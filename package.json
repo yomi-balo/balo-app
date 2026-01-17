@@ -9,6 +9,9 @@
     "check-types": "turbo run check-types"
   },
   "devDependencies": {
+    "@types/node": "^22.15.3",
+    "dotenv-cli": "^11.0.0",
+    "drizzle-kit": "^0.31.8",
     "prettier": "^3.7.4",
     "turbo": "^2.7.5",
     "typescript": "5.9.2"

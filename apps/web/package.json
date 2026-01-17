@@ -11,10 +11,16 @@
     "check-types": "next typegen && tsc --noEmit"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
     "@repo/ui": "workspace:*",
+    "@tanstack/react-query": "^5.90.18",
+    "drizzle-orm": "^0.45.1",
     "next": "16.1.0",
+    "postgres": "^3.4.8",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-hook-form": "^7.71.1",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",

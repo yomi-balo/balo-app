@@ -36,3 +36,14 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# Drizzle
+drizzle/meta
+
+# IDE
+.idea/
+.vscode/
+.claude/
+
+# Logs
+*.log
