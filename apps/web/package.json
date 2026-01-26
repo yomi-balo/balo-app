@@ -11,13 +11,12 @@
     "check-types": "next typegen && tsc --noEmit"
   },
   "dependencies": {
+    "@balo/db": "workspace:*",
     "@hookform/resolvers": "^5.2.2",
     "@repo/ui": "workspace:*",
     "@sentry/nextjs": "^10.36.0",
     "@tanstack/react-query": "^5.90.18",
-    "drizzle-orm": "^0.45.1",
     "next": "16.1.0",
-    "postgres": "^3.4.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.71.1",
