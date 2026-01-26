@@ -1,5 +1,7 @@
 import { pgTable, uuid, text, boolean, timestamp } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
 import { userModeEnum, userStatusEnum } from './enums';
+import { companyMembers } from './companies';
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -28,6 +30,11 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
   lastActiveAt: timestamp('last_active_at'),
 });
+
+// Relations
+export const usersRelations = relations(users, ({ many }) => ({
+  companyMemberships: many(companyMembers),
+}));
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
