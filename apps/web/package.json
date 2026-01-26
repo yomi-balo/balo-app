@@ -19,6 +19,8 @@
     "@repo/ui": "workspace:*",
     "@sentry/nextjs": "^10.36.0",
     "@tanstack/react-query": "^5.90.18",
+    "@workos-inc/node": "^8.0.0",
+    "iron-session": "^8.0.4",
     "next": "16.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
