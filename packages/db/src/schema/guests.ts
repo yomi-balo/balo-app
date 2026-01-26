@@ -9,7 +9,9 @@ export const meetingGuests = pgTable('meeting_guests', {
   email: text('email').notNull(),
   name: text('name'),
 
-  invitedById: uuid('invited_by_id').references(() => users.id).notNull(),
+  invitedById: uuid('invited_by_id')
+    .references(() => users.id)
+    .notNull(),
   accessToken: text('access_token').unique(),
 
   emailDomain: text('email_domain'),

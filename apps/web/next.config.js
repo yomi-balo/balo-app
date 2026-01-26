@@ -1,5 +1,5 @@
 // next.config.js
-import { withSentryConfig } from "@sentry/nextjs";
+import { withSentryConfig } from '@sentry/nextjs';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {};
@@ -7,8 +7,8 @@ const nextConfig = {};
 export default withSentryConfig(nextConfig, {
   // For all available options, see:
   // https://www.npmjs.com/package/@sentry/webpack-plugin#options
-  org: "balo-tecnologies",
-  project: "balo-web",
+  org: 'balo-tecnologies',
+  project: 'balo-web',
 
   // Only print logs for uploading source maps in CI
   silent: !process.env.CI,

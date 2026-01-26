@@ -20,18 +20,27 @@ export const companies = pgTable('companies', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-export const companyMembers = pgTable('company_members', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  companyId: uuid('company_id').references(() => companies.id).notNull(),
-  userId: uuid('user_id').references(() => users.id).unique().notNull(),
+export const companyMembers = pgTable(
+  'company_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id')
+      .references(() => companies.id)
+      .notNull(),
+    userId: uuid('user_id')
+      .references(() => users.id)
+      .unique()
+      .notNull(),
 
-  role: companyRoleEnum('role').notNull().default('member'),
+    role: companyRoleEnum('role').notNull().default('member'),
 
-  invitedById: uuid('invited_by_id').references(() => users.id),
-  joinedAt: timestamp('joined_at').defaultNow().notNull(),
-}, (table) => ({
-  companyUserIdx: uniqueIndex('company_user_idx').on(table.companyId, table.userId),
-}));
+    invitedById: uuid('invited_by_id').references(() => users.id),
+    joinedAt: timestamp('joined_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    companyUserIdx: uniqueIndex('company_user_idx').on(table.companyId, table.userId),
+  })
+);
 
 // Relations
 export const companiesRelations = relations(companies, ({ many }) => ({

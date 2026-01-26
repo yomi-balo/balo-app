@@ -27,7 +27,7 @@ fastify.get('/health', async () => {
 try {
   await fastify.listen({
     port: parseInt(process.env.PORT || '3001'),
-    host: '0.0.0.0'
+    host: '0.0.0.0',
   });
 } catch (err) {
   fastify.log.error(err);

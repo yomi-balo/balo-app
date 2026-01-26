@@ -15,23 +15,29 @@ export const verticals = pgTable('verticals', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-export const skills = pgTable('skills', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  verticalId: uuid('vertical_id').references(() => verticals.id).notNull(),
+export const skills = pgTable(
+  'skills',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    verticalId: uuid('vertical_id')
+      .references(() => verticals.id)
+      .notNull(),
 
-  name: text('name').notNull(),
-  slug: text('slug').notNull(),
-  description: text('description'),
-  iconUrl: text('icon_url'),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    description: text('description'),
+    iconUrl: text('icon_url'),
 
-  sortOrder: integer('sort_order').default(0),
-  isActive: boolean('is_active').default(true).notNull(),
+    sortOrder: integer('sort_order').default(0),
+    isActive: boolean('is_active').default(true).notNull(),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-}, (table) => ({
-  verticalSlugIdx: uniqueIndex('skill_vertical_slug_idx').on(table.verticalId, table.slug),
-}));
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    verticalSlugIdx: uniqueIndex('skill_vertical_slug_idx').on(table.verticalId, table.slug),
+  })
+);
 
 export const supportTypes = pgTable('support_types', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -48,23 +54,29 @@ export const supportTypes = pgTable('support_types', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-export const certifications = pgTable('certifications', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  verticalId: uuid('vertical_id').references(() => verticals.id).notNull(),
+export const certifications = pgTable(
+  'certifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    verticalId: uuid('vertical_id')
+      .references(() => verticals.id)
+      .notNull(),
 
-  name: text('name').notNull(),
-  slug: text('slug').notNull(),
-  description: text('description'),
-  logoUrl: text('logo_url'),
-  verificationUrl: text('verification_url'),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    description: text('description'),
+    logoUrl: text('logo_url'),
+    verificationUrl: text('verification_url'),
 
-  isActive: boolean('is_active').default(true).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-}, (table) => ({
-  verticalSlugIdx: uniqueIndex('cert_vertical_slug_idx').on(table.verticalId, table.slug),
-}));
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    verticalSlugIdx: uniqueIndex('cert_vertical_slug_idx').on(table.verticalId, table.slug),
+  })
+);
 
 // Relations
 export const verticalsRelations = relations(verticals, ({ many }) => ({

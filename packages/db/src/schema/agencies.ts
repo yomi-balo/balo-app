@@ -16,18 +16,26 @@ export const agencies = pgTable('agencies', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-export const agencyMembers = pgTable('agency_members', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  agencyId: uuid('agency_id').references(() => agencies.id).notNull(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
+export const agencyMembers = pgTable(
+  'agency_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agencyId: uuid('agency_id')
+      .references(() => agencies.id)
+      .notNull(),
+    userId: uuid('user_id')
+      .references(() => users.id)
+      .notNull(),
 
-  role: agencyRoleEnum('role').notNull().default('expert'),
+    role: agencyRoleEnum('role').notNull().default('expert'),
 
-  invitedById: uuid('invited_by_id').references(() => users.id),
-  joinedAt: timestamp('joined_at').defaultNow().notNull(),
-}, (table) => ({
-  agencyUserIdx: uniqueIndex('agency_user_idx').on(table.agencyId, table.userId),
-}));
+    invitedById: uuid('invited_by_id').references(() => users.id),
+    joinedAt: timestamp('joined_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    agencyUserIdx: uniqueIndex('agency_user_idx').on(table.agencyId, table.userId),
+  })
+);
 
 // Relations
 export const agenciesRelations = relations(agencies, ({ many }) => ({
