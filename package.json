@@ -10,11 +10,19 @@
     "format:check": "prettier --check .",
     "typecheck": "turbo run typecheck check-types",
     "check-types": "turbo run check-types",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "prepare": "husky"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.0",
     "@repo/eslint-config": "workspace:*",
     "@types/node": "^22.15.3",
+    "@vitest/coverage-v8": "^4.0.18",
     "dotenv-cli": "^11.0.0",
     "drizzle-kit": "^0.31.8",
     "husky": "^9.1.7",
@@ -22,7 +30,8 @@
     "prettier": "^3.7.4",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "turbo": "^2.7.5",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {
