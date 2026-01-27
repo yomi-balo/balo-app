@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@balo/db": "workspace:*",
+    "@balo/shared": "workspace:*",
     "@fastify/cors": "^11.2.0",
     "@fastify/sensible": "^6.0.4",
     "@sentry/node": "^10.36.0",

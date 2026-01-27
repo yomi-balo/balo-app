@@ -52,6 +52,9 @@ importers:
       '@balo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@balo/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@fastify/cors':
         specifier: ^11.2.0
         version: 11.2.0
