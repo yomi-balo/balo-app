@@ -1,9 +1,9 @@
 import pino from 'pino';
-import type { TransportTargetOptions } from 'pino';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-function getTransport(): pino.TransportSingleOptions | undefined {
+/** Resolve the appropriate Pino transport for the current environment. */
+export function getTransport(): pino.TransportSingleOptions | undefined {
   if (!isProduction) {
     return { target: 'pino-pretty', options: { colorize: true } };
   }
