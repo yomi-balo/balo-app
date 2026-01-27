@@ -23,9 +23,10 @@
     "@workos-inc/node": "^8.0.0",
     "iron-session": "^8.0.4",
     "next": "16.1.0",
+    "pino": "^9.0.0",
+    "posthog-js": "^1.335.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "pino": "^9.0.0",
     "react-hook-form": "^7.71.1",
     "zod": "^4.3.5"
   },
