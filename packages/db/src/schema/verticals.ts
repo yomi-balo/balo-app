@@ -91,6 +91,13 @@ export const skillsRelations = relations(skills, ({ one }) => ({
   }),
 }));
 
+export const certificationsRelations = relations(certifications, ({ one }) => ({
+  vertical: one(verticals, {
+    fields: [certifications.verticalId],
+    references: [verticals.id],
+  }),
+}));
+
 export type Vertical = typeof verticals.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type SupportType = typeof supportTypes.$inferSelect;

@@ -127,6 +127,32 @@ export const expertProfilesRelations = relations(expertProfiles, ({ one, many })
   certifications: many(expertCertifications),
 }));
 
+export const expertSkillsRelations = relations(expertSkills, ({ one }) => ({
+  expertProfile: one(expertProfiles, {
+    fields: [expertSkills.expertProfileId],
+    references: [expertProfiles.id],
+  }),
+  skill: one(skills, {
+    fields: [expertSkills.skillId],
+    references: [skills.id],
+  }),
+  supportType: one(supportTypes, {
+    fields: [expertSkills.supportTypeId],
+    references: [supportTypes.id],
+  }),
+}));
+
+export const expertCertificationsRelations = relations(expertCertifications, ({ one }) => ({
+  expertProfile: one(expertProfiles, {
+    fields: [expertCertifications.expertProfileId],
+    references: [expertProfiles.id],
+  }),
+  certification: one(certifications, {
+    fields: [expertCertifications.certificationId],
+    references: [certifications.id],
+  }),
+}));
+
 export type ExpertProfile = typeof expertProfiles.$inferSelect;
 export type ExpertSkill = typeof expertSkills.$inferSelect;
 export type ExpertCertification = typeof expertCertifications.$inferSelect;
