@@ -1,6 +1,9 @@
 import Link from 'next/link';
 
-const links = [
+const links: {
+  section: string;
+  items: { href: string; label: string; description: string; external?: boolean }[];
+}[] = [
   {
     section: 'Verification Pages',
     items: [

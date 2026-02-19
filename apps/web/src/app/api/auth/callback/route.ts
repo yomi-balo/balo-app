@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { workos, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
-import { db, usersRepository, expertProfiles } from '@balo/db';
+import { db, usersRepository } from '@balo/db';
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code');
