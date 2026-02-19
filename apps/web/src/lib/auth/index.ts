@@ -1,4 +1,4 @@
-export { workos, clientId, sessionConfig } from './config';
+export { getWorkOS, clientId, sessionConfig } from './config';
 export {
   getSession,
   getCurrentUser,
