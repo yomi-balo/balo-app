@@ -1,6 +1,8 @@
 import { db } from '@balo/db';
 import { users, verticals } from '@balo/db/schema';
 
+export const dynamic = 'force-dynamic';
+
 export default async function TestDbPage() {
   const userCount = await db.select().from(users);
   const verticalList = await db.select().from(verticals);
