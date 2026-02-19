@@ -1,3 +1,4 @@
+# Railway service configuration for balo-app API
 [build]
 buildCommand = "cd ../.. && pnpm install --frozen-lockfile && pnpm build --filter api"
 
