@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workos, clientId } from '@/lib/auth/config';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code');
@@ -15,7 +17,7 @@ export async function GET(req: NextRequest) {
       user: workosUser,
       accessToken,
       refreshToken,
-    } = await workos.userManagement.authenticateWithCode({
+    } = await getWorkOS().userManagement.authenticateWithCode({
       code,
       clientId,
     });
