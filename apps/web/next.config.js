@@ -18,7 +18,7 @@ export default withSentryConfig(nextConfig, {
   project: 'balo-web',
 
   // Only print logs for uploading source maps in CI
-  silent: !process.env.CI,
+  silent: !process.env.CI && process.env.NODE_ENV === 'production',
 
   // For all available options, see:
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/manual-setup/
