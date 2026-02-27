@@ -5,7 +5,6 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { UserMenu } from './user-menu';
-import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Menu, Bell, Search } from 'lucide-react';
 
 export function TopNav(): React.JSX.Element {
@@ -47,7 +46,6 @@ export function TopNav(): React.JSX.Element {
             <Bell className="h-4 w-4" />
           </Button>
 
-          <ThemeToggle />
           <UserMenu />
         </div>
       </div>
