@@ -36,9 +36,9 @@ description: Balo design system and UI component patterns using Shadcn/ui, shadc
 ```
 Tailwind CSS          → Utility-first styling, design tokens via CSS variables
     ↓
-Shadcn/ui             → Base primitives (Button, Input, Dialog, Card, etc.)
+Shadcn/ui             → Base primitives only when no shadcnspace alternative exists
     ↓
-shadcnspace           → Enhanced variants with micro-interactions
+shadcnspace           → DEFAULT choice. Enhanced variants with micro-interactions, polish, and delight.
     ↓
 Motion (motion.dev)   → Animations, scroll effects, page transitions
     ↓
@@ -46,6 +46,18 @@ Balo custom           → Domain-specific components (ExpertCard, CaseTimeline, 
 ```
 
 **Import:** `import { motion } from "motion/react"`
+
+### ⚠️ shadcnspace-First Policy
+
+**Always check [shadcnspace.com](https://shadcnspace.com) before reaching for plain shadcn/ui.** Plain shadcn components are functional but generic — they look like every other shadcn app. shadcnspace variants add the micro-interactions, animations, and polish that make Balo feel premium. The extra effort to browse, copy, and normalize a shadcnspace component is always worth it for user-facing UI.
+
+**When to use plain shadcn/ui:** Only when shadcnspace has no variant for that component (e.g., Tooltip, Separator, ScrollArea) or when the component is purely structural and invisible to the user (e.g., Form primitives, providers).
+
+**File organization:**
+
+- `components/ui/` — Plain shadcn primitives (auto-generated via CLI)
+- `components/enhanced/` — shadcnspace variants (copied, normalized to Balo tokens)
+- `components/balo/` — Domain-specific components built on enhanced + shadcn + Motion
 
 ## Decision Tree
 
@@ -153,21 +165,54 @@ Implemented from day one. Not optional.
 - **Rule:** Always use `dark:` variants or CSS variables. Never assume light mode.
 - **`suppressHydrationWarning`** on `<html>` tag to prevent flash
 
-## Component Selection
+## Component Selection — shadcnspace-First
 
-| Need                           | Source                             | Notes                   |
-| ------------------------------ | ---------------------------------- | ----------------------- |
-| Basic button, input, dialog    | shadcn/ui                          | `npx shadcn add button` |
-| Input with floating label      | shadcnspace Input-08               | Form polish             |
-| Input with character count     | shadcnspace Input-06               | Bio/description fields  |
-| Input with validation feedback | shadcnspace Input-04               | Real-time validation    |
-| Card with hover lift           | shadcnspace Card variants          | Expert cards, pricing   |
-| Dashboard sidebar              | shadcnspace Sidebar blocks         | App navigation          |
-| Toasts                         | Sonner (via shadcn)                | `npx shadcn add sonner` |
-| Data tables                    | TanStack Table + shadcn DataTable  | Sortable, filterable    |
-| Simple date field              | shadcn Calendar (react-day-picker) | Due dates, date filters |
-| Consultation booking calendar  | shadcnspace Calendar-03            | Date + time slot picker |
-| Rich text                      | Tiptap                             | Expert bios, proposals  |
+### Upgrade Table: Instead of Plain Shadcn, Use This
+
+| Component                 | ❌ Plain Shadcn              | ✅ Use Instead                                | Why                                                                   |
+| ------------------------- | ---------------------------- | --------------------------------------------- | --------------------------------------------------------------------- |
+| **Text input**            | `Input`                      | shadcnspace Input-08 (floating label)         | Floating labels save vertical space, feel polished, animate on focus  |
+| **Input with validation** | `Input` + manual error       | shadcnspace Input-04 (validation feedback)    | Integrated error/success states with color transitions, not bolted on |
+| **Textarea**              | `Textarea`                   | shadcnspace Input-06 (character count)        | Shows remaining chars, essential for bios/descriptions with limits    |
+| **Password input**        | `Input type="password"`      | shadcnspace Input-05 (password toggle)        | Eye icon to show/hide, strength indicator — expected UX in 2026       |
+| **Search input**          | `Input` with icon            | shadcnspace Input-03 (search with clear)      | Integrated search icon, clear button, loading spinner                 |
+| **Cards**                 | `Card`                       | shadcnspace Card variants + Motion hover lift | Hover shadow + subtle y-translate makes cards feel interactive        |
+| **Sidebar**               | Custom sidebar               | shadcnspace Sidebar blocks                    | Pre-built collapse, mobile drawer, nav grouping, polish               |
+| **Calendar/date picker**  | shadcn Calendar              | shadcnspace Calendar-03 (date + time slots)   | Side-by-side date and time selection for booking flows                |
+| **Login/signup forms**    | shadcn Form + Input          | shadcnspace Auth blocks                       | Pre-built auth form layouts with social buttons, dividers, polish     |
+| **Pricing cards**         | `Card` with content          | shadcnspace Pricing blocks                    | Feature comparison, highlighted tier, toggle monthly/annual           |
+| **Stat/metric cards**     | `Card` with numbers          | shadcnspace Stats blocks                      | Trend indicators, sparklines, comparison badges                       |
+| **File upload**           | Custom `<input type="file">` | shadcnspace Upload components                 | Drag-and-drop zone, preview, progress bar                             |
+| **Multi-step forms**      | Manual step state            | shadcnspace Stepper variants                  | Progress indicator, step validation, animated transitions             |
+| **Empty states**          | Custom div with text         | shadcnspace Empty state blocks                | Illustration, CTA button, consistent layout                           |
+| **Notification/alert**    | shadcn `Alert`               | shadcnspace Alert variants                    | Icon integration, dismiss animation, action buttons                   |
+
+### When Plain Shadcn Is Fine
+
+These components have no meaningful shadcnspace upgrade — use them directly:
+
+| Component                 | Source                  | Notes                                                     |
+| ------------------------- | ----------------------- | --------------------------------------------------------- |
+| Tooltip                   | shadcn/ui               | Functional, no visual upgrade needed                      |
+| Separator                 | shadcn/ui               | A line is a line                                          |
+| ScrollArea                | shadcn/ui               | Structural, invisible to user                             |
+| Form, FormField, FormItem | shadcn/ui               | Wiring primitives, not visual                             |
+| Select (basic dropdown)   | shadcn/ui               | Unless multi-select needed                                |
+| Combobox (Command)        | shadcn/ui               | For searchable multi-select (skill picker)                |
+| Sheet                     | shadcn/ui               | Mobile drawer, works well as-is                           |
+| Sonner (toast)            | shadcn/ui               | Already animated and polished                             |
+| Dialog (structural)       | shadcn/ui               | Base overlay — content inside can use enhanced components |
+| DropdownMenu              | shadcn/ui               | Menus are functional, not decorative                      |
+| Data tables               | TanStack Table + shadcn | No shadcnspace alternative for complex tables             |
+| Rich text editor          | Tiptap                  | Specialized, no shadcnspace equivalent                    |
+
+### How to Pull shadcnspace Components
+
+1. Browse [shadcnspace.com/components](https://shadcnspace.com/components) for the variant
+2. Copy the code into `apps/web/src/components/enhanced/`
+3. **Run the Normalization Checklist** (see components-forms.md) — this is mandatory
+4. Test in both light and dark mode
+5. Commit
 
 ## Key Rules
 
