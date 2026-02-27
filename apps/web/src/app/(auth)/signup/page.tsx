@@ -4,15 +4,15 @@ import { useEffect } from 'react';
 import { useAuthModal } from '@/components/auth/auth-modal-provider';
 import { Logo } from '@/components/layout/logo';
 
-export default function LoginPage(): React.JSX.Element {
-  const { openLogin, isOpen } = useAuthModal();
+export default function SignupPage(): React.JSX.Element {
+  const { openSignup, isOpen } = useAuthModal();
 
   useEffect(() => {
     // Auto-open modal on mount if not already open
     if (!isOpen) {
-      openLogin();
+      openSignup();
     }
-  }, [isOpen, openLogin]);
+  }, [isOpen, openSignup]);
 
   return (
     <div className="bg-background flex min-h-screen flex-col items-center justify-center">
