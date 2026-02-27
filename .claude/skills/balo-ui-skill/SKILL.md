@@ -17,6 +17,8 @@ description: Balo design system and UI component patterns using Shadcn/ui, shadc
 - **Lumen template** (shadcnblocks.com) — Gradient glows, SaaS polish, hero sections
 - **Linear** — Keyboard navigation, snappy transitions (but NOT Linear's density — too compact)
 
+**⚠️ The existing Bubble.io production app (balo.expert) is NOT a design reference.** Any screenshots or descriptions of the current app are for **feature and workflow reference only** — what it does, not how it looks. The new platform should have significantly better UI and UX. Do not replicate the current app's layout, styling, or interaction patterns.
+
 ### Design Quality Principles
 
 **Commit to a cohesive aesthetic.** Every screen should feel like it belongs to the same product. Dominant brand color with sharp accents outperforms a timid, evenly-distributed palette. When in doubt, lean into Balo Blue confidently.
