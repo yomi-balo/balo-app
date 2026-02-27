@@ -55,43 +55,58 @@ Balo custom           → Domain-specific components (ExpertCard, CaseTimeline, 
 
 ### CSS Variables (globals.css)
 
+Tailwind v4 uses OKLCH color format. Values are defined in `globals.css` and bridged to Tailwind utilities via `@theme inline`.
+
 ```css
 :root {
-  --primary: 217 91% 50%; /* Balo Blue */
-  --primary-foreground: 0 0% 100%;
-  --background: 0 0% 100%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 217 91% 50%;
-  --success: 142 76% 36%;
-  --warning: 38 92% 50%;
-  --destructive: 0 84% 60%;
+  --primary: oklch(0.552 0.228 260.9); /* Balo Blue */
+  --primary-foreground: oklch(1 0 0);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.206 0.039 265.5);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.206 0.039 265.5);
+  --muted: oklch(0.968 0.007 247.9);
+  --muted-foreground: oklch(0.556 0.04 256.8);
+  --border: oklch(0.926 0.013 255);
+  --input: oklch(0.926 0.013 255);
+  --ring: oklch(0.552 0.228 260.9);
+  --success: oklch(0.623 0.169 149.2);
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.77 0.165 70.6);
+  --warning-foreground: oklch(0.206 0.039 265.5);
+  --info: oklch(0.61 0.155 241.4);
+  --info-foreground: oklch(1 0 0);
+  --destructive: oklch(0.636 0.208 25.4);
+  --destructive-foreground: oklch(1 0 0);
 }
 
 .dark {
-  --primary: 217 91% 60%; /* Brighter for dark contrast */
-  --primary-foreground: 0 0% 100%;
-  --background: 222 47% 5%;
-  --foreground: 210 40% 98%;
-  --card: 222 47% 8%;
-  --card-foreground: 210 40% 98%;
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
-  --border: 217 33% 17%;
-  --input: 217 33% 17%;
-  --ring: 217 91% 60%;
+  --primary: oklch(0.626 0.186 259.6); /* Brighter for dark contrast */
+  --primary-foreground: oklch(1 0 0);
+  --background: oklch(0.147 0.019 264.6);
+  --foreground: oklch(0.984 0.003 247.9);
+  --card: oklch(0.177 0.029 265.8);
+  --card-foreground: oklch(0.984 0.003 247.9);
+  --muted: oklch(0.275 0.036 259.7);
+  --muted-foreground: oklch(0.71 0.035 256.8);
+  --border: oklch(0.275 0.036 259.7);
+  --input: oklch(0.275 0.036 259.7);
+  --ring: oklch(0.626 0.186 259.6);
+  --success: oklch(0.72 0.192 149.5);
+  --success-foreground: oklch(0.147 0.019 264.6);
+  --warning: oklch(0.77 0.165 70.6);
+  --warning-foreground: oklch(0.147 0.019 264.6);
+  --info: oklch(0.68 0.155 241.4);
+  --info-foreground: oklch(0.147 0.019 264.6);
+  --destructive: oklch(0.4 0.135 25.8);
+  --destructive-foreground: oklch(0.984 0.003 247.9);
 }
 ```
 
 ### Usage Rules
 
 - Never hardcode hex values — always use `text-primary`, `bg-muted`, etc.
-- Status colors are semantic: `text-success`, `text-warning`, `text-destructive`
+- Status colors are semantic: `text-success`, `text-warning`, `text-info`, `text-destructive`
 - **Hero/feature sections:** Blue → purple gradient spectrum for energy and premium feel
 - **Backgrounds:** Create depth with subtle gradients, layered card shadows, and gentle color washes rather than flat white/dark surfaces. A `bg-gradient-to-b from-background to-muted/30` adds atmosphere without distraction.
 - **Dark mode gradients:** MORE vivid and saturated. Light mode gradients: subtler and softer. Dark mode is where the brand really glows.
