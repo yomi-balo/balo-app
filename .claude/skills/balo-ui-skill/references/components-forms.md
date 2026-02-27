@@ -3,17 +3,19 @@
 ## Component Architecture
 
 ```
-packages/ui/src/components/
-├── ui/                    # Shadcn base primitives (auto-generated)
+apps/web/src/components/
+├── ui/                    # Shadcn base primitives (auto-generated, don't customize)
 │   ├── button.tsx
 │   ├── card.tsx
 │   ├── input.tsx
 │   └── ...
-├── enhanced/              # Shadcnspace variants (copy-pasted, customized)
-│   ├── input-floating.tsx
-│   ├── input-validation.tsx
-│   ├── input-character-count.tsx
-│   └── card-hover.tsx
+├── enhanced/              # shadcnspace variants (DEFAULT for user-facing UI)
+│   ├── input-floating.tsx       # Input-08: floating label
+│   ├── input-validation.tsx     # Input-04: real-time validation feedback
+│   ├── input-character-count.tsx # Input-06: character counter
+│   ├── input-password.tsx       # Input-05: password toggle + strength
+│   ├── input-search.tsx         # Input-03: search with clear button
+│   └── card-hover.tsx           # Card with Motion hover lift
 └── balo/                  # Domain-specific components
     ├── expert-card.tsx
     ├── case-status-badge.tsx
@@ -22,28 +24,37 @@ packages/ui/src/components/
     └── auth-modal.tsx
 ```
 
-**Shadcn components:** Generated via CLI, live in `ui/`. Don't customize these directly — extend via composition.
+**Shadcn components:** Generated via CLI, live in `ui/`. Don't customize these directly — extend via composition. Only use directly when no shadcnspace alternative exists.
 
-**Shadcnspace components:** Copy from shadcnspace.com, adapt to Balo tokens. Live in `enhanced/`. These ARE customized.
+**Shadcnspace components (DEFAULT):** Copy from shadcnspace.com, adapt to Balo tokens. Live in `enhanced/`. These ARE customized. **Always check shadcnspace first before using a plain shadcn component for user-facing UI.**
 
-**Balo components:** Domain-specific, built on top of shadcn + shadcnspace + Motion. Live in `balo/`.
+**Balo components:** Domain-specific, built on top of enhanced + shadcn + Motion. Live in `balo/`.
 
 ## Shadcnspace Component Guide
 
 ### When to Use Enhanced vs Base
 
-| Scenario                               | Use                                | Why                                      |
-| -------------------------------------- | ---------------------------------- | ---------------------------------------- |
-| Simple text input                      | shadcn `Input`                     | No extra behavior needed                 |
-| Input that needs validation feedback   | shadcnspace Input-04               | Real-time error display                  |
-| Bio/description with length limit      | shadcnspace Input-06               | Character counter                        |
-| Elegant form with labels               | shadcnspace Input-08               | Floating label animation                 |
-| Static info card                       | shadcn `Card`                      | No interaction                           |
-| Clickable card (expert, pricing)       | Custom with Motion                 | Hover lift + shadow                      |
-| Basic dropdown                         | shadcn `Select`                    | Standard behavior                        |
-| Multi-select with search               | shadcn `Combobox` (Command)        | Skill selection                          |
-| Simple date field (due dates, filters) | shadcn Calendar (react-day-picker) | Date-only picking                        |
-| Consultation booking                   | shadcnspace Calendar-03            | Date + available time slots side by side |
+**Default to shadcnspace.** Only fall back to plain shadcn when no enhanced variant exists or the component is purely structural.
+
+| Scenario                               | Use                                   | Why                                        |
+| -------------------------------------- | ------------------------------------- | ------------------------------------------ |
+| Any text input in a form               | shadcnspace Input-08 (floating label) | Polished, saves space, animates on focus   |
+| Input that needs validation feedback   | shadcnspace Input-04                  | Integrated error/success color transitions |
+| Bio/description with length limit      | shadcnspace Input-06                  | Built-in character counter                 |
+| Password field                         | shadcnspace Input-05                  | Show/hide toggle + strength indicator      |
+| Search field                           | shadcnspace Input-03                  | Search icon, clear button, loading state   |
+| Clickable card (expert, pricing)       | shadcnspace Card + Motion hover       | Hover lift + shadow = feels interactive    |
+| Auth forms (login, signup)             | shadcnspace Auth blocks               | Social buttons, dividers, layout polish    |
+| Stat/metric display                    | shadcnspace Stats blocks              | Trend arrows, sparklines, comparison       |
+| Empty states                           | shadcnspace Empty state blocks        | Illustration + CTA, consistent pattern     |
+| File/image upload                      | shadcnspace Upload components         | Drag-and-drop, preview, progress bar       |
+| Multi-step flow indicator              | shadcnspace Stepper variants          | Progress dots, step validation, animation  |
+| Simple label-only input (rare)         | shadcn `Input`                        | Only if floating label is genuinely wrong  |
+| Static info card (no interaction)      | shadcn `Card`                         | No click/hover behavior needed             |
+| Basic dropdown                         | shadcn `Select`                       | Standard behavior, no enhanced needed      |
+| Multi-select with search               | shadcn `Combobox` (Command)           | Skill selection — no shadcnspace equiv     |
+| Simple date field (due dates, filters) | shadcn Calendar (react-day-picker)    | Date-only picking                          |
+| Consultation booking                   | shadcnspace Calendar-03               | Date + available time slots side by side   |
 
 ### Pulling Shadcnspace Components
 
@@ -282,15 +293,9 @@ export function AvailabilityIndicator({ status }: { status: string }) {
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import {
-  Form,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormControl,
-  FormMessage,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
+import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
+import { InputFloating } from '@/components/enhanced/input-floating';
+import { InputCharacterCount } from '@/components/enhanced/input-character-count';
 import { Button } from '@/components/ui/button';
 
 const schema = z.object({
@@ -312,9 +317,13 @@ export function CreateCaseForm({ onSubmit }: { onSubmit: (data: z.infer<typeof s
           name="title"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Title</FormLabel>
               <FormControl>
-                <Input placeholder="Describe your Salesforce challenge" {...field} />
+                {/* shadcnspace Input-08: floating label animates on focus */}
+                <InputFloating
+                  label="Title"
+                  placeholder="Describe your Salesforce challenge"
+                  {...field}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -326,10 +335,9 @@ export function CreateCaseForm({ onSubmit }: { onSubmit: (data: z.infer<typeof s
           name="description"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Description (optional)</FormLabel>
               <FormControl>
-                {/* Use shadcnspace character count input for length-limited fields */}
-                <InputCharacterCount maxLength={500} {...field} />
+                {/* shadcnspace Input-06: character counter for length-limited fields */}
+                <InputCharacterCount label="Description (optional)" maxLength={500} {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
