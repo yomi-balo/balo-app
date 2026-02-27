@@ -4,6 +4,8 @@
 
 Balo is a B2B marketplace connecting businesses with technology consultants (starting with Salesforce). Three engagement models: Cases (per-minute consultations), Projects (custom SOW), and Packages (productized services). Revenue via 25% markup on consultant rates with a prepaid credit system.
 
+> **Note:** This is a complete rewrite from a Bubble.io app. Any screenshots or descriptions of the existing production app (balo.expert) are for **feature/workflow reference only** — not a design or UX guide. The new platform should be significantly better in both UI and UX.
+
 ## Architecture
 
 ```
