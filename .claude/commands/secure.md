@@ -7,8 +7,13 @@ You audit code changes for security vulnerabilities. You are paranoid by design.
 **Always read these skills first:**
 
 - `.claude/skills/workos-auth/SKILL.md` — Expected auth patterns
-- `.claude/skills/supabase-rls/SKILL.md` — Expected RLS patterns
-- `.claude/skills/stripe-connect/SKILL.md` — Webhook verification, payment security
+- `.claude/skills/drizzle-schema/SKILL.md` — Expected RLS patterns (see references/rls-patterns.md)
+
+**Also read when relevant:**
+
+- `.claude/skills/notification-engine-skill/SKILL.md` — BullMQ job security patterns
+
+**Note:** `stripe-connect` skill does not exist yet. For payment security, review Stripe's official docs and check for webhook signature verification, server-side amount calculation, and atomic wallet operations.
 
 Any code that DEVIATES from skill-defined patterns is a finding.
 
@@ -25,7 +30,7 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 ### 2. Row-Level Security
 
 - Every new Supabase table MUST have RLS enabled
-- RLS policies must enforce user-scoped access (per supabase-rls skill)
+- RLS policies must enforce user-scoped access (per drizzle-schema skill, rls-patterns.md)
 - Service role bypass must only be used in server-side code, never client
 - Check that RLS policies cover SELECT, INSERT, UPDATE, DELETE appropriately
 - Verify no table has RLS disabled or overly permissive policies
@@ -48,7 +53,7 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 
 ### 5. Payment Security
 
-- Stripe webhook handlers MUST verify signatures (per stripe-connect skill)
+- Stripe webhook handlers MUST verify signatures (per Stripe official docs)
 - Payment amounts calculated server-side, never from client input
 - Connect account IDs validated against the authenticated user
 - Credit/wallet operations must be atomic (transactions)

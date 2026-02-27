@@ -5,24 +5,33 @@ description: Drizzle ORM schema patterns for the Balo platform on Supabase Postg
 
 # Drizzle Schema — Balo Platform
 
-Balo uses Drizzle ORM with Supabase (managed PostgreSQL). Auth is handled by WorkOS (not Supabase Auth) — this affects how RLS policies reference users.
+Balo uses Drizzle ORM with Supabase (managed PostgreSQL) via the `postgres-js` driver. Auth is handled by WorkOS (not Supabase Auth) — this affects how RLS policies reference users.
 
 ## Quick Reference
 
 ### File Locations
 
 ```
-apps/api/src/db/
-├── schema/              # One file per domain
-│   ├── users.ts
-│   ├── cases.ts
-│   ├── experts.ts
-│   └── index.ts         # Re-exports all schemas
-├── relations.ts         # All Drizzle relations
-├── client.ts            # DB client (admin + RLS)
-└── migrate.ts           # Migration runner
-drizzle/                 # Generated migrations (do not edit)
-drizzle.config.ts        # Drizzle Kit config
+packages/db/
+├── src/
+│   ├── schema/              # One file per domain
+│   │   ├── enums.ts         # Shared pgEnum definitions
+│   │   ├── users.ts         # users table + relations
+│   │   ├── companies.ts     # companies, company_members + relations
+│   │   ├── agencies.ts      # agencies, agency_members + relations
+│   │   ├── experts.ts       # expert_profiles, expert_skills, expert_certifications + relations
+│   │   ├── verticals.ts     # verticals, skills, support_types, certifications + relations
+│   │   ├── guests.ts        # guest access
+│   │   └── index.ts         # Re-exports all schemas
+│   ├── repositories/        # Data access layer
+│   │   ├── users.ts
+│   │   ├── companies.ts
+│   │   └── index.ts
+│   ├── client.ts            # Drizzle client (postgres-js)
+│   └── index.ts             # Package entry point
+├── drizzle/                 # Generated migrations (do not edit)
+├── drizzle.config.ts        # Drizzle Kit config
+└── package.json
 ```
 
 ### Every Table Must Have
@@ -40,30 +49,32 @@ export const myTable = pgTable(
     // ... your columns
   },
   (t) => [
-    // RLS policies — see references/rls-patterns.md
+    // indexes, RLS policies — see references/rls-patterns.md
   ]
 );
 ```
 
 ### Shared Column Helpers
 
-Define once in `apps/api/src/db/schema/helpers.ts`:
+Define once in `packages/db/src/schema/helpers.ts`:
 
 ```typescript
 import { timestamp } from 'drizzle-orm/pg-core';
 
 export const timestamps = {
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at')
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
     .defaultNow()
     .notNull()
     .$onUpdateFn(() => new Date()),
 };
 
 export const softDelete = {
-  deletedAt: timestamp('deleted_at'),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
 };
 ```
+
+**Note:** `{ withTimezone: true }` is required on ALL timestamp columns. This ensures correct handling across timezones (Balo serves users globally).
 
 ### Type Exports
 
@@ -104,29 +115,25 @@ export const insertUserSchema = createInsertSchema(users, {
 | TypeScript keys | camelCase (auto via config)            | `firstName`                                       |
 | Foreign keys    | `{referenced_table_singular}_id`       | `user_id`                                         |
 | Enums           | camelCase variable, snake_case DB name | `const caseStatus = pgEnum('case_status', [...])` |
-| Schema files    | kebab-case or domain name              | `expert-profiles.ts`                              |
+| Schema files    | Domain name                            | `experts.ts`, `verticals.ts`                      |
 
 ### Drizzle Config
 
 ```typescript
-// drizzle.config.ts
+// packages/db/drizzle.config.ts
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-  schema: './apps/api/src/db/schema/index.ts',
+  schema: './src/schema/index.ts',
   out: './drizzle',
   dialect: 'postgresql',
-  casing: 'snake_case',
   dbCredentials: {
     url: process.env.DATABASE_URL!,
-  },
-  migrations: {
-    prefix: 'supabase',
   },
 });
 ```
 
-The `casing: 'snake_case'` setting means you write camelCase in TypeScript and Drizzle automatically maps to snake_case in the database.
+**Note:** No `casing` option — column names are explicitly defined in each schema file (e.g., `text('first_name')`).
 
 ### Primary Keys
 
@@ -175,7 +182,7 @@ export const experts = pgTable(
 Balo will expand beyond Salesforce. Schema rules:
 
 - No column named `salesforce_*` in generic tables
-- Use `technology_id` or `vertical_id` for category references
+- Use `verticalId` / `vertical_id` for vertical/technology references
 - Skill taxonomies go in a separate, configurable table — not hardcoded enums
 - Consultant/expert tables are technology-agnostic
 

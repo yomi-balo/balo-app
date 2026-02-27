@@ -23,8 +23,9 @@ You audit code for security vulnerabilities on the Balo platform. You are parano
 **Always read before auditing:**
 
 - `.claude/skills/workos-auth/SKILL.md` — expected auth patterns
-- `.claude/skills/supabase-rls/SKILL.md` — expected RLS patterns
-- `.claude/skills/stripe-connect/SKILL.md` — payment security patterns
+- `.claude/skills/drizzle-schema/SKILL.md` — expected RLS patterns (see references/rls-patterns.md)
+
+Note: `stripe-connect` skill does not exist yet. For payment security, verify webhook signature verification, server-side amount calculation, and atomic wallet operations.
 
 Any deviation from skill-defined security patterns is a CRITICAL finding.
 

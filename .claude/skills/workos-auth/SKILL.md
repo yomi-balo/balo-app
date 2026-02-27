@@ -11,15 +11,30 @@ description: WorkOS AuthKit authentication patterns for the Balo marketplace. Us
 
 ```
 WorkOS                              Balo (Supabase)
-├── Identity verification           ├── users table (role, profile)
+├── Identity verification           ├── users table (platformRole, activeMode)
 ├── Email + Password                ├── expert_profiles table
-├── OAuth (Google, GitHub)          ├── companies table
-├── MFA enrollment                  ├── company_members table
-├── Session tokens (JWT)            └── onboarding_completed flag
+├── OAuth (Google, Microsoft)       ├── companies table + company_members
+├── MFA enrollment                  ├── agencies table + agency_members
+├── Session tokens (JWT)            └── onboardingCompleted flag
 └── User metadata (role cache)
 ```
 
-WorkOS is NOT the source of truth for user data. Supabase `users.role` is the source of truth. WorkOS metadata caches the role for quick session access.
+WorkOS is NOT the source of truth for user data. Balo's database is the source of truth. WorkOS user metadata caches minimal info for quick session access.
+
+## Auth Model
+
+Authorization is **relationship-derived**, not stored in a single role field:
+
+| Question                          | Answer source                                         |
+| --------------------------------- | ----------------------------------------------------- |
+| Is this user a platform admin?    | `users.platformRole` (`user`, `admin`, `super_admin`) |
+| What mode are they viewing in?    | `users.activeMode` (`client`, `expert`)               |
+| What can they do in this company? | `company_members.role` (`owner`, `admin`, `member`)   |
+| What can they do in this agency?  | `agency_members.role` (`owner`, `admin`, `expert`)    |
+| Are they an approved expert?      | `expert_profiles` exists + `approvedAt` is set        |
+| What kind of expert?              | `expert_profiles.type` (`freelancer`, `agency`)       |
+
+A single user can be a company admin, agency expert, and platform admin simultaneously. `activeMode` controls which UI they see.
 
 ## Critical: Custom UI, Not Hosted AuthKit
 
@@ -40,11 +55,29 @@ Balo uses **custom UI via WorkOS headless APIs**. Not the hosted AuthKit redirec
 ## SDK Setup
 
 ```typescript
-// packages/shared/src/lib/workos.ts
+// apps/web/src/lib/auth/config.ts
 import { WorkOS } from '@workos-inc/node';
 
-export const workos = new WorkOS(process.env.WORKOS_API_KEY!);
-export const WORKOS_CLIENT_ID = process.env.WORKOS_CLIENT_ID!;
+let _workos: WorkOS;
+export function getWorkOS(): WorkOS {
+  if (!_workos) {
+    _workos = new WorkOS(process.env.WORKOS_API_KEY!);
+  }
+  return _workos;
+}
+
+export const clientId = process.env.WORKOS_CLIENT_ID!;
+
+export const sessionConfig = {
+  password: process.env.WORKOS_COOKIE_PASSWORD!,
+  cookieName: 'balo_session',
+  cookieOptions: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    maxAge: 60 * 60 * 24 * 7, // 7 days
+  },
+};
 ```
 
 ## Environment Variables
@@ -53,17 +86,9 @@ export const WORKOS_CLIENT_ID = process.env.WORKOS_CLIENT_ID!;
 WORKOS_API_KEY=sk_live_...          # Secret key (server only, NEVER expose)
 WORKOS_CLIENT_ID=client_...         # Client ID (can be public)
 WORKOS_COOKIE_PASSWORD=...          # Min 32 chars, encrypts session cookie
-WORKOS_REDIRECT_URI=https://balo.expert/callback
+WORKOS_REDIRECT_URI=https://balo.expert/api/auth/callback
 WORKOS_WEBHOOK_SECRET=whsec_...     # For webhook signature verification
 ```
-
-## User Roles
-
-```typescript
-type UserRole = 'client' | 'expert' | 'admin' | 'super_admin';
-```
-
-**Role is NULL after signup.** Set during onboarding when user chooses "I'm a Client" or "I'm an Expert".
 
 ## Decision Tree
 
@@ -75,23 +100,32 @@ type UserRole = 'client' | 'expert' | 'admin' | 'super_admin';
 ## Session Shape
 
 ```typescript
-interface BaloSession {
-  user: {
-    id: string; // Balo user UUID
-    email: string;
-    firstName: string | null;
-    lastName: string | null;
-    activeMode: 'client' | 'expert';
-    companyId: string; // Current company context
-    companyName: string;
-    companyRole: string; // Role within company
-    expertProfileId?: string; // If expert
-    verticalId?: string; // If expert
-  };
-  accessToken: string; // WorkOS JWT
-  refreshToken: string; // WorkOS refresh token
+// apps/web/src/lib/auth/session.ts
+interface SessionUser {
+  id: string; // Balo user UUID
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  activeMode: 'client' | 'expert';
+
+  // Company context (always present — personal workspace or real company)
+  companyId: string;
+  companyName: string;
+  companyRole: 'owner' | 'admin' | 'member';
+
+  // Expert context (only if user has expert profile)
+  expertProfileId?: string;
+  verticalId?: string;
+}
+
+interface SessionData {
+  user?: SessionUser;
+  accessToken?: string;
+  refreshToken?: string;
 }
 ```
+
+Session helpers already exist: `getCurrentUser()`, `requireUser()`, `requireExpert()`, `getCompanyContext()` — all in `apps/web/src/lib/auth/session.ts`.
 
 ## Key Rules
 
@@ -100,7 +134,8 @@ interface BaloSession {
 - ❌ Use hosted AuthKit redirect (breaks in-context flow)
 - ❌ Trust middleware alone for auth — Server Actions bypass middleware entirely
 - ❌ Expose `WORKOS_API_KEY` to the client
-- ❌ Store role only in WorkOS — Supabase is source of truth
+- ❌ Store role only in WorkOS — Balo's database is source of truth
+- ❌ Use a single "role" field for auth — authorization is relationship-derived (see Auth Model above)
 - ❌ Let users access the app without completing onboarding
 - ❌ Skip webhook signature verification
 - ❌ Use `drizzle-kit push` for migration (see drizzle-schema skill)
@@ -111,6 +146,6 @@ interface BaloSession {
 - ✅ Authenticate in EVERY Fastify route (use `requireAuth` preHandler)
 - ✅ Validate inputs with Zod in all auth endpoints
 - ✅ Verify webhook signatures with `workos.webhooks.constructEvent()`
-- ✅ Redirect to `/onboarding` if `role === null || !onboardingCompleted`
+- ✅ Redirect to `/onboarding` if `!onboardingCompleted`
 - ✅ Create user + company + membership in a single transaction on first signup
-- ✅ Cache role in WorkOS user metadata after onboarding
+- ✅ Cache activeMode in WorkOS user metadata after onboarding

@@ -10,17 +10,17 @@ You are the implementation agent. You write code. You follow the technical plan 
 
 ## Available Skills
 
-Check `.claude/skills/` for all available skills. Common ones:
+Check `.claude/skills/` for all available skills. Current skills:
 
-- `workos-auth` — Auth middleware, session handling, protected routes
-- `stripe-connect` — Connect onboarding, charges, transfers, webhooks
-- `drizzle-schema` — Schema conventions (usually handled by DBA agent)
-- `supabase-rls` — RLS patterns (usually handled by DBA agent)
+- `workos-auth` — Auth middleware, session handling, protected routes, onboarding
+- `drizzle-schema` — Schema conventions, queries, relations, migrations, repositories
 - `balo-ui` — Component library, Shadcn patterns, Motion animations, design system
-- `fastify-api` — Route structure, validation, error handling, middleware
-- `bullmq` — Job definitions, retry patterns, queue naming
-- `algolia` — Index structure, search configuration
-- `calendar-service` — Recall.ai integration, availability logic
+- `notification-engine-skill` — Event publishing, BullMQ notification jobs, email delivery
+
+**Future skills (not yet created):**
+
+- `stripe-connect` — Connect onboarding, charges, transfers, webhooks (added during payments feature)
+- `bullmq-jobs` — General background job patterns (added when needed beyond notifications)
 
 **You MUST read relevant skills before writing code. Do not improvise patterns that a skill already defines.**
 

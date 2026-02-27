@@ -2,66 +2,52 @@
 
 ## Defining Relations
 
-Relations are defined separately from tables in `apps/api/src/db/relations.ts`. They enable the Drizzle Query API for nested/relational fetches.
+Relations are defined **in the same file as their table**, immediately after the table definition. This keeps related code together and is the established pattern in the codebase.
 
 ```typescript
-// apps/api/src/db/relations.ts
+// packages/db/src/schema/users.ts
+import { pgTable, uuid, text, boolean, timestamp } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { users, expertProfiles, cases, caseParticipants, creditWallets } from './schema';
+import { userModeEnum, userStatusEnum } from './enums';
+import { companyMembers } from './companies';
 
-export const usersRelations = relations(users, ({ one, many }) => ({
-  expertProfile: one(expertProfiles, {
-    fields: [users.id],
-    references: [expertProfiles.userId],
-  }),
-  wallet: one(creditWallets, {
-    fields: [users.id],
-    references: [creditWallets.userId],
-  }),
-  participations: many(caseParticipants),
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workosId: text('workos_id').unique().notNull(),
+  email: text('email').unique().notNull(),
+  // ...
+});
+
+// Relations defined HERE, in the same file
+export const usersRelations = relations(users, ({ many }) => ({
+  companyMemberships: many(companyMembers),
 }));
 
-export const expertProfilesRelations = relations(expertProfiles, ({ one }) => ({
-  user: one(users, {
-    fields: [expertProfiles.userId],
-    references: [users.id],
-  }),
-}));
-
-export const casesRelations = relations(cases, ({ many }) => ({
-  participants: many(caseParticipants),
-}));
-
-export const caseParticipantsRelations = relations(caseParticipants, ({ one }) => ({
-  case: one(cases, {
-    fields: [caseParticipants.caseId],
-    references: [cases.id],
-  }),
-  user: one(users, {
-    fields: [caseParticipants.userId],
-    references: [users.id],
-  }),
-}));
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
 ```
 
 **Rules:**
 
 - Relations do NOT create foreign keys — those are defined in the table schema
 - Relations enable the `.query` API for relational data fetching
-- Define all relations in one file for clear overview of the data model
-- Export relations so they're included when creating the Drizzle client
+- Define relations in the SAME file as the primary table
+- Export relations so they're included via the barrel export in `schema/index.ts`
 
 ## Including Relations in DB Client
 
-```typescript
-// apps/api/src/db/client.ts
-import * as schema from './schema';
-import * as relations from './relations';
+All schemas (including co-located relations) are imported via the barrel export:
 
-export const db = drizzle(connection, {
-  schema: { ...schema, ...relations },
-  casing: 'snake_case',
-});
+```typescript
+// packages/db/src/client.ts
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import * as schema from './schema';
+
+const connectionString = process.env.DATABASE_URL!;
+const client = postgres(connectionString);
+
+export const db = drizzle(client, { schema });
 ```
 
 ## Query API (Relational Queries)
@@ -144,6 +130,8 @@ const activeUsers = await db
   .from(users)
   .where(and(eq(users.role, 'expert'), isNull(users.deletedAt)));
 ```
+
+**Rule:** Always filter `isNull(table.deletedAt)` in queries unless you specifically need soft-deleted rows (e.g., audit, admin views). Repository methods should include this by default.
 
 ### Select with Join
 

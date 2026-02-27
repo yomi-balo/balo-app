@@ -250,25 +250,27 @@ export const verticals = pgTable('verticals', {
 
 ## Schema File Organization
 
-One file per domain. Re-export everything from index.ts:
+One file per domain. Relations co-located with their table. Re-export everything from index.ts:
 
 ```typescript
-// apps/api/src/db/schema/index.ts
-export * from './helpers';
+// packages/db/src/schema/index.ts
+export * from './enums';
 export * from './users';
+export * from './companies';
+export * from './agencies';
 export * from './experts';
-export * from './cases';
-export * from './payments';
-export * from './chat';
+export * from './verticals';
+export * from './guests';
 ```
 
 Keep files focused:
 
-- `users.ts` — users, user preferences
-- `experts.ts` — expert profiles, certifications, availability
-- `cases.ts` — cases, case participants, case messages
-- `payments.ts` — wallets, transactions, invoices
-- `chat.ts` — messages, attachments
+- `enums.ts` — All shared pgEnum definitions
+- `users.ts` — users table + relations + types
+- `companies.ts` — companies, company_members + relations
+- `agencies.ts` — agencies, agency_members + relations
+- `experts.ts` — expert_profiles, expert_skills, expert_certifications + relations
+- `verticals.ts` — verticals, skills, support_types, certifications + relations
 
 ## Zod Schema Patterns
 

@@ -7,15 +7,27 @@ description: Balo design system and UI component patterns using Shadcn/ui, shadc
 
 ## Design DNA
 
-**Tone:** Professional confidence with modern freshness. Not boring enterprise, not adventurous startup. "Monday.com meets Stripe" — polished, approachable, trustworthy.
+**Tone:** Professional confidence with modern warmth. Not boring enterprise, not chaotic startup. Polished, approachable, trustworthy — a platform that justifies $200+/hr consultant rates.
 
-**Target users:** Consultants and enterprise clients. They need to trust the platform with real money and real projects.
+**Target users:** Technology consultants and enterprise clients. They need to trust the platform with real money and real projects. The UI must feel premium enough to match the service quality.
 
 **References:**
 
 - **Monday.com** — Navigation, spacing, micro-interactions, spacious density
 - **Lumen template** (shadcnblocks.com) — Gradient glows, SaaS polish, hero sections
 - **Linear** — Keyboard navigation, snappy transitions (but NOT Linear's density — too compact)
+
+### Design Quality Principles
+
+**Commit to a cohesive aesthetic.** Every screen should feel like it belongs to the same product. Dominant brand color with sharp accents outperforms a timid, evenly-distributed palette. When in doubt, lean into Balo Blue confidently.
+
+**Typography carries authority.** The font stack is the first thing that communicates "professional platform" or "template site." Pair display headings with refined body text. Never settle for defaults when a distinctive choice elevates the experience.
+
+**Orchestrate motion, don't scatter it.** One well-choreographed page load with staggered reveals creates more delight than random hover effects everywhere. Focus animation budget on high-impact moments: first paint, meaningful state changes, success confirmations.
+
+**Create atmosphere, not just layouts.** Backgrounds should create depth — subtle gradients, layered transparencies, gentle texture. Avoid flat white pages with floating cards. The space between and around components matters as much as the components themselves.
+
+**Every detail is intentional.** Shadows should have consistent direction. Border radii should be from a defined set. Spacing should follow a scale. Accidental inconsistency signals carelessness; intentional variation signals sophistication.
 
 ## Component Stack
 
@@ -80,16 +92,26 @@ Balo custom           → Domain-specific components (ExpertCard, CaseTimeline, 
 
 - Never hardcode hex values — always use `text-primary`, `bg-muted`, etc.
 - Status colors are semantic: `text-success`, `text-warning`, `text-destructive`
-- Gradient glows for hero/feature sections: blue → purple → pink spectrum
-- Gradients are MORE vivid in dark mode, subtler in light mode
+- **Hero/feature sections:** Blue → purple gradient spectrum for energy and premium feel
+- **Backgrounds:** Create depth with subtle gradients, layered card shadows, and gentle color washes rather than flat white/dark surfaces. A `bg-gradient-to-b from-background to-muted/30` adds atmosphere without distraction.
+- **Dark mode gradients:** MORE vivid and saturated. Light mode gradients: subtler and softer. Dark mode is where the brand really glows.
+- **Accent usage:** Use `primary` boldly but sparingly — one accent color per viewport section. Too many competing accents create visual noise.
 
 ## Typography
 
-- **Font:** Inter (or Geist Sans as fallback)
-- **Headings:** `font-semibold`, never `font-bold` (too heavy)
-- **Body:** `font-normal`, `leading-relaxed` for readability
-- **Small text/labels:** `text-sm text-muted-foreground`
-- **Code/IDs:** `font-mono text-sm`
+### Font Stack
+
+- **Primary (body):** Geist Sans — clean, modern, excellent for UI text and data-dense screens
+- **Display (headings, hero):** Geist Sans at larger weights, or a distinctive display font for marketing pages
+- **Mono (code, IDs):** Geist Mono — for case IDs, credit amounts, technical references
+
+### Rules
+
+- **Headings:** `font-semibold`, never `font-bold` (too heavy for Geist). Display headings (`text-3xl`+) can use `font-bold` sparingly for hero sections.
+- **Body:** `font-normal`, `leading-relaxed` for readability in paragraphs, `leading-normal` for UI labels
+- **Small text/labels:** `text-sm text-muted-foreground` — muted, not invisible
+- **Numbers/currency:** `font-mono tabular-nums` — ensures columns of numbers align properly
+- **Hierarchy:** Establish clear visual hierarchy through size + weight + color, not just size alone. A `text-sm font-medium text-foreground` label reads louder than a `text-base font-normal text-muted-foreground` description.
 
 ## Spacing & Density
 
@@ -141,7 +163,7 @@ Implemented from day one. Not optional.
 - ✅ Use `FormDescription` helper text on any form field that isn't immediately obvious
 - ✅ Use `focus-visible:ring-2` for keyboard navigation (accessibility)
 - ✅ Test at 375px viewport (mobile) minimum
-- ✅ Use Motion for meaningful transitions, not decoration
+- ✅ Use Motion for orchestrated transitions — prioritize page load reveals and state changes over scattered micro-interactions
 - ✅ Use semantic color tokens, not hardcoded values
 
 ### NEVER
