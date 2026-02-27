@@ -92,7 +92,7 @@ Channel Dispatcher
    Resend     Twilio*    Supabase     Future
                           insert
 
-* SMS provider TBD — Twilio is placeholder
+* SMS provider TBD — Twilio is a placeholder
 ```
 
 ## Decision Tree
