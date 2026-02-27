@@ -79,13 +79,13 @@ export async function createCase(input: CreateCaseInput) {
 ```typescript
 // apps/web/lib/auth/with-auth.ts (extended)
 
-export function withRole<TArgs extends any[], TReturn>(
-  requiredRole: UserRole | UserRole[],
+export function withPlatformRole<TArgs extends any[], TReturn>(
+  requiredRole: ('admin' | 'super_admin') | ('admin' | 'super_admin')[],
   action: AuthenticatedAction<TArgs, TReturn>
 ) {
   return withAuth(async (session, ...args: TArgs) => {
     const roles = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
-    if (!roles.includes(session.user.role as UserRole)) {
+    if (!roles.includes(session.user.platformRole as 'admin' | 'super_admin')) {
       throw new Error('Forbidden');
     }
     return action(session, ...args);
@@ -159,12 +159,12 @@ export async function middleware(req: NextRequest) {
   const refreshedResponse = await refreshSessionIfNeeded(session, req);
 
   // Onboarding check — role not set yet
-  if (!session.user.role && pathname !== ONBOARDING_ROUTE) {
+  if (!session.user.onboardingCompleted && pathname !== ONBOARDING_ROUTE) {
     return NextResponse.redirect(new URL(ONBOARDING_ROUTE, req.url));
   }
 
   // Already onboarded, trying to visit /onboarding
-  if (session.user.role && pathname === ONBOARDING_ROUTE) {
+  if (session.user.onboardingCompleted && pathname === ONBOARDING_ROUTE) {
     return NextResponse.redirect(new URL('/dashboard', req.url));
   }
 
@@ -188,7 +188,7 @@ export const config = {
 import 'server-only';
 import { cookies } from 'next/headers';
 import { SignJWT, jwtVerify } from 'jose';
-import { workos, WORKOS_CLIENT_ID } from '@/lib/workos';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 
 const SECRET = new TextEncoder().encode(process.env.WORKOS_COOKIE_PASSWORD!);
 const COOKIE_NAME = 'balo_session';
@@ -252,8 +252,8 @@ export async function refreshSessionIfNeeded(
   // Check if access token is about to expire
   // If so, use refresh token to get new tokens
   try {
-    const result = await workos.userManagement.authenticateWithRefreshToken({
-      clientId: WORKOS_CLIENT_ID,
+    const result = await getWorkOS().userManagement.authenticateWithRefreshToken({
+      clientId: clientId,
       refreshToken: session.refreshToken,
     });
 
@@ -292,7 +292,7 @@ The Fastify API (`apps/api`) uses a preHandler hook to verify the WorkOS access 
 // apps/api/src/plugins/auth.ts
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fp from 'fastify-plugin';
-import { workos } from '@/lib/workos';
+import { getWorkOS } from '@/lib/auth/config';
 import { db } from '@/db/client';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -322,7 +322,7 @@ async function authPlugin(fastify: FastifyInstance) {
 
     try {
       // Verify the WorkOS access token
-      const { sub: workosUserId } = await workos.userManagement.getJwksUrl(token);
+      const { sub: workosUserId } = await getWorkOS().userManagement.getJwksUrl(token);
       // Note: actual JWT verification uses JWKS from WorkOS
 
       // Load Balo user
@@ -338,20 +338,21 @@ async function authPlugin(fastify: FastifyInstance) {
         id: user.id,
         workosUserId: user.workosUserId,
         email: user.email,
-        role: user.role!,
+        platformRole: user.platformRole,
+        activeMode: user.activeMode,
       };
     } catch (error) {
       return reply.status(401).send({ error: 'Invalid token' });
     }
   });
 
-  // Role check decorator
-  fastify.decorate('requireRole', (roles: string[]) => {
+  // Platform role check decorator (for admin routes)
+  fastify.decorate('requirePlatformRole', (roles: string[]) => {
     return async (req: FastifyRequest, reply: FastifyReply) => {
       if (!req.user) {
         return reply.status(401).send({ error: 'Not authenticated' });
       }
-      if (!roles.includes(req.user.role)) {
+      if (!roles.includes(req.user.platformRole)) {
         return reply.status(403).send({ error: 'Insufficient permissions' });
       }
     };

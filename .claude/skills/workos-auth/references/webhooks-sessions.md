@@ -7,9 +7,9 @@ WorkOS sends webhook events when user data changes. These keep your Supabase `us
 ### Webhook Endpoint
 
 ```typescript
-// apps/api/src/routes/webhooks/workos.ts
+// apps/api/src/routes/webhooks/getWorkOS().ts
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { workos } from '@/lib/workos';
+import { getWorkOS } from '@/lib/auth/config';
 import { db } from '@/db/client';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -33,7 +33,7 @@ export async function workosWebhookRoutes(fastify: FastifyInstance) {
       // CRITICAL: Verify webhook signature. Never skip this.
       let event;
       try {
-        event = await workos.webhooks.constructEvent({
+        event = await getWorkOS().webhooks.constructEvent({
           payload: rawBody,
           sigHeader: signature,
           secret: process.env.WORKOS_WEBHOOK_SECRET!,
@@ -103,7 +103,7 @@ async function handleEmailVerified(data: any) {
 
 ### Webhook Security Rules
 
-1. **Always verify signatures** — use `workos.webhooks.constructEvent()`, never skip
+1. **Always verify signatures** — use `getWorkOS().webhooks.constructEvent()`, never skip
 2. **Use raw body** — signature is computed over raw request body, not parsed JSON
 3. **Idempotency** — webhooks may be delivered more than once; use `event.id` to deduplicate
 4. **Respond 200 quickly** — process heavy work async (queue to BullMQ if needed)
@@ -166,7 +166,7 @@ export async function signOutFull() {
   if (session?.accessToken) {
     try {
       // Revoke the session in WorkOS
-      await workos.userManagement.revokeSession({
+      await getWorkOS().userManagement.revokeSession({
         sessionId: session.sessionId,
       });
     } catch {
@@ -193,7 +193,7 @@ const IMPERSONATION_COOKIE = 'balo_admin_session';
 
 export async function startImpersonation(targetUserId: string): Promise<void> {
   const adminSession = await getSession();
-  if (!adminSession || !['admin', 'super_admin'].includes(adminSession.user.role!)) {
+  if (!adminSession || !['admin', 'super_admin'].includes(adminSession.user.platformRole!)) {
     throw new Error('Only admins can impersonate');
   }
 
@@ -301,7 +301,7 @@ export function withAuth<TArgs extends any[], TReturn>(
 ```env
 # Required — Server
 WORKOS_API_KEY=sk_live_...              # WorkOS secret key
-WORKOS_CLIENT_ID=client_...             # WorkOS client ID
+clientId=client_...             # WorkOS client ID
 WORKOS_COOKIE_PASSWORD=...              # Min 32 chars, session encryption
 WORKOS_REDIRECT_URI=https://balo.expert/callback
 WORKOS_WEBHOOK_SECRET=whsec_...         # Webhook signature secret

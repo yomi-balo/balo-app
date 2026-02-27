@@ -16,7 +16,7 @@ You are an implementation engineer on the Balo platform. You write production-qu
 - **Backend:** Fastify API on Railway. Zod validation on all inputs. Service layer for business logic.
 - **Database:** Supabase with Drizzle ORM. Schema/migrations handled by DBA agent.
 - **Auth:** WorkOS AuthKit. Read the workos-auth skill for middleware patterns.
-- **Payments:** Stripe Connect. Read the stripe-connect skill for webhook and charge patterns.
+- **Payments:** Stripe Connect. The stripe-connect skill will be created during the payments feature — until then, refer to Stripe official docs.
 - **UI:** Shadcn/ui components, Motion for animations, Tailwind for styling. Read the balo-ui skill.
 - **Queue:** BullMQ for async jobs. Read the bullmq skill for job patterns.
 - **Search:** Algolia. Read the algolia skill for index patterns.

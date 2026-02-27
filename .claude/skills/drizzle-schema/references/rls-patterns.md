@@ -14,26 +14,22 @@ Standard Supabase RLS examples use `auth.uid()` and `auth.jwt()`. Balo uses Work
 ## DB Client Setup
 
 ```typescript
-// apps/api/src/db/client.ts
+// packages/db/src/client.ts
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema';
 
 const connectionString = process.env.DATABASE_URL!;
+const client = postgres(connectionString);
 
-// Admin client — bypasses RLS. Use in Fastify API routes (already authed by WorkOS).
-const adminConnection = postgres(connectionString, { prepare: false });
-export const db = drizzle(adminConnection, { schema, casing: 'snake_case' });
-
-// RLS client — respects RLS policies. Use when user context must be enforced at DB level.
-const rlsConnection = postgres(connectionString, { prepare: false });
-export const rlsDb = drizzle(rlsConnection, { schema, casing: 'snake_case' });
+// Admin client — bypasses RLS. Use in API routes and Server Actions (already authed by WorkOS).
+export const db = drizzle(client, { schema });
 ```
 
-**When to use which:**
+**When to use RLS vs admin client:**
 
-- `db` (admin): Fastify API routes, webhooks, BullMQ jobs, server actions — anything where WorkOS middleware already verified the user
-- `rlsDb` (RLS): Edge cases where you want DB-level enforcement as an extra safety net
+- `db` (admin): Fastify API routes, Server Actions, webhooks, BullMQ jobs — anything where WorkOS auth already verified the user
+- RLS client: Edge cases where you want DB-level enforcement as an extra safety net (create a separate connection for this)
 
 ## Enabling RLS on Tables
 

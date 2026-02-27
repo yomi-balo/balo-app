@@ -7,38 +7,38 @@ Balo renders all auth UI itself using Shadcn components + WorkOS headless APIs v
 ## WorkOS SDK Methods (Custom UI)
 
 ```typescript
-import { workos, WORKOS_CLIENT_ID } from '@/lib/workos';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 
 // Create account
-workos.userManagement.createUser({ email, password, firstName, lastName });
+getWorkOS().userManagement.createUser({ email, password, firstName, lastName });
 
 // Email + password login
-workos.userManagement.authenticateWithPassword({ clientId, email, password });
+getWorkOS().userManagement.authenticateWithPassword({ clientId, email, password });
 
 // Exchange auth code (OAuth callback)
-workos.userManagement.authenticateWithCode({ code, clientId });
+getWorkOS().userManagement.authenticateWithCode({ code, clientId });
 
 // OAuth — generate authorization URL
-workos.userManagement.getAuthorizationUrl({
-  provider: 'GoogleOAuth', // or 'GitHubOAuth', 'MicrosoftOAuth'
-  clientId: WORKOS_CLIENT_ID,
+getWorkOS().userManagement.getAuthorizationUrl({
+  provider: 'GoogleOAuth', // or 'MicrosoftOAuth'
+  clientId: clientId,
   redirectUri: process.env.WORKOS_REDIRECT_URI!,
 });
 
 // Password reset
-workos.userManagement.sendPasswordResetEmail({ email, passwordResetUrl: '...' });
-workos.userManagement.resetPassword({ token, newPassword });
+getWorkOS().userManagement.sendPasswordResetEmail({ email, passwordResetUrl: '...' });
+getWorkOS().userManagement.resetPassword({ token, newPassword });
 
 // Email verification
-workos.userManagement.sendVerificationEmail({ userId });
-workos.userManagement.verifyEmail({ userId, code });
+getWorkOS().userManagement.sendVerificationEmail({ userId });
+getWorkOS().userManagement.verifyEmail({ userId, code });
 
 // Refresh session
-workos.userManagement.authenticateWithRefreshToken({ clientId, refreshToken });
+getWorkOS().userManagement.authenticateWithRefreshToken({ clientId, refreshToken });
 
 // Get/update user metadata
-workos.userManagement.getUser(workosUserId);
-workos.userManagement.updateUser(workosUserId, { metadata: { role: 'expert' } });
+getWorkOS().userManagement.getUser(workosUserId);
+getWorkOS().userManagement.updateUser(workosUserId, { metadata: { activeMode: 'expert' } });
 ```
 
 ## AuthModal Component Pattern
@@ -115,7 +115,7 @@ export function AuthModal({
 import 'server-only';
 
 import { z } from 'zod';
-import { workos, WORKOS_CLIENT_ID } from '@/lib/workos';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 import { setAuthSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
 import { users, companies, companyMembers } from '@balo/db/schema';
@@ -131,7 +131,7 @@ export async function signUp(input: z.infer<typeof signUpSchema>) {
   const validated = signUpSchema.parse(input);
 
   // 1. Create user in WorkOS
-  const workosUser = await workos.userManagement.createUser({
+  const workosUser = await getWorkOS().userManagement.createUser({
     email: validated.email,
     password: validated.password,
     firstName: validated.firstName,
@@ -139,8 +139,8 @@ export async function signUp(input: z.infer<typeof signUpSchema>) {
   });
 
   // 2. Authenticate to get session tokens
-  const authResult = await workos.userManagement.authenticateWithPassword({
-    clientId: WORKOS_CLIENT_ID,
+  const authResult = await getWorkOS().userManagement.authenticateWithPassword({
+    clientId: clientId,
     email: validated.email,
     password: validated.password,
   });
@@ -150,11 +150,11 @@ export async function signUp(input: z.infer<typeof signUpSchema>) {
     const [newUser] = await tx
       .insert(users)
       .values({
-        workosUserId: workosUser.id,
+        workosId: workosUser.id,
         email: workosUser.email,
         firstName: workosUser.firstName,
         lastName: workosUser.lastName,
-        role: null, // Set during onboarding
+        // activeMode defaults to 'client', updated during onboarding
         onboardingCompleted: false,
       })
       .returning();
@@ -210,7 +210,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
-import { workos, WORKOS_CLIENT_ID } from '@/lib/workos';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 import { setAuthSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
 import { users, companyMembers, expertProfiles } from '@balo/db/schema';
@@ -224,8 +224,8 @@ export async function signIn(input: z.infer<typeof signInSchema>) {
   const validated = signInSchema.parse(input);
 
   // 1. Authenticate with WorkOS
-  const authResult = await workos.userManagement.authenticateWithPassword({
-    clientId: WORKOS_CLIENT_ID,
+  const authResult = await getWorkOS().userManagement.authenticateWithPassword({
+    clientId: clientId,
     email: validated.email,
     password: validated.password,
   });
@@ -250,7 +250,7 @@ export async function signIn(input: z.infer<typeof signInSchema>) {
   }
 
   const expertProfile =
-    user.role === 'expert'
+    user.activeMode === 'expert'
       ? await db.query.expertProfiles.findFirst({
           where: eq(expertProfiles.userId, user.id),
         })
@@ -283,7 +283,7 @@ export async function signIn(input: z.infer<typeof signInSchema>) {
 }
 ```
 
-## OAuth Flow (Google, GitHub)
+## OAuth Flow (Google, Microsoft)
 
 OAuth requires a redirect, but we minimize disruption:
 
@@ -293,10 +293,10 @@ OAuth requires a redirect, but we minimize disruption:
 import 'server-only';
 
 import { redirect } from 'next/navigation';
-import { workos, WORKOS_CLIENT_ID } from '@/lib/workos';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 import { cookies } from 'next/headers';
 
-type OAuthProvider = 'GoogleOAuth' | 'GitHubOAuth' | 'MicrosoftOAuth';
+type OAuthProvider = 'GoogleOAuth' | 'MicrosoftOAuth';
 
 export async function initiateOAuth(provider: OAuthProvider, returnTo?: string) {
   // Store return path so we can redirect back after OAuth
@@ -310,9 +310,9 @@ export async function initiateOAuth(provider: OAuthProvider, returnTo?: string) 
     });
   }
 
-  const url = workos.userManagement.getAuthorizationUrl({
+  const url = getWorkOS().userManagement.getAuthorizationUrl({
     provider,
-    clientId: WORKOS_CLIENT_ID,
+    clientId: clientId,
     redirectUri: process.env.WORKOS_REDIRECT_URI!,
   });
 
@@ -323,7 +323,7 @@ export async function initiateOAuth(provider: OAuthProvider, returnTo?: string) 
 ```typescript
 // apps/web/app/callback/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { workos, WORKOS_CLIENT_ID } from '@/lib/workos';
+import { getWorkOS, clientId } from '@/lib/auth/config';
 import { setAuthSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
 import { users, companies, companyMembers, expertProfiles } from '@balo/db/schema';
@@ -336,9 +336,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const authResult = await workos.userManagement.authenticateWithCode({
+    const authResult = await getWorkOS().userManagement.authenticateWithCode({
       code,
-      clientId: WORKOS_CLIENT_ID,
+      clientId: clientId,
     });
 
     const workosUser = authResult.user;
@@ -357,11 +357,11 @@ export async function GET(req: NextRequest) {
         const [newUser] = await tx
           .insert(users)
           .values({
-            workosUserId: workosUser.id,
+            workosId: workosUser.id,
             email: workosUser.email,
             firstName: workosUser.firstName,
             lastName: workosUser.lastName,
-            role: null,
+            // activeMode defaults to 'client', updated during onboarding
             onboardingCompleted: false,
           })
           .returning();
@@ -401,7 +401,7 @@ export async function GET(req: NextRequest) {
     }
 
     const expertProfile =
-      user.role === 'expert'
+      user.activeMode === 'expert'
         ? await db.query.expertProfiles.findFirst({
             where: eq(expertProfiles.userId, user.id),
           })
@@ -448,24 +448,29 @@ After first authentication, users must complete onboarding before accessing the 
 ```
 1. User authenticates (custom UI modal or OAuth)
    ↓
-2. Callback creates users row with role=NULL, onboarding_completed=false
+2. Callback creates users row with onboarding_completed=false
+   + Creates personal company + company_members row (every user gets a company context)
    ↓
-3. Middleware detects role=null → redirects to /onboarding
+3. Middleware detects !onboardingCompleted → redirects to /onboarding
    ↓
-4. Step 1: "Are you a Client or an Expert?"
+4. Step 1: Welcome, timezone, preferences
    ↓
-5a. CLIENT PATH:
-    → Company name (optional), preferences
-    → Set role='client', onboarding_completed=true
+5. Step 2: "How will you use Balo?" — sets activeMode
+   ↓
+6a. CLIENT PATH:
+    → Company details (optional)
+    → Set activeMode='client', onboardingCompleted=true
     → Redirect to /dashboard
    ↓
-5b. EXPERT PATH:
-    → Multi-step: skills, bio, hourly rate, timezone, calendar
-    → Set role='expert', onboarding_completed=true
-    → Create expert_profiles row
-    → Cache { role: 'expert' } in WorkOS user metadata
+6b. EXPERT PATH:
+    → Multi-step: skills, bio, hourly rate, calendar
+    → Set activeMode='expert', onboardingCompleted=true
+    → Create expert_profiles row (approvedAt=null — pending approval)
+    → Cache { activeMode: 'expert' } in WorkOS user metadata
     → Redirect to /expert/dashboard
 ```
+
+**Note:** Users can later switch modes via the mode switcher. Choosing "client" during onboarding doesn't prevent becoming an expert later (and vice versa). The onboarding choice sets their initial default.
 
 ```typescript
 // apps/web/app/(auth)/actions/complete-onboarding.ts
@@ -474,26 +479,28 @@ import 'server-only';
 
 import { z } from 'zod';
 import { withAuth } from '@/lib/auth/with-auth';
-import { db } from '@/lib/db';
+import { db } from '@balo/db';
 import { users, expertProfiles } from '@balo/db/schema';
 import { eq } from 'drizzle-orm';
-import { workos } from '@/lib/workos';
+import { getWorkOS } from '@/lib/auth/config';
 
 const clientOnboardingSchema = z.object({
-  role: z.literal('client'),
+  activeMode: z.literal('client'),
   companyName: z.string().optional(),
+  timezone: z.string(),
 });
 
 const expertOnboardingSchema = z.object({
-  role: z.literal('expert'),
-  title: z.string().min(1),
+  activeMode: z.literal('expert'),
+  headline: z.string().min(1),
   bio: z.string().min(10),
-  hourlyRateCents: z.number().positive(),
+  hourlyRate: z.number().positive(),
   timezone: z.string(),
+  verticalId: z.string().uuid(),
   skills: z.array(z.string().uuid()).min(1),
 });
 
-const onboardingSchema = z.discriminatedUnion('role', [
+const onboardingSchema = z.discriminatedUnion('activeMode', [
   clientOnboardingSchema,
   expertOnboardingSchema,
 ]);
@@ -502,40 +509,42 @@ export const completeOnboarding = withAuth(async (session, input: unknown) => {
   const validated = onboardingSchema.parse(input);
 
   await db.transaction(async (tx) => {
-    // Update user role
+    // Update user preferences and mark onboarding complete
     await tx
       .update(users)
       .set({
-        role: validated.role,
+        activeMode: validated.activeMode,
+        timezone: validated.timezone,
         onboardingCompleted: true,
       })
       .where(eq(users.id, session.user.id));
 
-    // Create expert profile if expert
-    if (validated.role === 'expert') {
+    // Create expert profile if expert path (pending approval)
+    if (validated.activeMode === 'expert') {
       await tx.insert(expertProfiles).values({
         userId: session.user.id,
-        title: validated.title,
+        verticalId: validated.verticalId,
+        headline: validated.headline,
         bio: validated.bio,
-        hourlyRateCents: validated.hourlyRateCents,
-        timezone: validated.timezone,
+        hourlyRate: validated.hourlyRate,
+        type: 'freelancer', // default, can change later
       });
     }
   });
 
-  // Cache role in WorkOS metadata for fast session access
+  // Cache activeMode in WorkOS metadata
   const workosUser = await db.query.users.findFirst({
     where: eq(users.id, session.user.id),
-    columns: { workosUserId: true },
+    columns: { workosId: true },
   });
 
   if (workosUser) {
-    await workos.userManagement.updateUser(workosUser.workosUserId, {
-      metadata: { role: validated.role },
+    await getWorkOS().userManagement.updateUser(workosUser.workosId, {
+      metadata: { activeMode: validated.activeMode },
     });
   }
 
-  return { success: true, role: validated.role };
+  return { success: true, activeMode: validated.activeMode };
 });
 ```
 

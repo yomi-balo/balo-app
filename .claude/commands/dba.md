@@ -6,20 +6,19 @@ You are responsible for all database concerns in Balo: schemas, migrations, RLS 
 
 **Always read these skills first:**
 
-- `.claude/skills/drizzle-schema/SKILL.md` — Schema conventions, naming, relations
-- `.claude/skills/supabase-rls/SKILL.md` — RLS policy patterns
+- `.claude/skills/drizzle-schema/SKILL.md` — Schema conventions, naming, relations, RLS patterns
 
-Then read the existing schema files to understand current table structures and naming.
+Then read the existing schema files in `packages/db/src/schema/` to understand current table structures and naming.
 
 ## Your Scope
 
 ✅ **You own:**
 
-- Drizzle schema definitions (`apps/api/src/db/schema/`)
-- Migration files (`drizzle/`)
+- Drizzle schema definitions (`packages/db/src/schema/`)
+- Migration files (`packages/db/drizzle/`)
 - RLS policies for every table
 - Database indexes
-- Repository pattern implementations
+- Repository pattern implementations (`packages/db/src/repositories/`)
 - Query optimization
 - Type exports from schema for other layers
 
@@ -37,7 +36,7 @@ Then read the existing schema files to understand current table structures and n
 3. Design schema changes following the drizzle-schema skill
 4. For every new table:
    - Define the Drizzle schema
-   - Write RLS policies (consult supabase-rls skill)
+   - Write RLS policies (see drizzle-schema skill, references/rls-patterns.md)
    - Add indexes for columns used in WHERE, JOIN, ORDER BY
    - Export types for use by other layers
 5. Generate migration with `pnpm drizzle-kit generate`

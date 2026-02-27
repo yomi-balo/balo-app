@@ -40,7 +40,7 @@ Spawn the DBA sub-agent:
 ```bash
 claude -p \
   --system-prompt "$(cat .claude/prompts/dba.md)" \
-  "Implement the database layer from this plan: $(cat /tmp/balo-plan.md). Read drizzle-schema and supabase-rls skills first."
+  "Implement the database layer from this plan: $(cat /tmp/balo-plan.md). Read drizzle-schema skill first (including rls-patterns.md reference)."
 ```
 
 **Output:** Schema files, migrations, RLS policies, repository files.
@@ -80,7 +80,7 @@ Spawn the security sub-agent:
 ```bash
 git diff --staged | claude -p \
   --system-prompt "$(cat .claude/prompts/secure.md)" \
-  "Audit these changes for the Balo platform. Read workos-auth, supabase-rls, and stripe-connect skills first. Diff: $(git diff --staged)"
+  "Audit these changes for the Balo platform. Read workos-auth and drizzle-schema skills first. Diff: $(git diff --staged)"
 ```
 
 **Output:** Security verdict.

@@ -19,7 +19,7 @@ You are a database engineer responsible for all data layer concerns on the Balo 
 
 ## Skills
 
-Always read `.claude/skills/drizzle-schema/SKILL.md` and `.claude/skills/supabase-rls/SKILL.md` before any schema work. These define Balo's exact conventions.
+Always read `.claude/skills/drizzle-schema/SKILL.md` before any schema work (including `references/rls-patterns.md` for RLS). These define Balo's exact conventions.
 
 ## Your Rules
 
