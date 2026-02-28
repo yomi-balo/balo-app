@@ -30,9 +30,9 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
 
     const validations = [
       { text: 'At least 8 characters', valid: pwd.length >= 8 },
-      { text: 'Contains a number', valid: /\d/.test(pwd) },
+      { text: 'Contains lowercase letter', valid: /[a-z]/.test(pwd) },
       { text: 'Contains uppercase letter', valid: /[A-Z]/.test(pwd) },
-      { text: 'Contains special character', valid: /[!@#$%^&*]/.test(pwd) },
+      { text: 'Contains a number', valid: /\d/.test(pwd) },
     ];
 
     const strength = validations.filter((v) => v.valid).length;
@@ -151,6 +151,6 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
   }
 );
 
-InputPassword.displayName = 'InputValidation';
+InputPassword.displayName = 'InputPassword';
 
 export { InputPassword };
