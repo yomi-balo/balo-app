@@ -148,6 +148,6 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
   }
 );
 
-InputPassword.displayName = 'InputPassword';
+InputPassword.displayName = 'InputSecureField';
 
 export { InputPassword };
