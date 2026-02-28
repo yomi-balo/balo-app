@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import localFont from 'next/font/local';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
+import { AuthModal } from '@/components/balo/auth/auth-modal';
 import './globals.css';
 
 const geistSans = localFont({
@@ -29,6 +30,7 @@ export default function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <Providers>
           {children}
+          <AuthModal />
           <AppFooter />
         </Providers>
       </body>
