@@ -4,10 +4,11 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ArrowLeft, CheckCircle2, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
 import { Button } from '@/components/ui/button';
 import { InputFloating } from '@/components/enhanced/input-floating';
+import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from './auth-header';
 import { placeholderForgotPassword } from './placeholder-actions';
@@ -47,12 +48,11 @@ export function ForgotPasswordForm({
     <div className="flex flex-col gap-6">
       <AnimatePresence mode="wait">
         {!isSuccess ? (
-          <motion.div
+          <BlurFade
             key="form"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
+            managed
+            duration={0.2}
+            direction="up"
             className="flex flex-col gap-6"
           >
             <AuthHeader
@@ -104,14 +104,13 @@ export function ForgotPasswordForm({
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to sign in
             </Button>
-          </motion.div>
+          </BlurFade>
         ) : (
-          <motion.div
+          <BlurFade
             key="success"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.3, ease: 'easeOut' }}
+            managed
+            duration={0.3}
+            direction="up"
             className="flex flex-col items-center gap-4 py-4 text-center"
           >
             <div className="bg-success/10 flex h-14 w-14 items-center justify-center rounded-full">
@@ -144,7 +143,7 @@ export function ForgotPasswordForm({
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to sign in
             </Button>
-          </motion.div>
+          </BlurFade>
         )}
       </AnimatePresence>
     </div>

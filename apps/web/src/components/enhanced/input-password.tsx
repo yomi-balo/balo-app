@@ -1,7 +1,14 @@
 'use client';
 
+/**
+ * Password input with strength meter — adapted from @shadcn-space/input-04.
+ * Registry source: shadcn-space/input/input-04.tsx
+ * Balo adaptations: forwardRef for RHF, floating label (from input-09),
+ * semantic color tokens (destructive/warning/info/success), h-11 density.
+ */
+
 import * as React from 'react';
-import { Check, Eye, EyeClosed, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeClosed, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -15,20 +22,20 @@ interface InputPasswordProps extends Omit<React.ComponentProps<'input'>, 'type'>
 
 const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
   ({ label, showStrength = false, className, id: externalId, value, onChange, ...props }, ref) => {
-    const [showPassword, setShowPassword] = React.useState(false);
+    const [isVisible, setIsVisible] = React.useState(false);
     const internalId = React.useId();
     const id = externalId ?? internalId;
 
-    const password = typeof value === 'string' ? value : '';
+    const pwd = typeof value === 'string' ? value : '';
 
-    const requirements = [
-      { text: 'At least 8 characters', valid: password.length >= 8 },
-      { text: 'Lowercase letter (a-z)', valid: /[a-z]/.test(password) },
-      { text: 'Uppercase letter (A-Z)', valid: /[A-Z]/.test(password) },
-      { text: 'Number (0-9)', valid: /\d/.test(password) },
+    const validations = [
+      { text: 'At least 8 characters', valid: pwd.length >= 8 },
+      { text: 'Contains a number', valid: /\d/.test(pwd) },
+      { text: 'Contains uppercase letter', valid: /[A-Z]/.test(pwd) },
+      { text: 'Contains special character', valid: /[!@#$%^&*]/.test(pwd) },
     ];
 
-    const strength = requirements.filter((r) => r.valid).length;
+    const strength = validations.filter((v) => v.valid).length;
 
     const getStrengthColor = (score: number): string => {
       if (score === 0) return 'bg-muted';
@@ -43,7 +50,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
       if (score <= 1) return 'Weak';
       if (score <= 2) return 'Moderate';
       if (score <= 3) return 'Strong';
-      return 'Very strong';
+      return 'Very Strong';
     };
 
     const getStrengthTextColor = (score: number): string => {
@@ -56,7 +63,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
 
     return (
       <div className="w-full space-y-3">
-        {/* Floating label + password input */}
+        {/* Floating label + password input (input-09 pattern) */}
         <div className="group relative w-full">
           <label
             htmlFor={id}
@@ -79,7 +86,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
           <Input
             ref={ref}
             id={id}
-            type={showPassword ? 'text' : 'password'}
+            type={isVisible ? 'text' : 'password'}
             placeholder=" "
             value={value}
             onChange={onChange}
@@ -91,56 +98,52 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
             variant="ghost"
             size="icon"
             className="focus-visible:ring-ring absolute top-0 right-0 h-full px-3 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-2"
-            onClick={() => setShowPassword(!showPassword)}
+            onClick={() => setIsVisible(!isVisible)}
           >
-            {showPassword ? (
+            {isVisible ? (
               <Eye className="text-muted-foreground h-4 w-4" />
             ) : (
               <EyeClosed className="text-muted-foreground h-4 w-4" />
             )}
-            <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
+            <span className="sr-only">{isVisible ? 'Hide password' : 'Show password'}</span>
           </Button>
         </div>
 
-        {/* Strength meter + requirement checklist */}
-        {showStrength && password.length > 0 && (
-          <div className="space-y-2.5">
-            {/* Progress bar */}
-            <div className="space-y-1.5">
-              <div className="bg-secondary h-1.5 w-full overflow-hidden rounded-full">
-                <div
-                  className={cn(
-                    'h-full rounded-full transition-all duration-500 ease-out',
-                    getStrengthColor(strength)
-                  )}
-                  style={{ width: `${(strength / 4) * 100}%` }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-xs font-medium">
-                <span className="text-muted-foreground">Password strength</span>
-                <span className={getStrengthTextColor(strength)}>{getStrengthText(strength)}</span>
-              </div>
+        {/* Strength meter + validation checklist (input-04 pattern) */}
+        {showStrength && pwd.length > 0 && (
+          <div className="space-y-2">
+            <div className="bg-secondary h-1 w-full overflow-hidden rounded-full">
+              <div
+                className={cn(
+                  'h-full transition-all duration-500 ease-out',
+                  getStrengthColor(strength)
+                )}
+                style={{ width: `${(strength / 4) * 100}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-xs font-medium">
+              <span className="text-muted-foreground">Password must contain</span>
+              <span className={getStrengthTextColor(strength)}>{getStrengthText(strength)}</span>
             </div>
 
-            {/* Requirement checklist */}
-            <ul className="space-y-1" aria-label="Password requirements">
-              {requirements.map((req) => (
-                <li
-                  key={req.text}
+            <div className="space-y-1.5 pt-1">
+              {validations.map((v) => (
+                <div
+                  key={v.text}
                   className={cn(
                     'flex items-center gap-2 text-xs transition-colors duration-200',
-                    req.valid ? 'text-success' : 'text-muted-foreground'
+                    v.valid ? 'text-success' : 'text-muted-foreground'
                   )}
                 >
-                  {req.valid ? (
-                    <Check className="h-3 w-3 shrink-0" />
+                  {v.valid ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                   ) : (
-                    <X className="h-3 w-3 shrink-0" />
+                    <X className="h-3.5 w-3.5 shrink-0" />
                   )}
-                  {req.text}
-                </li>
+                  {v.text}
+                </div>
               ))}
-            </ul>
+            </div>
           </div>
         )}
       </div>
@@ -148,6 +151,6 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
   }
 );
 
-InputPassword.displayName = 'InputSecureField';
+InputPassword.displayName = 'InputValidation';
 
 export { InputPassword };

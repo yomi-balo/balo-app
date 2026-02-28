@@ -1,8 +1,9 @@
 'use client';
 
-import { motion, AnimatePresence } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShineBorder } from '@/components/magicui/shine-border';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuthModal } from '@/hooks/use-auth-modal';
@@ -10,18 +11,12 @@ import { SignInForm } from './sign-in-form';
 import { SignUpForm } from './sign-up-form';
 import { ForgotPasswordForm } from './forgot-password-form';
 
-const viewTransition = {
-  initial: { opacity: 0, y: 6, filter: 'blur(6px)' },
-  animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
-  exit: { opacity: 0, y: -6, filter: 'blur(4px)' },
-};
-
 function AuthModalContent(): React.JSX.Element {
   const { view, setView, handleAuthSuccess } = useAuthModal();
 
   return (
     <AnimatePresence mode="wait" initial={false}>
-      <motion.div key={view} {...viewTransition} transition={{ duration: 0.3, ease: 'easeOut' }}>
+      <BlurFade key={view} managed duration={0.3} direction="up" blur="6px">
         {view === 'sign-in' && (
           <SignInForm
             onSuccess={handleAuthSuccess}
@@ -40,7 +35,7 @@ function AuthModalContent(): React.JSX.Element {
             onBackToSignIn={() => setView('sign-in')}
           />
         )}
-      </motion.div>
+      </BlurFade>
     </AnimatePresence>
   );
 }
@@ -54,11 +49,22 @@ export function AuthModal(): React.JSX.Element {
       <Sheet open={isOpen} onOpenChange={(open) => !open && close()}>
         <SheetContent
           side="bottom"
-          className="h-[90dvh] overflow-y-auto rounded-t-2xl px-6 pt-6 pb-8"
+          className="h-[90dvh] overflow-hidden rounded-t-2xl"
           showCloseButton={true}
         >
           <SheetTitle className="sr-only">Authentication</SheetTitle>
-          <AuthModalContent />
+          <ShineBorder
+            shineColor={[
+              'oklch(0.552 0.228 260.9)',
+              'oklch(0.55 0.2 290)',
+              'oklch(0.626 0.186 259.6)',
+            ]}
+            borderWidth={1.5}
+            duration={10}
+          />
+          <div className="overflow-y-auto px-6 pt-6 pb-8" style={{ height: '100%' }}>
+            <AuthModalContent />
+          </div>
         </SheetContent>
       </Sheet>
     );

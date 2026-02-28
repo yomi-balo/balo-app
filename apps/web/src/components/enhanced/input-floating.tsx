@@ -1,5 +1,11 @@
 'use client';
 
+/**
+ * Floating label input — adapted from @shadcn-space/input-09.
+ * Registry source: shadcn-space/input/input-09.tsx
+ * Balo adaptations: forwardRef, reusable props, h-11 density, cn() normalization.
+ */
+
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';

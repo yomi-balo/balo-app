@@ -26,6 +26,11 @@ interface BlurFadeProps extends MotionProps {
   inView?: boolean;
   inViewMargin?: MarginType;
   blur?: string;
+  /**
+   * When true, skip the internal AnimatePresence so a parent
+   * AnimatePresence (e.g. mode="wait") can coordinate exit/enter.
+   */
+  managed?: boolean;
 }
 
 export function BlurFade({
@@ -39,6 +44,7 @@ export function BlurFade({
   inView = false,
   inViewMargin = '-50px',
   blur = '6px',
+  managed = false,
   ...props
 }: BlurFadeProps) {
   const ref = useRef(null);
@@ -58,24 +64,27 @@ export function BlurFade({
     },
   };
   const combinedVariants = variant || defaultVariants;
-  return (
-    <AnimatePresence>
-      <motion.div
-        ref={ref}
-        initial="hidden"
-        animate={isInView ? 'visible' : 'hidden'}
-        exit="hidden"
-        variants={combinedVariants}
-        transition={{
-          delay: 0.04 + delay,
-          duration,
-          ease: 'easeOut',
-        }}
-        className={className}
-        {...props}
-      >
-        {children}
-      </motion.div>
-    </AnimatePresence>
+
+  const content = (
+    <motion.div
+      ref={ref}
+      initial="hidden"
+      animate={isInView ? 'visible' : 'hidden'}
+      exit="hidden"
+      variants={combinedVariants}
+      transition={{
+        delay: 0.04 + delay,
+        duration,
+        ease: 'easeOut',
+      }}
+      className={className}
+      {...props}
+    >
+      {children}
+    </motion.div>
   );
+
+  if (managed) return content;
+
+  return <AnimatePresence>{content}</AnimatePresence>;
 }
