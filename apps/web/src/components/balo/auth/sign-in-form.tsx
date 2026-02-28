@@ -3,14 +3,15 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { AlertCircle, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
-import { Button } from '@/components/ui/button';
 import { InputFloating } from '@/components/enhanced/input-floating';
 import { InputPassword } from '@/components/enhanced/input-password';
 import { SocialAuthButtons } from './social-auth-buttons';
 import { AuthDivider } from './auth-divider';
+import { AuthHeader } from './auth-header';
+import { AuthSubmitButton } from './auth-submit-button';
+import { AuthErrorBanner } from './auth-error-banner';
+import { AuthFooterLink } from './auth-footer-link';
 import { signInSchema, type SignInFormData } from './auth-schemas';
 import { signInAction } from '@/lib/auth/auth-actions';
 
@@ -47,10 +48,7 @@ export function SignInForm({
 
   return (
     <div>
-      <div>
-        <h2 className="text-foreground text-2xl font-semibold tracking-tight">Welcome back</h2>
-        <p className="text-muted-foreground mt-1.5 text-sm">Sign in to your Balo account</p>
-      </div>
+      <AuthHeader title="Welcome back" subtitle="Sign in to your Balo account" />
 
       <div className="mt-6">
         <SocialAuthButtons isLoading={isSubmitting} />
@@ -109,45 +107,12 @@ export function SignInForm({
             </button>
           </div>
 
-          <motion.div whileTap={{ scale: 0.98 }}>
-            <Button
-              type="submit"
-              className="h-11 w-full text-sm font-medium"
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign in'}
-            </Button>
-          </motion.div>
-
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
-                className="overflow-hidden"
-              >
-                <div className="bg-destructive/10 text-destructive flex items-center gap-2 rounded-lg px-4 py-3 text-sm">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{error}</span>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <AuthSubmitButton isLoading={isSubmitting} text="Sign in" />
+          <AuthErrorBanner error={error} />
         </form>
       </Form>
 
-      <p className="text-muted-foreground mt-6 text-center text-sm">
-        Don&apos;t have an account?{' '}
-        <button
-          type="button"
-          onClick={onSwitchToSignUp}
-          className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-md font-medium transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
-        >
-          Sign up
-        </button>
-      </p>
+      <AuthFooterLink text="Don't have an account?" linkText="Sign up" onClick={onSwitchToSignUp} />
     </div>
   );
 }

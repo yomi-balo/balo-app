@@ -3,11 +3,14 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { AlertCircle, ArrowLeft, Loader2, Mail } from 'lucide-react';
+import { ArrowLeft, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
 import { Button } from '@/components/ui/button';
 import { InputFloating } from '@/components/enhanced/input-floating';
+import { AuthHeader } from './auth-header';
+import { AuthSubmitButton } from './auth-submit-button';
+import { AuthErrorBanner } from './auth-error-banner';
 import { forgotPasswordSchema, type ForgotPasswordFormData } from './auth-schemas';
 import { forgotPasswordAction } from '@/lib/auth/auth-actions';
 
@@ -17,7 +20,6 @@ interface ForgotPasswordFormProps {
 
 export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps): React.JSX.Element {
   const [sent, setSent] = useState(false);
-  const [sentEmail, setSentEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const form = useForm<ForgotPasswordFormData>({
@@ -32,7 +34,6 @@ export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps): React.J
     setError(null);
     const result = await forgotPasswordAction(data);
     if (result.success) {
-      setSentEmail(data.email);
       setSent(true);
     } else {
       setError(result.error ?? 'Something went wrong. Please try again.');
@@ -59,12 +60,10 @@ export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps): React.J
           </button>
 
           <div className="mt-4">
-            <h2 className="text-foreground text-2xl font-semibold tracking-tight">
-              Reset your password
-            </h2>
-            <p className="text-muted-foreground mt-1.5 text-sm">
-              Enter your email and we&apos;ll send you a reset link
-            </p>
+            <AuthHeader
+              title="Reset your password"
+              subtitle="Enter your email and we'll send you a reset link"
+            />
           </div>
 
           <Form {...form}>
@@ -89,32 +88,8 @@ export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps): React.J
                 )}
               />
 
-              <motion.div whileTap={{ scale: 0.98 }}>
-                <Button
-                  type="submit"
-                  className="h-11 w-full text-sm font-medium"
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send reset link'}
-                </Button>
-              </motion.div>
-
-              <AnimatePresence>
-                {error && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="bg-destructive/10 text-destructive flex items-center gap-2 rounded-lg px-4 py-3 text-sm">
-                      <AlertCircle className="h-4 w-4 shrink-0" />
-                      <span>{error}</span>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              <AuthSubmitButton isLoading={isSubmitting} text="Send reset link" />
+              <AuthErrorBanner error={error} />
             </form>
           </Form>
         </motion.div>
@@ -132,7 +107,7 @@ export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps): React.J
           </div>
           <h2 className="text-foreground mt-4 text-xl font-semibold">Check your email</h2>
           <p className="text-muted-foreground mt-1.5 text-sm">
-            We sent a reset link to <span className="text-foreground font-medium">{sentEmail}</span>
+            If an account exists with that email, we&apos;ve sent a password reset link.
           </p>
           <Button variant="outline" className="mt-6 w-full" onClick={onBack}>
             Back to sign in

@@ -11,11 +11,9 @@ import type {
 export async function signInAction(
   data: SignInFormData
 ): Promise<{ success: boolean; error?: string }> {
+  // TODO(BAL-169): Replace with WorkOS authenticateWithPassword()
+  void data;
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  console.log('[auth-actions] signIn called with:', { email: data.email });
-  if (data.email === 'error@test.com') {
-    return { success: false, error: 'Invalid email or password. Please try again.' };
-  }
   return { success: true };
 }
 
@@ -26,15 +24,9 @@ export async function signInAction(
 export async function signUpAction(
   data: SignUpFormData
 ): Promise<{ success: boolean; error?: string }> {
+  // TODO(BAL-169): Replace with WorkOS createUser()
+  void data;
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  console.log('[auth-actions] signUp called with:', {
-    email: data.email,
-    firstName: data.firstName,
-    lastName: data.lastName,
-  });
-  if (data.email === 'exists@test.com') {
-    return { success: false, error: 'An account with this email already exists.' };
-  }
   return { success: true };
 }
 
@@ -45,8 +37,9 @@ export async function signUpAction(
 export async function forgotPasswordAction(
   data: ForgotPasswordFormData
 ): Promise<{ success: boolean; error?: string }> {
+  // TODO(BAL-169): Replace with WorkOS sendPasswordResetEmail()
+  void data;
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  console.log('[auth-actions] forgotPassword called with:', { email: data.email });
   return { success: true };
 }
 
@@ -55,6 +48,7 @@ export async function forgotPasswordAction(
  * Will become a Server Action that generates a WorkOS OAuth authorization URL.
  */
 export async function oauthAction(provider: 'google' | 'microsoft'): Promise<void> {
-  console.log('[auth-actions] OAuth initiated for:', provider);
+  // TODO(BAL-169): Replace with WorkOS OAuth URL generation
+  void provider;
   await new Promise((resolve) => setTimeout(resolve, 500));
 }

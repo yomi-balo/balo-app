@@ -42,35 +42,46 @@ function MicrosoftIcon(): React.JSX.Element {
   );
 }
 
+interface OAuthButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  provider: 'google' | 'microsoft';
+  disabled?: boolean;
+}
+
+function OAuthButton({ icon, label, provider, disabled }: OAuthButtonProps): React.JSX.Element {
+  return (
+    <motion.div whileTap={{ scale: 0.98 }}>
+      <Button
+        variant="outline"
+        className="h-11 w-full gap-3 text-sm font-medium"
+        disabled={disabled}
+        onClick={() => {
+          void oauthAction(provider);
+        }}
+      >
+        {icon}
+        {label}
+      </Button>
+    </motion.div>
+  );
+}
+
 export function SocialAuthButtons({ isLoading }: SocialAuthButtonsProps): React.JSX.Element {
   return (
     <div className="space-y-3">
-      <motion.div whileTap={{ scale: 0.98 }}>
-        <Button
-          variant="outline"
-          className="h-11 w-full gap-3 text-sm font-medium"
-          disabled={isLoading}
-          onClick={() => {
-            void oauthAction('google');
-          }}
-        >
-          <GoogleIcon />
-          Continue with Google
-        </Button>
-      </motion.div>
-      <motion.div whileTap={{ scale: 0.98 }}>
-        <Button
-          variant="outline"
-          className="h-11 w-full gap-3 text-sm font-medium"
-          disabled={isLoading}
-          onClick={() => {
-            void oauthAction('microsoft');
-          }}
-        >
-          <MicrosoftIcon />
-          Continue with Microsoft
-        </Button>
-      </motion.div>
+      <OAuthButton
+        icon={<GoogleIcon />}
+        label="Continue with Google"
+        provider="google"
+        disabled={isLoading}
+      />
+      <OAuthButton
+        icon={<MicrosoftIcon />}
+        label="Continue with Microsoft"
+        provider="microsoft"
+        disabled={isLoading}
+      />
     </div>
   );
 }
