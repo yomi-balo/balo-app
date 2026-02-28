@@ -3,16 +3,16 @@
 import { useEffect } from 'react';
 import { useAuthModal } from '@/hooks/use-auth-modal';
 
-export default function LoginPage(): React.JSX.Element {
-  const { openLogin } = useAuthModal();
+export default function SignUpPage(): React.JSX.Element {
+  const { openSignup } = useAuthModal();
 
   useEffect(() => {
-    openLogin();
-  }, [openLogin]);
+    openSignup();
+  }, [openSignup]);
 
   return (
     <div className="text-muted-foreground text-center text-sm">
-      <p>Preparing sign in...</p>
+      <p>Preparing sign up...</p>
     </div>
   );
 }
