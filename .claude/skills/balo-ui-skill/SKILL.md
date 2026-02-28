@@ -49,9 +49,34 @@ Balo custom           → Domain-specific components (ExpertCard, CaseTimeline, 
 
 ### ⚠️ shadcnspace-First Policy
 
-**Always check [shadcnspace.com](https://shadcnspace.com) before reaching for plain shadcn/ui.** Plain shadcn components are functional but generic — they look like every other shadcn app. shadcnspace variants add the micro-interactions, animations, and polish that make Balo feel premium. The extra effort to browse, copy, and normalize a shadcnspace component is always worth it for user-facing UI.
+**Always use shadcnspace variants for user-facing UI.** Plain shadcn components are functional but generic — they look like every other shadcn app. shadcnspace variants add the micro-interactions, animations, and polish that make Balo feel premium.
+
+**How to install:** The `@shadcn-space` registry is configured in `components.json`. Install components via CLI:
+
+```bash
+# Install a specific component (preferred)
+npx shadcn@latest add @shadcn-space/input-04
+
+# Install multiple at once
+npx shadcn@latest add @shadcn-space/input-04 @shadcn-space/input-09
+
+# Or use direct URL (fallback)
+npx shadcn@latest add https://shadcnspace.com/r/input-04.json
+```
 
 **When to use plain shadcn/ui:** Only when shadcnspace has no variant for that component (e.g., Tooltip, Separator, ScrollArea) or when the component is purely structural and invisible to the user (e.g., Form primitives, providers).
+
+### Magic UI — Visual Effects Layer
+
+For landing pages, hero sections, and visual flourishes, use Magic UI. The `@magicui` registry is configured in `components.json`.
+
+```bash
+npx shadcn@latest add @magicui/number-ticker
+npx shadcn@latest add @magicui/border-beam
+npx shadcn@latest add @magicui/shimmer-button
+```
+
+Magic UI covers: text animations, background patterns, border effects, number tickers, animated lists, marquees. It has **zero form/app components** — use shadcnspace for those.
 
 **File organization:**
 
@@ -169,23 +194,25 @@ Implemented from day one. Not optional.
 
 ### Upgrade Table: Instead of Plain Shadcn, Use This
 
-| Component                 | ❌ Plain Shadcn              | ✅ Use Instead                                | Why                                                                   |
-| ------------------------- | ---------------------------- | --------------------------------------------- | --------------------------------------------------------------------- |
-| **Text input**            | `Input`                      | shadcnspace Input-08 (floating label)         | Floating labels save vertical space, feel polished, animate on focus  |
-| **Input with validation** | `Input` + manual error       | shadcnspace Input-04 (validation feedback)    | Integrated error/success states with color transitions, not bolted on |
-| **Textarea**              | `Textarea`                   | shadcnspace Input-06 (character count)        | Shows remaining chars, essential for bios/descriptions with limits    |
-| **Password input**        | `Input type="password"`      | shadcnspace Input-05 (password toggle)        | Eye icon to show/hide, strength indicator — expected UX in 2026       |
-| **Search input**          | `Input` with icon            | shadcnspace Input-03 (search with clear)      | Integrated search icon, clear button, loading spinner                 |
-| **Cards**                 | `Card`                       | shadcnspace Card variants + Motion hover lift | Hover shadow + subtle y-translate makes cards feel interactive        |
-| **Sidebar**               | Custom sidebar               | shadcnspace Sidebar blocks                    | Pre-built collapse, mobile drawer, nav grouping, polish               |
-| **Calendar/date picker**  | shadcn Calendar              | shadcnspace Calendar-03 (date + time slots)   | Side-by-side date and time selection for booking flows                |
-| **Login/signup forms**    | shadcn Form + Input          | shadcnspace Auth blocks                       | Pre-built auth form layouts with social buttons, dividers, polish     |
-| **Pricing cards**         | `Card` with content          | shadcnspace Pricing blocks                    | Feature comparison, highlighted tier, toggle monthly/annual           |
-| **Stat/metric cards**     | `Card` with numbers          | shadcnspace Stats blocks                      | Trend indicators, sparklines, comparison badges                       |
-| **File upload**           | Custom `<input type="file">` | shadcnspace Upload components                 | Drag-and-drop zone, preview, progress bar                             |
-| **Multi-step forms**      | Manual step state            | shadcnspace Stepper variants                  | Progress indicator, step validation, animated transitions             |
-| **Empty states**          | Custom div with text         | shadcnspace Empty state blocks                | Illustration, CTA button, consistent layout                           |
-| **Notification/alert**    | shadcn `Alert`               | shadcnspace Alert variants                    | Icon integration, dismiss animation, action buttons                   |
+| Component                 | ❌ Plain Shadcn              | ✅ Use Instead (CLI install)                    | Why                                                                   |
+| ------------------------- | ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| **Text input**            | `Input`                      | `@shadcn-space/input-09` (floating label)       | Floating labels save vertical space, feel polished, animate on focus  |
+| **Input with validation** | `Input` + manual error       | `@shadcn-space/input-04` (validation feedback)  | Integrated error/success states with color transitions, not bolted on |
+| **Input with error**      | `Input` + manual error       | `@shadcn-space/input-14` (error state)          | Pre-styled error input with proper destructive colors                 |
+| **Required input**        | `Input` + asterisk           | `@shadcn-space/input-15` (required indicator)   | Integrated required asterisk with proper label styling                |
+| **Textarea**              | `Textarea`                   | `@shadcn-space/input-06` (character count)      | Shows remaining chars, essential for bios/descriptions with limits    |
+| **Password input**        | `Input type="password"`      | `@shadcn-space/input-04` (password + strength)  | Eye icon to show/hide, strength indicator — expected UX in 2026       |
+| **Search input**          | `Input` with icon            | `@shadcn-space/input-10` (clear button)         | Integrated clear button, works with search patterns                   |
+| **Input with addons**     | `Input` + wrapper div        | `@shadcn-space/input-08` (add-ons)              | https:// prefix, .com suffix — pre-built URL/domain inputs            |
+| **Cards**                 | `Card`                       | shadcnspace Card variants + Motion hover lift   | Hover shadow + subtle y-translate makes cards feel interactive        |
+| **Sidebar**               | Custom sidebar               | shadcnspace Sidebar blocks                      | Pre-built collapse, mobile drawer, nav grouping, polish               |
+| **Calendar/date picker**  | shadcn Calendar              | `@shadcn-space/calendar-03` (date + time slots) | Side-by-side date and time selection for booking flows                |
+| **Login/signup forms**    | shadcn Form + Input          | shadcnspace Auth blocks                         | Pre-built auth form layouts with social buttons, dividers, polish     |
+| **Pricing cards**         | `Card` with content          | shadcnspace Pricing blocks                      | Feature comparison, highlighted tier, toggle monthly/annual           |
+| **Stat/metric cards**     | `Card` with numbers          | shadcnspace Stats blocks                        | Trend indicators, sparklines, comparison badges                       |
+| **File upload**           | Custom `<input type="file">` | `@shadcn-space/file-upload-01`                  | Drag-and-drop zone, preview, progress bar                             |
+| **Empty states**          | Custom div with text         | shadcnspace Empty state blocks                  | Illustration, CTA button, consistent layout                           |
+| **Notification/alert**    | shadcn `Alert`               | shadcnspace Alert variants                      | Icon integration, dismiss animation, action buttons                   |
 
 ### When Plain Shadcn Is Fine
 
@@ -206,13 +233,34 @@ These components have no meaningful shadcnspace upgrade — use them directly:
 | Data tables               | TanStack Table + shadcn | No shadcnspace alternative for complex tables             |
 | Rich text editor          | Tiptap                  | Specialized, no shadcnspace equivalent                    |
 
-### How to Pull shadcnspace Components
+### How to Install shadcnspace Components
 
-1. Browse [shadcnspace.com/components](https://shadcnspace.com/components) for the variant
-2. Copy the code into `apps/web/src/components/enhanced/`
-3. **Run the Normalization Checklist** (see components-forms.md) — this is mandatory
-4. Test in both light and dark mode
-5. Commit
+**Preferred: CLI install (always try this first)**
+
+```bash
+# The @shadcn-space registry is configured in apps/web/components.json
+npx shadcn@latest add @shadcn-space/input-04
+
+# Install into the enhanced/ directory, then normalize
+# The CLI puts files in components/ui/ by default — move to enhanced/ after install
+```
+
+**After CLI install:**
+
+1. Move the file from `components/ui/` to `components/enhanced/` (if it's a shadcnspace variant)
+2. **Run the Normalization Checklist** (see components-forms.md) — this is mandatory
+3. Test in both light and dark mode
+4. Commit
+
+**Fallback: Direct URL install**
+
+```bash
+npx shadcn@latest add https://shadcnspace.com/r/input-04.json
+```
+
+**Last resort: Manual copy from GitHub**
+
+If CLI install fails, fetch source from `https://github.com/shadcnspace/shadcnspace/tree/main/src` and copy the component code manually.
 
 ## Key Rules
 

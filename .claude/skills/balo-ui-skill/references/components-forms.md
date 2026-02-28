@@ -10,11 +10,13 @@ apps/web/src/components/
 │   ├── input.tsx
 │   └── ...
 ├── enhanced/              # shadcnspace variants (DEFAULT for user-facing UI)
-│   ├── input-floating.tsx       # Input-08: floating label
-│   ├── input-validation.tsx     # Input-04: real-time validation feedback
-│   ├── input-character-count.tsx # Input-06: character counter
-│   ├── input-password.tsx       # Input-05: password toggle + strength
-│   ├── input-search.tsx         # Input-03: search with clear button
+│   ├── input-floating.tsx       # @shadcn-space/input-09: floating label
+│   ├── input-validation.tsx     # @shadcn-space/input-04: real-time validation + password strength
+│   ├── input-error.tsx          # @shadcn-space/input-14: error state
+│   ├── input-required.tsx       # @shadcn-space/input-15: required indicator
+│   ├── input-character-count.tsx # @shadcn-space/input-06: character counter
+│   ├── input-search.tsx         # @shadcn-space/input-10: clear button
+│   ├── input-addons.tsx         # @shadcn-space/input-08: URL prefix/suffix
 │   └── card-hover.tsx           # Card with Motion hover lift
 └── balo/                  # Domain-specific components
     ├── expert-card.tsx
@@ -36,34 +38,67 @@ apps/web/src/components/
 
 **Default to shadcnspace.** Only fall back to plain shadcn when no enhanced variant exists or the component is purely structural.
 
-| Scenario                               | Use                                   | Why                                        |
-| -------------------------------------- | ------------------------------------- | ------------------------------------------ |
-| Any text input in a form               | shadcnspace Input-08 (floating label) | Polished, saves space, animates on focus   |
-| Input that needs validation feedback   | shadcnspace Input-04                  | Integrated error/success color transitions |
-| Bio/description with length limit      | shadcnspace Input-06                  | Built-in character counter                 |
-| Password field                         | shadcnspace Input-05                  | Show/hide toggle + strength indicator      |
-| Search field                           | shadcnspace Input-03                  | Search icon, clear button, loading state   |
-| Clickable card (expert, pricing)       | shadcnspace Card + Motion hover       | Hover lift + shadow = feels interactive    |
-| Auth forms (login, signup)             | shadcnspace Auth blocks               | Social buttons, dividers, layout polish    |
-| Stat/metric display                    | shadcnspace Stats blocks              | Trend arrows, sparklines, comparison       |
-| Empty states                           | shadcnspace Empty state blocks        | Illustration + CTA, consistent pattern     |
-| File/image upload                      | shadcnspace Upload components         | Drag-and-drop, preview, progress bar       |
-| Multi-step flow indicator              | shadcnspace Stepper variants          | Progress dots, step validation, animation  |
-| Simple label-only input (rare)         | shadcn `Input`                        | Only if floating label is genuinely wrong  |
-| Static info card (no interaction)      | shadcn `Card`                         | No click/hover behavior needed             |
-| Basic dropdown                         | shadcn `Select`                       | Standard behavior, no enhanced needed      |
-| Multi-select with search               | shadcn `Combobox` (Command)           | Skill selection — no shadcnspace equiv     |
-| Simple date field (due dates, filters) | shadcn Calendar (react-day-picker)    | Date-only picking                          |
-| Consultation booking                   | shadcnspace Calendar-03               | Date + available time slots side by side   |
+| Scenario                               | Use                                            | Why                                        |
+| -------------------------------------- | ---------------------------------------------- | ------------------------------------------ |
+| Any text input in a form               | `@shadcn-space/input-09` (floating label)      | Polished, saves space, animates on focus   |
+| Input that needs validation feedback   | `@shadcn-space/input-04`                       | Integrated error/success color transitions |
+| Input with error state                 | `@shadcn-space/input-14`                       | Pre-styled destructive color error input   |
+| Required field indicator               | `@shadcn-space/input-15`                       | Integrated asterisk + label styling        |
+| Bio/description with length limit      | `@shadcn-space/input-06`                       | Built-in character counter                 |
+| Password field                         | `@shadcn-space/input-04` (password + strength) | Show/hide toggle + strength indicator      |
+| Search field with clear                | `@shadcn-space/input-10`                       | Clear button, works with search patterns   |
+| URL/domain input                       | `@shadcn-space/input-08`                       | https:// prefix, .com suffix add-ons       |
+| Clickable card (expert, pricing)       | shadcnspace Card + Motion hover                | Hover lift + shadow = feels interactive    |
+| Auth forms (login, signup)             | shadcnspace Auth blocks                        | Social buttons, dividers, layout polish    |
+| Stat/metric display                    | shadcnspace Stats blocks                       | Trend arrows, sparklines, comparison       |
+| Empty states                           | shadcnspace Empty state blocks                 | Illustration + CTA, consistent pattern     |
+| File/image upload                      | `@shadcn-space/file-upload-01`                 | Drag-and-drop, preview, progress bar       |
+| Animated counter (credits, stats)      | `@magicui/number-ticker`                       | Smooth count-up animation                  |
+| Glowing card border (premium feel)     | `@magicui/border-beam`                         | Animated border glow effect                |
+| Simple label-only input (rare)         | shadcn `Input`                                 | Only if floating label is genuinely wrong  |
+| Static info card (no interaction)      | shadcn `Card`                                  | No click/hover behavior needed             |
+| Basic dropdown                         | shadcn `Select`                                | Standard behavior, no enhanced needed      |
+| Multi-select with search               | shadcn `Combobox` (Command)                    | Skill selection — no shadcnspace equiv     |
+| Simple date field (due dates, filters) | shadcn Calendar (react-day-picker)             | Date-only picking                          |
+| Consultation booking                   | `@shadcn-space/calendar-03`                    | Date + available time slots side by side   |
 
-### Pulling Shadcnspace Components
+### Installing Shadcnspace Components
 
-1. Browse https://shadcnspace.com/components
-2. Find the variant you need
-3. Copy the code into `packages/ui/src/components/enhanced/`
-4. **Run the Normalization Checklist (below)**
-5. Test in both light and dark mode
-6. Commit
+**Preferred: CLI install (always try this first)**
+
+The `@shadcn-space` registry is configured in `apps/web/components.json`.
+
+```bash
+# From the apps/web directory:
+npx shadcn@latest add @shadcn-space/input-04    # Password validation
+npx shadcn@latest add @shadcn-space/input-09    # Floating label
+npx shadcn@latest add @shadcn-space/input-14    # Error state
+npx shadcn@latest add @shadcn-space/input-15    # Required indicator
+npx shadcn@latest add @shadcn-space/input-08    # URL add-ons
+npx shadcn@latest add @shadcn-space/input-06    # Character counter
+npx shadcn@latest add @shadcn-space/input-10    # Clear button
+
+# Or use direct URL (fallback)
+npx shadcn@latest add https://shadcnspace.com/r/input-04.json
+```
+
+**After CLI install:**
+
+1. Move the generated file from `components/ui/` to `components/enhanced/`
+2. **Run the Normalization Checklist (below)**
+3. Test in both light and dark mode
+4. Commit
+
+**Registry JSON pattern:** `https://shadcnspace.com/r/{component-name}.json`
+**GitHub source:** `https://github.com/shadcnspace/shadcnspace/tree/main/src`
+
+**For Magic UI visual effects:**
+
+```bash
+npx shadcn@latest add @magicui/number-ticker    # Animated counters (credits)
+npx shadcn@latest add @magicui/border-beam      # Glowing card borders
+npx shadcn@latest add @magicui/shimmer-button    # Premium CTA buttons
+```
 
 ### Component Normalization Checklist
 
