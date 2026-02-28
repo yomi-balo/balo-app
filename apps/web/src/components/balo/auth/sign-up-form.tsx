@@ -53,6 +53,10 @@ export function SignUpForm({ onSuccess, onSwitchToSignIn }: SignUpFormProps): Re
         subtitle="Join Balo to connect with expert consultants"
       />
 
+      <SocialAuthButtons disabled={isSubmitting} />
+
+      <AuthDivider />
+
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -119,7 +123,7 @@ export function SignUpForm({ onSuccess, onSwitchToSignIn }: SignUpFormProps): Re
               <FormItem>
                 <FormControl>
                   <InputPassword
-                    placeholder="Create a password"
+                    label="Create a password"
                     autoComplete="new-password"
                     disabled={isSubmitting}
                     showStrength={true}
@@ -155,10 +159,6 @@ export function SignUpForm({ onSuccess, onSwitchToSignIn }: SignUpFormProps): Re
           </ShimmerButton>
         </form>
       </Form>
-
-      <AuthDivider />
-
-      <SocialAuthButtons disabled={isSubmitting} />
 
       <p className="text-muted-foreground text-center text-sm">
         Already have an account?{' '}

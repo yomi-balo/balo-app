@@ -53,6 +53,10 @@ export function SignInForm({
     <div className="flex flex-col gap-6">
       <AuthHeader title="Welcome back" subtitle="Sign in to your Balo account to continue" />
 
+      <SocialAuthButtons disabled={isSubmitting} />
+
+      <AuthDivider />
+
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
           <FormField
@@ -81,7 +85,7 @@ export function SignInForm({
               <FormItem>
                 <FormControl>
                   <InputPassword
-                    placeholder="Password"
+                    label="Password"
                     autoComplete="current-password"
                     disabled={isSubmitting}
                     showStrength={false}
@@ -127,10 +131,6 @@ export function SignInForm({
           </ShimmerButton>
         </form>
       </Form>
-
-      <AuthDivider />
-
-      <SocialAuthButtons disabled={isSubmitting} />
 
       <p className="text-muted-foreground text-center text-sm">
         Don&apos;t have an account?{' '}

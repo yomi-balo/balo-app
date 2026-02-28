@@ -67,7 +67,7 @@ export function AuthModal(): React.JSX.Element {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && close()}>
       <DialogContent
-        className="relative overflow-hidden border-0 p-0 sm:max-w-[440px]"
+        className="overflow-hidden border-0 p-0 sm:max-w-[440px]"
         showCloseButton={true}
       >
         <DialogTitle className="sr-only">Authentication</DialogTitle>
