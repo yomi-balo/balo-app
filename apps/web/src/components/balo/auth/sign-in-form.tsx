@@ -3,15 +3,14 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
-import { InputFloating } from '@/components/enhanced/input-floating';
-import { InputPassword } from '@/components/enhanced/input-password';
+import { Form } from '@/components/ui/form';
 import { SocialAuthButtons } from './social-auth-buttons';
 import { AuthDivider } from './auth-divider';
 import { AuthHeader } from './auth-header';
 import { AuthSubmitButton } from './auth-submit-button';
 import { AuthErrorBanner } from './auth-error-banner';
 import { AuthFooterLink } from './auth-footer-link';
+import { AuthEmailField, AuthPasswordField } from './auth-form-fields';
 import { signInSchema, type SignInFormData } from './auth-schemas';
 import { signInAction } from '@/lib/auth/auth-actions';
 
@@ -58,44 +57,8 @@ export function SignInForm({
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <FormField
-            control={form.control}
-            name="email"
-            render={({ field, fieldState }) => (
-              <FormItem>
-                <FormControl>
-                  <InputFloating
-                    label="Email address"
-                    type="email"
-                    error={!!fieldState.error}
-                    disabled={isSubmitting}
-                    autoComplete="email"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="password"
-            render={({ field, fieldState }) => (
-              <FormItem>
-                <FormControl>
-                  <InputPassword
-                    label="Password"
-                    error={!!fieldState.error}
-                    disabled={isSubmitting}
-                    autoComplete="current-password"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          <AuthEmailField />
+          <AuthPasswordField autoComplete="current-password" />
 
           <div className="flex justify-end">
             <button
