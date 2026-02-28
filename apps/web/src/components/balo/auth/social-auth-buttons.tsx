@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { placeholderOAuth } from './placeholder-actions';
 
-function GoogleIcon({ className }: { className?: string }): React.JSX.Element {
+function GoogleIcon({ className }: Readonly<{ className?: string }>): React.JSX.Element {
   return (
     <svg
       className={className}
@@ -34,7 +34,7 @@ function GoogleIcon({ className }: { className?: string }): React.JSX.Element {
   );
 }
 
-function MicrosoftIcon({ className }: { className?: string }): React.JSX.Element {
+function MicrosoftIcon({ className }: Readonly<{ className?: string }>): React.JSX.Element {
   return (
     <svg
       className={className}
@@ -58,7 +58,7 @@ interface SocialAuthButtonsProps {
 export function SocialAuthButtons({
   className,
   disabled = false,
-}: SocialAuthButtonsProps): React.JSX.Element {
+}: Readonly<SocialAuthButtonsProps>): React.JSX.Element {
   const [loadingProvider, setLoadingProvider] = useState<'google' | 'microsoft' | null>(null);
   const [error, setError] = useState<string | null>(null);
 

@@ -19,7 +19,10 @@ interface SignUpFormProps {
   onSwitchToSignIn: () => void;
 }
 
-export function SignUpForm({ onSuccess, onSwitchToSignIn }: SignUpFormProps): React.JSX.Element {
+export function SignUpForm({
+  onSuccess,
+  onSwitchToSignIn,
+}: Readonly<SignUpFormProps>): React.JSX.Element {
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<SignUpFormData>({

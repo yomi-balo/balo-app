@@ -21,7 +21,9 @@ interface AuthModalProviderProps {
   children: React.ReactNode;
 }
 
-export function AuthModalProvider({ children }: AuthModalProviderProps): React.JSX.Element {
+export function AuthModalProvider({
+  children,
+}: Readonly<AuthModalProviderProps>): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<AuthView>('sign-in');
   const onSuccessRef = useRef<(() => void) | undefined>(undefined);

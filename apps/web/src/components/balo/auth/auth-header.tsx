@@ -6,7 +6,11 @@ interface AuthHeaderProps {
   className?: string;
 }
 
-export function AuthHeader({ title, subtitle, className }: AuthHeaderProps): React.JSX.Element {
+export function AuthHeader({
+  title,
+  subtitle,
+  className,
+}: Readonly<AuthHeaderProps>): React.JSX.Element {
   return (
     <div className={cn('flex flex-col items-center gap-2 text-center', className)}>
       {/* Logo mark */}

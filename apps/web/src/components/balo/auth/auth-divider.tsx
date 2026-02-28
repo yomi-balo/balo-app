@@ -8,7 +8,7 @@ interface AuthDividerProps {
 export function AuthDivider({
   label = 'or continue with email',
   className,
-}: AuthDividerProps): React.JSX.Element {
+}: Readonly<AuthDividerProps>): React.JSX.Element {
   return (
     <div className={cn('relative flex items-center py-1', className)}>
       <div className="bg-border h-px flex-1" />

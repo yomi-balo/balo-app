@@ -24,7 +24,7 @@ export function SignInForm({
   onSuccess,
   onSwitchToSignUp,
   onForgotPassword,
-}: SignInFormProps): React.JSX.Element {
+}: Readonly<SignInFormProps>): React.JSX.Element {
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<SignInFormData>({

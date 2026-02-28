@@ -2,7 +2,7 @@ interface AuthLayoutProps {
   children: React.ReactNode;
 }
 
-export default function AuthLayout({ children }: AuthLayoutProps): React.JSX.Element {
+export default function AuthLayout({ children }: Readonly<AuthLayoutProps>): React.JSX.Element {
   return (
     <div className="bg-background relative flex min-h-screen items-center justify-center overflow-hidden">
       {/* Gradient glow orbs for atmosphere */}

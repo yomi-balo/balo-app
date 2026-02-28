@@ -22,7 +22,7 @@ interface ForgotPasswordFormProps {
 export function ForgotPasswordForm({
   onSuccess,
   onBackToSignIn,
-}: ForgotPasswordFormProps): React.JSX.Element {
+}: Readonly<ForgotPasswordFormProps>): React.JSX.Element {
   const [isSuccess, setIsSuccess] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');
 
@@ -47,7 +47,46 @@ export function ForgotPasswordForm({
   return (
     <div className="flex flex-col gap-6">
       <AnimatePresence mode="wait">
-        {!isSuccess ? (
+        {isSuccess ? (
+          <BlurFade
+            key="success"
+            managed
+            duration={0.3}
+            direction="up"
+            className="flex flex-col items-center gap-4 py-4 text-center"
+          >
+            <div className="bg-success/10 flex h-14 w-14 items-center justify-center rounded-full">
+              <CheckCircle2 className="text-success h-7 w-7" />
+            </div>
+
+            <div className="space-y-2">
+              <h2 className="text-foreground text-xl font-semibold">Check your email</h2>
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                We&apos;ve sent a password reset link to{' '}
+                <span className="text-foreground font-medium">{submittedEmail}</span>
+              </p>
+            </div>
+
+            <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+              Didn&apos;t receive the email? Check your spam folder or{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSuccess(false);
+                  form.reset();
+                }}
+                className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+              >
+                try again
+              </button>
+            </p>
+
+            <Button type="button" variant="outline" className="mt-2" onClick={onBackToSignIn}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to sign in
+            </Button>
+          </BlurFade>
+        ) : (
           <BlurFade
             key="form"
             managed
@@ -101,45 +140,6 @@ export function ForgotPasswordForm({
             </Form>
 
             <Button type="button" variant="ghost" className="mx-auto" onClick={onBackToSignIn}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to sign in
-            </Button>
-          </BlurFade>
-        ) : (
-          <BlurFade
-            key="success"
-            managed
-            duration={0.3}
-            direction="up"
-            className="flex flex-col items-center gap-4 py-4 text-center"
-          >
-            <div className="bg-success/10 flex h-14 w-14 items-center justify-center rounded-full">
-              <CheckCircle2 className="text-success h-7 w-7" />
-            </div>
-
-            <div className="space-y-2">
-              <h2 className="text-foreground text-xl font-semibold">Check your email</h2>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                We&apos;ve sent a password reset link to{' '}
-                <span className="text-foreground font-medium">{submittedEmail}</span>
-              </p>
-            </div>
-
-            <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
-              Didn&apos;t receive the email? Check your spam folder or{' '}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSuccess(false);
-                  form.reset();
-                }}
-                className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
-              >
-                try again
-              </button>
-            </p>
-
-            <Button type="button" variant="outline" className="mt-2" onClick={onBackToSignIn}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to sign in
             </Button>
