@@ -112,7 +112,7 @@ Spawn the UX sub-agent:
 
 ```bash
 git diff --staged --name-only | claude -p \
-  --system-prompt "$(cat .claude/commands/ux.md)" \
+  --system-prompt "$(cat .claude/commands/ux-review.md)" \
   "Validate the UX of these changes against the task: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design.md ] && echo "Original design spec: $(cat /tmp/balo-design.md)") Changed files: $(git diff --staged --name-only). Read each file in full."
 ```
 

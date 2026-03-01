@@ -37,7 +37,7 @@ balo-app/                          Turborepo monorepo
     ├── skills/                    Balo-specific patterns (READ THESE)
 ├── .agents/
 │   └── skills/                    Vendor skills (installed via `npx skills`)
-    └── commands/                  Agent definitions + slash commands (design, architect, build, dba, review, secure, ux, implement)
+    └── commands/                  Agent definitions + slash commands (design, architect, build, dba, review, secure, ux-review, implement)
 ```
 
 ## Tech Stack
