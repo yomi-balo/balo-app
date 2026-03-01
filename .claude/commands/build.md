@@ -16,6 +16,7 @@ Check `.claude/skills/` for all available skills. Current skills:
 - `drizzle-schema` — Schema conventions, queries, relations, migrations, repositories
 - `balo-ui` — Component library, Shadcn patterns, Motion animations, design system
 - `notification-engine-skill` — Event publishing, BullMQ notification jobs, email delivery
+- `vercel-react-best-practices` — React/Next.js performance optimization (57 rules). Read for async patterns, bundle splitting, server component boundaries, re-render optimization.
 
 **Future skills (not yet created):**
 
@@ -61,6 +62,18 @@ Check `.claude/skills/` for all available skills. Current skills:
 - Error handling on every external call (Stripe, WorkOS, DB)
 - Loading states for every async UI operation
 - Error boundaries for every new route segment
+
+## Performance Rules
+
+Follow `.claude/skills/vercel-react-best-practices/SKILL.md` when writing React/Next.js code. Priority rules for Balo:
+
+- **Async waterfalls (CRITICAL):** Expert profiles load profile + availability + ratings + reviews. Use `Promise.all()` for independent fetches. Never sequential awaits for unrelated queries.
+- **Bundle splitting (CRITICAL):** Dynamic import heavy SDKs — Daily.co, Recall.ai, rich text editors, calendar pickers. These must not be in the initial bundle.
+- **Server Components by default:** Pages and layouts are RSC. Only add `'use client'` for hooks, event handlers, or browser APIs.
+- **Serialization boundaries:** Pass only what client components need from RSC — not full database objects.
+- **Defer non-critical scripts:** PostHog, Sentry, and analytics load after hydration.
+
+For detailed patterns with code examples, read `AGENTS.md` in the skill directory.
 
 ## When You're Stuck
 
