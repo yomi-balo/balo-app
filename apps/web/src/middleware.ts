@@ -1,41 +1,21 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { getIronSession } from 'iron-session';
-import { sessionConfig } from '@/lib/auth/config';
-import type { SessionData } from '@/lib/auth/session';
-
-/**
- * Routes that don't require authentication.
- * Auth is checked for everything else as a UX convenience.
- */
-const PUBLIC_PATHS = new Set([
-  '/',
-  '/login',
-  '/signup',
-  '/reset-password',
-  '/experts',
-  '/about',
-  '/pricing',
-  '/contact',
-]);
-
-/**
- * Path prefixes that are always public.
- */
-const PUBLIC_PREFIXES = [
-  '/api/auth/', // Auth callbacks
-  '/api/webhooks/', // Webhook endpoints
-  '/experts/', // Expert profiles (public marketplace)
-  '/_next/', // Next.js internals
-];
+import {
+  getMiddlewareSession,
+  refreshSessionIfNeeded,
+  clearMiddlewareSession,
+} from '@/lib/auth/middleware-session';
+import {
+  isPublicRoute,
+  isAdminRoute,
+  isApiRoute,
+  isValidReturnTo,
+  ONBOARDING_PATH,
+} from '@/lib/auth/route-config';
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
   const requestId = crypto.randomUUID();
-
-  // Always add request ID
-  const responseHeaders = new Headers();
-  responseHeaders.set('x-request-id', requestId);
 
   // Structured JSON log compatible with Axiom ingestion.
   // Pino is not available in Edge Runtime, so we use console.log with JSON.
@@ -50,45 +30,96 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     })
   );
 
-  // Check if path is public
-  const isPublic =
-    PUBLIC_PATHS.has(pathname) || PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  const addRequestId = (res: NextResponse): NextResponse => {
+    res.headers.set('x-request-id', requestId);
+    return res;
+  };
 
-  if (isPublic) {
-    const response = NextResponse.next();
-    response.headers.set('x-request-id', requestId);
-    return response;
+  // ── Public routes — pass through ──────────────────────────────
+  if (isPublicRoute(pathname)) {
+    return addRequestId(NextResponse.next());
   }
 
-  // For protected routes: check session
+  // ── Protected routes — read session ───────────────────────────
   try {
-    const response = NextResponse.next();
-    response.headers.set('x-request-id', requestId);
-
-    const session = await getIronSession<SessionData>(request, response, sessionConfig);
+    const { session, response } = await getMiddlewareSession(request);
 
     if (!session?.user?.id) {
-      // No session — redirect to login with return-to
-      const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('returnTo', pathname);
-      return NextResponse.redirect(loginUrl);
+      return addRequestId(await redirectToLogin(request, pathname));
     }
 
-    // Onboarding check — redirect users who haven't completed onboarding.
-    // Exception: the onboarding route itself and API routes.
-    if (
-      pathname !== '/onboarding' &&
-      !pathname.startsWith('/api/') &&
-      session.user.onboardingCompleted === false
-    ) {
-      return NextResponse.redirect(new URL('/onboarding', request.url));
+    // ── Silent token refresh (only when expired/near-expired) ───
+    const refreshedResponse = await refreshSessionIfNeeded(request, session);
+    const activeResponse = refreshedResponse ?? response;
+
+    // ── Admin route check ───────────────────────────────────────
+    if (isAdminRoute(pathname)) {
+      const role = session.user.platformRole ?? 'user';
+      if (role !== 'admin' && role !== 'super_admin') {
+        return addRequestId(
+          redirectWithCookies(new URL('/dashboard', request.url), activeResponse)
+        );
+      }
     }
 
-    return response;
+    // ── Onboarding checks (skip for API routes) ─────────────────
+    if (!isApiRoute(pathname)) {
+      if (session.user.onboardingCompleted === false && pathname !== ONBOARDING_PATH) {
+        return addRequestId(
+          redirectWithCookies(new URL(ONBOARDING_PATH, request.url), activeResponse)
+        );
+      }
+
+      if (session.user.onboardingCompleted === true && pathname === ONBOARDING_PATH) {
+        return addRequestId(
+          redirectWithCookies(new URL('/dashboard', request.url), activeResponse)
+        );
+      }
+    }
+
+    // ── Proceed with (possibly refreshed) response ──────────────
+    return addRequestId(activeResponse);
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        level: 'error',
+        msg: 'Middleware session error',
+        requestId,
+        path: pathname,
+        error: error instanceof Error ? error.message : 'Unknown',
+        timestamp: new Date().toISOString(),
+      })
+    );
+    return addRequestId(await redirectToLogin(request, pathname));
+  }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────
+
+/** Transfer Set-Cookie headers from a source response to a redirect response. */
+function redirectWithCookies(url: URL, source: NextResponse): NextResponse {
+  const redirect = NextResponse.redirect(url);
+  for (const cookie of source.headers.getSetCookie()) {
+    redirect.headers.append('set-cookie', cookie);
+  }
+  return redirect;
+}
+
+async function redirectToLogin(request: NextRequest, pathname: string): Promise<NextResponse> {
+  const loginUrl = new URL('/login', request.url);
+  const returnTo = pathname + request.nextUrl.search;
+  if (isValidReturnTo(returnTo)) {
+    loginUrl.searchParams.set('returnTo', returnTo);
+  }
+
+  try {
+    const clearedResponse = await clearMiddlewareSession(request);
+    const redirectResponse = NextResponse.redirect(loginUrl);
+    for (const cookie of clearedResponse.headers.getSetCookie()) {
+      redirectResponse.headers.append('set-cookie', cookie);
+    }
+    return redirectResponse;
   } catch {
-    // Session decryption failed — treat as unauthenticated
-    const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('returnTo', pathname);
     return NextResponse.redirect(loginUrl);
   }
 }

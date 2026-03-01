@@ -4,6 +4,8 @@ import 'server-only';
  * Validate the return-to path to prevent open redirect attacks.
  * Only allow relative paths starting with /.
  * Reject absolute URLs, protocol-relative URLs, and paths with special characters.
+ * SYNC: This function is duplicated in route-config.ts (Edge) and validation.ts (Server).
+ * Changes must be applied to both files.
  */
 export function isValidReturnTo(path: string): boolean {
   // Must start with /

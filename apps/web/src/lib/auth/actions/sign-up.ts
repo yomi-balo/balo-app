@@ -68,6 +68,7 @@ export async function signUpAction(input: SignUpFormData): Promise<AuthResult<Si
       lastName: user.lastName,
       activeMode: user.activeMode,
       onboardingCompleted: false,
+      platformRole: 'user',
       companyId: company.id,
       companyName: company.name,
       companyRole: membership.role,

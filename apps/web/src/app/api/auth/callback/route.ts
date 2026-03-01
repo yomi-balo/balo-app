@@ -85,6 +85,7 @@ async function createSession(
     lastName: resolved.user.lastName,
     activeMode: resolved.user.activeMode,
     onboardingCompleted: resolved.user.onboardingCompleted,
+    platformRole: resolved.user.platformRole,
     companyId: resolved.companyId,
     companyName: resolved.companyName,
     companyRole: resolved.companyRole,

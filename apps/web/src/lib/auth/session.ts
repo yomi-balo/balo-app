@@ -11,6 +11,7 @@ export interface SessionUser {
   lastName: string | null;
   activeMode: 'client' | 'expert';
   onboardingCompleted: boolean;
+  platformRole: 'user' | 'admin' | 'super_admin';
 
   // Company context (always present - personal workspace or real company)
   companyId: string;
