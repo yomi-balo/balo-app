@@ -5,3 +5,4 @@ export const userStatusEnum = pgEnum('user_status', ['active', 'inactive', 'susp
 export const companyRoleEnum = pgEnum('company_role', ['owner', 'admin', 'member']);
 export const agencyRoleEnum = pgEnum('agency_role', ['owner', 'admin', 'expert']);
 export const expertTypeEnum = pgEnum('expert_type', ['freelancer', 'agency']);
+export const platformRoleEnum = pgEnum('platform_role', ['user', 'admin', 'super_admin']);

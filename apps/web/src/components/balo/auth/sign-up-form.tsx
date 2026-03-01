@@ -11,7 +11,8 @@ import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from './auth-header';
 import { AuthDivider } from './auth-divider';
 import { SocialAuthButtons } from './social-auth-buttons';
-import { placeholderSignUp } from './placeholder-actions';
+import { useRouter } from 'next/navigation';
+import { signUpAction } from '@/lib/auth/actions';
 import { signUpSchema, type SignUpFormData } from './schemas';
 
 interface SignUpFormProps {
@@ -23,6 +24,7 @@ export function SignUpForm({
   onSuccess,
   onSwitchToSignIn,
 }: Readonly<SignUpFormProps>): React.JSX.Element {
+  const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<SignUpFormData>({
@@ -39,13 +41,14 @@ export function SignUpForm({
 
   const onSubmit = async (data: SignUpFormData): Promise<void> => {
     setFormError(null);
-    try {
-      const result = await placeholderSignUp(data);
-      if (result.success) {
-        onSuccess();
+    const result = await signUpAction(data);
+    if (result.success) {
+      if (result.data?.needsOnboarding) {
+        router.push('/onboarding');
       }
-    } catch {
-      setFormError('Could not create your account. Please try again.');
+      onSuccess();
+    } else {
+      setFormError(result.error);
     }
   };
 

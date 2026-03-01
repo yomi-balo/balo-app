@@ -11,7 +11,7 @@ import { InputFloating } from '@/components/enhanced/input-floating';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from './auth-header';
-import { placeholderForgotPassword } from './placeholder-actions';
+import { forgotPasswordAction } from '@/lib/auth/actions';
 import { forgotPasswordSchema, type ForgotPasswordFormData } from './schemas';
 
 interface ForgotPasswordFormProps {
@@ -25,6 +25,7 @@ export function ForgotPasswordForm({
 }: Readonly<ForgotPasswordFormProps>): React.JSX.Element {
   const [isSuccess, setIsSuccess] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<ForgotPasswordFormData>({
     resolver: zodResolver(forgotPasswordSchema),
@@ -36,11 +37,14 @@ export function ForgotPasswordForm({
   const { isSubmitting } = form.formState;
 
   const onSubmit = async (data: ForgotPasswordFormData): Promise<void> => {
-    const result = await placeholderForgotPassword(data);
+    setFormError(null);
+    const result = await forgotPasswordAction(data);
     if (result.success) {
       setSubmittedEmail(data.email);
       setIsSuccess(true);
       onSuccess();
+    } else {
+      setFormError(result.error);
     }
   };
 
@@ -119,6 +123,12 @@ export function ForgotPasswordForm({
                     </FormItem>
                   )}
                 />
+
+                {formError && (
+                  <p className="text-destructive text-center text-sm" role="alert">
+                    {formError}
+                  </p>
+                )}
 
                 <ShimmerButton
                   type="submit"
