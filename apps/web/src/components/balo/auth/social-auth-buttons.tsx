@@ -76,7 +76,11 @@ export function SocialAuthButtons({
       }
       // Note: redirect() in the Server Action will navigate away.
       // The loading state clears automatically because the page unloads.
-    } catch {
+    } catch (err) {
+      // Next.js redirect() throws a NEXT_REDIRECT error — let it propagate.
+      if (err instanceof Error && err.message?.includes('NEXT_REDIRECT')) {
+        throw err;
+      }
       setError(
         `Could not connect to ${provider === 'google' ? 'Google' : 'Microsoft'}. Please try again.`
       );
