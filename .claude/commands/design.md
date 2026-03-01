@@ -37,6 +37,15 @@ The UI behaves like a helpful guide, not a passive tool. Every screen answers: *
 - **Smart scaffolding when stuck:** templates ("Common Salesforce tasks"), examples ("Here's a great brief"), autofill from previous actions ("You mentioned Sales Cloud last time…"), gentle nudges ("Most teams add success criteria—want to?").
 - **Continuous clarity:** always show where the user is (stepper/progress), what's done vs pending, and what will happen after they click. Reduce uncertainty at every moment.
 
+### Consistency First, Innovation When Earned
+
+Every screen should feel like it belongs to the same product. Before designing a new pattern, check if an existing one already solves the problem — reuse it. Consistent patterns reduce cognitive load and build user confidence.
+
+- **Same problem, same solution:** if the app already has a filter panel, wizard flow, or confirmation dialog pattern — use it. Don't invent a new one unless the existing pattern genuinely fails for this use case.
+- **Read existing screens first:** before designing, look at what's already built. Match navigation placement, card layouts, action patterns, spacing, and motion choreography.
+- **New patterns are welcome — but justify them.** This is a greenfield app, so many problems are being solved for the first time. When you introduce a new pattern, note that it's new and describe when future screens should reuse it.
+- **Break consistency only for better experience.** If a proven pattern doesn't serve the user well in a specific context, deviate — but call it out explicitly in your spec so the team knows it's intentional, not accidental.
+
 ### Delight Is Not Decoration
 
 Every micro-interaction serves exactly one purpose:
