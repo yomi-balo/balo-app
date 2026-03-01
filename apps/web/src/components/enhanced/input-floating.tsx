@@ -26,6 +26,7 @@ const InputFloating = React.forwardRef<HTMLInputElement, InputFloatingProps>(
           className={cn(
             'text-muted-foreground group-focus-within:text-foreground',
             'has-[+input:not(:placeholder-shown)]:text-foreground',
+            'has-[+input:-webkit-autofill]:text-foreground',
             'origin-start absolute top-1/2 block -translate-y-1/2 cursor-text px-2 text-sm',
             'transition-all duration-200',
             'group-focus-within:pointer-events-none group-focus-within:top-0',
@@ -34,7 +35,12 @@ const InputFloating = React.forwardRef<HTMLInputElement, InputFloatingProps>(
             'has-[+input:not(:placeholder-shown)]:top-0',
             'has-[+input:not(:placeholder-shown)]:cursor-default',
             'has-[+input:not(:placeholder-shown)]:text-xs',
-            'has-[+input:not(:placeholder-shown)]:font-medium'
+            'has-[+input:not(:placeholder-shown)]:font-medium',
+            'has-[+input:-webkit-autofill]:pointer-events-none',
+            'has-[+input:-webkit-autofill]:top-0',
+            'has-[+input:-webkit-autofill]:cursor-default',
+            'has-[+input:-webkit-autofill]:text-xs',
+            'has-[+input:-webkit-autofill]:font-medium'
           )}
         >
           <span className="bg-background inline-flex px-1">{label}</span>

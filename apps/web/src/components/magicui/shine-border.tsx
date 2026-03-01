@@ -35,20 +35,17 @@ export function ShineBorder({
   style,
   ...props
 }: Readonly<ShineBorderProps>) {
+  const colors = Array.isArray(shineColor) ? shineColor.join(',') : shineColor;
+
   return (
     <div
       style={
         {
           '--border-width': `${borderWidth}px`,
           '--duration': `${duration}s`,
-          backgroundImage: `radial-gradient(transparent,transparent, ${
-            Array.isArray(shineColor) ? shineColor.join(',') : shineColor
-          },transparent,transparent)`,
-          backgroundSize: '300% 300%',
-          mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-          WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-          WebkitMaskComposite: 'xor',
-          maskComposite: 'exclude',
+          backgroundImage: `linear-gradient(var(--background), var(--background)), radial-gradient(transparent,transparent, ${colors},transparent,transparent)`,
+          backgroundSize: '100% 100%, 300% 300%',
+          backgroundClip: 'content-box, border-box',
           padding: 'var(--border-width)',
           ...style,
         } as React.CSSProperties

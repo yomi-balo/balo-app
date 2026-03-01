@@ -49,7 +49,7 @@ export function AuthModal(): React.JSX.Element {
       <Sheet open={isOpen} onOpenChange={(open) => !open && close()}>
         <SheetContent
           side="bottom"
-          className="h-[90dvh] overflow-hidden rounded-t-2xl"
+          className="max-h-[90dvh] overflow-hidden rounded-t-2xl"
           showCloseButton={true}
         >
           <SheetTitle className="sr-only">Authentication</SheetTitle>
@@ -62,7 +62,7 @@ export function AuthModal(): React.JSX.Element {
             borderWidth={1.5}
             duration={10}
           />
-          <div className="overflow-y-auto px-6 pt-6 pb-8" style={{ height: '100%' }}>
+          <div className="overflow-y-auto px-6 pt-6 pb-8">
             <AuthModalContent />
           </div>
         </SheetContent>
@@ -73,7 +73,7 @@ export function AuthModal(): React.JSX.Element {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && close()}>
       <DialogContent
-        className="overflow-hidden border-0 p-0 sm:max-w-[440px]"
+        className="overflow-hidden rounded-xl border-0 p-0 sm:max-w-[440px]"
         showCloseButton={true}
       >
         <DialogTitle className="sr-only">Authentication</DialogTitle>
