@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { IronSession } from 'iron-session';
 import type { SessionData, SessionUser } from '@/lib/auth/session';
 import { middleware } from './middleware';
@@ -44,7 +44,6 @@ function mockSession(
   user: SessionUser | undefined,
   overrides: Partial<SessionData> = {}
 ): { session: Partial<IronSession<SessionData>>; response: Response } {
-  const { NextResponse } = require('next/server');
   return {
     session: {
       user,
@@ -259,7 +258,6 @@ describe('middleware — token refresh', () => {
     const user = mockSessionUser();
     mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
 
-    const { NextResponse } = require('next/server');
     const refreshedResponse = NextResponse.next();
     refreshedResponse.headers.set('x-refreshed', 'true');
     mockRefreshSessionIfNeeded.mockResolvedValue(refreshedResponse);

@@ -12,6 +12,7 @@ import {
   isValidReturnTo,
   ONBOARDING_PATH,
 } from '@/lib/auth/route-config';
+import { COOKIE_NAME } from '@/lib/auth/session-config';
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
@@ -114,7 +115,7 @@ async function redirectToLogin(request: NextRequest, pathname: string): Promise<
 
   // Only clear session if a cookie actually exists (avoid unnecessary iron-session work
   // on every anonymous page hit)
-  const hasCookie = request.cookies.has('balo_session');
+  const hasCookie = request.cookies.has(COOKIE_NAME);
   if (!hasCookie) {
     return NextResponse.redirect(loginUrl);
   }

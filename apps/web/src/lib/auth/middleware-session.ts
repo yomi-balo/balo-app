@@ -12,7 +12,7 @@ import { WorkOS } from '@workos-inc/node';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import type { SessionData } from './session';
-import { sessionConfig, COOKIE_NAME } from './session-config';
+import { sessionConfig } from './session-config';
 
 /** Buffer before actual JWT expiry to trigger proactive refresh (seconds) */
 const REFRESH_BUFFER_SECONDS = 60;
