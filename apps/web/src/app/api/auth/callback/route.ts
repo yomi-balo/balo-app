@@ -44,7 +44,14 @@ async function resolveOrCreateUser(workosUser: {
     };
   }
 
-  const userWithCompany = await usersRepository.findWithCompany(existing.id);
+  // Sync profile data from OAuth provider on every login.
+  // The provider (Google/Microsoft) is the source of truth for avatar and email verification.
+  const updatedUser = await usersRepository.update(existing.id, {
+    avatarUrl: workosUser.profilePictureUrl ?? existing.avatarUrl,
+    emailVerified: workosUser.emailVerified || existing.emailVerified,
+  });
+
+  const userWithCompany = await usersRepository.findWithCompany(updatedUser.id);
 
   if (!userWithCompany?.companyMemberships?.[0]) {
     throw new Error('User has no company membership');
@@ -53,7 +60,7 @@ async function resolveOrCreateUser(workosUser: {
   const membership = userWithCompany.companyMemberships[0];
 
   return {
-    user: existing,
+    user: updatedUser,
     companyId: membership.company.id,
     companyName: membership.company.name,
     companyRole: membership.role,
@@ -77,6 +84,7 @@ async function createSession(
     firstName: resolved.user.firstName,
     lastName: resolved.user.lastName,
     activeMode: resolved.user.activeMode,
+    onboardingCompleted: resolved.user.onboardingCompleted,
     companyId: resolved.companyId,
     companyName: resolved.companyName,
     companyRole: resolved.companyRole,

@@ -74,19 +74,15 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
       return NextResponse.redirect(loginUrl);
     }
 
-    // Onboarding check
-    // Users who haven't completed onboarding should be redirected there.
+    // Onboarding check — redirect users who haven't completed onboarding.
     // Exception: the onboarding route itself and API routes.
-    // Note: onboardingCompleted is not yet in SessionUser type.
-    // When added, uncomment this block:
-    //
-    // if (
-    //   pathname !== '/onboarding' &&
-    //   !pathname.startsWith('/api/') &&
-    //   session.user.onboardingCompleted === false
-    // ) {
-    //   return NextResponse.redirect(new URL('/onboarding', request.url));
-    // }
+    if (
+      pathname !== '/onboarding' &&
+      !pathname.startsWith('/api/') &&
+      session.user.onboardingCompleted === false
+    ) {
+      return NextResponse.redirect(new URL('/onboarding', request.url));
+    }
 
     return response;
   } catch {

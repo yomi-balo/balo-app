@@ -10,6 +10,7 @@ export interface SessionUser {
   firstName: string | null;
   lastName: string | null;
   activeMode: 'client' | 'expert';
+  onboardingCompleted: boolean;
 
   // Company context (always present - personal workspace or real company)
   companyId: string;

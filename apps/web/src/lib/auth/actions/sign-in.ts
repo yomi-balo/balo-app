@@ -31,20 +31,26 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       password,
     });
 
-    // 3. Find Balo user by WorkOS ID
-    const user = await usersRepository.findByWorkosId(authResponse.user.id);
+    // 3. Find Balo user by WorkOS ID — or auto-create if orphaned.
+    //    An orphaned WorkOS user (exists in WorkOS but not Balo DB) can happen
+    //    if the DB transaction failed during signup. We recover by creating
+    //    the DB user now rather than leaving them permanently locked out.
+    let user = await usersRepository.findByWorkosId(authResponse.user.id);
     if (!user) {
-      // Edge case: user exists in WorkOS but not in Balo DB.
-      // This can happen if DB creation failed during signup.
-      // For safety, return a generic error rather than auto-creating.
-      return {
-        success: false,
-        error: 'Account not found. Please contact support.',
-        code: 'user_not_found_in_db',
-      };
+      const workosUser = authResponse.user;
+      const result = await usersRepository.createWithWorkspace({
+        workosId: workosUser.id,
+        email: workosUser.email,
+        firstName: workosUser.firstName,
+        lastName: workosUser.lastName,
+        avatarUrl: workosUser.profilePictureUrl ?? null,
+        emailVerified: workosUser.emailVerified ?? false,
+        activeMode: 'client',
+      });
+      user = result.user;
     }
 
-    // 4. Load company membership (always exists — created at signup)
+    // 4. Load company membership (always exists — created at signup or recovery above)
     const userWithCompany = await usersRepository.findWithCompany(user.id);
     if (!userWithCompany?.companyMemberships?.[0]) {
       return {
@@ -72,6 +78,7 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       firstName: user.firstName,
       lastName: user.lastName,
       activeMode: user.activeMode,
+      onboardingCompleted: user.onboardingCompleted,
       companyId: membership.company.id,
       companyName: membership.company.name,
       companyRole: membership.role,
