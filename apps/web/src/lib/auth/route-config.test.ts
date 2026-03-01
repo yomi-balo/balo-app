@@ -95,7 +95,7 @@ describe('isValidReturnTo', () => {
   });
 
   it('rejects backslash-based bypasses', () => {
-    expect(isValidReturnTo('/\\evil.com')).toBe(false);
+    expect(isValidReturnTo(String.raw`/\evil.com`)).toBe(false);
   });
 
   it('rejects auth-related paths to prevent redirect loops', () => {

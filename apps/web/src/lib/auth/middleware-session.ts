@@ -39,7 +39,7 @@ function getTokenExpiry(token: string): number | null {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     // JWT uses base64url encoding; atob() expects standard base64
-    const base64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
+    const base64 = parts[1]!.replaceAll('-', '+').replaceAll('_', '/');
     const payload = JSON.parse(atob(base64)) as { exp?: number };
     return payload.exp ?? null;
   } catch {

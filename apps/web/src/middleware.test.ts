@@ -43,18 +43,17 @@ function mockSessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
 function mockSession(
   user: SessionUser | undefined,
   overrides: Partial<SessionData> = {}
-): { session: Partial<IronSession<SessionData>>; response: Response } {
-  return {
-    session: {
-      user,
-      accessToken: 'at_valid',
-      refreshToken: 'rt_valid',
-      ...overrides,
-      save: vi.fn(),
-      destroy: vi.fn(),
-    } as Partial<IronSession<SessionData>>,
-    response: NextResponse.next(),
-  };
+): { session: IronSession<SessionData>; response: Response } {
+  const session = {
+    user,
+    accessToken: 'at_valid',
+    refreshToken: 'rt_valid',
+    ...overrides,
+    save: vi.fn(),
+    destroy: vi.fn(),
+    updateConfig: vi.fn(),
+  } as unknown as IronSession<SessionData>;
+  return { session, response: NextResponse.next() };
 }
 
 function setupAuthenticatedSession(userOverrides: Partial<SessionUser> = {}): void {
@@ -205,15 +204,10 @@ describe('middleware — admin routes', () => {
   });
 
   it('defaults undefined platformRole to user (deny admin)', async () => {
-    setupAuthenticatedSession();
-    // Manually override to simulate old session without platformRole
-    const user = mockSessionUser();
-    const session = mockSession(user);
-    (session.session as Record<string, unknown>).user = {
-      ...user,
-      platformRole: undefined,
-    };
-    mockGetMiddlewareSession.mockResolvedValue(session);
+    // Simulate old session without platformRole
+    const user = mockSessionUser({ platformRole: undefined });
+    mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
+    mockRefreshSessionIfNeeded.mockResolvedValue(null);
 
     const res = await middleware(createRequest('/admin/users'));
     expect(res.status).toBe(307);

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import type { SessionData } from '@/lib/auth/session';
 import {
   getMiddlewareSession,
   refreshSessionIfNeeded,
@@ -43,43 +44,8 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   // ── Protected routes — read session ───────────────────────────
   try {
-    const { session, response } = await getMiddlewareSession(request);
-
-    if (!session?.user?.id) {
-      return addRequestId(await redirectToLogin(request, pathname));
-    }
-
-    // ── Silent token refresh (only when expired/near-expired) ───
-    const refreshedResponse = await refreshSessionIfNeeded(request, session);
-    const activeResponse = refreshedResponse ?? response;
-
-    // ── Admin route check ───────────────────────────────────────
-    if (isAdminRoute(pathname)) {
-      const role = session.user.platformRole ?? 'user';
-      if (role !== 'admin' && role !== 'super_admin') {
-        return addRequestId(
-          redirectWithCookies(new URL('/dashboard', request.url), activeResponse)
-        );
-      }
-    }
-
-    // ── Onboarding checks (skip for API routes) ─────────────────
-    if (!isApiRoute(pathname)) {
-      if (session.user.onboardingCompleted === false && pathname !== ONBOARDING_PATH) {
-        return addRequestId(
-          redirectWithCookies(new URL(ONBOARDING_PATH, request.url), activeResponse)
-        );
-      }
-
-      if (session.user.onboardingCompleted === true && pathname === ONBOARDING_PATH) {
-        return addRequestId(
-          redirectWithCookies(new URL('/dashboard', request.url), activeResponse)
-        );
-      }
-    }
-
-    // ── Proceed with (possibly refreshed) response ──────────────
-    return addRequestId(activeResponse);
+    const result = await handleProtectedRoute(request, pathname);
+    return addRequestId(result);
   } catch (error) {
     console.log(
       JSON.stringify({
@@ -93,6 +59,54 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     );
     return addRequestId(await redirectToLogin(request, pathname));
   }
+}
+
+// ── Protected route handling ─────────────────────────────────────
+
+async function handleProtectedRoute(request: NextRequest, pathname: string): Promise<NextResponse> {
+  const { session, response } = await getMiddlewareSession(request);
+
+  if (!session?.user?.id) {
+    return redirectToLogin(request, pathname);
+  }
+
+  const refreshedResponse = await refreshSessionIfNeeded(request, session);
+  const activeResponse = refreshedResponse ?? response;
+
+  const guardRedirect = checkRouteGuards(session.user, pathname, request.url, activeResponse);
+  if (guardRedirect) {
+    return guardRedirect;
+  }
+
+  return activeResponse;
+}
+
+function checkRouteGuards(
+  user: NonNullable<SessionData['user']>,
+  pathname: string,
+  baseUrl: string,
+  activeResponse: NextResponse
+): NextResponse | null {
+  if (isAdminRoute(pathname)) {
+    const role = user.platformRole ?? 'user';
+    if (role !== 'admin' && role !== 'super_admin') {
+      return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
+    }
+  }
+
+  if (isApiRoute(pathname)) {
+    return null;
+  }
+
+  if (user.onboardingCompleted === false && pathname !== ONBOARDING_PATH) {
+    return redirectWithCookies(new URL(ONBOARDING_PATH, baseUrl), activeResponse);
+  }
+
+  if (user.onboardingCompleted === true && pathname === ONBOARDING_PATH) {
+    return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
+  }
+
+  return null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
