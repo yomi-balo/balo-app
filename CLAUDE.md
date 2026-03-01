@@ -35,8 +35,9 @@ balo-app/                          Turborepo monorepo
 │   └── typescript-config/         Shared tsconfig
 └── .claude/
     ├── skills/                    Balo-specific patterns (READ THESE)
-    ├── prompts/                   Agent personas (architect, builder, dba, etc.)
-    └── commands/                  Slash commands that load agents
+├── .agents/
+│   └── skills/                    Vendor skills (installed via `npx skills`)
+    └── commands/                  Agent definitions + slash commands (design, architect, build, dba, review, secure, ux-review, implement)
 ```
 
 ## Tech Stack
@@ -62,7 +63,7 @@ balo-app/                          Turborepo monorepo
 
 ## Skills — READ BEFORE CODING
 
-Skills in `.claude/skills/` define Balo's exact patterns. **Always read relevant skills before writing code.** Do not improvise patterns that a skill already defines.
+Skills define exact patterns for this codebase. Balo-specific skills live in `.claude/skills/`, vendor skills (e.g., Vercel React best practices) live in `.agents/skills/`. **Always read relevant skills before writing code.** Do not improvise patterns that a skill already defines.
 
 | Skill                       | When to read                                                    |
 | --------------------------- | --------------------------------------------------------------- |
