@@ -8,7 +8,7 @@ import type { SessionData } from '@/lib/auth/session';
  * Routes that don't require authentication.
  * Auth is checked for everything else as a UX convenience.
  */
-const PUBLIC_PATHS = [
+const PUBLIC_PATHS = new Set([
   '/',
   '/login',
   '/signup',
@@ -17,7 +17,7 @@ const PUBLIC_PATHS = [
   '/about',
   '/pricing',
   '/contact',
-];
+]);
 
 /**
  * Path prefixes that are always public.
@@ -52,8 +52,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   // Check if path is public
   const isPublic =
-    PUBLIC_PATHS.includes(pathname) ||
-    PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+    PUBLIC_PATHS.has(pathname) || PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
   if (isPublic) {
     const response = NextResponse.next();
@@ -101,6 +100,6 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 export const config = {
   matcher: [
     // Match all routes except static files
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+    String.raw`/((?!_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)`,
   ],
 };

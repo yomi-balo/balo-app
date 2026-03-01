@@ -67,7 +67,7 @@ export function SocialAuthButtons({
     setLoadingProvider(provider);
     try {
       // Get current page path for return-to after OAuth
-      const returnTo = window.location.pathname + window.location.search;
+      const returnTo = globalThis.location.pathname + globalThis.location.search;
 
       if (provider === 'google') {
         await initiateGoogleOAuth(returnTo);
