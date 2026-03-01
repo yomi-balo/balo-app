@@ -22,7 +22,9 @@ const REFRESH_BUFFER_SECONDS = 60;
 let _workos: WorkOS;
 function getWorkOS(): WorkOS {
   if (!_workos) {
-    _workos = new WorkOS(process.env.WORKOS_API_KEY!);
+    const apiKey = process.env.WORKOS_API_KEY;
+    if (!apiKey) throw new Error('WORKOS_API_KEY is not set');
+    _workos = new WorkOS(apiKey);
   }
   return _workos;
 }
@@ -38,8 +40,10 @@ function getTokenExpiry(token: string): number | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
+    const encodedPayload = parts[1];
+    if (!encodedPayload) return null;
     // JWT uses base64url encoding; atob() expects standard base64
-    const base64 = parts[1]!.replaceAll('-', '+').replaceAll('_', '/');
+    const base64 = encodedPayload.replaceAll('-', '+').replaceAll('_', '/');
     const payload = JSON.parse(atob(base64)) as { exp?: number };
     return payload.exp ?? null;
   } catch {

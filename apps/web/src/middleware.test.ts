@@ -67,6 +67,13 @@ function setupUnauthenticatedSession(): void {
   mockClearMiddlewareSession.mockResolvedValue(new Response(null, { headers: new Headers() }));
 }
 
+/** Extract redirect Location as a URL. Fails the test if header is missing. */
+function getRedirectUrl(res: Response): URL {
+  const location = res.headers.get('location');
+  expect(location).toBeTruthy();
+  return new URL(location ?? '');
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -127,7 +134,7 @@ describe('middleware — unauthenticated access', () => {
   it('redirects /dashboard to /login?returnTo=/dashboard', async () => {
     const res = await middleware(createRequest('/dashboard'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/login');
     expect(location.searchParams.get('returnTo')).toBe('/dashboard');
   });
@@ -135,7 +142,7 @@ describe('middleware — unauthenticated access', () => {
   it('redirects /settings/profile to /login with returnTo', async () => {
     const res = await middleware(createRequest('/settings/profile'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/login');
     expect(location.searchParams.get('returnTo')).toBe('/settings/profile');
   });
@@ -143,7 +150,7 @@ describe('middleware — unauthenticated access', () => {
   it('redirects /admin/users to /login with returnTo', async () => {
     const res = await middleware(createRequest('/admin/users'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/login');
     expect(location.searchParams.get('returnTo')).toBe('/admin/users');
   });
@@ -151,7 +158,7 @@ describe('middleware — unauthenticated access', () => {
   it('preserves query string in returnTo', async () => {
     const res = await middleware(createRequest('/dashboard?tab=billing'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.searchParams.get('returnTo')).toBe('/dashboard?tab=billing');
   });
 
@@ -199,7 +206,7 @@ describe('middleware — admin routes', () => {
     setupAuthenticatedSession({ platformRole: 'user' });
     const res = await middleware(createRequest('/admin/users'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/dashboard');
   });
 
@@ -211,7 +218,7 @@ describe('middleware — admin routes', () => {
 
     const res = await middleware(createRequest('/admin/users'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/dashboard');
   });
 });
@@ -221,7 +228,7 @@ describe('middleware — onboarding', () => {
     setupAuthenticatedSession({ onboardingCompleted: false });
     const res = await middleware(createRequest('/dashboard'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/onboarding');
   });
 
@@ -235,7 +242,7 @@ describe('middleware — onboarding', () => {
     setupAuthenticatedSession({ onboardingCompleted: true });
     const res = await middleware(createRequest('/onboarding'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/dashboard');
   });
 
@@ -275,7 +282,7 @@ describe('middleware — session errors', () => {
 
     const res = await middleware(createRequest('/dashboard'));
     expect(res.status).toBe(307);
-    const location = new URL(res.headers.get('location')!);
+    const location = getRedirectUrl(res);
     expect(location.pathname).toBe('/login');
   });
 
