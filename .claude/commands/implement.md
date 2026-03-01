@@ -17,9 +17,24 @@ Your first step is to gather full context:
 
 ## Workflow
 
-### Phase 0: Design (if feature has user-facing UI)
+### Phase 0: Design (conditional)
 
-Only skip this phase if the task is purely backend/infrastructure with no UI impact.
+**Run design phase when the task involves:**
+- New pages, screens, or flows users will see
+- Significant changes to existing UI (new sections, redesigned layouts, new interaction patterns)
+- User-facing wizards, onboarding steps, or multi-step flows
+- Features where the *feeling* matters (booking, payment, first-time experience)
+
+**Skip design phase when the task is:**
+- Backend-only (API endpoints, services, queue jobs, migrations)
+- Infrastructure (CI/CD, env config, deployment, monitoring)
+- Bug fixes with an obvious UI fix (broken button, wrong color, missing field)
+- Refactors with no visible UI change
+- Adding a single field or column to an existing screen
+- Purely technical (auth middleware, RLS policies, webhook handlers)
+- Performance improvements (caching, query optimization, bundle size)
+
+**When in doubt, skip.** The user can always invoke `/design` standalone before running `/implement` if they want the design phase for a borderline task.
 
 Spawn the designer sub-agent:
 
@@ -141,7 +156,7 @@ If CHANGES_REQUESTED → back to Phase 3 with fix instructions.
 
 1. Never skip Phase 1 (architect) or Phase 6 (review)
 2. Always run Phase 5 (security) — no exceptions
-3. Phase 0 (design) requires user approval before proceeding — this is the only human gate in the pipeline
+3. Phase 0 (design) is conditional — skip it for backend, infra, bug fixes, refactors, and simple UI additions. When it runs, it requires user approval before proceeding.
 4. Each sub-agent gets a fresh context window — do not pollute with prior agent outputs except the technical plan and design spec
 5. If any agent references a skill, it must read the skill file before acting
 6. Stage changes with `git add -A` before running review agents so they see the full diff
