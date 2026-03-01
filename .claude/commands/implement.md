@@ -20,12 +20,14 @@ Your first step is to gather full context:
 ### Phase 0: Design (conditional)
 
 **Run design phase when the task involves:**
+
 - New pages, screens, or flows users will see
 - Significant changes to existing UI (new sections, redesigned layouts, new interaction patterns)
 - User-facing wizards, onboarding steps, or multi-step flows
-- Features where the *feeling* matters (booking, payment, first-time experience)
+- Features where the _feeling_ matters (booking, payment, first-time experience)
 
 **Skip design phase when the task is:**
+
 - Backend-only (API endpoints, services, queue jobs, migrations)
 - Infrastructure (CI/CD, env config, deployment, monitoring)
 - Bug fixes with an obvious UI fix (broken button, wrong color, missing field)
