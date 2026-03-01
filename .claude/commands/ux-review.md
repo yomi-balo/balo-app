@@ -19,9 +19,10 @@ You validate user experience quality for the Balo platform. You do not write fea
 ## Before Reviewing
 
 1. Read the task description or PRD to understand the intended user journey
-2. Read `.claude/skills/balo-ui-skill/SKILL.md` for the design system and component patterns
-3. Read `.agents/skills/vercel-react-best-practices/SKILL.md` — focus on sections 1 (waterfalls) and 2 (bundle size) for performance that users feel
-4. Read each changed file in full
+2. If a design spec exists (`/tmp/balo-design.md`), read it — the implementation should match the specified motion choreography, components, microcopy, and guided flow design
+3. Read `.claude/skills/balo-ui-skill/SKILL.md` for the design system and component patterns
+4. Read `.agents/skills/vercel-react-best-practices/SKILL.md` — focus on sections 1 (waterfalls) and 2 (bundle size) for performance that users feel
+5. Read each changed file in full
 
 ## Quick Checklist
 
@@ -91,6 +92,41 @@ Every user interaction must have these states accounted for:
 - Are destructive actions confirmed?
 - Are success messages specific (not just "Done")?
 - Do long operations show progress?
+
+### Experience Craft
+
+These checks validate that the implementation delivers on Balo's design philosophy. If a design spec was produced for this feature, review the code against it. If not, apply these standards independently.
+
+**Motion & Delight:**
+
+- Does the page have a choreographed entrance (staggered reveal, fade-in) — or does content just hard-render?
+- Do clickable cards have hover lift (`y: -4`) + shadow transition?
+- Do buttons have press feedback (`scale: 0.98` or similar)?
+- Are state transitions animated (loading → loaded, empty → populated) — or hard-swapped?
+- Do success moments have celebration beyond a toast (animated checkmark, summary card reveal, brief shimmer)?
+- Is `prefers-reduced-motion` respected — animations degrade gracefully?
+
+**One Step Ahead:**
+
+- Do dashboards and workspaces include a "next step" or suggested action prompt?
+- Are multi-step processes using progressive disclosure (wizard, 1-2 questions at a time) — or one long form?
+- Do empty states include actionable guidance (templates, examples, CTAs) — not just "No data"?
+- Are smart defaults provided where possible instead of blank fields?
+
+**Microcopy Quality:**
+
+- Are button labels action-specific ("Book Session", "Send Brief") — not generic ("Submit", "Continue")?
+- Is loading text meaningful ("Finding available experts...") — not generic ("Loading...")?
+- Are success messages specific ("Session booked with Alex for Tuesday 2pm") — not vague ("Success!")?
+- Do high-stakes moments (booking, payment, destructive actions) have anxiety-reducing copy ("You won't be charged until...", "You can cancel up to 2 hours before")?
+- Do error messages avoid blaming the user and always show a recovery path?
+
+**Premium Feel:**
+
+- Are shadcnspace enhanced components used for user-facing inputs/cards — not plain shadcn where an upgrade exists?
+- Are backgrounds creating depth (subtle gradients, layered cards) — not flat white/dark with floating elements?
+- Are semantic color tokens used throughout — no hardcoded hex/rgb values?
+- Is dark mode working correctly with appropriate contrast and vivid accents?
 
 ## Output Format
 
