@@ -11,7 +11,8 @@ import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from './auth-header';
 import { AuthDivider } from './auth-divider';
 import { SocialAuthButtons } from './social-auth-buttons';
-import { placeholderSignIn } from './placeholder-actions';
+import { useRouter } from 'next/navigation';
+import { signInAction } from '@/lib/auth/actions';
 import { signInSchema, type SignInFormData } from './schemas';
 
 interface SignInFormProps {
@@ -25,6 +26,7 @@ export function SignInForm({
   onSwitchToSignUp,
   onForgotPassword,
 }: Readonly<SignInFormProps>): React.JSX.Element {
+  const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<SignInFormData>({
@@ -39,13 +41,14 @@ export function SignInForm({
 
   const onSubmit = async (data: SignInFormData): Promise<void> => {
     setFormError(null);
-    try {
-      const result = await placeholderSignIn(data);
-      if (result.success) {
-        onSuccess();
+    const result = await signInAction(data);
+    if (result.success) {
+      if (result.data?.needsOnboarding) {
+        router.push('/onboarding');
       }
-    } catch {
-      setFormError('Invalid email or password. Please try again.');
+      onSuccess();
+    } else {
+      setFormError(result.error);
     }
   };
 

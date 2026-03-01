@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { placeholderOAuth } from './placeholder-actions';
+import { initiateGoogleOAuth, initiateMicrosoftOAuth } from '@/lib/auth/actions';
 
 function GoogleIcon({ className }: Readonly<{ className?: string }>): React.JSX.Element {
   return (
@@ -66,12 +66,20 @@ export function SocialAuthButtons({
     setError(null);
     setLoadingProvider(provider);
     try {
-      await placeholderOAuth(provider);
+      // Get current page path for return-to after OAuth
+      const returnTo = window.location.pathname + window.location.search;
+
+      if (provider === 'google') {
+        await initiateGoogleOAuth(returnTo);
+      } else {
+        await initiateMicrosoftOAuth(returnTo);
+      }
+      // Note: redirect() in the Server Action will navigate away.
+      // The loading state clears automatically because the page unloads.
     } catch {
       setError(
         `Could not connect to ${provider === 'google' ? 'Google' : 'Microsoft'}. Please try again.`
       );
-    } finally {
       setLoadingProvider(null);
     }
   };

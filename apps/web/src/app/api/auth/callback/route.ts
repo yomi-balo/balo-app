@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
+import { isValidReturnTo } from '@/lib/auth/validation';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   const code = req.nextUrl.searchParams.get('code');
 
   if (!code) {
@@ -28,15 +29,17 @@ export async function GET(req: NextRequest) {
     let companyId: string;
     let companyName: string;
     let companyRole: 'owner' | 'admin' | 'member';
+    let isNewUser = false;
 
     if (!user) {
-      // === NEW USER SIGNUP ===
-      // Create user, personal workspace, and membership in a transaction
+      // === NEW USER SIGNUP VIA OAUTH ===
+      isNewUser = true;
       const result = await usersRepository.createWithWorkspace({
         workosId: workosUser.id,
         email: workosUser.email,
         firstName: workosUser.firstName,
         lastName: workosUser.lastName,
+        avatarUrl: workosUser.profilePictureUrl ?? null,
         emailVerified: workosUser.emailVerified ?? false,
         activeMode: 'client',
       });
@@ -46,8 +49,7 @@ export async function GET(req: NextRequest) {
       companyName = result.company.name;
       companyRole = result.membership.role;
     } else {
-      // === EXISTING USER LOGIN ===
-      // Fetch user with company membership
+      // === EXISTING USER LOGIN VIA OAUTH ===
       const userWithCompany = await usersRepository.findWithCompany(user.id);
 
       if (!userWithCompany?.companyMemberships?.[0]) {
@@ -60,7 +62,7 @@ export async function GET(req: NextRequest) {
       companyRole = membership.role;
     }
 
-    // Optionally fetch expert profile if user has one
+    // Load expert profile if user has one
     const expertProfile = await db.query.expertProfiles.findFirst({
       where: (profiles, { eq }) => eq(profiles.userId, user.id),
     });
@@ -73,13 +75,9 @@ export async function GET(req: NextRequest) {
       firstName: user.firstName,
       lastName: user.lastName,
       activeMode: user.activeMode,
-
-      // Company context
       companyId,
       companyName,
       companyRole,
-
-      // Expert context (if exists)
       ...(expertProfile && {
         expertProfileId: expertProfile.id,
         verticalId: expertProfile.verticalId,
@@ -89,13 +87,35 @@ export async function GET(req: NextRequest) {
     session.refreshToken = refreshToken;
     await session.save();
 
-    // Redirect based on active mode
-    const redirectUrl =
-      user.activeMode === 'expert' && expertProfile ? '/expert/dashboard' : '/dashboard';
+    // Determine redirect URL
+    let redirectUrl: string;
 
-    return NextResponse.redirect(new URL(redirectUrl, req.url));
+    // Check onboarding status
+    const needsOnboarding = isNewUser || user.onboardingCompleted === false;
+
+    if (needsOnboarding) {
+      redirectUrl = '/onboarding';
+    } else {
+      // Check for return-to cookie (set by OAuth initiation action)
+      const returnTo = req.cookies.get('auth_return_to')?.value;
+
+      if (returnTo && isValidReturnTo(returnTo)) {
+        redirectUrl = returnTo;
+      } else {
+        // Default: route based on active mode
+        redirectUrl =
+          user.activeMode === 'expert' && expertProfile ? '/expert/dashboard' : '/dashboard';
+      }
+    }
+
+    const response = NextResponse.redirect(new URL(redirectUrl, req.url));
+
+    // Clear the return-to cookie
+    response.cookies.delete('auth_return_to');
+
+    return response;
   } catch (error) {
-    console.error('Auth callback error:', error);
+    console.error('Auth callback error:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.redirect(new URL('/login?error=auth_failed', req.url));
   }
 }

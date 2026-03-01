@@ -1,6 +1,6 @@
 import { pgTable, uuid, text, boolean, timestamp } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { userModeEnum, userStatusEnum } from './enums';
+import { userModeEnum, userStatusEnum, platformRoleEnum } from './enums';
 import { companyMembers } from './companies';
 
 export const users = pgTable('users', {
@@ -15,12 +15,14 @@ export const users = pgTable('users', {
   firstName: text('first_name'),
   lastName: text('last_name'),
   avatarUrl: text('avatar_url'),
+  platformRole: platformRoleEnum('platform_role').default('user').notNull(),
   phone: text('phone'),
 
   // Preferences
   activeMode: userModeEnum('active_mode').default('client').notNull(),
   timezone: text('timezone').default('UTC'),
   currency: text('currency').default('AUD'),
+  onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
 
   // Status
   status: userStatusEnum('status').default('active').notNull(),

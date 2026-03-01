@@ -1,9 +1,11 @@
 'use server';
 
-import { redirect } from 'next/navigation';
-import { getSession } from './session';
+import 'server-only';
 
-export async function logoutAction() {
+import { redirect } from 'next/navigation';
+import { getSession } from '../session';
+
+export async function logoutAction(): Promise<void> {
   const session = await getSession();
   session.destroy();
   redirect('/');

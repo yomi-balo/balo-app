@@ -1,3 +1,5 @@
+import 'server-only';
+
 import { WorkOS } from '@workos-inc/node';
 
 let _workos: WorkOS;
