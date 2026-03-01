@@ -5,8 +5,6 @@
  *   - session.ts imports 'server-only' (fails in Edge Runtime)
  *   - session.ts uses cookies() from next/headers (unavailable in middleware)
  *   - Middleware must use request/response cookies via getIronSession(req, res, config)
- *
- * This file inlines the minimal config and provides middleware-specific operations.
  */
 
 import { getIronSession, type IronSession } from 'iron-session';
@@ -14,20 +12,7 @@ import { WorkOS } from '@workos-inc/node';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import type { SessionData } from './session';
-
-// ── Inlined config (config.ts has 'server-only') ──────────────
-// IMPORTANT: Keep in sync with config.ts sessionConfig
-
-const SESSION_CONFIG = {
-  password: process.env.WORKOS_COOKIE_PASSWORD!,
-  cookieName: 'balo_session',
-  cookieOptions: {
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    sameSite: 'lax' as const,
-    maxAge: 60 * 60 * 24 * 7, // 7 days
-  },
-};
+import { sessionConfig, COOKIE_NAME } from './session-config';
 
 /** Buffer before actual JWT expiry to trigger proactive refresh (seconds) */
 const REFRESH_BUFFER_SECONDS = 60;
@@ -82,7 +67,7 @@ export interface MiddlewareSessionResult {
  */
 export async function getMiddlewareSession(request: NextRequest): Promise<MiddlewareSessionResult> {
   const response = NextResponse.next();
-  const session = await getIronSession<SessionData>(request, response, SESSION_CONFIG);
+  const session = await getIronSession<SessionData>(request, response, sessionConfig);
   return { session, response };
 }
 
@@ -117,7 +102,7 @@ export async function refreshSessionIfNeeded(
 
     // Build a new response with the updated session cookie
     const response = NextResponse.next();
-    const updatedSession = await getIronSession<SessionData>(request, response, SESSION_CONFIG);
+    const updatedSession = await getIronSession<SessionData>(request, response, sessionConfig);
     updatedSession.user = session.user;
     updatedSession.accessToken = result.accessToken;
     updatedSession.refreshToken = result.refreshToken;
@@ -143,7 +128,7 @@ export async function refreshSessionIfNeeded(
  */
 export async function clearMiddlewareSession(request: NextRequest): Promise<NextResponse> {
   const response = NextResponse.next();
-  const session = await getIronSession<SessionData>(request, response, SESSION_CONFIG);
+  const session = await getIronSession<SessionData>(request, response, sessionConfig);
   session.destroy();
   return response;
 }

@@ -112,6 +112,13 @@ async function redirectToLogin(request: NextRequest, pathname: string): Promise<
     loginUrl.searchParams.set('returnTo', returnTo);
   }
 
+  // Only clear session if a cookie actually exists (avoid unnecessary iron-session work
+  // on every anonymous page hit)
+  const hasCookie = request.cookies.has('balo_session');
+  if (!hasCookie) {
+    return NextResponse.redirect(loginUrl);
+  }
+
   try {
     const clearedResponse = await clearMiddlewareSession(request);
     const redirectResponse = NextResponse.redirect(loginUrl);

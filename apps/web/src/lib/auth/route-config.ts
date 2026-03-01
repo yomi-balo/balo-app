@@ -45,8 +45,7 @@ export function isApiRoute(pathname: string): boolean {
 
 /**
  * Validate returnTo path to prevent open redirect attacks.
- * SYNC: This function is duplicated in validation.ts (Server) and route-config.ts (Edge).
- * Changes must be applied to both files.
+ * Single source of truth — validation.ts re-exports this for server-side code.
  */
 export function isValidReturnTo(path: string): boolean {
   if (!path.startsWith('/')) return false;
