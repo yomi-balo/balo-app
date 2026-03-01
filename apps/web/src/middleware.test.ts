@@ -74,6 +74,25 @@ function getRedirectUrl(res: Response): URL {
   return new URL(location ?? '');
 }
 
+/** Assert response is a 307 redirect to /login with the given returnTo param. */
+async function expectLoginRedirect(path: string, expectedReturnTo: string): Promise<Response> {
+  const res = await middleware(createRequest(path));
+  expect(res.status).toBe(307);
+  const location = getRedirectUrl(res);
+  expect(location.pathname).toBe('/login');
+  expect(location.searchParams.get('returnTo')).toBe(expectedReturnTo);
+  return res;
+}
+
+/** Assert response is a 307 redirect to the given pathname. */
+async function expectRedirectTo(path: string, expectedPathname: string): Promise<Response> {
+  const res = await middleware(createRequest(path));
+  expect(res.status).toBe(307);
+  const location = getRedirectUrl(res);
+  expect(location.pathname).toBe(expectedPathname);
+  return res;
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -83,41 +102,23 @@ beforeEach(() => {
 });
 
 describe('middleware — public routes', () => {
-  it('passes through / without session check', async () => {
-    const res = await middleware(createRequest('/'));
+  it.each([
+    '/',
+    '/experts',
+    '/experts/abc-123',
+    '/blog/some-post',
+    '/api/health',
+    '/api/auth/callback',
+    '/login',
+  ])('passes through %s without auth', async (path) => {
+    const res = await middleware(createRequest(path));
     expect(res.status).toBe(200);
+  });
+
+  it('does not call getMiddlewareSession for public routes', async () => {
+    await middleware(createRequest('/'));
+    await middleware(createRequest('/experts'));
     expect(mockGetMiddlewareSession).not.toHaveBeenCalled();
-  });
-
-  it('passes through /experts without session check', async () => {
-    const res = await middleware(createRequest('/experts'));
-    expect(res.status).toBe(200);
-    expect(mockGetMiddlewareSession).not.toHaveBeenCalled();
-  });
-
-  it('passes through /experts/abc-123', async () => {
-    const res = await middleware(createRequest('/experts/abc-123'));
-    expect(res.status).toBe(200);
-  });
-
-  it('passes through /blog/some-post', async () => {
-    const res = await middleware(createRequest('/blog/some-post'));
-    expect(res.status).toBe(200);
-  });
-
-  it('passes through /api/health', async () => {
-    const res = await middleware(createRequest('/api/health'));
-    expect(res.status).toBe(200);
-  });
-
-  it('passes through /api/auth/callback', async () => {
-    const res = await middleware(createRequest('/api/auth/callback'));
-    expect(res.status).toBe(200);
-  });
-
-  it('passes through /login', async () => {
-    const res = await middleware(createRequest('/login'));
-    expect(res.status).toBe(200);
   });
 
   it('always sets x-request-id on public routes', async () => {
@@ -131,35 +132,13 @@ describe('middleware — unauthenticated access', () => {
     setupUnauthenticatedSession();
   });
 
-  it('redirects /dashboard to /login?returnTo=/dashboard', async () => {
-    const res = await middleware(createRequest('/dashboard'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/login');
-    expect(location.searchParams.get('returnTo')).toBe('/dashboard');
-  });
-
-  it('redirects /settings/profile to /login with returnTo', async () => {
-    const res = await middleware(createRequest('/settings/profile'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/login');
-    expect(location.searchParams.get('returnTo')).toBe('/settings/profile');
-  });
-
-  it('redirects /admin/users to /login with returnTo', async () => {
-    const res = await middleware(createRequest('/admin/users'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/login');
-    expect(location.searchParams.get('returnTo')).toBe('/admin/users');
-  });
-
-  it('preserves query string in returnTo', async () => {
-    const res = await middleware(createRequest('/dashboard?tab=billing'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.searchParams.get('returnTo')).toBe('/dashboard?tab=billing');
+  it.each([
+    ['/dashboard', '/dashboard'],
+    ['/settings/profile', '/settings/profile'],
+    ['/admin/users', '/admin/users'],
+    ['/dashboard?tab=billing', '/dashboard?tab=billing'],
+  ])('redirects %s to /login with returnTo=%s', async (path, expectedReturnTo) => {
+    await expectLoginRedirect(path, expectedReturnTo);
   });
 
   it('sets x-request-id on redirect responses', async () => {
@@ -204,10 +183,7 @@ describe('middleware — admin routes', () => {
 
   it('redirects non-admin to /dashboard (not /login)', async () => {
     setupAuthenticatedSession({ platformRole: 'user' });
-    const res = await middleware(createRequest('/admin/users'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/dashboard');
+    await expectRedirectTo('/admin/users', '/dashboard');
   });
 
   it('defaults undefined platformRole to user (deny admin)', async () => {
@@ -215,21 +191,14 @@ describe('middleware — admin routes', () => {
     const user = mockSessionUser({ platformRole: undefined });
     mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
     mockRefreshSessionIfNeeded.mockResolvedValue(null);
-
-    const res = await middleware(createRequest('/admin/users'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/dashboard');
+    await expectRedirectTo('/admin/users', '/dashboard');
   });
 });
 
 describe('middleware — onboarding', () => {
   it('redirects non-onboarded user from /dashboard to /onboarding', async () => {
     setupAuthenticatedSession({ onboardingCompleted: false });
-    const res = await middleware(createRequest('/dashboard'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/onboarding');
+    await expectRedirectTo('/dashboard', '/onboarding');
   });
 
   it('allows non-onboarded user to stay on /onboarding', async () => {
@@ -240,10 +209,7 @@ describe('middleware — onboarding', () => {
 
   it('bounces onboarded user from /onboarding to /dashboard', async () => {
     setupAuthenticatedSession({ onboardingCompleted: true });
-    const res = await middleware(createRequest('/onboarding'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/dashboard');
+    await expectRedirectTo('/onboarding', '/dashboard');
   });
 
   it('skips onboarding check for API routes', async () => {
@@ -279,11 +245,7 @@ describe('middleware — token refresh', () => {
 describe('middleware — session errors', () => {
   it('redirects to /login when session decryption fails', async () => {
     mockGetMiddlewareSession.mockRejectedValue(new Error('Decryption failed'));
-
-    const res = await middleware(createRequest('/dashboard'));
-    expect(res.status).toBe(307);
-    const location = getRedirectUrl(res);
-    expect(location.pathname).toBe('/login');
+    await expectRedirectTo('/dashboard', '/login');
   });
 
   it('still sets x-request-id on error redirects', async () => {
