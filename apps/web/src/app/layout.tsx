@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import localFont from 'next/font/local';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
+import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
 const geistSans = localFont({
@@ -30,6 +31,7 @@ export default function RootLayout({
         <Providers>
           {children}
           <AppFooter />
+          <Toaster richColors position="top-center" />
         </Providers>
       </body>
     </html>
