@@ -21,7 +21,7 @@ export default function OnboardingLayout({
           <div className="bg-primary flex h-12 w-12 items-center justify-center rounded-xl shadow-lg">
             <span className="text-primary-foreground text-lg font-semibold">B</span>
           </div>
-          <h1 className="text-foreground text-2xl font-semibold tracking-tight">balo</h1>
+          <p className="text-foreground text-2xl font-semibold tracking-tight">balo</p>
         </div>
 
         {children}

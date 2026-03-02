@@ -54,13 +54,13 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
 
   return (
     <div className="flex w-full flex-col items-center text-center">
-      <h2
+      <h1
         ref={ref}
         tabIndex={-1}
         className="text-foreground text-xl font-semibold outline-none sm:text-2xl"
       >
         What brings you to Balo?
-      </h2>
+      </h1>
 
       <p className="text-muted-foreground mt-2 text-sm">
         Choose how you&apos;d like to get started. You can always switch later.

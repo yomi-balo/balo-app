@@ -46,13 +46,13 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
 
   return (
     <div className="flex w-full flex-col items-center text-center">
-      <h2
+      <h1
         ref={ref}
         tabIndex={-1}
         className="text-foreground text-xl font-semibold outline-none sm:text-2xl"
       >
-        Set Your Timezone
-      </h2>
+        Set your timezone
+      </h1>
 
       <p className="text-muted-foreground mt-2 text-sm">
         We use this to show you accurate availability and consultation times.
