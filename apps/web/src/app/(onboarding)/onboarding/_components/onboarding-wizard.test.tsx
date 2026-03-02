@@ -23,28 +23,36 @@ vi.mock('@/lib/auth/actions/complete-onboarding', () => ({
 }));
 
 // Stub motion to render plain divs — avoids animation timing issues in tests
-vi.mock('motion/react', () => {
-  const React = require('react');
+const MOTION_PROPS = new Set([
+  'initial',
+  'animate',
+  'exit',
+  'variants',
+  'transition',
+  'whileHover',
+  'whileTap',
+  'custom',
+  'layout',
+]);
+
+vi.mock('motion/react', async () => {
+  const React = await import('react');
   return {
     motion: new Proxy(
       {},
       {
         get: (_target: unknown, prop: string) => {
-          return React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
-            const {
-              initial: _i,
-              animate: _a,
-              exit: _e,
-              variants: _v,
-              transition: _t,
-              whileHover: _wh,
-              whileTap: _wt,
-              custom: _c,
-              layout: _l,
-              ...rest
-            } = props;
-            return React.createElement(prop, { ...rest, ref });
+          const Component = React.forwardRef(function MotionStub(
+            props: Record<string, unknown>,
+            ref: React.Ref<unknown>
+          ) {
+            const filtered: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(props)) {
+              if (!MOTION_PROPS.has(key)) filtered[key] = value;
+            }
+            return React.createElement(prop, { ...filtered, ref });
           });
+          return Component;
         },
       }
     ),
