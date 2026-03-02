@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { forgotPasswordAction } from './forgot-password';
 
+// TODO: add WorkOS integration tests when sendPasswordResetEmail is wired up
 describe('forgotPasswordAction', () => {
   describe('validation errors', () => {
     it('returns error for empty email', async () => {

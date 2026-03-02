@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { IronSession } from 'iron-session';
 import { NextRequest, NextResponse } from 'next/server';
+import type { SessionData } from './session';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -79,6 +81,11 @@ function mockSessionData(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Typed wrapper — one cast in one place rather than scattered `as never`. */
+function mockSession(overrides: Record<string, unknown> = {}): IronSession<SessionData> {
+  return mockSessionData(overrides) as unknown as IronSession<SessionData>;
+}
+
 // ── Environment ─────────────────────────────────────────────────
 
 const originalEnv = { ...process.env };
@@ -126,29 +133,29 @@ describe('getMiddlewareSession', () => {
 describe('refreshSessionIfNeeded', () => {
   describe('skip refresh — no tokens', () => {
     it('returns null when session has no accessToken', async () => {
-      const session = mockSessionData({ accessToken: undefined });
-      const result = await refreshSessionIfNeeded(createRequest(), session as never);
+      const session = mockSession({ accessToken: undefined });
+      const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).toBeNull();
       expect(mockAuthenticateWithRefreshToken).not.toHaveBeenCalled();
     });
 
     it('returns null when session has no refreshToken', async () => {
-      const session = mockSessionData({ refreshToken: undefined });
-      const result = await refreshSessionIfNeeded(createRequest(), session as never);
+      const session = mockSession({ refreshToken: undefined });
+      const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).toBeNull();
     });
 
     it('returns null when both tokens are missing', async () => {
-      const session = mockSessionData({ accessToken: undefined, refreshToken: undefined });
-      const result = await refreshSessionIfNeeded(createRequest(), session as never);
+      const session = mockSession({ accessToken: undefined, refreshToken: undefined });
+      const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).toBeNull();
     });
   });
 
   describe('skip refresh — token still valid', () => {
     it('returns null when access token is not expired', async () => {
-      const session = mockSessionData({ accessToken: createValidToken() });
-      const result = await refreshSessionIfNeeded(createRequest(), session as never);
+      const session = mockSession({ accessToken: createValidToken() });
+      const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).toBeNull();
       expect(mockAuthenticateWithRefreshToken).not.toHaveBeenCalled();
     });
@@ -172,8 +179,8 @@ describe('refreshSessionIfNeeded', () => {
       ['no exp claim in payload', createJwt({ sub: 'user-1' })],
     ])('triggers refresh when token is %s', async (_label, accessToken) => {
       setupRefreshMocks();
-      const session = mockSessionData({ accessToken });
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      const session = mockSession({ accessToken });
+      await refreshSessionIfNeeded(createRequest(), session);
       expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
     });
 
@@ -181,16 +188,16 @@ describe('refreshSessionIfNeeded', () => {
       setupRefreshMocks();
       const invalidPayload = toBase64Url('not-json');
       const token = `header.${invalidPayload}.sig`;
-      const session = mockSessionData({ accessToken: token });
+      const session = mockSession({ accessToken: token });
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
       expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
     });
   });
 
   describe('successful refresh', () => {
     it('calls authenticateWithRefreshToken with clientId and refreshToken', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       const updatedSession = mockSessionData();
       mockGetIronSession.mockResolvedValue(updatedSession);
       mockAuthenticateWithRefreshToken.mockResolvedValue({
@@ -198,7 +205,7 @@ describe('refreshSessionIfNeeded', () => {
         refreshToken: 'new-rt',
       });
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
 
       expect(mockAuthenticateWithRefreshToken).toHaveBeenCalledWith({
         clientId: 'client_test_id',
@@ -207,7 +214,7 @@ describe('refreshSessionIfNeeded', () => {
     });
 
     it('creates a new session with updated tokens', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       const updatedSession = mockSessionData();
       mockGetIronSession.mockResolvedValue(updatedSession);
       mockAuthenticateWithRefreshToken.mockResolvedValue({
@@ -215,7 +222,7 @@ describe('refreshSessionIfNeeded', () => {
         refreshToken: 'new-rt',
       });
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
 
       expect(updatedSession.accessToken).toBe('new-at');
       expect(updatedSession.refreshToken).toBe('new-rt');
@@ -223,7 +230,7 @@ describe('refreshSessionIfNeeded', () => {
 
     it('preserves original session.user in the refreshed session', async () => {
       const originalUser = { id: 'user-1', email: 'test@example.com' };
-      const session = mockSessionData({ accessToken: createExpiredToken(), user: originalUser });
+      const session = mockSession({ accessToken: createExpiredToken(), user: originalUser });
       const updatedSession = mockSessionData();
       mockGetIronSession.mockResolvedValue(updatedSession);
       mockAuthenticateWithRefreshToken.mockResolvedValue({
@@ -231,13 +238,13 @@ describe('refreshSessionIfNeeded', () => {
         refreshToken: 'new-rt',
       });
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
 
       expect(updatedSession.user).toEqual(originalUser);
     });
 
     it('calls save() on the updated session', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       const updatedSession = mockSessionData();
       mockGetIronSession.mockResolvedValue(updatedSession);
       mockAuthenticateWithRefreshToken.mockResolvedValue({
@@ -245,13 +252,13 @@ describe('refreshSessionIfNeeded', () => {
         refreshToken: 'new-rt',
       });
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
 
       expect(updatedSession.save).toHaveBeenCalledOnce();
     });
 
     it('returns a NextResponse (not null)', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       const updatedSession = mockSessionData();
       mockGetIronSession.mockResolvedValue(updatedSession);
       mockAuthenticateWithRefreshToken.mockResolvedValue({
@@ -259,7 +266,7 @@ describe('refreshSessionIfNeeded', () => {
         refreshToken: 'new-rt',
       });
 
-      const result = await refreshSessionIfNeeded(createRequest(), session as never);
+      const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).not.toBeNull();
       expect(result).toBeInstanceOf(NextResponse);
     });
@@ -277,18 +284,18 @@ describe('refreshSessionIfNeeded', () => {
     });
 
     it('returns null when authenticateWithRefreshToken throws', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       mockAuthenticateWithRefreshToken.mockRejectedValue(new Error('token revoked'));
 
-      const result = await refreshSessionIfNeeded(createRequest(), session as never);
+      const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).toBeNull();
     });
 
     it('logs a structured warning when refresh fails', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       mockAuthenticateWithRefreshToken.mockRejectedValue(new Error('token revoked'));
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
 
       expect(consoleLogSpy).toHaveBeenCalledOnce();
       const logArg = consoleLogSpy.mock.calls[0]?.[0] as string;
@@ -299,10 +306,10 @@ describe('refreshSessionIfNeeded', () => {
     });
 
     it('includes "Unknown" as error when non-Error is thrown', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
+      const session = mockSession({ accessToken: createExpiredToken() });
       mockAuthenticateWithRefreshToken.mockRejectedValue('some string error');
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
+      await refreshSessionIfNeeded(createRequest(), session);
 
       const logArg = consoleLogSpy.mock.calls[0]?.[0] as string;
       const parsed = JSON.parse(logArg) as Record<string, unknown>;

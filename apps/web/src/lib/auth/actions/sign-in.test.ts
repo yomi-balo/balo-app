@@ -44,8 +44,10 @@ import type { SignInFormData } from '@/components/balo/auth/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+const TEST_PASSWORD = 'Passw0rd'; // NOSONAR — test fixture, not a real credential
+
 function validInput(): SignInFormData {
-  return { email: 'user@example.com', password: 'Passw0rd' }; // NOSONAR — test fixture, not a real credential
+  return { email: 'user@example.com', password: TEST_PASSWORD };
 }
 
 function mockWorkOSAuthResponse(overrides: Record<string, unknown> = {}) {
@@ -94,13 +96,13 @@ function setupHappyPath(userOverrides: Record<string, unknown> = {}) {
 
 // ── Tests ───────────────────────────────────────────────────────
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mockSessionObj = { save: mockSave };
-  mockTouch.mockResolvedValue(undefined);
-});
-
 describe('signInAction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionObj = { save: mockSave };
+    mockTouch.mockResolvedValue(undefined);
+  });
+
   describe('input validation', () => {
     it('returns error for empty email', async () => {
       const result = await signInAction({ email: '', password: 'pass' }); // NOSONAR
@@ -127,7 +129,7 @@ describe('signInAction', () => {
       expect(mockAuthenticateWithPassword).toHaveBeenCalledWith({
         clientId: 'test-client-id',
         email: 'user@example.com',
-        password: 'Passw0rd', // NOSONAR
+        password: TEST_PASSWORD,
       });
     });
 
