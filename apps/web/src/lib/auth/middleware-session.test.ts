@@ -155,83 +155,33 @@ describe('refreshSessionIfNeeded', () => {
   });
 
   describe('token expiry detection', () => {
-    it('triggers refresh when token is expired (exp in the past)', async () => {
-      const session = mockSessionData({ accessToken: createExpiredToken() });
-      const updatedSession = mockSessionData();
-      mockGetIronSession.mockResolvedValue(updatedSession);
+    /** Setup mocks so refresh proceeds when triggered by an invalid/expired token */
+    function setupRefreshMocks(): void {
+      mockGetIronSession.mockResolvedValue(mockSessionData());
       mockAuthenticateWithRefreshToken.mockResolvedValue({
         accessToken: 'new-at',
         refreshToken: 'new-rt',
       });
+    }
 
-      await refreshSessionIfNeeded(createRequest(), session as never);
-      expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
-    });
-
-    it('triggers refresh when token is within 60s buffer window', async () => {
-      const session = mockSessionData({ accessToken: createAlmostExpiredToken() });
-      const updatedSession = mockSessionData();
-      mockGetIronSession.mockResolvedValue(updatedSession);
-      mockAuthenticateWithRefreshToken.mockResolvedValue({
-        accessToken: 'new-at',
-        refreshToken: 'new-rt',
-      });
-
-      await refreshSessionIfNeeded(createRequest(), session as never);
-      expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
-    });
-
-    it('triggers refresh when token payload is not valid base64', async () => {
-      const session = mockSessionData({ accessToken: 'header.not-valid-base64!.sig' });
-      const updatedSession = mockSessionData();
-      mockGetIronSession.mockResolvedValue(updatedSession);
-      mockAuthenticateWithRefreshToken.mockResolvedValue({
-        accessToken: 'new-at',
-        refreshToken: 'new-rt',
-      });
-
-      await refreshSessionIfNeeded(createRequest(), session as never);
-      expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
-    });
-
-    it('triggers refresh when token has fewer than 3 parts', async () => {
-      const session = mockSessionData({ accessToken: 'only.two' });
-      const updatedSession = mockSessionData();
-      mockGetIronSession.mockResolvedValue(updatedSession);
-      mockAuthenticateWithRefreshToken.mockResolvedValue({
-        accessToken: 'new-at',
-        refreshToken: 'new-rt',
-      });
-
-      await refreshSessionIfNeeded(createRequest(), session as never);
-      expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
-    });
-
-    it('triggers refresh when token payload JSON has no exp claim', async () => {
-      const session = mockSessionData({
-        accessToken: createJwt({ sub: 'user-1' }),
-      });
-      const updatedSession = mockSessionData();
-      mockGetIronSession.mockResolvedValue(updatedSession);
-      mockAuthenticateWithRefreshToken.mockResolvedValue({
-        accessToken: 'new-at',
-        refreshToken: 'new-rt',
-      });
-
+    it.each([
+      ['expired (exp in the past)', createExpiredToken()],
+      ['within 60s buffer window', createAlmostExpiredToken()],
+      ['not valid base64 payload', 'header.not-valid-base64!.sig'],
+      ['fewer than 3 parts', 'only.two'],
+      ['no exp claim in payload', createJwt({ sub: 'user-1' })],
+    ])('triggers refresh when token is %s', async (_label, accessToken) => {
+      setupRefreshMocks();
+      const session = mockSessionData({ accessToken });
       await refreshSessionIfNeeded(createRequest(), session as never);
       expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();
     });
 
     it('triggers refresh when token payload is not valid JSON', async () => {
+      setupRefreshMocks();
       const invalidPayload = toBase64Url('not-json');
       const token = `header.${invalidPayload}.sig`;
       const session = mockSessionData({ accessToken: token });
-      const updatedSession = mockSessionData();
-      mockGetIronSession.mockResolvedValue(updatedSession);
-      mockAuthenticateWithRefreshToken.mockResolvedValue({
-        accessToken: 'new-at',
-        refreshToken: 'new-rt',
-      });
 
       await refreshSessionIfNeeded(createRequest(), session as never);
       expect(mockAuthenticateWithRefreshToken).toHaveBeenCalled();

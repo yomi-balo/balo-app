@@ -12,7 +12,7 @@ describe('signInSchema', () => {
     });
 
     it('accepts single-character password', () => {
-      expect(signInSchema.safeParse({ ...validInput, password: 'x' }).success).toBe(true);
+      expect(signInSchema.safeParse({ ...validInput, password: 'x' }).success).toBe(true); // NOSONAR
     });
   });
 
@@ -132,39 +132,16 @@ describe('signUpSchema', () => {
   });
 
   describe('password validation', () => {
-    it('rejects password shorter than 8 chars', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'Aa1bbbb' }); // NOSONAR
+    it.each([
+      ['Aa1bbbb', 'Password must be at least 8 characters'], // too short
+      ['PASSWORD1', 'Must contain a lowercase letter'], // NOSONAR — no lowercase
+      ['password1', 'Must contain an uppercase letter'], // NOSONAR — no uppercase
+      ['Passwords', 'Must contain a number'], // NOSONAR — no digit
+    ])('rejects "%s" with expected error', (pwd, expectedMsg) => {
+      const result = signUpSchema.safeParse({ ...validInput, password: pwd }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe('Password must be at least 8 characters');
-      }
-    });
-
-    it('rejects password without lowercase letter', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'PASSWORD1' }); // NOSONAR
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(
-          result.error.issues.some((i) => i.message === 'Must contain a lowercase letter')
-        ).toBe(true);
-      }
-    });
-
-    it('rejects password without uppercase letter', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'password1' }); // NOSONAR
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(
-          result.error.issues.some((i) => i.message === 'Must contain an uppercase letter')
-        ).toBe(true);
-      }
-    });
-
-    it('rejects password without digit', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'Passwords' }); // NOSONAR
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues.some((i) => i.message === 'Must contain a number')).toBe(true);
+        expect(result.error.issues.some((i) => i.message === expectedMsg)).toBe(true);
       }
     });
   });
