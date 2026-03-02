@@ -35,7 +35,7 @@ import type { SignUpFormData } from '@/components/balo/auth/schemas';
 // ── Helpers ─────────────────────────────────────────────────────
 
 function validInput(): SignUpFormData {
-  return { firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com', password: 'Passw0rd' };
+  return { firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com', password: 'Passw0rd' }; // NOSONAR — test fixture, not a real credential
 }
 
 function mockWorkOSUser(overrides: Record<string, unknown> = {}) {
@@ -98,7 +98,7 @@ describe('signUpAction', () => {
     });
 
     it('returns error for short password', async () => {
-      const result = await signUpAction({ ...validInput(), password: 'Ab1' });
+      const result = await signUpAction({ ...validInput(), password: 'Ab1' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('at least 8 characters');
@@ -126,7 +126,7 @@ describe('signUpAction', () => {
       await signUpAction(validInput());
       expect(mockCreateUser).toHaveBeenCalledWith({
         email: 'jane@example.com',
-        password: 'Passw0rd',
+        password: 'Passw0rd', // NOSONAR
         firstName: 'Jane',
         lastName: 'Doe',
       });
@@ -161,7 +161,7 @@ describe('signUpAction', () => {
       expect(mockAuthenticateWithPassword).toHaveBeenCalledWith({
         clientId: 'test-client-id',
         email: 'jane@example.com',
-        password: 'Passw0rd',
+        password: 'Passw0rd', // NOSONAR
       });
     });
   });

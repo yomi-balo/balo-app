@@ -4,7 +4,7 @@ import { signInSchema, signUpSchema, forgotPasswordSchema } from './schemas';
 // ── signInSchema ────────────────────────────────────────────────
 
 describe('signInSchema', () => {
-  const validInput = { email: 'user@example.com', password: 'password123' };
+  const validInput = { email: 'user@example.com', password: 'password123' }; // NOSONAR — test fixture, not a real credential
 
   describe('valid input', () => {
     it('accepts valid email and password', () => {
@@ -36,7 +36,7 @@ describe('signInSchema', () => {
 
   describe('password validation', () => {
     it('rejects empty password with "Password is required"', () => {
-      const result = signInSchema.safeParse({ ...validInput, password: '' });
+      const result = signInSchema.safeParse({ ...validInput, password: '' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues[0]?.message).toBe('Password is required');
@@ -52,7 +52,7 @@ describe('signUpSchema', () => {
     firstName: 'John',
     lastName: 'Doe',
     email: 'john@example.com',
-    password: 'Passw0rd',
+    password: 'Passw0rd', // NOSONAR — test fixture, not a real credential
   };
 
   describe('valid input', () => {
@@ -73,7 +73,7 @@ describe('signUpSchema', () => {
     });
 
     it('accepts password at exactly 8 chars meeting all requirements', () => {
-      expect(signUpSchema.safeParse({ ...validInput, password: 'Passwo1d' }).success).toBe(true);
+      expect(signUpSchema.safeParse({ ...validInput, password: 'Passwo1d' }).success).toBe(true); // NOSONAR
     });
   });
 
@@ -133,7 +133,7 @@ describe('signUpSchema', () => {
 
   describe('password validation', () => {
     it('rejects password shorter than 8 chars', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'Aa1bbbb' });
+      const result = signUpSchema.safeParse({ ...validInput, password: 'Aa1bbbb' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues[0]?.message).toBe('Password must be at least 8 characters');
@@ -141,7 +141,7 @@ describe('signUpSchema', () => {
     });
 
     it('rejects password without lowercase letter', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'PASSWORD1' });
+      const result = signUpSchema.safeParse({ ...validInput, password: 'PASSWORD1' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(
@@ -151,7 +151,7 @@ describe('signUpSchema', () => {
     });
 
     it('rejects password without uppercase letter', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'password1' });
+      const result = signUpSchema.safeParse({ ...validInput, password: 'password1' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(
@@ -161,7 +161,7 @@ describe('signUpSchema', () => {
     });
 
     it('rejects password without digit', () => {
-      const result = signUpSchema.safeParse({ ...validInput, password: 'Passwords' });
+      const result = signUpSchema.safeParse({ ...validInput, password: 'Passwords' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues.some((i) => i.message === 'Must contain a number')).toBe(true);
@@ -175,7 +175,7 @@ describe('signUpSchema', () => {
         firstName: '',
         lastName: '',
         email: 'bad',
-        password: 'x',
+        password: 'x', // NOSONAR
       });
       expect(result.success).toBe(false);
       if (!result.success) {

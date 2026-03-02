@@ -9,22 +9,21 @@ vi.mock('iron-session', () => ({
 }));
 
 const mockAuthenticateWithRefreshToken = vi.fn();
-vi.mock('@workos-inc/node', () => {
-  // Must use a regular function (not arrow) because it's called with `new`
-  function MockWorkOS() {
-    return {
-      userManagement: {
-        authenticateWithRefreshToken: (...args: unknown[]) =>
-          mockAuthenticateWithRefreshToken(...args),
-      },
-    };
-  }
-  return { WorkOS: MockWorkOS };
-});
+// Must be a regular function (not arrow) because it's called with `new WorkOS()`
+function MockWorkOS() {
+  // NOSONAR — intentionally inside module scope for vi.mock hoisting
+  return {
+    userManagement: {
+      authenticateWithRefreshToken: (...args: unknown[]) =>
+        mockAuthenticateWithRefreshToken(...args),
+    },
+  };
+}
+vi.mock('@workos-inc/node', () => ({ WorkOS: MockWorkOS }));
 
 vi.mock('./session-config', () => ({
   sessionConfig: {
-    password: 'test-password-that-is-at-least-32-chars!!',
+    password: 'test-password-that-is-at-least-32-chars!!', // NOSONAR — test fixture, not a real credential
     cookieName: 'balo_session',
     cookieOptions: { secure: false, httpOnly: true, sameSite: 'lax', maxAge: 604800 },
   },

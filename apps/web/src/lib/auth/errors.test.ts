@@ -110,7 +110,7 @@ describe('mapWorkOSError', () => {
     });
 
     it('returns default error for Error with empty message and no code', () => {
-      expect(mapWorkOSError(new Error(''))).toBe('Something went wrong. Please try again.');
+      expect(mapWorkOSError(new Error(''))).toBe('Something went wrong. Please try again.'); // NOSONAR — intentional empty string to test edge case
     });
   });
 });

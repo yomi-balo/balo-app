@@ -45,7 +45,7 @@ import type { SignInFormData } from '@/components/balo/auth/schemas';
 // ── Helpers ─────────────────────────────────────────────────────
 
 function validInput(): SignInFormData {
-  return { email: 'user@example.com', password: 'Passw0rd' };
+  return { email: 'user@example.com', password: 'Passw0rd' }; // NOSONAR — test fixture, not a real credential
 }
 
 function mockWorkOSAuthResponse(overrides: Record<string, unknown> = {}) {
@@ -103,7 +103,7 @@ beforeEach(() => {
 describe('signInAction', () => {
   describe('input validation', () => {
     it('returns error for empty email', async () => {
-      const result = await signInAction({ email: '', password: 'pass' });
+      const result = await signInAction({ email: '', password: 'pass' }); // NOSONAR
       expect(result).toEqual({ success: false, error: 'Email is required' });
       expect(mockAuthenticateWithPassword).not.toHaveBeenCalled();
     });
@@ -114,7 +114,7 @@ describe('signInAction', () => {
     });
 
     it('returns error for invalid email format', async () => {
-      const result = await signInAction({ email: 'bad', password: 'pass' });
+      const result = await signInAction({ email: 'bad', password: 'pass' }); // NOSONAR
       expect(result.success).toBe(false);
       expect(mockAuthenticateWithPassword).not.toHaveBeenCalled();
     });
@@ -127,7 +127,7 @@ describe('signInAction', () => {
       expect(mockAuthenticateWithPassword).toHaveBeenCalledWith({
         clientId: 'test-client-id',
         email: 'user@example.com',
-        password: 'Passw0rd',
+        password: 'Passw0rd', // NOSONAR
       });
     });
 
