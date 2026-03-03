@@ -62,8 +62,9 @@ export function ForgotStep({ email, onBack }: Readonly<ForgotStepProps>): React.
             <div className="space-y-2">
               <h2 className="text-foreground text-xl font-semibold">Check your email</h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                We&apos;ve sent a password reset link to{' '}
-                <span className="text-foreground font-medium">{submittedEmail}</span>
+                If an account exists for{' '}
+                <span className="text-foreground font-medium">{submittedEmail}</span>, we&apos;ve
+                sent a password reset link.
               </p>
             </div>
 
