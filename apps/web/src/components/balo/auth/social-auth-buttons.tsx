@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { initiateGoogleOAuth, initiateMicrosoftOAuth } from '@/lib/auth/actions';
+import { track, AUTH_EVENTS } from '@/lib/analytics';
 
 function GoogleIcon({ className }: Readonly<{ className?: string }>): React.JSX.Element {
   return (
@@ -65,6 +66,10 @@ export function SocialAuthButtons({
   const handleOAuth = async (provider: 'google' | 'microsoft'): Promise<void> => {
     setError(null);
     setLoadingProvider(provider);
+
+    track(AUTH_EVENTS.METHOD_SELECTED, { method: provider });
+    track(AUTH_EVENTS.OAUTH_REDIRECT_STARTED, { provider });
+
     try {
       // Get current page path for return-to after OAuth
       const returnTo = globalThis.location.pathname + globalThis.location.search;

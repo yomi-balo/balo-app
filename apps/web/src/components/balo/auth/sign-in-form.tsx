@@ -13,6 +13,7 @@ import { AuthDivider } from './auth-divider';
 import { SocialAuthButtons } from './social-auth-buttons';
 import { useRouter } from 'next/navigation';
 import { signInAction } from '@/lib/auth/actions';
+import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { signInSchema, type SignInFormData } from './schemas';
 
 interface SignInFormProps {
@@ -43,11 +44,24 @@ export function SignInForm({
     setFormError(null);
     const result = await signInAction(data);
     if (result.success) {
+      track(AUTH_EVENTS.LOGIN_COMPLETED, {
+        method: 'email',
+        is_returning_user: !result.data?.needsOnboarding,
+      });
+      analytics.identify(result.data?.userId ?? '', {
+        email: result.data?.email,
+        active_mode: result.data?.activeMode,
+        platform_role: result.data?.platformRole,
+      });
       if (result.data?.needsOnboarding) {
         router.push('/onboarding');
       }
       onSuccess();
     } else {
+      track(AUTH_EVENTS.LOGIN_FAILED, {
+        method: 'email',
+        error_message: result.error,
+      });
       setFormError(result.error);
     }
   };

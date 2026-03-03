@@ -11,6 +11,10 @@ import { log } from '@/lib/logging';
 
 interface SignInResult {
   needsOnboarding: boolean;
+  userId: string;
+  email: string;
+  activeMode: 'client' | 'expert';
+  platformRole: 'user' | 'admin' | 'super_admin';
 }
 
 export async function signInAction(input: SignInFormData): Promise<AuthResult<SignInResult>> {
@@ -106,7 +110,13 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
 
     return {
       success: true,
-      data: { needsOnboarding },
+      data: {
+        needsOnboarding,
+        userId: user.id,
+        email: user.email,
+        activeMode: user.activeMode,
+        platformRole: user.platformRole,
+      },
     };
   } catch (error) {
     log.error('Sign-in failed', {

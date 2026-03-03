@@ -175,6 +175,42 @@ const response = await loggedFetch('https://api.stripe.com/v1/charges', {
 - Custom UI modals (not hosted AuthKit redirect)
 - Session via iron-session with 7-day cookie (`balo_session`)
 
+### Analytics
+
+**All tracking is client-side only.** PostHog JS SDK runs in the browser. Server components and server actions never call `track()`.
+
+**Use the typed `track()` function** — never call `analytics.track()` directly from feature code:
+
+```typescript
+import { track, AUTH_EVENTS } from '@/lib/analytics';
+
+track(AUTH_EVENTS.LOGIN_COMPLETED, { method: 'email', is_returning_user: true });
+```
+
+**Adding a new feature's events:**
+
+1. Create `apps/web/src/lib/analytics/events/<feature>.ts` with `<FEATURE>_EVENTS` constants + `<Feature>EventMap` interface
+2. Re-export from `apps/web/src/lib/analytics/events/index.ts`
+3. Add `& <Feature>EventMap` to `AllEvents` in `apps/web/src/lib/analytics/types.ts`
+4. Re-export event constants from `apps/web/src/lib/analytics/index.ts`
+
+**Event naming convention:**
+
+- Constant: `AUTH_EVENTS.LOGIN_COMPLETED` (SCREAMING_SNAKE)
+- Value: `'auth_login_completed'` (snake_case with feature prefix)
+- Pattern: `{feature}_{noun}_{past_tense_verb}`
+
+**`analytics.identify()` calls:**
+
+- After sign-in / sign-up success: `analytics.identify(userId, { email, active_mode, platform_role })`
+- PostHogProvider auto-identifies on page load if session exists
+- On logout: `analytics.reset()` (clears distinct_id)
+
+**Testing:**
+
+- Global mock in `apps/web/src/test/setup.ts` silences analytics in all tests
+- To assert tracking: `import { track } from '@/lib/analytics'; expect(track).toHaveBeenCalledWith(AUTH_EVENTS.LOGIN_COMPLETED, { ... })`
+
 ### Notifications
 
 - Feature code publishes domain events via `notificationEvents.publish()`

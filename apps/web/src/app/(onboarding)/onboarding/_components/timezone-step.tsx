@@ -7,6 +7,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Globe, ChevronRight, ArrowLeft, Loader2 } from 'lucide-react';
 import { TimezoneCombobox } from './timezone-combobox';
 import { updateTimezoneAction } from '@/lib/auth/actions/update-timezone';
+import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 
 interface TimezoneStepProps {
@@ -24,6 +25,7 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
   const detectedRef = useRef<string | null>(null);
 
   useEffect(() => {
+    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'timezone', step_number: 2 });
     try {
       const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (detected) {
@@ -39,6 +41,11 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
     startTransition(async () => {
       const result = await updateTimezoneAction(timezone);
       if (result.success) {
+        track(ONBOARDING_EVENTS.STEP_COMPLETED, {
+          step: 'timezone',
+          step_number: 2,
+          value: timezone,
+        });
         onContinue();
       } else {
         toast.error(result.error);

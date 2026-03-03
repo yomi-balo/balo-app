@@ -3,6 +3,7 @@ import localFont from 'next/font/local';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
 import { Toaster } from '@/components/ui/sonner';
+import { getCurrentUser } from '@/lib/auth/session';
 import './globals.css';
 
 const geistSans = localFont({
@@ -20,15 +21,28 @@ export const metadata: Metadata = {
     'B2B marketplace connecting businesses with technology consultants. Cases, Projects, and Packages.',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const user = await getCurrentUser();
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
-        <Providers>
+        <Providers
+          userId={user?.id}
+          userTraitsJson={
+            user
+              ? JSON.stringify({
+                  email: user.email,
+                  active_mode: user.activeMode,
+                  platform_role: user.platformRole,
+                })
+              : undefined
+          }
+        >
           {children}
           <AppFooter />
           <Toaster richColors position="top-center" />

@@ -352,13 +352,31 @@ describe('signInAction', () => {
     it('returns needsOnboarding: false when onboardingCompleted is true', async () => {
       setupHappyPath({ onboardingCompleted: true });
       const result = await signInAction(validInput());
-      expect(result).toEqual({ success: true, data: { needsOnboarding: false } });
+      expect(result).toEqual({
+        success: true,
+        data: {
+          needsOnboarding: false,
+          userId: 'user-1',
+          email: 'user@example.com',
+          activeMode: 'client',
+          platformRole: 'user',
+        },
+      });
     });
 
     it('returns needsOnboarding: true when onboardingCompleted is false', async () => {
       setupHappyPath({ onboardingCompleted: false });
       const result = await signInAction(validInput());
-      expect(result).toEqual({ success: true, data: { needsOnboarding: true } });
+      expect(result).toEqual({
+        success: true,
+        data: {
+          needsOnboarding: true,
+          userId: 'user-1',
+          email: 'user@example.com',
+          activeMode: 'client',
+          platformRole: 'user',
+        },
+      });
     });
   });
 

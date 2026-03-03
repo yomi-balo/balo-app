@@ -12,6 +12,7 @@ import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from './auth-header';
 import { forgotPasswordAction } from '@/lib/auth/actions';
+import { track, AUTH_EVENTS } from '@/lib/analytics';
 import { forgotPasswordSchema, type ForgotPasswordFormData } from './schemas';
 
 interface ForgotPasswordFormProps {
@@ -40,6 +41,7 @@ export function ForgotPasswordForm({
     setFormError(null);
     const result = await forgotPasswordAction(data);
     if (result.success) {
+      track(AUTH_EVENTS.PASSWORD_RESET_REQUESTED, {});
       setSubmittedEmail(data.email);
       setIsSuccess(true);
       onSuccess();
