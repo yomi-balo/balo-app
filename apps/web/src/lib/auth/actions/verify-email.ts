@@ -2,22 +2,14 @@
 
 import 'server-only';
 
-import { z } from 'zod';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { usersRepository } from '@balo/db';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
+import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
 import { log } from '@/lib/logging';
 
-const verifyEmailSchema = z.object({
-  pendingAuthToken: z.string().min(1, 'Missing verification token'),
-  code: z
-    .string()
-    .length(6, 'Code must be 6 digits')
-    .regex(/^\d{6}$/, 'Code must be 6 digits'),
-});
-
-export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+export type VerifyEmailInput = VerifyEmailFormData;
 
 interface VerifyEmailResult {
   needsOnboarding: boolean;

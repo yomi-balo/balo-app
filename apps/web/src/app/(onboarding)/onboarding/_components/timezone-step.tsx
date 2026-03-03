@@ -14,10 +14,11 @@ interface TimezoneStepProps {
   onContinue: () => void;
   onBack: () => void;
   onTimezoneSelected?: (timezone: string) => void;
+  stepNumber?: number;
 }
 
 export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(function TimezoneStep(
-  { onContinue, onBack, onTimezoneSelected },
+  { onContinue, onBack, onTimezoneSelected, stepNumber = 2 },
   ref
 ) {
   const [timezone, setTimezone] = useState('UTC');
@@ -26,7 +27,7 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
   const detectedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'timezone', step_number: 2 });
+    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'timezone', step_number: stepNumber });
     try {
       const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (detected) {
@@ -44,7 +45,7 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
       if (result.success) {
         track(ONBOARDING_EVENTS.STEP_COMPLETED, {
           step: 'timezone',
-          step_number: 2,
+          step_number: stepNumber,
           value: timezone,
         });
         onTimezoneSelected?.(timezone);

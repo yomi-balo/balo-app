@@ -72,6 +72,8 @@ export async function signUpAction(
 
     // FALLBACK: No verification required -- create DB user + session immediately.
     // This path executes when email verification is not enabled in WorkOS.
+    // Dynamic imports: the primary path (email verification) doesn't need DB/session,
+    // so we lazy-load them here to keep the main bundle lighter.
     const { usersRepository } = await import('@balo/db');
     const { getSession } = await import('@/lib/auth/session');
 

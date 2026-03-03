@@ -51,8 +51,8 @@ export interface AuthEventMap {
   };
   // BAL-184: Unified auth flow
   [AUTH_EVENTS.STEP_CHANGED]: {
-    from: string;
-    to: string;
+    from: AuthStepName;
+    to: AuthStepName;
   };
   [AUTH_EVENTS.VERIFICATION_CODE_SUBMITTED]: {
     success: boolean;

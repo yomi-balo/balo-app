@@ -98,10 +98,18 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
               onContinue={goForward}
               onBack={goBack}
               onTimezoneSelected={setSelectedTimezone}
+              stepNumber={3}
             />
           );
         case 4:
-          return <IntentStep ref={headingRef} onBack={goBack} timezone={selectedTimezone} />;
+          return (
+            <IntentStep
+              ref={headingRef}
+              onBack={goBack}
+              timezone={selectedTimezone}
+              stepNumber={4}
+            />
+          );
         default:
           return <NameStep ref={headingRef} onContinue={handleNameComplete} />;
       }
