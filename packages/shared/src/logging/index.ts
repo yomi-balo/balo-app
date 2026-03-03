@@ -1,24 +1,38 @@
 import pino from 'pino';
 
 const isProduction = process.env.NODE_ENV === 'production';
+const hasAxiom = !!(process.env.AXIOM_TOKEN && process.env.AXIOM_DATASET);
 
 /** Resolve the appropriate Pino transport for the current environment. */
-export function getTransport(): pino.TransportSingleOptions | undefined {
-  if (!isProduction) {
-    return { target: 'pino-pretty', options: { colorize: true } };
+export function getTransport():
+  | pino.TransportSingleOptions
+  | pino.TransportMultiOptions
+  | undefined {
+  const axiomTransport = {
+    target: '@axiomhq/pino',
+    options: {
+      dataset: process.env.AXIOM_DATASET,
+      token: process.env.AXIOM_TOKEN,
+    },
+  };
+
+  if (isProduction) {
+    return hasAxiom ? axiomTransport : undefined;
   }
 
-  if (process.env.AXIOM_TOKEN && process.env.AXIOM_DATASET) {
+  // Dev: always pretty-print to console. Also send to Axiom if configured.
+  const prettyTransport = { target: 'pino-pretty', options: { colorize: true } };
+
+  if (hasAxiom) {
     return {
-      target: '@axiomhq/pino',
-      options: {
-        dataset: process.env.AXIOM_DATASET,
-        token: process.env.AXIOM_TOKEN,
-      },
+      targets: [
+        { ...prettyTransport, level: 'debug' },
+        { ...axiomTransport, level: 'info' }, // don't flood Axiom with debug logs
+      ],
     };
   }
 
-  return undefined;
+  return prettyTransport;
 }
 
 export const log = pino({
