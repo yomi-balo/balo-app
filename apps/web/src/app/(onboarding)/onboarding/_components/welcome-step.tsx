@@ -1,8 +1,9 @@
 'use client';
 
-import { forwardRef } from 'react';
+import { forwardRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { ChevronRight } from 'lucide-react';
+import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 
 interface WelcomeStepProps {
   firstName: string | null;
@@ -13,6 +14,15 @@ export const WelcomeStep = forwardRef<HTMLHeadingElement, WelcomeStepProps>(func
   { firstName, onContinue },
   ref
 ) {
+  useEffect(() => {
+    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'welcome', step_number: 1 });
+  }, []);
+
+  function handleContinue(): void {
+    track(ONBOARDING_EVENTS.STEP_COMPLETED, { step: 'welcome', step_number: 1 });
+    onContinue();
+  }
+
   const heading = firstName ? `Welcome to Balo, ${firstName}!` : 'Welcome to Balo!';
 
   return (
@@ -30,7 +40,7 @@ export const WelcomeStep = forwardRef<HTMLHeadingElement, WelcomeStepProps>(func
         you&apos;re an expert ready to grow your practice — you&apos;re in the right place.
       </p>
 
-      <Button size="lg" onClick={onContinue} className="mt-8 w-full min-w-[200px] sm:w-auto">
+      <Button size="lg" onClick={handleContinue} className="mt-8 w-full min-w-[200px] sm:w-auto">
         Get Started
         <ChevronRight className="ml-2 h-4 w-4" />
       </Button>

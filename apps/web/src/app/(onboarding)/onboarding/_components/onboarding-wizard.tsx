@@ -34,6 +34,7 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
     Number.isNaN(stepFromUrl) ? 1 : clampStep(stepFromUrl)
   );
   const [direction, setDirection] = useState(1);
+  const [selectedTimezone, setSelectedTimezone] = useState<string | null>(null);
 
   const headingRef = useRef<HTMLHeadingElement>(null);
 
@@ -70,9 +71,16 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
       case 1:
         return <WelcomeStep ref={headingRef} firstName={firstName} onContinue={goForward} />;
       case 2:
-        return <TimezoneStep ref={headingRef} onContinue={goForward} onBack={goBack} />;
+        return (
+          <TimezoneStep
+            ref={headingRef}
+            onContinue={goForward}
+            onBack={goBack}
+            onTimezoneSelected={setSelectedTimezone}
+          />
+        );
       case 3:
-        return <IntentStep ref={headingRef} onBack={goBack} />;
+        return <IntentStep ref={headingRef} onBack={goBack} timezone={selectedTimezone} />;
       default:
         return <WelcomeStep ref={headingRef} firstName={firstName} onContinue={goForward} />;
     }

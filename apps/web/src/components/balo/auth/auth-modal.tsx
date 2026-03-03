@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -7,12 +8,22 @@ import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShineBorder } from '@/components/magicui/shine-border';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuthModal } from '@/hooks/use-auth-modal';
+import { track, AUTH_EVENTS } from '@/lib/analytics';
 import { SignInForm } from './sign-in-form';
 import { SignUpForm } from './sign-up-form';
 import { ForgotPasswordForm } from './forgot-password-form';
 
 function AuthModalContent(): React.JSX.Element {
   const { view, setView, handleAuthSuccess } = useAuthModal();
+
+  useEffect(() => {
+    if (view === 'sign-in' || view === 'sign-up') {
+      track(AUTH_EVENTS.MODAL_OPENED, {
+        view,
+        page: typeof window !== 'undefined' ? window.location.pathname : '',
+      });
+    }
+  }, [view]);
 
   return (
     <AnimatePresence mode="wait" initial={false}>

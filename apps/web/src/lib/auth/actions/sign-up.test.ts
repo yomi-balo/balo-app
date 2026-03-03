@@ -227,7 +227,16 @@ describe('signUpAction', () => {
     it('returns { success: true, data: { needsOnboarding: true } }', async () => {
       setupHappyPath();
       const result = await signUpAction(validInput());
-      expect(result).toEqual({ success: true, data: { needsOnboarding: true } });
+      expect(result).toEqual({
+        success: true,
+        data: {
+          needsOnboarding: true,
+          userId: 'user-1',
+          email: 'jane@example.com',
+          activeMode: 'client',
+          platformRole: 'user',
+        },
+      });
     });
   });
 

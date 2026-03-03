@@ -2,6 +2,8 @@
 
 import { useTheme } from 'next-themes';
 import { FAKE_USER } from '@/lib/fake-user';
+import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
+import { logoutAction } from '@/lib/auth/actions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -86,8 +88,14 @@ export function UserMenu(): React.JSX.Element {
 
         <DropdownMenuSeparator />
 
-        {/* TODO: BAL-169 — wire to logout server action */}
-        <DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            track(AUTH_EVENTS.LOGOUT_COMPLETED, {});
+            // Defer reset so PostHog flushes the event with the user's identity
+            setTimeout(() => analytics.reset(), 500);
+            logoutAction();
+          }}
+        >
           <LogOut className="mr-2 h-4 w-4" />
           Log out
         </DropdownMenuItem>

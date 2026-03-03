@@ -1,18 +1,20 @@
 'use client';
 
-import { useState, useTransition, forwardRef } from 'react';
+import { useState, useTransition, forwardRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { motion } from 'motion/react';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { completeOnboardingAction } from '@/lib/auth/actions/complete-onboarding';
+import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 import { FindExpertIllustration, BecomeExpertIllustration } from './illustrations';
 import { cn } from '@/lib/utils';
 
 interface IntentStepProps {
   onBack: () => void;
+  timezone?: string | null;
 }
 
 type Intent = 'client' | 'expert';
@@ -28,12 +30,16 @@ const item = {
 };
 
 export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(function IntentStep(
-  { onBack },
+  { onBack, timezone },
   ref
 ) {
   const router = useRouter();
   const [selectedIntent, setSelectedIntent] = useState<Intent | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'intent', step_number: 3 });
+  }, []);
 
   function handleSelect(intent: Intent): void {
     if (isPending || selectedIntent !== null) return;
@@ -42,6 +48,15 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
     startTransition(async () => {
       const result = await completeOnboardingAction(intent);
       if (result.success) {
+        track(ONBOARDING_EVENTS.STEP_COMPLETED, {
+          step: 'intent',
+          step_number: 3,
+          value: intent,
+        });
+        track(ONBOARDING_EVENTS.COMPLETED, {
+          intent,
+          timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
         router.push(result.data?.redirectTo ?? '/dashboard');
       } else {
         toast.error(result.error);

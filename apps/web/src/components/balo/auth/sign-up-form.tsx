@@ -13,6 +13,7 @@ import { AuthDivider } from './auth-divider';
 import { SocialAuthButtons } from './social-auth-buttons';
 import { useRouter } from 'next/navigation';
 import { signUpAction } from '@/lib/auth/actions';
+import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { signUpSchema, type SignUpFormData } from './schemas';
 
 interface SignUpFormProps {
@@ -43,11 +44,18 @@ export function SignUpForm({
     setFormError(null);
     const result = await signUpAction(data);
     if (result.success) {
+      track(AUTH_EVENTS.SIGNUP_COMPLETED, { method: 'email' });
+      analytics.identify(result.data?.userId ?? '', {
+        email: result.data?.email,
+        active_mode: result.data?.activeMode,
+        platform_role: result.data?.platformRole,
+      });
       if (result.data?.needsOnboarding) {
         router.push('/onboarding');
       }
       onSuccess();
     } else {
+      track(AUTH_EVENTS.SIGNUP_FAILED, { method: 'email', error_message: result.error });
       setFormError(result.error);
     }
   };

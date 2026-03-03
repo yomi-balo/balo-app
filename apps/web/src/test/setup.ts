@@ -17,6 +17,20 @@ vi.mock('@/lib/logging', () => ({
   requestContext: {},
 }));
 
+// Silence analytics in tests — prevent PostHog calls and provide stable mocks.
+// Import real constants so the mock stays in sync with source.
+vi.mock('@/lib/analytics', async () => {
+  const { AUTH_EVENTS } = await import('@/lib/analytics/events/auth');
+  const { ONBOARDING_EVENTS } = await import('@/lib/analytics/events/onboarding');
+  return {
+    analytics: { identify: vi.fn(), track: vi.fn(), page: vi.fn(), reset: vi.fn() },
+    track: vi.fn(),
+    AUTH_EVENTS,
+    ONBOARDING_EVENTS,
+    initAnalytics: vi.fn(),
+  };
+});
+
 // Cleanup after each test
 afterEach(() => {
   cleanup();

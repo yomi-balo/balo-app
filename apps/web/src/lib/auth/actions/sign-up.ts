@@ -10,6 +10,10 @@ import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 
 interface SignUpResult {
   needsOnboarding: boolean;
+  userId: string;
+  email: string;
+  activeMode: 'client' | 'expert';
+  platformRole: 'user' | 'admin' | 'super_admin';
 }
 
 export async function signUpAction(input: SignUpFormData): Promise<AuthResult<SignUpResult>> {
@@ -79,7 +83,13 @@ export async function signUpAction(input: SignUpFormData): Promise<AuthResult<Si
 
     return {
       success: true,
-      data: { needsOnboarding: true },
+      data: {
+        needsOnboarding: true,
+        userId: user.id,
+        email: user.email,
+        activeMode: user.activeMode,
+        platformRole: 'user',
+      },
     };
   } catch (error) {
     // Clean up orphaned WorkOS user to prevent permanent lockout.
