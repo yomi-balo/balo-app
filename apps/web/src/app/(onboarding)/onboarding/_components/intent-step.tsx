@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 
 interface IntentStepProps {
   onBack: () => void;
+  timezone?: string | null;
 }
 
 type Intent = 'client' | 'expert';
@@ -29,7 +30,7 @@ const item = {
 };
 
 export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(function IntentStep(
-  { onBack },
+  { onBack, timezone },
   ref
 ) {
   const router = useRouter();
@@ -52,7 +53,10 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
           step_number: 3,
           value: intent,
         });
-        track(ONBOARDING_EVENTS.COMPLETED, { intent });
+        track(ONBOARDING_EVENTS.COMPLETED, {
+          intent,
+          timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
         router.push(result.data?.redirectTo ?? '/dashboard');
       } else {
         toast.error(result.error);

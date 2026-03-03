@@ -13,10 +13,11 @@ import { toast } from 'sonner';
 interface TimezoneStepProps {
   onContinue: () => void;
   onBack: () => void;
+  onTimezoneSelected?: (timezone: string) => void;
 }
 
 export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(function TimezoneStep(
-  { onContinue, onBack },
+  { onContinue, onBack, onTimezoneSelected },
   ref
 ) {
   const [timezone, setTimezone] = useState('UTC');
@@ -46,6 +47,7 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
           step_number: 2,
           value: timezone,
         });
+        onTimezoneSelected?.(timezone);
         onContinue();
       } else {
         toast.error(result.error);

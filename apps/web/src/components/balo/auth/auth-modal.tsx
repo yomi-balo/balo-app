@@ -18,7 +18,10 @@ function AuthModalContent(): React.JSX.Element {
 
   useEffect(() => {
     if (view === 'sign-in' || view === 'sign-up') {
-      track(AUTH_EVENTS.MODAL_OPENED, { view });
+      track(AUTH_EVENTS.MODAL_OPENED, {
+        view,
+        page: typeof window !== 'undefined' ? window.location.pathname : '',
+      });
     }
   }, [view]);
 

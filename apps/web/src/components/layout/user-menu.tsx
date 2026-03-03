@@ -91,7 +91,8 @@ export function UserMenu(): React.JSX.Element {
         <DropdownMenuItem
           onClick={() => {
             track(AUTH_EVENTS.LOGOUT_COMPLETED, {});
-            analytics.reset();
+            // Defer reset so PostHog flushes the event with the user's identity
+            setTimeout(() => analytics.reset(), 500);
             logoutAction();
           }}
         >

@@ -55,6 +55,7 @@ export function SignUpForm({
       }
       onSuccess();
     } else {
+      track(AUTH_EVENTS.SIGNUP_FAILED, { method: 'email', error_message: result.error });
       setFormError(result.error);
     }
   };

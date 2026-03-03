@@ -18,5 +18,6 @@ export interface OnboardingEventMap {
   };
   [ONBOARDING_EVENTS.COMPLETED]: {
     intent: 'client' | 'expert';
+    timezone: string;
   };
 }
