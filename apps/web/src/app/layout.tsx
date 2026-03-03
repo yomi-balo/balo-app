@@ -26,7 +26,12 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const user = await getCurrentUser();
+  let user: Awaited<ReturnType<typeof getCurrentUser>> = null;
+  try {
+    user = await getCurrentUser();
+  } catch {
+    // Session unavailable (e.g. missing env vars in E2E/CI) — continue without user
+  }
 
   return (
     <html lang="en" suppressHydrationWarning>
