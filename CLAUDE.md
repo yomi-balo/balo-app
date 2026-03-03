@@ -104,8 +104,51 @@ pnpm format:check           # Prettier check
 
 - No `any` — use `unknown` and narrow with type guards
 - Explicit return types on exported functions
-- No `console.log` — use structured logging (`@balo/shared` logger)
 - No commented-out code or dead code
+
+### Logging
+
+**Never use `console.log` / `console.error` in application code** (exception: `middleware.ts` Edge Runtime where Pino can't run — use structured `JSON.stringify` there).
+
+The logging infrastructure auto-handles most things. You only need to add manual logging at **caught error boundaries** — places where you catch an error and return a user-friendly message:
+
+```typescript
+import { log } from '@/lib/logging'; // web app — has AsyncLocalStorage context (requestId, userId auto-attached)
+import { createLogger } from '@balo/shared/logging'; // packages or API — create scoped child logger
+
+// In every catch block that handles (not re-throws) an error:
+log.error('Sign-in failed', {
+  email, // context needed to debug — never log passwords or tokens
+  error: error instanceof Error ? error.message : String(error),
+  stack: error instanceof Error ? error.stack : undefined,
+});
+```
+
+**What's already automatic (don't duplicate):**
+
+- Request logging → middleware (structured JSON with requestId)
+- DB query logging → Drizzle logger hook in `packages/db/src/client.ts`
+- Unhandled errors → Sentry `onRequestError` in `instrumentation.ts`
+- Request context → AsyncLocalStorage mixin attaches `requestId` + `userId` to every log
+
+**What you must add manually:**
+
+- `log.error()` in every catch block that returns a user-facing error (the original error gets lost otherwise)
+- `log.info()` for key business events: sign-in, sign-up, OAuth callback, onboarding completion, payment events
+- `log.warn()` for recoverable issues: session refresh fallbacks, missing optional data, validation anomalies
+
+**For external API calls**, use the `loggedFetch` wrapper instead of bare `fetch`:
+
+```typescript
+import { loggedFetch } from '@/lib/logging/fetch-wrapper';
+
+const response = await loggedFetch('https://api.stripe.com/v1/charges', {
+  service: 'stripe', // appears in logs for filtering
+  method: 'POST',
+  headers: { Authorization: `Bearer ${key}` }, // auto-redacted by Pino
+  body: JSON.stringify(data),
+});
+```
 
 ### React / Next.js
 

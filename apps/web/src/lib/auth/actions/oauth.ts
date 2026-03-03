@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { isValidReturnTo } from '@/lib/auth/validation';
+import { log } from '@/lib/logging';
 
 type OAuthProvider = 'GoogleOAuth' | 'MicrosoftOAuth';
 
@@ -46,6 +47,8 @@ async function initiateOAuth(provider: OAuthProvider, returnTo?: string): Promis
     clientId,
     redirectUri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback`,
   });
+
+  log.info('OAuth redirect initiated', { provider });
 
   redirect(authorizationUrl);
 }
