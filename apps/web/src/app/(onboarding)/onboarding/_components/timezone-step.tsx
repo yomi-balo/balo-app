@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useTransition, forwardRef } from 'react';
+import { useState, useEffect, useRef, useTransition, forwardRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AnimatePresence, motion } from 'motion/react';
@@ -21,11 +21,13 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
   const [timezone, setTimezone] = useState('UTC');
   const [showSelector, setShowSelector] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const detectedRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
       const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (detected) {
+        detectedRef.current = detected;
         setTimezone(detected);
       }
     } catch {
@@ -65,7 +67,9 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
           </div>
           <div className="text-left">
             <p className="text-foreground text-sm font-medium">{timezone.replace(/_/g, ' ')}</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">Detected from your browser</p>
+            {timezone === detectedRef.current && (
+              <p className="text-muted-foreground mt-0.5 text-xs">Detected from your browser</p>
+            )}
           </div>
         </div>
 
