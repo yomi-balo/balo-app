@@ -3,6 +3,7 @@ import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
+import { log } from '@/lib/logging';
 
 export const dynamic = 'force-dynamic';
 
@@ -133,13 +134,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const resolved = await resolveOrCreateUser(workosUser);
     await createSession(resolved, accessToken, refreshToken);
 
+    log.info('OAuth callback succeeded', {
+      userId: resolved.user.id,
+      isNewUser: resolved.isNewUser,
+      provider: workosUser.id, // WorkOS user ID identifies the provider flow
+    });
+
     const redirectUrl = determineRedirectUrl(resolved, req);
     const response = NextResponse.redirect(new URL(redirectUrl, req.url));
     response.cookies.delete('auth_return_to');
 
     return response;
   } catch (error) {
-    console.error('Auth callback error:', error instanceof Error ? error.message : 'Unknown error');
+    log.error('OAuth callback failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      path: req.nextUrl.pathname,
+      hasCode: !!code,
+    });
     return NextResponse.redirect(new URL('/login?error=auth_failed', req.url));
   }
 }

@@ -7,6 +7,7 @@ import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
+import { log } from '@/lib/logging';
 
 interface SignInResult {
   needsOnboarding: boolean;
@@ -93,8 +94,11 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
     await session.save();
 
     // 7. Touch last active timestamp (fire-and-forget, don't block response)
-    usersRepository.touch(user.id).catch(() => {
-      // Non-critical — swallow errors
+    usersRepository.touch(user.id).catch((err) => {
+      log.warn('Failed to update last active timestamp', {
+        userId: user.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 
     // 8. Determine onboarding status
@@ -105,6 +109,11 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       data: { needsOnboarding },
     };
   } catch (error) {
+    log.error('Sign-in failed', {
+      email,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return {
       success: false,
       error: mapWorkOSError(error),

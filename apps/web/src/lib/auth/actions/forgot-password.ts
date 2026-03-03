@@ -4,6 +4,7 @@ import 'server-only';
 
 import { forgotPasswordSchema, type ForgotPasswordFormData } from '@/components/balo/auth/schemas';
 import type { AuthResult } from '@/lib/auth/errors';
+import { log } from '@/lib/logging';
 
 /**
  * Forgot password placeholder.
@@ -26,5 +27,7 @@ export async function forgotPasswordAction(input: ForgotPasswordFormData): Promi
 
   // TODO: Wire up WorkOS createPasswordReset() once /reset-password
   // accepts a token and calls resetPassword(). See BAL-169 follow-up.
+  log.info('Password reset requested', { email: parsed.data.email });
+
   return { success: true };
 }
