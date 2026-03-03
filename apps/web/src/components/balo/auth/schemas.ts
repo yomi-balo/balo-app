@@ -31,6 +31,24 @@ export const unifiedSignUpSchema = z.object({
 });
 export type UnifiedSignUpFormData = z.infer<typeof unifiedSignUpSchema>;
 
+/** Password reset form schema -- token from URL + new password + confirmation */
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().min(1, 'Missing reset token'),
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .regex(/[a-z]/, 'Must contain a lowercase letter')
+      .regex(/[A-Z]/, 'Must contain an uppercase letter')
+      .regex(/\d/, 'Must contain a number'),
+    confirmPassword: z.string().min(1, 'Please confirm your password'),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords don't match",
+    path: ['confirmPassword'],
+  });
+export type ResetPasswordFormData = z.infer<typeof resetPasswordSchema>;
+
 /** Verification code schema */
 export const verifyEmailSchema = z.object({
   pendingAuthToken: z.string().min(1, 'Missing verification token'),
