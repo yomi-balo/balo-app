@@ -10,29 +10,24 @@ import { Button } from '@/components/ui/button';
 import { InputFloating } from '@/components/enhanced/input-floating';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
-import { AuthHeader } from './auth-header';
+import { AuthHeader } from '../auth-header';
 import { forgotPasswordAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS } from '@/lib/analytics';
-import { forgotPasswordSchema, type ForgotPasswordFormData } from './schemas';
+import { forgotPasswordSchema, type ForgotPasswordFormData } from '../schemas';
 
-interface ForgotPasswordFormProps {
-  onSuccess: () => void;
-  onBackToSignIn: () => void;
+interface ForgotStepProps {
+  email: string;
+  onBack: () => void;
 }
 
-export function ForgotPasswordForm({
-  onSuccess,
-  onBackToSignIn,
-}: Readonly<ForgotPasswordFormProps>): React.JSX.Element {
+export function ForgotStep({ email, onBack }: Readonly<ForgotStepProps>): React.JSX.Element {
   const [isSuccess, setIsSuccess] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<ForgotPasswordFormData>({
     resolver: zodResolver(forgotPasswordSchema),
-    defaultValues: {
-      email: '',
-    },
+    defaultValues: { email },
   });
 
   const { isSubmitting } = form.formState;
@@ -44,7 +39,6 @@ export function ForgotPasswordForm({
       track(AUTH_EVENTS.PASSWORD_RESET_REQUESTED, {});
       setSubmittedEmail(data.email);
       setIsSuccess(true);
-      onSuccess();
     } else {
       setFormError(result.error);
     }
@@ -68,8 +62,9 @@ export function ForgotPasswordForm({
             <div className="space-y-2">
               <h2 className="text-foreground text-xl font-semibold">Check your email</h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                We&apos;ve sent a password reset link to{' '}
-                <span className="text-foreground font-medium">{submittedEmail}</span>
+                If an account exists for{' '}
+                <span className="text-foreground font-medium">{submittedEmail}</span>, we&apos;ve
+                sent a password reset link.
               </p>
             </div>
 
@@ -87,7 +82,7 @@ export function ForgotPasswordForm({
               </button>
             </p>
 
-            <Button type="button" variant="outline" className="mt-2" onClick={onBackToSignIn}>
+            <Button type="button" variant="outline" className="mt-2" onClick={onBack}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to sign in
             </Button>
@@ -151,7 +146,7 @@ export function ForgotPasswordForm({
               </form>
             </Form>
 
-            <Button type="button" variant="ghost" className="mx-auto" onClick={onBackToSignIn}>
+            <Button type="button" variant="ghost" className="mx-auto" onClick={onBack}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to sign in
             </Button>

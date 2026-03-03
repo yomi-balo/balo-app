@@ -4,7 +4,7 @@ export const ONBOARDING_EVENTS = {
   COMPLETED: 'onboarding_completed',
 } as const;
 
-export type OnboardingStepName = 'welcome' | 'timezone' | 'intent';
+export type OnboardingStepName = 'name' | 'welcome' | 'timezone' | 'intent';
 
 export interface OnboardingEventMap {
   [ONBOARDING_EVENTS.STEP_VIEWED]: {

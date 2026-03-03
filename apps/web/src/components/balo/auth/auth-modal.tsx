@@ -1,59 +1,42 @@
 'use client';
 
 import { useEffect } from 'react';
-import { AnimatePresence } from 'motion/react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
-import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShineBorder } from '@/components/magicui/shine-border';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuthModal } from '@/hooks/use-auth-modal';
+import { UnifiedAuthForm, type AuthStep } from './unified-auth-form';
 import { track, AUTH_EVENTS } from '@/lib/analytics';
-import { SignInForm } from './sign-in-form';
-import { SignUpForm } from './sign-up-form';
-import { ForgotPasswordForm } from './forgot-password-form';
 
-function AuthModalContent(): React.JSX.Element {
-  const { view, setView, handleAuthSuccess } = useAuthModal();
+interface AuthModalProps {
+  defaultStep?: AuthStep;
+  initialError?: string | null;
+}
+
+export function AuthModal({
+  defaultStep = 'email',
+  initialError = null,
+}: Readonly<AuthModalProps>): React.JSX.Element {
+  const { isOpen, close, handleAuthSuccess } = useAuthModal();
+  const isMobile = useIsMobile(768);
 
   useEffect(() => {
-    if (view === 'sign-in' || view === 'sign-up') {
+    if (isOpen) {
       track(AUTH_EVENTS.MODAL_OPENED, {
-        view,
+        view: defaultStep,
         page: typeof window !== 'undefined' ? window.location.pathname : '',
       });
     }
-  }, [view]);
+  }, [isOpen, defaultStep]);
 
-  return (
-    <AnimatePresence mode="wait" initial={false}>
-      <BlurFade key={view} managed duration={0.3} direction="up" blur="6px">
-        {view === 'sign-in' && (
-          <SignInForm
-            onSuccess={handleAuthSuccess}
-            onSwitchToSignUp={() => setView('sign-up')}
-            onForgotPassword={() => setView('forgot-password')}
-          />
-        )}
-        {view === 'sign-up' && (
-          <SignUpForm onSuccess={handleAuthSuccess} onSwitchToSignIn={() => setView('sign-in')} />
-        )}
-        {view === 'forgot-password' && (
-          <ForgotPasswordForm
-            onSuccess={() => {
-              /* Stay on success state within the form */
-            }}
-            onBackToSignIn={() => setView('sign-in')}
-          />
-        )}
-      </BlurFade>
-    </AnimatePresence>
+  const content = (
+    <UnifiedAuthForm
+      defaultStep={defaultStep}
+      initialError={initialError}
+      onSuccess={handleAuthSuccess}
+    />
   );
-}
-
-export function AuthModal(): React.JSX.Element {
-  const { isOpen, close } = useAuthModal();
-  const isMobile = useIsMobile(768);
 
   if (isMobile) {
     return (
@@ -73,9 +56,7 @@ export function AuthModal(): React.JSX.Element {
             borderWidth={1.5}
             duration={10}
           />
-          <div className="overflow-y-auto px-6 pt-6 pb-8">
-            <AuthModalContent />
-          </div>
+          <div className="overflow-y-auto px-6 pt-6 pb-8">{content}</div>
         </SheetContent>
       </Sheet>
     );
@@ -97,9 +78,7 @@ export function AuthModal(): React.JSX.Element {
           borderWidth={1.5}
           duration={10}
         />
-        <div className="p-6">
-          <AuthModalContent />
-        </div>
+        <div className="p-6">{content}</div>
       </DialogContent>
     </Dialog>
   );

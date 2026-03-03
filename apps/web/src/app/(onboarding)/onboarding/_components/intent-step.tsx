@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 interface IntentStepProps {
   onBack: () => void;
   timezone?: string | null;
+  stepNumber?: number;
 }
 
 type Intent = 'client' | 'expert';
@@ -30,7 +31,7 @@ const item = {
 };
 
 export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(function IntentStep(
-  { onBack, timezone },
+  { onBack, timezone, stepNumber = 3 },
   ref
 ) {
   const router = useRouter();
@@ -38,8 +39,8 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
   const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
-    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'intent', step_number: 3 });
-  }, []);
+    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'intent', step_number: stepNumber });
+  }, [stepNumber]);
 
   function handleSelect(intent: Intent): void {
     if (isPending || selectedIntent !== null) return;
@@ -50,7 +51,7 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
       if (result.success) {
         track(ONBOARDING_EVENTS.STEP_COMPLETED, {
           step: 'intent',
-          step_number: 3,
+          step_number: stepNumber,
           value: intent,
         });
         track(ONBOARDING_EVENTS.COMPLETED, {

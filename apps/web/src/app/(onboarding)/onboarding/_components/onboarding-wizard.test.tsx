@@ -22,6 +22,10 @@ vi.mock('@/lib/auth/actions/complete-onboarding', () => ({
   }),
 }));
 
+vi.mock('@/lib/auth/actions/update-name', () => ({
+  updateNameAction: vi.fn().mockResolvedValue({ success: true }),
+}));
+
 // Stub motion to render plain divs — avoids animation timing issues in tests
 const MOTION_PROPS = new Set([
   'initial',
@@ -69,14 +73,14 @@ describe('OnboardingWizard', () => {
     vi.clearAllMocks();
   });
 
-  it('renders Step 1 (welcome) by default', () => {
+  it('renders Step 1 (welcome) by default when firstName is provided', () => {
     render(<OnboardingWizard firstName="Sarah" />);
     expect(screen.getByText(/Welcome to Balo, Sarah!/i)).toBeInTheDocument();
   });
 
-  it('shows generic greeting when firstName is null', () => {
+  it('renders Step 1 (name) when firstName is null', () => {
     render(<OnboardingWizard firstName={null} />);
-    expect(screen.getByText(/Welcome to Balo!/i)).toBeInTheDocument();
+    expect(screen.getByText(/What should we call you\?/i)).toBeInTheDocument();
   });
 
   it('advances to Step 2 when "Get Started" is clicked', async () => {
@@ -100,10 +104,17 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText(/Welcome to Balo, Sarah!/i)).toBeInTheDocument();
   });
 
-  it('renders progress dots with correct aria attributes', () => {
+  it('renders progress dots with correct aria attributes (3 steps)', () => {
     render(<OnboardingWizard firstName="Sarah" />);
     const progressbar = screen.getByRole('progressbar');
     expect(progressbar).toHaveAttribute('aria-valuenow', '1');
     expect(progressbar).toHaveAttribute('aria-valuemax', '3');
+  });
+
+  it('renders progress dots with 4 steps when firstName is null', () => {
+    render(<OnboardingWizard firstName={null} />);
+    const progressbar = screen.getByRole('progressbar');
+    expect(progressbar).toHaveAttribute('aria-valuenow', '1');
+    expect(progressbar).toHaveAttribute('aria-valuemax', '4');
   });
 });
