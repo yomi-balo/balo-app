@@ -65,9 +65,8 @@ describe('unifiedSignUpSchema', () => {
     });
 
     it('accepts password at exactly 8 chars meeting all requirements', () => {
-      expect(unifiedSignUpSchema.safeParse({ ...validInput, password: 'Passwo1d' }).success).toBe(
-        true
-      ); // NOSONAR
+      const pwd = 'Passwo1d'; // NOSONAR — test fixture, not a real credential
+      expect(unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }).success).toBe(true);
     });
   });
 

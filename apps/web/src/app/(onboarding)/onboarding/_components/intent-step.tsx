@@ -40,7 +40,7 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
 
   useEffect(() => {
     track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'intent', step_number: stepNumber });
-  }, []);
+  }, [stepNumber]);
 
   function handleSelect(intent: Intent): void {
     if (isPending || selectedIntent !== null) return;

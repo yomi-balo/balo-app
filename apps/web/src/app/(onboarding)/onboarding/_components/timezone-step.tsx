@@ -37,7 +37,7 @@ export const TimezoneStep = forwardRef<HTMLHeadingElement, TimezoneStepProps>(fu
     } catch {
       // Fallback to UTC is already set
     }
-  }, []);
+  }, [stepNumber]);
 
   function handleContinue(): void {
     startTransition(async () => {
