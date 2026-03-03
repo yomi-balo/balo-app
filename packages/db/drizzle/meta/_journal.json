@@ -15,6 +15,13 @@
       "when": 1772373749794,
       "tag": "0001_purple_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772550832565,
+      "tag": "0002_striped_guardian",
+      "breakpoints": true
     }
   ]
 }

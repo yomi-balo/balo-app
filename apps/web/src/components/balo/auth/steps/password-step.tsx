@@ -3,97 +3,105 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
-import { InputFloating } from '@/components/enhanced/input-floating';
 import { InputPassword } from '@/components/enhanced/input-password';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
-import { AuthHeader } from './auth-header';
-import { AuthDivider } from './auth-divider';
-import { SocialAuthButtons } from './social-auth-buttons';
-import { useRouter } from 'next/navigation';
+import { AuthHeader } from '../auth-header';
 import { signInAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
-import { signInSchema, type SignInFormData } from './schemas';
+import { signInSchema, type SignInFormData } from '../schemas';
 
-interface SignInFormProps {
+interface PasswordStepProps {
+  email: string;
+  formError: string | null;
   onSuccess: () => void;
-  onSwitchToSignUp: () => void;
   onForgotPassword: () => void;
+  onCreateAccount: () => void;
+  onBack: () => void;
+  onError: (error: string) => void;
 }
 
-export function SignInForm({
+export function PasswordStep({
+  email,
+  formError,
   onSuccess,
-  onSwitchToSignUp,
   onForgotPassword,
-}: Readonly<SignInFormProps>): React.JSX.Element {
+  onCreateAccount,
+  onBack,
+  onError,
+}: Readonly<PasswordStepProps>): React.JSX.Element {
   const router = useRouter();
-  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<SignInFormData>({
     resolver: zodResolver(signInSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
+    defaultValues: { email, password: '' },
   });
 
-  const { isSubmitting } = form.formState;
-
   const onSubmit = async (data: SignInFormData): Promise<void> => {
-    setFormError(null);
-    const result = await signInAction(data);
-    if (result.success) {
-      track(AUTH_EVENTS.LOGIN_COMPLETED, {
-        method: 'email',
-        is_returning_user: !result.data?.needsOnboarding,
-      });
-      analytics.identify(result.data?.userId ?? '', {
-        email: result.data?.email,
-        active_mode: result.data?.activeMode,
-        platform_role: result.data?.platformRole,
-      });
-      if (result.data?.needsOnboarding) {
-        router.push('/onboarding');
+    setIsSubmitting(true);
+    try {
+      const result = await signInAction(data);
+      if (result.success) {
+        track(AUTH_EVENTS.LOGIN_COMPLETED, {
+          method: 'email',
+          is_returning_user: !result.data?.needsOnboarding,
+        });
+        analytics.identify(result.data?.userId ?? '', {
+          email: result.data?.email,
+          active_mode: result.data?.activeMode,
+          platform_role: result.data?.platformRole,
+        });
+        if (result.data?.needsOnboarding) {
+          router.push('/onboarding');
+        }
+        onSuccess();
+      } else {
+        track(AUTH_EVENTS.LOGIN_FAILED, {
+          method: 'email',
+          error_message: result.error,
+        });
+        onError(result.error);
       }
-      onSuccess();
-    } else {
-      track(AUTH_EVENTS.LOGIN_FAILED, {
-        method: 'email',
-        error_message: result.error,
-      });
-      setFormError(result.error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
     <div className="flex flex-col gap-6">
-      <AuthHeader title="Welcome back" subtitle="Sign in to your Balo account to continue" />
+      <div className="flex items-start">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -ml-1 rounded-sm p-1 transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+          aria-label="Back to email"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+      </div>
 
-      <SocialAuthButtons disabled={isSubmitting} />
+      <AuthHeader title="Welcome back" subtitle="Enter your password to sign in" />
 
-      <AuthDivider />
+      {/* Email pill display */}
+      <div className="bg-muted/50 flex items-center justify-between rounded-lg px-4 py-3">
+        <span className="text-foreground text-sm font-medium">{email}</span>
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1 transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+          aria-label="Change email"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+      </div>
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <FormField
-            control={form.control}
-            name="email"
-            render={({ field }) => (
-              <FormItem>
-                <FormControl>
-                  <InputFloating
-                    label="Email address"
-                    type="email"
-                    autoComplete="email"
-                    disabled={isSubmitting}
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {/* Hidden email field for password managers */}
+          <input type="hidden" name="email" value={email} autoComplete="email" />
 
           <FormField
             control={form.control}
@@ -106,6 +114,7 @@ export function SignInForm({
                     autoComplete="current-password"
                     disabled={isSubmitting}
                     showStrength={false}
+                    autoFocus
                     {...field}
                   />
                 </FormControl>
@@ -153,10 +162,10 @@ export function SignInForm({
         Don&apos;t have an account?{' '}
         <button
           type="button"
-          onClick={onSwitchToSignUp}
+          onClick={onCreateAccount}
           className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
         >
-          Sign up
+          Create one
         </button>
       </p>
     </div>

@@ -6,9 +6,21 @@ export const signInSchema = z.object({
 });
 export type SignInFormData = z.infer<typeof signInSchema>;
 
-export const signUpSchema = z.object({
-  firstName: z.string().min(1, 'First name is required').max(50, 'First name is too long'),
-  lastName: z.string().min(1, 'Last name is required').max(50, 'Last name is too long'),
+export const forgotPasswordSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Please enter a valid email address'),
+});
+export type ForgotPasswordFormData = z.infer<typeof forgotPasswordSchema>;
+
+// ---- New schemas for unified auth flow (BAL-184) ----
+
+/** Email-only schema for the email step */
+export const emailSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Please enter a valid email address'),
+});
+export type EmailFormData = z.infer<typeof emailSchema>;
+
+/** Unified sign-up schema -- no firstName/lastName (collected in onboarding) */
+export const unifiedSignUpSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Please enter a valid email address'),
   password: z
     .string()
@@ -17,9 +29,14 @@ export const signUpSchema = z.object({
     .regex(/[A-Z]/, 'Must contain an uppercase letter')
     .regex(/\d/, 'Must contain a number'),
 });
-export type SignUpFormData = z.infer<typeof signUpSchema>;
+export type UnifiedSignUpFormData = z.infer<typeof unifiedSignUpSchema>;
 
-export const forgotPasswordSchema = z.object({
-  email: z.string().min(1, 'Email is required').email('Please enter a valid email address'),
+/** Verification code schema */
+export const verifyEmailSchema = z.object({
+  pendingAuthToken: z.string().min(1, 'Missing verification token'),
+  code: z
+    .string()
+    .length(6, 'Code must be 6 digits')
+    .regex(/^\d{6}$/, 'Code must be 6 digits'),
 });
-export type ForgotPasswordFormData = z.infer<typeof forgotPasswordSchema>;
+export type VerifyEmailFormData = z.infer<typeof verifyEmailSchema>;

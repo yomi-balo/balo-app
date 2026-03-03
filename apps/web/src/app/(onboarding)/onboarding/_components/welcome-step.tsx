@@ -8,18 +8,19 @@ import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 interface WelcomeStepProps {
   firstName: string | null;
   onContinue: () => void;
+  stepNumber?: number;
 }
 
 export const WelcomeStep = forwardRef<HTMLHeadingElement, WelcomeStepProps>(function WelcomeStep(
-  { firstName, onContinue },
+  { firstName, onContinue, stepNumber = 1 },
   ref
 ) {
   useEffect(() => {
-    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'welcome', step_number: 1 });
-  }, []);
+    track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'welcome', step_number: stepNumber });
+  }, [stepNumber]);
 
   function handleContinue(): void {
-    track(ONBOARDING_EVENTS.STEP_COMPLETED, { step: 'welcome', step_number: 1 });
+    track(ONBOARDING_EVENTS.STEP_COMPLETED, { step: 'welcome', step_number: stepNumber });
     onContinue();
   }
 

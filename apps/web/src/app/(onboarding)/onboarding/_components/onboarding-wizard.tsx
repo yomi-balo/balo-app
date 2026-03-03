@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
+import { NameStep } from './name-step';
 import { WelcomeStep } from './welcome-step';
 import { TimezoneStep } from './timezone-step';
 import { IntentStep } from './intent-step';
@@ -11,12 +12,6 @@ import { cn } from '@/lib/utils';
 
 interface OnboardingWizardProps {
   firstName: string | null;
-}
-
-const TOTAL_STEPS = 3;
-
-function clampStep(step: number): number {
-  return Math.max(1, Math.min(TOTAL_STEPS, step));
 }
 
 const variants = {
@@ -29,12 +24,20 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const needsNameStep = firstName === null;
+  const totalSteps = needsNameStep ? 4 : 3;
+
+  function clampStep(step: number): number {
+    return Math.max(1, Math.min(totalSteps, step));
+  }
+
   const stepFromUrl = parseInt(searchParams.get('step') ?? '1', 10);
   const [currentStep, setCurrentStep] = useState(
     Number.isNaN(stepFromUrl) ? 1 : clampStep(stepFromUrl)
   );
   const [direction, setDirection] = useState(1);
   const [selectedTimezone, setSelectedTimezone] = useState<string | null>(null);
+  const [collectedName, setCollectedName] = useState<string | null>(firstName);
 
   const headingRef = useRef<HTMLHeadingElement>(null);
 
@@ -55,10 +58,10 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
   );
 
   const goForward = useCallback(() => {
-    if (currentStep < TOTAL_STEPS) {
+    if (currentStep < totalSteps) {
       goToStep(currentStep + 1, 1);
     }
-  }, [currentStep, goToStep]);
+  }, [currentStep, totalSteps, goToStep]);
 
   const goBack = useCallback(() => {
     if (currentStep > 1) {
@@ -66,7 +69,45 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
     }
   }, [currentStep, goToStep]);
 
+  const handleNameComplete = useCallback(
+    (data: { firstName: string; lastName: string }) => {
+      setCollectedName(data.firstName);
+      goForward();
+    },
+    [goForward]
+  );
+
   function renderStep(): React.JSX.Element {
+    if (needsNameStep) {
+      switch (currentStep) {
+        case 1:
+          return <NameStep ref={headingRef} onContinue={handleNameComplete} />;
+        case 2:
+          return (
+            <WelcomeStep
+              ref={headingRef}
+              firstName={collectedName}
+              onContinue={goForward}
+              stepNumber={2}
+            />
+          );
+        case 3:
+          return (
+            <TimezoneStep
+              ref={headingRef}
+              onContinue={goForward}
+              onBack={goBack}
+              onTimezoneSelected={setSelectedTimezone}
+            />
+          );
+        case 4:
+          return <IntentStep ref={headingRef} onBack={goBack} timezone={selectedTimezone} />;
+        default:
+          return <NameStep ref={headingRef} onContinue={handleNameComplete} />;
+      }
+    }
+
+    // Standard 3-step flow (existing code, unchanged)
     switch (currentStep) {
       case 1:
         return <WelcomeStep ref={headingRef} firstName={firstName} onContinue={goForward} />;
@@ -86,10 +127,13 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
     }
   }
 
+  // Determine if the current step is the intent step (full-width for card grid)
+  const isIntentStep = needsNameStep ? currentStep === 4 : currentStep === 3;
+
   return (
     <div className="flex w-full flex-col items-center">
       <div
-        className={cn('w-full', currentStep === 3 ? 'max-w-2xl' : 'max-w-lg')}
+        className={cn('w-full', isIntentStep ? 'max-w-2xl' : 'max-w-lg')}
         aria-live="polite"
         aria-atomic="true"
       >
@@ -109,7 +153,7 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
       </div>
 
       <div className="mt-8">
-        <ProgressDots current={currentStep} total={TOTAL_STEPS} />
+        <ProgressDots current={currentStep} total={totalSteps} />
       </div>
     </div>
   );

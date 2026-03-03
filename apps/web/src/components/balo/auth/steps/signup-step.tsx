@@ -4,59 +4,75 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
 import { InputFloating } from '@/components/enhanced/input-floating';
 import { InputPassword } from '@/components/enhanced/input-password';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
-import { AuthHeader } from './auth-header';
-import { AuthDivider } from './auth-divider';
-import { SocialAuthButtons } from './social-auth-buttons';
-import { useRouter } from 'next/navigation';
+import { AuthHeader } from '../auth-header';
 import { signUpAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
-import { signUpSchema, type SignUpFormData } from './schemas';
+import { unifiedSignUpSchema, type UnifiedSignUpFormData } from '../schemas';
 
-interface SignUpFormProps {
+interface SignupStepProps {
+  email: string;
+  formError: string | null;
+  onEmailChange: (email: string) => void;
+  onVerificationRequired: (pendingAuthToken: string) => void;
   onSuccess: () => void;
-  onSwitchToSignIn: () => void;
+  onSignInInstead: () => void;
+  onError: (error: string) => void;
 }
 
-export function SignUpForm({
+export function SignupStep({
+  email,
+  formError,
+  onEmailChange,
+  onVerificationRequired,
   onSuccess,
-  onSwitchToSignIn,
-}: Readonly<SignUpFormProps>): React.JSX.Element {
+  onSignInInstead,
+  onError,
+}: Readonly<SignupStepProps>): React.JSX.Element {
   const router = useRouter();
-  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const form = useForm<SignUpFormData>({
-    resolver: zodResolver(signUpSchema),
-    defaultValues: {
-      firstName: '',
-      lastName: '',
-      email: '',
-      password: '',
-    },
+  const form = useForm<UnifiedSignUpFormData>({
+    resolver: zodResolver(unifiedSignUpSchema),
+    defaultValues: { email, password: '' },
   });
 
-  const { isSubmitting } = form.formState;
+  const onSubmit = async (data: UnifiedSignUpFormData): Promise<void> => {
+    setIsSubmitting(true);
+    onEmailChange(data.email);
+    try {
+      const result = await signUpAction(data);
+      if (result.success) {
+        track(AUTH_EVENTS.SIGNUP_COMPLETED, { method: 'email' });
 
-  const onSubmit = async (data: SignUpFormData): Promise<void> => {
-    setFormError(null);
-    const result = await signUpAction(data);
-    if (result.success) {
-      track(AUTH_EVENTS.SIGNUP_COMPLETED, { method: 'email' });
-      analytics.identify(result.data?.userId ?? '', {
-        email: result.data?.email,
-        active_mode: result.data?.activeMode,
-        platform_role: result.data?.platformRole,
-      });
-      if (result.data?.needsOnboarding) {
-        router.push('/onboarding');
+        if (result.data?.verified) {
+          // Fallback path: no verification required
+          analytics.identify(result.data.userId ?? '', {
+            email: result.data.email,
+            active_mode: result.data.activeMode,
+            platform_role: result.data.platformRole,
+          });
+          if (result.data.needsOnboarding) {
+            router.push('/onboarding');
+          }
+          onSuccess();
+        } else if (result.data?.pendingAuthToken) {
+          // Email verification required
+          onVerificationRequired(result.data.pendingAuthToken);
+        }
+      } else {
+        track(AUTH_EVENTS.SIGNUP_FAILED, {
+          method: 'email',
+          error_message: result.error,
+        });
+        onError(result.error);
       }
-      onSuccess();
-    } else {
-      track(AUTH_EVENTS.SIGNUP_FAILED, { method: 'email', error_message: result.error });
-      setFormError(result.error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -67,50 +83,8 @@ export function SignUpForm({
         subtitle="Join Balo to connect with expert consultants"
       />
 
-      <SocialAuthButtons disabled={isSubmitting} />
-
-      <AuthDivider />
-
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="firstName"
-              render={({ field }) => (
-                <FormItem>
-                  <FormControl>
-                    <InputFloating
-                      label="First name"
-                      autoComplete="given-name"
-                      disabled={isSubmitting}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="lastName"
-              render={({ field }) => (
-                <FormItem>
-                  <FormControl>
-                    <InputFloating
-                      label="Last name"
-                      autoComplete="family-name"
-                      disabled={isSubmitting}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-
           <FormField
             control={form.control}
             name="email"
@@ -178,7 +152,7 @@ export function SignUpForm({
         Already have an account?{' '}
         <button
           type="button"
-          onClick={onSwitchToSignIn}
+          onClick={onSignInInstead}
           className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
         >
           Sign in

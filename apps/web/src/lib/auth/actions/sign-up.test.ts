@@ -30,23 +30,23 @@ vi.mock('@balo/db', () => ({
 }));
 
 import { signUpAction } from './sign-up';
-import type { SignUpFormData } from '@/components/balo/auth/schemas';
+import type { UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
 const TEST_PASSWORD = 'Passw0rd'; // NOSONAR — test fixture, not a real credential
 
-function validInput(): SignUpFormData {
-  return { firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com', password: TEST_PASSWORD };
+function validInput(): UnifiedSignUpFormData {
+  return { email: 'jane@example.com', password: TEST_PASSWORD };
 }
 
 function mockWorkOSUser(overrides: Record<string, unknown> = {}) {
   return {
     id: 'workos-user-1',
     email: 'jane@example.com',
-    firstName: 'Jane',
-    lastName: 'Doe',
-    emailVerified: true,
+    firstName: null,
+    lastName: null,
+    emailVerified: false,
     ...overrides,
   };
 }
@@ -60,16 +60,16 @@ function mockDbResult() {
     user: {
       id: 'user-1',
       email: 'jane@example.com',
-      firstName: 'Jane',
-      lastName: 'Doe',
+      firstName: null,
+      lastName: null,
       activeMode: 'client',
     },
-    company: { id: 'co-1', name: "Jane's Workspace" },
+    company: { id: 'co-1', name: 'My Workspace' },
     membership: { role: 'owner' },
   };
 }
 
-function setupHappyPath(workosOverrides: Record<string, unknown> = {}) {
+function setupFallbackPath(workosOverrides: Record<string, unknown> = {}) {
   const workosUser = mockWorkOSUser(workosOverrides);
   mockCreateUser.mockResolvedValue(workosUser);
   mockAuthenticateWithPassword.mockResolvedValue({
@@ -109,8 +109,6 @@ describe('signUpAction', () => {
 
     it('returns first validation error when multiple fields are invalid', async () => {
       const result = await signUpAction({
-        firstName: '',
-        lastName: '',
         email: '',
         password: '',
       });
@@ -123,25 +121,23 @@ describe('signUpAction', () => {
   });
 
   describe('WorkOS user creation', () => {
-    it('calls createUser with correct parameters', async () => {
-      setupHappyPath();
+    it('calls createUser with email and password only (no names)', async () => {
+      setupFallbackPath();
       await signUpAction(validInput());
       expect(mockCreateUser).toHaveBeenCalledWith({
         email: 'jane@example.com',
         password: TEST_PASSWORD,
-        firstName: 'Jane',
-        lastName: 'Doe',
       });
     });
 
-    it('returns mapped error when createUser throws with known code', async () => {
+    it('returns generic error when createUser throws with email_already_exists (no enumeration)', async () => {
       mockCreateUser.mockRejectedValue(
         Object.assign(new Error('Duplicate'), { code: 'email_already_exists' })
       );
       const result = await signUpAction(validInput());
       expect(result).toEqual({
         success: false,
-        error: 'An account with this email already exists. Try signing in instead.',
+        error: 'Invalid email or password. Please try again.',
       });
       expect(mockAuthenticateWithPassword).not.toHaveBeenCalled();
     });
@@ -158,7 +154,7 @@ describe('signUpAction', () => {
 
   describe('authentication after creation', () => {
     it('authenticates with correct parameters after user creation', async () => {
-      setupHappyPath();
+      setupFallbackPath();
       await signUpAction(validInput());
       expect(mockAuthenticateWithPassword).toHaveBeenCalledWith({
         clientId: 'test-client-id',
@@ -168,80 +164,106 @@ describe('signUpAction', () => {
     });
   });
 
-  describe('database transaction', () => {
-    it('calls createWithWorkspace with correct data', async () => {
-      setupHappyPath();
-      await signUpAction(validInput());
-      expect(mockCreateWithWorkspace).toHaveBeenCalledWith({
-        workosId: 'workos-user-1',
-        email: 'jane@example.com',
-        firstName: 'Jane',
-        lastName: 'Doe',
-        emailVerified: true,
-        activeMode: 'client',
+  describe('email verification required path', () => {
+    it('returns pendingAuthToken when authenticateWithPassword returns pending token', async () => {
+      mockCreateUser.mockResolvedValue(mockWorkOSUser());
+      mockAuthenticateWithPassword.mockResolvedValue({
+        pendingAuthenticationToken: 'pat_test_123',
+        user: mockWorkOSUser(),
       });
+
+      const result = await signUpAction(validInput());
+      expect(result).toEqual({
+        success: true,
+        data: {
+          pendingAuthToken: 'pat_test_123',
+          email: 'jane@example.com',
+        },
+      });
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
     });
 
-    it('passes emailVerified: false when WorkOS user emailVerified is null', async () => {
-      setupHappyPath({ emailVerified: null });
-      await signUpAction(validInput());
-      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ emailVerified: false })
+    it('returns pendingAuthToken when authenticateWithPassword throws email_verification_required', async () => {
+      mockCreateUser.mockResolvedValue(mockWorkOSUser());
+      mockAuthenticateWithPassword.mockRejectedValue(
+        Object.assign(new Error('Email verification required'), {
+          code: 'email_verification_required',
+          rawData: {
+            code: 'email_verification_required',
+            pending_authentication_token: 'pat_error_path_123',
+          },
+        })
       );
+
+      const result = await signUpAction(validInput());
+      expect(result).toEqual({
+        success: true,
+        data: {
+          pendingAuthToken: 'pat_error_path_123',
+          email: 'jane@example.com',
+        },
+      });
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
+      expect(mockDeleteUser).not.toHaveBeenCalled();
     });
   });
 
-  describe('session setup', () => {
+  describe('fallback path (no verification required)', () => {
+    it('creates DB user + session when no verification needed', async () => {
+      setupFallbackPath();
+      const result = await signUpAction(validInput());
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data?.verified).toBe(true);
+        expect(result.data?.needsOnboarding).toBe(true);
+        expect(result.data?.userId).toBe('user-1');
+      }
+    });
+
+    it('calls createWithWorkspace with null names', async () => {
+      setupFallbackPath();
+      await signUpAction(validInput());
+      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          firstName: null,
+          lastName: null,
+        })
+      );
+    });
+
     it('sets session.user with correct fields on success', async () => {
-      setupHappyPath();
+      setupFallbackPath();
       await signUpAction(validInput());
       expect(mockSessionObj.user).toEqual({
         id: 'user-1',
         email: 'jane@example.com',
-        firstName: 'Jane',
-        lastName: 'Doe',
+        firstName: null,
+        lastName: null,
         activeMode: 'client',
         onboardingCompleted: false,
         platformRole: 'user',
         companyId: 'co-1',
-        companyName: "Jane's Workspace",
+        companyName: 'My Workspace',
         companyRole: 'owner',
       });
     });
 
     it('sets accessToken and refreshToken from auth response', async () => {
-      setupHappyPath();
+      setupFallbackPath();
       await signUpAction(validInput());
       expect(mockSessionObj.accessToken).toBe('at_test');
       expect(mockSessionObj.refreshToken).toBe('rt_test');
     });
 
     it('calls session.save()', async () => {
-      setupHappyPath();
+      setupFallbackPath();
       await signUpAction(validInput());
       expect(mockSave).toHaveBeenCalledOnce();
     });
   });
 
-  describe('success response', () => {
-    it('returns { success: true, data: { needsOnboarding: true } }', async () => {
-      setupHappyPath();
-      const result = await signUpAction(validInput());
-      expect(result).toEqual({
-        success: true,
-        data: {
-          needsOnboarding: true,
-          userId: 'user-1',
-          email: 'jane@example.com',
-          activeMode: 'client',
-          platformRole: 'user',
-        },
-      });
-    });
-  });
-
   describe('post-creation failure and orphan cleanup', () => {
-    it('deletes orphaned WorkOS user when authenticateWithPassword fails', async () => {
+    it('deletes orphaned WorkOS user when authenticateWithPassword fails (non-verification)', async () => {
       const workosUser = mockWorkOSUser();
       mockCreateUser.mockResolvedValue(workosUser);
       mockAuthenticateWithPassword.mockRejectedValue(new Error('auth failed'));

@@ -20,10 +20,7 @@ describe('mapWorkOSError', () => {
       ['invalid_credentials', 'Invalid email or password. Please try again.'],
       ['email_not_verified', 'Please verify your email address before signing in.'],
       ['user_suspended', 'Your account has been suspended. Please contact support.'],
-      [
-        'email_already_exists',
-        'An account with this email already exists. Try signing in instead.',
-      ],
+      ['email_already_exists', 'Invalid email or password. Please try again.'],
       ['user_creation_failed', 'Could not create your account. Please try again.'],
       ['password_too_short', 'Password must be at least 8 characters.'],
       ['password_too_weak', 'Please choose a stronger password.'],
@@ -50,19 +47,14 @@ describe('mapWorkOSError', () => {
 
     it('falls through to message matching for unrecognized code', () => {
       const error = errorWithCode('some_unknown_code', 'already exists in system');
-      expect(mapWorkOSError(error)).toBe(
-        'An account with this email already exists. Try signing in instead.'
-      );
+      expect(mapWorkOSError(error)).toBe('Invalid email or password. Please try again.');
     });
   });
 
   describe('message-based fallback', () => {
     it.each([
-      ['already exists', 'An account with this email already exists. Try signing in instead.'],
-      [
-        'duplicate entry found',
-        'An account with this email already exists. Try signing in instead.',
-      ],
+      ['already exists', 'Invalid email or password. Please try again.'],
+      ['duplicate entry found', 'Invalid email or password. Please try again.'],
       ['user not found', 'Invalid email or password. Please try again.'],
       ['invalid credentials provided', 'Invalid email or password. Please try again.'],
       ['rate limit hit', 'Too many attempts. Please wait a moment and try again.'],
@@ -73,7 +65,7 @@ describe('mapWorkOSError', () => {
 
     it('message match is case-insensitive', () => {
       expect(mapWorkOSError(new Error('ALREADY EXISTS'))).toBe(
-        'An account with this email already exists. Try signing in instead.'
+        'Invalid email or password. Please try again.'
       );
     });
 

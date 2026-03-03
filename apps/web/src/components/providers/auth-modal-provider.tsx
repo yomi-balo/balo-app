@@ -2,17 +2,23 @@
 
 import { createContext, useState, useCallback, useMemo, useRef } from 'react';
 import { AuthModal } from '@/components/balo/auth/auth-modal';
-
-export type AuthView = 'sign-in' | 'sign-up' | 'forgot-password';
+import type { AuthStep } from '@/components/balo/auth/unified-auth-form';
 
 export interface AuthModalContextValue {
   isOpen: boolean;
-  view: AuthView;
-  openLogin: (onSuccess?: () => void) => void;
-  openSignup: (onSuccess?: () => void) => void;
+  defaultStep: AuthStep;
+  initialError: string | null;
+  open: (options?: {
+    defaultStep?: AuthStep;
+    onSuccess?: () => void;
+    initialError?: string;
+  }) => void;
   close: () => void;
-  setView: (view: AuthView) => void;
   handleAuthSuccess: () => void;
+  /** @deprecated Use open({ defaultStep: 'email' }) */
+  openLogin: (onSuccess?: () => void) => void;
+  /** @deprecated Use open({ defaultStep: 'signup' }) */
+  openSignup: (onSuccess?: () => void) => void;
 }
 
 export const AuthModalContext = createContext<AuthModalContextValue | null>(null);
@@ -25,20 +31,33 @@ export function AuthModalProvider({
   children,
 }: Readonly<AuthModalProviderProps>): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
-  const [view, setView] = useState<AuthView>('sign-in');
+  const [defaultStep, setDefaultStep] = useState<AuthStep>('email');
+  const [initialError, setInitialError] = useState<string | null>(null);
   const onSuccessRef = useRef<(() => void) | undefined>(undefined);
 
-  const openLogin = useCallback((onSuccess?: () => void) => {
-    onSuccessRef.current = onSuccess;
-    setView('sign-in');
-    setIsOpen(true);
-  }, []);
+  const open = useCallback(
+    (options?: { defaultStep?: AuthStep; onSuccess?: () => void; initialError?: string }) => {
+      onSuccessRef.current = options?.onSuccess;
+      setDefaultStep(options?.defaultStep ?? 'email');
+      setInitialError(options?.initialError ?? null);
+      setIsOpen(true);
+    },
+    []
+  );
 
-  const openSignup = useCallback((onSuccess?: () => void) => {
-    onSuccessRef.current = onSuccess;
-    setView('sign-up');
-    setIsOpen(true);
-  }, []);
+  const openLogin = useCallback(
+    (onSuccess?: () => void) => {
+      open({ defaultStep: 'email', onSuccess });
+    },
+    [open]
+  );
+
+  const openSignup = useCallback(
+    (onSuccess?: () => void) => {
+      open({ defaultStep: 'signup', onSuccess });
+    },
+    [open]
+  );
 
   const close = useCallback(() => {
     setIsOpen(false);
@@ -51,25 +70,24 @@ export function AuthModalProvider({
     onSuccessRef.current = undefined;
   }, []);
 
-  const handleSetView = useCallback((v: AuthView) => setView(v), []);
-
   const contextValue = useMemo<AuthModalContextValue>(
     () => ({
       isOpen,
-      view,
+      defaultStep,
+      initialError,
+      open,
       openLogin,
       openSignup,
       close,
-      setView: handleSetView,
       handleAuthSuccess,
     }),
-    [isOpen, view, openLogin, openSignup, close, handleSetView, handleAuthSuccess]
+    [isOpen, defaultStep, initialError, open, openLogin, openSignup, close, handleAuthSuccess]
   );
 
   return (
     <AuthModalContext.Provider value={contextValue}>
       {children}
-      <AuthModal />
+      <AuthModal defaultStep={defaultStep} initialError={initialError} />
     </AuthModalContext.Provider>
   );
 }

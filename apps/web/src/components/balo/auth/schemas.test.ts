@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { signInSchema, signUpSchema, forgotPasswordSchema } from './schemas';
+import {
+  signInSchema,
+  forgotPasswordSchema,
+  unifiedSignUpSchema,
+  emailSchema,
+  verifyEmailSchema,
+} from './schemas';
 
 // ── signInSchema ────────────────────────────────────────────────
 
@@ -45,77 +51,29 @@ describe('signInSchema', () => {
   });
 });
 
-// ── signUpSchema ────────────────────────────────────────────────
+// ── unifiedSignUpSchema ────────────────────────────────────────
 
-describe('signUpSchema', () => {
+describe('unifiedSignUpSchema', () => {
   const validInput = {
-    firstName: 'John',
-    lastName: 'Doe',
     email: 'john@example.com',
     password: 'Passw0rd', // NOSONAR — test fixture, not a real credential
   };
 
   describe('valid input', () => {
     it('accepts complete valid input', () => {
-      expect(signUpSchema.safeParse(validInput).success).toBe(true);
-    });
-
-    it('accepts firstName at exactly 50 chars', () => {
-      expect(signUpSchema.safeParse({ ...validInput, firstName: 'a'.repeat(50) }).success).toBe(
-        true
-      );
-    });
-
-    it('accepts lastName at exactly 50 chars', () => {
-      expect(signUpSchema.safeParse({ ...validInput, lastName: 'a'.repeat(50) }).success).toBe(
-        true
-      );
+      expect(unifiedSignUpSchema.safeParse(validInput).success).toBe(true);
     });
 
     it('accepts password at exactly 8 chars meeting all requirements', () => {
-      expect(signUpSchema.safeParse({ ...validInput, password: 'Passwo1d' }).success).toBe(true); // NOSONAR
-    });
-  });
-
-  describe('firstName validation', () => {
-    it('rejects empty firstName', () => {
-      const result = signUpSchema.safeParse({ ...validInput, firstName: '' });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe('First name is required');
-      }
-    });
-
-    it('rejects firstName exceeding 50 chars', () => {
-      const result = signUpSchema.safeParse({ ...validInput, firstName: 'a'.repeat(51) });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe('First name is too long');
-      }
-    });
-  });
-
-  describe('lastName validation', () => {
-    it('rejects empty lastName', () => {
-      const result = signUpSchema.safeParse({ ...validInput, lastName: '' });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe('Last name is required');
-      }
-    });
-
-    it('rejects lastName exceeding 50 chars', () => {
-      const result = signUpSchema.safeParse({ ...validInput, lastName: 'a'.repeat(51) });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe('Last name is too long');
-      }
+      expect(unifiedSignUpSchema.safeParse({ ...validInput, password: 'Passwo1d' }).success).toBe(
+        true
+      ); // NOSONAR
     });
   });
 
   describe('email validation', () => {
     it('rejects empty email', () => {
-      const result = signUpSchema.safeParse({ ...validInput, email: '' });
+      const result = unifiedSignUpSchema.safeParse({ ...validInput, email: '' });
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues[0]?.message).toBe('Email is required');
@@ -123,7 +81,7 @@ describe('signUpSchema', () => {
     });
 
     it('rejects invalid email format', () => {
-      const result = signUpSchema.safeParse({ ...validInput, email: 'bad' });
+      const result = unifiedSignUpSchema.safeParse({ ...validInput, email: 'bad' });
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues[0]?.message).toBe('Please enter a valid email address');
@@ -138,7 +96,7 @@ describe('signUpSchema', () => {
       ['password1', 'Must contain an uppercase letter'], // NOSONAR — no uppercase
       ['Passwords', 'Must contain a number'], // NOSONAR — no digit
     ])('rejects "%s" with expected error', (pwd, expectedMsg) => {
-      const result = signUpSchema.safeParse({ ...validInput, password: pwd }); // NOSONAR
+      const result = unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues.some((i) => i.message === expectedMsg)).toBe(true);
@@ -148,17 +106,58 @@ describe('signUpSchema', () => {
 
   describe('multiple errors', () => {
     it('returns all failing validations when multiple rules fail', () => {
-      const result = signUpSchema.safeParse({
-        firstName: '',
-        lastName: '',
+      const result = unifiedSignUpSchema.safeParse({
         email: 'bad',
         password: 'x', // NOSONAR
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues.length).toBeGreaterThanOrEqual(4);
+        expect(result.error.issues.length).toBeGreaterThanOrEqual(2);
       }
     });
+  });
+});
+
+// ── emailSchema ────────────────────────────────────────────────
+
+describe('emailSchema', () => {
+  it('accepts valid email', () => {
+    expect(emailSchema.safeParse({ email: 'user@example.com' }).success).toBe(true);
+  });
+
+  it('rejects empty email', () => {
+    const result = emailSchema.safeParse({ email: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid email', () => {
+    const result = emailSchema.safeParse({ email: 'bad' });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ── verifyEmailSchema ────────────────────────────────────────
+
+describe('verifyEmailSchema', () => {
+  it('accepts valid token and code', () => {
+    expect(
+      verifyEmailSchema.safeParse({ pendingAuthToken: 'token123', code: '123456' }).success
+    ).toBe(true);
+  });
+
+  it('rejects empty token', () => {
+    const result = verifyEmailSchema.safeParse({ pendingAuthToken: '', code: '123456' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects non-numeric code', () => {
+    const result = verifyEmailSchema.safeParse({ pendingAuthToken: 'token', code: 'abcdef' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects code shorter than 6 digits', () => {
+    const result = verifyEmailSchema.safeParse({ pendingAuthToken: 'token', code: '12345' });
+    expect(result.success).toBe(false);
   });
 });
 

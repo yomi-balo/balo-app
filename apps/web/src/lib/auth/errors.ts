@@ -20,10 +20,15 @@ const ERROR_MAP: Record<string, string> = {
   user_suspended: 'Your account has been suspended. Please contact support.',
 
   // createUser errors
-  email_already_exists: 'An account with this email already exists. Try signing in instead.',
+  email_already_exists: 'Invalid email or password. Please try again.',
   user_creation_failed: 'Could not create your account. Please try again.',
   password_too_short: 'Password must be at least 8 characters.',
   password_too_weak: 'Please choose a stronger password.',
+
+  // Email verification errors
+  email_verification_required: 'Please verify your email address.',
+  email_verification_failed: 'Invalid or expired verification code. Please try again.',
+  email_verification_code_expired: 'Your verification code has expired. Please request a new one.',
 
   // Password reset errors
   password_reset_expired: 'This password reset link has expired. Please request a new one.',
