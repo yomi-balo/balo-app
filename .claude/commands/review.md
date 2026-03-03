@@ -79,6 +79,17 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 - BullMQ jobs designed for retry with proper backoff config?
 - Database operations that must be atomic use transactions?
 
+### 7. Observability
+
+- Every catch block uses structured logger (`log.error()` from `@/lib/logging`), not `console.log` / `console.error`? (Exception: middleware Edge Runtime uses structured `JSON.stringify`)
+- Caught errors log the original error message + stack trace + contextual IDs (userId, caseId, etc.) before returning user-facing message?
+- Key business events logged at info level (sign-in, sign-up, OAuth callback, payment, booking)?
+- `loggedFetch` from `@/lib/logging/fetch-wrapper` used for external API calls instead of bare `fetch`?
+- User-initiated actions tracked via `track()` from `@/lib/analytics/track` with typed constants from `@/lib/analytics/events/`? No raw event name strings?
+- `analytics.identify()` called after any auth flow that establishes a session?
+- `analytics.reset()` called on logout?
+- New features define events in `events/{feature}.ts` with typed property maps?
+
 ## Output Format
 
 ### VERDICT: [APPROVED | CHANGES_REQUESTED]

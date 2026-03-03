@@ -33,6 +33,7 @@ The project has skill files in `.claude/skills/` that define Balo-specific patte
 3. **Type safety end-to-end:** Shared types in `packages/shared`, Zod schemas for runtime validation.
 4. **Multi-tenant ready:** No hardcoded Salesforce concepts in generic tables. Design for future verticals.
 5. **Explicit over implicit:** Name things clearly. No abbreviations. No magic.
+6. **Observable by default:** Every feature must define its logging error paths and analytics events upfront. If a user can do it, we track it. If it can fail, we log it.
 
 ## Process
 
@@ -96,6 +97,26 @@ Which components, server vs client, data flow between them.
 ## Edge Cases
 
 Specific scenarios the implementation must handle.
+
+## Observability
+
+### Logging
+
+List error paths and key business events that need structured logging.
+Refer to CLAUDE.md logging standards for patterns — the builder will implement using `log.error()` / `log.info()` from `@/lib/logging`.
+
+### Analytics Events
+
+Define PostHog events for this feature. Names follow `{feature}_{entity}_{action}` convention.
+The builder will create `lib/analytics/events/{feature}.ts` with these as typed constants.
+
+| Event                   | When                   | Properties       |
+| ----------------------- | ---------------------- | ---------------- |
+| `feature_entity_action` | Description of trigger | `prop1`, `prop2` |
+
+### Identify / Reset
+
+Note if this feature establishes or destroys a user session (requires `analytics.identify()` or `analytics.reset()`).
 
 ## Open Questions
 
