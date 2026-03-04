@@ -80,6 +80,7 @@ Check `.claude/skills/` for all available skills. Current skills:
 - No commented-out code
 - No `console.log` — use proper structured logging
 - Error handling on every external call (Stripe, WorkOS, DB)
+- Data-driven over repetitive — when generating 3+ items with the same shape (seed rows, route registrations, nav items, form fields), define a compact data array and map over it. Never copy-paste the same object structure with different values.
 - Loading states for every async UI operation
 - Error boundaries for every new route segment
 

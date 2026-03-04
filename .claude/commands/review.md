@@ -69,6 +69,7 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 - Functions are focused (single responsibility)
 - No magic numbers or strings — use constants
 - Validation schemas, enum definitions, and business logic chains shared across files extracted into a single source of truth? (e.g. password rules used in both signup and reset should be one shared field, not copy-pasted)
+- Repetitive data structures (seed data, config objects, route definitions) expressed as compact data definitions with loops/maps rather than copy-pasted blocks? If 3+ items share the same shape, they should be a data array with a single insert/render/register call.
 - Naming is clear and consistent with codebase conventions
 - Tests exist and test meaningful behavior (not just "it renders")
 
