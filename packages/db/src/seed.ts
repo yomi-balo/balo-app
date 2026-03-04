@@ -907,7 +907,9 @@ async function seed(): Promise<void> {
   await client.end();
 }
 
-seed().catch((err) => {
+try {
+  await seed();
+} catch (err) {
   console.error('Seed failed:', err);
   process.exit(1);
-});
+}
