@@ -6,7 +6,6 @@ import { log } from '@/lib/logging';
 import { z } from 'zod';
 import {
   STEP_SCHEMAS,
-  type StepKey,
   type ProfileStepData,
   type ProductsStepData,
   type AssessmentStepData,
