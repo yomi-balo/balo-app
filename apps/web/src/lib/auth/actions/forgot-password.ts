@@ -24,6 +24,7 @@ export async function forgotPasswordAction(input: ForgotPasswordFormData): Promi
     await getWorkOS().userManagement.createPasswordReset({
       email: parsed.data.email,
     });
+    log.info('Password reset requested', { email: parsed.data.email });
   } catch (error) {
     // SECURITY: Swallow all errors -- do NOT return failure to prevent email enumeration.
     // If the email doesn't exist, WorkOS may throw. We still return success.
@@ -31,8 +32,6 @@ export async function forgotPasswordAction(input: ForgotPasswordFormData): Promi
       error: error instanceof Error ? error.message : String(error),
     });
   }
-
-  log.info('Password reset requested', { email: parsed.data.email });
 
   return { success: true };
 }

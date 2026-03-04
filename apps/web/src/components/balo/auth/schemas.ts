@@ -19,15 +19,18 @@ export const emailSchema = z.object({
 });
 export type EmailFormData = z.infer<typeof emailSchema>;
 
+/** Shared password requirements — single source of truth for signup + reset */
+const passwordField = z
+  .string()
+  .min(8, 'Password must be at least 8 characters')
+  .regex(/[a-z]/, 'Must contain a lowercase letter')
+  .regex(/[A-Z]/, 'Must contain an uppercase letter')
+  .regex(/\d/, 'Must contain a number');
+
 /** Unified sign-up schema -- no firstName/lastName (collected in onboarding) */
 export const unifiedSignUpSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Please enter a valid email address'),
-  password: z
-    .string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/[a-z]/, 'Must contain a lowercase letter')
-    .regex(/[A-Z]/, 'Must contain an uppercase letter')
-    .regex(/\d/, 'Must contain a number'),
+  password: passwordField,
 });
 export type UnifiedSignUpFormData = z.infer<typeof unifiedSignUpSchema>;
 
@@ -35,12 +38,7 @@ export type UnifiedSignUpFormData = z.infer<typeof unifiedSignUpSchema>;
 export const resetPasswordSchema = z
   .object({
     token: z.string().min(1, 'Missing reset token'),
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters')
-      .regex(/[a-z]/, 'Must contain a lowercase letter')
-      .regex(/[A-Z]/, 'Must contain an uppercase letter')
-      .regex(/\d/, 'Must contain a number'),
+    password: passwordField,
     confirmPassword: z.string().min(1, 'Please confirm your password'),
   })
   .refine((data) => data.password === data.confirmPassword, {
