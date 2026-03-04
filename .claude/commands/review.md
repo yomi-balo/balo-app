@@ -68,6 +68,7 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 - No dead code, no commented-out blocks
 - Functions are focused (single responsibility)
 - No magic numbers or strings — use constants
+- Validation schemas, enum definitions, and business logic chains shared across files extracted into a single source of truth? (e.g. password rules used in both signup and reset should be one shared field, not copy-pasted)
 - Naming is clear and consistent with codebase conventions
 - Tests exist and test meaningful behavior (not just "it renders")
 
@@ -85,6 +86,7 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 - Caught errors log the original error message + stack trace + contextual IDs (userId, caseId, etc.) before returning user-facing message?
 - Key business events logged at info level (sign-in, sign-up, OAuth callback, payment, booking)?
 - `loggedFetch` from `@/lib/logging/fetch-wrapper` used for external API calls instead of bare `fetch`?
+- Log statements placed correctly relative to control flow? Success-level logs (`log.info`) must be inside the success path, not after a catch block where they'd fire regardless of outcome.
 - User-initiated actions tracked via `track()` from `@/lib/analytics/track` with typed constants from `@/lib/analytics/events/`? No raw event name strings?
 - `analytics.identify()` called after any auth flow that establishes a session?
 - `analytics.reset()` called on logout?
