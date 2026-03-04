@@ -34,79 +34,43 @@ describe('resetPasswordAction', () => {
   });
 
   describe('input validation', () => {
-    it('returns error for empty token', async () => {
-      const result = await resetPasswordAction({
-        token: '',
-        password: TEST_PASSWORD,
-        confirmPassword: TEST_PASSWORD,
-      });
-      expect(result).toEqual({ success: false, error: 'Missing reset token' });
-      expect(mockResetPassword).not.toHaveBeenCalled();
-    });
-
-    it('returns error for password under 8 chars', async () => {
-      const result = await resetPasswordAction({
-        token: 'tok',
-        password: 'Short1a',
-        confirmPassword: 'Short1a',
-      });
+    it.each([
+      {
+        name: 'empty token',
+        input: { token: '', password: TEST_PASSWORD, confirmPassword: TEST_PASSWORD },
+        errorMatch: 'Missing reset token',
+      },
+      {
+        name: 'password under 8 chars',
+        input: { token: 'tok', password: 'Short1a', confirmPassword: 'Short1a' },
+        errorMatch: 'at least 8 characters',
+      },
+      {
+        name: 'password without lowercase',
+        input: { token: 'tok', password: 'ALLCAPS123', confirmPassword: 'ALLCAPS123' },
+        errorMatch: 'lowercase',
+      },
+      {
+        name: 'password without uppercase',
+        input: { token: 'tok', password: 'alllower1', confirmPassword: 'alllower1' },
+        errorMatch: 'uppercase',
+      },
+      {
+        name: 'password without number',
+        input: { token: 'tok', password: 'NoNumbersHere', confirmPassword: 'NoNumbersHere' },
+        errorMatch: 'number',
+      },
+      {
+        name: 'passwords do not match',
+        input: { token: 'tok', password: TEST_PASSWORD, confirmPassword: 'DifferentPass1' },
+        errorMatch: "don't match",
+      },
+    ])('returns error for $name', async ({ input, errorMatch }) => {
+      const result = await resetPasswordAction(input);
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('at least 8 characters');
+        expect(result.error).toContain(errorMatch);
       }
-      expect(mockResetPassword).not.toHaveBeenCalled();
-    });
-
-    it('returns error for password without lowercase', async () => {
-      const result = await resetPasswordAction({
-        token: 'tok',
-        password: 'ALLCAPS123',
-        confirmPassword: 'ALLCAPS123',
-      });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('lowercase');
-      }
-    });
-
-    it('returns error for password without uppercase', async () => {
-      const result = await resetPasswordAction({
-        token: 'tok',
-        password: 'alllower1',
-        confirmPassword: 'alllower1',
-      });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('uppercase');
-      }
-    });
-
-    it('returns error for password without number', async () => {
-      const result = await resetPasswordAction({
-        token: 'tok',
-        password: 'NoNumbersHere',
-        confirmPassword: 'NoNumbersHere',
-      });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('number');
-      }
-    });
-
-    it('returns error when passwords do not match', async () => {
-      const result = await resetPasswordAction({
-        token: 'tok',
-        password: TEST_PASSWORD,
-        confirmPassword: 'DifferentPass1',
-      });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain("don't match");
-      }
-    });
-
-    it('does not call WorkOS when validation fails', async () => {
-      await resetPasswordAction({ token: '', password: '', confirmPassword: '' });
       expect(mockResetPassword).not.toHaveBeenCalled();
     });
   });
