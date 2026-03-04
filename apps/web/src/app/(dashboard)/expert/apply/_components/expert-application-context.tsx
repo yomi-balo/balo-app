@@ -113,13 +113,14 @@ function resolveInitialStep(
   searchParams: URLSearchParams,
   draft: ApplicationWithRelations | null
 ): number {
+  const maxStep = draft ? findFirstIncompleteStep(draft) : 0;
+
   const stepParam = searchParams.get('step');
   if (stepParam) {
     const index = STEP_CONFIG.findIndex((s) => s.key === stepParam);
-    if (index !== -1) return index;
+    if (index !== -1) return Math.min(index, maxStep);
   }
-  if (draft) return findFirstIncompleteStep(draft);
-  return 0;
+  return maxStep;
 }
 
 function hydrateStepStatuses(draft: ApplicationWithRelations | null): StepStatus[] {
