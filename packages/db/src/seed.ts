@@ -28,6 +28,18 @@ async function seed(): Promise<void> {
         description: 'Salesforce ecosystem',
         isActive: true,
       },
+      {
+        name: 'Microsoft',
+        slug: 'microsoft',
+        description: 'Microsoft ecosystem',
+        isActive: false,
+      },
+      {
+        name: 'Adobe',
+        slug: 'adobe',
+        description: 'Adobe ecosystem',
+        isActive: false,
+      },
     ])
     .onConflictDoNothing();
 
@@ -875,7 +887,23 @@ async function seed(): Promise<void> {
     ])
     .onConflictDoNothing();
 
-  console.log('Seed complete.');
+  // ──────────────────────────────────────────────
+  // Summary
+  // ──────────────────────────────────────────────
+  const counts = await Promise.all([
+    db.select().from(schema.verticals),
+    db.select().from(schema.supportTypes),
+    db.select().from(schema.skillCategories),
+    db.select().from(schema.skills),
+    db.select().from(schema.certificationCategories),
+    db.select().from(schema.certifications),
+    db.select().from(schema.languages),
+    db.select().from(schema.industries),
+  ]);
+
+  console.log(
+    `\nSeed complete. Seeded ${counts[0].length} verticals, ${counts[1].length} support types, ${counts[2].length} skill categories, ${counts[3].length} skills, ${counts[4].length} certification categories, ${counts[5].length} certifications, ${counts[6].length} languages, ${counts[7].length} industries.`
+  );
   await client.end();
 }
 

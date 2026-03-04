@@ -51,8 +51,11 @@ export const expertProfiles = pgTable(
 
     // Experience metrics
     yearStartedSalesforce: integer('year_started_salesforce'),
-    projectCount: integer('project_count'),
-    projectLeadCount: integer('project_lead_count'),
+    // Stores the lower bound of the selected range.
+    // UI ranges → stored value: None=0, 1-9=1, 10-25=10, 26-50=26, 50+=50
+    // Display logic maps the stored value back to the range label.
+    projectCountMin: integer('project_count_min'),
+    projectLeadCountMin: integer('project_lead_count_min'),
 
     // Salesforce distinctions
     isSalesforceMvp: boolean('is_salesforce_mvp').default(false).notNull(),

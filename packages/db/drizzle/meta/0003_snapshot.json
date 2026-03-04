@@ -1,5 +1,5 @@
 {
-  "id": "4db9cfdb-6a3c-4e67-bf01-545c65807acb",
+  "id": "93c00d7f-8520-4e4f-9bea-b177752ea106",
   "prevId": "13816db8-91d4-499a-9333-a2a74905dce0",
   "version": "7",
   "dialect": "postgresql",
@@ -1626,14 +1626,14 @@
           "primaryKey": false,
           "notNull": false
         },
-        "project_count": {
-          "name": "project_count",
+        "project_count_min": {
+          "name": "project_count_min",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
-        "project_lead_count": {
-          "name": "project_lead_count",
+        "project_lead_count_min": {
+          "name": "project_lead_count_min",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
@@ -2326,7 +2326,7 @@
     "public.language_proficiency": {
       "name": "language_proficiency",
       "schema": "public",
-      "values": ["basic", "conversational", "professional", "native"]
+      "values": ["beginner", "intermediate", "advanced", "native"]
     },
     "public.platform_role": {
       "name": "platform_role",

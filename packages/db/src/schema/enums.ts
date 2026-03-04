@@ -9,9 +9,9 @@ export const platformRoleEnum = pgEnum('platform_role', ['user', 'admin', 'super
 export const signupIntentEnum = pgEnum('signup_intent', ['client', 'expert']);
 
 export const languageProficiencyEnum = pgEnum('language_proficiency', [
-  'basic',
-  'conversational',
-  'professional',
+  'beginner',
+  'intermediate',
+  'advanced',
   'native',
 ]);
 

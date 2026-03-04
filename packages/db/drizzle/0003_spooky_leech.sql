@@ -1,5 +1,5 @@
 CREATE TYPE "public"."application_status" AS ENUM('draft', 'submitted', 'under_review', 'approved', 'rejected');--> statement-breakpoint
-CREATE TYPE "public"."language_proficiency" AS ENUM('basic', 'conversational', 'professional', 'native');--> statement-breakpoint
+CREATE TYPE "public"."language_proficiency" AS ENUM('beginner', 'intermediate', 'advanced', 'native');--> statement-breakpoint
 CREATE TABLE "certification_categories" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"name" text NOT NULL,
@@ -76,8 +76,8 @@ CREATE TABLE "industries" (
 ALTER TABLE "certifications" ADD COLUMN "category_id" uuid;--> statement-breakpoint
 ALTER TABLE "skills" ADD COLUMN "category_id" uuid;--> statement-breakpoint
 ALTER TABLE "expert_profiles" ADD COLUMN "year_started_salesforce" integer;--> statement-breakpoint
-ALTER TABLE "expert_profiles" ADD COLUMN "project_count" integer;--> statement-breakpoint
-ALTER TABLE "expert_profiles" ADD COLUMN "project_lead_count" integer;--> statement-breakpoint
+ALTER TABLE "expert_profiles" ADD COLUMN "project_count_min" integer;--> statement-breakpoint
+ALTER TABLE "expert_profiles" ADD COLUMN "project_lead_count_min" integer;--> statement-breakpoint
 ALTER TABLE "expert_profiles" ADD COLUMN "is_salesforce_mvp" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "expert_profiles" ADD COLUMN "is_salesforce_cta" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "expert_profiles" ADD COLUMN "is_certified_trainer" boolean DEFAULT false NOT NULL;--> statement-breakpoint
