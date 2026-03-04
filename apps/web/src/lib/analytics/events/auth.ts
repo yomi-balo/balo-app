@@ -9,6 +9,10 @@ export const AUTH_EVENTS = {
   PASSWORD_RESET_REQUESTED: 'auth_password_reset_requested',
   EMAIL_VERIFIED: 'auth_email_verified',
   OAUTH_REDIRECT_STARTED: 'auth_oauth_redirect_started',
+  // BAL-180: Password reset page
+  PASSWORD_RESET_COMPLETED: 'auth_password_reset_completed',
+  PASSWORD_RESET_FAILED: 'auth_password_reset_failed',
+  PASSWORD_RESET_TOKEN_MISSING: 'auth_password_reset_token_missing',
   // BAL-184: Unified auth flow
   STEP_CHANGED: 'auth_step_changed',
   VERIFICATION_CODE_SUBMITTED: 'auth_verification_code_submitted',
@@ -45,6 +49,11 @@ export interface AuthEventMap {
   };
   [AUTH_EVENTS.LOGOUT_COMPLETED]: Record<string, never>;
   [AUTH_EVENTS.PASSWORD_RESET_REQUESTED]: Record<string, never>;
+  [AUTH_EVENTS.PASSWORD_RESET_COMPLETED]: Record<string, never>;
+  [AUTH_EVENTS.PASSWORD_RESET_FAILED]: {
+    error_message: string;
+  };
+  [AUTH_EVENTS.PASSWORD_RESET_TOKEN_MISSING]: Record<string, never>;
   [AUTH_EVENTS.EMAIL_VERIFIED]: Record<string, never>;
   [AUTH_EVENTS.OAUTH_REDIRECT_STARTED]: {
     provider: 'google' | 'microsoft';

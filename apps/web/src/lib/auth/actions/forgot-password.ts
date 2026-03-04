@@ -3,17 +3,12 @@
 import 'server-only';
 
 import { forgotPasswordSchema, type ForgotPasswordFormData } from '@/components/balo/auth/schemas';
+import { getWorkOS } from '@/lib/auth/config';
 import type { AuthResult } from '@/lib/auth/errors';
 import { log } from '@/lib/logging';
 
 /**
- * Forgot password placeholder.
- *
- * The reset-password page doesn't have a token handler yet, so sending
- * real WorkOS emails would confuse users. This stub validates input and
- * returns success. Replace with real WorkOS `createPasswordReset()` call
- * when the full reset flow is built.
- *
+ * Request a password reset email.
  * SECURITY: Always returns success to prevent email enumeration.
  */
 export async function forgotPasswordAction(input: ForgotPasswordFormData): Promise<AuthResult> {
@@ -25,9 +20,18 @@ export async function forgotPasswordAction(input: ForgotPasswordFormData): Promi
     };
   }
 
-  // TODO: Wire up WorkOS createPasswordReset() once /reset-password
-  // accepts a token and calls resetPassword(). See BAL-169 follow-up.
-  log.info('Password reset requested', { email: parsed.data.email });
+  try {
+    await getWorkOS().userManagement.createPasswordReset({
+      email: parsed.data.email,
+    });
+    log.info('Password reset requested', { email: parsed.data.email });
+  } catch (error) {
+    // SECURITY: Swallow all errors -- do NOT return failure to prevent email enumeration.
+    // If the email doesn't exist, WorkOS may throw. We still return success.
+    log.warn('Password reset request failed (swallowed for enumeration protection)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   return { success: true };
 }

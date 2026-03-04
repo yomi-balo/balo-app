@@ -10,6 +10,8 @@ import { InputFloating } from '@/components/enhanced/input-floating';
 import { InputPassword } from '@/components/enhanced/input-password';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '../auth-header';
+import { SocialAuthButtons } from '../social-auth-buttons';
+import { AuthDivider } from '../auth-divider';
 import { signUpAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { unifiedSignUpSchema, type UnifiedSignUpFormData } from '../schemas';
@@ -82,6 +84,9 @@ export function SignupStep({
         title="Create your account"
         subtitle="Join Balo to connect with expert consultants"
       />
+
+      <SocialAuthButtons disabled={isSubmitting} />
+      <AuthDivider label="or sign up with email" />
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
