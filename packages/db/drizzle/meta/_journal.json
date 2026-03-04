@@ -22,6 +22,13 @@
       "when": 1772550832565,
       "tag": "0002_striped_guardian",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1772654763716,
+      "tag": "0003_spooky_leech",
+      "breakpoints": true
     }
   ]
 }

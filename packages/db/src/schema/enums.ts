@@ -7,3 +7,18 @@ export const agencyRoleEnum = pgEnum('agency_role', ['owner', 'admin', 'expert']
 export const expertTypeEnum = pgEnum('expert_type', ['freelancer', 'agency']);
 export const platformRoleEnum = pgEnum('platform_role', ['user', 'admin', 'super_admin']);
 export const signupIntentEnum = pgEnum('signup_intent', ['client', 'expert']);
+
+export const languageProficiencyEnum = pgEnum('language_proficiency', [
+  'beginner',
+  'intermediate',
+  'advanced',
+  'native',
+]);
+
+export const applicationStatusEnum = pgEnum('application_status', [
+  'draft',
+  'submitted',
+  'under_review',
+  'approved',
+  'rejected',
+]);
