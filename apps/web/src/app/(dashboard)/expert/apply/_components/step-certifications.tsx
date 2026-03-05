@@ -137,7 +137,7 @@ export function StepCertifications({
           transition={slideUpVariant.transition}
           className="border-border bg-muted/30 space-y-3 rounded-xl border p-6"
         >
-          <SectionLabel icon={GraduationCap} color="text-violet-600">
+          <SectionLabel icon={GraduationCap} color="violet">
             Trailhead Profile
           </SectionLabel>
           <FormField
@@ -164,7 +164,7 @@ export function StepCertifications({
         </motion.div>
 
         {/* Certification list */}
-        <SectionLabel icon={Award} color="text-success">
+        <SectionLabel icon={Award} color="emerald">
           Certifications
         </SectionLabel>
         {certs.length === 0 ? (

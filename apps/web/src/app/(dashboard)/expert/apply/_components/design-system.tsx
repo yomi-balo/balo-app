@@ -35,35 +35,43 @@ export function stagger(index: number, base = 0.04): { transition: { delay: numb
 
 // ── SectionLabel ────────────────────────────────────────────────
 
-const SECTION_BG_MAP: Record<string, string> = {
-  'text-primary': 'bg-primary/10',
-  'text-violet-600': 'bg-violet-600/10',
-  'text-cyan-600': 'bg-cyan-600/10',
-  'text-amber-600': 'bg-amber-600/10',
-  'text-emerald-600': 'bg-emerald-600/10',
-  'text-pink-600': 'bg-pink-600/10',
-  'text-indigo-600': 'bg-indigo-600/10',
+const SECTION_COLORS: Record<string, { text: string; bg: string }> = {
+  primary: { text: '#2563EB', bg: 'rgba(37,99,235,0.1)' },
+  violet: { text: '#7C3AED', bg: 'rgba(124,58,237,0.1)' },
+  cyan: { text: '#0891B2', bg: 'rgba(8,145,178,0.1)' },
+  amber: { text: '#D97706', bg: 'rgba(217,119,6,0.1)' },
+  emerald: { text: '#059669', bg: 'rgba(5,150,105,0.1)' },
+  pink: { text: '#DB2777', bg: 'rgba(219,39,119,0.1)' },
+  indigo: { text: '#4F46E5', bg: 'rgba(79,70,229,0.1)' },
 };
 
 interface SectionLabelProps {
   children: React.ReactNode;
   icon: LucideIcon;
-  color?: string;
+  color?: keyof typeof SECTION_COLORS;
 }
 
 export function SectionLabel({
   children,
   icon: Icon,
-  color = 'text-primary',
+  color = 'primary',
 }: Readonly<SectionLabelProps>): React.JSX.Element {
-  const bgClass = SECTION_BG_MAP[color] ?? 'bg-primary/10';
+  const c = SECTION_COLORS[color] ?? SECTION_COLORS.primary;
 
   return (
     <div className="mb-3.5 flex items-center gap-2">
-      <div className={`flex h-6 w-6 items-center justify-center rounded-md ${bgClass}`}>
-        <Icon className={`h-[13px] w-[13px] ${color}`} aria-hidden="true" />
+      <div
+        className="flex h-6 w-6 items-center justify-center rounded-md"
+        style={{ backgroundColor: c.bg }}
+      >
+        <Icon className="h-[13px] w-[13px]" style={{ color: c.text }} aria-hidden="true" />
       </div>
-      <p className={`text-[11px] font-semibold tracking-[0.08em] uppercase ${color}`}>{children}</p>
+      <p
+        className="text-[11px] font-semibold tracking-[0.08em] uppercase"
+        style={{ color: c.text }}
+      >
+        {children}
+      </p>
     </div>
   );
 }

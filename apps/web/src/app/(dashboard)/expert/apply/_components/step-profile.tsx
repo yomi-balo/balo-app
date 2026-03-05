@@ -168,7 +168,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           transition={{ ...slideUpVariant.transition, ...stagger(0).transition }}
           className="space-y-4"
         >
-          <SectionLabel icon={Phone} color="text-primary">
+          <SectionLabel icon={Phone} color="primary">
             Contact Information
           </SectionLabel>
           <div className="grid grid-cols-[140px_1fr] items-end gap-3">
@@ -224,7 +224,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           transition={{ ...slideUpVariant.transition, ...stagger(1).transition }}
           className="space-y-4"
         >
-          <SectionLabel icon={Briefcase} color="text-violet-600">
+          <SectionLabel icon={Briefcase} color="violet">
             Salesforce Experience
           </SectionLabel>
           <div className="grid grid-cols-1 items-start gap-x-4 gap-y-5 sm:grid-cols-2">
@@ -358,7 +358,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
         >
           <div className="flex items-center justify-between">
             <div>
-              <SectionLabel icon={Globe} color="text-cyan-600">
+              <SectionLabel icon={Globe} color="cyan">
                 Languages
               </SectionLabel>
               <p className="text-muted-foreground -mt-2 text-sm">
@@ -490,7 +490,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
         >
           <div className="from-primary/[0.04] space-y-4 rounded-xl bg-gradient-to-br to-violet-600/[0.06] p-6 ring-1 ring-violet-200/40">
             <div>
-              <SectionLabel icon={Award} color="text-amber-600">
+              <SectionLabel icon={Award} color="amber">
                 Salesforce Distinctions
               </SectionLabel>
               <p className="text-muted-foreground -mt-2 text-xs">
@@ -529,7 +529,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           className="space-y-3"
         >
           <div>
-            <SectionLabel icon={Building2} color="text-emerald-600">
+            <SectionLabel icon={Building2} color="emerald">
               Industry Expertise
             </SectionLabel>
             <p className="text-muted-foreground -mt-2 text-sm">
