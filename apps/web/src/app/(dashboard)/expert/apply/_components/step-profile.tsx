@@ -372,6 +372,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   variant="outline"
                   size="sm"
                   disabled={availableLanguages.length === 0}
+                  className="border-primary/30 bg-primary/5 text-primary hover:bg-primary/10"
                 >
                   <Plus className="mr-1 h-4 w-4" aria-hidden="true" />
                   Add language

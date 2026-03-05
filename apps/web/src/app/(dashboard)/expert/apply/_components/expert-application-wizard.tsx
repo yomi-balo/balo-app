@@ -45,8 +45,8 @@ function WizardContent(): React.JSX.Element {
   };
 
   return (
-    <div className="-m-6 min-h-screen bg-[#F8FAFB] lg:-m-8">
-      <div className="mx-auto max-w-4xl px-4 py-8 pb-20 md:pb-8 [&_[data-slot=checkbox]]:bg-white [&_[data-slot=input]]:bg-white [&_[data-slot=select-trigger]]:bg-white [&_textarea]:bg-white">
+    <div className="-m-6 min-h-screen w-[calc(100%+3rem)] overflow-x-hidden bg-[#F8FAFB] lg:-m-8 lg:w-[calc(100%+4rem)]">
+      <div className="mx-auto max-w-4xl px-4 py-8 pb-20 md:pb-8 [&_[data-slot=checkbox]:not([data-state=checked])]:!bg-white [&_[data-slot=input]]:!bg-white [&_[data-slot=select-trigger]]:!bg-white [&_textarea]:!bg-white">
         <WizardProgress />
 
         <div className="mb-4 flex justify-end">
