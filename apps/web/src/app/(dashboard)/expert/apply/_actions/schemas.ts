@@ -167,7 +167,7 @@ export const STEP_CONFIG = [
   {
     key: 'certifications',
     label: 'Certifications',
-    shortLabel: 'Certs',
+    shortLabel: 'Certifications',
     required: false,
   },
   {

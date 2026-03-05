@@ -38,8 +38,11 @@ export function stagger(index: number, base = 0.04): { transition: { delay: numb
 const SECTION_BG_MAP: Record<string, string> = {
   'text-primary': 'bg-primary/10',
   'text-violet-600': 'bg-violet-600/10',
-  'text-success': 'bg-success/10',
-  'text-warning': 'bg-warning/10',
+  'text-cyan-600': 'bg-cyan-600/10',
+  'text-amber-600': 'bg-amber-600/10',
+  'text-emerald-600': 'bg-emerald-600/10',
+  'text-pink-600': 'bg-pink-600/10',
+  'text-indigo-600': 'bg-indigo-600/10',
 };
 
 interface SectionLabelProps {

@@ -45,35 +45,37 @@ function WizardContent(): React.JSX.Element {
   };
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 pb-20 md:pb-8">
-      <WizardProgress />
+    <div className="min-h-screen bg-[#F8FAFB]">
+      <div className="mx-auto max-w-4xl px-4 py-8 pb-20 md:pb-8">
+        <WizardProgress />
 
-      <div className="mb-4 flex justify-end">
-        <AutoSaveIndicator />
+        <div className="mb-4 flex justify-end">
+          <AutoSaveIndicator />
+        </div>
+
+        <div aria-live="polite">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={stepKey}
+              initial={{
+                opacity: 0,
+                x: direction === 'forward' ? 40 : -40,
+              }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{
+                opacity: 0,
+                x: direction === 'forward' ? -40 : 40,
+              }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              onAnimationComplete={handleAnimationComplete}
+            >
+              {STEP_COMPONENTS[stepKey]}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        <WizardActionBar />
       </div>
-
-      <div aria-live="polite">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={stepKey}
-            initial={{
-              opacity: 0,
-              x: direction === 'forward' ? 40 : -40,
-            }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{
-              opacity: 0,
-              x: direction === 'forward' ? -40 : 40,
-            }}
-            transition={{ duration: 0.3, ease: 'easeOut' }}
-            onAnimationComplete={handleAnimationComplete}
-          >
-            {STEP_COMPONENTS[stepKey]}
-          </motion.div>
-        </AnimatePresence>
-      </div>
-
-      <WizardActionBar />
     </div>
   );
 }

@@ -1,18 +1,18 @@
 'use client';
 
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { STEP_CONFIG } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 
 const NEXT_LABELS: Record<string, string> = {
-  profile: 'Next: Products',
-  products: 'Next: Self-Assessment',
-  assessment: 'Next: Certifications',
-  certifications: 'Next: Work History',
-  'work-history': 'Next: Invite Experts',
-  invite: 'Next: Terms',
+  profile: 'Next',
+  products: 'Next',
+  assessment: 'Next',
+  certifications: 'Next',
+  'work-history': 'Next',
+  invite: 'Next',
 };
 
 export function WizardActionBar(): React.JSX.Element {
@@ -28,24 +28,21 @@ export function WizardActionBar(): React.JSX.Element {
       {/* Desktop action bar */}
       <div className="border-border mt-8 hidden items-center justify-between border-t pt-6 md:flex">
         <div className="flex items-center gap-3">
-          {!isFirst && (
-            <Button type="button" variant="ghost" onClick={goPrevious} className="group">
-              <motion.span className="inline-flex items-center gap-1" whileHover={{ x: -3 }}>
-                <ChevronLeft className="h-4 w-4" />
-                Previous
-              </motion.span>
-            </Button>
-          )}
-          {isFirst && (
-            <Button
-              type="button"
-              variant="ghost"
-              className="text-muted-foreground"
-              onClick={() => void abandon()}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={isFirst ? () => void abandon() : goPrevious}
+            disabled={isFirst}
+            className={isFirst ? 'text-muted-foreground opacity-50' : 'group'}
+          >
+            <motion.span
+              className="inline-flex items-center gap-1.5"
+              whileHover={!isFirst ? { x: -3 } : undefined}
             >
-              Save &amp; continue later
-            </Button>
-          )}
+              <ArrowLeft className="h-4 w-4" />
+              Previous
+            </motion.span>
+          </Button>
         </div>
 
         <div className="flex items-center gap-3">
@@ -56,14 +53,19 @@ export function WizardActionBar(): React.JSX.Element {
               className="text-muted-foreground"
               onClick={() => void skipStep()}
             >
-              Skip this step
+              Skip
             </Button>
           )}
           {!isLast && (
-            <Button type="button" size="lg" onClick={() => void goNext()} className="group">
-              <motion.span className="inline-flex items-center gap-1" whileHover={{ x: 3 }}>
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => void goNext()}
+              className="group from-primary shadow-primary/20 hover:shadow-primary/25 bg-gradient-to-r to-violet-600 text-white shadow-md hover:shadow-lg"
+            >
+              <motion.span className="inline-flex items-center gap-1.5" whileHover={{ x: 3 }}>
                 {nextLabel}
-                <ChevronRight className="h-4 w-4" />
+                <ArrowRight className="h-4 w-4" />
               </motion.span>
             </Button>
           )}
@@ -79,30 +81,28 @@ export function WizardActionBar(): React.JSX.Element {
             className="text-muted-foreground mb-2 w-full"
             onClick={() => void skipStep()}
           >
-            Skip this step
+            Skip
           </Button>
         )}
         <div className="flex gap-3">
-          {!isFirst && (
-            <Button type="button" variant="outline" className="flex-1" onClick={goPrevious}>
-              <ChevronLeft className="mr-1 h-4 w-4" />
-              Previous
-            </Button>
-          )}
-          {isFirst && (
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            onClick={isFirst ? () => void abandon() : goPrevious}
+            disabled={isFirst}
+          >
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            Previous
+          </Button>
+          {!isLast && (
             <Button
               type="button"
-              variant="ghost"
-              className="text-muted-foreground flex-1"
-              onClick={() => void abandon()}
+              className="from-primary flex-1 bg-gradient-to-r to-violet-600 text-white"
+              onClick={() => void goNext()}
             >
-              Save for later
-            </Button>
-          )}
-          {!isLast && (
-            <Button type="button" className="flex-1" onClick={() => void goNext()}>
               {nextLabel}
-              <ChevronRight className="ml-1 h-4 w-4" />
+              <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           )}
         </div>
