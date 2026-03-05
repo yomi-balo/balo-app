@@ -9,8 +9,10 @@ import { useWizard } from './expert-application-context';
 type DotStatus = 'completed' | 'active' | 'skipped' | 'future';
 
 const DOT_STATUSES = {
-  completed: 'bg-success text-success-foreground cursor-pointer hover:ring-2 hover:ring-primary/30',
-  active: 'bg-primary text-primary-foreground',
+  completed:
+    'bg-gradient-to-br from-primary to-violet-600 text-white shadow-[0_2px_6px_rgba(37,99,235,0.25)] cursor-pointer hover:ring-2 hover:ring-primary/30',
+  active:
+    'bg-background text-primary border-2 border-primary shadow-[0_0_0_4px_rgba(37,99,235,0.12)]',
   skipped: 'bg-muted text-muted-foreground cursor-pointer hover:ring-2 hover:ring-primary/30',
   future: 'bg-muted text-muted-foreground cursor-not-allowed opacity-60',
 } as const;
@@ -64,8 +66,10 @@ export function WizardProgress(): React.JSX.Element {
                   <div
                     className={cn(
                       'h-full transition-colors duration-300',
-                      isCompleted && !isNextActive && 'bg-success',
-                      isCompleted && isNextActive && 'from-success to-border bg-gradient-to-r',
+                      isCompleted && !isNextActive && 'from-primary bg-gradient-to-r to-violet-600',
+                      isCompleted &&
+                        isNextActive &&
+                        'from-primary to-border bg-gradient-to-r via-violet-600',
                       !isCompleted && 'bg-border'
                     )}
                   />
@@ -114,7 +118,7 @@ export function WizardProgress(): React.JSX.Element {
       <div className="mb-4 md:hidden">
         <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
           <motion.div
-            className="bg-primary h-full rounded-full"
+            className="from-primary h-full rounded-full bg-gradient-to-r to-violet-600"
             initial={{ width: 0 }}
             animate={{ width: `${Math.min(progressPercent, 100)}%` }}
             transition={{ duration: 0.5, ease: 'easeOut' }}

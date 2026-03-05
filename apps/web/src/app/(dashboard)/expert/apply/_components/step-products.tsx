@@ -3,7 +3,7 @@
 import { useEffect, useCallback, useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Search, X } from 'lucide-react';
+import { Search, X, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,7 @@ import { Form, FormField, FormItem, FormControl, FormMessage } from '@/component
 import { productsStepSchema, type ProductsStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { ChipPicker } from './chip-picker';
+import { StepHeading, scaleInVariant } from './design-system';
 
 interface StepProductsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
@@ -83,17 +84,16 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
   return (
     <Form {...form}>
       <form className="space-y-6">
-        <h2
-          ref={headingRef}
-          tabIndex={-1}
-          className="text-foreground text-xl font-semibold outline-none"
-        >
-          What Salesforce products do you know?
-        </h2>
-        <p className="text-muted-foreground -mt-2 text-sm">
-          Select the products you have hands-on experience with. You&apos;ll rate your proficiency
-          in the next step.
-        </p>
+        <div ref={headingRef} tabIndex={-1} className="outline-none">
+          <StepHeading
+            icon={Sparkles}
+            iconColor="text-violet-600"
+            iconBg="bg-violet-100 dark:bg-violet-950/30"
+            iconBorder="border-violet-200 dark:border-violet-800"
+            title="Products & Skills"
+            subtitle="Select the Salesforce products you work with."
+          />
+        </div>
 
         {/* Selected pills */}
         <AnimatePresence>
@@ -102,15 +102,15 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="flex flex-wrap gap-2"
+              className="border-border flex flex-wrap gap-2 border-b pb-4"
             >
               {selectedSkillIds.map((id) => (
                 <motion.div
                   key={id}
-                  initial={{ y: 8, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
+                  initial={scaleInVariant.initial}
+                  animate={scaleInVariant.animate}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
+                  transition={scaleInVariant.transition}
                 >
                   <Badge variant="secondary" className="gap-1.5 rounded-full px-3 py-1">
                     {skillNameMap.get(id) ?? id}
@@ -170,7 +170,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
           render={({ field }) => (
             <FormItem>
               <FormControl>
-                <div className="space-y-6">
+                <div className="space-y-8">
                   {filteredCategories.length === 0 && (
                     <p className="text-muted-foreground py-8 text-center text-sm">
                       No products match your search

@@ -307,7 +307,9 @@ export function ExpertApplicationProvider({
   const [inviteData, setInviteData] = useState<Partial<InviteStepData>>({
     emails: [],
   });
-  const [termsData, setTermsData] = useState<Partial<TermsStepData>>({});
+  const [termsData, setTermsData] = useState<Partial<TermsStepData>>({
+    termsAccepted: false,
+  });
 
   // Validation ref
   const validationRef = useRef<(() => Promise<boolean>) | null>(null);
