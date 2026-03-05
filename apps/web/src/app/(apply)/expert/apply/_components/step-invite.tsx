@@ -23,9 +23,10 @@ interface StepInviteProps {
 }
 
 function isValidEmail(email: string): boolean {
-  // Cap length at RFC 5321 max to prevent regex backtracking on long input
   if (email.length > 254) return false;
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const at = email.indexOf('@');
+  const dot = email.lastIndexOf('.');
+  return at > 0 && dot > at + 1 && dot < email.length - 1 && !email.includes(' ');
 }
 
 export function StepInvite({ headingRef }: Readonly<StepInviteProps>): React.JSX.Element {
