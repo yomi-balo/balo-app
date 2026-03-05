@@ -23,6 +23,8 @@ interface StepInviteProps {
 }
 
 function isValidEmail(email: string): boolean {
+  // Cap length at RFC 5321 max to prevent regex backtracking on long input
+  if (email.length > 254) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
