@@ -32,7 +32,7 @@ function WizardContent(): React.JSX.Element {
     headingRef.current?.focus({ preventScroll: true });
   };
 
-  const stepKey = STEP_CONFIG[currentStep]!.key;
+  const stepKey = STEP_CONFIG[currentStep]?.key ?? 'profile';
 
   const STEP_COMPONENTS: Record<string, React.JSX.Element> = {
     profile: <StepProfile headingRef={headingRef} />,
@@ -82,7 +82,7 @@ export function ExpertApplicationWizard({
   draft,
   referenceData,
   user,
-}: ExpertApplicationWizardProps): React.JSX.Element {
+}: Readonly<ExpertApplicationWizardProps>): React.JSX.Element {
   return (
     <ExpertApplicationProvider draft={draft} referenceData={referenceData} user={user}>
       <WizardContent />

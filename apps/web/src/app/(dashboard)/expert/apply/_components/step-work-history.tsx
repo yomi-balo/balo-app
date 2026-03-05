@@ -33,7 +33,7 @@ interface WorkEntry {
   responsibilities?: string;
 }
 
-export function StepWorkHistory({ headingRef }: StepWorkHistoryProps): React.JSX.Element {
+export function StepWorkHistory({ headingRef }: Readonly<StepWorkHistoryProps>): React.JSX.Element {
   const { workHistoryData, updateStepData, registerValidation } = useWizard();
   const [showForm, setShowForm] = useState(false);
   const [editIndex, setEditIndex] = useState<number | null>(null);
@@ -68,12 +68,12 @@ export function StepWorkHistory({ headingRef }: StepWorkHistoryProps): React.JSX
 
   const handleSave = (entry: WorkEntry): void => {
     const current = form.getValues('entries') ?? [];
-    if (editIndex !== null) {
+    if (editIndex === null) {
+      form.setValue('entries', [...current, entry], { shouldDirty: true });
+    } else {
       const updated = [...current];
       updated[editIndex] = entry;
       form.setValue('entries', updated, { shouldDirty: true });
-    } else {
-      form.setValue('entries', [...current, entry], { shouldDirty: true });
     }
     setShowForm(false);
     setEditIndex(null);
@@ -175,7 +175,7 @@ export function StepWorkHistory({ headingRef }: StepWorkHistoryProps): React.JSX
         <AnimatePresence>
           {showForm && (
             <WorkHistoryForm
-              initialData={editIndex !== null ? entries[editIndex] : undefined}
+              initialData={editIndex === null ? undefined : entries[editIndex]}
               onSave={handleSave}
               onCancel={handleCancel}
             />

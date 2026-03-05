@@ -6,7 +6,7 @@ export default function ExpertApplyLoading(): React.JSX.Element {
       {/* Progress bar skeleton */}
       <div className="hidden items-center justify-between md:flex">
         {Array.from({ length: 7 }).map((_, i) => (
-          <div key={i} className="flex flex-col items-center gap-2">
+          <div key={`progress-dot-${i}`} className="flex flex-col items-center gap-2">
             <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />
             <div className="bg-muted h-3 w-12 animate-pulse rounded" />
           </div>
@@ -26,7 +26,10 @@ export default function ExpertApplyLoading(): React.JSX.Element {
           <div className="bg-muted h-4 w-80 animate-pulse rounded" />
           <div className="space-y-4 pt-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-muted h-12 w-full animate-pulse rounded-lg" />
+              <div
+                key={`form-field-${i}`}
+                className="bg-muted h-12 w-full animate-pulse rounded-lg"
+              />
             ))}
           </div>
         </div>

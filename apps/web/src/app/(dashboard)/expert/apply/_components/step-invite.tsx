@@ -25,7 +25,7 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-export function StepInvite({ headingRef }: StepInviteProps): React.JSX.Element {
+export function StepInvite({ headingRef }: Readonly<StepInviteProps>): React.JSX.Element {
   const { inviteData, updateStepData, registerValidation } = useWizard();
   const [inputValue, setInputValue] = useState('');
 
@@ -58,7 +58,7 @@ export function StepInvite({ headingRef }: StepInviteProps): React.JSX.Element {
 
   const addEmails = (raw: string): void => {
     const candidates = raw
-      .split(/[,\n\s]+/)
+      .split(/[,\s]+/)
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0);
 
@@ -148,7 +148,7 @@ export function StepInvite({ headingRef }: StepInviteProps): React.JSX.Element {
                 </motion.div>
               ))}
               <p className="text-muted-foreground mt-1 w-full text-xs">
-                {emails.length} invitation{emails.length !== 1 ? 's' : ''} ready to send
+                {emails.length} invitation{emails.length === 1 ? '' : 's'} ready to send
               </p>
             </motion.div>
           )}

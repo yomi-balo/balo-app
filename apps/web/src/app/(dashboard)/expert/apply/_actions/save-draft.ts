@@ -45,7 +45,7 @@ export const saveDraftAction = withAuth(
       // Verify ownership when expertProfileId is provided
       if (profileId) {
         const existing = await expertsRepository.findApplicationWithRelations(profileId);
-        if (!existing || existing.profile.userId !== session.user.id) {
+        if (existing?.profile.userId !== session.user.id) {
           return { success: false, expertProfileId: '', error: 'Unauthorized' };
         }
       }

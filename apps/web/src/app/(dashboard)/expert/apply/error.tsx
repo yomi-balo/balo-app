@@ -4,11 +4,13 @@ import { AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export default function ExpertApplyError({
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- required by Next.js error boundary contract
+  error,
   reset,
-}: {
+}: Readonly<{
   error: Error & { digest?: string };
   reset: () => void;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <div className="bg-destructive/10 mb-4 rounded-xl p-4">

@@ -21,13 +21,15 @@ import {
 
 // ── Output types ─────────────────────────────────────────────────
 
+type ReferenceFieldKeys = 'id' | 'name' | 'slug' | 'sortOrder';
+
 export interface SkillsByCategory {
-  category: Pick<SkillCategory, 'id' | 'name' | 'slug' | 'sortOrder'>;
-  skills: Pick<Skill, 'id' | 'name' | 'slug' | 'sortOrder'>[];
+  category: Pick<SkillCategory, ReferenceFieldKeys>;
+  skills: Pick<Skill, ReferenceFieldKeys>[];
 }
 
 export interface CertificationsByCategory {
-  category: Pick<CertificationCategory, 'id' | 'name' | 'slug' | 'sortOrder'>;
+  category: Pick<CertificationCategory, ReferenceFieldKeys>;
   certifications: Pick<Certification, 'id' | 'name' | 'slug'>[];
 }
 

@@ -17,7 +17,7 @@ const NEXT_LABELS: Record<string, string> = {
 
 export function WizardActionBar(): React.JSX.Element {
   const { currentStep, goNext, goPrevious, skipStep, abandon } = useWizard();
-  const stepConfig = STEP_CONFIG[currentStep]!;
+  const stepConfig = STEP_CONFIG[currentStep] ?? STEP_CONFIG[0];
   const isFirst = currentStep === 0;
   const isLast = currentStep === STEP_CONFIG.length - 1;
   const isSkippable = !stepConfig.required;

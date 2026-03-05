@@ -7,8 +7,11 @@ import {
   type ApplicationWithRelations,
   type SkillsByCategory,
   type CertificationsByCategory,
+  type Vertical,
+  type SupportType,
+  type Language,
+  type Industry,
 } from '@balo/db';
-import type { Vertical, SupportType, Language, Industry } from '@balo/db';
 import { log } from '@/lib/logging';
 
 export interface ReferenceData {

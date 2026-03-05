@@ -39,7 +39,7 @@ function calculateDuration(startedAt: string, endedAt?: string): string {
   const years = Math.floor(months / 12);
   const remainingMonths = months % 12;
   const parts: string[] = [];
-  if (years > 0) parts.push(`${years} yr${years !== 1 ? 's' : ''}`);
+  if (years > 0) parts.push(`${years} yr${years === 1 ? '' : 's'}`);
   if (remainingMonths > 0) parts.push(`${remainingMonths} mo`);
   return parts.length > 0 ? parts.join(' ') : '< 1 mo';
 }
@@ -48,7 +48,7 @@ export function WorkHistoryCard({
   entry,
   onEdit,
   onDelete,
-}: WorkHistoryCardProps): React.JSX.Element {
+}: Readonly<WorkHistoryCardProps>): React.JSX.Element {
   return (
     <motion.div
       initial={{ y: 20, opacity: 0 }}

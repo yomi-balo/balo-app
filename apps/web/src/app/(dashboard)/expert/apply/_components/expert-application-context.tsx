@@ -123,37 +123,40 @@ function resolveInitialStep(
   return maxStep;
 }
 
-function hydrateStepStatuses(draft: ApplicationWithRelations | null): StepStatus[] {
-  if (!draft) return Array(7).fill('pending') as StepStatus[];
+function isProfileComplete(draft: ApplicationWithRelations): boolean {
+  return (
+    draft.profile.yearStartedSalesforce !== null &&
+    draft.languages.length > 0 &&
+    draft.industries.length > 0
+  );
+}
 
-  const statuses: StepStatus[] = Array(7).fill('pending') as StepStatus[];
+function isProductsComplete(draft: ApplicationWithRelations): boolean {
+  return draft.skills.length > 0;
+}
 
-  // Step 1: profile
-  const hasProfile = draft.profile.yearStartedSalesforce !== null;
-  const hasLanguages = draft.languages.length > 0;
-  const hasIndustries = draft.industries.length > 0;
-  if (hasProfile && hasLanguages && hasIndustries) statuses[0] = 'completed';
-
-  // Step 2: products
-  if (draft.skills.length > 0) statuses[1] = 'completed';
-
-  // Step 3: assessment
-  if (draft.skills.length > 0) {
-    const skillProficiencies = new Map<string, number[]>();
-    for (const s of draft.skills) {
-      const arr = skillProficiencies.get(s.skillId) ?? [];
-      arr.push(s.proficiency);
-      skillProficiencies.set(s.skillId, arr);
-    }
-    let allRated = true;
-    for (const [, profs] of skillProficiencies) {
-      if (!profs.some((p) => p > 0)) {
-        allRated = false;
-        break;
-      }
-    }
-    if (allRated) statuses[2] = 'completed';
+function isAssessmentComplete(draft: ApplicationWithRelations): boolean {
+  if (draft.skills.length === 0) return false;
+  const skillProficiencies = new Map<string, number[]>();
+  for (const s of draft.skills) {
+    const arr = skillProficiencies.get(s.skillId) ?? [];
+    arr.push(s.proficiency);
+    skillProficiencies.set(s.skillId, arr);
   }
+  for (const [, profs] of skillProficiencies) {
+    if (!profs.some((p) => p > 0)) return false;
+  }
+  return true;
+}
+
+function hydrateStepStatuses(draft: ApplicationWithRelations | null): StepStatus[] {
+  if (!draft) return new Array(7).fill('pending') as StepStatus[];
+
+  const statuses: StepStatus[] = new Array(7).fill('pending') as StepStatus[];
+
+  if (isProfileComplete(draft)) statuses[0] = 'completed';
+  if (isProductsComplete(draft)) statuses[1] = 'completed';
+  if (isAssessmentComplete(draft)) statuses[2] = 'completed';
 
   // Steps 4-6 are optional - mark as skipped if first 3 are done and they have no data
   if (statuses[0] === 'completed' && statuses[1] === 'completed' && statuses[2] === 'completed') {
@@ -269,7 +272,7 @@ export function ExpertApplicationProvider({
   draft,
   referenceData,
   user,
-}: ExpertApplicationProviderProps): React.JSX.Element {
+}: Readonly<ExpertApplicationProviderProps>): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -320,7 +323,7 @@ export function ExpertApplicationProvider({
     hasTrackedRef.current = true;
     if (draft) {
       track(EXPERT_EVENTS.APPLICATION_RESUMED, {
-        resumed_at_step: STEP_CONFIG[initialStep]!.key,
+        resumed_at_step: STEP_CONFIG[initialStep]?.key ?? 'profile',
       });
     } else {
       track(EXPERT_EVENTS.APPLICATION_STARTED, {});
@@ -330,12 +333,12 @@ export function ExpertApplicationProvider({
 
   // Update URL on step change
   useEffect(() => {
-    const stepKey = STEP_CONFIG[currentStep]!.key;
+    const stepKey = STEP_CONFIG[currentStep]?.key ?? 'profile';
     router.replace(`/expert/apply?step=${stepKey}`, { scroll: false });
   }, [currentStep, router]);
 
   const getCurrentStepKey = useCallback((): StepKey => {
-    return STEP_CONFIG[currentStep]!.key;
+    return STEP_CONFIG[currentStep]?.key ?? 'profile';
   }, [currentStep]);
 
   const getStepData = useCallback(
@@ -458,9 +461,9 @@ export function ExpertApplicationProvider({
     });
 
     // 4. Track analytics
-    const stepConfig = STEP_CONFIG[currentStep]!;
+    const stepConfig = STEP_CONFIG[currentStep];
     track(EXPERT_EVENTS.APPLICATION_STEP_COMPLETED, {
-      step: stepConfig.key,
+      step: stepConfig?.key ?? 'profile',
       step_number: currentStep + 1,
     });
 
@@ -490,9 +493,9 @@ export function ExpertApplicationProvider({
     });
 
     // Track analytics
-    const skipStepConfig = STEP_CONFIG[currentStep]!;
+    const skipStepConfig = STEP_CONFIG[currentStep];
     track(EXPERT_EVENTS.APPLICATION_STEP_SKIPPED, {
-      step: skipStepConfig.key,
+      step: skipStepConfig?.key ?? 'profile',
       step_number: currentStep + 1,
     });
 
@@ -523,9 +526,9 @@ export function ExpertApplicationProvider({
     await performSave();
 
     // Track analytics
-    const abandonStepConfig = STEP_CONFIG[currentStep]!;
+    const abandonStepConfig = STEP_CONFIG[currentStep];
     track(EXPERT_EVENTS.APPLICATION_ABANDONED, {
-      last_step: abandonStepConfig.key,
+      last_step: abandonStepConfig?.key ?? 'profile',
       step_number: currentStep + 1,
     });
 

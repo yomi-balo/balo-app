@@ -3,7 +3,6 @@ import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
-// import { notificationEvents } from '@/lib/notifications'; // When engine is built
 
 interface SubmitResult {
   success: boolean;

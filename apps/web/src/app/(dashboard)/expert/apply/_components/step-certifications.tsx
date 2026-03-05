@@ -25,7 +25,9 @@ interface StepCertificationsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }
 
-export function StepCertifications({ headingRef }: StepCertificationsProps): React.JSX.Element {
+export function StepCertifications({
+  headingRef,
+}: Readonly<StepCertificationsProps>): React.JSX.Element {
   const { certificationsData, referenceData, updateStepData, registerValidation } = useWizard();
   const [pickerOpen, setPickerOpen] = useState(false);
 

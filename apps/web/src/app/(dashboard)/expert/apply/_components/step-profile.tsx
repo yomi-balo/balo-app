@@ -92,7 +92,7 @@ interface StepProfileProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }
 
-export function StepProfile({ headingRef }: StepProfileProps): React.JSX.Element {
+export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.JSX.Element {
   const { profileData, referenceData, updateStepData, registerValidation } = useWizard();
 
   const currentYear = new Date().getFullYear();

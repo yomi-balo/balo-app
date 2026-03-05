@@ -21,7 +21,7 @@ export function ChipPicker({
   selected,
   onChange,
   className,
-}: ChipPickerProps): React.JSX.Element {
+}: Readonly<ChipPickerProps>): React.JSX.Element {
   const toggleOption = (id: string): void => {
     if (selected.includes(id)) {
       onChange(selected.filter((s) => s !== id));

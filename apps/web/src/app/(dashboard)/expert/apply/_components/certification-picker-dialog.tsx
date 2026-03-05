@@ -29,7 +29,7 @@ export function CertificationPickerDialog({
   categories,
   alreadyAdded,
   onAdd,
-}: CertificationPickerDialogProps): React.JSX.Element {
+}: Readonly<CertificationPickerDialogProps>): React.JSX.Element {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
@@ -138,7 +138,7 @@ export function CertificationPickerDialog({
           </Button>
           <Button type="button" onClick={handleAdd} disabled={selectedIds.length === 0}>
             Add {selectedIds.length > 0 ? `${selectedIds.length} ` : ''}
-            certification{selectedIds.length !== 1 ? 's' : ''}
+            certification{selectedIds.length === 1 ? '' : 's'}
           </Button>
         </DialogFooter>
       </DialogContent>

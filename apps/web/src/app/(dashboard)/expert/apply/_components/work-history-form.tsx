@@ -66,7 +66,7 @@ export function WorkHistoryForm({
   initialData,
   onSave,
   onCancel,
-}: WorkHistoryFormProps): React.JSX.Element {
+}: Readonly<WorkHistoryFormProps>): React.JSX.Element {
   const startParsed = parseDate(initialData?.startedAt);
   const endParsed = parseDate(initialData?.endedAt);
 

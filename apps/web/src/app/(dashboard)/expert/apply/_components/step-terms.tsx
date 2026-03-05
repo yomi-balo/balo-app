@@ -23,7 +23,7 @@ interface StepTermsProps {
 
 type SubmitState = 'idle' | 'submitting' | 'success';
 
-export function StepTerms({ headingRef }: StepTermsProps): React.JSX.Element {
+export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.Element {
   const router = useRouter();
   const {
     termsData,

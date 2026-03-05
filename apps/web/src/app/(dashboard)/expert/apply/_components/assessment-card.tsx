@@ -50,7 +50,7 @@ export function AssessmentCard({
   dimensions,
   onChange,
   isComplete,
-}: AssessmentCardProps): React.JSX.Element {
+}: Readonly<AssessmentCardProps>): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
 
   return (

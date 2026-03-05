@@ -39,7 +39,7 @@ interface StepAssessmentProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }
 
-export function StepAssessment({ headingRef }: StepAssessmentProps): React.JSX.Element {
+export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): React.JSX.Element {
   const { assessmentData, productsData, referenceData, updateStepData, registerValidation } =
     useWizard();
 

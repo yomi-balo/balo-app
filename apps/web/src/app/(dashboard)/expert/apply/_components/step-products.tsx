@@ -16,7 +16,7 @@ interface StepProductsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }
 
-export function StepProducts({ headingRef }: StepProductsProps): React.JSX.Element {
+export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React.JSX.Element {
   const { productsData, referenceData, updateStepData, registerValidation } = useWizard();
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -127,7 +127,7 @@ export function StepProducts({ headingRef }: StepProductsProps): React.JSX.Eleme
               ))}
               <p className="text-muted-foreground mt-1 w-full text-xs">
                 {selectedSkillIds.length} product
-                {selectedSkillIds.length !== 1 ? 's' : ''} selected
+                {selectedSkillIds.length === 1 ? '' : 's'} selected
               </p>
               {selectedSkillIds.length >= 5 && (
                 <p className="text-success w-full text-xs">Great coverage!</p>

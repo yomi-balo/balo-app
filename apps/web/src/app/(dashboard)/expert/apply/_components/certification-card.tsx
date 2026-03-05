@@ -48,7 +48,7 @@ export function CertificationCard({
   cert,
   onUpdate,
   onRemove,
-}: CertificationCardProps): React.JSX.Element {
+}: Readonly<CertificationCardProps>): React.JSX.Element {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [earnedMonth, setEarnedMonth] = useState('');
   const [earnedYear, setEarnedYear] = useState('');

@@ -27,7 +27,7 @@ const NEXT_STEPS = [
   },
 ] as const;
 
-export function SuccessContent({ email }: SuccessContentProps): React.JSX.Element {
+export function SuccessContent({ email }: Readonly<SuccessContentProps>): React.JSX.Element {
   return (
     <div className="relative flex flex-col items-center justify-center px-4 py-16">
       {/* Background glow */}
@@ -122,7 +122,7 @@ export function SuccessContent({ email }: SuccessContentProps): React.JSX.Elemen
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ duration: 0.2, delay: 2.0 }}
+        transition={{ duration: 0.2, delay: 2 }}
         className="mt-4"
       >
         <Button asChild variant="link">
