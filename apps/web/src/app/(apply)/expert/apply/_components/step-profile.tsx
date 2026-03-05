@@ -171,7 +171,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           <SectionLabel icon={Phone} color="primary">
             Contact Information
           </SectionLabel>
-          <div className="grid grid-cols-[140px_1fr] items-end gap-3">
+          <div className="grid grid-cols-[140px_1fr] items-start gap-3">
             <FormField
               control={form.control}
               name="countryCode"
@@ -238,7 +238,10 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                     Year started on Salesforce <span className="text-destructive">*</span>
                   </FormLabel>
                   <Select
-                    onValueChange={(v) => field.onChange(Number(v))}
+                    onValueChange={(v) => {
+                      field.onChange(Number(v));
+                      form.trigger('yearStartedSalesforce');
+                    }}
                     value={field.value?.toString()}
                   >
                     <FormControl>
@@ -269,7 +272,10 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                     Projects involved in <span className="text-destructive">*</span>
                   </FormLabel>
                   <Select
-                    onValueChange={(v) => field.onChange(Number(v))}
+                    onValueChange={(v) => {
+                      field.onChange(Number(v));
+                      form.trigger('projectCountMin');
+                    }}
                     value={field.value?.toString()}
                   >
                     <FormControl>
@@ -299,7 +305,10 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                     Projects as Lead <span className="text-destructive">*</span>
                   </FormLabel>
                   <Select
-                    onValueChange={(v) => field.onChange(Number(v))}
+                    onValueChange={(v) => {
+                      field.onChange(Number(v));
+                      form.trigger('projectLeadCountMin');
+                    }}
                     value={field.value?.toString()}
                   >
                     <FormControl>

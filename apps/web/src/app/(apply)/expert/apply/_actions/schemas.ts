@@ -15,12 +15,27 @@ export const profileStepSchema = z
       .max(5, 'Invalid country code')
       .regex(/^\+\d+$/, 'Country code must start with + followed by digits'),
     yearStartedSalesforce: z
-      .number()
+      .number({
+        required_error: 'Select a valid value',
+        invalid_type_error: 'Select a valid value',
+      })
       .int()
       .min(2000, 'Year must be 2000 or later')
       .max(new Date().getFullYear(), 'Year cannot be in the future'),
-    projectCountMin: z.number().int().min(0),
-    projectLeadCountMin: z.number().int().min(0),
+    projectCountMin: z
+      .number({
+        required_error: 'Select a valid value',
+        invalid_type_error: 'Select a valid value',
+      })
+      .int()
+      .min(0),
+    projectLeadCountMin: z
+      .number({
+        required_error: 'Select a valid value',
+        invalid_type_error: 'Select a valid value',
+      })
+      .int()
+      .min(0),
     linkedinSlug: z
       .string()
       .regex(/^[a-zA-Z0-9-]+$/, 'Only letters, numbers, and hyphens allowed')
