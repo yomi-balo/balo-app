@@ -56,7 +56,7 @@ export function SectionLabel({
   icon: Icon,
   color = 'primary',
 }: Readonly<SectionLabelProps>): React.JSX.Element {
-  const c = SECTION_COLORS[color] ?? SECTION_COLORS.primary;
+  const c = SECTION_COLORS[color] ?? { text: '#2563EB', bg: 'rgba(37,99,235,0.1)' };
 
   return (
     <div className="mb-3.5 flex items-center gap-2">

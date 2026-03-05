@@ -24,6 +24,7 @@
   --border: oklch(0.926 0.013 255);
   --input: oklch(0.926 0.013 255);
   --ring: oklch(0.552 0.228 260.9);
+  --input-bg: transparent;
   --success: oklch(0.623 0.169 149.2);
   --success-foreground: oklch(1 0 0);
   --warning: oklch(0.77 0.165 70.6);
@@ -65,6 +66,7 @@
   --border: oklch(0.275 0.036 259.7);
   --input: oklch(0.275 0.036 259.7);
   --ring: oklch(0.626 0.186 259.6);
+  --input-bg: oklch(0.275 0.036 259.7 / 0.3);
   --success: oklch(0.72 0.192 149.5);
   --success-foreground: oklch(0.147 0.019 264.6);
   --warning: oklch(0.77 0.165 70.6);
@@ -190,4 +192,13 @@
     caret-color: var(--foreground);
     transition: background-color 5000s ease-in-out 0s;
   }
+}
+
+/* White inputs on tinted wizard background */
+[data-wizard-inputs] {
+  --input-bg: white;
+}
+
+:is(.dark) [data-wizard-inputs] {
+  --input-bg: oklch(0.21 0.019 264.5);
 }
