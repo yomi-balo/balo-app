@@ -1,9 +1,10 @@
 'use client';
 
-import { Clock, Mail, Rocket, ChevronRight } from 'lucide-react';
+import { Clock, Mail, Rocket, ChevronRight, Check } from 'lucide-react';
 import { motion } from 'motion/react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { scaleInVariant } from '../../_components/design-system';
 
 interface SuccessContentProps {
   email: string;
@@ -30,37 +31,57 @@ const NEXT_STEPS = [
 export function SuccessContent({ email }: Readonly<SuccessContentProps>): React.JSX.Element {
   return (
     <div className="relative flex flex-col items-center justify-center px-4 py-16">
+      {/* Confetti keyframes */}
+      <style>{`
+        @keyframes confetti1 { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(-80px) rotate(180deg); opacity: 0; } }
+        @keyframes confetti2 { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(-60px) rotate(-120deg) translateX(30px); opacity: 0; } }
+        @keyframes confetti3 { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(-70px) rotate(90deg) translateX(-25px); opacity: 0; } }
+      `}</style>
+
       {/* Background glow */}
       <div
         className="bg-primary/15 dark:bg-primary/25 absolute top-1/4 left-1/2 -z-10 h-72 w-72 -translate-x-1/2 rounded-full blur-3xl"
         aria-hidden="true"
       />
 
-      {/* Animated checkmark */}
-      <motion.div
-        initial={{ scale: 0.8, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.4, ease: 'easeOut' }}
-        className="bg-success/10 dark:bg-success/20 mx-auto flex h-20 w-20 items-center justify-center rounded-full"
-      >
-        <svg
-          className="text-success h-10 w-10"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
+      {/* Gradient hero badge with confetti */}
+      <div className="relative">
+        <motion.div
+          initial={scaleInVariant.initial}
+          animate={scaleInVariant.animate}
+          transition={{ duration: 0.4, ease: 'easeOut' }}
+          className="from-primary mx-auto flex h-[88px] w-[88px] items-center justify-center rounded-full bg-gradient-to-br to-violet-600 shadow-[0_8px_32px_rgba(37,99,235,0.3)]"
         >
-          <motion.path
-            d="M5 13l4 4L19 7"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.6, ease: 'easeOut', delay: 0.2 }}
+          <Check className="h-10 w-10 text-white" strokeWidth={2.5} aria-hidden="true" />
+        </motion.div>
+
+        {/* Confetti particles */}
+        <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+          <div
+            className="bg-primary absolute top-1/2 left-1/2 h-2 w-2 rounded-sm"
+            style={{ animation: 'confetti1 1s ease-out 0.4s forwards' }}
           />
-        </svg>
-      </motion.div>
+          <div
+            className="absolute top-1/2 left-1/2 h-2 w-2 rounded-sm bg-violet-500"
+            style={{ animation: 'confetti2 1.1s ease-out 0.5s forwards' }}
+          />
+          <div
+            className="absolute top-1/2 left-1/2 h-2 w-2 rounded-sm bg-amber-400"
+            style={{ animation: 'confetti3 0.9s ease-out 0.45s forwards' }}
+          />
+          <div
+            className="absolute top-1/2 left-1/2 h-2 w-2 rounded-sm bg-emerald-400"
+            style={{
+              animation: 'confetti2 1s ease-out 0.55s forwards',
+              animationDirection: 'reverse',
+            }}
+          />
+          <div
+            className="absolute top-1/2 left-1/2 h-2 w-2 rounded-sm bg-pink-400"
+            style={{ animation: 'confetti1 1.2s ease-out 0.6s forwards' }}
+          />
+        </div>
+      </div>
 
       {/* Heading */}
       <motion.h1

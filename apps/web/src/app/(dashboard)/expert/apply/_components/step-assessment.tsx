@@ -11,6 +11,7 @@ import { Form } from '@/components/ui/form';
 import { assessmentStepSchema, type AssessmentStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { AssessmentCard } from './assessment-card';
+import { StepHeading, slideUpVariant, stagger } from './design-system';
 
 const DIMENSION_EXPLANATION = [
   {
@@ -150,17 +151,13 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   return (
     <Form {...form}>
       <form className="space-y-6">
-        <h2
-          ref={headingRef}
-          tabIndex={-1}
-          className="text-foreground text-xl font-semibold outline-none"
-        >
-          Rate your expertise
-        </h2>
-        <p className="text-muted-foreground -mt-2 text-sm">
-          For each product, rate your ability across 4 support dimensions. Be honest &mdash; clients
-          rely on these ratings to find the right match.
-        </p>
+        <div ref={headingRef} tabIndex={-1} className="outline-none">
+          <StepHeading
+            icon={Wrench}
+            title="Rate your expertise"
+            subtitle="For each product, rate your ability across 4 support dimensions. Be honest -- clients rely on these ratings to find the right match."
+          />
+        </div>
 
         {/* Dimension explanation */}
         <Collapsible open={guideOpen} onOpenChange={setGuideOpen}>
@@ -193,13 +190,15 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
         </Collapsible>
 
         {/* Progress counter */}
-        <p className="text-muted-foreground text-sm">
-          {completedCount} of {selectedSkillIds.length} products assessed
-        </p>
+        <div className="bg-muted rounded-lg px-4 py-2.5">
+          <p className="text-foreground text-sm font-medium">
+            {completedCount} of {selectedSkillIds.length} products assessed
+          </p>
+        </div>
 
         {/* Assessment cards */}
         <div className="space-y-3">
-          {selectedSkillIds.map((skillId) => {
+          {selectedSkillIds.map((skillId, index) => {
             const dimensions = supportTypes.map((st) => {
               const rating = ratings.find(
                 (r) => r.skillId === skillId && r.supportTypeId === st.id
@@ -213,14 +212,20 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
             });
 
             return (
-              <AssessmentCard
+              <motion.div
                 key={skillId}
-                skillId={skillId}
-                skillName={skillNameMap.get(skillId) ?? skillId}
-                dimensions={dimensions}
-                onChange={handleChange}
-                isComplete={isSkillComplete(skillId)}
-              />
+                initial={slideUpVariant.initial}
+                animate={slideUpVariant.animate}
+                transition={{ ...slideUpVariant.transition, ...stagger(index).transition }}
+              >
+                <AssessmentCard
+                  skillId={skillId}
+                  skillName={skillNameMap.get(skillId) ?? skillId}
+                  dimensions={dimensions}
+                  onChange={handleChange}
+                  isComplete={isSkillComplete(skillId)}
+                />
+              </motion.div>
             );
           })}
         </div>

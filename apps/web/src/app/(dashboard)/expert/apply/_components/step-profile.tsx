@@ -3,7 +3,7 @@
 import { useEffect, useCallback, useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, X } from 'lucide-react';
+import { Plus, X, Phone, Briefcase, Globe, Award, Compass } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -37,6 +37,7 @@ import {
 import { profileStepSchema, type ProfileStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { ChipPicker } from './chip-picker';
+import { StepHeading, SectionLabel, slideUpVariant, stagger } from './design-system';
 
 // ── Data-driven config ───────────────────────────────────────────
 
@@ -151,21 +152,25 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
 
   return (
     <Form {...form}>
-      <form className="space-y-8">
-        <h2
-          ref={headingRef}
-          tabIndex={-1}
-          className="text-foreground text-xl font-semibold outline-none"
-        >
-          Your Profile
-        </h2>
-        <p className="text-muted-foreground -mt-4 text-sm">
-          Tell us about your Salesforce journey. This takes about 10 minutes.
-        </p>
+      <form className="mx-auto max-w-[680px] space-y-10">
+        <div ref={headingRef} tabIndex={-1} className="outline-none">
+          <StepHeading
+            icon={Briefcase}
+            title="Your Profile"
+            subtitle="Tell us about your Salesforce journey. This takes about 10 minutes."
+          />
+        </div>
 
-        {/* Section A: Contact & Experience */}
-        <div className="space-y-4">
-          {/* Phone */}
+        {/* Section 1: Contact Information */}
+        <motion.div
+          initial={slideUpVariant.initial}
+          animate={slideUpVariant.animate}
+          transition={{ ...slideUpVariant.transition, ...stagger(0).transition }}
+          className="space-y-4"
+        >
+          <SectionLabel icon={Phone} color="text-primary">
+            Contact Information
+          </SectionLabel>
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-end">
             <FormField
               control={form.control}
@@ -208,125 +213,147 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               )}
             />
           </div>
+        </motion.div>
 
-          {/* Year started */}
-          <FormField
-            control={form.control}
-            name="yearStartedSalesforce"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Year started on Salesforce</FormLabel>
-                <Select
-                  onValueChange={(v) => field.onChange(Number(v))}
-                  value={field.value?.toString()}
-                >
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select year" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {years.map((y) => (
-                      <SelectItem key={y} value={y.toString()}>
-                        {y}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FormDescription>When did you first start working with Salesforce?</FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+        {/* Section 2: Salesforce Experience */}
+        <motion.div
+          initial={slideUpVariant.initial}
+          animate={slideUpVariant.animate}
+          transition={{ ...slideUpVariant.transition, ...stagger(1).transition }}
+          className="space-y-4"
+        >
+          <SectionLabel icon={Briefcase} color="text-primary">
+            Salesforce Experience
+          </SectionLabel>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* Year started */}
+            <FormField
+              control={form.control}
+              name="yearStartedSalesforce"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Year started on Salesforce</FormLabel>
+                  <Select
+                    onValueChange={(v) => field.onChange(Number(v))}
+                    value={field.value?.toString()}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select year" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {years.map((y) => (
+                        <SelectItem key={y} value={y.toString()}>
+                          {y}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    When did you first start working with Salesforce?
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          {/* Projects */}
-          <FormField
-            control={form.control}
-            name="projectCountMin"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Projects involved in</FormLabel>
-                <Select
-                  onValueChange={(v) => field.onChange(Number(v))}
-                  value={field.value?.toString()}
-                >
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select range" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {PROJECT_COUNT_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+            {/* Projects */}
+            <FormField
+              control={form.control}
+              name="projectCountMin"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Projects involved in</FormLabel>
+                  <Select
+                    onValueChange={(v) => field.onChange(Number(v))}
+                    value={field.value?.toString()}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select range" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {PROJECT_COUNT_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name="projectLeadCountMin"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Projects as Lead</FormLabel>
-                <Select
-                  onValueChange={(v) => field.onChange(Number(v))}
-                  value={field.value?.toString()}
-                >
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select range" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {PROJECT_COUNT_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FormDescription>
-                  Projects where you were the primary Salesforce consultant or architect.
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+            <FormField
+              control={form.control}
+              name="projectLeadCountMin"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Projects as Lead</FormLabel>
+                  <Select
+                    onValueChange={(v) => field.onChange(Number(v))}
+                    value={field.value?.toString()}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select range" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {PROJECT_COUNT_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    Projects where you were the primary Salesforce consultant or architect.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          {/* LinkedIn */}
-          <FormField
-            control={form.control}
-            name="linkedinSlug"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>LinkedIn URL</FormLabel>
-                <div className="flex">
-                  <span className="border-input bg-muted text-muted-foreground inline-flex items-center rounded-l-md border border-r-0 px-3 text-sm">
-                    linkedin.com/in/
-                  </span>
-                  <FormControl>
-                    <Input placeholder="your-profile" className="rounded-l-none" {...field} />
-                  </FormControl>
-                </div>
-                <FormDescription>Helps us verify your professional background.</FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        </div>
+            {/* LinkedIn */}
+            <FormField
+              control={form.control}
+              name="linkedinSlug"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>LinkedIn URL</FormLabel>
+                  <div className="flex">
+                    <span className="border-input bg-muted text-muted-foreground inline-flex items-center rounded-l-md border border-r-0 px-3 text-sm">
+                      linkedin.com/in/
+                    </span>
+                    <FormControl>
+                      <Input placeholder="your-profile" className="rounded-l-none" {...field} />
+                    </FormControl>
+                  </div>
+                  <FormDescription>Helps us verify your professional background.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </motion.div>
 
-        {/* Section B: Languages */}
-        <div className="space-y-3">
+        {/* Section 3: Languages */}
+        <motion.div
+          initial={slideUpVariant.initial}
+          animate={slideUpVariant.animate}
+          transition={{ ...slideUpVariant.transition, ...stagger(2).transition }}
+          className="space-y-3"
+        >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-foreground text-sm font-semibold">Languages</p>
-              <p className="text-muted-foreground mt-0.5 text-sm">
+              <SectionLabel icon={Globe} color="text-violet-600">
+                Languages
+              </SectionLabel>
+              <p className="text-muted-foreground -mt-2 text-sm">
                 Languages you can consult in. Add at least one.
               </p>
             </div>
@@ -436,44 +463,59 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           {form.formState.errors.languages?.message && (
             <p className="text-destructive text-sm">{form.formState.errors.languages.message}</p>
           )}
-        </div>
+        </motion.div>
 
-        {/* Section C: Credentials */}
-        <div className="border-border bg-muted/30 dark:bg-muted/10 space-y-4 rounded-xl border p-6">
-          <div>
-            <p className="text-foreground text-sm font-semibold">Salesforce Distinctions</p>
-            <p className="text-muted-foreground mt-1 text-xs">
-              Check any that apply. These are prestigious &mdash; they&apos;ll be highlighted on
-              your profile.
-            </p>
+        {/* Section 4: Credentials */}
+        <motion.div
+          initial={slideUpVariant.initial}
+          animate={slideUpVariant.animate}
+          transition={{ ...slideUpVariant.transition, ...stagger(3).transition }}
+        >
+          <div className="border-border bg-muted/30 dark:bg-muted/10 space-y-4 rounded-xl border p-6">
+            <div>
+              <SectionLabel icon={Award} color="text-success">
+                Salesforce Distinctions
+              </SectionLabel>
+              <p className="text-muted-foreground -mt-2 text-xs">
+                Check any that apply. These are prestigious &mdash; they&apos;ll be highlighted on
+                your profile.
+              </p>
+            </div>
+            {CREDENTIALS.map((cred) => (
+              <FormField
+                key={cred.field}
+                control={form.control}
+                name={cred.field}
+                render={({ field }) => (
+                  <FormItem className="flex items-start gap-3">
+                    <FormControl>
+                      <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                    </FormControl>
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-foreground text-sm leading-normal font-medium">
+                        {cred.label}
+                      </FormLabel>
+                      <FormDescription className="text-xs">{cred.description}</FormDescription>
+                    </div>
+                  </FormItem>
+                )}
+              />
+            ))}
           </div>
-          {CREDENTIALS.map((cred) => (
-            <FormField
-              key={cred.field}
-              control={form.control}
-              name={cred.field}
-              render={({ field }) => (
-                <FormItem className="flex items-start gap-3">
-                  <FormControl>
-                    <Checkbox checked={field.value} onCheckedChange={field.onChange} />
-                  </FormControl>
-                  <div className="space-y-0.5">
-                    <FormLabel className="text-foreground text-sm leading-normal font-medium">
-                      {cred.label}
-                    </FormLabel>
-                    <FormDescription className="text-xs">{cred.description}</FormDescription>
-                  </div>
-                </FormItem>
-              )}
-            />
-          ))}
-        </div>
+        </motion.div>
 
-        {/* Section D: Industries */}
-        <div className="space-y-3">
+        {/* Section 5: Industries */}
+        <motion.div
+          initial={slideUpVariant.initial}
+          animate={slideUpVariant.animate}
+          transition={{ ...slideUpVariant.transition, ...stagger(4).transition }}
+          className="space-y-3"
+        >
           <div>
-            <p className="text-foreground text-sm font-semibold">Industry Expertise</p>
-            <p className="text-muted-foreground mt-0.5 text-sm">
+            <SectionLabel icon={Compass} color="text-warning">
+              Industry Expertise
+            </SectionLabel>
+            <p className="text-muted-foreground -mt-2 text-sm">
               Select industries you have consulting experience in.
             </p>
           </div>
@@ -494,7 +536,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               </FormItem>
             )}
           />
-        </div>
+        </motion.div>
       </form>
     </Form>
   );

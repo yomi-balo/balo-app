@@ -3,8 +3,8 @@
 import { useEffect, useCallback, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, Shield } from 'lucide-react';
-import { AnimatePresence } from 'motion/react';
+import { Plus, Shield, Award, GraduationCap } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -20,6 +20,7 @@ import { certificationsStepSchema, type CertificationsStepData } from '../_actio
 import { useWizard } from './expert-application-context';
 import { CertificationCard } from './certification-card';
 import { CertificationPickerDialog } from './certification-picker-dialog';
+import { StepHeading, SectionLabel, slideUpVariant } from './design-system';
 
 interface StepCertificationsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
@@ -106,18 +107,17 @@ export function StepCertifications({
 
   return (
     <Form {...form}>
-      <form className="space-y-6">
-        <h2
-          ref={headingRef}
-          tabIndex={-1}
-          className="text-foreground text-xl font-semibold outline-none"
-        >
-          Your Certifications
-        </h2>
-        <p className="text-muted-foreground -mt-2 text-sm">
-          Salesforce certifications boost your profile credibility. This step is optional but highly
-          recommended.
-        </p>
+      <form className="mx-auto max-w-[680px] space-y-8">
+        <div ref={headingRef} tabIndex={-1} className="outline-none">
+          <StepHeading
+            icon={Award}
+            iconColor="text-success"
+            iconBg="bg-success/10"
+            iconBorder="border-success/25"
+            title="Your Certifications"
+            subtitle="Salesforce certifications boost your profile credibility. This step is optional but highly recommended."
+          />
+        </div>
 
         {/* Encouraging banner */}
         {certs.length === 0 && (
@@ -131,29 +131,42 @@ export function StepCertifications({
         )}
 
         {/* Trailhead URL */}
-        <FormField
-          control={form.control}
-          name="trailheadSlug"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Trailhead profile</FormLabel>
-              <div className="flex">
-                <span className="border-input bg-muted text-muted-foreground inline-flex items-center rounded-l-md border border-r-0 px-3 text-sm">
-                  trailblazer.me/id/
-                </span>
-                <FormControl>
-                  <Input placeholder="your-username" className="rounded-l-none" {...field} />
-                </FormControl>
-              </div>
-              <FormDescription>
-                Your Trailhead profile helps us verify your certifications.
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        <motion.div
+          initial={slideUpVariant.initial}
+          animate={slideUpVariant.animate}
+          transition={slideUpVariant.transition}
+          className="border-border bg-muted/30 space-y-3 rounded-xl border p-6"
+        >
+          <SectionLabel icon={GraduationCap} color="text-violet-600">
+            Trailhead Profile
+          </SectionLabel>
+          <FormField
+            control={form.control}
+            name="trailheadSlug"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Trailhead profile</FormLabel>
+                <div className="flex">
+                  <span className="border-input bg-muted text-muted-foreground inline-flex items-center rounded-l-md border border-r-0 px-3 text-sm">
+                    trailblazer.me/id/
+                  </span>
+                  <FormControl>
+                    <Input placeholder="your-username" className="rounded-l-none" {...field} />
+                  </FormControl>
+                </div>
+                <FormDescription>
+                  Your Trailhead profile helps us verify your certifications.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </motion.div>
 
         {/* Certification list */}
+        <SectionLabel icon={Award} color="text-success">
+          Certifications
+        </SectionLabel>
         {certs.length === 0 ? (
           <div className="border-border rounded-xl border-2 border-dashed p-8 text-center">
             <div className="bg-muted mx-auto mb-3 w-fit rounded-xl p-3">

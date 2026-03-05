@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Loader2, Check } from 'lucide-react';
+import { ChevronDown, Loader2, Check, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { termsStepSchema, type TermsStepData, STEP_CONFIG } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
+import { StepHeading } from './design-system';
 
 interface StepTermsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
@@ -38,7 +39,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     goToStep,
   } = useWizard();
 
-  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(true);
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
 
@@ -181,16 +182,13 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
   return (
     <Form {...form}>
       <form className="mx-auto max-w-2xl space-y-6">
-        <h2
-          ref={headingRef}
-          tabIndex={-1}
-          className="text-foreground text-xl font-semibold outline-none"
-        >
-          Terms & Conditions
-        </h2>
-        <p className="text-muted-foreground -mt-2 text-sm">
-          Please review and accept the Balo expert terms before submitting your application.
-        </p>
+        <div ref={headingRef} tabIndex={-1} className="outline-none">
+          <StepHeading
+            icon={Shield}
+            title="Terms & Conditions"
+            subtitle="Please review and accept the Balo expert terms before submitting your application."
+          />
+        </div>
 
         {/* T&C container */}
         <div className="border-border relative overflow-hidden rounded-xl border">
@@ -316,7 +314,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="space-y-3 pt-3">
+            <div className="space-y-3 rounded-xl bg-gradient-to-br from-blue-50 to-violet-50 p-5 dark:from-blue-950/20 dark:to-violet-950/20">
               {summaryItems.map((item) => (
                 <div key={item.label} className="flex items-center justify-between">
                   <div>
@@ -339,15 +337,15 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         </Collapsible>
 
         {/* Submit button */}
-        <div className="mt-6">
+        <div className="mt-8 text-center">
           <Button
             type="button"
             size="lg"
             className={cn(
-              'w-full transition-all duration-300 sm:w-auto',
+              'w-full rounded-xl px-8 py-3 shadow-lg transition-all duration-300 sm:w-auto',
               submitState === 'success' && 'bg-success hover:bg-success text-success-foreground',
               !termsAccepted && 'cursor-not-allowed opacity-50',
-              termsAccepted && submitState === 'idle' && 'hover:shadow-primary/20 hover:shadow-lg'
+              termsAccepted && submitState === 'idle' && 'hover:shadow-primary/20 hover:shadow-xl'
             )}
             disabled={!termsAccepted || submitState !== 'idle'}
             onClick={() => void handleSubmit()}

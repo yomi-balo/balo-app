@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Plus, Briefcase } from 'lucide-react';
-import { AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -18,6 +18,7 @@ import { workHistoryStepSchema, type WorkHistoryStepData } from '../_actions/sch
 import { useWizard } from './expert-application-context';
 import { WorkHistoryCard } from './work-history-card';
 import { WorkHistoryForm } from './work-history-form';
+import { StepHeading, slideUpVariant } from './design-system';
 
 interface StepWorkHistoryProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
@@ -102,23 +103,24 @@ export function StepWorkHistory({ headingRef }: Readonly<StepWorkHistoryProps>):
 
   return (
     <Form {...form}>
-      <form className="space-y-6">
-        <h2
-          ref={headingRef}
-          tabIndex={-1}
-          className="text-foreground text-xl font-semibold outline-none"
-        >
-          Work Experience
-        </h2>
-        <p className="text-muted-foreground -mt-2 text-sm">
-          Add your relevant consulting and Salesforce experience. This is optional but helps clients
-          understand your background.
-        </p>
+      <form className="mx-auto max-w-[680px] space-y-6">
+        <div ref={headingRef} tabIndex={-1} className="outline-none">
+          <StepHeading
+            icon={Briefcase}
+            title="Work Experience"
+            subtitle="Add your relevant consulting and Salesforce experience. This is optional but helps clients understand your background."
+          />
+        </div>
 
         {entries.length === 0 && !showForm ? (
-          <div className="border-border rounded-xl border-2 border-dashed p-8 text-center">
-            <div className="bg-muted mx-auto mb-3 w-fit rounded-xl p-3">
-              <Briefcase className="text-muted-foreground h-6 w-6" aria-hidden="true" />
+          <motion.div
+            initial={slideUpVariant.initial}
+            animate={slideUpVariant.animate}
+            transition={slideUpVariant.transition}
+            className="border-border rounded-xl border-2 border-dashed bg-gradient-to-br from-blue-50 to-violet-50 px-8 py-12 text-center dark:from-blue-950/20 dark:to-violet-950/20"
+          >
+            <div className="bg-primary/10 mx-auto mb-3 w-fit rounded-xl p-3">
+              <Briefcase className="text-primary h-6 w-6" aria-hidden="true" />
             </div>
             <p className="text-foreground text-sm font-semibold">No experience added yet</p>
             <p className="text-muted-foreground mt-1 text-xs">
@@ -133,9 +135,9 @@ export function StepWorkHistory({ headingRef }: Readonly<StepWorkHistoryProps>):
               <Plus className="mr-1 h-4 w-4" aria-hidden="true" />
               Add Experience
             </Button>
-          </div>
+          </motion.div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <AnimatePresence>
               {entries.map((entry, index) => (
                 <WorkHistoryCard
