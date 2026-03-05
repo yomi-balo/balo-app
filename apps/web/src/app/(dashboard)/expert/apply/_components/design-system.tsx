@@ -63,9 +63,7 @@ export function SectionLabel({
       <div className={`flex h-6 w-6 items-center justify-center rounded-md ${bgClass}`}>
         <Icon className={`h-[13px] w-[13px] ${color}`} aria-hidden="true" />
       </div>
-      <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.08em] uppercase">
-        {children}
-      </p>
+      <p className={`text-[11px] font-semibold tracking-[0.08em] uppercase ${color}`}>{children}</p>
     </div>
   );
 }

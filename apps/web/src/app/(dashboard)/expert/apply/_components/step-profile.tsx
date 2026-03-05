@@ -171,16 +171,16 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           <SectionLabel icon={Phone} color="text-primary">
             Contact Information
           </SectionLabel>
-          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-end">
+          <div className="grid grid-cols-[140px_1fr] items-end gap-3">
             <FormField
               control={form.control}
               name="countryCode"
               render={({ field }) => (
-                <FormItem className="w-full sm:w-[160px]">
+                <FormItem>
                   <FormLabel>Country</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder="Country" />
                       </SelectTrigger>
                     </FormControl>
@@ -200,21 +200,21 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               control={form.control}
               name="phone"
               render={({ field }) => (
-                <FormItem className="w-full flex-1">
+                <FormItem>
                   <FormLabel>
                     Phone number <span className="text-destructive">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input placeholder="412 345 678" {...field} aria-required="true" />
                   </FormControl>
-                  <FormDescription>
-                    We&apos;ll only use this to contact you about your application.
-                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
           </div>
+          <p className="text-muted-foreground text-xs">
+            We&apos;ll only use this to contact you about your application.
+          </p>
         </motion.div>
 
         {/* Section 2: Salesforce Experience */}
@@ -227,7 +227,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           <SectionLabel icon={Briefcase} color="text-violet-600">
             Salesforce Experience
           </SectionLabel>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 items-start gap-x-4 gap-y-5 sm:grid-cols-2">
             {/* Year started */}
             <FormField
               control={form.control}
@@ -254,9 +254,6 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormDescription>
-                    When did you first start working with Salesforce?
-                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -318,9 +315,6 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormDescription>
-                    Projects as Lead = where you were the primary consultant or architect.
-                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -333,24 +327,26 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>LinkedIn</FormLabel>
-                  <div className="flex items-stretch">
-                    <span className="border-input bg-muted text-muted-foreground inline-flex items-center rounded-l-md border border-r-0 px-3 text-sm">
+                  <div className="flex">
+                    <span className="border-input bg-muted text-muted-foreground inline-flex h-10 items-center rounded-l-md border border-r-0 px-3 text-sm">
                       linkedin.com/in/
                     </span>
                     <FormControl>
                       <Input
                         placeholder="your-profile"
-                        className="rounded-l-none border-l-0"
+                        className="h-10 rounded-l-none"
                         {...field}
                       />
                     </FormControl>
                   </div>
-                  <FormDescription>Helps us verify your professional background.</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
           </div>
+          <p className="text-muted-foreground text-xs">
+            Projects as Lead = where you were the primary consultant or architect.
+          </p>
         </motion.div>
 
         {/* Section 3: Languages */}
