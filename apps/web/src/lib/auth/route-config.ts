@@ -13,6 +13,7 @@ export const PUBLIC_PATHS = new Set([
   '/about',
   '/pricing',
   '/contact',
+  '/admin-dev',
 ]);
 
 /** Prefix-based public paths */

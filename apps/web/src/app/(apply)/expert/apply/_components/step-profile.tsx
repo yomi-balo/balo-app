@@ -554,7 +554,10 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   <ChipPicker
                     options={industryOptions}
                     selected={field.value ?? []}
-                    onChange={field.onChange}
+                    onChange={(v) => {
+                      field.onChange(v);
+                      form.trigger('industryIds');
+                    }}
                     className="mt-3"
                   />
                 </FormControl>
