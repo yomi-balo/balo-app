@@ -3,7 +3,7 @@
 import { useEffect, useCallback, useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, X, Phone, Briefcase, Globe, Award, Compass } from 'lucide-react';
+import { Plus, X, Phone, Briefcase, Globe, Award, Building2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -168,19 +168,19 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           transition={{ ...slideUpVariant.transition, ...stagger(0).transition }}
           className="space-y-4"
         >
-          <SectionLabel icon={Phone} color="text-primary">
+          <SectionLabel icon={Phone} color="primary">
             Contact Information
           </SectionLabel>
-          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-end">
+          <div className="grid grid-cols-[140px_1fr] items-start gap-3">
             <FormField
               control={form.control}
               name="countryCode"
               render={({ field }) => (
-                <FormItem className="w-full sm:w-[160px]">
+                <FormItem>
                   <FormLabel>Country</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder="Country" />
                       </SelectTrigger>
                     </FormControl>
@@ -200,19 +200,21 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               control={form.control}
               name="phone"
               render={({ field }) => (
-                <FormItem className="w-full flex-1">
-                  <FormLabel>Phone number</FormLabel>
+                <FormItem>
+                  <FormLabel>
+                    Phone number <span className="text-destructive">*</span>
+                  </FormLabel>
                   <FormControl>
                     <Input placeholder="412 345 678" {...field} aria-required="true" />
                   </FormControl>
-                  <FormDescription>
-                    We&apos;ll only use this to contact you about your application.
-                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
           </div>
+          <p className="text-muted-foreground text-xs">
+            We&apos;ll only use this to contact you about your application.
+          </p>
         </motion.div>
 
         {/* Section 2: Salesforce Experience */}
@@ -222,23 +224,28 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           transition={{ ...slideUpVariant.transition, ...stagger(1).transition }}
           className="space-y-4"
         >
-          <SectionLabel icon={Briefcase} color="text-primary">
+          <SectionLabel icon={Briefcase} color="violet">
             Salesforce Experience
           </SectionLabel>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 items-start gap-x-4 gap-y-5 sm:grid-cols-2">
             {/* Year started */}
             <FormField
               control={form.control}
               name="yearStartedSalesforce"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Year started on Salesforce</FormLabel>
+                  <FormLabel>
+                    Year started on Salesforce <span className="text-destructive">*</span>
+                  </FormLabel>
                   <Select
-                    onValueChange={(v) => field.onChange(Number(v))}
+                    onValueChange={(v) => {
+                      field.onChange(Number(v));
+                      form.trigger('yearStartedSalesforce');
+                    }}
                     value={field.value?.toString()}
                   >
                     <FormControl>
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder="Select year" />
                       </SelectTrigger>
                     </FormControl>
@@ -250,9 +257,6 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormDescription>
-                    When did you first start working with Salesforce?
-                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -264,13 +268,18 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               name="projectCountMin"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Projects involved in</FormLabel>
+                  <FormLabel>
+                    Projects involved in <span className="text-destructive">*</span>
+                  </FormLabel>
                   <Select
-                    onValueChange={(v) => field.onChange(Number(v))}
+                    onValueChange={(v) => {
+                      field.onChange(Number(v));
+                      form.trigger('projectCountMin');
+                    }}
                     value={field.value?.toString()}
                   >
                     <FormControl>
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder="Select range" />
                       </SelectTrigger>
                     </FormControl>
@@ -292,13 +301,18 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               name="projectLeadCountMin"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Projects as Lead</FormLabel>
+                  <FormLabel>
+                    Projects as Lead <span className="text-destructive">*</span>
+                  </FormLabel>
                   <Select
-                    onValueChange={(v) => field.onChange(Number(v))}
+                    onValueChange={(v) => {
+                      field.onChange(Number(v));
+                      form.trigger('projectLeadCountMin');
+                    }}
                     value={field.value?.toString()}
                   >
                     <FormControl>
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder="Select range" />
                       </SelectTrigger>
                     </FormControl>
@@ -310,9 +324,6 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormDescription>
-                    Projects where you were the primary Salesforce consultant or architect.
-                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -324,21 +335,27 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
               name="linkedinSlug"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>LinkedIn URL</FormLabel>
+                  <FormLabel>LinkedIn</FormLabel>
                   <div className="flex">
-                    <span className="border-input bg-muted text-muted-foreground inline-flex items-center rounded-l-md border border-r-0 px-3 text-sm">
+                    <span className="border-input bg-muted text-muted-foreground inline-flex h-10 items-center rounded-l-md border border-r-0 px-3 text-sm">
                       linkedin.com/in/
                     </span>
                     <FormControl>
-                      <Input placeholder="your-profile" className="rounded-l-none" {...field} />
+                      <Input
+                        placeholder="your-profile"
+                        className="h-10 rounded-l-none"
+                        {...field}
+                      />
                     </FormControl>
                   </div>
-                  <FormDescription>Helps us verify your professional background.</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
           </div>
+          <p className="text-muted-foreground text-xs">
+            Projects as Lead = where you were the primary consultant or architect.
+          </p>
         </motion.div>
 
         {/* Section 3: Languages */}
@@ -350,7 +367,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
         >
           <div className="flex items-center justify-between">
             <div>
-              <SectionLabel icon={Globe} color="text-violet-600">
+              <SectionLabel icon={Globe} color="cyan">
                 Languages
               </SectionLabel>
               <p className="text-muted-foreground -mt-2 text-sm">
@@ -364,6 +381,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   variant="outline"
                   size="sm"
                   disabled={availableLanguages.length === 0}
+                  className="border-primary/30 bg-primary/5 text-primary hover:bg-primary/10"
                 >
                   <Plus className="mr-1 h-4 w-4" aria-hidden="true" />
                   Add language
@@ -399,65 +417,73 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           </div>
 
           {/* Language rows */}
-          <AnimatePresence mode="popLayout">
-            {fields.map((field, index) => {
-              const langInfo = referenceData.languages.find((l) => l.id === field.languageId);
-              return (
-                <motion.div
-                  key={field.id}
-                  initial={{ y: 10, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="border-border flex items-center gap-3 border-b py-3 last:border-b-0"
-                >
-                  <span className="text-foreground flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
-                    {langInfo?.flagEmoji && <span>{langInfo.flagEmoji}</span>}
-                    <span className="truncate">{langInfo?.name ?? 'Unknown'}</span>
-                  </span>
-                  <FormField
-                    control={form.control}
-                    name={`languages.${index}.proficiency`}
-                    render={({ field: profField }) => (
-                      <Select onValueChange={profField.onChange} value={profField.value}>
-                        <SelectTrigger className="w-[140px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(['beginner', 'intermediate', 'advanced', 'native'] as const).map(
-                            (prof) => (
-                              <SelectItem key={prof} value={prof}>
-                                {prof.charAt(0).toUpperCase() + prof.slice(1)}
-                              </SelectItem>
-                            )
-                          )}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                  <Badge
-                    variant="outline"
-                    className={
-                      PROFICIENCY_BADGE_STYLES[form.watch(`languages.${index}.proficiency`)] ??
-                      'bg-muted text-muted-foreground'
-                    }
-                  >
-                    {form.watch(`languages.${index}.proficiency`)}
-                  </Badge>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => remove(index)}
-                    aria-label={`Remove ${langInfo?.name ?? 'language'}`}
-                  >
-                    <X className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
+          {fields.length === 0 ? (
+            <div className="border-border mt-2 rounded-xl border-2 border-dashed p-6 text-center">
+              <p className="text-muted-foreground text-sm">No languages added yet</p>
+            </div>
+          ) : (
+            <div className="border-border mt-2 overflow-hidden rounded-xl border">
+              <AnimatePresence mode="popLayout">
+                {fields.map((field, index) => {
+                  const langInfo = referenceData.languages.find((l) => l.id === field.languageId);
+                  return (
+                    <motion.div
+                      key={field.id}
+                      initial={{ x: 20, opacity: 0 }}
+                      animate={{ x: 0, opacity: 1 }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2, delay: index * 0.06 }}
+                      className="border-border/50 flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
+                    >
+                      <span className="text-foreground flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
+                        {langInfo?.flagEmoji && <span>{langInfo.flagEmoji}</span>}
+                        <span className="truncate">{langInfo?.name ?? 'Unknown'}</span>
+                      </span>
+                      <FormField
+                        control={form.control}
+                        name={`languages.${index}.proficiency`}
+                        render={({ field: profField }) => (
+                          <Select onValueChange={profField.onChange} value={profField.value}>
+                            <SelectTrigger className="w-[140px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(['beginner', 'intermediate', 'advanced', 'native'] as const).map(
+                                (prof) => (
+                                  <SelectItem key={prof} value={prof}>
+                                    {prof.charAt(0).toUpperCase() + prof.slice(1)}
+                                  </SelectItem>
+                                )
+                              )}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                      <Badge
+                        variant="outline"
+                        className={
+                          PROFICIENCY_BADGE_STYLES[form.watch(`languages.${index}.proficiency`)] ??
+                          'bg-muted text-muted-foreground'
+                        }
+                      >
+                        {form.watch(`languages.${index}.proficiency`)}
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0"
+                        onClick={() => remove(index)}
+                        aria-label={`Remove ${langInfo?.name ?? 'language'}`}
+                      >
+                        <X className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
+          )}
 
           {/* Language error message */}
           {form.formState.errors.languages?.message && (
@@ -471,9 +497,9 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           animate={slideUpVariant.animate}
           transition={{ ...slideUpVariant.transition, ...stagger(3).transition }}
         >
-          <div className="border-border bg-muted/30 dark:bg-muted/10 space-y-4 rounded-xl border p-6">
+          <div className="from-primary/[0.04] space-y-4 rounded-xl bg-gradient-to-br to-violet-600/[0.06] p-6 ring-1 ring-violet-200/40">
             <div>
-              <SectionLabel icon={Award} color="text-success">
+              <SectionLabel icon={Award} color="amber">
                 Salesforce Distinctions
               </SectionLabel>
               <p className="text-muted-foreground -mt-2 text-xs">
@@ -512,7 +538,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           className="space-y-3"
         >
           <div>
-            <SectionLabel icon={Compass} color="text-warning">
+            <SectionLabel icon={Building2} color="emerald">
               Industry Expertise
             </SectionLabel>
             <p className="text-muted-foreground -mt-2 text-sm">
@@ -528,7 +554,10 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   <ChipPicker
                     options={industryOptions}
                     selected={field.value ?? []}
-                    onChange={field.onChange}
+                    onChange={(v) => {
+                      field.onChange(v);
+                      form.trigger('industryIds');
+                    }}
                     className="mt-3"
                   />
                 </FormControl>

@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { Search, X } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -107,12 +108,12 @@ export function CertificationPickerDialog({
                     const isAlreadyAdded = alreadyAddedSet.has(cert.id);
                     const isSelected = selectedIds.includes(cert.id);
                     return (
-                      <button
+                      <label
                         key={cert.id}
-                        type="button"
-                        className="hover:bg-muted/50 flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors"
-                        onClick={() => !isAlreadyAdded && toggleCert(cert.id)}
-                        disabled={isAlreadyAdded}
+                        className={cn(
+                          'hover:bg-muted/50 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors',
+                          isAlreadyAdded ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                        )}
                       >
                         <Checkbox
                           checked={isSelected || isAlreadyAdded}
@@ -123,7 +124,7 @@ export function CertificationPickerDialog({
                         {isAlreadyAdded && (
                           <span className="text-muted-foreground text-xs">Added</span>
                         )}
-                      </button>
+                      </label>
                     );
                   })}
                 </div>

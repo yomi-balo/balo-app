@@ -147,7 +147,7 @@ export function SuccessContent({ email }: Readonly<SuccessContentProps>): React.
         className="mt-4"
       >
         <Button asChild variant="link">
-          <Link href="/expert/apply">View your application</Link>
+          <Link href="/expert/apply/review">View your application</Link>
         </Button>
       </motion.div>
     </div>

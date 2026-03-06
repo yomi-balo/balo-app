@@ -23,7 +23,10 @@ interface StepInviteProps {
 }
 
 function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (email.length > 254) return false;
+  const at = email.indexOf('@');
+  const dot = email.lastIndexOf('.');
+  return at > 0 && dot > at + 1 && dot < email.length - 1 && !email.includes(' ');
 }
 
 export function StepInvite({ headingRef }: Readonly<StepInviteProps>): React.JSX.Element {

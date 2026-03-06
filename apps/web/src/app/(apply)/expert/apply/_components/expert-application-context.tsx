@@ -105,8 +105,14 @@ function findFirstIncompleteStep(draft: ApplicationWithRelations): number {
     if (!profs.some((p) => p > 0)) return 2;
   }
 
-  // Steps 4-6 are optional, skip to 6 (terms)
-  return 6;
+  // Steps 3-5 are optional — infer progress from later-step data.
+  // If work history exists, user must have passed certifications too.
+  const hasCertData = draft.certifications.length > 0;
+  const hasWorkHistoryData = draft.workHistory.length > 0;
+
+  if (hasWorkHistoryData) return 6; // past both optional steps → terms
+  if (hasCertData) return 4; // past certs → work-history
+  return 3; // → certifications
 }
 
 function resolveInitialStep(
@@ -332,6 +338,15 @@ export function ExpertApplicationProvider({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Clear stale idle-save timer on step change to prevent old closures
+  // from re-saving a previous step's data (which can wipe assessment ratings)
+  useEffect(() => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+  }, [currentStep]);
 
   // Update URL on step change
   useEffect(() => {

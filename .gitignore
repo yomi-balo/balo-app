@@ -49,3 +49,6 @@ drizzle/meta
 
 # Logs
 *.log
+
+# Documentation (local reference only)
+documentation_bubble_app.md
