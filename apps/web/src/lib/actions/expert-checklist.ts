@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { cache } from 'react';
 import { getSession } from '@/lib/auth/session';
 import { expertsRepository, usersRepository } from '@balo/db';
 import { log } from '@/lib/logging';
@@ -17,7 +18,7 @@ export interface ChecklistStatus {
 }
 
 /** Server-side function to compute checklist status. Called from server components. */
-export async function getChecklistStatus(): Promise<ChecklistStatus> {
+export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   const session = await getSession();
   if (!session?.user?.id) {
     throw new Error('Unauthorized');
@@ -77,4 +78,4 @@ export async function getChecklistStatus(): Promise<ChecklistStatus> {
   }
 
   return { items, completedCount, allComplete };
-}
+});

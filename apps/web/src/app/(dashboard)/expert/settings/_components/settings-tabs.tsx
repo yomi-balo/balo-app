@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { User, Shield, DollarSign, Calendar, CreditCard } from 'lucide-react';
@@ -73,6 +73,11 @@ interface SettingsTabsProps {
 export function SettingsTabs({ defaultTab, setupStep }: SettingsTabsProps): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
+
+  // Sync tab state when URL changes externally (browser back/forward, checklist click)
+  useEffect(() => {
+    setTab(defaultTab);
+  }, [defaultTab]);
 
   const handleTabChange = (key: string): void => {
     setTab(key);
