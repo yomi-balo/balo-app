@@ -46,7 +46,7 @@ export const expertProfiles = pgTable(
 
     stripeConnectId: text('stripe_connect_id'),
 
-    searchable: boolean('searchable').default(true).notNull(),
+    searchable: boolean('searchable').default(false).notNull(),
     skillsLocked: boolean('skills_locked').default(false).notNull(),
 
     // Experience metrics

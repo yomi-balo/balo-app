@@ -73,6 +73,7 @@ export async function verifyEmailAction(
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
+      avatarUrl: user.avatarUrl ?? null,
       activeMode: user.activeMode,
       onboardingCompleted: false,
       platformRole: 'user',

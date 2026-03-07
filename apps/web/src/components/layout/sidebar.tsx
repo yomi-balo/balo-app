@@ -4,29 +4,93 @@ import { useSidebar } from './sidebar-context';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { SidebarNavLink } from './sidebar-nav-link';
 import { Logo } from './logo';
+import { UserMenu } from './user-menu';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import {
   LayoutDashboard,
-  MessageSquare,
+  Video,
   FolderKanban,
-  Package,
+  MessageSquare,
+  Settings,
+  User,
   PanelLeftClose,
   PanelLeft,
+  Check,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// TODO: Derive nav items from user's activeMode (client vs consultant) in a future ticket
-const NAV_ITEMS = [
+// Primary nav items -- same for both modes
+const TOP_NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/cases', label: 'Cases', icon: MessageSquare },
-  { href: '/dashboard/projects', label: 'Projects', icon: FolderKanban },
-  { href: '/dashboard/packages', label: 'Packages', icon: Package },
+  { href: '/consultations', label: 'Consultations', icon: Video },
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
+  { href: '/messages', label: 'Messages', icon: MessageSquare },
 ];
 
+interface NavItem {
+  href: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+}
+
+function getBottomNavItems(activeMode: 'client' | 'expert'): NavItem[] {
+  const items: NavItem[] = [];
+  if (activeMode === 'expert') {
+    items.push({
+      href: '/expert/settings',
+      label: 'Expert Settings',
+      icon: Settings,
+    });
+  }
+  items.push({
+    href: '/settings/account',
+    label: 'Account',
+    icon: User,
+  });
+  return items;
+}
+
+function ChecklistBadge({
+  completedCount,
+  allComplete,
+}: {
+  completedCount: number;
+  allComplete: boolean;
+}): React.JSX.Element {
+  if (allComplete) {
+    return (
+      <span
+        className="bg-success/10 text-success flex h-5 w-5 items-center justify-center rounded-full"
+        style={{ animation: 'checkPop 0.3s ease-out' }}
+      >
+        <Check className="h-3 w-3" />
+      </span>
+    );
+  }
+
+  return (
+    <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-[10px] font-semibold">
+      {completedCount}/5
+    </span>
+  );
+}
+
 function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.Element {
+  const {
+    activeMode,
+    userName,
+    userInitials,
+    userAvatarUrl,
+    checklistCompletedCount,
+    checklistAllComplete,
+  } = useSidebar();
+
+  const bottomNavItems = getBottomNavItems(activeMode);
+
   return (
     <div className="flex h-full flex-col pb-14">
       {/* Logo */}
@@ -36,13 +100,13 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
           isCollapsed && 'justify-center px-2'
         )}
       >
-        <Logo collapsed={isCollapsed} />
+        <Logo collapsed={isCollapsed} showExpertBadge={activeMode === 'expert'} />
       </div>
 
-      {/* Navigation */}
+      {/* Primary navigation */}
       <nav className="flex-1 space-y-1 p-3">
         <TooltipProvider delayDuration={0}>
-          {NAV_ITEMS.map((item) => (
+          {TOP_NAV_ITEMS.map((item) => (
             <SidebarNavLink
               key={item.href}
               href={item.href}
@@ -55,6 +119,62 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
       </nav>
 
       <Separator className="bg-sidebar-border" />
+
+      {/* Bottom navigation */}
+      <div className="space-y-1 p-3">
+        <TooltipProvider delayDuration={0}>
+          {bottomNavItems.map((item) => (
+            <SidebarNavLink
+              key={item.href}
+              href={item.href}
+              label={item.label}
+              icon={item.icon}
+              isCollapsed={isCollapsed}
+              isSecondary
+              suffix={
+                item.href === '/expert/settings' ? (
+                  <ChecklistBadge
+                    completedCount={checklistCompletedCount}
+                    allComplete={checklistAllComplete}
+                  />
+                ) : undefined
+              }
+            />
+          ))}
+        </TooltipProvider>
+      </div>
+
+      <Separator className="bg-sidebar-border" />
+
+      {/* User pill */}
+      <div className={cn('p-3', isCollapsed && 'flex justify-center')}>
+        <UserMenu>
+          <button
+            className={cn(
+              'ring-offset-background focus-visible:ring-ring hover:bg-sidebar-accent/50 flex items-center transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+              isCollapsed
+                ? 'min-h-[44px] min-w-[44px] justify-center rounded-full'
+                : 'w-full gap-3 rounded-lg px-3 py-2 text-left'
+            )}
+            aria-label={`User menu for ${userName}`}
+          >
+            <Avatar className="h-8 w-8 shrink-0">
+              {userAvatarUrl && <AvatarImage src={userAvatarUrl} alt={userName} />}
+              <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                {userInitials}
+              </AvatarFallback>
+            </Avatar>
+            {!isCollapsed && (
+              <div className="min-w-0 flex-1">
+                <p className="text-sidebar-foreground truncate text-sm font-medium">{userName}</p>
+                <p className="text-muted-foreground text-xs">
+                  {activeMode === 'expert' ? 'Expert' : 'Client'}
+                </p>
+              </div>
+            )}
+          </button>
+        </UserMenu>
+      </div>
     </div>
   );
 }

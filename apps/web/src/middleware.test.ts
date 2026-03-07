@@ -30,6 +30,7 @@ function mockSessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
     email: 'test@example.com',
     firstName: 'Test',
     lastName: 'User',
+    avatarUrl: null,
     activeMode: 'client',
     onboardingCompleted: true,
     platformRole: 'user',

@@ -1,10 +1,8 @@
 'use client';
 
 import { useTheme } from 'next-themes';
-import { FAKE_USER } from '@/lib/fake-user';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { logoutAction } from '@/lib/auth/actions';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,40 +16,51 @@ import {
   DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu';
 import { User, Settings, Sun, Moon, Monitor, LogOut } from 'lucide-react';
+import { useSidebarOptional } from './sidebar-context';
 
-export function UserMenu(): React.JSX.Element {
+interface UserMenuProps {
+  children?: React.ReactNode;
+  userName?: string;
+  userInitials?: string;
+}
+
+export function UserMenu({
+  children,
+  userName: userNameProp,
+  userInitials: userInitialsProp,
+}: UserMenuProps): React.JSX.Element {
   const { setTheme } = useTheme();
-  const user = FAKE_USER;
+  const sidebar = useSidebarOptional();
+
+  const userName = userNameProp ?? sidebar?.userName ?? 'User';
+  const userInitials = userInitialsProp ?? sidebar?.userInitials ?? 'U';
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          className="ring-offset-background focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
-          aria-label={`User menu for ${user.name}`}
-        >
-          <Avatar className="h-8 w-8">
-            {user.avatarUrl && <AvatarImage src={user.avatarUrl} alt={user.name} />}
-            <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-              {user.initials}
-            </AvatarFallback>
-          </Avatar>
-        </button>
+        {children ?? (
+          <button
+            className="ring-offset-background focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+            aria-label={`User menu for ${userName}`}
+          >
+            <span className="bg-primary/10 text-primary flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold">
+              {userInitials}
+            </span>
+          </button>
+        )}
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-56">
         {/* User info header */}
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
-            <p className="text-sm leading-none font-semibold">{user.name}</p>
-            <p className="text-muted-foreground text-xs leading-none">{user.email}</p>
+            <p className="text-sm leading-none font-semibold">{userName}</p>
           </div>
         </DropdownMenuLabel>
 
         <DropdownMenuSeparator />
 
         <DropdownMenuGroup>
-          {/* TODO: Wire to real routes when profile/settings pages exist */}
           <DropdownMenuItem>
             <User className="mr-2 h-4 w-4" />
             Profile

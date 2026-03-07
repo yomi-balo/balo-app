@@ -32,6 +32,7 @@ interface UpdateProfileInput {
   isSalesforceMvp?: boolean;
   isSalesforceCta?: boolean;
   isCertifiedTrainer?: boolean;
+  searchable?: boolean;
 }
 
 interface SyncLanguageInput {
@@ -92,6 +93,13 @@ export interface ApplicationWithRelations {
 // ── Repository ───────────────────────────────────────────────────
 
 export const expertsRepository = {
+  /** Find expert profile by ID (used for checklist status) */
+  async findProfileById(expertProfileId: string): Promise<ExpertProfile | undefined> {
+    return db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+    });
+  },
+
   /** Find draft or submitted application for a user + vertical */
   async findApplicationByUserId(
     userId: string,

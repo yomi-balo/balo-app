@@ -92,6 +92,7 @@ export async function signUpAction(
       email: user.email,
       firstName: null,
       lastName: null,
+      avatarUrl: null,
       activeMode: user.activeMode,
       onboardingCompleted: false,
       platformRole: 'user',

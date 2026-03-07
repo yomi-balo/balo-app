@@ -4,9 +4,14 @@ import { cn } from '@/lib/utils';
 interface LogoProps {
   className?: string;
   collapsed?: boolean;
+  showExpertBadge?: boolean;
 }
 
-export function Logo({ className, collapsed = false }: LogoProps): React.JSX.Element {
+export function Logo({
+  className,
+  collapsed = false,
+  showExpertBadge = false,
+}: LogoProps): React.JSX.Element {
   return (
     <Link
       href="/"
@@ -16,12 +21,18 @@ export function Logo({ className, collapsed = false }: LogoProps): React.JSX.Ele
         className
       )}
     >
-      {/* Icon mark — always visible */}
+      {/* Icon mark -- always visible */}
       <div className="bg-primary flex h-8 w-8 items-center justify-center rounded-lg">
         <span className="text-primary-foreground text-sm font-semibold">B</span>
       </div>
-      {/* Wordmark — hidden when sidebar collapsed */}
+      {/* Wordmark -- hidden when sidebar collapsed */}
       {!collapsed && <span className="text-lg">balo</span>}
+      {/* Expert mode badge */}
+      {!collapsed && showExpertBadge && (
+        <span className="bg-success/10 text-success border-success/30 ml-auto rounded-md border px-2 py-0.5 text-[10px] font-semibold">
+          Expert
+        </span>
+      )}
     </Link>
   );
 }
