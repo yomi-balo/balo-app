@@ -1,120 +1,129 @@
-// credit-purchase-flow.ts
-// Client buys credits via Stripe Checkout Session
-// Flow: Checkout Session → Stripe payment page → webhook → BullMQ → addCredits()
+/**
+ * Credit Purchase Flow
+ *
+ * Client buys credits via Stripe Checkout.
+ * Funds go into Balo's Stripe account (no Connect).
+ * Balance is updated on webhook receipt, not here.
+ */
 
 import Stripe from 'stripe';
 import { db } from '@balo/db';
-import { users, creditTransactions } from '@balo/db/schema';
+import { clientProfiles, creditTransactions } from '@balo/db/schema';
 import { eq } from 'drizzle-orm';
+import { generateIdempotencyKey } from './idempotency-pattern';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-// ── Create Checkout Session ───────────────────────────────────────
+export interface CreditPackage {
+  credits: number;       // Number of credits (= AUD dollars)
+  priceAUDCents: number; // Amount to charge in cents
+  label: string;         // e.g. "50 credits — A$50"
+}
 
-export async function createCreditPurchaseSession(
-  userId: string,
-  packageId: string,
-  userEmail: string,
-) {
-  const pkg = await creditPackageRepository.findById(packageId);
-  const idempotencyKey = `purchase_${userId}_${packageId}_${Date.now()}`;
+export const CREDIT_PACKAGES: CreditPackage[] = [
+  { credits: 25,  priceAUDCents: 2500,  label: '25 credits — A$25' },
+  { credits: 50,  priceAUDCents: 5000,  label: '50 credits — A$50' },
+  { credits: 100, priceAUDCents: 10000, label: '100 credits — A$100' },
+  { credits: 250, priceAUDCents: 25000, label: '250 credits — A$250' },
+];
 
-  const session = await stripe.checkout.sessions.create({
-    mode: 'payment',
-    customer_email: userEmail,
-    line_items: [
-      {
-        price_data: {
-          currency: 'aud',
-          product_data: { name: `${pkg.credits} Balo Credits` },
-          unit_amount: pkg.priceInCents, // Always in cents
+/**
+ * Create a Stripe Checkout session for a credit purchase.
+ * Balance is NOT updated here — wait for webhook.
+ */
+export async function createCreditCheckoutSession({
+  clientUserId,
+  packageCredits,
+  successUrl,
+  cancelUrl,
+}: {
+  clientUserId: string;
+  packageCredits: number;
+  successUrl: string;
+  cancelUrl: string;
+}): Promise<{ sessionId: string; url: string }> {
+  const pkg = CREDIT_PACKAGES.find(p => p.credits === packageCredits);
+  if (!pkg) throw new Error(`Invalid credit package: ${packageCredits}`);
+
+  const idempotencyKey = generateIdempotencyKey('checkout', clientUserId, String(packageCredits));
+
+  const session = await stripe.checkout.sessions.create(
+    {
+      mode: 'payment',
+      currency: 'aud',
+      line_items: [
+        {
+          price_data: {
+            currency: 'aud',
+            unit_amount: pkg.priceAUDCents,
+            product_data: { name: pkg.label },
+          },
+          quantity: 1,
         },
-        quantity: 1,
+      ],
+      metadata: {
+        clientUserId,
+        creditsToAdd: String(pkg.credits),
+        packageLabel: pkg.label,
       },
-    ],
-    metadata: {
-      userId,
-      packageId,
-      credits: pkg.credits.toString(), // Must be string in metadata
-      idempotencyKey,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
     },
-    success_url: 'https://balo.expert/dashboard?purchase=success',
-    cancel_url: 'https://balo.expert/dashboard?purchase=cancelled',
-  });
+    { idempotencyKey }
+  );
 
-  return session.url;
+  return { sessionId: session.id, url: session.url! };
 }
 
-// ── Add Credits (atomic DB transaction) ──────────────────────────
-// THIS IS THE ONLY WAY TO MODIFY CREDIT BALANCE — never update directly
+/**
+ * Fulfill a completed credit purchase.
+ * Called by the webhook handler — NOT called directly from the UI.
+ * Idempotent: checks for existing transaction before updating balance.
+ */
+export async function fulfillCreditPurchase({
+  stripeSessionId,
+  clientUserId,
+  creditsToAdd,
+  amountPaidCents,
+}: {
+  stripeSessionId: string;
+  clientUserId: string;
+  creditsToAdd: number;
+  amountPaidCents: number;
+}): Promise<void> {
+  await db.transaction(async (tx) => {
+    // Idempotency check — skip if already processed
+    const existing = await tx
+      .select()
+      .from(creditTransactions)
+      .where(eq(creditTransactions.stripePaymentId, stripeSessionId))
+      .limit(1);
 
-export async function addCredits(
-  userId: string,
-  amount: number, // Positive = credits in, negative = credits out
-  type: 'purchase' | 'consumption' | 'refund' | 'promo' | 'expiry' | 'adjustment',
-  metadata: {
-    description?: string;
-    stripePaymentIntentId?: string;
-    stripeTransferId?: string;
-    caseId?: string;
-    meetingId?: string;
-    idempotencyKey?: string;
-  },
-) {
-  return db.transaction(async (tx) => {
-    // 1. Get current balance with row lock (prevents race conditions)
-    const [user] = await tx
-      .select({ balance: users.creditBalance })
-      .from(users)
-      .where(eq(users.id, userId))
-      .for('update'); // CRITICAL: row lock
+    if (existing.length > 0) return; // Already fulfilled
 
-    if (!user) throw new Error('User not found');
+    // Lock the row before updating balance
+    const [profile] = await tx
+      .select()
+      .from(clientProfiles)
+      .where(eq(clientProfiles.userId, clientUserId))
+      .for('update');
 
-    const newBalance = user.balance + amount;
+    if (!profile) throw new Error(`Client profile not found: ${clientUserId}`);
 
-    // 2. Guard: never allow negative balance
-    if (newBalance < 0) {
-      throw new Error(`Insufficient credits. Balance: ${user.balance}, Requested: ${Math.abs(amount)}`);
-    }
+    // Update balance
+    await tx
+      .update(clientProfiles)
+      .set({ creditBalance: profile.creditBalance + creditsToAdd })
+      .where(eq(clientProfiles.userId, clientUserId));
 
-    // 3. Record transaction with balance snapshot
+    // Record transaction
     await tx.insert(creditTransactions).values({
-      userId,
-      type,
-      amount,
-      balanceAfter: newBalance, // Snapshot for audit trail
-      ...metadata,
+      userId: clientUserId,
+      type: 'purchase',
+      credits: creditsToAdd,
+      amountCents: amountPaidCents,
+      stripePaymentId: stripeSessionId,
+      description: `Purchased ${creditsToAdd} credits`,
     });
-
-    // 4. Update denormalized balance
-    await tx.update(users).set({ creditBalance: newBalance }).where(eq(users.id, userId));
-
-    return newBalance;
-  });
-}
-
-// ── Webhook handler (called from BullMQ worker) ───────────────────
-
-export async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
-  const idempotencyKey = `checkout_${session.id}`;
-
-  // Check if already processed (idempotency)
-  const existing = await db.query.creditTransactions.findFirst({
-    where: eq(creditTransactions.idempotencyKey, idempotencyKey),
-  });
-
-  if (existing) {
-    console.info('Duplicate checkout webhook, skipping', { sessionId: session.id });
-    return;
-  }
-
-  const credits = parseInt(session.metadata!.credits);
-  const userId = session.metadata!.userId;
-
-  await addCredits(userId, credits, 'purchase', {
-    stripePaymentIntentId: session.payment_intent as string,
-    idempotencyKey,
-    description: `Purchased ${credits} Balo credits`,
   });
 }
