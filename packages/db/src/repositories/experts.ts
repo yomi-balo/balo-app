@@ -33,6 +33,7 @@ interface UpdateProfileInput {
   isSalesforceCta?: boolean;
   isCertifiedTrainer?: boolean;
   searchable?: boolean;
+  hourlyRate?: number;
 }
 
 interface SyncLanguageInput {

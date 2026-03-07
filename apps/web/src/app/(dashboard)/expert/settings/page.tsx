@@ -27,12 +27,18 @@ export default async function ExpertSettingsPage({
     });
   }
 
+  const initialRateCents = checklistStatus?.rateCents ?? null;
+
   return (
     <div>
       {setupStep && checklistStatus && !checklistStatus.allComplete && (
         <SetupContextBar activeSetupStep={setupStep} checklistStatus={checklistStatus} />
       )}
-      <SettingsTabs defaultTab={activeTab} setupStep={setupStep} />
+      <SettingsTabs
+        defaultTab={activeTab}
+        setupStep={setupStep}
+        initialRateCents={initialRateCents}
+      />
     </div>
   );
 }

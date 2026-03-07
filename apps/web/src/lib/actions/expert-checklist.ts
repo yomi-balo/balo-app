@@ -15,6 +15,8 @@ export interface ChecklistStatus {
   };
   completedCount: number;
   allComplete: boolean;
+  /** Raw per-minute rate in cents from expert profile. Used by settings tabs to avoid a second DB query. */
+  rateCents: number | null;
 }
 
 /** Server-side function to compute checklist status. Called from server components. */
@@ -77,5 +79,5 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     });
   }
 
-  return { items, completedCount, allComplete };
+  return { items, completedCount, allComplete, rateCents: profile.hourlyRate ?? null };
 });
