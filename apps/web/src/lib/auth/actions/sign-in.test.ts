@@ -315,6 +315,7 @@ describe('signInAction', () => {
         companyId: 'co-1',
         companyName: 'Test Co',
         companyRole: 'owner',
+        avatarUrl: null,
       });
     });
 

@@ -3,4 +3,5 @@ export { track } from './track';
 export { AUTH_EVENTS } from './events/auth';
 export { ONBOARDING_EVENTS } from './events/onboarding';
 export { EXPERT_EVENTS } from './events/expert';
+export { EXPERT_SETUP_EVENTS } from './events/expert-setup';
 export type { AllEvents, EventName } from './types';

@@ -9,6 +9,7 @@ export interface SessionUser {
   email: string;
   firstName: string | null;
   lastName: string | null;
+  avatarUrl: string | null;
   activeMode: 'client' | 'expert';
   onboardingCompleted: boolean;
   platformRole: 'user' | 'admin' | 'super_admin';

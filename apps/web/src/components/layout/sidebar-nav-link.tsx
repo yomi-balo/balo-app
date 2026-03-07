@@ -11,6 +11,8 @@ interface SidebarNavLinkProps {
   label: string;
   icon: LucideIcon;
   isCollapsed: boolean;
+  isSecondary?: boolean;
+  suffix?: React.ReactNode;
 }
 
 export function SidebarNavLink({
@@ -18,6 +20,8 @@ export function SidebarNavLink({
   label,
   icon: Icon,
   isCollapsed,
+  isSecondary = false,
+  suffix,
 }: SidebarNavLinkProps): React.JSX.Element {
   const pathname = usePathname();
 
@@ -31,17 +35,25 @@ export function SidebarNavLink({
     <Link
       href={href}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+        'flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
         'min-h-[44px]',
         'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+        isSecondary ? 'text-xs font-normal' : 'text-sm font-medium',
         isActive
-          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-          : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
+          ? 'bg-primary/10 text-primary'
+          : isSecondary
+            ? 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
+            : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
         isCollapsed && 'justify-center px-2'
       )}
     >
       <Icon className="h-5 w-5 shrink-0" />
-      {!isCollapsed && <span>{label}</span>}
+      {!isCollapsed && (
+        <>
+          <span className="flex-1">{label}</span>
+          {suffix && <span className="ml-auto">{suffix}</span>}
+        </>
+      )}
     </Link>
   );
 

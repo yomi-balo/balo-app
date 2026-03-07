@@ -82,6 +82,7 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
+      avatarUrl: user.avatarUrl ?? null,
       activeMode: user.activeMode,
       onboardingCompleted: user.onboardingCompleted,
       platformRole: user.platformRole,

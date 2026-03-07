@@ -289,6 +289,7 @@ describe('verifyEmailAction', () => {
         companyId: 'co-1',
         companyName: 'My Workspace',
         companyRole: 'owner',
+        avatarUrl: null,
       });
     });
 

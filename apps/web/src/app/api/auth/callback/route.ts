@@ -84,6 +84,7 @@ async function createSession(
     email: resolved.user.email,
     firstName: resolved.user.firstName,
     lastName: resolved.user.lastName,
+    avatarUrl: resolved.user.avatarUrl ?? null,
     activeMode: resolved.user.activeMode,
     onboardingCompleted: resolved.user.onboardingCompleted,
     platformRole: resolved.user.platformRole,
