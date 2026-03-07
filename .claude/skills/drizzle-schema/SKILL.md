@@ -34,6 +34,21 @@ packages/db/
 └── package.json
 ```
 
+### Package Imports
+
+```typescript
+// Schema types and table definitions
+import { users, experts } from '@balo/db/schema';
+
+// Drizzle client
+import { db } from '@balo/db';
+
+// Repositories (data access layer)
+import { userRepository } from '@balo/db/repositories';
+```
+
+The package name is `@balo/db`. Import from `@balo/db/schema` for table definitions and types, `@balo/db` for the Drizzle client.
+
 ### Every Table Must Have
 
 ```typescript
@@ -76,6 +91,38 @@ export const softDelete = {
 
 **Note:** `{ withTimezone: true }` is required on ALL timestamp columns. This ensures correct handling across timezones (Balo serves users globally).
 
+**Warning:** `$onUpdateFn(() => new Date())` only fires through Drizzle ORM calls. If anything bypasses Drizzle (raw SQL, Supabase dashboard edits, direct migrations), `updatedAt` will silently stay stale. For critical tables, back this up with a DB-level trigger:
+
+```sql
+-- Add to the migration SQL after generating:
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$ BEGIN NEW.updated_at = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_updated_at
+BEFORE UPDATE ON my_table
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+```
+
+### Enums
+
+Define enums at module level in `schema/enums.ts`, then import them in the table file:
+
+```typescript
+import { pgEnum } from 'drizzle-orm/pg-core';
+
+export const caseStatus = pgEnum('case_status', [
+  'pending',
+  'active',
+  'resolved',
+  'cancelled',
+]);
+
+// In the table:
+status: caseStatus('status').default('pending').notNull(),
+```
+
+For full enum patterns and a complete table example → see [references/schema-patterns.md](references/schema-patterns.md).
+
 ### Type Exports
 
 Every schema file must export inferred types:
@@ -92,9 +139,14 @@ Use `drizzle-zod` for runtime validation schemas:
 ```typescript
 import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 
+// Use createInsertSchema for API input validation (POST/PUT bodies)
 export const insertUserSchema = createInsertSchema(users, {
   email: (schema) => schema.email('Invalid email'),
 });
+
+// Use createSelectSchema when you need to validate/parse data coming OUT of the DB
+// (e.g. serialising to API responses, validating third-party data before storing)
+export const selectUserSchema = createSelectSchema(users);
 ```
 
 ## Decision Tree
@@ -177,6 +229,30 @@ export const experts = pgTable(
 );
 ```
 
+### Soft Delete Query Rule
+
+**Always filter deleted records in queries.** The `deletedAt` column is only useful if every query guards against it:
+
+```typescript
+import { isNull } from 'drizzle-orm';
+
+// ✅ Correct — excludes soft-deleted rows
+const active = await db.select().from(users).where(isNull(users.deletedAt));
+
+// ❌ Wrong — returns deleted records too
+const all = await db.select().from(users);
+```
+
+Add `isNull(table.deletedAt)` to every query on soft-deletable tables. Helper for combining conditions:
+
+```typescript
+import { and, isNull, eq } from 'drizzle-orm';
+
+const user = await db.select().from(users).where(
+  and(isNull(users.deletedAt), eq(users.id, userId))
+);
+```
+
 ### Multi-Tenant Design
 
 Balo will expand beyond Salesforce. Schema rules:
@@ -186,9 +262,65 @@ Balo will expand beyond Salesforce. Schema rules:
 - Skill taxonomies go in a separate, configurable table — not hardcoded enums
 - Consultant/expert tables are technology-agnostic
 
+## WorkOS + RLS: The Key Pattern
+
+Standard Supabase RLS uses `auth.uid()`. Balo uses WorkOS — RLS works differently. **Summary:**
+
+- The **admin client** (`db`) bypasses RLS. Use it in Fastify routes, Server Actions, webhooks, and jobs where WorkOS has already verified the user.
+- RLS provides defense-in-depth as a second layer. Set user context via transaction-scoped variables when DB-level enforcement is needed.
+- **Never** use `auth.uid()` in Balo RLS policies — it will always be null. Use `current_setting('app.current_user_id', true)::uuid` instead.
+
+```typescript
+// Inline policy example:
+pgPolicy('users_select_own', {
+  for: 'select',
+  using: sql`id = current_setting('app.current_user_id', true)::uuid`,
+}),
+```
+
+For full RLS setup, client patterns, and all policy examples → see [references/rls-patterns.md](references/rls-patterns.md).
+
+## Relations: Minimal Example
+
+```typescript
+import { relations } from 'drizzle-orm';
+
+// In users.ts — relations co-located with their table
+export const usersRelations = relations(users, ({ many }) => ({
+  companyMemberships: many(companyMembers),  // one-to-many
+}));
+
+// In companyMembers.ts
+export const companyMembersRelations = relations(companyMembers, ({ one }) => ({
+  user: one(users, { fields: [companyMembers.userId], references: [users.id] }),
+  company: one(companies, { fields: [companyMembers.companyId], references: [companies.id] }),
+}));
+```
+
+For full relation patterns and the `.query` API → see [references/relations-queries.md](references/relations-queries.md).
+
 ## Migration Workflow
 
 **Always use `generate` + `migrate`, never `push` for production.**
+
+### DATABASE_URL Format
+
+`postgres-js` requires the standard Postgres connection string format:
+```
+postgresql://user:password@host:port/database
+```
+
+Railway sometimes generates a `postgres://` URL (vs `postgresql://`) — these are equivalent and both work. However, Railway may also generate a **pooled** connection string that includes `?pgbouncer=true&connection_limit=1` — strip those parameters for the Drizzle migration client, which needs a direct connection.
+
+### If a Migration Fails Mid-Way on Railway
+
+Drizzle migrations are transactional — if the SQL errors, the transaction is rolled back automatically. However if a migration partially succeeds outside a transaction:
+
+1. Fix the schema error in the migration file (or delete and regenerate)
+2. Connect to the DB directly and manually roll back the partial change
+3. Re-run `pnpm drizzle-kit migrate`
+
+Do not edit generated migration files for new changes — always regenerate.
 
 RLS policies have known issues with `drizzle-kit push`. Use the generate/migrate flow:
 
