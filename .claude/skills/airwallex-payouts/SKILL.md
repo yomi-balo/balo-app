@@ -94,20 +94,19 @@ async function getToken(): Promise<string> {
   }
 
   const env = process.env.AIRWALLEX_ENV ?? 'demo';
-  const base = env === 'prod'
-    ? process.env.AIRWALLEX_API_BASE_PROD!
-    : process.env.AIRWALLEX_API_BASE_DEMO!;
+  const base =
+    env === 'prod' ? process.env.AIRWALLEX_API_BASE_PROD! : process.env.AIRWALLEX_API_BASE_DEMO!;
 
   const res = await fetch(`${base}/authentication/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-client-id': env === 'prod'
-        ? process.env.AIRWALLEX_CLIENT_ID_PROD!
-        : process.env.AIRWALLEX_CLIENT_ID_DEMO!,
-      'x-api-key': env === 'prod'
-        ? process.env.AIRWALLEX_API_KEY_PROD!
-        : process.env.AIRWALLEX_API_KEY_DEMO!,
+      'x-client-id':
+        env === 'prod'
+          ? process.env.AIRWALLEX_CLIENT_ID_PROD!
+          : process.env.AIRWALLEX_CLIENT_ID_DEMO!,
+      'x-api-key':
+        env === 'prod' ? process.env.AIRWALLEX_API_KEY_PROD! : process.env.AIRWALLEX_API_KEY_DEMO!,
     },
   });
 
@@ -128,12 +127,11 @@ async function airwallexRequest<T>(
   method: string,
   path: string,
   body?: unknown,
-  options?: { idempotencyKey?: string; isRetry?: boolean },
+  options?: { idempotencyKey?: string; isRetry?: boolean }
 ): Promise<T> {
   const env = process.env.AIRWALLEX_ENV ?? 'demo';
-  const base = env === 'prod'
-    ? process.env.AIRWALLEX_API_BASE_PROD!
-    : process.env.AIRWALLEX_API_BASE_DEMO!;
+  const base =
+    env === 'prod' ? process.env.AIRWALLEX_API_BASE_PROD! : process.env.AIRWALLEX_API_BASE_DEMO!;
 
   const token = await getToken();
 
@@ -180,14 +178,14 @@ Balo uses the **form schema** endpoint (not the API schema) — it includes fiel
 // POST /beneficiary_form_schemas/generate
 
 interface BeneficiarySchemaRequest {
-  bank_country_code: string;  // ISO 3166-2, e.g. "AU"
-  account_currency?: string;  // ISO 4217, e.g. "AUD"
+  bank_country_code: string; // ISO 3166-2, e.g. "AU"
+  account_currency?: string; // ISO 4217, e.g. "AUD"
   transfer_method?: 'LOCAL' | 'SWIFT';
   entity_type?: 'PERSONAL' | 'COMPANY';
 }
 
 interface FormSchemaField {
-  path: string;         // e.g. "beneficiary.bank_details.bsb_number"
+  path: string; // e.g. "beneficiary.bank_details.bsb_number"
   required: boolean;
   enabled: boolean;
   rule: { type: string; pattern?: string };
@@ -197,10 +195,10 @@ interface FormSchemaField {
     description?: string;
     placeholder?: string;
     tip?: string;
-    type: string;       // "TEXT", "SELECT", "RADIO", "TRANSFER_METHOD"
+    type: string; // "TEXT", "SELECT", "RADIO", "TRANSFER_METHOD"
     options?: Array<{ label: string; value: string }>;
     default?: string;
-    refresh?: boolean;  // if true, changing this field should re-fetch schema
+    refresh?: boolean; // if true, changing this field should re-fetch schema
   };
 }
 ```
@@ -211,7 +209,11 @@ interface FormSchemaField {
 // GET /api/payouts/schema?country=AU&method=LOCAL&currency=AUD
 
 fastify.get('/api/payouts/schema', async (req, reply) => {
-  const { country, method = 'LOCAL', currency } = req.query as {
+  const {
+    country,
+    method = 'LOCAL',
+    currency,
+  } = req.query as {
     country: string;
     method?: string;
     currency?: string;
@@ -264,7 +266,8 @@ async function getOrCreateBeneficiary(expert: Expert): Promise<string> {
     idempotencyKey: `balo-beneficiary-${expert.id}`,
   });
 
-  await db.update(experts)
+  await db
+    .update(experts)
     .set({ airwallexBeneficiaryId: result.id })
     .where(eq(experts.id, expert.id));
 
@@ -287,8 +290,8 @@ async function listBeneficiaries(pageNum = 0, pageSize = 50) {
 
 ```ts
 interface CreateBeneficiaryRequest {
-  nickname: string;                        // Expert's full name
-  payer_entity_type: 'COMPANY';            // Always COMPANY — Balo is the payer
+  nickname: string; // Expert's full name
+  payer_entity_type: 'COMPANY'; // Always COMPANY — Balo is the payer
   transfer_methods: Array<'LOCAL' | 'SWIFT'>;
   beneficiary: {
     entity_type: 'PERSONAL' | 'COMPANY';
@@ -301,7 +304,7 @@ interface CreateBeneficiaryRequest {
       account_name: string;
       // Other schema fields: account_number, bsb_number, swift_code, iban, etc.
     };
-    address?: { country_code: string; /* other address fields */ };
+    address?: { country_code: string /* other address fields */ };
   };
 }
 ```
@@ -315,14 +318,14 @@ import { set } from 'lodash';
 
 function buildBeneficiaryPayload(
   formValues: Record<string, string>,
-  expertName: string,
+  expertName: string
 ): CreateBeneficiaryRequest {
   const transferMethod = formValues['transfer_method'] ?? 'LOCAL';
 
   const payload: Record<string, unknown> = {
     nickname: expertName,
     payer_entity_type: 'COMPANY',
-    transfer_methods: [transferMethod],  // array at root level
+    transfer_methods: [transferMethod], // array at root level
   };
 
   for (const [path, value] of Object.entries(formValues)) {
@@ -355,7 +358,7 @@ For same-currency payouts (AUD → AUD expert), use `transfer_amount`. For cross
 
 async function getAudBalance(): Promise<number> {
   const balances = await airwallexRequest<BalanceEntry[]>('GET', '/balances/current');
-  return balances.find(b => b.currency === 'AUD')?.available_amount ?? 0;
+  return balances.find((b) => b.currency === 'AUD')?.available_amount ?? 0;
 }
 ```
 
@@ -364,13 +367,13 @@ async function getAudBalance(): Promise<number> {
 ```ts
 interface CreateTransferRequest {
   beneficiary_id: string;
-  source_currency: string;       // e.g. "AUD"
-  transfer_currency: string;     // e.g. "AUD"
-  transfer_amount?: number;      // same-currency: fixed payout amount
-  source_amount?: number;        // cross-currency: fixed source debit
+  source_currency: string; // e.g. "AUD"
+  transfer_currency: string; // e.g. "AUD"
+  transfer_amount?: number; // same-currency: fixed payout amount
+  source_amount?: number; // cross-currency: fixed source debit
   transfer_method: 'LOCAL' | 'SWIFT';
-  reason: string;                // e.g. "Consulting earnings payout"
-  reference: string;             // e.g. "BALO-PAYOUT-{expertId}-{cycleId}"
+  reason: string; // e.g. "Consulting earnings payout"
+  reference: string; // e.g. "BALO-PAYOUT-{expertId}-{cycleId}"
 }
 
 // ALWAYS include idempotency key — network retries must not double-pay an expert
@@ -408,19 +411,23 @@ Register at server startup — required before the webhook route is registered:
 import rawBody from 'fastify-raw-body';
 
 await fastify.register(rawBody, {
-  field: 'rawBody',    // req.rawBody will be set
-  global: false,        // opt-in per route only
-  encoding: false,      // keep as Buffer
-  runFirst: true,       // run before body parsers
+  field: 'rawBody', // req.rawBody will be set
+  global: false, // opt-in per route only
+  encoding: false, // keep as Buffer
+  runFirst: true, // run before body parsers
 });
 ```
 
 Activate on the webhook route:
 
 ```ts
-fastify.post('/webhooks/airwallex', {
-  config: { rawBody: true },
-}, handler);
+fastify.post(
+  '/webhooks/airwallex',
+  {
+    config: { rawBody: true },
+  },
+  handler
+);
 ```
 
 ### Signature Verification
@@ -432,22 +439,17 @@ import { createHmac, timingSafeEqual } from 'crypto';
 
 function verifyAirwallexWebhook(
   rawBody: Buffer,
-  timestamp: string,    // x-timestamp header (Unix ms as string)
-  signature: string,    // x-signature header
-  secret: string,
+  timestamp: string, // x-timestamp header (Unix ms as string)
+  signature: string, // x-signature header
+  secret: string
 ): boolean {
   // Exact order: timestamp string + raw body string
   const valueToDigest = timestamp + rawBody.toString('utf8');
 
-  const expected = createHmac('sha256', secret)
-    .update(valueToDigest)
-    .digest('hex');
+  const expected = createHmac('sha256', secret).update(valueToDigest).digest('hex');
 
   try {
-    return timingSafeEqual(
-      Buffer.from(signature, 'hex'),
-      Buffer.from(expected, 'hex'),
-    );
+    return timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
   } catch {
     return false;
   }
@@ -457,48 +459,53 @@ function verifyAirwallexWebhook(
 ### Route Implementation with Replay Protection
 
 ```ts
-fastify.post('/webhooks/airwallex', {
-  config: { rawBody: true },
-}, async (req, reply) => {
-  const timestamp = req.headers['x-timestamp'] as string;
-  const signature = req.headers['x-signature'] as string;
+fastify.post(
+  '/webhooks/airwallex',
+  {
+    config: { rawBody: true },
+  },
+  async (req, reply) => {
+    const timestamp = req.headers['x-timestamp'] as string;
+    const signature = req.headers['x-signature'] as string;
 
-  const env = process.env.AIRWALLEX_ENV ?? 'demo';
-  const secret = env === 'prod'
-    ? process.env.AIRWALLEX_WEBHOOK_SECRET_PROD!
-    : process.env.AIRWALLEX_WEBHOOK_SECRET_DEMO!;
+    const env = process.env.AIRWALLEX_ENV ?? 'demo';
+    const secret =
+      env === 'prod'
+        ? process.env.AIRWALLEX_WEBHOOK_SECRET_PROD!
+        : process.env.AIRWALLEX_WEBHOOK_SECRET_DEMO!;
 
-  if (!verifyAirwallexWebhook(req.rawBody!, timestamp, signature, secret)) {
-    return reply.status(401).send({ error: 'Invalid signature' });
+    if (!verifyAirwallexWebhook(req.rawBody!, timestamp, signature, secret)) {
+      return reply.status(401).send({ error: 'Invalid signature' });
+    }
+
+    const event = req.body as AirwallexWebhookEvent;
+    const webhookId = event.id;
+
+    // Replay protection: Airwallex retries on non-2xx — deduplicate by event ID
+    const already = await db.query.processedWebhooks.findFirst({
+      where: eq(processedWebhooks.webhookId, webhookId),
+    });
+    if (already) return reply.status(200).send({ received: true });
+
+    await db.insert(processedWebhooks).values({ webhookId, processedAt: new Date() });
+
+    // ACK immediately before processing
+    reply.status(200).send({ received: true });
+
+    await payoutQueue.add('process-airwallex-webhook', { event });
   }
-
-  const event = req.body as AirwallexWebhookEvent;
-  const webhookId = event.id;
-
-  // Replay protection: Airwallex retries on non-2xx — deduplicate by event ID
-  const already = await db.query.processedWebhooks.findFirst({
-    where: eq(processedWebhooks.webhookId, webhookId),
-  });
-  if (already) return reply.status(200).send({ received: true });
-
-  await db.insert(processedWebhooks).values({ webhookId, processedAt: new Date() });
-
-  // ACK immediately before processing
-  reply.status(200).send({ received: true });
-
-  await payoutQueue.add('process-airwallex-webhook', { event });
-});
+);
 ```
 
 ### Webhook Events (current API)
 
-| Event | Meaning |
-|---|---|
-| `payout.transfer.processing` | Transfer funded and in progress |
-| `payout.transfer.sent` | Sent from Airwallex to banking partner |
-| `payout.transfer.paid` | Confirmed delivered ✅ |
-| `payout.transfer.failed` | Failed — notify admin ❌ |
-| `payout.transfer.cancelled` | Cancelled, funds returned |
+| Event                        | Meaning                                |
+| ---------------------------- | -------------------------------------- |
+| `payout.transfer.processing` | Transfer funded and in progress        |
+| `payout.transfer.sent`       | Sent from Airwallex to banking partner |
+| `payout.transfer.paid`       | Confirmed delivered ✅                 |
+| `payout.transfer.failed`     | Failed — notify admin ❌               |
+| `payout.transfer.cancelled`  | Cancelled, funds returned              |
 
 > ⚠️ Do NOT use `payment.*` event names — those are from older API versions.
 
@@ -520,14 +527,16 @@ worker.process('process-airwallex-webhook', async (job) => {
 
   const transferId = event.data?.transfer_id ?? event.data?.id;
 
-  await db.update(payoutTransfers)
+  await db
+    .update(payoutTransfers)
     .set({ status, updatedAt: new Date() })
     .where(eq(payoutTransfers.airwallexTransferId, transferId));
 
   if (status === 'paid') {
-    await db.update(expertEarnings)
+    await db
+      .update(expertEarnings)
       .set({ disbursedAt: new Date() })
-      .where(eq(expertEarnings.payoutTransferId, /* internal record id */));
+      .where(eq(expertEarnings.payoutTransferId /* internal record id */));
   }
 
   if (status === 'failed') {
@@ -584,7 +593,7 @@ class AirwallexApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly path: string,
-    detail: string,
+    detail: string
   ) {
     super(`Airwallex API error ${status} at ${path}: ${detail}`);
     this.name = 'AirwallexApiError';
@@ -593,6 +602,7 @@ class AirwallexApiError extends Error {
 ```
 
 Common errors:
+
 - `SCHEMA_DEFINITION_NOT_FOUND` (400) — invalid country/currency/method combination. Return user-friendly message.
 - `credentials_invalid` (401) — bad API key. Check env vars.
 - `credentials_expired` (401) — handled automatically by `airwallexRequest` retry logic.
@@ -614,6 +624,7 @@ Common errors:
 ## Testing in Sandbox
 
 The Airwallex MCP (`https://mcp-demo.airwallex.com/developer`) is in `.mcp.json` and available in Claude Code. Use it to:
+
 - `list_beneficiaries` — verify beneficiary creation succeeded
 - `get_balances` — check AUD balance before initiating transfers
 - `simulate_transfer_result` — progress transfer through `SENT` → `PAID`

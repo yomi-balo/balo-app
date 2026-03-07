@@ -94,16 +94,16 @@ WORKOS_WEBHOOK_SECRET=whsec_...     # For webhook signature verification
 ## Decision Tree
 
 **Building auth modal / login forms?** → Read [references/custom-ui-flows.md](references/custom-ui-flows.md)
-  — Contains: `signUp`, `signIn` Server Action implementations, `<AuthModal>` component, OAuth callback route (`/callback`), full onboarding flow with code
+— Contains: `signUp`, `signIn` Server Action implementations, `<AuthModal>` component, OAuth callback route (`/callback`), full onboarding flow with code
 
 **Adding route protection or middleware?** → Read [references/protected-routes.md](references/protected-routes.md)
-  — Contains: `withAuth()` full implementation + role variants, `requireAuth` Fastify plugin, middleware code, session management (`setAuthSession`, `getSession`, `refreshSessionIfNeeded`)
+— Contains: `withAuth()` full implementation + role variants, `requireAuth` Fastify plugin, middleware code, session management (`setAuthSession`, `getSession`, `refreshSessionIfNeeded`)
 
 **Handling webhooks from WorkOS?** → Read [references/webhooks-sessions.md](references/webhooks-sessions.md)
-  — Contains: WorkOS webhook endpoint, event handlers, sign-out (simple + full revocation), admin impersonation (`startImpersonation`, `stopImpersonation`)
+— Contains: WorkOS webhook endpoint, event handlers, sign-out (simple + full revocation), admin impersonation (`startImpersonation`, `stopImpersonation`)
 
 **Building onboarding flow?** → Read [references/custom-ui-flows.md](references/custom-ui-flows.md)
-  — Contains: full onboarding step sequence, `completeOnboarding` Server Action, WorkOS metadata caching
+— Contains: full onboarding step sequence, `completeOnboarding` Server Action, WorkOS metadata caching
 
 ## Session Shape
 
@@ -159,15 +159,18 @@ getCompanyContext(): Promise<{ companyId: string; companyName: string; companyRo
 The `!onboardingCompleted` check runs in **two places**, and both are required:
 
 **1. Middleware** (UX layer — handles page navigations):
+
 ```typescript
 // apps/web/middleware.ts
 if (!session.user.onboardingCompleted && pathname !== ONBOARDING_ROUTE) {
   return NextResponse.redirect(new URL('/onboarding', req.url));
 }
 ```
+
 This catches direct URL navigation. But middleware does NOT protect Server Actions.
 
 **2. `requireUser()` helper** (security layer — handles Server Actions):
+
 ```typescript
 // apps/web/src/lib/auth/session.ts
 export async function requireUser(): Promise<SessionUser> {
@@ -177,6 +180,7 @@ export async function requireUser(): Promise<SessionUser> {
   return session.user;
 }
 ```
+
 This ensures no Server Action can be invoked by a user who bypassed the onboarding redirect (e.g., by posting directly to the action endpoint).
 
 **Rule:** Use `withAuth(async (session, ...) => requireUser())` pattern, or call `requireUser()` at the top of any action that should require completed onboarding. The sign-up and onboarding wizard actions are the only Server Actions that should call `getSession()` directly without the onboarding check.
@@ -186,6 +190,7 @@ This ensures no Server Action can be invoked by a user who bypassed the onboardi
 Admins can impersonate any user for debugging. The original admin session is preserved in a separate cookie and restored on exit. Full implementation in [references/webhooks-sessions.md](references/webhooks-sessions.md).
 
 Key rules:
+
 - Only `platformRole: 'admin'` or `super_admin'` can start impersonation
 - Session carries `isImpersonating: true` flag during impersonation
 - Destructive actions (payments, password change, account deletion, email change) must check `session.isImpersonating` and throw — `withAuth()` blocks these by default unless `{ allowImpersonation: true }` is passed
@@ -227,17 +232,21 @@ import { withAuth } from '@/lib/auth/with-auth';
 export const createCase = withAuth(async (session, input: CreateCaseInput) => {
   // session.user is guaranteed here — withAuth throws 'Unauthorized' if not
   const validated = createCaseSchema.parse(input);
-  return db.insert(cases).values({ creatorId: session.user.id, ...validated }).returning();
+  return db
+    .insert(cases)
+    .values({ creatorId: session.user.id, ...validated })
+    .returning();
 });
 
 // ❌ WRONG — middleware does NOT protect Server Actions
-'use server';
+('use server');
 export async function createCase(input: CreateCaseInput) {
   // No auth check — callable by anyone who sends a POST to the action URL
 }
 ```
 
 Variants for role-based guards:
+
 - `withPlatformRole('admin', action)` — admin-only actions
 - `withExpert(action)` — expert-only, guarantees `session.user.expertProfileId`
 
@@ -254,9 +263,13 @@ fastify.get('/cases', { preHandler: [fastify.requireAuth] }, async (req) => {
 });
 
 // For admin routes
-fastify.delete('/users/:id', {
-  preHandler: [fastify.requireAuth, fastify.requirePlatformRole(['admin', 'super_admin'])],
-}, handler);
+fastify.delete(
+  '/users/:id',
+  {
+    preHandler: [fastify.requireAuth, fastify.requirePlatformRole(['admin', 'super_admin'])],
+  },
+  handler
+);
 ```
 
 Full implementation → [references/protected-routes.md](references/protected-routes.md)
@@ -289,9 +302,7 @@ export const switchActiveMode = withAuth(async (session, newMode: 'client' | 'ex
   }
 
   // Update DB
-  await db.update(users)
-    .set({ activeMode: newMode })
-    .where(eq(users.id, session.user.id));
+  await db.update(users).set({ activeMode: newMode }).where(eq(users.id, session.user.id));
 
   // Re-issue session cookie with updated mode
   await setAuthSession({

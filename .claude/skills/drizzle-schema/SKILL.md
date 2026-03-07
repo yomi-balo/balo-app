@@ -248,9 +248,10 @@ Add `isNull(table.deletedAt)` to every query on soft-deletable tables. Helper fo
 ```typescript
 import { and, isNull, eq } from 'drizzle-orm';
 
-const user = await db.select().from(users).where(
-  and(isNull(users.deletedAt), eq(users.id, userId))
-);
+const user = await db
+  .select()
+  .from(users)
+  .where(and(isNull(users.deletedAt), eq(users.id, userId)));
 ```
 
 ### Multi-Tenant Design
@@ -287,7 +288,7 @@ import { relations } from 'drizzle-orm';
 
 // In users.ts — relations co-located with their table
 export const usersRelations = relations(users, ({ many }) => ({
-  companyMemberships: many(companyMembers),  // one-to-many
+  companyMemberships: many(companyMembers), // one-to-many
 }));
 
 // In companyMembers.ts
@@ -306,6 +307,7 @@ For full relation patterns and the `.query` API → see [references/relations-qu
 ### DATABASE_URL Format
 
 `postgres-js` requires the standard Postgres connection string format:
+
 ```
 postgresql://user:password@host:port/database
 ```

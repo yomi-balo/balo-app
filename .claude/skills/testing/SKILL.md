@@ -38,8 +38,8 @@ The workspace is defined in `vitest.config.ts` at the monorepo root. Each app is
 import { defineWorkspace } from 'vitest/config';
 
 export default defineWorkspace([
-  'apps/web/vitest.config.ts',   // jsdom env, React Testing Library
-  'apps/api/vitest.config.ts',   // node env, Fastify inject
+  'apps/web/vitest.config.ts', // jsdom env, React Testing Library
+  'apps/api/vitest.config.ts', // node env, Fastify inject
   'packages/db/vitest.config.ts', // node env, test DB
   // Add new packages here
 ]);
@@ -606,7 +606,8 @@ export const mockStripe = {
   },
   webhooks: {
     constructEvent: vi.fn().mockImplementation((body, sig) => {
-      if (sig === 'invalid') throw new Error('No signatures found matching the expected signature for payload');
+      if (sig === 'invalid')
+        throw new Error('No signatures found matching the expected signature for payload');
       return JSON.parse(typeof body === 'string' ? body : body.toString());
     }),
   },
@@ -725,7 +726,7 @@ export const mockBeneficiary = {
 export const mockTransfer = {
   id: 'transfer_test_123',
   status: 'PENDING',
-  transfer_amount: 500.00,
+  transfer_amount: 500.0,
   transfer_currency: 'AUD',
 };
 ```
@@ -735,9 +736,14 @@ export const mockTransfer = {
 ```typescript
 import { createHmac } from 'crypto';
 
-function makeAirwallexSignature(payload: string, secret: string): { timestamp: string; signature: string } {
+function makeAirwallexSignature(
+  payload: string,
+  secret: string
+): { timestamp: string; signature: string } {
   const timestamp = String(Date.now());
-  const sig = createHmac('sha256', secret).update(timestamp + payload).digest('hex');
+  const sig = createHmac('sha256', secret)
+    .update(timestamp + payload)
+    .digest('hex');
   return { timestamp, signature: sig };
 }
 ```
@@ -805,7 +811,7 @@ export default defineConfig({
       // Use: pnpm test:coverage --changed HEAD~1
       thresholds: {
         perFile: true,
-        lines: 70,    // minimum for any modified file
+        lines: 70, // minimum for any modified file
         functions: 70,
         branches: 60,
       },
