@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "airwallex": {
-      "type": "sse",
+      "type": "http",
       "url": "https://mcp-demo.airwallex.com/developer",
       "note": "Airwallex demo/sandbox only. Do NOT point at production API. Used to verify beneficiary creation, simulate transfer status, and check balances during development."
     }
