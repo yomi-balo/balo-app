@@ -17,6 +17,34 @@ Balo uses Airwallex **exclusively for expert payout disbursements**. There is no
 
 ---
 
+## Happy Path: Full Payout Flow
+
+End-to-end from admin clicking "Pay expert" to webhook confirming delivery:
+
+```
+1. Expert fills payout details (BAL-196)
+   └─ GET /api/payouts/schema?country=AU   → proxy to Airwallex form schema
+   └─ POST /api/payouts/details            → save form values to DB
+
+2. Admin triggers beneficiary registration (BAL-203)
+   └─ Check: expert.airwallex_beneficiary_id set? → skip if yes
+   └─ POST /beneficiaries/create           → get beneficiary_id
+   └─ Store beneficiary_id on expert record
+
+3. Admin initiates payout (BAL-202)
+   └─ GET /balances/current                → verify AUD balance sufficient
+   └─ POST /transfers/create (with x-idempotency-key)
+   └─ Store transfer record in DB (status: pending)
+
+4. Airwallex fires webhooks as transfer progresses
+   └─ payout.transfer.processing → status: processing
+   └─ payout.transfer.sent       → status: sent
+   └─ payout.transfer.paid       → status: paid ✅ (mark expert_earnings as disbursed)
+   └─ payout.transfer.failed     → status: failed ❌ (alert admin)
+```
+
+---
+
 ## Environment Configuration
 
 ```
@@ -30,7 +58,9 @@ AIRWALLEX_WEBHOOK_SECRET_DEMO=
 AIRWALLEX_WEBHOOK_SECRET_PROD=
 ```
 
-Environment selection is driven by `AIRWALLEX_ENV=demo|prod` (default: `demo`). The `AirwallexClient` reads this at startup.
+Environment selection is driven by `AIRWALLEX_ENV=demo|prod` (default: `demo`).
+
+**Sandbox dashboard:** https://demo.airwallex.com/app → Settings → Developer → Webhooks → click subscription → copy Secret.
 
 ---
 
@@ -42,17 +72,15 @@ Location: `apps/api/src/services/airwallex/client.ts`
 
 ```ts
 // POST /authentication/login
-// Headers: x-client-id, x-api-key
-// Returns: { token: string, expires_at: string }
-
+// Headers: x-client-id, x-api-key (NOT Bearer — auth headers, not Authorization)
+// Returns: { token: string, expires_at: string (ISO8601) }
+//
 // RULES:
 // - Cache the token in memory (module-level singleton)
 // - Reuse until expires_at (30 min TTL)
 // - Do NOT call /authentication/login before every request
 // - Refresh proactively when within 60s of expiry
-```
 
-```ts
 interface TokenCache {
   token: string;
   expiresAt: Date;
@@ -93,11 +121,14 @@ async function getToken(): Promise<string> {
 
 ### Request Helper
 
+Handles token refresh on `credentials_expired` 401 with one automatic retry. Accepts optional idempotency key for mutation requests.
+
 ```ts
 async function airwallexRequest<T>(
   method: string,
   path: string,
   body?: unknown,
+  options?: { idempotencyKey?: string; isRetry?: boolean },
 ): Promise<T> {
   const env = process.env.AIRWALLEX_ENV ?? 'demo';
   const base = env === 'prod'
@@ -106,18 +137,33 @@ async function airwallexRequest<T>(
 
   const token = await getToken();
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+
+  if (options?.idempotencyKey) {
+    headers['x-idempotency-key'] = options.idempotencyKey;
+  }
+
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
 
+  // Token expired mid-request — clear cache and retry once
+  if (res.status === 401 && !options?.isRetry) {
+    const errText = await res.text();
+    if (errText.includes('credentials_expired')) {
+      tokenCache = null;
+      return airwallexRequest(method, path, body, { ...options, isRetry: true });
+    }
+    throw new AirwallexApiError(401, path, errText);
+  }
+
   if (!res.ok) {
-    const text = await res.text();
-    throw new AirwallexApiError(res.status, path, text);
+    throw new AirwallexApiError(res.status, path, await res.text());
   }
 
   return res.json() as T;
@@ -128,11 +174,10 @@ async function airwallexRequest<T>(
 
 ## Beneficiary Schema API (used by BAL-196)
 
-Balo uses the **form schema** endpoint (not the API schema) because it includes field labels, options, and UI rendering hints needed to build the dynamic form.
+Balo uses the **form schema** endpoint (not the API schema) — it includes field labels, options, and UI rendering hints needed to build the dynamic form.
 
 ```ts
 // POST /beneficiary_form_schemas/generate
-// Auth: Bearer token
 
 interface BeneficiarySchemaRequest {
   bank_country_code: string;  // ISO 3166-2, e.g. "AU"
@@ -141,15 +186,11 @@ interface BeneficiarySchemaRequest {
   entity_type?: 'PERSONAL' | 'COMPANY';
 }
 
-// Response fields[] shape (simplified):
 interface FormSchemaField {
   path: string;         // e.g. "beneficiary.bank_details.bsb_number"
   required: boolean;
   enabled: boolean;
-  rule: {
-    type: string;       // "string", "number"
-    pattern?: string;   // regex validation
-  };
+  rule: { type: string; pattern?: string };
   field: {
     key: string;
     label: string;
@@ -164,11 +205,10 @@ interface FormSchemaField {
 }
 ```
 
-### Balo's Backend Proxy Route
+### Backend Proxy Route
 
 ```ts
 // GET /api/payouts/schema?country=AU&method=LOCAL&currency=AUD
-// Fastify route — proxies to Airwallex, normalises response
 
 fastify.get('/api/payouts/schema', async (req, reply) => {
   const { country, method = 'LOCAL', currency } = req.query as {
@@ -184,7 +224,6 @@ fastify.get('/api/payouts/schema', async (req, reply) => {
     entity_type: 'PERSONAL',
   });
 
-  // Only return enabled fields to the frontend
   const fields = schema.fields
     .filter((f: FormSchemaField) => f.enabled)
     .map((f: FormSchemaField) => ({
@@ -209,16 +248,47 @@ fastify.get('/api/payouts/schema', async (req, reply) => {
 
 ---
 
-## Beneficiary Create (used by BAL-203)
+## Beneficiary Create & Lookup (used by BAL-203)
+
+### Idempotency Check Before Creating
+
+Always check if the expert already has a beneficiary before creating — never create duplicates.
 
 ```ts
-// POST /beneficiaries/create
-// Builds the nested beneficiary object from the form fields collected in BAL-196.
-// Fields are stored by their `path` — reconstruct the nested object using path notation.
+async function getOrCreateBeneficiary(expert: Expert): Promise<string> {
+  // Primary check: DB record
+  if (expert.airwallexBeneficiaryId) return expert.airwallexBeneficiaryId;
 
+  const payload = buildBeneficiaryPayload(expert.payoutFormValues, expert.fullName);
+  const result = await airwallexRequest('POST', '/beneficiaries/create', payload, {
+    idempotencyKey: `balo-beneficiary-${expert.id}`,
+  });
+
+  await db.update(experts)
+    .set({ airwallexBeneficiaryId: result.id })
+    .where(eq(experts.id, expert.id));
+
+  return result.id;
+}
+```
+
+### Beneficiary Listing (for admin reconciliation)
+
+```ts
+// GET /beneficiaries?page_num=0&page_size=50
+// Returns: { items: Beneficiary[], has_more: boolean }
+
+async function listBeneficiaries(pageNum = 0, pageSize = 50) {
+  return airwallexRequest('GET', `/beneficiaries?page_num=${pageNum}&page_size=${pageSize}`);
+}
+```
+
+### CreateBeneficiaryRequest Shape
+
+```ts
 interface CreateBeneficiaryRequest {
-  nickname: string;                // Expert's full name
-  payer_entity_type: 'COMPANY';   // Always COMPANY — Balo is the payer
+  nickname: string;                        // Expert's full name
+  payer_entity_type: 'COMPANY';            // Always COMPANY — Balo is the payer
   transfer_methods: Array<'LOCAL' | 'SWIFT'>;
   beneficiary: {
     entity_type: 'PERSONAL' | 'COMPANY';
@@ -229,37 +299,36 @@ interface CreateBeneficiaryRequest {
       bank_country_code: string;
       account_currency: string;
       account_name: string;
-      // ... other fields from schema (account_number, bsb_number, swift_code, iban, etc.)
+      // Other schema fields: account_number, bsb_number, swift_code, iban, etc.
     };
-    address?: {
-      country_code: string;
-      // ... other address fields if schema requires them
-    };
+    address?: { country_code: string; /* other address fields */ };
   };
 }
-
-// Response includes beneficiary `id` — store this as expert.airwallex_beneficiary_id
 ```
 
 ### Path → Object Reconstruction
 
-Schema fields come with dotted paths like `beneficiary.bank_details.bsb_number`. Use a path-setter utility to rebuild the nested object:
+**Important:** Set `transfer_methods` before the loop and skip the `transfer_method` path — lodash `set` would overwrite the array with a string.
 
 ```ts
-import { set } from 'lodash'; // or implement manually
+import { set } from 'lodash';
 
 function buildBeneficiaryPayload(
   formValues: Record<string, string>,
   expertName: string,
 ): CreateBeneficiaryRequest {
+  const transferMethod = formValues['transfer_method'] ?? 'LOCAL';
+
   const payload: Record<string, unknown> = {
     nickname: expertName,
     payer_entity_type: 'COMPANY',
-    transfer_methods: [formValues['transfer_method'] ?? 'LOCAL'],
+    transfer_methods: [transferMethod],  // array at root level
   };
 
   for (const [path, value] of Object.entries(formValues)) {
-    if (value) set(payload, path, value);
+    if (!value) continue;
+    if (path === 'transfer_method') continue; // already handled above
+    set(payload, path, value);
   }
 
   return payload as CreateBeneficiaryRequest;
@@ -270,22 +339,58 @@ function buildBeneficiaryPayload(
 
 ## Transfers (used by BAL-202 admin dashboard)
 
-```ts
-// POST /transfers/create
-// Requires beneficiary_id stored in expert profile
+### FX / Multi-Currency
 
+- **`transfer_amount`** — send a fixed amount to the recipient (e.g. "pay them exactly AUD 500"). Airwallex deducts whatever is needed from the source wallet.
+- **`source_amount`** — debit a fixed amount from the wallet (e.g. "spend exactly AUD 500"). The recipient gets the net after FX.
+
+For same-currency payouts (AUD → AUD expert), use `transfer_amount`. For cross-currency payouts, use `source_amount` and show the FX estimate to the admin before confirming. Only one of the two should be set per request.
+
+### Balance Check Before Transfer
+
+```ts
+// GET /balances/current
+// Returns: Array<{ currency: string, available_amount: number, ... }>
+// Always verify sufficient AUD balance before initiating. Show in admin payout UI.
+
+async function getAudBalance(): Promise<number> {
+  const balances = await airwallexRequest<BalanceEntry[]>('GET', '/balances/current');
+  return balances.find(b => b.currency === 'AUD')?.available_amount ?? 0;
+}
+```
+
+### Create Transfer
+
+```ts
 interface CreateTransferRequest {
   beneficiary_id: string;
-  source_currency: string;      // e.g. "AUD"
-  transfer_currency: string;    // e.g. "AUD"
-  transfer_amount?: number;     // specify one of transfer_amount OR source_amount
-  source_amount?: number;
+  source_currency: string;       // e.g. "AUD"
+  transfer_currency: string;     // e.g. "AUD"
+  transfer_amount?: number;      // same-currency: fixed payout amount
+  source_amount?: number;        // cross-currency: fixed source debit
   transfer_method: 'LOCAL' | 'SWIFT';
-  reason: string;               // e.g. "Consulting earnings payout"
-  reference: string;            // e.g. "BALO-PAYOUT-{expertId}-{cycleId}"
+  reason: string;                // e.g. "Consulting earnings payout"
+  reference: string;             // e.g. "BALO-PAYOUT-{expertId}-{cycleId}"
 }
 
-// Response includes transfer `id` — store for reconciliation and webhook matching
+// ALWAYS include idempotency key — network retries must not double-pay an expert
+const transfer = await airwallexRequest('POST', '/transfers/create', payload, {
+  idempotencyKey: `balo-transfer-${expertId}-${payoutCycleId}`,
+});
+
+// Store transfer.id in payout_transfers table immediately after creation
+```
+
+### Transfer Listing (for reconciliation)
+
+```ts
+// GET /transfers?page_num=0&page_size=50
+// Returns: { items: Transfer[], has_more: boolean }
+// Use in admin dashboard for payout history and to reconcile with DB records
+
+async function listTransfers(pageNum = 0, pageSize = 50) {
+  return airwallexRequest('GET', `/transfers?page_num=${pageNum}&page_size=${pageSize}`);
+}
 ```
 
 ---
@@ -294,27 +399,50 @@ interface CreateTransferRequest {
 
 Location: `apps/api/src/routes/webhooks/airwallex.ts`
 
+### Fastify rawBody Plugin Setup
+
+Register at server startup — required before the webhook route is registered:
+
+```ts
+// apps/api/src/server.ts
+import rawBody from 'fastify-raw-body';
+
+await fastify.register(rawBody, {
+  field: 'rawBody',    // req.rawBody will be set
+  global: false,        // opt-in per route only
+  encoding: false,      // keep as Buffer
+  runFirst: true,       // run before body parsers
+});
+```
+
+Activate on the webhook route:
+
+```ts
+fastify.post('/webhooks/airwallex', {
+  config: { rawBody: true },
+}, handler);
+```
+
 ### Signature Verification
 
-**CRITICAL:** Verify signature using the **raw body buffer** BEFORE any JSON parsing. Fastify's `addContentTypeParser` or `rawBody` plugin is needed.
+**CRITICAL:** Verify using the **raw body buffer** before any JSON parsing. Re-serialising parsed JSON changes byte order and breaks the signature.
 
 ```ts
 import { createHmac, timingSafeEqual } from 'crypto';
 
 function verifyAirwallexWebhook(
   rawBody: Buffer,
-  timestamp: string,    // from x-timestamp header (Unix ms as string)
-  signature: string,    // from x-signature header
+  timestamp: string,    // x-timestamp header (Unix ms as string)
+  signature: string,    // x-signature header
   secret: string,
 ): boolean {
-  // Concatenate: timestamp string + raw body string (exact order matters)
+  // Exact order: timestamp string + raw body string
   const valueToDigest = timestamp + rawBody.toString('utf8');
 
   const expected = createHmac('sha256', secret)
     .update(valueToDigest)
     .digest('hex');
 
-  // Use timing-safe comparison to prevent timing attacks
   try {
     return timingSafeEqual(
       Buffer.from(signature, 'hex'),
@@ -326,11 +454,11 @@ function verifyAirwallexWebhook(
 }
 ```
 
-### Route Implementation
+### Route Implementation with Replay Protection
 
 ```ts
 fastify.post('/webhooks/airwallex', {
-  config: { rawBody: true }, // ensure raw body is available
+  config: { rawBody: true },
 }, async (req, reply) => {
   const timestamp = req.headers['x-timestamp'] as string;
   const signature = req.headers['x-signature'] as string;
@@ -344,10 +472,20 @@ fastify.post('/webhooks/airwallex', {
     return reply.status(401).send({ error: 'Invalid signature' });
   }
 
-  // ACK immediately — process async via BullMQ job
+  const event = req.body as AirwallexWebhookEvent;
+  const webhookId = event.id;
+
+  // Replay protection: Airwallex retries on non-2xx — deduplicate by event ID
+  const already = await db.query.processedWebhooks.findFirst({
+    where: eq(processedWebhooks.webhookId, webhookId),
+  });
+  if (already) return reply.status(200).send({ received: true });
+
+  await db.insert(processedWebhooks).values({ webhookId, processedAt: new Date() });
+
+  // ACK immediately before processing
   reply.status(200).send({ received: true });
 
-  const event = req.body as AirwallexWebhookEvent;
   await payoutQueue.add('process-airwallex-webhook', { event });
 });
 ```
@@ -362,12 +500,11 @@ fastify.post('/webhooks/airwallex', {
 | `payout.transfer.failed` | Failed — notify admin ❌ |
 | `payout.transfer.cancelled` | Cancelled, funds returned |
 
-> ⚠️ Do NOT use `payment.*` event names — those are from older API versions and do not exist in the current API.
+> ⚠️ Do NOT use `payment.*` event names — those are from older API versions.
 
-### Event Processing (BullMQ Worker)
+### BullMQ Worker
 
 ```ts
-// Map event name → transfer status update in DB
 const EVENT_TO_STATUS: Record<string, string> = {
   'payout.transfer.processing': 'processing',
   'payout.transfer.sent': 'sent',
@@ -379,15 +516,21 @@ const EVENT_TO_STATUS: Record<string, string> = {
 worker.process('process-airwallex-webhook', async (job) => {
   const { event } = job.data;
   const status = EVENT_TO_STATUS[event.name];
-  if (!status) return; // ignore unknown events
+  if (!status) return;
 
   const transferId = event.data?.transfer_id ?? event.data?.id;
+
   await db.update(payoutTransfers)
     .set({ status, updatedAt: new Date() })
     .where(eq(payoutTransfers.airwallexTransferId, transferId));
 
+  if (status === 'paid') {
+    await db.update(expertEarnings)
+      .set({ disbursedAt: new Date() })
+      .where(eq(expertEarnings.payoutTransferId, /* internal record id */));
+  }
+
   if (status === 'failed') {
-    // Alert admin via notification service
     await notificationService.alertAdmin('payout_failed', { transferId });
   }
 });
@@ -395,19 +538,35 @@ worker.process('process-airwallex-webhook', async (job) => {
 
 ---
 
-## Database Schema Notes
+## Database Schema
 
-The `experts` table should have:
-- `airwallex_beneficiary_id: varchar` — populated after BAL-203 beneficiary registration
-- `payout_country_code: varchar(2)` — the country selected in BAL-196 form
+Use the drizzle-schema skill for conventions. Key Drizzle column definitions:
 
-The `payout_transfers` table should have:
-- `airwallex_transfer_id: varchar` — Airwallex's transfer ID
-- `expert_id: uuid`
-- `amount_aud: decimal` — source amount
-- `status: enum('pending','processing','sent','paid','failed','cancelled')`
-- `initiated_by: uuid` — admin user ID
-- `created_at`, `updated_at`
+```ts
+// experts table — add these columns:
+airwallexBeneficiaryId: varchar('airwallex_beneficiary_id', { length: 255 }),
+payoutCountryCode: char('payout_country_code', { length: 2 }),
+
+// payout_transfers table:
+export const payoutTransfers = pgTable('payout_transfers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  expertId: uuid('expert_id').notNull().references(() => experts.id),
+  airwallexTransferId: varchar('airwallex_transfer_id', { length: 255 }).unique(),
+  amountAud: numeric('amount_aud', { precision: 10, scale: 2 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  // status values: pending | processing | sent | paid | failed | cancelled
+  initiatedBy: uuid('initiated_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// processed_webhooks table (replay protection):
+export const processedWebhooks = pgTable('processed_webhooks', {
+  webhookId: varchar('webhook_id', { length: 255 }).primaryKey(),
+  processedAt: timestamp('processed_at').notNull().defaultNow(),
+});
+// Add index on processedAt for periodic cleanup of old entries
+```
 
 ---
 
@@ -422,7 +581,11 @@ class AirwallexAuthError extends Error {
 }
 
 class AirwallexApiError extends Error {
-  constructor(status: number, path: string, detail: string) {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+    detail: string,
+  ) {
     super(`Airwallex API error ${status} at ${path}: ${detail}`);
     this.name = 'AirwallexApiError';
   }
@@ -432,7 +595,7 @@ class AirwallexApiError extends Error {
 Common errors:
 - `SCHEMA_DEFINITION_NOT_FOUND` (400) — invalid country/currency/method combination. Return user-friendly message.
 - `credentials_invalid` (401) — bad API key. Check env vars.
-- `credentials_expired` (401) — token expired mid-request. Clear cache, retry once.
+- `credentials_expired` (401) — handled automatically by `airwallexRequest` retry logic.
 
 ---
 
@@ -442,17 +605,19 @@ Common errors:
 2. **Never log raw Airwallex API keys or tokens.**
 3. **Always verify webhook signatures** before processing. Return 401 on failure.
 4. **Use `timingSafeEqual`** for signature comparison (prevents timing attacks).
-5. **IP allowlisting** will be applied at go-live (BAL-206/BAL-207) — demo key is unrestricted.
+5. **Always use idempotency keys** on `POST /transfers/create` and `POST /beneficiaries/create`.
+6. **Store processed webhook IDs** to prevent duplicate processing on Airwallex retries.
+7. **IP allowlisting** applied at go-live (BAL-206/BAL-207) — demo key is unrestricted.
 
 ---
 
 ## Testing in Sandbox
 
-The Airwallex MCP (`https://mcp-demo.airwallex.com/developer`) is configured in `.mcp.json` and available in Claude Code. Use it to:
-- Verify beneficiary creation succeeded
-- Simulate transfer status progression: `SENT` → `PAID`
-- Check balances before/after test transfers
+The Airwallex MCP (`https://mcp-demo.airwallex.com/developer`) is in `.mcp.json` and available in Claude Code. Use it to:
+- `list_beneficiaries` — verify beneficiary creation succeeded
+- `get_balances` — check AUD balance before initiating transfers
+- `simulate_transfer_result` — progress transfer through `SENT` → `PAID`
 
-Sandbox has pre-funded AUD $10,000,000 balance. Use it freely.
+Sandbox AUD balance: $10,000,000. Use freely.
 
-Do NOT register or test against `https://api.airwallex.com` (production) during development.
+Do NOT test against `https://api.airwallex.com` (production) during development.
