@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { User, Shield, DollarSign, Calendar, CreditCard } from 'lucide-react';
 import { TabPlaceholder } from './tab-placeholder';
+import { RateTab } from './rate-tab';
 import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
 
@@ -68,9 +69,14 @@ const TAB_CONTENT: Record<string, TabContentConfig> = {
 interface SettingsTabsProps {
   defaultTab: string;
   setupStep: string | null;
+  initialRateCents: number | null;
 }
 
-export function SettingsTabs({ defaultTab, setupStep }: SettingsTabsProps): React.JSX.Element {
+export function SettingsTabs({
+  defaultTab,
+  setupStep,
+  initialRateCents,
+}: SettingsTabsProps): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
 
@@ -119,13 +125,17 @@ export function SettingsTabs({ defaultTab, setupStep }: SettingsTabsProps): Reac
           exit={{ y: -8, opacity: 0 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
         >
-          <TabPlaceholder
-            icon={content.icon}
-            iconColor={content.color}
-            title={content.title}
-            description={content.description}
-            task={content.task}
-          />
+          {tab === 'rate' ? (
+            <RateTab initialRateCents={initialRateCents} />
+          ) : (
+            <TabPlaceholder
+              icon={content.icon}
+              iconColor={content.color}
+              title={content.title}
+              description={content.description}
+              task={content.task}
+            />
+          )}
         </motion.div>
       </AnimatePresence>
     </div>

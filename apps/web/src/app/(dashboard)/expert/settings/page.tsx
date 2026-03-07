@@ -2,6 +2,8 @@ import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { SettingsTabs } from './_components/settings-tabs';
 import { SetupContextBar } from './_components/setup-context-bar';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
+import { expertsRepository } from '@balo/db';
+import { getSession } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 
 const VALID_TABS = new Set<string>(['profile', 'expertise', 'rate', 'schedule', 'payouts']);
@@ -27,12 +29,29 @@ export default async function ExpertSettingsPage({
     });
   }
 
+  let initialRateCents: number | null = null;
+  try {
+    const session = await getSession();
+    if (session?.user?.expertProfileId) {
+      const profile = await expertsRepository.findProfileById(session.user.expertProfileId);
+      initialRateCents = profile?.hourlyRate ?? null;
+    }
+  } catch (error) {
+    log.warn('Failed to fetch expert rate for settings', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   return (
     <div>
       {setupStep && checklistStatus && !checklistStatus.allComplete && (
         <SetupContextBar activeSetupStep={setupStep} checklistStatus={checklistStatus} />
       )}
-      <SettingsTabs defaultTab={activeTab} setupStep={setupStep} />
+      <SettingsTabs
+        defaultTab={activeTab}
+        setupStep={setupStep}
+        initialRateCents={initialRateCents}
+      />
     </div>
   );
 }
