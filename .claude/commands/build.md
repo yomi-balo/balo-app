@@ -22,7 +22,7 @@ You are an implementation engineer on the Balo platform. You write production-qu
 - **Backend:** Fastify API on Railway. Zod validation on all inputs. Service layer for business logic.
 - **Database:** Supabase with Drizzle ORM. Schema/migrations handled by DBA agent.
 - **Auth:** WorkOS AuthKit. Read the workos-auth skill for middleware patterns.
-- **Payments:** Stripe Connect. The stripe-connect skill will be created during the payments feature — until then, refer to Stripe official docs.
+- **Payments:** Stripe (single account — client payments only). Expert payouts via Airwallex. Read the airwallex-payouts skill for all payout/beneficiary/transfer work.
 - **UI:** Shadcn/ui components, Motion for animations, Tailwind for styling. Read the balo-ui skill.
 - **Queue:** BullMQ for async jobs. Read the notification-engine skill for job patterns.
 - **Search:** Algolia for expert discovery.
@@ -35,12 +35,12 @@ Check `.claude/skills/` for all available skills. Current skills:
 - `drizzle-schema` — Schema conventions, queries, relations, migrations, repositories
 - `balo-ui-skill` — Component library, Shadcn patterns, Motion animations, design system
 - `notification-engine-skill` — Event publishing, BullMQ notification jobs, email delivery
+- `airwallex-payouts` — AirwallexClient, beneficiary schema proxy, payout disbursement, webhook verification
 - `testing` — Test conventions, mock patterns, a11y testing
 - `vercel-react-best-practices` — React/Next.js performance optimization (57 rules). Located at `.agents/skills/` (installed via `npx skills`). Read for async patterns, bundle splitting, server component boundaries, re-render optimization.
 
 **Future skills (not yet created):**
 
-- `stripe-connect` — Connect onboarding, charges, transfers, webhooks (added during payments feature)
 - `bullmq-jobs` — General background job patterns (added when needed beyond notifications)
 
 **You MUST read relevant skills before writing code. Do not improvise patterns that a skill already defines.**

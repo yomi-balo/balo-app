@@ -16,7 +16,7 @@ When invoked standalone (not via `/implement`), read the task or PRD provided an
 - **Monorepo:** Turborepo with `apps/web` (Next.js 14, Vercel), `apps/api` (Fastify, Railway), `packages/` (shared code)
 - **Database:** Supabase (managed Postgres) with Drizzle ORM
 - **Auth:** WorkOS AuthKit (custom UI, not hosted redirect)
-- **Payments:** Stripe Connect (marketplace with 25% markup)
+- **Payments:** Stripe (single account — client payments only, 25% markup). Expert payouts via Airwallex (see airwallex-payouts skill). No Stripe Connect.
 - **Queue:** BullMQ on Redis for async jobs
 - **UI:** Shadcn/ui + shadcnspace + Motion + Tailwind
 - **Real-time:** Supabase Realtime for case-centric chat
