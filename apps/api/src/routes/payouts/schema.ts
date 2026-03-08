@@ -71,7 +71,7 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.status(400).send({
         error: 'Invalid query parameters',
-        details: parsed.error.issues.map((i) => i.message),
+        details: parsed.error.issues.map((i: { message: string }) => i.message),
       });
     }
 
