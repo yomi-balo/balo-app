@@ -2,11 +2,10 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { motion } from 'motion/react';
-import { CreditCard, AlertCircle, RefreshCw, Shield } from 'lucide-react';
+import { CreditCard, AlertCircle, RefreshCw, Lock, Globe, Circle, Zap, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { IconBadge } from '@/components/balo/icon-badge';
 import { track, EXPERT_PAYOUT_EVENTS } from '@/lib/analytics';
 import { PayoutCountrySelector } from './payout-country-selector';
@@ -45,6 +44,15 @@ interface PayoutsTabProps {
 }
 
 type TabState = 'empty' | 'form' | 'saved';
+
+// ── Fields auto-populated from country selection (hide from form) ──
+
+const HIDDEN_FIELD_KEYS = new Set([
+  'beneficiary.entity_type',
+  'beneficiary.bank_details.bank_country_code',
+  'beneficiary.bank_details.account_currency',
+  'beneficiary.bank_details.local_clearing_system',
+]);
 
 // ── Animation variants ──────────────────────────────────────────
 
@@ -86,6 +94,9 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const formStartedRef = useRef(false);
   const formValuesRef = useRef(formValues);
   formValuesRef.current = formValues;
+
+  // Visible fields (filter out auto-populated metadata fields)
+  const visibleFields = schemaFields?.filter((f) => !HIDDEN_FIELD_KEYS.has(f.path)) ?? null;
 
   // ── Schema fetching ─────────────────────────────────────────
 
@@ -161,8 +172,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   );
 
   const handleRefreshField = useCallback(() => {
-    // Re-fetch schema on refresh-triggering field change, preserving current values
-    // Use ref to avoid stale closure over formValues
     fetchSchema(countryCode, currency, transferMethod, entityType, formValuesRef.current);
   }, [fetchSchema, countryCode, currency, transferMethod, entityType]);
 
@@ -191,7 +200,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
       if (value && field.validation?.pattern) {
         try {
-          // Guard against ReDoS: skip overly complex patterns from upstream API
           if (field.validation.pattern.length > 200) continue;
           const regex = new RegExp(field.validation.pattern);
           if (!regex.test(value)) {
@@ -230,7 +238,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
       if (result.success) {
         toast.success('Payout details saved successfully');
 
-        // Use masked values returned from the server action (never show raw values)
         const summary: PayoutDetailsSummary = {
           countryCode,
           currency,
@@ -270,18 +277,14 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     return (
       <div className="mx-auto max-w-[620px]">
         <motion.div variants={containerVariants} initial="hidden" animate="show">
-          <motion.div variants={itemVariants} className="mb-9 text-center">
-            <IconBadge
-              icon={CreditCard}
-              color="#D97706"
-              size={52}
-              iconSize={24}
-              className="mx-auto mb-4"
-            />
-            <h1 className="text-foreground text-2xl font-semibold">Payout Details</h1>
-            <p className="text-muted-foreground mx-auto mt-2 max-w-[440px] text-sm leading-relaxed">
-              Your bank details are saved and will be used for payout disbursements.
-            </p>
+          <motion.div variants={itemVariants} className="mb-8 flex items-center gap-3">
+            <IconBadge icon={CreditCard} color="#4F6EF7" size={44} iconSize={22} />
+            <div>
+              <h1 className="text-foreground text-2xl font-semibold">Payout Details</h1>
+              <p className="text-muted-foreground mt-0.5 text-sm leading-relaxed">
+                Your bank details are saved and will be used for payout disbursements.
+              </p>
+            </div>
           </motion.div>
         </motion.div>
 
@@ -299,33 +302,33 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
       animate="show"
       className="mx-auto max-w-[620px]"
     >
-      {/* Hero header */}
-      <motion.div variants={itemVariants} className="mb-9 text-center">
-        <IconBadge
-          icon={CreditCard}
-          color="#D97706"
-          size={52}
-          iconSize={24}
-          className="mx-auto mb-4"
-        />
-        <h1 className="text-foreground text-2xl font-semibold">Payout Details</h1>
-        <p className="text-muted-foreground mx-auto mt-2 max-w-[440px] text-sm leading-relaxed">
-          Add your bank details to receive earnings from consultations. Choose the country where
-          your bank account is located.
+      {/* Header — left-aligned, icon inline */}
+      <motion.div variants={itemVariants} className="mb-8">
+        <div className="flex items-center gap-3">
+          <IconBadge icon={CreditCard} color="#4F6EF7" size={44} iconSize={22} />
+          <h1 className="text-foreground text-2xl font-semibold">Payout Details</h1>
+        </div>
+        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+          Where you want to receive your earnings. Balo admin disburses payouts manually after each
+          payout cycle.
         </p>
       </motion.div>
 
-      {/* Country selector */}
+      {/* Card with country + bank details sections */}
       <motion.div variants={itemVariants}>
         <Card className="p-6">
-          <div className="mb-4">
-            <label className="text-foreground mb-1.5 block text-sm font-medium">Bank country</label>
-            <PayoutCountrySelector
-              value={countryCode}
-              onCountryChange={handleCountryChange}
-              disabled={isFetchingSchema}
-            />
+          {/* Country section */}
+          <div className="mb-5 flex items-center gap-2">
+            <Globe className="h-4 w-4 text-amber-600" />
+            <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
+              Country
+            </span>
           </div>
+          <PayoutCountrySelector
+            value={countryCode}
+            onCountryChange={handleCountryChange}
+            disabled={isFetchingSchema}
+          />
 
           {/* Schema loading shimmer */}
           {isFetchingSchema && (
@@ -356,46 +359,56 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
             </div>
           )}
 
-          {/* Dynamic form */}
-          {schemaFields && !isFetchingSchema && (
+          {/* Bank details section */}
+          {visibleFields && !isFetchingSchema && (
             <>
-              <Separator className="my-5" />
+              <div className="mt-6 mb-5 flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-amber-600" />
+                <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
+                  Bank Details
+                </span>
+              </div>
               <PayoutDynamicForm
-                fields={schemaFields}
+                fields={visibleFields}
                 formValues={formValues}
                 onFormValuesChange={setFormValues}
                 onRefreshField={handleRefreshField}
                 validationErrors={validationErrors}
               />
+
+              {/* Save button — right-aligned */}
+              <div className="mt-6 flex justify-end">
+                <Button
+                  onClick={handleSave}
+                  disabled={isSubmitting || !countryCode}
+                  className="gap-2"
+                >
+                  <Check className="h-4 w-4" />
+                  {isSubmitting ? 'Saving...' : 'Save Details'}
+                </Button>
+              </div>
             </>
           )}
         </Card>
       </motion.div>
 
-      {/* Trust badge */}
+      {/* Trust badges */}
       <motion.div variants={itemVariants}>
-        <div className="text-muted-foreground mt-4 flex items-center justify-center gap-4 text-xs">
+        <div className="text-muted-foreground mt-4 flex items-start justify-between gap-4 text-xs">
           <div className="flex items-center gap-1.5">
-            <Shield className="h-3.5 w-3.5" />
-            <span>Bank details encrypted</span>
+            <Lock className="h-3.5 w-3.5 shrink-0" />
+            <span>Bank details encrypted at rest</span>
           </div>
-          <span>Powered by Airwallex</span>
+          <div className="flex items-center gap-1.5">
+            <Circle className="h-3.5 w-3.5 shrink-0" />
+            <span>Never shared with third parties</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Zap className="h-3.5 w-3.5 shrink-0" />
+            <span>Used only for payout disbursements</span>
+          </div>
         </div>
       </motion.div>
-
-      {/* Save button */}
-      {schemaFields && !isFetchingSchema && (
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, ease: 'easeOut' }}
-          className="mt-7 text-center"
-        >
-          <Button size="lg" onClick={handleSave} disabled={isSubmitting || !countryCode}>
-            {isSubmitting ? 'Saving...' : 'Save payout details'}
-          </Button>
-        </motion.div>
-      )}
     </motion.div>
   );
 }

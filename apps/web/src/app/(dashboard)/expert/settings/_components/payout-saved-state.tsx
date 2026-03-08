@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'motion/react';
-import { CheckCircle2, Pencil, Shield } from 'lucide-react';
+import { CheckCircle2, Pencil, Lock, Circle, Zap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -93,12 +93,19 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
 
       {/* Trust badges */}
       <motion.div variants={itemVariants}>
-        <div className="text-muted-foreground mt-4 flex items-center gap-4 text-xs">
+        <div className="text-muted-foreground mt-4 flex items-start justify-between gap-4 text-xs">
           <div className="flex items-center gap-1.5">
-            <Shield className="h-3.5 w-3.5" />
-            <span>Bank details encrypted</span>
+            <Lock className="h-3.5 w-3.5 shrink-0" />
+            <span>Bank details encrypted at rest</span>
           </div>
-          <span>Powered by Airwallex</span>
+          <div className="flex items-center gap-1.5">
+            <Circle className="h-3.5 w-3.5 shrink-0" />
+            <span>Never shared with third parties</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Zap className="h-3.5 w-3.5 shrink-0" />
+            <span>Used only for payout disbursements</span>
+          </div>
         </div>
       </motion.div>
     </motion.div>
