@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'motion/react';
-import { CheckCircle2, Pencil, Lock, ShieldCheck, Zap } from 'lucide-react';
+import { CheckCircle2, Clock, AlertCircle, Pencil, Lock, ShieldCheck, Zap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -58,10 +58,16 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
             {details.entityType.toLowerCase()}
           </Badge>
         )}
-        {details.verifiedAt && (
+        {details.beneficiaryStatus === 'verified' && (
           <Badge className="gap-1 bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-700">
             <CheckCircle2 className="h-3.5 w-3.5" />
             Verified
+          </Badge>
+        )}
+        {details.beneficiaryStatus === 'pending_verification' && (
+          <Badge className="gap-1 bg-amber-500 px-3 py-1 text-sm text-white hover:bg-amber-600">
+            <Clock className="h-3.5 w-3.5" />
+            Verifying
           </Badge>
         )}
       </motion.div>
@@ -88,6 +94,15 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
               Edit payout details
             </Button>
           </div>
+
+          {details.beneficiaryStatus === 'pending_verification' && (
+            <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>
+                We&apos;re verifying your bank details — this usually takes a few minutes.
+              </span>
+            </div>
+          )}
         </Card>
       </motion.div>
 

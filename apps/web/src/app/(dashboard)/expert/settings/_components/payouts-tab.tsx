@@ -46,6 +46,7 @@ export interface PayoutDetailsSummary {
   entityType: string;
   formValues: Record<string, string>;
   verifiedAt: string | null;
+  beneficiaryStatus: 'verified' | 'pending_verification' | 'invalid' | null;
 }
 
 interface PayoutsTabProps {
@@ -100,6 +101,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const [isFetchingSchema, setIsFetchingSchema] = useState(false);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formBannerError, setFormBannerError] = useState<string | null>(null);
   const [savedDetails, setSavedDetails] = useState<PayoutDetailsSummary | null>(
     initialPayoutDetails
   );
@@ -107,6 +109,11 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const formStartedRef = useRef(false);
   const formValuesRef = useRef(formValues);
   formValuesRef.current = formValues;
+
+  const handleFormValuesChange = useCallback((values: Record<string, string>) => {
+    setFormValues(values);
+    setFormBannerError(null);
+  }, []);
 
   // Visible fields: strip auto-populated metadata fields, single-option enums, and optional fields.
   // Optional fields are either Airwallex internal labels (nickname), data Balo already holds
@@ -241,6 +248,8 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   // ── Submit ──────────────────────────────────────────────────
 
   async function handleSave(): Promise<void> {
+    setFormBannerError(null);
+
     if (!validateForm()) {
       toast.error('Please fix the errors before saving.');
       return;
@@ -258,8 +267,49 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
         formValues,
       });
 
+      // Handle Airwallex 4xx field errors — stay on form
+      if (
+        !result.success &&
+        result.beneficiaryStatus === 'invalid' &&
+        result.airwallexFieldErrors
+      ) {
+        const mergedErrors = { ...validationErrors };
+        for (const [field, message] of Object.entries(result.airwallexFieldErrors)) {
+          mergedErrors[field] = message;
+        }
+        setValidationErrors(mergedErrors);
+        setFormBannerError(
+          'Your bank rejected some details. Please review the highlighted fields and try again.'
+        );
+        toast.error('Bank details validation failed');
+
+        track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_FAILED, {
+          method: transferMethod,
+          country_code: countryCode,
+          error_type: 'validation',
+        });
+        return;
+      }
+
       if (result.success) {
-        toast.success('Payout details saved successfully');
+        const beneficiaryStatus = result.beneficiaryStatus ?? null;
+
+        if (beneficiaryStatus === 'verified') {
+          toast.success('Payout details saved and verified');
+          track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
+            method: transferMethod,
+            country_code: countryCode,
+          });
+        } else if (beneficiaryStatus === 'pending_verification') {
+          toast.success('Payout details saved — verification in progress');
+          track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_FAILED, {
+            method: transferMethod,
+            country_code: countryCode,
+            error_type: 'outage',
+          });
+        } else {
+          toast.success('Payout details saved successfully');
+        }
 
         const summary: PayoutDetailsSummary = {
           countryCode,
@@ -268,6 +318,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           entityType,
           formValues: result.maskedFormValues ?? formValues,
           verifiedAt: null,
+          beneficiaryStatus,
         };
         setSavedDetails(summary);
         setState('saved');
@@ -388,10 +439,19 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
                   Bank Details
                 </span>
               </div>
+
+              {/* Form-level error banner */}
+              {formBannerError && (
+                <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{formBannerError}</span>
+                </div>
+              )}
+
               <PayoutDynamicForm
                 fields={visibleFields}
                 formValues={formValues}
-                onFormValuesChange={setFormValues}
+                onFormValuesChange={handleFormValuesChange}
                 onRefreshField={handleRefreshField}
                 validationErrors={validationErrors}
               />

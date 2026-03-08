@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
 import { payoutsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
+import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 
 // ── Sensitive field paths ───────────────────────────────────────
 
@@ -67,6 +68,8 @@ export interface SavePayoutDetailsResult {
   success: boolean;
   error?: string;
   maskedFormValues?: Record<string, string>;
+  beneficiaryStatus?: 'verified' | 'pending_verification' | 'invalid';
+  airwallexFieldErrors?: Record<string, string>;
 }
 
 // ── Action ──────────────────────────────────────────────────────
@@ -146,10 +149,88 @@ export const savePayoutDetailsAction = withAuth(
         });
       }
 
-      // 6. Revalidate the settings page so checklist picks up the new payout details
+      // 6. Call Fastify API for Airwallex beneficiary registration
+      const apiUrl =
+        process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
+      const internalSecret = process.env.INTERNAL_API_SECRET;
+
+      let beneficiaryStatus: 'verified' | 'pending_verification' | 'invalid' =
+        'pending_verification';
+      let airwallexFieldErrors: Record<string, string> | undefined;
+
+      if (!internalSecret) {
+        log.error('INTERNAL_API_SECRET is not configured — cannot register beneficiary', {
+          expertProfileId,
+        });
+      }
+
+      try {
+        const beneficiaryRes = await loggedFetch(`${apiUrl}/api/payouts/beneficiary`, {
+          service: 'balo-api',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-api-key': internalSecret ?? '',
+          },
+          body: JSON.stringify({
+            expertProfileId,
+            expertName:
+              [session.user.firstName, session.user.lastName].filter(Boolean).join(' ') || 'Expert',
+          }),
+        });
+
+        const beneficiaryData = (await beneficiaryRes.json()) as {
+          success?: boolean;
+          beneficiaryStatus?: 'verified' | 'pending_verification' | 'invalid';
+          airwallexFieldErrors?: Record<string, string>;
+        };
+
+        beneficiaryStatus = beneficiaryData.beneficiaryStatus ?? 'pending_verification';
+
+        // 7. Handle response — three cases
+        if (beneficiaryRes.ok && beneficiaryData.success) {
+          // Airwallex verified
+          beneficiaryStatus = 'verified';
+        } else if (beneficiaryRes.status === 422) {
+          // Airwallex 4xx validation error
+          airwallexFieldErrors = beneficiaryData.airwallexFieldErrors;
+          beneficiaryStatus = 'invalid';
+
+          // Revalidate so page picks up the new payout details (even though invalid)
+          revalidatePath('/expert/settings');
+
+          return {
+            success: false,
+            airwallexFieldErrors,
+            beneficiaryStatus: 'invalid',
+          };
+        }
+        // 202 (pending_verification) falls through to success path
+      } catch (fetchError) {
+        // Fastify unreachable — update DB directly to pending_verification
+        log.warn('Fastify beneficiary endpoint unreachable — marking pending_verification', {
+          expertProfileId,
+          error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        });
+
+        try {
+          await payoutsRepository.updateBeneficiaryStatus(expertProfileId, {
+            beneficiaryStatus: 'pending_verification',
+          });
+        } catch (dbErr) {
+          log.error('Failed to update beneficiary status after Fastify failure', {
+            expertProfileId,
+            error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+          });
+        }
+
+        beneficiaryStatus = 'pending_verification';
+      }
+
+      // 8. Revalidate the settings page so checklist picks up the new payout details
       revalidatePath('/expert/settings');
 
-      return { success: true, maskedFormValues };
+      return { success: true, maskedFormValues, beneficiaryStatus };
     } catch (error) {
       log.error('Failed to save payout details', {
         userId: session.user.id,

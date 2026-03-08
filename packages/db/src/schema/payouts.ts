@@ -22,6 +22,10 @@ export const expertPayoutDetails = pgTable(
     encryptedIban: text('encrypted_iban'),
     encryptedRoutingNumber: text('encrypted_routing_number'),
 
+    airwallexBeneficiaryId: text('airwallex_beneficiary_id'),
+    beneficiaryRegisteredAt: timestamp('beneficiary_registered_at', { withTimezone: true }),
+    beneficiaryStatus: text('beneficiary_status'),
+
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
     verifiedBy: uuid('verified_by'),
 

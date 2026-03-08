@@ -46,6 +46,8 @@ export default async function ExpertSettingsPage({
           entityType: details.entityType,
           formValues: details.formValues as Record<string, string>,
           verifiedAt: details.verifiedAt?.toISOString() ?? null,
+          beneficiaryStatus:
+            (details.beneficiaryStatus as 'verified' | 'pending_verification' | 'invalid') ?? null,
         };
       }
     }

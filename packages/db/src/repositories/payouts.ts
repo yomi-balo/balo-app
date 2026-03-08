@@ -47,6 +47,9 @@ export const payoutsRepository = {
         encryptedRoutingNumber: data.encryptedRoutingNumber ?? null,
         verifiedAt: null,
         verifiedBy: null,
+        airwallexBeneficiaryId: null,
+        beneficiaryRegisteredAt: null,
+        beneficiaryStatus: null,
       })
       .onConflictDoUpdate({
         target: [expertPayoutDetails.expertProfileId],
@@ -61,6 +64,9 @@ export const payoutsRepository = {
           encryptedRoutingNumber: data.encryptedRoutingNumber ?? null,
           verifiedAt: null,
           verifiedBy: null,
+          airwallexBeneficiaryId: null,
+          beneficiaryRegisteredAt: null,
+          beneficiaryStatus: null,
           updatedAt: new Date(),
           deletedAt: null,
         },
@@ -68,6 +74,35 @@ export const payoutsRepository = {
       .returning();
 
     return result!;
+  },
+
+  /** Update Airwallex beneficiary status for an expert's payout details */
+  async updateBeneficiaryStatus(
+    expertProfileId: string,
+    data: {
+      airwallexBeneficiaryId?: string;
+      beneficiaryStatus: 'verified' | 'pending_verification' | 'invalid';
+      beneficiaryRegisteredAt?: Date;
+    }
+  ): Promise<void> {
+    await db
+      .update(expertPayoutDetails)
+      .set({
+        ...(data.airwallexBeneficiaryId !== undefined && {
+          airwallexBeneficiaryId: data.airwallexBeneficiaryId,
+        }),
+        beneficiaryStatus: data.beneficiaryStatus,
+        ...(data.beneficiaryRegisteredAt !== undefined && {
+          beneficiaryRegisteredAt: data.beneficiaryRegisteredAt,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(expertPayoutDetails.expertProfileId, expertProfileId),
+          isNull(expertPayoutDetails.deletedAt)
+        )
+      );
   },
 
   /** Check if payout details exist (for checklist) */
