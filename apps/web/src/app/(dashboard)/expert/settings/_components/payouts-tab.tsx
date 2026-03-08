@@ -2,7 +2,16 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { motion } from 'motion/react';
-import { CreditCard, AlertCircle, RefreshCw, Lock, Globe, Circle, Zap, Check } from 'lucide-react';
+import {
+  CreditCard,
+  AlertCircle,
+  RefreshCw,
+  Lock,
+  Globe,
+  ShieldCheck,
+  Zap,
+  Check,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -310,11 +319,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   // ── Render: Empty / Form state ──────────────────────────────
 
   return (
-    <motion.div
-      variants={containerVariants}
-      initial="hidden"
-      animate="show"
-    >
+    <motion.div variants={containerVariants} initial="hidden" animate="show">
       {/* Header — left-aligned, icon inline */}
       <motion.div variants={itemVariants} className="mb-8">
         <div className="flex items-center gap-3">
@@ -415,7 +420,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
             <span>Bank details encrypted at rest</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <Circle className="h-3.5 w-3.5 shrink-0" />
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
             <span>Never shared with third parties</span>
           </div>
           <div className="flex items-center gap-1.5">
