@@ -334,9 +334,9 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
       {/* Card with country + bank details sections */}
       <motion.div variants={itemVariants}>
-        <Card className="px-6 pt-5 pb-6">
+        <Card className="px-7 pt-6 pb-7">
           {/* Country section — wrapped so Card's gap-6 doesn't split label from selector */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2">
               <Globe className="h-4 w-4 text-amber-600" />
               <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
@@ -381,7 +381,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
           {/* Bank details section — wrapped so Card's gap-6 doesn't split label from form */}
           {visibleFields && !isFetchingSchema && (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-4">
               <div className="flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-amber-600" />
                 <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
