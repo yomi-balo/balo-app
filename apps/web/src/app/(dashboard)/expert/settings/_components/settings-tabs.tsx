@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { User, Shield, DollarSign, Calendar, CreditCard } from 'lucide-react';
 import { TabPlaceholder } from './tab-placeholder';
 import { RateTab } from './rate-tab';
+import { PayoutsTab, type PayoutDetailsSummary } from './payouts-tab';
 import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
 
@@ -70,12 +71,14 @@ interface SettingsTabsProps {
   defaultTab: string;
   setupStep: string | null;
   initialRateCents: number | null;
+  initialPayoutDetails: PayoutDetailsSummary | null;
 }
 
 export function SettingsTabs({
   defaultTab,
   setupStep,
   initialRateCents,
+  initialPayoutDetails,
 }: SettingsTabsProps): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
@@ -97,7 +100,7 @@ export function SettingsTabs({
   if (!content) return <div />;
 
   return (
-    <div>
+    <div className="mx-auto max-w-[620px]">
       {/* Pill tab bar */}
       <div className="bg-muted mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1">
         {SETTINGS_TABS.map((t) => (
@@ -127,6 +130,8 @@ export function SettingsTabs({
         >
           {tab === 'rate' ? (
             <RateTab initialRateCents={initialRateCents} />
+          ) : tab === 'payouts' ? (
+            <PayoutsTab initialPayoutDetails={initialPayoutDetails} />
           ) : (
             <TabPlaceholder
               icon={content.icon}

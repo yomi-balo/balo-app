@@ -3,3 +3,4 @@ export { ONBOARDING_EVENTS, type OnboardingEventMap, type OnboardingStepName } f
 export { EXPERT_EVENTS, type ExpertEventMap, type ExpertStepName } from './expert';
 export { EXPERT_SETUP_EVENTS, type ExpertSetupEventMap } from './expert-setup';
 export { EXPERT_RATE_EVENTS, type ExpertRateEventMap } from './expert-rate';
+export { EXPERT_PAYOUT_EVENTS, type ExpertPayoutEventMap } from './expert-payouts';

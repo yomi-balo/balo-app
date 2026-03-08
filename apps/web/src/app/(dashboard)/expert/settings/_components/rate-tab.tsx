@@ -107,12 +107,7 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
   const clientPays30min = formatCurrency(clientRateCents * 30);
 
   return (
-    <motion.div
-      variants={containerVariants}
-      initial="hidden"
-      animate="show"
-      className="mx-auto max-w-[620px]"
-    >
+    <motion.div variants={containerVariants} initial="hidden" animate="show">
       {/* Hero header */}
       <motion.div variants={itemVariants} className="mb-9 text-center">
         <IconBadge

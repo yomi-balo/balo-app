@@ -10,3 +10,4 @@ export * from './experts';
 export * from './guests';
 export * from './languages';
 export * from './industries';
+export * from './payouts';
