@@ -275,7 +275,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
   if (state === 'saved' && savedDetails) {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div>
         <motion.div variants={containerVariants} initial="hidden" animate="show">
           <motion.div variants={itemVariants} className="mb-8 flex items-center gap-3">
             <IconBadge icon={CreditCard} color="#4F6EF7" size={44} iconSize={22} />
@@ -300,7 +300,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
       variants={containerVariants}
       initial="hidden"
       animate="show"
-      className="mx-auto max-w-[620px]"
     >
       {/* Header — left-aligned, icon inline */}
       <motion.div variants={itemVariants} className="mb-8">

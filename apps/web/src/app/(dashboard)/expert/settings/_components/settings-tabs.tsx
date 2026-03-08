@@ -100,7 +100,7 @@ export function SettingsTabs({
   if (!content) return <div />;
 
   return (
-    <div>
+    <div className="mx-auto max-w-[620px]">
       {/* Pill tab bar */}
       <div className="bg-muted mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1">
         {SETTINGS_TABS.map((t) => (
