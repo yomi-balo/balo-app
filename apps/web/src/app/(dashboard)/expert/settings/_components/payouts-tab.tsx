@@ -329,9 +329,9 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
       {/* Card with country + bank details sections */}
       <motion.div variants={itemVariants}>
-        <Card className="p-6">
+        <Card className="px-6 pt-5 pb-6">
           {/* Country section */}
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-1.5 flex items-center gap-2">
             <Globe className="h-4 w-4 text-amber-600" />
             <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
               Country
@@ -375,7 +375,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           {/* Bank details section */}
           {visibleFields && !isFetchingSchema && (
             <>
-              <div className="mt-5 mb-2 flex items-center gap-2">
+              <div className="mt-4 mb-1.5 flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-amber-600" />
                 <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
                   Bank Details
