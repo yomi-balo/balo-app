@@ -102,7 +102,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
       setSchemaFields(null);
 
       try {
-        const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+        const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
         const params = new URLSearchParams({ country });
         if (curr) params.set('currency', curr);
         if (method) params.set('method', method);

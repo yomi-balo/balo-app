@@ -11,7 +11,7 @@ const app = await buildApp();
 
 try {
   await app.listen({
-    port: parseInt(process.env.PORT || '3001'),
+    port: parseInt(process.env.PORT || '3002'),
     host: '0.0.0.0',
   });
 } catch (err) {
