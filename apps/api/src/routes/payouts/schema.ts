@@ -9,7 +9,7 @@ interface FormSchemaField {
   path: string;
   required: boolean;
   enabled: boolean;
-  rule: { type: string; pattern?: string };
+  rule?: { type: string; pattern?: string };
   field: {
     key: string;
     label: string;
@@ -105,7 +105,7 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
           options: f.field.options,
           defaultValue: f.field.default,
           refresh: f.field.refresh ?? false,
-          validation: f.rule.pattern ? { pattern: f.rule.pattern } : undefined,
+          validation: f.rule?.pattern ? { pattern: f.rule.pattern } : undefined,
           wide: WIDE_FIELD_KEYS.has(f.path),
         }));
 
@@ -125,6 +125,7 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
         {
           countryCode: country,
           error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
         },
         'Airwallex schema fetch failed'
       );
