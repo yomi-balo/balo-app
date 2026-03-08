@@ -97,11 +97,13 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const formValuesRef = useRef(formValues);
   formValuesRef.current = formValues;
 
-  // Visible fields: strip auto-populated metadata fields and single-option enums
-  // (single-option enums are pre-filled by the system — showing them adds no user value)
+  // Visible fields: strip auto-populated metadata fields, single-option enums, and optional fields.
+  // Optional fields are either Airwallex internal labels (nickname), data Balo already holds
+  // (email — passed server-side from the expert's profile), or genuinely not needed for transfers.
   const visibleFields =
     schemaFields?.filter(
       (f) =>
+        f.required &&
         !HIDDEN_FIELD_KEYS.has(f.path) &&
         !(f.type === 'enum' && f.options && f.options.length <= 1)
     ) ?? null;
