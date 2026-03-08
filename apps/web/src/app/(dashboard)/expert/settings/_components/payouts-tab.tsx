@@ -330,22 +330,24 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
       {/* Card with country + bank details sections */}
       <motion.div variants={itemVariants}>
         <Card className="px-6 pt-5 pb-6">
-          {/* Country section */}
-          <div className="mb-1.5 flex items-center gap-2">
-            <Globe className="h-4 w-4 text-amber-600" />
-            <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
-              Country
-            </span>
+          {/* Country section — wrapped so Card's gap-6 doesn't split label from selector */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <Globe className="h-4 w-4 text-amber-600" />
+              <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
+                Country
+              </span>
+            </div>
+            <PayoutCountrySelector
+              value={countryCode}
+              onCountryChange={handleCountryChange}
+              disabled={isFetchingSchema}
+            />
           </div>
-          <PayoutCountrySelector
-            value={countryCode}
-            onCountryChange={handleCountryChange}
-            disabled={isFetchingSchema}
-          />
 
           {/* Schema loading shimmer */}
           {isFetchingSchema && (
-            <div className="mt-6 space-y-4">
+            <div className="space-y-4">
               <div className="bg-muted h-10 animate-pulse rounded-md" />
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted h-10 animate-pulse rounded-md" />
@@ -357,7 +359,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
           {/* Schema error */}
           {schemaError && (
-            <div className="mt-6 flex flex-col items-center gap-3 py-6 text-center">
+            <div className="flex flex-col items-center gap-3 py-6 text-center">
               <AlertCircle className="text-destructive h-8 w-8" />
               <p className="text-destructive text-sm">{schemaError}</p>
               <Button
@@ -372,10 +374,10 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
             </div>
           )}
 
-          {/* Bank details section */}
+          {/* Bank details section — wrapped so Card's gap-6 doesn't split label from form */}
           {visibleFields && !isFetchingSchema && (
-            <>
-              <div className="mt-4 mb-1.5 flex items-center gap-2">
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-amber-600" />
                 <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
                   Bank Details
@@ -390,7 +392,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
               />
 
               {/* Save button — right-aligned */}
-              <div className="mt-6 flex justify-end">
+              <div className="mt-4 flex justify-end">
                 <Button
                   onClick={handleSave}
                   disabled={isSubmitting || !countryCode}
@@ -400,7 +402,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
                   {isSubmitting ? 'Saving...' : 'Save Details'}
                 </Button>
               </div>
-            </>
+            </div>
           )}
         </Card>
       </motion.div>
