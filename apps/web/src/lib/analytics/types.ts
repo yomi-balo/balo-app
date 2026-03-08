@@ -3,6 +3,7 @@ import type { OnboardingEventMap } from './events/onboarding';
 import type { ExpertEventMap } from './events/expert';
 import type { ExpertSetupEventMap } from './events/expert-setup';
 import type { ExpertRateEventMap } from './events/expert-rate';
+import type { ExpertPayoutEventMap } from './events/expert-payouts';
 
 /**
  * Union of all event maps in the platform.
@@ -12,6 +13,7 @@ export type AllEvents = AuthEventMap &
   OnboardingEventMap &
   ExpertEventMap &
   ExpertSetupEventMap &
-  ExpertRateEventMap;
+  ExpertRateEventMap &
+  ExpertPayoutEventMap;
 
 export type EventName = keyof AllEvents;

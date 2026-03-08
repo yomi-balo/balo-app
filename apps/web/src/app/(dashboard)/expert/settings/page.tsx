@@ -3,6 +3,9 @@ import { SettingsTabs } from './_components/settings-tabs';
 import { SetupContextBar } from './_components/setup-context-bar';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import { log } from '@/lib/logging';
+import { getSession } from '@/lib/auth/session';
+import { payoutsRepository } from '@balo/db';
+import type { PayoutDetailsSummary } from './_components/payouts-tab';
 
 const VALID_TABS = new Set<string>(['profile', 'expertise', 'rate', 'schedule', 'payouts']);
 const VALID_SETUP_KEYS = new Set<string>(CHECKLIST_ITEMS.map((item) => item.key));
@@ -29,6 +32,29 @@ export default async function ExpertSettingsPage({
 
   const initialRateCents = checklistStatus?.rateCents ?? null;
 
+  // Fetch initial payout details for the expert
+  let initialPayoutDetails: PayoutDetailsSummary | null = null;
+  try {
+    const session = await getSession();
+    if (session?.user?.expertProfileId) {
+      const details = await payoutsRepository.findByExpertProfileId(session.user.expertProfileId);
+      if (details) {
+        initialPayoutDetails = {
+          countryCode: details.countryCode,
+          currency: details.currency,
+          transferMethod: details.transferMethod,
+          entityType: details.entityType,
+          formValues: details.formValues as Record<string, string>,
+          verifiedAt: details.verifiedAt?.toISOString() ?? null,
+        };
+      }
+    }
+  } catch (error) {
+    log.warn('Failed to fetch payout details for settings', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   return (
     <div>
       {setupStep && checklistStatus && !checklistStatus.allComplete && (
@@ -38,6 +64,7 @@ export default async function ExpertSettingsPage({
         defaultTab={activeTab}
         setupStep={setupStep}
         initialRateCents={initialRateCents}
+        initialPayoutDetails={initialPayoutDetails}
       />
     </div>
   );

@@ -3,4 +3,5 @@ export { companiesRepository } from './companies';
 export { expertsRepository } from './experts';
 export type { ApplicationWithRelations } from './experts';
 export { referenceDataRepository } from './reference-data';
+export { payoutsRepository } from './payouts';
 export type { SkillsByCategory, CertificationsByCategory } from './reference-data';

@@ -20,7 +20,15 @@
     "WORKOS_API_KEY",
     "WORKOS_CLIENT_ID",
     "WORKOS_COOKIE_PASSWORD",
-    "npm_package_version"
+    "npm_package_version",
+    "AIRWALLEX_ENV",
+    "AIRWALLEX_API_BASE_DEMO",
+    "AIRWALLEX_API_BASE_PROD",
+    "AIRWALLEX_CLIENT_ID_DEMO",
+    "AIRWALLEX_CLIENT_ID_PROD",
+    "AIRWALLEX_API_KEY_DEMO",
+    "AIRWALLEX_API_KEY_PROD",
+    "PAYOUT_ENCRYPTION_KEY"
   ],
   "tasks": {
     "build": {

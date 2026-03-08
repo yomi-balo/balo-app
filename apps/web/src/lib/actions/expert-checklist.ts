@@ -2,7 +2,7 @@ import 'server-only';
 
 import { cache } from 'react';
 import { getSession } from '@/lib/auth/session';
-import { expertsRepository, usersRepository } from '@balo/db';
+import { expertsRepository, usersRepository, payoutsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 
 export interface ChecklistStatus {
@@ -35,9 +35,10 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Expert profile required');
   }
 
-  const [profile, user] = await Promise.all([
+  const [profile, user, hasPayouts] = await Promise.all([
     expertsRepository.findProfileById(expertProfileId),
     usersRepository.findById(session.user.id),
+    payoutsRepository.hasPayoutDetails(expertProfileId),
   ]);
 
   if (!profile || !user) {
@@ -61,8 +62,7 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     rate: Boolean(profile.hourlyRate && profile.hourlyRate > 0),
     calendar: Boolean(profile.cronofySyncStatus && profile.cronofySyncStatus !== 'not_connected'),
     availability: false, // TODO: BAL-195 — check availability_slots table
-    payouts: Boolean(profile.stripeConnectId),
-    // TODO: BAL-196 — check stripeChargesEnabled when column exists
+    payouts: hasPayouts,
   };
 
   const completedCount = Object.values(items).filter(Boolean).length;
