@@ -52,8 +52,10 @@ const HIDDEN_FIELD_KEYS = new Set([
   'beneficiary.bank_details.bank_country_code',
   'beneficiary.bank_details.account_currency',
   'beneficiary.bank_details.local_clearing_system',
-  // Transfer method is auto-populated by the system — never shown in the form
+  // Transfer method is auto-populated by the system — never shown in the form.
+  // Include path variants since Airwallex nesting can differ by schema version.
   'beneficiary.bank_details.transfer_method',
+  'transfer_method',
 ]);
 
 // ── Animation variants ──────────────────────────────────────────
@@ -100,12 +102,14 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   // Visible fields: strip auto-populated metadata fields, single-option enums, and optional fields.
   // Optional fields are either Airwallex internal labels (nickname), data Balo already holds
   // (email — passed server-side from the expert's profile), or genuinely not needed for transfers.
+  // Also strip by label as a catch-all — Airwallex returns transfer_method in varying shapes.
   const visibleFields =
     schemaFields?.filter(
       (f) =>
         f.required &&
         !HIDDEN_FIELD_KEYS.has(f.path) &&
-        !(f.type === 'enum' && f.options && f.options.length <= 1)
+        !(f.type === 'enum' && f.options && f.options.length <= 1) &&
+        !f.label.toLowerCase().includes('transfer method')
     ) ?? null;
 
   // ── Schema fetching ─────────────────────────────────────────
