@@ -52,6 +52,8 @@ const HIDDEN_FIELD_KEYS = new Set([
   'beneficiary.bank_details.bank_country_code',
   'beneficiary.bank_details.account_currency',
   'beneficiary.bank_details.local_clearing_system',
+  // Transfer method is auto-populated by the system — never shown in the form
+  'beneficiary.bank_details.transfer_method',
 ]);
 
 // ── Animation variants ──────────────────────────────────────────
@@ -95,8 +97,14 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const formValuesRef = useRef(formValues);
   formValuesRef.current = formValues;
 
-  // Visible fields (filter out auto-populated metadata fields)
-  const visibleFields = schemaFields?.filter((f) => !HIDDEN_FIELD_KEYS.has(f.path)) ?? null;
+  // Visible fields: strip auto-populated metadata fields and single-option enums
+  // (single-option enums are pre-filled by the system — showing them adds no user value)
+  const visibleFields =
+    schemaFields?.filter(
+      (f) =>
+        !HIDDEN_FIELD_KEYS.has(f.path) &&
+        !(f.type === 'enum' && f.options && f.options.length <= 1)
+    ) ?? null;
 
   // ── Schema fetching ─────────────────────────────────────────
 
