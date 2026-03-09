@@ -43,6 +43,13 @@
       "when": 1772964696977,
       "tag": "0005_last_khan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1773018901337,
+      "tag": "0006_oval_hawkeye",
+      "breakpoints": true
     }
   ]
 }

@@ -9,7 +9,7 @@ import { AirwallexApiError } from './errors.js';
 
 interface CreateBeneficiaryRequest {
   nickname: string;
-  payer_entity_type: 'COMPANY';
+  payer_entity_type: 'PERSONAL' | 'COMPANY';
   transfer_methods: string[];
   beneficiary: Record<string, unknown>;
 }
@@ -44,13 +44,14 @@ const ALLOWED_PATH_PREFIXES = ['beneficiary.'] as const;
  */
 export function buildBeneficiaryPayload(
   formValues: Record<string, string>,
-  expertName: string
+  expertName: string,
+  entityType: 'PERSONAL' | 'COMPANY' = 'COMPANY'
 ): CreateBeneficiaryRequest {
   const transferMethod = formValues['transfer_method'] ?? 'LOCAL';
 
   const payload: Record<string, unknown> = {
     nickname: expertName,
-    payer_entity_type: 'COMPANY',
+    payer_entity_type: entityType,
     transfer_methods: [transferMethod],
   };
 
@@ -132,9 +133,10 @@ export async function registerBeneficiary(
   formValues: Record<string, string>,
   expertName: string,
   expertProfileId: string,
-  updatedAtMs: number
+  updatedAtMs: number,
+  entityType: 'PERSONAL' | 'COMPANY' = 'COMPANY'
 ): Promise<RegisterResult> {
-  const payload = buildBeneficiaryPayload(formValues, expertName);
+  const payload = buildBeneficiaryPayload(formValues, expertName, entityType);
   const idempotencyKey = `balo-beneficiary-${expertProfileId}-${updatedAtMs}`;
 
   try {

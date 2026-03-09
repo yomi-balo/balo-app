@@ -37,13 +37,15 @@ export function startVerifyBeneficiaryWorker(): Worker<VerifyBeneficiaryJobData>
 
       const formValues = reconstructFormValues(details);
       const updatedAtMs = details.updatedAt.getTime();
+      const entityType = (details.entityType as 'PERSONAL' | 'COMPANY') ?? 'COMPANY';
 
       try {
         const result = await registerBeneficiary(
           formValues,
           expertName,
           expertProfileId,
-          updatedAtMs
+          updatedAtMs,
+          entityType
         );
 
         if (result.success) {

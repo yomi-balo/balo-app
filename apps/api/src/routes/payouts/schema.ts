@@ -49,7 +49,7 @@ const querySchema = z.object({
   country: z.string().length(2, 'country must be a 2-letter ISO code'),
   method: z.enum(['LOCAL', 'SWIFT']).default('LOCAL'),
   currency: z.string().length(3, 'currency must be a 3-letter ISO code').optional(),
-  entity_type: z.enum(['PERSONAL', 'COMPANY']).default('PERSONAL'),
+  entity_type: z.enum(['PERSONAL', 'COMPANY']).default('COMPANY'),
 });
 
 // Fields that should span full width

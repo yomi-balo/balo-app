@@ -1,0 +1,2 @@
+ALTER TABLE "expert_payout_details" ALTER COLUMN "entity_type" SET DEFAULT 'COMPANY';--> statement-breakpoint
+UPDATE "expert_payout_details" SET "entity_type" = 'COMPANY' WHERE "entity_type" = 'PERSONAL';

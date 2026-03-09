@@ -94,7 +94,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const [countryCode, setCountryCode] = useState(initialPayoutDetails?.countryCode ?? '');
   const [currency, setCurrency] = useState(initialPayoutDetails?.currency ?? '');
   const [transferMethod] = useState(initialPayoutDetails?.transferMethod ?? 'LOCAL');
-  const [entityType] = useState(initialPayoutDetails?.entityType ?? 'PERSONAL');
+  const [entityType] = useState(initialPayoutDetails?.entityType ?? 'COMPANY');
 
   const [schemaFields, setSchemaFields] = useState<NormalizedField[] | null>(null);
   const [formValues, setFormValues] = useState<Record<string, string>>(
@@ -119,14 +119,11 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     setFormBannerError(null);
   }, []);
 
-  // Visible fields: strip auto-populated metadata fields, single-option enums, and optional fields.
-  // Optional fields are either Airwallex internal labels (nickname), data Balo already holds
-  // (email — passed server-side from the expert's profile), or genuinely not needed for transfers.
+  // Visible fields: strip auto-populated metadata fields and single-option enums.
   // Also strip by label as a catch-all — Airwallex returns transfer_method in varying shapes.
   const visibleFields =
     schemaFields?.filter(
       (f) =>
-        f.required &&
         !HIDDEN_FIELD_KEYS.has(f.path) &&
         !(f.type === 'enum' && f.options && f.options.length <= 1) &&
         !f.label.toLowerCase().includes('transfer method')
