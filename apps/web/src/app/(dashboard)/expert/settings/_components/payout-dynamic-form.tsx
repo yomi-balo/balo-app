@@ -72,7 +72,10 @@ export function PayoutDynamicForm({
                 onValueChange={(val) => handleChange(field.path, val, field.refresh)}
                 disabled={isDisabled}
               >
-                <SelectTrigger id={field.path} className={`h-10${isDisabled ? 'bg-muted' : ''}`}>
+                <SelectTrigger
+                  id={field.path}
+                  className={`h-10 ${isDisabled ? 'bg-muted' : ''} ${error ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                >
                   <SelectValue placeholder={field.placeholder ?? `Select ${field.label}`} />
                 </SelectTrigger>
                 <SelectContent>
@@ -90,7 +93,7 @@ export function PayoutDynamicForm({
                 onChange={(e) => handleChange(field.path, e.target.value, field.refresh)}
                 placeholder={field.placeholder}
                 disabled={isDisabled}
-                className={`h-10${isDisabled ? 'bg-muted' : ''}`}
+                className={`h-10 ${isDisabled ? 'bg-muted' : ''} ${error ? 'border-destructive focus-visible:ring-destructive' : ''}`}
               />
             )}
 
