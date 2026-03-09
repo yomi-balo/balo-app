@@ -34,6 +34,7 @@ export const expertProfiles = pgTable(
 
     headline: text('headline'),
     bio: text('bio'),
+    username: text('username'),
     hourlyRate: integer('hourly_rate'),
 
     trailheadUrl: text('trailhead_url'),
@@ -73,6 +74,7 @@ export const expertProfiles = pgTable(
   },
   (table) => ({
     userVerticalIdx: uniqueIndex('expert_user_vertical_idx').on(table.userId, table.verticalId),
+    usernameIdx: uniqueIndex('expert_profiles_username_idx').on(table.username),
   })
 );
 

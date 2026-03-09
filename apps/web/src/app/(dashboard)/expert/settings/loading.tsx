@@ -3,7 +3,7 @@ export default function ExpertSettingsLoading(): React.JSX.Element {
     <div>
       {/* Tab bar skeleton */}
       <div className="bg-muted mb-7 inline-flex gap-1 rounded-xl p-1">
-        {Array.from({ length: 5 }).map((_, i) => (
+        {Array.from({ length: 7 }).map((_, i) => (
           <div key={i} className="bg-muted-foreground/10 h-9 w-20 animate-pulse rounded-lg" />
         ))}
       </div>

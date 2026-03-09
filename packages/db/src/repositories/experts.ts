@@ -1,4 +1,4 @@
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, not, inArray } from 'drizzle-orm';
 import { db } from '../client';
 import {
   expertProfiles,
@@ -24,6 +24,10 @@ interface CreateDraftInput {
 }
 
 interface UpdateProfileInput {
+  headline?: string | null;
+  bio?: string | null;
+  username?: string | null;
+  websiteUrl?: string | null;
   yearStartedSalesforce?: number;
   projectCountMin?: number;
   projectLeadCountMin?: number;
@@ -98,6 +102,38 @@ export const expertsRepository = {
   async findProfileById(expertProfileId: string): Promise<ExpertProfile | undefined> {
     return db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
+    });
+  },
+
+  /** Check if a username is available, optionally excluding a specific profile */
+  async checkUsernameAvailability(username: string, excludeProfileId?: string): Promise<boolean> {
+    const conditions = [eq(expertProfiles.username, username)];
+    if (excludeProfileId) {
+      conditions.push(not(eq(expertProfiles.id, excludeProfileId)));
+    }
+
+    const existing = await db.query.expertProfiles.findFirst({
+      where: and(...conditions),
+      columns: { id: true },
+    });
+
+    return !existing;
+  },
+
+  /** Find profile with all relations needed for the settings page */
+  async findProfileForSettings(expertProfileId: string) {
+    return db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+      with: {
+        user: {
+          columns: { id: true, firstName: true, lastName: true, avatarUrl: true },
+        },
+        languages: { with: { language: true } },
+        industries: { with: { industry: true } },
+        workHistory: { orderBy: (wh, { asc }) => [asc(wh.sortOrder)] },
+        certifications: { with: { certification: true } },
+        skills: { with: { skill: true, supportType: true } },
+      },
     });
   },
 
@@ -341,3 +377,7 @@ export const expertsRepository = {
     return profile;
   },
 };
+
+export type ProfileSettingsData = NonNullable<
+  Awaited<ReturnType<typeof expertsRepository.findProfileForSettings>>
+>;
