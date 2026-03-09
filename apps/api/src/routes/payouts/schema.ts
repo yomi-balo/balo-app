@@ -49,7 +49,7 @@ const querySchema = z.object({
   country: z.string().length(2, 'country must be a 2-letter ISO code'),
   method: z.enum(['LOCAL', 'SWIFT']).default('LOCAL'),
   currency: z.string().length(3, 'currency must be a 3-letter ISO code').optional(),
-  entity_type: z.enum(['PERSONAL', 'COMPANY']).default('PERSONAL'),
+  entity_type: z.enum(['PERSONAL', 'COMPANY']).default('COMPANY'),
 });
 
 // Fields that should span full width
@@ -109,7 +109,16 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
           wide: WIDE_FIELD_KEYS.has(f.path),
         }));
 
-      return reply.send({ fields, condition: schema.condition });
+      // Disabled fields with a default value that must be included in the
+      // create payload (e.g. account_routing_type1 = "bsb" for AU).
+      const hiddenDefaults: Record<string, string> = {};
+      for (const f of schema.fields) {
+        if (!f.enabled && f.required && f.field.default) {
+          hiddenDefaults[f.path] = f.field.default;
+        }
+      }
+
+      return reply.send({ fields, hiddenDefaults, condition: schema.condition });
     } catch (err: unknown) {
       if (err instanceof AirwallexApiError && err.status === 400) {
         fastify.log.warn(

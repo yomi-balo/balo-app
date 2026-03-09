@@ -1,12 +1,13 @@
 'use client';
 
 import { motion } from 'motion/react';
-import { CheckCircle2, Pencil, Lock, ShieldCheck, Zap } from 'lucide-react';
+import { CheckCircle2, Clock, AlertCircle, Pencil, Lock, ShieldCheck, Zap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { getCountryByCode } from '@/lib/constants/countries';
+import { COMPANY_LABEL_OVERRIDES } from '../_constants/payout-labels';
 import type { PayoutDetailsSummary } from '@/app/(dashboard)/expert/settings/_components/payouts-tab';
 
 interface PayoutSavedStateProps {
@@ -30,12 +31,34 @@ const itemVariants = {
 export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): React.JSX.Element {
   const country = getCountryByCode(details.countryCode);
 
-  // Build display fields from formValues (already masked)
-  const displayFields = Object.entries(details.formValues).map(([path, value]) => {
-    const lastSegment = path.split('.').pop() ?? path;
-    const label = lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
-    return { path, label, value };
-  });
+  // Metadata / auto-populated paths that should not appear in the saved-state display
+  const hiddenPaths = new Set([
+    'beneficiary.entity_type',
+    'beneficiary.bank_details.bank_country_code',
+    'beneficiary.bank_details.account_currency',
+    'beneficiary.bank_details.local_clearing_system',
+    'beneficiary.bank_details.transfer_method',
+    'beneficiary.bank_details.account_routing_type1',
+    'transfer_method',
+    'beneficiary.address.country_or_region',
+    'beneficiary.address.country_code',
+  ]);
+
+  // Build display fields from formValues (already masked), with label overrides
+  const displayFields = Object.entries(details.formValues)
+    .filter(([path]) => !hiddenPaths.has(path))
+    .map(([path, value]) => {
+      const overrideLabel = COMPANY_LABEL_OVERRIDES[path];
+      const lastSegment = path.split('.').pop() ?? path;
+      const label =
+        overrideLabel ?? lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+      return { path, label, value };
+    });
+
+  // Check if trading name matches account holder name for badge display
+  const accountHolderName = details.formValues['beneficiary.bank_details.account_name'] ?? '';
+  const tradingNameMatchesAccount =
+    !!details.tradingName && details.tradingName === accountHolderName && accountHolderName !== '';
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -58,10 +81,16 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
             {details.entityType.toLowerCase()}
           </Badge>
         )}
-        {details.verifiedAt && (
+        {details.beneficiaryStatus === 'verified' && (
           <Badge className="gap-1 bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-700">
             <CheckCircle2 className="h-3.5 w-3.5" />
             Verified
+          </Badge>
+        )}
+        {details.beneficiaryStatus === 'pending_verification' && (
+          <Badge className="gap-1 bg-amber-500 px-3 py-1 text-sm text-white hover:bg-amber-600">
+            <Clock className="h-3.5 w-3.5" />
+            Verifying
           </Badge>
         )}
       </motion.div>
@@ -69,6 +98,22 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
       {/* Saved field values */}
       <motion.div variants={itemVariants}>
         <Card className="p-6">
+          {details.tradingName && (
+            <div className="mb-4">
+              <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                Business Name
+              </p>
+              <div className="mt-0.5 flex items-center gap-2">
+                <p className="text-foreground font-mono text-sm">{details.tradingName}</p>
+                {tradingNameMatchesAccount && (
+                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                    Same as account
+                  </Badge>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {displayFields.map((field) => (
               <div key={field.path}>
@@ -88,6 +133,15 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
               Edit payout details
             </Button>
           </div>
+
+          {details.beneficiaryStatus === 'pending_verification' && (
+            <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>
+                We&apos;re verifying your bank details — this usually takes a few minutes.
+              </span>
+            </div>
+          )}
         </Card>
       </motion.div>
 

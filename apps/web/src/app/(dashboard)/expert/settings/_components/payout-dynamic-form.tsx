@@ -20,6 +20,7 @@ interface PayoutDynamicFormProps {
   onFormValuesChange: (values: Record<string, string>) => void;
   onRefreshField: () => void;
   validationErrors: Record<string, string>;
+  disabledFields?: Set<string>;
 }
 
 export function PayoutDynamicForm({
@@ -28,6 +29,7 @@ export function PayoutDynamicForm({
   onFormValuesChange,
   onRefreshField,
   validationErrors,
+  disabledFields,
 }: PayoutDynamicFormProps): React.JSX.Element {
   const handleChange = useCallback(
     (path: string, value: string, refresh: boolean) => {
@@ -45,6 +47,7 @@ export function PayoutDynamicForm({
       {fields.map((field) => {
         const isWide = field.wide || false;
         const error = validationErrors[field.path];
+        const isDisabled = disabledFields?.has(field.path) ?? false;
 
         return (
           <div key={field.path} className={isWide ? 'sm:col-span-2' : ''}>
@@ -67,8 +70,12 @@ export function PayoutDynamicForm({
               <Select
                 value={formValues[field.path] ?? field.defaultValue ?? ''}
                 onValueChange={(val) => handleChange(field.path, val, field.refresh)}
+                disabled={isDisabled}
               >
-                <SelectTrigger id={field.path} className="h-10">
+                <SelectTrigger
+                  id={field.path}
+                  className={`h-10 ${isDisabled ? 'bg-muted' : ''} ${error ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                >
                   <SelectValue placeholder={field.placeholder ?? `Select ${field.label}`} />
                 </SelectTrigger>
                 <SelectContent>
@@ -85,7 +92,8 @@ export function PayoutDynamicForm({
                 value={formValues[field.path] ?? ''}
                 onChange={(e) => handleChange(field.path, e.target.value, field.refresh)}
                 placeholder={field.placeholder}
-                className="h-10"
+                disabled={isDisabled}
+                className={`h-10 ${isDisabled ? 'bg-muted' : ''} ${error ? 'border-destructive focus-visible:ring-destructive' : ''}`}
               />
             )}
 

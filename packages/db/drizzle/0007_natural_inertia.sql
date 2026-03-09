@@ -1,0 +1,1 @@
+ALTER TABLE "expert_payout_details" ADD COLUMN "trading_name" text;

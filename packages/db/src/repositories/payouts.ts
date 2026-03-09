@@ -1,6 +1,6 @@
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { expertPayoutDetails, type ExpertPayoutDetails } from '../schema';
+import { expertPayoutDetails, type ExpertPayoutDetails, type BeneficiaryStatus } from '../schema';
 
 // ── Input types ──────────────────────────────────────────────────
 
@@ -9,6 +9,7 @@ interface UpsertPayoutInput {
   currency: string;
   transferMethod: string;
   entityType: string;
+  tradingName?: string | null;
   formValues: Record<string, string>;
   encryptedAccountNumber?: string | null;
   encryptedIban?: string | null;
@@ -41,12 +42,16 @@ export const payoutsRepository = {
         currency: data.currency,
         transferMethod: data.transferMethod,
         entityType: data.entityType,
+        tradingName: data.tradingName ?? null,
         formValues: data.formValues,
         encryptedAccountNumber: data.encryptedAccountNumber ?? null,
         encryptedIban: data.encryptedIban ?? null,
         encryptedRoutingNumber: data.encryptedRoutingNumber ?? null,
         verifiedAt: null,
         verifiedBy: null,
+        airwallexBeneficiaryId: null,
+        beneficiaryRegisteredAt: null,
+        beneficiaryStatus: null,
       })
       .onConflictDoUpdate({
         target: [expertPayoutDetails.expertProfileId],
@@ -55,12 +60,16 @@ export const payoutsRepository = {
           currency: data.currency,
           transferMethod: data.transferMethod,
           entityType: data.entityType,
+          tradingName: data.tradingName ?? null,
           formValues: data.formValues,
           encryptedAccountNumber: data.encryptedAccountNumber ?? null,
           encryptedIban: data.encryptedIban ?? null,
           encryptedRoutingNumber: data.encryptedRoutingNumber ?? null,
           verifiedAt: null,
           verifiedBy: null,
+          airwallexBeneficiaryId: null,
+          beneficiaryRegisteredAt: null,
+          beneficiaryStatus: null,
           updatedAt: new Date(),
           deletedAt: null,
         },
@@ -68,6 +77,35 @@ export const payoutsRepository = {
       .returning();
 
     return result!;
+  },
+
+  /** Update Airwallex beneficiary status for an expert's payout details */
+  async updateBeneficiaryStatus(
+    expertProfileId: string,
+    data: {
+      airwallexBeneficiaryId?: string;
+      beneficiaryStatus: BeneficiaryStatus;
+      beneficiaryRegisteredAt?: Date;
+    }
+  ): Promise<void> {
+    await db
+      .update(expertPayoutDetails)
+      .set({
+        ...(data.airwallexBeneficiaryId !== undefined && {
+          airwallexBeneficiaryId: data.airwallexBeneficiaryId,
+        }),
+        beneficiaryStatus: data.beneficiaryStatus,
+        ...(data.beneficiaryRegisteredAt !== undefined && {
+          beneficiaryRegisteredAt: data.beneficiaryRegisteredAt,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(expertPayoutDetails.expertProfileId, expertProfileId),
+          isNull(expertPayoutDetails.deletedAt)
+        )
+      );
   },
 
   /** Check if payout details exist (for checklist) */

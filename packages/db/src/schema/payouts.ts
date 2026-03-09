@@ -2,6 +2,13 @@ import { pgTable, uuid, char, varchar, text, jsonb, timestamp } from 'drizzle-or
 import { relations } from 'drizzle-orm';
 import { expertProfiles } from './experts';
 
+// ── Domain constants ─────────────────────────────────────────
+export const ENTITY_TYPES = ['PERSONAL', 'COMPANY'] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
+export const BENEFICIARY_STATUSES = ['verified', 'pending_verification', 'invalid'] as const;
+export type BeneficiaryStatus = (typeof BENEFICIARY_STATUSES)[number];
+
 export const expertPayoutDetails = pgTable(
   'expert_payout_details',
   {
@@ -14,13 +21,18 @@ export const expertPayoutDetails = pgTable(
     countryCode: char('country_code', { length: 2 }).notNull(),
     currency: varchar('currency', { length: 3 }).notNull(),
     transferMethod: varchar('transfer_method', { length: 10 }).notNull().default('LOCAL'),
-    entityType: varchar('entity_type', { length: 10 }).notNull().default('PERSONAL'),
+    entityType: varchar('entity_type', { length: 10 }).notNull().default('COMPANY'),
+    tradingName: text('trading_name'),
 
     formValues: jsonb('form_values').notNull().$type<Record<string, string>>(),
 
     encryptedAccountNumber: text('encrypted_account_number'),
     encryptedIban: text('encrypted_iban'),
     encryptedRoutingNumber: text('encrypted_routing_number'),
+
+    airwallexBeneficiaryId: text('airwallex_beneficiary_id'),
+    beneficiaryRegisteredAt: timestamp('beneficiary_registered_at', { withTimezone: true }),
+    beneficiaryStatus: text('beneficiary_status'),
 
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
     verifiedBy: uuid('verified_by'),

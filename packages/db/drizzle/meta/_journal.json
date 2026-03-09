@@ -36,6 +36,27 @@
       "when": 1772931760077,
       "tag": "0004_square_gamora",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1772964696977,
+      "tag": "0005_last_khan",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1773018901337,
+      "tag": "0006_oval_hawkeye",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1773031812747,
+      "tag": "0007_natural_inertia",
+      "breakpoints": true
     }
   ]
 }

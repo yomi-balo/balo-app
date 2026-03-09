@@ -3,6 +3,8 @@ export const EXPERT_PAYOUT_EVENTS = {
   PAYOUT_DETAILS_UPDATED: 'expert_payout_details_updated',
   PAYOUT_COUNTRY_SELECTED: 'expert_payout_country_selected',
   PAYOUT_FORM_STARTED: 'expert_payout_form_started',
+  AIRWALLEX_BENEFICIARY_REGISTERED: 'expert_airwallex_beneficiary_registered',
+  AIRWALLEX_BENEFICIARY_FAILED: 'expert_airwallex_beneficiary_failed',
 } as const;
 
 export interface ExpertPayoutEventMap {
@@ -20,5 +22,16 @@ export interface ExpertPayoutEventMap {
   };
   [EXPERT_PAYOUT_EVENTS.PAYOUT_FORM_STARTED]: {
     country_code: string;
+  };
+  [EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED]: {
+    method: string;
+    country_code: string;
+    beneficiary_status: 'verified';
+  };
+  [EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_FAILED]: {
+    method: string;
+    country_code: string;
+    error_type: 'validation' | 'outage';
+    beneficiary_status: 'invalid' | 'pending_verification';
   };
 }

@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { buildApp } from './app.js';
+import { startWorkers } from './jobs/worker.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -14,6 +15,8 @@ try {
     port: parseInt(process.env.PORT || '3002'),
     host: '0.0.0.0',
   });
+
+  startWorkers(app.log);
 } catch (err) {
   app.log.error(err);
   process.exit(1);
