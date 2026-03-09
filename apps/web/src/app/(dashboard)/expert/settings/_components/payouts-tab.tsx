@@ -66,6 +66,10 @@ const HIDDEN_FIELD_KEYS = new Set([
   // Include path variants since Airwallex nesting can differ by schema version.
   'beneficiary.bank_details.transfer_method',
   'transfer_method',
+  // Address country is redundant — already chosen via the top-level country selector.
+  // Auto-injected server-side in reconstructFormValues.
+  'beneficiary.address.country_or_region',
+  'beneficiary.address.country_code',
 ]);
 
 // ── Animation variants ──────────────────────────────────────────

@@ -109,6 +109,11 @@ export function reconstructFormValues(details: ExpertPayoutDetails): Record<stri
     }
   }
 
+  // Inject beneficiary address country from stored countryCode
+  // These fields are hidden from the form (HIDDEN_FIELD_KEYS) and auto-populated here
+  formValues['beneficiary.address.country_or_region'] = details.countryCode;
+  formValues['beneficiary.address.country_code'] = details.countryCode;
+
   // Ensure transfer_method is present (needed by buildBeneficiaryPayload)
   if (!formValues['transfer_method'] && details.transferMethod) {
     formValues['transfer_method'] = details.transferMethod;
