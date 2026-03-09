@@ -31,14 +31,29 @@ const itemVariants = {
 export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): React.JSX.Element {
   const country = getCountryByCode(details.countryCode);
 
+  // Metadata / auto-populated paths that should not appear in the saved-state display
+  const hiddenPaths = new Set([
+    'beneficiary.entity_type',
+    'beneficiary.bank_details.bank_country_code',
+    'beneficiary.bank_details.account_currency',
+    'beneficiary.bank_details.local_clearing_system',
+    'beneficiary.bank_details.transfer_method',
+    'beneficiary.bank_details.account_routing_type1',
+    'transfer_method',
+    'beneficiary.address.country_or_region',
+    'beneficiary.address.country_code',
+  ]);
+
   // Build display fields from formValues (already masked), with label overrides
-  const displayFields = Object.entries(details.formValues).map(([path, value]) => {
-    const overrideLabel = COMPANY_LABEL_OVERRIDES[path];
-    const lastSegment = path.split('.').pop() ?? path;
-    const label =
-      overrideLabel ?? lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
-    return { path, label, value };
-  });
+  const displayFields = Object.entries(details.formValues)
+    .filter(([path]) => !hiddenPaths.has(path))
+    .map(([path, value]) => {
+      const overrideLabel = COMPANY_LABEL_OVERRIDES[path];
+      const lastSegment = path.split('.').pop() ?? path;
+      const label =
+        overrideLabel ?? lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+      return { path, label, value };
+    });
 
   // Check if trading name matches account holder name for badge display
   const accountHolderName = details.formValues['beneficiary.bank_details.account_name'] ?? '';

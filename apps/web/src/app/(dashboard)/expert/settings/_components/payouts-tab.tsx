@@ -78,6 +78,8 @@ const HIDDEN_FIELD_KEYS = new Set([
   // Auto-injected server-side in reconstructFormValues.
   'beneficiary.address.country_or_region',
   'beneficiary.address.country_code',
+  // Hidden defaults auto-injected from schema (not user-facing)
+  'beneficiary.bank_details.account_routing_type1',
 ]);
 
 // ── Animation variants ──────────────────────────────────────────
