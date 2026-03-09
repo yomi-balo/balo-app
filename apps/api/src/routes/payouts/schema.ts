@@ -1,7 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import * as baloDb from '@balo/db';
-const { ENTITY_TYPES } = baloDb;
 import { airwallexRequest } from '../../services/airwallex/client.js';
 import { AirwallexApiError } from '../../services/airwallex/errors.js';
 
@@ -51,7 +49,7 @@ const querySchema = z.object({
   country: z.string().length(2, 'country must be a 2-letter ISO code'),
   method: z.enum(['LOCAL', 'SWIFT']).default('LOCAL'),
   currency: z.string().length(3, 'currency must be a 3-letter ISO code').optional(),
-  entity_type: z.enum(ENTITY_TYPES).default('COMPANY'),
+  entity_type: z.enum(['PERSONAL', 'COMPANY']).default('COMPANY'),
 });
 
 // Fields that should span full width
