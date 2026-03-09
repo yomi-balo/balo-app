@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import { motion } from 'motion/react';
 import {
   CreditCard,
@@ -11,15 +11,21 @@ import {
   ShieldCheck,
   Zap,
   Check,
+  Building2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
 import { IconBadge } from '@/components/balo/icon-badge';
 import { track, EXPERT_PAYOUT_EVENTS } from '@/lib/analytics';
 import { PayoutCountrySelector } from './payout-country-selector';
 import { PayoutDynamicForm } from './payout-dynamic-form';
 import { PayoutSavedState } from './payout-saved-state';
+import { COMPANY_LABEL_OVERRIDES } from '../_constants/payout-labels';
 import type { BeneficiaryStatus } from '@balo/db';
 import { savePayoutDetailsAction } from '../_actions/save-payout-details';
 
@@ -45,6 +51,7 @@ export interface PayoutDetailsSummary {
   currency: string;
   transferMethod: string;
   entityType: string;
+  tradingName: string | null;
   formValues: Record<string, string>;
   verifiedAt: string | null;
   beneficiaryStatus: BeneficiaryStatus | null;
@@ -97,6 +104,14 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const [transferMethod] = useState(initialPayoutDetails?.transferMethod ?? 'LOCAL');
   const [entityType] = useState(initialPayoutDetails?.entityType ?? 'COMPANY');
 
+  const [tradingName, setTradingName] = useState(initialPayoutDetails?.tradingName ?? '');
+  const [sameAsAccountName, setSameAsAccountName] = useState(() => {
+    if (!initialPayoutDetails?.tradingName) return false;
+    const accountName =
+      initialPayoutDetails?.formValues['beneficiary.bank_details.account_name'] ?? '';
+    return initialPayoutDetails.tradingName === accountName && accountName !== '';
+  });
+
   const [schemaFields, setSchemaFields] = useState<NormalizedField[] | null>(null);
   const [formValues, setFormValues] = useState<Record<string, string>>(
     initialPayoutDetails?.formValues ?? {}
@@ -120,15 +135,58 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     setFormBannerError(null);
   }, []);
 
+  const handleTradingNameChange = useCallback(
+    (value: string) => {
+      setTradingName(value);
+      if (!value && sameAsAccountName) {
+        // Auto-uncheck when business name is cleared to avoid stuck state
+        setSameAsAccountName(false);
+      } else if (sameAsAccountName) {
+        setFormValues((prev) => ({
+          ...prev,
+          'beneficiary.bank_details.account_name': value,
+        }));
+      }
+    },
+    [sameAsAccountName]
+  );
+
+  const handleSameAsToggle = useCallback(
+    (checked: boolean) => {
+      setSameAsAccountName(checked);
+      if (checked && tradingName) {
+        setFormValues((prev) => ({
+          ...prev,
+          'beneficiary.bank_details.account_name': tradingName,
+        }));
+      }
+    },
+    [tradingName]
+  );
+
+  const disabledFields = useMemo(() => {
+    const set = new Set<string>();
+    if (sameAsAccountName) {
+      set.add('beneficiary.bank_details.account_name');
+    }
+    return set;
+  }, [sameAsAccountName]);
+
   // Visible fields: strip auto-populated metadata fields and single-option enums.
   // Also strip by label as a catch-all — Airwallex returns transfer_method in varying shapes.
+  // Apply business-context label overrides for company entity type fields.
   const visibleFields =
-    schemaFields?.filter(
-      (f) =>
-        !HIDDEN_FIELD_KEYS.has(f.path) &&
-        !(f.type === 'enum' && f.options && f.options.length <= 1) &&
-        !f.label.toLowerCase().includes('transfer method')
-    ) ?? null;
+    schemaFields
+      ?.filter(
+        (f) =>
+          !HIDDEN_FIELD_KEYS.has(f.path) &&
+          !(f.type === 'enum' && f.options && f.options.length <= 1) &&
+          !f.label.toLowerCase().includes('transfer method')
+      )
+      .map((f) => ({
+        ...f,
+        label: COMPANY_LABEL_OVERRIDES[f.path] ?? f.label,
+      })) ?? null;
 
   // ── Schema fetching ─────────────────────────────────────────
 
@@ -267,6 +325,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
         transferMethod,
         entityType,
         formValues,
+        tradingName: tradingName || undefined,
       });
 
       // Handle Airwallex 4xx field errors — stay on form
@@ -321,6 +380,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           currency,
           transferMethod,
           entityType,
+          tradingName: tradingName || null,
           formValues: result.maskedFormValues ?? formValues,
           verifiedAt: null,
           beneficiaryStatus,
@@ -435,6 +495,56 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
             </div>
           )}
 
+          {/* Business details section */}
+          {visibleFields && !isFetchingSchema && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-amber-600" />
+                <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
+                  Business Details
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <Label htmlFor="tradingName" className="text-sm font-medium">
+                      Business Name
+                    </Label>
+                    <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                      Optional
+                    </Badge>
+                  </div>
+                  <Input
+                    id="tradingName"
+                    value={tradingName}
+                    onChange={(e) => handleTradingNameChange(e.target.value)}
+                    placeholder="e.g. Acme Consulting Pty Ltd"
+                    className="h-10"
+                  />
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    Used on invoices sent to your clients
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="sameAsAccountName"
+                    checked={sameAsAccountName}
+                    onCheckedChange={(checked) => handleSameAsToggle(checked === true)}
+                    disabled={!tradingName}
+                  />
+                  <Label
+                    htmlFor="sameAsAccountName"
+                    className="text-muted-foreground cursor-pointer text-sm font-normal"
+                  >
+                    Account is registered under this business name
+                  </Label>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Bank details section — wrapped so Card's gap-6 doesn't split label from form */}
           {visibleFields && !isFetchingSchema && (
             <div className="flex flex-col gap-4">
@@ -459,6 +569,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
                 onFormValuesChange={handleFormValuesChange}
                 onRefreshField={handleRefreshField}
                 validationErrors={validationErrors}
+                disabledFields={disabledFields}
               />
 
               {/* Save button — right-aligned */}

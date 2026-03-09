@@ -9,6 +9,7 @@ interface UpsertPayoutInput {
   currency: string;
   transferMethod: string;
   entityType: string;
+  tradingName?: string | null;
   formValues: Record<string, string>;
   encryptedAccountNumber?: string | null;
   encryptedIban?: string | null;
@@ -41,6 +42,7 @@ export const payoutsRepository = {
         currency: data.currency,
         transferMethod: data.transferMethod,
         entityType: data.entityType,
+        tradingName: data.tradingName ?? null,
         formValues: data.formValues,
         encryptedAccountNumber: data.encryptedAccountNumber ?? null,
         encryptedIban: data.encryptedIban ?? null,
@@ -58,6 +60,7 @@ export const payoutsRepository = {
           currency: data.currency,
           transferMethod: data.transferMethod,
           entityType: data.entityType,
+          tradingName: data.tradingName ?? null,
           formValues: data.formValues,
           encryptedAccountNumber: data.encryptedAccountNumber ?? null,
           encryptedIban: data.encryptedIban ?? null,

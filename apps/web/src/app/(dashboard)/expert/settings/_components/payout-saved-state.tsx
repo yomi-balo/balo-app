@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { getCountryByCode } from '@/lib/constants/countries';
+import { COMPANY_LABEL_OVERRIDES } from '../_constants/payout-labels';
 import type { PayoutDetailsSummary } from '@/app/(dashboard)/expert/settings/_components/payouts-tab';
 
 interface PayoutSavedStateProps {
@@ -30,12 +31,19 @@ const itemVariants = {
 export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): React.JSX.Element {
   const country = getCountryByCode(details.countryCode);
 
-  // Build display fields from formValues (already masked)
+  // Build display fields from formValues (already masked), with label overrides
   const displayFields = Object.entries(details.formValues).map(([path, value]) => {
+    const overrideLabel = COMPANY_LABEL_OVERRIDES[path];
     const lastSegment = path.split('.').pop() ?? path;
-    const label = lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+    const label =
+      overrideLabel ?? lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
     return { path, label, value };
   });
+
+  // Check if trading name matches account holder name for badge display
+  const accountHolderName = details.formValues['beneficiary.bank_details.account_name'] ?? '';
+  const tradingNameMatchesAccount =
+    !!details.tradingName && details.tradingName === accountHolderName && accountHolderName !== '';
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -75,6 +83,22 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
       {/* Saved field values */}
       <motion.div variants={itemVariants}>
         <Card className="p-6">
+          {details.tradingName && (
+            <div className="mb-4">
+              <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                Business Name
+              </p>
+              <div className="mt-0.5 flex items-center gap-2">
+                <p className="text-foreground font-mono text-sm">{details.tradingName}</p>
+                {tradingNameMatchesAccount && (
+                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                    Same as account
+                  </Badge>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {displayFields.map((field) => (
               <div key={field.path}>

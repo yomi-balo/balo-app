@@ -22,6 +22,7 @@ export const expertPayoutDetails = pgTable(
     currency: varchar('currency', { length: 3 }).notNull(),
     transferMethod: varchar('transfer_method', { length: 10 }).notNull().default('LOCAL'),
     entityType: varchar('entity_type', { length: 10 }).notNull().default('COMPANY'),
+    tradingName: text('trading_name'),
 
     formValues: jsonb('form_values').notNull().$type<Record<string, string>>(),
 

@@ -44,6 +44,7 @@ export default async function ExpertSettingsPage({
           currency: details.currency,
           transferMethod: details.transferMethod,
           entityType: details.entityType,
+          tradingName: details.tradingName ?? null,
           formValues: details.formValues as Record<string, string>,
           verifiedAt: details.verifiedAt?.toISOString() ?? null,
           beneficiaryStatus: (details.beneficiaryStatus as BeneficiaryStatus) ?? null,

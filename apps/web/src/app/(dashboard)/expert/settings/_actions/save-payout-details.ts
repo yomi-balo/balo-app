@@ -49,6 +49,7 @@ const savePayoutDetailsSchema = z.object({
   currency: z.string().length(3, 'Currency must be 3 characters'),
   transferMethod: z.string().min(1, 'Transfer method is required'),
   entityType: z.string().min(1, 'Entity type is required'),
+  tradingName: z.string().trim().max(255).optional(),
   formValues: z
     .record(z.string(), z.string())
     .refine((val) => Object.keys(val).length > 0, 'Form values cannot be empty'),
@@ -61,6 +62,7 @@ export interface SavePayoutDetailsInput {
   currency: string;
   transferMethod: string;
   entityType: string;
+  tradingName?: string;
   formValues: Record<string, string>;
 }
 
@@ -68,6 +70,7 @@ export interface SavePayoutDetailsResult {
   success: boolean;
   error?: string;
   maskedFormValues?: Record<string, string>;
+  tradingName?: string | null;
   beneficiaryStatus?: BeneficiaryStatus;
   airwallexFieldErrors?: Record<string, string>;
 }
@@ -127,6 +130,7 @@ export const savePayoutDetailsAction = withAuth(
         currency: validated.currency,
         transferMethod: validated.transferMethod,
         entityType: validated.entityType,
+        tradingName: validated.tradingName || null,
         formValues: maskedFormValues,
         encryptedAccountNumber,
         encryptedIban,
@@ -167,7 +171,12 @@ export const savePayoutDetailsAction = withAuth(
         });
 
         revalidatePath('/expert/settings');
-        return { success: true, maskedFormValues, beneficiaryStatus: 'pending_verification' };
+        return {
+          success: true,
+          maskedFormValues,
+          tradingName: validated.tradingName || null,
+          beneficiaryStatus: 'pending_verification',
+        };
       }
 
       try {
@@ -236,7 +245,12 @@ export const savePayoutDetailsAction = withAuth(
       // 8. Revalidate the settings page so checklist picks up the new payout details
       revalidatePath('/expert/settings');
 
-      return { success: true, maskedFormValues, beneficiaryStatus };
+      return {
+        success: true,
+        maskedFormValues,
+        tradingName: validated.tradingName || null,
+        beneficiaryStatus,
+      };
     } catch (error) {
       log.error('Failed to save payout details', {
         userId: session.user.id,
