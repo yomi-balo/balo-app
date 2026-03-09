@@ -28,7 +28,10 @@
     "AIRWALLEX_CLIENT_ID_PROD",
     "AIRWALLEX_API_KEY_DEMO",
     "AIRWALLEX_API_KEY_PROD",
-    "PAYOUT_ENCRYPTION_KEY"
+    "PAYOUT_ENCRYPTION_KEY",
+    "INTERNAL_API_SECRET",
+    "API_URL",
+    "REDIS_URL"
   ],
   "tasks": {
     "build": {
