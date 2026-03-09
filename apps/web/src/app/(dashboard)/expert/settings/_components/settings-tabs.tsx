@@ -105,11 +105,11 @@ export function SettingsTabs({
 
   return (
     <div>
-      {/* ── Main tabs (pill style) ── */}
+      {/* ── Main tabs (pill style with sliding indicator) ── */}
       <div
         role="tablist"
         aria-label="Settings sections"
-        className="bg-muted mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1"
+        className="bg-muted relative mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1"
       >
         {MAIN_TABS.map((t) => {
           const Icon = t.icon;
@@ -121,17 +121,27 @@ export function SettingsTabs({
               aria-selected={isActive}
               onClick={() => handleMainTabChange(t.key)}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm whitespace-nowrap transition-all duration-200',
+                'relative z-10 inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm whitespace-nowrap transition-colors duration-200',
                 isActive
-                  ? 'bg-card text-foreground font-medium shadow-sm'
+                  ? 'text-foreground font-medium'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
+              {isActive && (
+                <motion.div
+                  layoutId="main-tab-pill"
+                  className="bg-card absolute inset-0 rounded-lg shadow-sm"
+                  transition={{ type: 'spring', duration: 0.35, bounce: 0.15 }}
+                />
+              )}
               <Icon
-                className={cn('h-4 w-4', isActive ? 'text-primary' : 'text-muted-foreground')}
+                className={cn(
+                  'relative z-10 h-4 w-4',
+                  isActive ? 'text-primary' : 'text-muted-foreground'
+                )}
                 aria-hidden="true"
               />
-              {t.label}
+              <span className="relative z-10">{t.label}</span>
             </button>
           );
         })}
