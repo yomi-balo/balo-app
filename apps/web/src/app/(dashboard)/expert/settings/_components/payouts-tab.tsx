@@ -216,11 +216,20 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           throw new Error(data.error ?? 'Failed to fetch schema');
         }
 
-        const data = (await res.json()) as { fields: NormalizedField[] };
+        const data = (await res.json()) as {
+          fields: NormalizedField[];
+          hiddenDefaults?: Record<string, string>;
+        };
         setSchemaFields(data.fields);
 
         // Populate defaults and preserve existing values
         const defaults: Record<string, string> = {};
+
+        // Start with hidden defaults (disabled-but-required fields like account_routing_type1)
+        if (data.hiddenDefaults) {
+          Object.assign(defaults, data.hiddenDefaults);
+        }
+
         for (const field of data.fields) {
           if (preserveValues?.[field.path] != null) {
             defaults[field.path] = preserveValues[field.path] as string;
