@@ -65,11 +65,9 @@ export function startVerifyBeneficiaryWorker(): Worker<VerifyBeneficiaryJobData>
         const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
 
         if (isLastAttempt) {
-          // Mark as invalid on final failure
-          await payoutsRepository.updateBeneficiaryStatus(expertProfileId, {
-            beneficiaryStatus: 'invalid',
-          });
-          job.log(`Final attempt failed — marking invalid`);
+          // Keep pending_verification — outage ≠ invalid bank details
+          // A future sweep or manual admin action can re-trigger registration
+          job.log(`Final attempt failed — keeping pending_verification`);
 
           if (err instanceof AirwallexApiError) {
             job.log(`Airwallex error: ${err.status} — ${err.message}`);

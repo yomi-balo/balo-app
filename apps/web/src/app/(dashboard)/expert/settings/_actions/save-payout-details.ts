@@ -162,6 +162,13 @@ export const savePayoutDetailsAction = withAuth(
         log.error('INTERNAL_API_SECRET is not configured — cannot register beneficiary', {
           expertProfileId,
         });
+
+        await payoutsRepository.updateBeneficiaryStatus(expertProfileId, {
+          beneficiaryStatus: 'pending_verification',
+        });
+
+        revalidatePath('/expert/settings');
+        return { success: true, maskedFormValues, beneficiaryStatus: 'pending_verification' };
       }
 
       try {

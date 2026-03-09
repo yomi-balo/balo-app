@@ -287,6 +287,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           method: transferMethod,
           country_code: countryCode,
           error_type: 'validation',
+          beneficiary_status: 'invalid',
         });
         return;
       }
@@ -299,6 +300,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
             method: transferMethod,
             country_code: countryCode,
+            beneficiary_status: 'verified',
           });
         } else if (beneficiaryStatus === 'pending_verification') {
           toast.success('Payout details saved — verification in progress');
@@ -306,6 +308,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
             method: transferMethod,
             country_code: countryCode,
             error_type: 'outage',
+            beneficiary_status: 'pending_verification',
           });
         } else {
           toast.success('Payout details saved successfully');

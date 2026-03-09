@@ -26,10 +26,12 @@ export interface ExpertPayoutEventMap {
   [EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED]: {
     method: string;
     country_code: string;
+    beneficiary_status: 'verified';
   };
   [EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_FAILED]: {
     method: string;
     country_code: string;
     error_type: 'validation' | 'outage';
+    beneficiary_status: 'invalid' | 'pending_verification';
   };
 }
