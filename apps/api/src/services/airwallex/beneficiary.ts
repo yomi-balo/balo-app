@@ -1,6 +1,6 @@
 import lodash from 'lodash';
 const { set } = lodash;
-import type { ExpertPayoutDetails } from '@balo/db';
+import type { ExpertPayoutDetails, EntityType } from '@balo/db';
 import { decryptValue } from '../../lib/encryption.js';
 import { airwallexRequest } from './client.js';
 import { AirwallexApiError } from './errors.js';
@@ -9,7 +9,7 @@ import { AirwallexApiError } from './errors.js';
 
 interface CreateBeneficiaryRequest {
   nickname: string;
-  payer_entity_type: 'PERSONAL' | 'COMPANY';
+  payer_entity_type: EntityType;
   transfer_methods: string[];
   beneficiary: Record<string, unknown>;
 }
@@ -45,7 +45,7 @@ const ALLOWED_PATH_PREFIXES = ['beneficiary.'] as const;
 export function buildBeneficiaryPayload(
   formValues: Record<string, string>,
   expertName: string,
-  entityType: 'PERSONAL' | 'COMPANY' = 'COMPANY'
+  entityType: EntityType = 'COMPANY'
 ): CreateBeneficiaryRequest {
   const transferMethod = formValues['transfer_method'] ?? 'LOCAL';
 
@@ -134,7 +134,7 @@ export async function registerBeneficiary(
   expertName: string,
   expertProfileId: string,
   updatedAtMs: number,
-  entityType: 'PERSONAL' | 'COMPANY' = 'COMPANY'
+  entityType: EntityType = 'COMPANY'
 ): Promise<RegisterResult> {
   const payload = buildBeneficiaryPayload(formValues, expertName, entityType);
   const idempotencyKey = `balo-beneficiary-${expertProfileId}-${updatedAtMs}`;

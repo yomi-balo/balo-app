@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
-import { payoutsRepository } from '@balo/db';
+import { payoutsRepository, type BeneficiaryStatus } from '@balo/db';
 import { log } from '@/lib/logging';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 
@@ -68,7 +68,7 @@ export interface SavePayoutDetailsResult {
   success: boolean;
   error?: string;
   maskedFormValues?: Record<string, string>;
-  beneficiaryStatus?: 'verified' | 'pending_verification' | 'invalid';
+  beneficiaryStatus?: BeneficiaryStatus;
   airwallexFieldErrors?: Record<string, string>;
 }
 
@@ -154,8 +154,7 @@ export const savePayoutDetailsAction = withAuth(
         process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
       const internalSecret = process.env.INTERNAL_API_SECRET;
 
-      let beneficiaryStatus: 'verified' | 'pending_verification' | 'invalid' =
-        'pending_verification';
+      let beneficiaryStatus: BeneficiaryStatus = 'pending_verification';
       let airwallexFieldErrors: Record<string, string> | undefined;
 
       if (!internalSecret) {
@@ -188,7 +187,7 @@ export const savePayoutDetailsAction = withAuth(
 
         const beneficiaryData = (await beneficiaryRes.json()) as {
           success?: boolean;
-          beneficiaryStatus?: 'verified' | 'pending_verification' | 'invalid';
+          beneficiaryStatus?: BeneficiaryStatus;
           airwallexFieldErrors?: Record<string, string>;
         };
 

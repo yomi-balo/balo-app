@@ -1,6 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import * as baloDb from '@balo/db';
 const { payoutsRepository } = baloDb;
+import type { EntityType } from '@balo/db';
 import { getRedis } from '../lib/redis.js';
 import { reconstructFormValues, registerBeneficiary } from '../services/airwallex/beneficiary.js';
 import { AirwallexApiError } from '../services/airwallex/errors.js';
@@ -37,7 +38,7 @@ export function startVerifyBeneficiaryWorker(): Worker<VerifyBeneficiaryJobData>
 
       const formValues = reconstructFormValues(details);
       const updatedAtMs = details.updatedAt.getTime();
-      const entityType = (details.entityType as 'PERSONAL' | 'COMPANY') ?? 'COMPANY';
+      const entityType = (details.entityType as EntityType) ?? 'COMPANY';
 
       try {
         const result = await registerBeneficiary(

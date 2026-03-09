@@ -2,6 +2,13 @@ import { pgTable, uuid, char, varchar, text, jsonb, timestamp } from 'drizzle-or
 import { relations } from 'drizzle-orm';
 import { expertProfiles } from './experts';
 
+// ── Domain constants ─────────────────────────────────────────
+export const ENTITY_TYPES = ['PERSONAL', 'COMPANY'] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
+export const BENEFICIARY_STATUSES = ['verified', 'pending_verification', 'invalid'] as const;
+export type BeneficiaryStatus = (typeof BENEFICIARY_STATUSES)[number];
+
 export const expertPayoutDetails = pgTable(
   'expert_payout_details',
   {

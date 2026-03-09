@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import * as baloDb from '@balo/db';
 const { payoutsRepository } = baloDb;
+import type { EntityType } from '@balo/db';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { getQueue } from '../../lib/queue.js';
 import {
@@ -48,7 +49,7 @@ export async function beneficiaryRoute(fastify: FastifyInstance): Promise<void> 
       const formValues = reconstructFormValues(details);
       const updatedAtMs = details.updatedAt.getTime();
 
-      const entityType = (details.entityType as 'PERSONAL' | 'COMPANY') ?? 'COMPANY';
+      const entityType = (details.entityType as EntityType) ?? 'COMPANY';
 
       try {
         const result = await registerBeneficiary(

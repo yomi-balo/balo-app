@@ -20,6 +20,7 @@ import { track, EXPERT_PAYOUT_EVENTS } from '@/lib/analytics';
 import { PayoutCountrySelector } from './payout-country-selector';
 import { PayoutDynamicForm } from './payout-dynamic-form';
 import { PayoutSavedState } from './payout-saved-state';
+import type { BeneficiaryStatus } from '@balo/db';
 import { savePayoutDetailsAction } from '../_actions/save-payout-details';
 
 // ── Types ───────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ export interface PayoutDetailsSummary {
   entityType: string;
   formValues: Record<string, string>;
   verifiedAt: string | null;
-  beneficiaryStatus: 'verified' | 'pending_verification' | 'invalid' | null;
+  beneficiaryStatus: BeneficiaryStatus | null;
 }
 
 interface PayoutsTabProps {

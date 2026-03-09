@@ -4,7 +4,7 @@ import { SetupContextBar } from './_components/setup-context-bar';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
-import { payoutsRepository } from '@balo/db';
+import { payoutsRepository, type BeneficiaryStatus } from '@balo/db';
 import type { PayoutDetailsSummary } from './_components/payouts-tab';
 
 const VALID_TABS = new Set<string>(['profile', 'expertise', 'rate', 'schedule', 'payouts']);
@@ -46,8 +46,7 @@ export default async function ExpertSettingsPage({
           entityType: details.entityType,
           formValues: details.formValues as Record<string, string>,
           verifiedAt: details.verifiedAt?.toISOString() ?? null,
-          beneficiaryStatus:
-            (details.beneficiaryStatus as 'verified' | 'pending_verification' | 'invalid') ?? null,
+          beneficiaryStatus: (details.beneficiaryStatus as BeneficiaryStatus) ?? null,
         };
       }
     }

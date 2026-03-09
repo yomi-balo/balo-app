@@ -1,6 +1,6 @@
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { expertPayoutDetails, type ExpertPayoutDetails } from '../schema';
+import { expertPayoutDetails, type ExpertPayoutDetails, type BeneficiaryStatus } from '../schema';
 
 // ── Input types ──────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ export const payoutsRepository = {
     expertProfileId: string,
     data: {
       airwallexBeneficiaryId?: string;
-      beneficiaryStatus: 'verified' | 'pending_verification' | 'invalid';
+      beneficiaryStatus: BeneficiaryStatus;
       beneficiaryRegisteredAt?: Date;
     }
   ): Promise<void> {
