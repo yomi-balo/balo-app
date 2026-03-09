@@ -1,7 +1,9 @@
 import { Worker, type Job } from 'bullmq';
-import * as baloDb from '@balo/db';
-const { payoutsRepository } = baloDb;
+import { createRequire } from 'module';
 import type { EntityType } from '@balo/db';
+
+const require = createRequire(import.meta.url);
+const { payoutsRepository } = require('@balo/db');
 import { getRedis } from '../lib/redis.js';
 import { reconstructFormValues, registerBeneficiary } from '../services/airwallex/beneficiary.js';
 import { AirwallexApiError } from '../services/airwallex/errors.js';

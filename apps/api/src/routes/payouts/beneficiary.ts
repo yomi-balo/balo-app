@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import * as baloDb from '@balo/db';
-const { payoutsRepository } = baloDb;
+import { createRequire } from 'module';
 import type { EntityType } from '@balo/db';
+
+const require = createRequire(import.meta.url);
+const { payoutsRepository } = require('@balo/db');
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { getQueue } from '../../lib/queue.js';
 import {

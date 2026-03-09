@@ -161,7 +161,7 @@ export async function registerBeneficiary(
           details?: AirwallexErrorDetail[];
           message?: string;
         };
-        parsedDetails = body.details ?? [];
+        parsedDetails = Array.isArray(body.details) ? body.details : [];
       } catch {
         // detail is not JSON — use the raw string as the error message
       }
