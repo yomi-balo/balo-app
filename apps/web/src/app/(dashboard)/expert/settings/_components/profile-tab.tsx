@@ -9,10 +9,38 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
 import { saveProfileAction } from '../_actions/save-profile';
 import type { ProfileSettingsData } from '@balo/db';
+
+// ── Map support type slugs to ExpertCard SkillType ───────────────
+
+const SUPPORT_TYPE_SLUG_MAP: Record<string, SkillType> = {
+  'technical-fix-support': 'technical',
+  'architecture-integrations': 'architecture',
+  'strategy-best-practices': 'strategy',
+  'platform-training': 'admin',
+};
+
+function buildExpertise(skills: ProfileSettingsData['skills']): ExpertiseItem[] {
+  const groups = new Map<string, ExpertiseItem>();
+
+  for (const s of skills) {
+    if (s.proficiency <= 0) continue;
+    const key = s.skillId;
+    if (!groups.has(key)) {
+      groups.set(key, { product: s.skill.name, skills: [] });
+    }
+    const mapped = SUPPORT_TYPE_SLUG_MAP[s.supportType.slug];
+    if (mapped && !groups.get(key)!.skills.includes(mapped)) {
+      groups.get(key)!.skills.push(mapped);
+    }
+  }
+
+  return Array.from(groups.values());
+}
 
 // ── Form schema ──────────────────────────────────────────────────
 
@@ -75,16 +103,29 @@ export function ProfileTab({
   const fullName = [firstName, lastName].filter(Boolean).join(' ') || 'Expert';
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
 
-  // Map industry IDs to names for the preview
-  const selectedIndustryNames = useMemo(() => {
-    const ids = new Set(watchedValues.industryIds ?? []);
-    return referenceData.industries.filter((i) => ids.has(i.id)).map((i) => i.name);
-  }, [watchedValues.industryIds, referenceData.industries]);
-
-  // Rate display
-  const ratePerMinute = initialProfile.hourlyRate
-    ? (initialProfile.hourlyRate / 100).toFixed(2)
-    : '';
+  // Build ExpertCardData from form watch values + initial profile
+  const expertCardData: ExpertCardData = useMemo(
+    () => ({
+      id: initialProfile.id,
+      name: fullName,
+      initials,
+      avatarKey: avatarUrl,
+      title: watchedValues.headline || initialProfile.headline || 'Salesforce Expert',
+      bio: watchedValues.bio?.trim() || null,
+      location: '',
+      yearsExp: initialProfile.yearStartedSalesforce
+        ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
+        : 0,
+      certifications: initialProfile.certifications?.length ?? 0,
+      consultationCount: 0,
+      rating: null,
+      reviewCount: 0,
+      rate: initialProfile.hourlyRate ? initialProfile.hourlyRate / 100 : 0,
+      available: initialProfile.availableForWork ?? false,
+      expertise: buildExpertise(initialProfile.skills),
+    }),
+    [initialProfile, fullName, initials, avatarUrl, watchedValues.headline, watchedValues.bio]
+  );
 
   const handleSave = async (): Promise<void> => {
     const valid = await form.trigger();
@@ -117,14 +158,9 @@ export function ProfileTab({
 
   const previewPanel = (
     <ProfilePreviewPanel
-      photo={avatarUrl}
-      name={fullName}
-      initials={initials}
-      headline={watchedValues.headline ?? ''}
-      bio={watchedValues.bio ?? ''}
+      expert={expertCardData}
       username={watchedValues.username ?? ''}
-      industries={selectedIndustryNames}
-      ratePerMinute={ratePerMinute}
+      headline={watchedValues.headline ?? ''}
     />
   );
 

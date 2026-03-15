@@ -4,34 +4,25 @@ import { useState, useCallback } from 'react';
 import { Eye, Link, Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
-import { MarketplacePreviewCard } from './marketplace-preview-card';
+import { ExpertCard } from '@/components/expert';
+import type { ExpertCardData } from '@/components/expert';
 import { CompletenessBar } from './completeness-bar';
 
 interface ProfilePreviewPanelProps {
-  photo: string | null;
-  name: string;
-  initials: string;
-  headline: string;
-  bio: string;
+  expert: ExpertCardData;
   username: string;
-  industries: string[];
-  ratePerMinute: string;
+  headline: string;
 }
 
 export function ProfilePreviewPanel({
-  photo,
-  name,
-  initials,
-  headline,
-  bio,
+  expert,
   username,
-  industries,
-  ratePerMinute,
+  headline,
 }: Readonly<ProfilePreviewPanelProps>): React.JSX.Element {
   const completenessFields = [
-    { label: 'Profile photo', done: !!photo },
-    { label: 'Headline', done: headline.length > 0 },
-    { label: 'Bio', done: bio.length >= 80 },
+    { label: 'Profile photo', done: !!expert.avatarKey },
+    { label: 'Headline', done: !!expert.title && expert.title !== 'Salesforce Expert' },
+    { label: 'Bio (min 80 chars)', done: (expert.bio?.length ?? 0) >= 80 },
     { label: 'Username', done: username.length >= 3 },
   ];
 
@@ -46,18 +37,8 @@ export function ProfilePreviewPanel({
         <div className="bg-success h-1.5 w-1.5 animate-pulse rounded-full" />
       </div>
 
-      {/* Marketplace card */}
-      <MarketplacePreviewCard
-        photo={photo}
-        name={name}
-        initials={initials}
-        headline={headline}
-        bio={bio}
-        industries={industries}
-        rating="4.9"
-        reviewCount="47"
-        ratePerMinute={ratePerMinute}
-      />
+      {/* Expert card */}
+      <ExpertCard expert={expert} />
 
       {/* Profile URL preview */}
       {username && username.length >= 3 && <CopyableUrl username={username} />}
@@ -74,7 +55,9 @@ export function ProfilePreviewPanel({
             Search result snippet
           </p>
           <div className="border-border bg-card rounded-lg border p-3">
-            <p className="text-primary text-xs font-semibold">{name} &middot; Salesforce Expert</p>
+            <p className="text-primary text-xs font-semibold">
+              {expert.name} &middot; Salesforce Expert
+            </p>
             <p className="text-muted-foreground mt-0.5 mb-1 text-[11px]">
               balo.expert/experts/{username || 'your-username'}
             </p>

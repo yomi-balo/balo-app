@@ -249,9 +249,6 @@ export function ProfileForm({
           options={industryOptions}
           selected={industryIds ?? []}
           onChange={(v) => form.setValue('industryIds', v, { shouldDirty: true })}
-          className={cn(
-            '[&_button[aria-checked=true]]:from-primary [&_button[aria-checked=true]]:border-transparent [&_button[aria-checked=true]]:bg-gradient-to-r [&_button[aria-checked=true]]:to-violet-600 [&_button[aria-checked=true]]:text-white'
-          )}
         />
       </Card>
 
