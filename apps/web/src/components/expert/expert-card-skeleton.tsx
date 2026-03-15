@@ -41,14 +41,16 @@ export function ExpertCardSkeleton(): React.JSX.Element {
         </div>
       </div>
 
-      {/* Stats strip placeholder */}
-      <div className="border-border/50 flex items-center justify-evenly border-y px-4 py-3">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="flex flex-col items-center gap-1">
-            <div className="bg-muted h-4 w-4 animate-pulse rounded" />
-            <div className="bg-muted h-2.5 w-12 animate-pulse rounded" />
-          </div>
-        ))}
+      {/* Stats strip placeholder — 2 columns to match minimum real state */}
+      <div className="border-border/50 mx-4 border-y">
+        <div className="grid grid-cols-2 py-3">
+          {[1, 2].map((i) => (
+            <div key={i} className="flex flex-col items-center gap-1">
+              <div className="bg-muted h-4 w-4 animate-pulse rounded" />
+              <div className="bg-muted h-2.5 w-12 animate-pulse rounded" />
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Expertise pills placeholder */}

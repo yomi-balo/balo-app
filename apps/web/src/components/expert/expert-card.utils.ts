@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { createElement } from 'react';
-import type { ExpertiseItem } from './expert-card.types';
+import type { ExpertiseItem, SkillType } from './expert-card.types';
 
 // ── Deterministic gradient avatar ────────────────────────────────
 
@@ -27,6 +27,15 @@ export function getGradientFromId(id: string): { from: string; to: string } {
   return GRADIENT_PAIRS[hashString(id) % GRADIENT_PAIRS.length]!;
 }
 
+// ── Skill type labels (for orderBy matching) ────────────────────
+
+const SKILL_LABELS: Record<SkillType, string> = {
+  technical: 'Technical / Dev',
+  architecture: 'Architecture & Integrations',
+  admin: 'Configuration & Admin',
+  strategy: 'Strategy & Consulting',
+};
+
 // ── Expertise ordering ───────────────────────────────────────────
 
 export function getOrderedExpertise(
@@ -39,7 +48,15 @@ export function getOrderedExpertise(
 
   const scored = expertise.map((item, originalIndex) => {
     const productLower = item.product.toLowerCase();
-    const score = terms.reduce((sum, term) => sum + (productLower.includes(term) ? 1 : 0), 0);
+    const productScore = terms.reduce(
+      (sum, term) => sum + (productLower.includes(term) ? 1 : 0),
+      0
+    );
+    const skillScore = item.skills.reduce((sum, sk) => {
+      const label = SKILL_LABELS[sk].toLowerCase();
+      return sum + terms.reduce((s, t) => s + (label.includes(t) ? 1 : 0), 0);
+    }, 0);
+    const score = productScore + skillScore;
     return { item, score, originalIndex };
   });
 
