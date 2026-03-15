@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import Image from 'next/image';
 import { motion } from 'motion/react';
 import {
   Check,
@@ -32,6 +33,7 @@ import {
   getOrderedExpertise,
   buildTagline,
   highlightTagline,
+  SKILL_LABELS,
 } from './expert-card.utils';
 
 // ── Skill icon mapping ───────────────────────────────────────────
@@ -41,13 +43,6 @@ const SKILL_ICON_MAP: Record<SkillType, LucideIcon> = {
   architecture: Layers,
   admin: Settings,
   strategy: Target,
-};
-
-const SKILL_LABELS: Record<SkillType, string> = {
-  technical: 'Technical / Dev',
-  architecture: 'Architecture & Integrations',
-  admin: 'Configuration & Admin',
-  strategy: 'Strategy & Consulting',
 };
 
 const MAX_VISIBLE_PILLS = 3;
@@ -65,10 +60,12 @@ function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
       {/* Background: full-bleed photo or dark gradient with centered initials */}
       {showPhoto ? (
         <>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <Image
             src={getAvatarUrl(expert.avatarKey, 'profile')!}
             alt={expert.name}
+            width={400}
+            height={320}
+            unoptimized
             className="aspect-[5/4] w-full object-cover"
             onError={() => setPhotoError(true)}
           />

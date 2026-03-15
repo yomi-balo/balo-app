@@ -32,7 +32,7 @@ export function ExpertCardSkeleton(): React.JSX.Element {
 
       {/* Bio placeholder */}
       <div className="px-4 pb-3">
-        <div className="border-muted bg-muted/30 animate-pulse rounded-r-lg border-l-2 py-2 pr-3 pl-3">
+        <div className="border-muted bg-muted/30 animate-pulse rounded-lg border-l-2 py-2 pr-3 pl-3">
           <div className="space-y-1.5">
             <div className="bg-muted h-3 w-full rounded" />
             <div className="bg-muted h-3 w-4/5 rounded" />
@@ -41,14 +41,16 @@ export function ExpertCardSkeleton(): React.JSX.Element {
         </div>
       </div>
 
-      {/* Stats strip placeholder */}
-      <div className="border-border/50 flex items-center justify-evenly border-y px-4 py-3">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="flex flex-col items-center gap-1">
-            <div className="bg-muted h-4 w-4 animate-pulse rounded" />
-            <div className="bg-muted h-2.5 w-12 animate-pulse rounded" />
-          </div>
-        ))}
+      {/* Stats strip placeholder — 2 columns to match minimum real state */}
+      <div className="border-border/50 mx-4 border-y">
+        <div className="grid grid-cols-2 py-3">
+          {[1, 2].map((i) => (
+            <div key={i} className="flex flex-col items-center gap-1">
+              <div className="bg-muted h-4 w-4 animate-pulse rounded" />
+              <div className="bg-muted h-2.5 w-12 animate-pulse rounded" />
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Expertise pills placeholder */}
