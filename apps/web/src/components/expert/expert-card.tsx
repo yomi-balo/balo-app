@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import Image from 'next/image';
 import { motion } from 'motion/react';
 import {
   Check,
@@ -65,10 +66,12 @@ function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
       {/* Background: full-bleed photo or dark gradient with centered initials */}
       {showPhoto ? (
         <>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <Image
             src={getAvatarUrl(expert.avatarKey, 'profile')!}
             alt={expert.name}
+            width={400}
+            height={320}
+            unoptimized
             className="aspect-[5/4] w-full object-cover"
             onError={() => setPhotoError(true)}
           />
