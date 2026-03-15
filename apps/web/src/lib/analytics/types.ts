@@ -4,6 +4,7 @@ import type { ExpertEventMap } from './events/expert';
 import type { ExpertSetupEventMap } from './events/expert-setup';
 import type { ExpertRateEventMap } from './events/expert-rate';
 import type { ExpertPayoutEventMap } from './events/expert-payouts';
+import type { AvatarEventMap } from './events/avatar';
 
 /**
  * Union of all event maps in the platform.
@@ -14,6 +15,7 @@ export type AllEvents = AuthEventMap &
   ExpertEventMap &
   ExpertSetupEventMap &
   ExpertRateEventMap &
-  ExpertPayoutEventMap;
+  ExpertPayoutEventMap &
+  AvatarEventMap;
 
 export type EventName = keyof AllEvents;

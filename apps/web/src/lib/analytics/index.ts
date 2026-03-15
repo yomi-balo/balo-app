@@ -6,4 +6,5 @@ export { EXPERT_EVENTS } from './events/expert';
 export { EXPERT_SETUP_EVENTS } from './events/expert-setup';
 export { EXPERT_RATE_EVENTS } from './events/expert-rate';
 export { EXPERT_PAYOUT_EVENTS } from './events/expert-payouts';
+export { AVATAR_EVENTS } from './events/avatar';
 export type { AllEvents, EventName } from './types';

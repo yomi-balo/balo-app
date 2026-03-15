@@ -5,8 +5,27 @@ import { Camera, Upload, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import { uploadAvatarAction } from '../_actions/upload-avatar';
+import { track, AVATAR_EVENTS } from '@/lib/analytics';
+import { getAvatarUrl } from '@/lib/storage/avatar-url';
+import { requestAvatarUploadAction } from '../_actions/request-avatar-upload';
+import { confirmAvatarUploadAction } from '../_actions/confirm-avatar-upload';
 import { removeAvatarAction } from '../_actions/remove-avatar';
+
+const COMPRESSION_OPTIONS = {
+  maxSizeMB: 1,
+  maxWidthOrHeight: 1600,
+  useWebWorker: true,
+  fileType: 'image/webp' as const,
+  initialQuality: 0.85,
+};
+
+type UploadStep = 'compressing' | 'uploading' | 'saving' | null;
+
+const STEP_LABELS: Record<NonNullable<UploadStep>, string> = {
+  compressing: 'Compressing...',
+  uploading: 'Uploading...',
+  saving: 'Saving...',
+};
 
 interface PhotoUploadProps {
   currentAvatarUrl: string | null;
@@ -22,6 +41,7 @@ export function PhotoUpload({
   onRemoveComplete,
 }: Readonly<PhotoUploadProps>): React.JSX.Element {
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStep, setUploadStep] = useState<UploadStep>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -30,32 +50,76 @@ export function PhotoUpload({
     async (file: File) => {
       if (isUploading) return;
 
-      // Client-side validation
-      const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
-      if (!allowedTypes.has(file.type)) {
-        toast.error('Please upload a JPG, PNG, or WebP image.');
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error('Image must be smaller than 5MB.');
+      // Only reject non-image files
+      if (!file.type.startsWith('image/')) {
+        toast.error('Please select an image file.');
         return;
       }
 
       setIsUploading(true);
+      const startTime = Date.now();
+      let failedStep: 'compression' | 'presign' | 'upload' | 'confirm' = 'compression';
+
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const result = await uploadAvatarAction(formData);
-        if (result.success && result.avatarUrl) {
-          onUploadComplete(result.avatarUrl);
-          toast.success('Profile photo updated');
-        } else {
-          toast.error(result.error ?? 'Failed to upload photo');
+        // Track start
+        track(AVATAR_EVENTS.AVATAR_UPLOAD_STARTED, {
+          original_size_kb: Math.round(file.size / 1024),
+          original_type: file.type,
+        });
+
+        // Step 1: Compress
+        setUploadStep('compressing');
+        failedStep = 'compression';
+        const imageCompression = (await import('browser-image-compression')).default;
+        const compressed = await imageCompression(file, COMPRESSION_OPTIONS);
+
+        // Step 2: Get presigned URL
+        setUploadStep('uploading');
+        failedStep = 'presign';
+        const presignResult = await requestAvatarUploadAction({
+          contentType: 'image/webp',
+        });
+        if (!presignResult.success || !presignResult.presignedUrl || !presignResult.key) {
+          throw new Error(presignResult.error ?? 'Failed to prepare upload');
         }
-      } catch {
-        toast.error('Failed to upload photo. Please try again.');
+
+        // Step 3: Upload directly to R2
+        failedStep = 'upload';
+        const uploadResponse = await fetch(presignResult.presignedUrl, {
+          method: 'PUT',
+          body: compressed,
+          headers: { 'Content-Type': 'image/webp' },
+        });
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload failed with status ${uploadResponse.status}`);
+        }
+
+        // Step 4: Confirm on server
+        setUploadStep('saving');
+        failedStep = 'confirm';
+        const confirmResult = await confirmAvatarUploadAction({ key: presignResult.key });
+        if (!confirmResult.success) {
+          throw new Error(confirmResult.error ?? 'Failed to save photo');
+        }
+
+        // Success
+        onUploadComplete(confirmResult.avatarUrl!);
+        toast.success('Profile photo updated');
+        track(AVATAR_EVENTS.AVATAR_UPLOAD_COMPLETED, {
+          compressed_size_kb: Math.round(compressed.size / 1024),
+          compression_ratio: +(file.size / compressed.size).toFixed(1),
+          duration_ms: Date.now() - startTime,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Failed to upload photo';
+        toast.error(errorMessage);
+        track(AVATAR_EVENTS.AVATAR_UPLOAD_FAILED, {
+          step: failedStep,
+          error: errorMessage,
+        });
       } finally {
         setIsUploading(false);
+        setUploadStep(null);
       }
     },
     [isUploading, onUploadComplete]
@@ -69,6 +133,7 @@ export function PhotoUpload({
       if (result.success) {
         onRemoveComplete();
         toast.success('Profile photo removed');
+        track(AVATAR_EVENTS.AVATAR_REMOVED, {});
       } else {
         toast.error(result.error ?? 'Failed to remove photo');
       }
@@ -113,6 +178,8 @@ export function PhotoUpload({
     [handleUpload]
   );
 
+  const displayUrl = getAvatarUrl(currentAvatarUrl, 'profile');
+
   return (
     <div className="flex items-start gap-6">
       {/* Avatar */}
@@ -133,8 +200,8 @@ export function PhotoUpload({
           )}
           aria-label="Change profile photo"
         >
-          {currentAvatarUrl ? (
-            <img src={currentAvatarUrl} alt="Profile" className="h-full w-full object-cover" />
+          {displayUrl ? (
+            <img src={displayUrl} alt="Profile" className="h-full w-full object-cover" />
           ) : (
             <span className="text-2xl font-semibold text-white">{initials}</span>
           )}
@@ -160,8 +227,8 @@ export function PhotoUpload({
       <div className="flex-1">
         <p className="text-foreground text-sm font-semibold">Profile Photo</p>
         <p className="text-muted-foreground mt-1 mb-3 text-xs leading-relaxed">
-          A professional headshot helps clients feel confident booking you. JPG or PNG, at least
-          400x400px.
+          A professional headshot helps clients feel confident booking you. Any image format, up to
+          20 MB.
         </p>
         <div className="flex gap-2">
           <Button
@@ -176,7 +243,7 @@ export function PhotoUpload({
             ) : (
               <Upload className="mr-1.5 h-3.5 w-3.5" />
             )}
-            {isUploading ? 'Uploading...' : 'Upload photo'}
+            {uploadStep ? STEP_LABELS[uploadStep] : 'Upload photo'}
           </Button>
           {currentAvatarUrl && (
             <Button
@@ -202,7 +269,7 @@ export function PhotoUpload({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         onChange={handleFileChange}
         className="hidden"
         aria-hidden="true"

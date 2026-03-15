@@ -2,6 +2,7 @@
 
 import { Star, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getAvatarUrl } from '@/lib/storage/avatar-url';
 
 interface MarketplacePreviewCardProps {
   photo: string | null;
@@ -50,7 +51,11 @@ export function MarketplacePreviewCard({
             )}
           >
             {hasPhoto ? (
-              <img src={photo} alt="" className="h-full w-full object-cover" />
+              <img
+                src={getAvatarUrl(photo, 'thumbnail') ?? undefined}
+                alt=""
+                className="h-full w-full object-cover"
+              />
             ) : (
               <span className="text-lg font-semibold text-white">{initials}</span>
             )}
