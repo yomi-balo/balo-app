@@ -7,15 +7,13 @@ import {
   Star,
   Heart,
   MapPin,
-  Briefcase,
   Award,
-  Monitor,
-  User,
   Video,
-  Wrench,
-  Blocks,
-  Shield,
-  Compass,
+  User,
+  Code,
+  Layers,
+  Settings,
+  Target,
   ChevronRight,
   type LucideIcon,
 } from 'lucide-react';
@@ -39,17 +37,17 @@ import {
 // ── Skill icon mapping ───────────────────────────────────────────
 
 const SKILL_ICON_MAP: Record<SkillType, LucideIcon> = {
-  technical: Wrench,
-  architecture: Blocks,
-  admin: Shield,
-  strategy: Compass,
+  technical: Code,
+  architecture: Layers,
+  admin: Settings,
+  strategy: Target,
 };
 
 const SKILL_LABELS: Record<SkillType, string> = {
-  technical: 'Technical',
-  architecture: 'Architecture',
-  admin: 'Admin',
-  strategy: 'Strategy',
+  technical: 'Technical / Dev',
+  architecture: 'Architecture & Integrations',
+  admin: 'Configuration & Admin',
+  strategy: 'Strategy & Consulting',
 };
 
 const MAX_VISIBLE_PILLS = 3;
@@ -58,11 +56,49 @@ const MAX_VISIBLE_PILLS = 3;
 
 function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
   const [photoError, setPhotoError] = useState(false);
+  const [liked, setLiked] = useState(false);
   const showPhoto = !!expert.avatarKey && !photoError;
   const gradient = getGradientFromId(expert.id);
 
   return (
-    <div className="relative bg-gradient-to-br from-[#0F1729] to-[#1E293B] px-4 pt-4 pb-5 dark:from-[#0a0f1a] dark:to-[#151d2e]">
+    <div className="relative">
+      {/* Background: full-bleed photo or dark gradient with centered initials */}
+      {showPhoto ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={getAvatarUrl(expert.avatarKey, 'profile')!}
+            alt={expert.name}
+            className="aspect-[5/4] w-full object-cover"
+            onError={() => setPhotoError(true)}
+          />
+          {/* Scrim — only covers bottom third for overlay text readability */}
+          <div className="absolute right-0 bottom-0 left-0 h-1/3 bg-gradient-to-t from-black/75 to-transparent" />
+        </>
+      ) : (
+        <div className="bg-gradient-to-br from-[#0F1729] to-[#1E293B] px-4 pt-4 pb-5 dark:from-[#0a0f1a] dark:to-[#151d2e]">
+          {/* Centered avatar with gradient ring — no-photo state only */}
+          <div className="mt-4 flex justify-center">
+            <div className="rounded-full bg-gradient-to-br from-blue-500 to-violet-600 p-[3px]">
+              <div className="rounded-full border-[3px] border-[#0F1729] dark:border-[#0a0f1a]">
+                <div
+                  className={cn(
+                    'flex h-[88px] w-[88px] items-center justify-center rounded-full bg-gradient-to-br',
+                    gradient.from,
+                    gradient.to
+                  )}
+                >
+                  <span className="text-2xl font-semibold text-white select-none">
+                    {expert.initials}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Overlay elements — positioned absolutely over both photo and no-photo states */}
       {/* Availability pill */}
       {expert.available && (
         <div className="bg-success/20 absolute top-3 left-3 flex items-center gap-1.5 rounded-full px-2.5 py-1">
@@ -74,44 +110,31 @@ function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
         </div>
       )}
 
-      {/* Favorite icon */}
-      <div className="absolute top-3 right-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10">
-          <Heart className="h-4 w-4 text-white/70" />
-        </div>
-      </div>
+      {/* Favorite toggle */}
+      <motion.button
+        type="button"
+        className="absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full bg-gray-600/60 backdrop-blur-sm"
+        onClick={() => setLiked((prev) => !prev)}
+        whileTap={{ scale: 0.85 }}
+        aria-label={liked ? 'Remove from favorites' : 'Add to favorites'}
+      >
+        <motion.div
+          key={liked ? 'liked' : 'unliked'}
+          initial={{ scale: 0 }}
+          animate={{ scale: [0, 1.2, 1] }}
+          transition={{ duration: 0.3, ease: 'easeOut' }}
+        >
+          <Heart className={cn('h-4 w-4', liked ? 'fill-red-500 text-red-500' : 'text-white')} />
+        </motion.div>
+      </motion.button>
 
-      {/* Centered avatar with gradient ring */}
-      <div className="mt-4 flex justify-center">
-        <div className="rounded-full bg-gradient-to-br from-blue-500 to-violet-600 p-[3px]">
-          <div className="rounded-full border-[3px] border-[#0F1729] dark:border-[#0a0f1a]">
-            {showPhoto ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={getAvatarUrl(expert.avatarKey, 'thumbnail')!}
-                alt={expert.name}
-                className="h-[88px] w-[88px] rounded-full object-cover"
-                onError={() => setPhotoError(true)}
-              />
-            ) : (
-              <div
-                className={cn(
-                  'flex h-[88px] w-[88px] items-center justify-center rounded-full bg-gradient-to-br',
-                  gradient.from,
-                  gradient.to
-                )}
-              >
-                <span className="text-2xl font-semibold text-white select-none">
-                  {expert.initials}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Name + Rate row */}
-      <div className="mt-3 flex items-start justify-between">
+      {/* Name + Rate row — overlaid at bottom */}
+      <div
+        className={cn(
+          'flex items-end justify-between px-4 pb-4',
+          showPhoto ? 'absolute right-0 bottom-0 left-0' : 'mt-3'
+        )}
+      >
         <div>
           <div className="flex items-center gap-1.5">
             <p className="text-[15px] font-semibold text-white">{expert.name}</p>
@@ -162,16 +185,14 @@ function TitleSection({
 }): React.JSX.Element {
   return (
     <div className="px-4 pt-3 pb-2">
-      <div className="line-clamp-2">
-        <p className="text-foreground text-[13px] leading-snug font-semibold">
-          {expert.title}
-          {tagline && (
-            <span className="text-muted-foreground ml-1 text-[12px] font-normal">
-              {' '}
-              <span className="text-muted-foreground/50">&middot;</span> {highlightedTagline}
-            </span>
-          )}
-        </p>
+      <div className="line-clamp-2 text-[13px] leading-snug">
+        <span className="text-foreground font-semibold">{expert.title}</span>
+        {tagline && (
+          <span className="text-muted-foreground text-[12px] font-normal">
+            {' '}
+            <span className="text-muted-foreground/50">&middot;</span> {highlightedTagline}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -182,10 +203,8 @@ function TitleSection({
 function BioSection({ bio }: { bio: string }): React.JSX.Element {
   return (
     <div className="px-4 pb-3">
-      <div className="border-primary/40 bg-primary/5 rounded-r-lg border-l-2 py-2 pr-3 pl-3">
-        <p className="text-muted-foreground line-clamp-3 text-[12px] leading-relaxed italic">
-          {bio}
-        </p>
+      <div className="border-l-primary/40 bg-muted/60 rounded-lg border-l-2 py-2 pr-3 pl-3">
+        <p className="text-foreground/70 line-clamp-3 text-[12px] leading-relaxed italic">{bio}</p>
       </div>
     </div>
   );
@@ -202,23 +221,31 @@ interface StatItemData {
 function StatsStrip({ expert }: { expert: ExpertCardData }): React.JSX.Element {
   const visibleStats: StatItemData[] = [
     { label: expert.location || 'Remote', value: '', icon: MapPin },
-    { label: `${expert.yearsExp}y exp`, value: '', icon: Briefcase },
+    { label: `${expert.yearsExp}y exp`, value: '', icon: Award },
     ...(expert.certifications > 0
       ? [{ label: `${expert.certifications} certs`, value: '', icon: Award }]
       : []),
     ...(expert.consultationCount > 0
-      ? [{ label: `${expert.consultationCount} sessions`, value: '', icon: Monitor }]
+      ? [{ label: `${expert.consultationCount} sessions`, value: '', icon: Video }]
       : []),
   ];
 
   return (
-    <div className="border-border/50 flex items-center justify-evenly border-y px-4 py-3">
-      {visibleStats.map((stat) => (
-        <div key={stat.label} className="flex flex-col items-center gap-1">
-          <stat.icon className="text-primary h-4 w-4" />
-          <span className="text-muted-foreground text-[10px] font-medium">{stat.label}</span>
+    <div className="mx-4">
+      <div className="border-border/50 border-y">
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: `repeat(${visibleStats.length}, 1fr)` }}
+        >
+          {visibleStats.map((stat, i) => (
+            <div key={stat.label} className="relative flex flex-col items-center gap-1 py-3">
+              {i > 0 && <span className="bg-border/50 absolute top-2 bottom-2 left-0 w-px" />}
+              <stat.icon className="text-primary h-4 w-4" />
+              <span className="text-muted-foreground text-[10px] font-medium">{stat.label}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -233,40 +260,42 @@ function ExpertisePills({ expertise }: { expertise: ExpertiseItem[] }): React.JS
 
   return (
     <TooltipProvider delayDuration={0}>
-      <div className="flex flex-col gap-2 px-4 py-3">
+      <div className="flex flex-col gap-[5px] px-4 pt-3 pb-0.5">
         {visibleExpertise.map((item) => (
           <div
             key={item.product}
-            className="border-border/60 bg-card flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5"
+            className="text-primary border-primary/[0.18] bg-primary/[0.07] flex w-fit items-center gap-1.5 self-start rounded-full border px-2.5 py-[5px] text-[11px] font-semibold"
           >
-            <span className="text-foreground text-xs font-medium">{item.product}</span>
+            <span>{item.product}</span>
             {item.skills.length > 0 && (
-              <span className="flex items-center gap-1">
-                {item.skills.map((skill) => {
-                  const Icon = SKILL_ICON_MAP[skill];
-                  return (
-                    <Tooltip key={skill}>
-                      <TooltipTrigger asChild>
-                        <span className="text-primary/60 hover:text-primary inline-flex h-4 w-4 cursor-help items-center justify-center transition-colors">
-                          <Icon className="h-3.5 w-3.5" />
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>{SKILL_LABELS[skill]}</TooltipContent>
-                    </Tooltip>
-                  );
-                })}
-              </span>
+              <>
+                <span className="bg-primary/20 h-3 w-px shrink-0" />
+                <span className="flex items-center">
+                  {item.skills.map((skill) => {
+                    const Icon = SKILL_ICON_MAP[skill];
+                    return (
+                      <Tooltip key={skill}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex h-6 w-6 cursor-default items-center justify-center">
+                            <Icon className="h-[11px] w-[11px]" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>{SKILL_LABELS[skill]}</TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+                </span>
+              </>
             )}
           </div>
         ))}
         {overflowCount > 0 && (
-          <button
-            type="button"
-            className="text-primary flex items-center gap-0.5 text-xs font-medium"
-          >
-            +{overflowCount} more products
-            <ChevronRight className="h-3 w-3" />
-          </button>
+          <div className="flex items-center gap-0.5 pb-2.5 pl-1">
+            <span className="text-primary text-[11px] font-semibold">
+              +{overflowCount} more products
+            </span>
+            <ChevronRight className="text-primary h-[11px] w-[11px]" />
+          </div>
         )}
       </div>
     </TooltipProvider>
@@ -283,7 +312,7 @@ function CtaRow({
   onViewProfile?: () => void;
 }): React.JSX.Element {
   return (
-    <div className="border-border flex items-center gap-2 border-t px-4 py-3">
+    <div className="mx-4 flex items-center gap-2 py-3">
       {onViewProfile ? (
         <motion.button
           type="button"

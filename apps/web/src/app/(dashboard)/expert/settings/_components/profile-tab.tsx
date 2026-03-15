@@ -9,11 +9,38 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-import type { ExpertCardData } from '@/components/expert';
+import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
 import { saveProfileAction } from '../_actions/save-profile';
 import type { ProfileSettingsData } from '@balo/db';
+
+// ── Map support type slugs to ExpertCard SkillType ───────────────
+
+const SUPPORT_TYPE_SLUG_MAP: Record<string, SkillType> = {
+  'technical-fix-support': 'technical',
+  'architecture-integrations': 'architecture',
+  'strategy-best-practices': 'strategy',
+  'platform-training': 'admin',
+};
+
+function buildExpertise(skills: ProfileSettingsData['skills']): ExpertiseItem[] {
+  const groups = new Map<string, ExpertiseItem>();
+
+  for (const s of skills) {
+    if (s.proficiency <= 0) continue;
+    const key = s.skillId;
+    if (!groups.has(key)) {
+      groups.set(key, { product: s.skill.name, skills: [] });
+    }
+    const mapped = SUPPORT_TYPE_SLUG_MAP[s.supportType.slug];
+    if (mapped && !groups.get(key)!.skills.includes(mapped)) {
+      groups.get(key)!.skills.push(mapped);
+    }
+  }
+
+  return Array.from(groups.values());
+}
 
 // ── Form schema ──────────────────────────────────────────────────
 
@@ -95,7 +122,7 @@ export function ProfileTab({
       reviewCount: 0,
       rate: initialProfile.hourlyRate ? initialProfile.hourlyRate / 100 : 0,
       available: initialProfile.availableForWork ?? false,
-      expertise: [],
+      expertise: buildExpertise(initialProfile.skills),
     }),
     [initialProfile, fullName, initials, avatarUrl, watchedValues.headline, watchedValues.bio]
   );
