@@ -228,8 +228,7 @@ export function PhotoUpload({
       <div className="flex-1">
         <p className="text-foreground text-sm font-semibold">Profile Photo</p>
         <p className="text-muted-foreground mt-1 mb-3 text-xs leading-relaxed">
-          A professional headshot helps clients feel confident booking you. Any image format, up to
-          20 MB.
+          A professional headshot helps clients feel confident booking you. Max 5 MB.
         </p>
         <div className="flex gap-2">
           <Button
