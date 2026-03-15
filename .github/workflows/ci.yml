@@ -68,13 +68,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Run Tests with Coverage
-        run: pnpm test:run --coverage
+        run: pnpm test:coverage
 
       - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v4
         if: always()
         with:
-          files: ./apps/web/coverage/lcov.info,./apps/api/coverage/lcov.info
+          files: ./coverage/lcov.info
           fail_ci_if_error: false
 
       - name: SonarCloud Scan
