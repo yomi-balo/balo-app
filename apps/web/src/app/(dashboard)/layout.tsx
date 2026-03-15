@@ -1,4 +1,6 @@
+import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
+import { syncSessionWithDb } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { TopNav } from '@/components/layout/top-nav';
@@ -11,6 +13,14 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }): Promise<React.JSX.Element> {
+  // Lazy session sync: compare session cookie vs DB on every page load
+  const syncResult = await syncSessionWithDb();
+
+  if (syncResult.action === 'invalidated') {
+    redirect(`/login?error=account_${syncResult.reason}`);
+  }
+
+  // After sync, session is guaranteed fresh — read user normally
   const user = await getCurrentUser();
 
   // Fetch checklist status only for expert mode users with a profile

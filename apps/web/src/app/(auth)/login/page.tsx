@@ -9,6 +9,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing_code: 'Authentication was incomplete. Please try again.',
   session_expired: 'Your session has expired. Please sign in again.',
   access_denied: 'Access was denied by the authentication provider.',
+  account_suspended: 'Your account has been suspended. Please contact support.',
+  account_deleted: 'Your account is no longer active. Please contact support.',
 };
 
 const VALID_ERROR_CODES = new Set(Object.keys(ERROR_MESSAGES));

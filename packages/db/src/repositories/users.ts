@@ -1,47 +1,98 @@
-import { eq } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { users, companies, companyMembers, type User, type NewUser } from '../schema';
+import {
+  users,
+  companies,
+  companyMembers,
+  expertProfiles,
+  type User,
+  type NewUser,
+} from '../schema';
 
 export const usersRepository = {
   /**
-   * Find user by internal UUID
+   * Find user by internal UUID (excludes soft-deleted)
    */
   findById: async (id: string): Promise<User | undefined> => {
     return db.query.users.findFirst({
-      where: eq(users.id, id),
+      where: and(eq(users.id, id), isNull(users.deletedAt)),
     });
   },
 
   /**
-   * Find user by WorkOS ID (used in auth callback)
+   * Find user by WorkOS ID (used in auth callback, excludes soft-deleted)
    */
   findByWorkosId: async (workosId: string): Promise<User | undefined> => {
     return db.query.users.findFirst({
-      where: eq(users.workosId, workosId),
+      where: and(eq(users.workosId, workosId), isNull(users.deletedAt)),
     });
   },
 
   /**
-   * Find user by email
+   * Find user by email (excludes soft-deleted)
    */
   findByEmail: async (email: string): Promise<User | undefined> => {
     return db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: and(eq(users.email, email), isNull(users.deletedAt)),
     });
   },
 
   /**
-   * Find user with their company membership (for session hydration)
+   * Find user with their company membership (for session hydration, excludes soft-deleted)
    */
   findWithCompany: async (id: string) => {
     return db.query.users.findFirst({
-      where: eq(users.id, id),
+      where: and(eq(users.id, id), isNull(users.deletedAt)),
       with: {
         companyMemberships: {
           with: { company: true },
         },
       },
     });
+  },
+
+  /**
+   * Find user by internal UUID including soft-deleted users
+   */
+  findByIdIncludingDeleted: async (id: string): Promise<User | undefined> => {
+    return db.query.users.findFirst({
+      where: eq(users.id, id),
+    });
+  },
+
+  /**
+   * Soft-delete a user by setting deletedAt to the current timestamp
+   */
+  softDelete: async (id: string): Promise<User> => {
+    const [user] = await db
+      .update(users)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return user!;
+  },
+
+  /**
+   * Find minimal user fields for session sync comparison.
+   * Intentionally does NOT filter deletedAt — needs to detect deleted users.
+   * Returns: status, activeMode, platformRole, onboardingCompleted, deletedAt, expertProfileId
+   */
+  findForSessionSync: async (id: string) => {
+    const rows = await db
+      .select({
+        status: users.status,
+        activeMode: users.activeMode,
+        platformRole: users.platformRole,
+        onboardingCompleted: users.onboardingCompleted,
+        deletedAt: users.deletedAt,
+        expertProfileId: expertProfiles.id,
+      })
+      .from(users)
+      .leftJoin(expertProfiles, eq(expertProfiles.userId, users.id))
+      .where(eq(users.id, id))
+      .limit(1);
+
+    return rows[0] ?? null;
   },
 
   /**
