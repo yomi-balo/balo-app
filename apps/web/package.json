@@ -14,7 +14,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1004.0",
+    "@aws-sdk/client-s3": "^3.1009.0",
     "@aws-sdk/s3-request-presigner": "^3.1009.0",
     "@balo/db": "workspace:*",
     "@balo/shared": "workspace:*",

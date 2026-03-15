@@ -8,11 +8,6 @@ import { log } from '@/lib/logging';
 // ── Constants ──
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const PRESIGN_TTL_SECONDS = 60;
-// Note: R2 presigned PUT URLs do not support Content-Length-Range conditions
-// (that requires presigned POST). Client-side compression targets ~1 MB output,
-// so server-side size enforcement is deferred. If needed, use HeadObjectCommand
-// in confirmAvatarUploadAction to verify object size before persisting.
-
 // ── Avatar key generation ──
 export function generateAvatarKey(userId: string): string {
   return `avatars/${userId}/${crypto.randomUUID()}.webp`;
@@ -37,9 +32,7 @@ export async function createPresignedAvatarUpload(
     ContentType: contentType,
   });
 
-  // @smithy/types version mismatch between @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const presignedUrl = await getSignedUrl(r2Client as any, command as any, {
+  const presignedUrl = await getSignedUrl(r2Client, command, {
     expiresIn: PRESIGN_TTL_SECONDS,
   });
 

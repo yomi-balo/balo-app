@@ -1,4 +1,8 @@
-const CDN_URL = process.env.NEXT_PUBLIC_CDN_URL ?? '';
+const CDN_URL = process.env.NEXT_PUBLIC_CDN_URL;
+
+if (!CDN_URL && process.env.NODE_ENV === 'production') {
+  throw new Error('NEXT_PUBLIC_CDN_URL is required in production');
+}
 
 const SIZE_PARAMS: Record<'thumbnail' | 'profile', string> = {
   thumbnail: 'width=200,height=200,fit=cover,quality=80',
@@ -12,6 +16,7 @@ export function getAvatarUrl(
   if (!avatarKeyOrUrl) return null;
   // Legacy full URLs (existing uploads, OAuth provider URLs)
   if (avatarKeyOrUrl.startsWith('http')) return avatarKeyOrUrl;
-  // R2 key -> Cloudflare Image Resizing transform URL
+  // R2 key → Cloudflare Image Resizing transform URL
+  if (!CDN_URL) return null;
   return `${CDN_URL}/cdn-cgi/image/${SIZE_PARAMS[size]}/${avatarKeyOrUrl}`;
 }

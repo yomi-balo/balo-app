@@ -76,8 +76,9 @@ export function PhotoUpload({
         // Step 2: Get presigned URL
         setUploadStep('uploading');
         failedStep = 'presign';
+        const compressedType = compressed.type || 'image/webp';
         const presignResult = await requestAvatarUploadAction({
-          contentType: 'image/webp',
+          contentType: compressedType,
         });
         if (!presignResult.success || !presignResult.presignedUrl || !presignResult.key) {
           throw new Error(presignResult.error ?? 'Failed to prepare upload');
@@ -88,7 +89,7 @@ export function PhotoUpload({
         const uploadResponse = await fetch(presignResult.presignedUrl, {
           method: 'PUT',
           body: compressed,
-          headers: { 'Content-Type': 'image/webp' },
+          headers: { 'Content-Type': compressedType },
         });
         if (!uploadResponse.ok) {
           throw new Error(`Upload failed with status ${uploadResponse.status}`);
