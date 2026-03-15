@@ -100,7 +100,7 @@ export function UsernameInput({
     <div>
       <div className="flex">
         <span className="border-input bg-muted text-muted-foreground inline-flex h-9 items-center rounded-l-md border border-r-0 px-3 text-xs sm:text-sm">
-          balo.expert/@
+          balo.expert/experts/
         </span>
         <Input
           value={value}
@@ -121,7 +121,7 @@ export function UsernameInput({
       {status === 'available' && (
         <p className="text-success mt-1.5 flex items-center gap-1.5 text-xs">
           <Check className="h-3 w-3" />
-          balo.expert/@{value} is available
+          balo.expert/experts/{value} is available
         </p>
       )}
       {status === 'taken' && (

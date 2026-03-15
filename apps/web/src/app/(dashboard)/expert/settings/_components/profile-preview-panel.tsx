@@ -62,7 +62,7 @@ export function ProfilePreviewPanel({
         <div className="bg-primary/5 border-primary/20 animate-in fade-in mt-3 flex items-center gap-2 rounded-lg border p-2.5 duration-300">
           <Link className="text-primary h-3.5 w-3.5 shrink-0" />
           <span className="text-primary text-xs font-medium break-all">
-            balo.expert/@{username}
+            balo.expert/experts/{username}
           </span>
         </div>
       )}
@@ -81,7 +81,7 @@ export function ProfilePreviewPanel({
           <div className="border-border bg-card rounded-lg border p-3">
             <p className="text-primary text-xs font-semibold">{name} &middot; Salesforce Expert</p>
             <p className="text-muted-foreground mt-0.5 mb-1 text-[11px]">
-              balo.expert/@{username || 'your-username'}
+              balo.expert/experts/{username || 'your-username'}
             </p>
             <p className="text-muted-foreground line-clamp-2 text-[11px] leading-relaxed">
               {headline}

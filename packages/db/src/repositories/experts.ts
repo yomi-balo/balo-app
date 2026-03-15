@@ -105,6 +105,18 @@ export const expertsRepository = {
     });
   },
 
+  /** Find expert profile by username (for public profile page) */
+  async findByUsername(username: string) {
+    return db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.username, username),
+      with: {
+        user: {
+          columns: { id: true, firstName: true, lastName: true, avatarUrl: true },
+        },
+      },
+    });
+  },
+
   /** Check if a username is available, optionally excluding a specific profile */
   async checkUsernameAvailability(username: string, excludeProfileId?: string): Promise<boolean> {
     const conditions = [eq(expertProfiles.username, username)];
