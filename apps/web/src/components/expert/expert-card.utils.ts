@@ -29,12 +29,16 @@ export function getGradientFromId(id: string): { from: string; to: string } {
 
 // ── Skill type labels (for orderBy matching) ────────────────────
 
-const SKILL_LABELS: Record<SkillType, string> = {
+export const SKILL_LABELS: Record<SkillType, string> = {
   technical: 'Technical / Dev',
   architecture: 'Architecture & Integrations',
   admin: 'Configuration & Admin',
   strategy: 'Strategy & Consulting',
 };
+
+const SKILL_LABELS_LOWER: Record<SkillType, string> = Object.fromEntries(
+  Object.entries(SKILL_LABELS).map(([k, v]) => [k, v.toLowerCase()])
+) as Record<SkillType, string>;
 
 // ── Expertise ordering ───────────────────────────────────────────
 
@@ -53,7 +57,7 @@ export function getOrderedExpertise(
       0
     );
     const skillScore = item.skills.reduce((sum, sk) => {
-      const label = SKILL_LABELS[sk].toLowerCase();
+      const label = SKILL_LABELS_LOWER[sk];
       return sum + terms.reduce((s, t) => s + (label.includes(t) ? 1 : 0), 0);
     }, 0);
     const score = productScore + skillScore;

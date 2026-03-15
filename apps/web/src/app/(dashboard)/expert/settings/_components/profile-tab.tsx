@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import { PLATFORM_PRICING } from '@/lib/constants/platform';
 import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
@@ -120,7 +121,9 @@ export function ProfileTab({
       consultationCount: 0,
       rating: null,
       reviewCount: 0,
-      rate: initialProfile.hourlyRate ? (initialProfile.hourlyRate / 100) * 1.25 : 0,
+      rate: initialProfile.hourlyRate
+        ? (initialProfile.hourlyRate / 100) * PLATFORM_PRICING.MARKUP_MULTIPLIER
+        : 0,
       available: initialProfile.availableForWork ?? false,
       expertise: buildExpertise(initialProfile.skills),
     }),

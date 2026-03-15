@@ -32,7 +32,7 @@ export function ExpertCardSkeleton(): React.JSX.Element {
 
       {/* Bio placeholder */}
       <div className="px-4 pb-3">
-        <div className="border-muted bg-muted/30 animate-pulse rounded-r-lg border-l-2 py-2 pr-3 pl-3">
+        <div className="border-muted bg-muted/30 animate-pulse rounded-lg border-l-2 py-2 pr-3 pl-3">
           <div className="space-y-1.5">
             <div className="bg-muted h-3 w-full rounded" />
             <div className="bg-muted h-3 w-4/5 rounded" />

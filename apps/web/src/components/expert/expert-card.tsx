@@ -33,6 +33,7 @@ import {
   getOrderedExpertise,
   buildTagline,
   highlightTagline,
+  SKILL_LABELS,
 } from './expert-card.utils';
 
 // ── Skill icon mapping ───────────────────────────────────────────
@@ -42,13 +43,6 @@ const SKILL_ICON_MAP: Record<SkillType, LucideIcon> = {
   architecture: Layers,
   admin: Settings,
   strategy: Target,
-};
-
-const SKILL_LABELS: Record<SkillType, string> = {
-  technical: 'Technical / Dev',
-  architecture: 'Architecture & Integrations',
-  admin: 'Configuration & Admin',
-  strategy: 'Strategy & Consulting',
 };
 
 const MAX_VISIBLE_PILLS = 3;
