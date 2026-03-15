@@ -1,6 +1,8 @@
 'use client';
 
-import { Eye, Link } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { Eye, Link, Copy, Check } from 'lucide-react';
+import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { MarketplacePreviewCard } from './marketplace-preview-card';
 import { CompletenessBar } from './completeness-bar';
@@ -58,14 +60,7 @@ export function ProfilePreviewPanel({
       />
 
       {/* Profile URL preview */}
-      {username && username.length >= 3 && (
-        <div className="bg-primary/5 border-primary/20 animate-in fade-in mt-3 flex items-center gap-2 rounded-lg border p-2.5 duration-300">
-          <Link className="text-primary h-3.5 w-3.5 shrink-0" />
-          <span className="text-primary text-xs font-medium break-all">
-            balo.expert/experts/{username}
-          </span>
-        </div>
-      )}
+      {username && username.length >= 3 && <CopyableUrl username={username} />}
 
       {/* Completeness */}
       <Card className="mt-3 p-4">
@@ -89,6 +84,33 @@ export function ProfilePreviewPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CopyableUrl({ username }: { username: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const url = `balo.expert/experts/${username}`;
+
+  const handleCopy = useCallback(async () => {
+    await navigator.clipboard.writeText(`https://${url}`);
+    setCopied(true);
+    toast.success('Profile URL copied');
+    setTimeout(() => setCopied(false), 2000);
+  }, [url]);
+
+  return (
+    <div className="bg-primary/5 border-primary/20 animate-in fade-in mt-3 flex items-center gap-2 rounded-lg border p-2.5 duration-300">
+      <Link className="text-primary h-3.5 w-3.5 shrink-0" />
+      <span className="text-primary flex-1 text-xs font-medium break-all">{url}</span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="text-primary/60 hover:text-primary shrink-0 transition-colors"
+        aria-label="Copy profile URL"
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
     </div>
   );
 }
