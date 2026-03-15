@@ -1,12 +1,8 @@
 const CDN_URL = process.env.NEXT_PUBLIC_CDN_URL;
 
-if (!CDN_URL && process.env.NODE_ENV === 'production') {
-  throw new Error('NEXT_PUBLIC_CDN_URL is required in production');
-}
-
 const SIZE_PARAMS: Record<'thumbnail' | 'profile', string> = {
-  thumbnail: 'width=200,height=200,fit=cover,quality=80',
-  profile: 'width=600,height=600,fit=cover,quality=85',
+  thumbnail: 'width=200,height=200,fit=cover,gravity=face,zoom=0.3,quality=80',
+  profile: 'width=600,height=600,fit=cover,gravity=face,zoom=0.3,quality=85',
 };
 
 export function getAvatarUrl(
