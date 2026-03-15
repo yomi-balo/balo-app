@@ -4,10 +4,25 @@ import { SetupContextBar } from './_components/setup-context-bar';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
-import { payoutsRepository, type BeneficiaryStatus } from '@balo/db';
+import {
+  payoutsRepository,
+  expertsRepository,
+  referenceDataRepository,
+  type BeneficiaryStatus,
+  type ProfileSettingsData,
+  type CertificationsByCategory,
+} from '@balo/db';
 import type { PayoutDetailsSummary } from './_components/payouts-tab';
 
-const VALID_TABS = new Set<string>(['profile', 'expertise', 'rate', 'schedule', 'payouts']);
+const VALID_TABS = new Set<string>([
+  'profile',
+  'expertise',
+  'workHistory',
+  'certifications',
+  'rate',
+  'schedule',
+  'payouts',
+]);
 const VALID_SETUP_KEYS = new Set<string>(CHECKLIST_ITEMS.map((item) => item.key));
 
 interface ExpertSettingsPageProps {
@@ -34,25 +49,60 @@ export default async function ExpertSettingsPage({
 
   // Fetch initial payout details for the expert
   let initialPayoutDetails: PayoutDetailsSummary | null = null;
+
+  // Fetch profile data and reference data for the profile/expertise/work-history/certifications tabs
+  let profileData: ProfileSettingsData | null = null;
+  let allLanguages: Array<{ id: string; name: string; code: string; flagEmoji: string | null }> =
+    [];
+  let allIndustries: Array<{ id: string; name: string }> = [];
+  let certCategories: CertificationsByCategory[] | null = null;
+
   try {
     const session = await getSession();
     if (session?.user?.expertProfileId) {
-      const details = await payoutsRepository.findByExpertProfileId(session.user.expertProfileId);
-      if (details) {
+      const [payoutDetails, profile, languages, industries, certs] = await Promise.all([
+        payoutsRepository.findByExpertProfileId(session.user.expertProfileId),
+        expertsRepository.findProfileForSettings(session.user.expertProfileId),
+        referenceDataRepository.getLanguages(),
+        referenceDataRepository.getIndustries(),
+        session.user.verticalId
+          ? referenceDataRepository.getCertificationsByVertical(session.user.verticalId)
+          : Promise.resolve([]),
+      ]);
+
+      if (payoutDetails) {
         initialPayoutDetails = {
-          countryCode: details.countryCode,
-          currency: details.currency,
-          transferMethod: details.transferMethod,
-          entityType: details.entityType,
-          tradingName: details.tradingName ?? null,
-          formValues: details.formValues as Record<string, string>,
-          verifiedAt: details.verifiedAt?.toISOString() ?? null,
-          beneficiaryStatus: (details.beneficiaryStatus as BeneficiaryStatus) ?? null,
+          countryCode: payoutDetails.countryCode,
+          currency: payoutDetails.currency,
+          transferMethod: payoutDetails.transferMethod,
+          entityType: payoutDetails.entityType,
+          tradingName: payoutDetails.tradingName ?? null,
+          formValues: payoutDetails.formValues as Record<string, string>,
+          verifiedAt: payoutDetails.verifiedAt?.toISOString() ?? null,
+          beneficiaryStatus: (payoutDetails.beneficiaryStatus as BeneficiaryStatus) ?? null,
         };
       }
+
+      if (profile) {
+        profileData = profile;
+      }
+
+      allLanguages = languages.map((l) => ({
+        id: l.id,
+        name: l.name,
+        code: l.code,
+        flagEmoji: l.flagEmoji,
+      }));
+
+      allIndustries = industries.map((i) => ({
+        id: i.id,
+        name: i.name,
+      }));
+
+      certCategories = certs;
     }
   } catch (error) {
-    log.warn('Failed to fetch payout details for settings', {
+    log.warn('Failed to fetch settings data', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -67,6 +117,13 @@ export default async function ExpertSettingsPage({
         setupStep={setupStep}
         initialRateCents={initialRateCents}
         initialPayoutDetails={initialPayoutDetails}
+        profileData={profileData}
+        referenceData={
+          allLanguages.length > 0 || allIndustries.length > 0
+            ? { languages: allLanguages, industries: allIndustries }
+            : null
+        }
+        certCategories={certCategories}
       />
     </div>
   );

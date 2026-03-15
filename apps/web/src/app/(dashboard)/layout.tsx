@@ -4,6 +4,7 @@ import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
 import { log } from '@/lib/logging';
+import { getAvatarUrl } from '@/lib/storage/avatar-url';
 
 export default async function DashboardLayout({
   children,
@@ -42,7 +43,7 @@ export default async function DashboardLayout({
       activeMode={user?.activeMode ?? 'client'}
       userName={userName}
       userInitials={userInitials}
-      userAvatarUrl={user?.avatarUrl ?? null}
+      userAvatarUrl={getAvatarUrl(user?.avatarUrl ?? null, 'thumbnail')}
       checklistCompletedCount={checklistCompletedCount}
       checklistAllComplete={checklistAllComplete}
     >

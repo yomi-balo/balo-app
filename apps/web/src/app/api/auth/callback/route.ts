@@ -46,9 +46,13 @@ async function resolveOrCreateUser(workosUser: {
   }
 
   // Sync profile data from OAuth provider on every login.
-  // The provider (Google/Microsoft) is the source of truth for avatar and email verification.
+  // Only use OAuth avatar if user hasn't uploaded a custom one (R2 key).
+  // R2 keys don't start with 'http', so preserve them.
+  const shouldUpdateAvatar = !existing.avatarUrl || existing.avatarUrl.startsWith('http');
   const updatedUser = await usersRepository.update(existing.id, {
-    avatarUrl: workosUser.profilePictureUrl ?? existing.avatarUrl,
+    avatarUrl: shouldUpdateAvatar
+      ? (workosUser.profilePictureUrl ?? existing.avatarUrl)
+      : existing.avatarUrl,
     emailVerified: workosUser.emailVerified || existing.emailVerified,
   });
 

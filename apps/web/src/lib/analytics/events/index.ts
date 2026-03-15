@@ -4,3 +4,4 @@ export { EXPERT_EVENTS, type ExpertEventMap, type ExpertStepName } from './exper
 export { EXPERT_SETUP_EVENTS, type ExpertSetupEventMap } from './expert-setup';
 export { EXPERT_RATE_EVENTS, type ExpertRateEventMap } from './expert-rate';
 export { EXPERT_PAYOUT_EVENTS, type ExpertPayoutEventMap } from './expert-payouts';
+export { AVATAR_EVENTS, type AvatarEventMap } from './avatar';

@@ -159,7 +159,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
             aria-label={`User menu for ${userName}`}
           >
             <Avatar className="h-8 w-8 shrink-0">
-              {userAvatarUrl && <AvatarImage src={userAvatarUrl} alt={userName} />}
+              {userAvatarUrl && <AvatarImage src={userAvatarUrl ?? undefined} alt={userName} />}
               <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
                 {userInitials}
               </AvatarFallback>
