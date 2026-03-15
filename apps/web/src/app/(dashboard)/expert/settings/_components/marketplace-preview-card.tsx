@@ -51,6 +51,7 @@ export function MarketplacePreviewCard({
             )}
           >
             {hasPhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing
               <img
                 src={getAvatarUrl(photo, 'thumbnail') ?? undefined}
                 alt=""

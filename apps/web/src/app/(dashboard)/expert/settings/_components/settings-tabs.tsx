@@ -26,7 +26,6 @@ import type {
   ApplicationCertWithRelations,
   CertificationsByCategory,
 } from '@balo/db';
-import type { LucideIcon } from 'lucide-react';
 
 // ── Main tabs (pill style) ──────────────────────────────────────
 const MAIN_TABS = [

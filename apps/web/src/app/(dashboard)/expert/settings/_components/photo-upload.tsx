@@ -202,6 +202,7 @@ export function PhotoUpload({
           aria-label="Change profile photo"
         >
           {displayUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing
             <img src={displayUrl} alt="Profile" className="h-full w-full object-cover" />
           ) : (
             <span className="text-2xl font-semibold text-white">{initials}</span>
