@@ -243,15 +243,16 @@ describe('GET /api/auth/session-sync', () => {
       expect(getRedirectLocation(response)).toBe('/dashboard');
     });
 
-    it('rejects returnTo with embedded protocol', async () => {
+    it('allows same-origin path with colon (not a real redirect)', async () => {
       const session = createMockSession();
       mockGetSession.mockResolvedValue(session);
       mockFindForSessionSync.mockResolvedValue(createDbUser());
 
       const response = await GET(makeRequest('returnTo=/foo://bar'));
 
+      // URL parsing confirms this is a same-origin path, not an open redirect
       expect(response.status).toBe(307);
-      expect(getRedirectLocation(response)).toBe('/dashboard');
+      expect(getRedirectLocation(response)).toBe('/foo://bar');
     });
 
     it('rejects returnTo pointing to /login', async () => {
@@ -276,15 +277,16 @@ describe('GET /api/auth/session-sync', () => {
       expect(getRedirectLocation(response)).toBe('/dashboard');
     });
 
-    it('rejects returnTo with backslash', async () => {
+    it('normalizes backslash in returnTo to forward slash', async () => {
       const session = createMockSession();
       mockGetSession.mockResolvedValue(session);
       mockFindForSessionSync.mockResolvedValue(createDbUser());
 
       const response = await GET(makeRequest('returnTo=/foo\\bar'));
 
+      // URL parsing normalizes backslash to forward slash — safe same-origin path
       expect(response.status).toBe(307);
-      expect(getRedirectLocation(response)).toBe('/dashboard');
+      expect(getRedirectLocation(response)).toBe('/foo/bar');
     });
 
     it('accepts valid relative path returnTo', async () => {

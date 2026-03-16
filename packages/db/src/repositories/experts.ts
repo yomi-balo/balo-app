@@ -202,8 +202,16 @@ export const expertsRepository = {
 
   /** Find all usernames that match a base or start with `base-` (for uniqueness suffix logic) */
   async findUsernamesWithPrefix(base: string): Promise<string[]> {
+    // Escape SQL wildcard characters in the base to prevent unintended pattern matching
+    const escapedBase = base
+      .split('')
+      .map((ch) => (ch === '%' || ch === '_' ? `\\${ch}` : ch))
+      .join('');
     const rows = await db.query.expertProfiles.findMany({
-      where: or(eq(expertProfiles.username, base), like(expertProfiles.username, `${base}-%`)),
+      where: or(
+        eq(expertProfiles.username, base),
+        like(expertProfiles.username, `${escapedBase}-%`)
+      ),
       columns: { username: true },
     });
     return rows.map((r) => r.username).filter((u): u is string => u !== null);

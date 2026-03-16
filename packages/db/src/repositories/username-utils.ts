@@ -2,7 +2,6 @@
 // Pure functions for auto-generating expert profile usernames from
 // first/last name at draft creation time.
 
-export const USERNAME_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
 export const USERNAME_MIN = 3;
 export const USERNAME_MAX = 30;
 export const RESERVED_USERNAMES = new Set([
@@ -17,32 +16,69 @@ export const RESERVED_USERNAMES = new Set([
   'experts',
 ]);
 
+/** Check if a character is a lowercase alphanumeric (a-z, 0-9) */
+function isAlphanumeric(ch: string): boolean {
+  const code = ch.charCodeAt(0);
+  return (code >= 97 && code <= 122) || (code >= 48 && code <= 57); // a-z or 0-9
+}
+
 /**
  * Lowercase a name segment, replace non-alphanumeric characters with hyphens,
  * collapse consecutive hyphens, and trim leading/trailing hyphens.
  */
 export function sanitizeNameSegment(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '');
+  const lower = name.toLowerCase();
+  let result = '';
+  let lastWasHyphen = false;
+
+  for (const ch of lower) {
+    if (isAlphanumeric(ch)) {
+      result += ch;
+      lastWasHyphen = false;
+    } else if (!lastWasHyphen) {
+      result += '-';
+      lastWasHyphen = true;
+    }
+  }
+
+  // Trim leading/trailing hyphens
+  let start = 0;
+  let end = result.length;
+  while (start < end && result[start] === '-') start++;
+  while (end > start && result[end - 1] === '-') end--;
+
+  return result.slice(start, end);
 }
 
 /**
  * Validate a candidate username against format, length, and reserved-word rules.
+ * Format: must start and end with alphanumeric, middle can include hyphens.
  */
 export function isValidUsername(username: string): boolean {
   if (username.length < USERNAME_MIN || username.length > USERNAME_MAX) {
     return false;
   }
-  if (!USERNAME_REGEX.test(username)) {
+  // Must start and end with alphanumeric
+  if (!isAlphanumeric(username[0]!) || !isAlphanumeric(username[username.length - 1]!)) {
     return false;
+  }
+  // All chars must be alphanumeric or hyphen
+  for (const ch of username) {
+    if (!isAlphanumeric(ch) && ch !== '-') {
+      return false;
+    }
   }
   if (RESERVED_USERNAMES.has(username)) {
     return false;
   }
   return true;
+}
+
+/** Trim trailing hyphens from a string */
+function trimTrailingHyphens(s: string): string {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === '-') end--;
+  return s.slice(0, end);
 }
 
 /**
@@ -65,7 +101,7 @@ export function generateBaseUsername(
 
   // Truncate to max length while keeping it valid (don't end on a hyphen)
   if (base.length > USERNAME_MAX) {
-    base = base.slice(0, USERNAME_MAX).replace(/-+$/, '');
+    base = trimTrailingHyphens(base.slice(0, USERNAME_MAX));
   }
 
   if (!isValidUsername(base)) return null;
@@ -95,7 +131,7 @@ export function pickNextAvailable(base: string, existing: string[]): string {
 
     // Trim the base portion to make room for the suffix
     const maxBase = USERNAME_MAX - `-${suffix}`.length;
-    const trimmed = base.slice(0, maxBase).replace(/-+$/, '');
+    const trimmed = trimTrailingHyphens(base.slice(0, maxBase));
     const trimmedCandidate = `${trimmed}-${suffix}`;
 
     if (!isValidUsername(trimmedCandidate)) {
