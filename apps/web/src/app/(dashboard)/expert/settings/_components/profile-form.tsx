@@ -26,7 +26,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
-import { COUNTRIES, PRIORITY_COUNTRY_CODES, type Country } from '@/lib/constants/countries';
+import { COUNTRIES, PRIORITY_COUNTRY_CODES } from '@/lib/constants/countries';
 import { ChipPicker } from '@/app/(apply)/expert/apply/_components/chip-picker';
 import { PhotoUpload } from './photo-upload';
 import { UsernameInput } from './username-input';
