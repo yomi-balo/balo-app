@@ -13,7 +13,6 @@ const mockUpdateProfile = vi.fn();
 const mockCheckUsernameAvailability = vi.fn();
 const mockSyncIndustries = vi.fn();
 const mockSyncLanguages = vi.fn();
-const mockUserUpdate = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
@@ -21,9 +20,6 @@ vi.mock('@balo/db', () => ({
     checkUsernameAvailability: (...args: unknown[]) => mockCheckUsernameAvailability(...args),
     syncIndustries: (...args: unknown[]) => mockSyncIndustries(...args),
     syncLanguages: (...args: unknown[]) => mockSyncLanguages(...args),
-  },
-  usersRepository: {
-    update: (...args: unknown[]) => mockUserUpdate(...args),
   },
 }));
 
@@ -59,7 +55,6 @@ describe('saveProfileAction', () => {
     mockCheckUsernameAvailability.mockResolvedValue(true);
     mockSyncIndustries.mockResolvedValue(undefined);
     mockSyncLanguages.mockResolvedValue(undefined);
-    mockUserUpdate.mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
@@ -150,40 +145,6 @@ describe('saveProfileAction', () => {
     });
   });
 
-  describe('country / countryCode', () => {
-    it('saves countryCode and derives country name via getCountryByCode', async () => {
-      const result = await saveProfileAction({ countryCode: 'AU' });
-      expect(result).toEqual({ success: true });
-      expect(mockUserUpdate).toHaveBeenCalledWith('user-1', {
-        countryCode: 'AU',
-        country: 'Australia',
-      });
-    });
-
-    it('sets country and countryCode to null when countryCode is empty string', async () => {
-      const result = await saveProfileAction({ countryCode: '' });
-      expect(result).toEqual({ success: true });
-      expect(mockUserUpdate).toHaveBeenCalledWith('user-1', {
-        countryCode: null,
-        country: null,
-      });
-    });
-
-    it('does not update users table when countryCode is not provided', async () => {
-      const result = await saveProfileAction({ headline: 'No country change' });
-      expect(result).toEqual({ success: true });
-      expect(mockUserUpdate).not.toHaveBeenCalled();
-    });
-
-    it('resolves different country codes correctly', async () => {
-      await saveProfileAction({ countryCode: 'US' });
-      expect(mockUserUpdate).toHaveBeenCalledWith('user-1', {
-        countryCode: 'US',
-        country: 'United States',
-      });
-    });
-  });
-
   describe('input validation', () => {
     it('rejects headline exceeding 100 characters', async () => {
       const result = await saveProfileAction({ headline: 'a'.repeat(101) });
@@ -212,28 +173,12 @@ describe('saveProfileAction', () => {
       expect(result.error).toBeDefined();
       expect(mockUpdateProfile).not.toHaveBeenCalled();
     });
-
-    it('rejects countryCode that is not exactly 2 characters', async () => {
-      const result = await saveProfileAction({ countryCode: 'AUS' });
-      expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
-    });
   });
 
   describe('error handling', () => {
     it('returns generic error when repository throws', async () => {
       mockUpdateProfile.mockRejectedValue(new Error('DB connection failed'));
       const result = await saveProfileAction({ headline: 'Test' });
-      expect(result).toEqual({
-        success: false,
-        error: 'Failed to save profile. Please try again.',
-      });
-    });
-
-    it('returns generic error when usersRepository.update throws', async () => {
-      mockUserUpdate.mockRejectedValue(new Error('DB connection failed'));
-      const result = await saveProfileAction({ countryCode: 'AU' });
       expect(result).toEqual({
         success: false,
         error: 'Failed to save profile. Please try again.',

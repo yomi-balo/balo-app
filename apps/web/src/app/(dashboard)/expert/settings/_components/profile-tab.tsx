@@ -15,6 +15,7 @@ import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expe
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
 import { saveProfileAction } from '../_actions/save-profile';
+import { saveCountryAction } from '../_actions/save-country';
 import type { ProfileSettingsData } from '@balo/db';
 
 // ── Map support type slugs to ExpertCard SkillType ───────────────
@@ -56,7 +57,6 @@ const profileFormSchema = z.object({
     .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
     .optional()
     .or(z.literal('')),
-  countryCode: z.string().length(2).optional().or(z.literal('')),
   industryIds: z.array(z.string()),
   languages: z.array(
     z.object({
@@ -85,6 +85,7 @@ export function ProfileTab({
   const [isSaving, setIsSaving] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(initialProfile.user.avatarUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [countryCode, setCountryCode] = useState(initialProfile.user.countryCode ?? '');
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileFormSchema),
@@ -92,7 +93,6 @@ export function ProfileTab({
       headline: initialProfile.headline ?? '',
       bio: initialProfile.bio ?? '',
       username: initialProfile.username ?? '',
-      countryCode: initialProfile.user.countryCode ?? '',
       industryIds: initialProfile.industries.map((i) => i.industryId),
       languages: initialProfile.languages.map((l) => ({
         languageId: l.languageId,
@@ -110,7 +110,7 @@ export function ProfileTab({
   // Build ExpertCardData from form watch values + initial profile
   const expertCardData: ExpertCardData = useMemo(() => {
     const city = extractCityFromTimezone(initialProfile.user.timezone);
-    const cc = watchedValues.countryCode || initialProfile.user.countryCode;
+    const cc = countryCode || initialProfile.user.countryCode;
     const location = cc ? (city ? `${city}, ${cc}` : cc) : city || '';
 
     return {
@@ -141,7 +141,7 @@ export function ProfileTab({
     avatarUrl,
     watchedValues.headline,
     watchedValues.bio,
-    watchedValues.countryCode,
+    countryCode,
   ]);
 
   const handleSave = async (): Promise<void> => {
@@ -151,21 +151,32 @@ export function ProfileTab({
     setIsSaving(true);
     try {
       const values = form.getValues();
-      const result = await saveProfileAction({
-        headline: values.headline,
-        bio: values.bio,
-        username: values.username || null,
-        countryCode: values.countryCode || null,
-        industryIds: values.industryIds,
-        languages: values.languages,
-      });
+      const initialCountryCode = initialProfile.user.countryCode ?? '';
+      const countryChanged = countryCode !== initialCountryCode;
 
-      if (result.success) {
+      const promises: Promise<{ success: boolean; error?: string }>[] = [
+        saveProfileAction({
+          headline: values.headline,
+          bio: values.bio,
+          username: values.username || null,
+          industryIds: values.industryIds,
+          languages: values.languages,
+        }),
+      ];
+
+      if (countryChanged) {
+        promises.push(saveCountryAction({ countryCode: countryCode || null }));
+      }
+
+      const results = await Promise.all(promises);
+      const failed = results.find((r) => !r.success);
+
+      if (failed) {
+        toast.error(failed.error ?? 'Failed to save profile');
+      } else {
         toast.success('Profile saved');
         // Reset dirty state with current values
         form.reset(values);
-      } else {
-        toast.error(result.error ?? 'Failed to save profile');
       }
     } catch {
       toast.error('Failed to save profile. Please try again.');
@@ -213,6 +224,8 @@ export function ProfileTab({
             expertProfileId={initialProfile.id}
             allLanguages={referenceData.languages}
             allIndustries={referenceData.industries}
+            countryCode={countryCode}
+            onCountryChange={setCountryCode}
             onAvatarChange={setAvatarUrl}
             onSave={handleSave}
             isSaving={isSaving}

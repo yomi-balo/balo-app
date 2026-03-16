@@ -398,6 +398,21 @@ export const TIMEZONE_TO_COUNTRY: Record<string, { country: string; countryCode:
 
   // Monaco
   'Europe/Monaco': { country: 'Monaco', countryCode: 'MC' },
+
+  // Atlantic territories
+  'Atlantic/Canary': { country: 'Spain', countryCode: 'ES' },
+  'Atlantic/Madeira': { country: 'Portugal', countryCode: 'PT' },
+
+  // US territories
+  'Pacific/Midway': { country: 'United States', countryCode: 'US' },
+
+  // Australian territories
+  'Indian/Christmas': { country: 'Australia', countryCode: 'AU' },
+  'Indian/Cocos': { country: 'Australia', countryCode: 'AU' },
+  'Pacific/Norfolk': { country: 'Australia', countryCode: 'AU' },
+
+  // American Samoa
+  'Pacific/Pago_Pago': { country: 'American Samoa', countryCode: 'AS' },
 };
 
 /**
