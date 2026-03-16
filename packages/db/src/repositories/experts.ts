@@ -1,4 +1,5 @@
-import { eq, and, not, inArray } from 'drizzle-orm';
+import { eq, and, not, inArray, or, like } from 'drizzle-orm';
+import { createLogger } from '@balo/shared/logging';
 import { db } from '../client';
 import {
   expertProfiles,
@@ -14,6 +15,9 @@ import {
   type ExpertIndustry,
   type WorkHistory as WorkHistoryType,
 } from '../schema';
+import { generateBaseUsername, pickNextAvailable } from './username-utils';
+
+const log = createLogger('experts-repository');
 
 // ── Input types ──────────────────────────────────────────────────
 
@@ -21,6 +25,8 @@ interface CreateDraftInput {
   userId: string;
   verticalId: string;
   type: 'freelancer' | 'agency';
+  firstName?: string | null;
+  lastName?: string | null;
 }
 
 interface UpdateProfileInput {
@@ -138,7 +144,15 @@ export const expertsRepository = {
       where: eq(expertProfiles.id, expertProfileId),
       with: {
         user: {
-          columns: { id: true, firstName: true, lastName: true, avatarUrl: true },
+          columns: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            avatarUrl: true,
+            timezone: true,
+            country: true,
+            countryCode: true,
+          },
         },
         languages: { with: { language: true } },
         industries: { with: { industry: true } },
@@ -186,18 +200,75 @@ export const expertsRepository = {
     };
   },
 
-  /** Create initial draft profile */
+  /** Find all usernames that match a base or start with `base-` (for uniqueness suffix logic) */
+  async findUsernamesWithPrefix(base: string): Promise<string[]> {
+    const rows = await db.query.expertProfiles.findMany({
+      where: or(eq(expertProfiles.username, base), like(expertProfiles.username, `${base}-%`)),
+      columns: { username: true },
+    });
+    return rows.map((r) => r.username).filter((u): u is string => u !== null);
+  },
+
+  /** Create initial draft profile, auto-generating a username from first/last name */
   async createDraft(data: CreateDraftInput): Promise<ExpertProfile> {
-    const [profile] = await db
-      .insert(expertProfiles)
-      .values({
-        userId: data.userId,
-        verticalId: data.verticalId,
-        type: data.type,
-        applicationStatus: 'draft',
-      })
-      .returning();
-    return profile!;
+    const base = generateBaseUsername(data.firstName, data.lastName);
+
+    let username: string | null = null;
+    if (base) {
+      const existing = await this.findUsernamesWithPrefix(base);
+      username = pickNextAvailable(base, existing);
+    }
+
+    const MAX_RETRIES = 3;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const [profile] = await db
+          .insert(expertProfiles)
+          .values({
+            userId: data.userId,
+            verticalId: data.verticalId,
+            type: data.type,
+            applicationStatus: 'draft',
+            username,
+          })
+          .returning();
+        return profile!;
+      } catch (error: unknown) {
+        const isUniqueViolation =
+          error instanceof Error && error.message.includes('expert_profiles_username_idx');
+
+        if (isUniqueViolation && username && attempt < MAX_RETRIES) {
+          // Re-fetch existing usernames and pick the next available
+          const existing = await this.findUsernamesWithPrefix(base!);
+          username = pickNextAvailable(base!, existing);
+          continue;
+        }
+
+        if (isUniqueViolation) {
+          // Graceful degradation: insert without a username
+          log.warn(
+            { userId: data.userId, attemptedBase: base, attempt },
+            'Username generation exhausted retries, inserting without username'
+          );
+          const [profile] = await db
+            .insert(expertProfiles)
+            .values({
+              userId: data.userId,
+              verticalId: data.verticalId,
+              type: data.type,
+              applicationStatus: 'draft',
+              username: null,
+            })
+            .returning();
+          return profile!;
+        }
+
+        throw error;
+      }
+    }
+
+    // Unreachable, but satisfies TypeScript
+    throw new Error('Failed to create draft profile');
   },
 
   /** Update profile scalar fields */
@@ -384,6 +455,30 @@ export const expertsRepository = {
 
     if (!profile) {
       throw new Error('Application not found or already submitted');
+    }
+
+    return profile;
+  },
+
+  /** Approve application: transition from submitted to approved, set approvedAt */
+  async approveApplication(expertProfileId: string): Promise<ExpertProfile> {
+    const [profile] = await db
+      .update(expertProfiles)
+      .set({
+        applicationStatus: 'approved',
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(expertProfiles.id, expertProfileId),
+          eq(expertProfiles.applicationStatus, 'submitted')
+        )
+      )
+      .returning();
+
+    if (!profile) {
+      throw new Error('Application not found or not in submitted status');
     }
 
     return profile;

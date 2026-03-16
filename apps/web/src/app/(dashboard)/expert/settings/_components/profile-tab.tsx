@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
+import { extractCityFromTimezone } from '@balo/shared/timezone';
 import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
@@ -51,10 +52,11 @@ const profileFormSchema = z.object({
   username: z
     .string()
     .min(3)
-    .max(40)
+    .max(30)
     .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
     .optional()
     .or(z.literal('')),
+  countryCode: z.string().length(2).optional().or(z.literal('')),
   industryIds: z.array(z.string()),
   languages: z.array(
     z.object({
@@ -90,6 +92,7 @@ export function ProfileTab({
       headline: initialProfile.headline ?? '',
       bio: initialProfile.bio ?? '',
       username: initialProfile.username ?? '',
+      countryCode: initialProfile.user.countryCode ?? '',
       industryIds: initialProfile.industries.map((i) => i.industryId),
       languages: initialProfile.languages.map((l) => ({
         languageId: l.languageId,
@@ -105,15 +108,19 @@ export function ProfileTab({
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
 
   // Build ExpertCardData from form watch values + initial profile
-  const expertCardData: ExpertCardData = useMemo(
-    () => ({
+  const expertCardData: ExpertCardData = useMemo(() => {
+    const city = extractCityFromTimezone(initialProfile.user.timezone);
+    const cc = watchedValues.countryCode || initialProfile.user.countryCode;
+    const location = cc ? (city ? `${city}, ${cc}` : cc) : city || '';
+
+    return {
       id: initialProfile.id,
       name: fullName,
       initials,
       avatarKey: avatarUrl,
       title: watchedValues.headline || initialProfile.headline || 'Salesforce Expert',
       bio: watchedValues.bio?.trim() || null,
-      location: '',
+      location,
       yearsExp: initialProfile.yearStartedSalesforce
         ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
         : 0,
@@ -126,9 +133,16 @@ export function ProfileTab({
         : 0,
       available: initialProfile.availableForWork ?? false,
       expertise: buildExpertise(initialProfile.skills),
-    }),
-    [initialProfile, fullName, initials, avatarUrl, watchedValues.headline, watchedValues.bio]
-  );
+    };
+  }, [
+    initialProfile,
+    fullName,
+    initials,
+    avatarUrl,
+    watchedValues.headline,
+    watchedValues.bio,
+    watchedValues.countryCode,
+  ]);
 
   const handleSave = async (): Promise<void> => {
     const valid = await form.trigger();
@@ -141,6 +155,7 @@ export function ProfileTab({
         headline: values.headline,
         bio: values.bio,
         username: values.username || null,
+        countryCode: values.countryCode || null,
         industryIds: values.industryIds,
         languages: values.languages,
       });

@@ -4,8 +4,9 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
-import { expertsRepository } from '@balo/db';
+import { expertsRepository, usersRepository } from '@balo/db';
 import { log } from '@/lib/logging';
+import { getCountryByCode } from '@/lib/constants/countries';
 import { USERNAME_REGEX, RESERVED_USERNAMES, USERNAME_MIN, USERNAME_MAX } from './username-rules';
 
 const saveProfileSchema = z.object({
@@ -19,6 +20,7 @@ const saveProfileSchema = z.object({
     .optional()
     .nullable()
     .or(z.literal('')),
+  countryCode: z.string().length(2).optional().nullable().or(z.literal('')),
   industryIds: z.array(z.string().uuid()).max(20).optional(),
   languages: z
     .array(
@@ -35,6 +37,7 @@ export interface SaveProfileInput {
   headline?: string;
   bio?: string;
   username?: string | null;
+  countryCode?: string | null;
   industryIds?: string[];
   languages?: Array<{
     languageId: string;
@@ -79,6 +82,16 @@ export const saveProfileAction = withAuth(
         bio: validated.bio ?? null,
         username: usernameToSave,
       });
+
+      // Update country on users table if countryCode was explicitly included
+      if (validated.countryCode !== undefined) {
+        const countryCodeToSave = validated.countryCode || null;
+        const countryInfo = countryCodeToSave ? getCountryByCode(countryCodeToSave) : null;
+        await usersRepository.update(session.user.id, {
+          countryCode: countryCodeToSave,
+          country: countryInfo?.name ?? null,
+        });
+      }
 
       // Sync industries if provided
       if (validated.industryIds) {

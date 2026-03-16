@@ -2,7 +2,7 @@
 
 import 'server-only';
 
-import { db, users, expertProfiles, companyMembers, sql, desc } from '@balo/db';
+import { db, users, sql, desc } from '@balo/db';
 import { log } from '@/lib/logging';
 
 export interface AdminUserRow {
@@ -17,6 +17,7 @@ export interface AdminUserRow {
   createdAt: Date;
   expertProfileCount: number;
   applicationStatus: string | null;
+  expertProfileId: string | null;
   companyMembershipCount: number;
 }
 
@@ -35,17 +36,22 @@ export async function listUsersAction(): Promise<AdminUserRow[]> {
         status: users.status,
         createdAt: users.createdAt,
         expertProfileCount: sql<number>`(
-          SELECT COUNT(*)::int FROM ${expertProfiles}
-          WHERE ${expertProfiles.userId} = ${users.id}
+          SELECT COUNT(*)::int FROM "expert_profiles"
+          WHERE "expert_profiles"."user_id" = "users"."id"
         )`,
         applicationStatus: sql<string | null>`(
-          SELECT ${expertProfiles.applicationStatus} FROM ${expertProfiles}
-          WHERE ${expertProfiles.userId} = ${users.id}
+          SELECT "expert_profiles"."application_status" FROM "expert_profiles"
+          WHERE "expert_profiles"."user_id" = "users"."id"
+          LIMIT 1
+        )`,
+        expertProfileId: sql<string | null>`(
+          SELECT "expert_profiles"."id"::text FROM "expert_profiles"
+          WHERE "expert_profiles"."user_id" = "users"."id"
           LIMIT 1
         )`,
         companyMembershipCount: sql<number>`(
-          SELECT COUNT(*)::int FROM ${companyMembers}
-          WHERE ${companyMembers.userId} = ${users.id}
+          SELECT COUNT(*)::int FROM "company_members"
+          WHERE "company_members"."user_id" = "users"."id"
         )`,
       })
       .from(users)

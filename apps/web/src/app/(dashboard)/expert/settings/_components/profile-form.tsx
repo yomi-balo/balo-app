@@ -26,10 +26,17 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
+import { COUNTRIES, PRIORITY_COUNTRY_CODES, type Country } from '@/lib/constants/countries';
 import { ChipPicker } from '@/app/(apply)/expert/apply/_components/chip-picker';
 import { PhotoUpload } from './photo-upload';
 import { UsernameInput } from './username-input';
 import type { ProfileFormData } from './profile-tab';
+
+// ── Country options for the selector ─────────────────────────────
+
+const prioritySet = new Set<string>(PRIORITY_COUNTRY_CODES);
+const PRIORITY_COUNTRIES = COUNTRIES.filter((c) => prioritySet.has(c.code));
+const OTHER_COUNTRIES = COUNTRIES.filter((c) => !prioritySet.has(c.code));
 
 // ── Section Label ────────────────────────────────────────────────
 
@@ -182,13 +189,42 @@ export function ProfileForm({
         </div>
 
         {/* Username */}
-        <div>
+        <div className="mb-4">
           <Label className="text-foreground mb-1.5 block text-[13px] font-semibold">Username</Label>
           <UsernameInput
             value={form.watch('username') ?? ''}
             onChange={(v) => form.setValue('username', v, { shouldDirty: true })}
             expertProfileId={expertProfileId}
           />
+        </div>
+
+        {/* Country */}
+        <div>
+          <Label className="text-foreground mb-1.5 block text-[13px] font-semibold">Country</Label>
+          <Select
+            value={form.watch('countryCode') || ''}
+            onValueChange={(val) => form.setValue('countryCode', val, { shouldDirty: true })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select your country" />
+            </SelectTrigger>
+            <SelectContent>
+              {PRIORITY_COUNTRIES.map((c) => (
+                <SelectItem key={c.code} value={c.code}>
+                  {c.flag} {c.name}
+                </SelectItem>
+              ))}
+              <div className="border-border my-1 border-t" />
+              {OTHER_COUNTRIES.map((c) => (
+                <SelectItem key={c.code} value={c.code}>
+                  {c.flag} {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground mt-1.5 text-[11px]">
+            Auto-detected from your timezone. You can change it manually.
+          </p>
         </div>
       </Card>
 

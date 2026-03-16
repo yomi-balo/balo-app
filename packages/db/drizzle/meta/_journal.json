@@ -71,6 +71,13 @@
       "when": 1773579113182,
       "tag": "0009_true_aqueduct",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1773697835942,
+      "tag": "0010_flowery_namora",
+      "breakpoints": true
     }
   ]
 }

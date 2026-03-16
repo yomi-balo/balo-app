@@ -72,10 +72,19 @@ describe('updateTimezoneAction', () => {
   });
 
   describe('happy path', () => {
-    it('calls usersRepository.update with correct user ID and timezone', async () => {
+    it('calls usersRepository.update with timezone, country, and countryCode for a known timezone', async () => {
       await updateTimezoneAction('Australia/Sydney');
       expect(mockUpdate).toHaveBeenCalledWith('user-1', {
         timezone: 'Australia/Sydney',
+        country: 'Australia',
+        countryCode: 'AU',
+      });
+    });
+
+    it('calls usersRepository.update with only timezone for an unknown timezone', async () => {
+      await updateTimezoneAction('Pacific/Palau');
+      expect(mockUpdate).toHaveBeenCalledWith('user-1', {
+        timezone: 'Pacific/Palau',
       });
     });
 

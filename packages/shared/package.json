@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./logging": "./src/logging/index.ts",
-    "./errors": "./src/errors/index.ts"
+    "./errors": "./src/errors/index.ts",
+    "./timezone": "./src/timezone/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

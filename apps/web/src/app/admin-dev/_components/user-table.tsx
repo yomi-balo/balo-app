@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { AdminUserRow } from '../_actions/list-users';
 import { DeleteUserDialog } from './delete-user-dialog';
+import { ApproveExpertDialog } from './approve-expert-dialog';
 
 interface UserTableProps {
   users: AdminUserRow[];
@@ -50,6 +51,11 @@ function getStatusBadgeVariant(
 export function UserTable({ users }: UserTableProps): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string;
+    email: string;
+  } | null>(null);
+  const [approveTarget, setApproveTarget] = useState<{
+    expertProfileId: string;
+    userId: string;
     email: string;
   } | null>(null);
 
@@ -232,13 +238,30 @@ export function UserTable({ users }: UserTableProps): React.JSX.Element {
                     {formatDate(user.createdAt)}
                   </td>
                   <td style={{ padding: '10px 12px' }}>
-                    <Button
-                      variant="destructive"
-                      size="xs"
-                      onClick={() => setDeleteTarget({ id: user.id, email: user.email })}
-                    >
-                      Delete
-                    </Button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {user.applicationStatus === 'submitted' && user.expertProfileId && (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            setApproveTarget({
+                              expertProfileId: user.expertProfileId!,
+                              userId: user.id,
+                              email: user.email,
+                            })
+                          }
+                        >
+                          Approve
+                        </Button>
+                      )}
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        onClick={() => setDeleteTarget({ id: user.id, email: user.email })}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -255,6 +278,18 @@ export function UserTable({ users }: UserTableProps): React.JSX.Element {
           }}
           userId={deleteTarget.id}
           userEmail={deleteTarget.email}
+        />
+      )}
+
+      {approveTarget && (
+        <ApproveExpertDialog
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) setApproveTarget(null);
+          }}
+          expertProfileId={approveTarget.expertProfileId}
+          userId={approveTarget.userId}
+          userEmail={approveTarget.email}
         />
       )}
     </>
