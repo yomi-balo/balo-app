@@ -11,14 +11,23 @@ interface ExpertDraftOverrides {
   lastName?: string | null;
 }
 
+// Cache the vertical ID — seeded in global-setup, never rolled back
+let cachedVerticalId: string | undefined;
+
+async function getSalesforceVerticalId(): Promise<string> {
+  if (!cachedVerticalId) {
+    cachedVerticalId = (await referenceDataRepository.getSalesforceVertical()).id;
+  }
+  return cachedVerticalId;
+}
+
 export async function expertDraftFactory(
   overrides: ExpertDraftOverrides = {}
 ): Promise<ExpertProfile> {
   const user = overrides.userId ? null : await userFactory();
   const userId = overrides.userId ?? user!.id;
 
-  const verticalId =
-    overrides.verticalId ?? (await referenceDataRepository.getSalesforceVertical()).id;
+  const verticalId = overrides.verticalId ?? (await getSalesforceVerticalId());
 
   return expertsRepository.createDraft({
     userId,
