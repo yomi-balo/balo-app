@@ -35,6 +35,7 @@ expert's local timezone.
 import { db } from '@/db';
 import { availabilityOverrides } from '@/db/schema';
 import { invalidateAvailabilityCache } from '@/services/cronofy/free-busy';
+import { rebuildAvailabilityCacheQueue } from '@/jobs/availability';
 
 interface OverrideInput {
   expertId: string;
@@ -54,8 +55,17 @@ export async function upsertAvailabilityOverride(
     .values(input)
     .returning({ id: availabilityOverrides.id });
 
-  // Invalidate Redis cache — availability has changed for this period
+  // Invalidate Redis cache immediately so live profile requests are accurate
   await invalidateAvailabilityCache(input.expertId);
+
+  // Explicitly enqueue cache rebuild — do NOT rely on the 15-min staleness cron.
+  // If the expert just blocked their earliest available day, earliest_available_at
+  // must update now, not 15 minutes from now.
+  await rebuildAvailabilityCacheQueue.add(
+    'rebuild-availability-cache',
+    { expertId: input.expertId },
+    { jobId: `availability-${input.expertId}`, removeOnComplete: true }
+  );
 
   return override.id;
 }
@@ -78,7 +88,14 @@ export async function deleteAvailabilityOverride(
       )
     );
 
+  // Same reasoning as upsert — deleting an override may free up the
+  // earliest available slot, so the cache must rebuild immediately.
   await invalidateAvailabilityCache(expertId);
+  await rebuildAvailabilityCacheQueue.add(
+    'rebuild-availability-cache',
+    { expertId },
+    { jobId: `availability-${expertId}`, removeOnComplete: true }
+  );
 }
 ```
 
@@ -186,26 +203,17 @@ function isWithinOverride(
 
 ## earliest_available_at Cache Update
 
-When rebuilding the availability cache (triggered by push notification or cron),
-overrides must be applied. `calculateEarliestAvailable` in `push-notifications.md`
-already calls `getAvailableSlots`, which now includes overrides — no change needed there.
+Yes — overrides are considered when calculating `earliest_available_at`.
 
-However, when an override is created or deleted, the availability cache must be
-rebuilt immediately since `earliest_available_at` may change:
+`calculateEarliestAvailable` (in `push-notifications.md`) calls `getAvailableSlots`,
+which applies overrides first in `buildAvailableSlots`. So the calculation is always
+correct.
 
-```typescript
-// Called after upsertAvailabilityOverride or deleteAvailabilityOverride
-await rebuildAvailabilityCacheQueue.add(
-  'rebuild-availability-cache',
-  { expertId },
-  { jobId: `availability-${expertId}` }
-);
-```
-
-This is already handled by `invalidateAvailabilityCache` calling the Redis key
-invalidation — the BullMQ staleness fallback cron will pick up the rebuild within
-15 minutes. For immediate accuracy (the override being set for today or tomorrow),
-explicitly enqueue the rebuild job after any override write.
+The critical requirement is **when the rebuild is triggered**. The 15-min staleness
+cron is not fast enough — if an expert blocks their earliest available day for a holiday,
+`earliest_available_at` must update immediately, not 15 minutes later. For this reason,
+`upsertAvailabilityOverride` and `deleteAvailabilityOverride` both explicitly enqueue
+the rebuild job (see code above). Do not remove those enqueue calls.
 
 ---
 
