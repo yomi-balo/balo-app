@@ -51,7 +51,11 @@ Client views expert profile
     → Populate slot picker when resolves (~500ms)
     → Redis cache: 5-min TTL keyed by expert_id + date
 
-Consultation booked
+Expert saves day overrides (holiday, leave)
+    → Stored in Balo DB as availability_overrides (start_date, end_date)
+    → Applied FIRST during slot calculation — supersedes rules and calendar
+    → BullMQ job triggered to rebuild earliest_available_at cache
+
     → Write event to expert's primary calendar via Cronofy upsertEvent
     → Store external_event_id on consultation record
 
@@ -73,6 +77,7 @@ Read the relevant reference file before implementing any feature:
 | Free/busy fetch + Redis cache pattern | `references/free-busy.md` |
 | Write / delete consultation events | `references/events.md` |
 | Availability Rules (BAL-195 weekly schedule) | `references/availability-rules.md` |
+| Date overrides — holidays, leave, block days | `references/overrides.md` |
 | Error handling + token expiry recovery | `references/errors.md` |
 
 ---
@@ -162,4 +167,5 @@ export const availabilityCache = pgTable('availability_cache', {
 4. **Availability Rules are per-sub** — they're stored on the Cronofy account, not on Balo's DB. Use a stable `availability_rule_id` (e.g. `"balo_work_hours"`) so upsert is idempotent.
 5. **Free/busy only, not event details** — Balo never reads event titles or descriptions. Use the `/v1/free_busy` endpoint, not `/v1/events`. Privacy by design.
 6. **60-day forward window** — cap all free/busy queries to `now → now + 60 days`. No need to query further.
-7. **Primary calendar for writes** — consultation events are written to the primary calendar only. Use `calendar_id` from the sub-calendar list where `is_primary = true`.
+7. **Overrides are Balo-side, not Cronofy** — Cronofy Available Periods API adds availability (one-off open slots), it cannot block time. Date overrides (holidays, leave) are stored in Balo's `availability_overrides` table and applied first in slot calculation. See `references/overrides.md`.
+8. **Primary calendar for writes** — consultation events are written to the primary calendar only. Use `calendar_id` from the sub-calendar list where `is_primary = true`.
