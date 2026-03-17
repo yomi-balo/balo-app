@@ -22,6 +22,8 @@ export const users = pgTable('users', {
   activeMode: userModeEnum('active_mode').default('client').notNull(),
   timezone: text('timezone').default('UTC'),
   currency: text('currency').default('AUD'),
+  country: text('country'),
+  countryCode: text('country_code'),
   onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
   signupIntent: signupIntentEnum('signup_intent'), // nullable -- null for OAuth or pre-existing users
 

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
-import { syncSessionWithDb } from '@/lib/auth/session-sync';
+import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { TopNav } from '@/components/layout/top-nav';
@@ -13,11 +14,14 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }): Promise<React.JSX.Element> {
-  // Lazy session sync: compare session cookie vs DB on every page load
-  const syncResult = await syncSessionWithDb();
+  // Read-only drift check — if sync needed, redirect to route handler
+  // which can safely mutate cookies
+  const checkResult = await checkSessionDrift();
 
-  if (syncResult.action === 'invalidated') {
-    redirect(`/login?error=account_${syncResult.reason}`);
+  if (checkResult.action === 'sync-needed') {
+    const headersList = await headers();
+    const pathname = headersList.get('x-invoke-path') || '/dashboard';
+    redirect(`/api/auth/session-sync?returnTo=${encodeURIComponent(pathname)}`);
   }
 
   // After sync, session is guaranteed fresh — read user normally

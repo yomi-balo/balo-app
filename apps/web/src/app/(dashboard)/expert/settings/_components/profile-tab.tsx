@@ -10,10 +10,12 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
+import { extractCityFromTimezone } from '@balo/shared/timezone';
 import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
 import { saveProfileAction } from '../_actions/save-profile';
+import { saveCountryAction } from '../_actions/save-country';
 import type { ProfileSettingsData } from '@balo/db';
 
 // ── Map support type slugs to ExpertCard SkillType ───────────────
@@ -51,7 +53,7 @@ const profileFormSchema = z.object({
   username: z
     .string()
     .min(3)
-    .max(40)
+    .max(30)
     .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
     .optional()
     .or(z.literal('')),
@@ -83,6 +85,7 @@ export function ProfileTab({
   const [isSaving, setIsSaving] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(initialProfile.user.avatarUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [countryCode, setCountryCode] = useState(initialProfile.user.countryCode ?? '');
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileFormSchema),
@@ -105,15 +108,22 @@ export function ProfileTab({
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
 
   // Build ExpertCardData from form watch values + initial profile
-  const expertCardData: ExpertCardData = useMemo(
-    () => ({
+  const expertCardData: ExpertCardData = useMemo(() => {
+    const city = extractCityFromTimezone(initialProfile.user.timezone);
+    const cc = countryCode || initialProfile.user.countryCode;
+    let location = '';
+    if (cc && city) location = `${city}, ${cc}`;
+    else if (cc) location = cc;
+    else if (city) location = city;
+
+    return {
       id: initialProfile.id,
       name: fullName,
       initials,
       avatarKey: avatarUrl,
       title: watchedValues.headline || initialProfile.headline || 'Salesforce Expert',
       bio: watchedValues.bio?.trim() || null,
-      location: '',
+      location,
       yearsExp: initialProfile.yearStartedSalesforce
         ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
         : 0,
@@ -126,9 +136,16 @@ export function ProfileTab({
         : 0,
       available: initialProfile.availableForWork ?? false,
       expertise: buildExpertise(initialProfile.skills),
-    }),
-    [initialProfile, fullName, initials, avatarUrl, watchedValues.headline, watchedValues.bio]
-  );
+    };
+  }, [
+    initialProfile,
+    fullName,
+    initials,
+    avatarUrl,
+    watchedValues.headline,
+    watchedValues.bio,
+    countryCode,
+  ]);
 
   const handleSave = async (): Promise<void> => {
     const valid = await form.trigger();
@@ -137,20 +154,32 @@ export function ProfileTab({
     setIsSaving(true);
     try {
       const values = form.getValues();
-      const result = await saveProfileAction({
-        headline: values.headline,
-        bio: values.bio,
-        username: values.username || null,
-        industryIds: values.industryIds,
-        languages: values.languages,
-      });
+      const initialCountryCode = initialProfile.user.countryCode ?? '';
+      const countryChanged = countryCode !== initialCountryCode;
 
-      if (result.success) {
+      const promises: Promise<{ success: boolean; error?: string }>[] = [
+        saveProfileAction({
+          headline: values.headline,
+          bio: values.bio,
+          username: values.username || null,
+          industryIds: values.industryIds,
+          languages: values.languages,
+        }),
+      ];
+
+      if (countryChanged) {
+        promises.push(saveCountryAction({ countryCode: countryCode || null }));
+      }
+
+      const results = await Promise.all(promises);
+      const failed = results.find((r) => !r.success);
+
+      if (failed) {
+        toast.error(failed.error ?? 'Failed to save profile');
+      } else {
         toast.success('Profile saved');
         // Reset dirty state with current values
         form.reset(values);
-      } else {
-        toast.error(result.error ?? 'Failed to save profile');
       }
     } catch {
       toast.error('Failed to save profile. Please try again.');
@@ -198,6 +227,8 @@ export function ProfileTab({
             expertProfileId={initialProfile.id}
             allLanguages={referenceData.languages}
             allIndustries={referenceData.industries}
+            countryCode={countryCode}
+            onCountryChange={setCountryCode}
             onAvatarChange={setAvatarUrl}
             onSave={handleSave}
             isSaving={isSaving}

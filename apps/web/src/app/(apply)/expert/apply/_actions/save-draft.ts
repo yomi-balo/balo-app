@@ -57,6 +57,8 @@ export const saveDraftAction = withAuth(
           userId: session.user.id,
           verticalId: vertical.id,
           type: 'freelancer',
+          firstName: session.user.firstName,
+          lastName: session.user.lastName,
         });
         profileId = profile.id;
       }

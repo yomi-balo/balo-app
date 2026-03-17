@@ -26,6 +26,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
+import { CountryCombobox } from '@/components/country-combobox';
 import { ChipPicker } from '@/app/(apply)/expert/apply/_components/chip-picker';
 import { PhotoUpload } from './photo-upload';
 import { UsernameInput } from './username-input';
@@ -111,6 +112,8 @@ interface ProfileFormProps {
     id: string;
     name: string;
   }>;
+  countryCode: string;
+  onCountryChange: (code: string) => void;
   onAvatarChange: (url: string | null) => void;
   onSave: () => void;
   isSaving: boolean;
@@ -124,6 +127,8 @@ export function ProfileForm({
   expertProfileId,
   allLanguages,
   allIndustries,
+  countryCode,
+  onCountryChange,
   onAvatarChange,
   onSave,
   isSaving,
@@ -182,13 +187,22 @@ export function ProfileForm({
         </div>
 
         {/* Username */}
-        <div>
+        <div className="mb-4">
           <Label className="text-foreground mb-1.5 block text-[13px] font-semibold">Username</Label>
           <UsernameInput
             value={form.watch('username') ?? ''}
             onChange={(v) => form.setValue('username', v, { shouldDirty: true })}
             expertProfileId={expertProfileId}
           />
+        </div>
+
+        {/* Country */}
+        <div>
+          <Label className="text-foreground mb-1.5 block text-[13px] font-semibold">Country</Label>
+          <CountryCombobox value={countryCode} onValueChange={onCountryChange} />
+          <p className="text-muted-foreground mt-1.5 text-[11px]">
+            Auto-detected from your timezone. You can change it manually.
+          </p>
         </div>
       </Card>
 

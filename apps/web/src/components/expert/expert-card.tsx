@@ -52,16 +52,23 @@ const MAX_VISIBLE_PILLS = 3;
 function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
   const [photoError, setPhotoError] = useState(false);
   const [liked, setLiked] = useState(false);
-  const showPhoto = !!expert.avatarKey && !photoError;
   const gradient = getGradientFromId(expert.id);
+
+  // Only use R2-hosted photos for the avatar circle (not OAuth default avatars).
+  // R2 keys don't start with "http" and get CDN-transformed via getAvatarUrl.
+  const photoUrl =
+    expert.avatarKey && !expert.avatarKey.startsWith('http')
+      ? getAvatarUrl(expert.avatarKey, 'profile')
+      : null;
+  const showPhoto = !!photoUrl && !photoError;
 
   return (
     <div className="relative">
-      {/* Background: full-bleed photo or dark gradient with centered initials */}
       {showPhoto ? (
+        /* ── Photo state: full-bleed image hero ── */
         <>
           <Image
-            src={getAvatarUrl(expert.avatarKey, 'profile')!}
+            src={photoUrl}
             alt={expert.name}
             width={400}
             height={320}
@@ -69,13 +76,23 @@ function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
             className="aspect-[5/4] w-full object-cover"
             onError={() => setPhotoError(true)}
           />
-          {/* Scrim — only covers bottom third for overlay text readability */}
-          <div className="absolute right-0 bottom-0 left-0 h-1/3 bg-gradient-to-t from-black/75 to-transparent" />
+          {/* Scrim for text readability */}
+          <div className="absolute right-0 bottom-0 left-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent" />
         </>
       ) : (
-        <div className="bg-gradient-to-br from-[#0F1729] to-[#1E293B] px-4 pt-4 pb-5 dark:from-[#0a0f1a] dark:to-[#151d2e]">
-          {/* Centered avatar with gradient ring — no-photo state only */}
-          <div className="mt-4 flex justify-center">
+        /* ── No-photo state: dark hero with circular avatar ── */
+        <div className="relative bg-gradient-to-br from-[#0F1729] to-[#1E293B] dark:from-[#0a0f1a] dark:to-[#151d2e]">
+          {/* Dot texture */}
+          <div
+            className="pointer-events-none absolute inset-0 opacity-[0.04]"
+            style={{
+              backgroundImage: 'radial-gradient(circle, white 1px, transparent 1px)',
+              backgroundSize: '28px 28px',
+            }}
+          />
+
+          {/* Centered circular avatar with gradient ring */}
+          <div className="relative flex justify-center px-4 pt-8">
             <div className="rounded-full bg-gradient-to-br from-blue-500 to-violet-600 p-[3px]">
               <div className="rounded-full border-[3px] border-[#0F1729] dark:border-[#0a0f1a]">
                 <div
@@ -92,10 +109,13 @@ function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
               </div>
             </div>
           </div>
+
+          {/* Spacer so name row has room below avatar */}
+          <div className="h-4" />
         </div>
       )}
 
-      {/* Overlay elements — positioned absolutely over both photo and no-photo states */}
+      {/* Overlay elements — positioned absolutely over both states */}
       {/* Availability pill */}
       {expert.available && (
         <div className="bg-success/20 absolute top-3 left-3 flex items-center gap-1.5 rounded-full px-2.5 py-1">
@@ -125,11 +145,13 @@ function CardHeader({ expert }: { expert: ExpertCardData }): React.JSX.Element {
         </motion.div>
       </motion.button>
 
-      {/* Name + Rate row — overlaid at bottom */}
+      {/* Name + Rate row — overlaid at bottom for photo, below dark bg for no-photo */}
       <div
         className={cn(
           'flex items-end justify-between px-4 pb-4',
-          showPhoto ? 'absolute right-0 bottom-0 left-0' : 'mt-3'
+          showPhoto
+            ? 'absolute right-0 bottom-0 left-0'
+            : 'relative mt-0 bg-gradient-to-br from-[#0F1729] to-[#1E293B] dark:from-[#0a0f1a] dark:to-[#151d2e]'
         )}
       >
         <div>
