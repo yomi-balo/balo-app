@@ -25,8 +25,12 @@ packages/db/
 │   │   └── index.ts         # Re-exports all schemas
 │   ├── repositories/        # Data access layer
 │   │   ├── users.ts
-│   │   ├── companies.ts
+│   │   ├── experts.ts
 │   │   └── index.ts
+│   ├── test/                # Integration test infrastructure
+│   │   ├── global-setup.ts  # Testcontainers lifecycle (Postgres 16 + migrations)
+│   │   ├── setup.ts         # Per-test transaction rollback
+│   │   └── factories/       # userFactory, expertFactory, expertDraftFactory
 │   ├── client.ts            # Drizzle client (postgres-js)
 │   └── index.ts             # Package entry point
 ├── drizzle/                 # Generated migrations (do not edit)
@@ -334,6 +338,20 @@ pnpm drizzle-kit generate
 # Then apply
 pnpm drizzle-kit migrate
 ```
+
+## New Repository File Checklist
+
+Every new file added to `packages/db/src/repositories/` **must** ship with a corresponding
+`*.integration.test.ts` file in the same PR. This is a hard requirement — SonarQube will
+flag the PR if repository files are uncovered.
+
+1. Create `{name}.integration.test.ts` alongside the repository file
+2. Use factories from `packages/db/src/test/factories/` to seed test data
+3. Transaction rollback is handled globally — no `cleanTables()` or manual teardown
+4. Cover each exported function: at minimum happy path + key error/edge case
+5. Run locally with `pnpm test:integration` (requires Docker)
+
+See `.claude/skills/testing/SKILL.md` → "Database Integration Tests" for the full pattern.
 
 ## What NOT to Do
 

@@ -83,6 +83,7 @@ pnpm typecheck              # TypeScript checks across all packages
 # Testing
 pnpm test                   # Run vitest (watch mode)
 pnpm test:run               # Run vitest (single run)
+pnpm test:integration       # Run integration tests (requires Docker)
 pnpm test:e2e               # Run Playwright E2E tests
 
 # Database (run from packages/db/)
@@ -164,6 +165,18 @@ const response = await loggedFetch('https://api.stripe.com/v1/charges', {
 - Every table: `id` (UUID), `created_at`, `updated_at` (with timezone)
 - Soft deletes via `deleted_at` timestamp — every table gets it
 - Foreign keys explicit with ON DELETE behaviour specified
+
+### Integration Tests
+
+Any new file added to `packages/db/src/repositories/` **must** include a corresponding
+`*.integration.test.ts` file in the same PR. Integration tests run against a real
+Postgres 16 instance via Testcontainers.
+
+- Unit tests (`*.test.ts`): mock all repository calls — fast, no DB required
+- Integration tests (`*.integration.test.ts`): real Postgres, transaction rollback per test
+- Run with: `pnpm test:integration` (requires Docker)
+
+Do not add new repository files without integration tests. SonarQube will flag coverage regression.
 
 ### Auth Model
 

@@ -122,6 +122,16 @@ Note if this feature establishes or destroys a user session (requires `analytics
 ## Open Questions
 
 Anything that needs user input before proceeding.
+
+## Testing Requirements
+
+List any new `packages/db/src/repositories/` files introduced by this plan.
+Each requires a companion integration test Linear task (or sub-task) — note them here
+so they are not missed when tickets are created.
+
+| New repository file | Integration test task needed? |
+| ------------------- | ----------------------------- |
+| `repositories/X.ts` | Yes — companion task required |
 ```
 
 ## Rules
@@ -131,3 +141,4 @@ Anything that needs user input before proceeding.
 3. Prefer composition of existing components over new ones
 4. If the feature touches auth, payments, or data — explicitly reference the governing skill
 5. The plan must be implementable by someone who has never seen the PRD — all context must be in the plan
+6. If the plan introduces new files in `packages/db/src/repositories/`, include a "Testing Requirements" section in the plan output listing each file. These require companion integration test Linear tasks — do not omit them.

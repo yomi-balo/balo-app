@@ -40,8 +40,16 @@ import { defineWorkspace } from 'vitest/config';
 export default defineWorkspace([
   'apps/web/vitest.config.ts', // jsdom env, React Testing Library
   'apps/api/vitest.config.ts', // node env, Fastify inject
-  'packages/db/vitest.config.ts', // node env, test DB
-  // Add new packages here
+  {
+    // Integration tests — real Postgres via Testcontainers
+    test: {
+      name: 'integration',
+      include: ['packages/db/**/*.integration.test.ts'],
+      globalSetup: './packages/db/src/test/global-setup.ts',
+      setupFiles: ['./packages/db/src/test/setup.ts'],
+      poolOptions: { threads: { singleThread: true } },
+    },
+  },
 ]);
 ```
 
@@ -347,122 +355,87 @@ describe('createCaseBooking', () => {
 
 **Key difference from API route tests:** Server Actions run in the Next.js runtime and can access cookies, headers, and auth context via `next/headers`. Always mock `next/headers` in Server Action tests.
 
-## Database Integration Tests (Vitest + Drizzle)
+## Database Integration Tests (Vitest + Testcontainers)
 
 ### When: Repository methods, complex queries, transaction logic
 
-Use a dedicated test database. Never mock the database layer for integration tests — the whole point is testing real SQL.
+File naming: `*.integration.test.ts` — discovered by the `integration` Vitest project only.
+Never name a repository integration test `*.test.ts` — it will be picked up by the unit project and fail.
 
-### Test Database Setup
+### Infrastructure (already set up — do not recreate)
 
-```typescript
-// packages/db/src/test/setup.ts
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import * as schema from '../schema';
-
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || 'postgresql://postgres:postgres@localhost:54322/balo_test';
-
-// Connection for migrations (must not be in pool mode)
-const migrationClient = postgres(TEST_DATABASE_URL, { max: 1 });
-
-// Connection for tests
-const queryClient = postgres(TEST_DATABASE_URL);
-export const testDb = drizzle(queryClient, { schema });
-
-export async function setupTestDatabase() {
-  await migrate(drizzle(migrationClient, { schema }), {
-    migrationsFolder: './drizzle',
-  });
-}
-
-export async function teardownTestDatabase() {
-  await migrationClient.end();
-  await queryClient.end();
-}
-
-export async function cleanTables() {
-  // Truncate in correct order (respect FK constraints)
-  await testDb.execute(sql`
-    TRUNCATE TABLE case_messages, case_participants, cases,
-    expert_availabilities, expert_profiles, company_members, companies,
-    users CASCADE
-  `);
-}
+```
+packages/db/src/test/
+  global-setup.ts   — Testcontainers Postgres 16 lifecycle: spin up, run migrations, expose TEST_DATABASE_URL
+  setup.ts          — Per-test transaction rollback: BEGIN before each test, ROLLBACK after
+  factories/
+    index.ts
+    user.factory.ts
+    expert.factory.ts
+    expert-draft.factory.ts
 ```
 
-### Repository Test Pattern
+### Transaction rollback pattern
+
+Each test is automatically wrapped in a transaction that rolls back after. This means:
+
+- No manual `cleanTables()` calls needed
+- No test data leaks between tests
+- Tests run in serial (`singleThread: true`) to avoid concurrent transaction conflicts
+
+### Repository test pattern
 
 ```typescript
-// packages/db/src/repositories/user.test.ts
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { testDb, setupTestDatabase, teardownTestDatabase, cleanTables } from '../test/setup';
-import { createUserRepository } from './user';
+// packages/db/src/repositories/users.integration.test.ts
+import { describe, it, expect } from 'vitest';
+import { usersRepository } from './users';
+import { userFactory } from '../test/factories';
 
-const userRepo = createUserRepository(testDb);
+// No beforeEach cleanup — transaction rollback handles it automatically
 
-beforeAll(async () => {
-  await setupTestDatabase();
-});
-afterAll(async () => {
-  await teardownTestDatabase();
-});
-beforeEach(async () => {
-  await cleanTables();
-});
+describe('usersRepository.update', () => {
+  it('updates country and countryCode', async () => {
+    const user = await userFactory();
+    await usersRepository.update(user.id, { country: 'Germany', countryCode: 'DE' });
 
-describe('UserRepository', () => {
-  it('creates and retrieves a user', async () => {
-    const user = await userRepo.create({
-      workosId: 'user_01ABC',
-      email: 'test@example.com',
-      firstName: 'Jane',
-      lastName: 'Doe',
-    });
-
-    const found = await userRepo.findByEmail('test@example.com');
-    expect(found).toBeDefined();
-    expect(found!.workosId).toBe('user_01ABC');
+    const updated = await usersRepository.findById(user.id);
+    expect(updated?.countryCode).toBe('DE');
+    expect(updated?.country).toBe('Germany');
   });
 
-  it('returns null for non-existent user', async () => {
-    const found = await userRepo.findByEmail('nope@example.com');
-    expect(found).toBeNull();
-  });
+  it('nulls out countryCode when passed null', async () => {
+    const user = await userFactory({ countryCode: 'AU', country: 'Australia' });
+    await usersRepository.update(user.id, { countryCode: null, country: null });
 
-  it('respects soft delete', async () => {
-    const user = await userRepo.create({
-      /* ... */
-    });
-    await userRepo.softDelete(user.id);
-
-    const found = await userRepo.findById(user.id);
-    expect(found).toBeNull(); // Soft-deleted users excluded by default
+    const updated = await usersRepository.findById(user.id);
+    expect(updated?.countryCode).toBeNull();
   });
 });
 ```
 
-### Test Database in CI
+### Running integration tests
 
-Add a PostgreSQL service in GitHub Actions:
+```bash
+pnpm test:integration        # requires Docker — Testcontainers manages the container
+pnpm test:run                # unit tests only — fast, no Docker needed
+```
+
+### CI
+
+Integration tests run in a separate `integration-tests` job. No Postgres service container needed — Testcontainers spins up its own container:
 
 ```yaml
-services:
-  postgres:
-    image: supabase/postgres:15.6.1.143
-    env:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: balo_test
-    ports:
-      - 54322:5432
-    options: >-
-      --health-cmd pg_isready
-      --health-interval 10s
-      --health-timeout 5s
-      --health-retries 5
+integration-tests:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+    - run: pnpm test:integration
 ```
 
 ## E2E Tests (Playwright)
@@ -828,7 +801,9 @@ When a Linear task includes "Write tests per the testing skill", use this decisi
 
 1. **Does the task touch Zod schemas or validation?** → Write unit tests for every rule
 2. **Does the task touch price calculations or fee logic?** → Write unit tests with edge cases (rounding, zero, negative)
-3. **Does the task add/modify a repository method?** → Write DB integration tests
+3. **Does the task add/modify a repository method?** → Write DB integration tests (`*.integration.test.ts`).
+   Use factories from `packages/db/src/test/factories/`. Transaction rollback is automatic.
+   If infrastructure isn't set up yet, that's a blocker — do not mock the DB layer for these tests
 4. **Does the task add/modify an API route?** → Write Fastify inject tests
 5. **Does the task add a Server Action?** → Write integration tests mocking external services
 6. **Does the task add an interactive component with >2 states?** → Write component tests
