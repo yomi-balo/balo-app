@@ -18,7 +18,7 @@ export const RESERVED_USERNAMES = new Set([
 
 /** Check if a character is a lowercase alphanumeric (a-z, 0-9) */
 function isAlphanumeric(ch: string): boolean {
-  const code = ch.charCodeAt(0);
+  const code = ch.codePointAt(0) ?? 0;
   return (code >= 97 && code <= 122) || (code >= 48 && code <= 57); // a-z or 0-9
 }
 
@@ -59,7 +59,7 @@ export function isValidUsername(username: string): boolean {
     return false;
   }
   // Must start and end with alphanumeric
-  if (!isAlphanumeric(username[0]!) || !isAlphanumeric(username[username.length - 1]!)) {
+  if (!isAlphanumeric(username.at(0)!) || !isAlphanumeric(username.at(-1)!)) {
     return false;
   }
   // All chars must be alphanumeric or hyphen

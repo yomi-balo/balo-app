@@ -27,7 +27,7 @@ export function ApproveExpertDialog({
   expertProfileId,
   userId,
   userEmail,
-}: ApproveExpertDialogProps): React.JSX.Element {
+}: Readonly<ApproveExpertDialogProps>): React.JSX.Element {
   const [isPending, startTransition] = useTransition();
 
   function handleApprove(): void {

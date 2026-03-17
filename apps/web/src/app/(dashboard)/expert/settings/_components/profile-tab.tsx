@@ -111,7 +111,10 @@ export function ProfileTab({
   const expertCardData: ExpertCardData = useMemo(() => {
     const city = extractCityFromTimezone(initialProfile.user.timezone);
     const cc = countryCode || initialProfile.user.countryCode;
-    const location = cc ? (city ? `${city}, ${cc}` : cc) : city || '';
+    let location = '';
+    if (cc && city) location = `${city}, ${cc}`;
+    else if (cc) location = cc;
+    else if (city) location = city;
 
     return {
       id: initialProfile.id,

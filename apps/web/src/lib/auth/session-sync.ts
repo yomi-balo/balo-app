@@ -27,7 +27,7 @@ export async function checkSessionDrift(): Promise<CheckResult> {
   const dbUser = await getCachedUserForSync(session.user.id);
 
   // User not found, soft-deleted, or non-active → needs sync (route handler will destroy session)
-  if (!dbUser || dbUser.deletedAt !== null || dbUser.status !== 'active') {
+  if (dbUser?.deletedAt !== null || dbUser?.status !== 'active') {
     return { action: 'sync-needed' };
   }
 

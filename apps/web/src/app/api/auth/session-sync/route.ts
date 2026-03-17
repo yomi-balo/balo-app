@@ -73,8 +73,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   // Patch session with fresh DB values
-  session.user.activeMode = dbUser.activeMode as 'client' | 'expert';
-  session.user.platformRole = dbUser.platformRole as 'user' | 'admin' | 'super_admin';
+  session.user.activeMode = dbUser.activeMode;
+  session.user.platformRole = dbUser.platformRole;
   session.user.onboardingCompleted = dbUser.onboardingCompleted;
   session.user.expertProfileId = dbUser.expertProfileId ?? undefined;
   await session.save();

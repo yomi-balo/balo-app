@@ -31,8 +31,8 @@ export async function approveExpertAction(
   }
 
   // Validate inputs
-  const profileParsed = z.string().uuid().safeParse(expertProfileId);
-  const userParsed = z.string().uuid().safeParse(userId);
+  const profileParsed = z.uuid().safeParse(expertProfileId);
+  const userParsed = z.uuid().safeParse(userId);
   if (!profileParsed.success || !userParsed.success) {
     return { success: false, error: 'Invalid ID format.' };
   }

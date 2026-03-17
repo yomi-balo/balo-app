@@ -434,7 +434,7 @@ export function deriveCountryFromTimezone(
 export function extractCityFromTimezone(timezone: string | null | undefined): string | null {
   if (!timezone || timezone === 'UTC') return null;
   const parts = timezone.split('/');
-  const city = parts[parts.length - 1];
+  const city = parts.at(-1);
   if (!city) return null;
-  return city.replace(/_/g, ' ');
+  return city.replaceAll('_', ' ');
 }

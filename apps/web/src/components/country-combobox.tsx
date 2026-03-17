@@ -26,7 +26,7 @@ export function CountryCombobox({
   value,
   onValueChange,
   disabled = false,
-}: CountryComboboxProps): React.JSX.Element {
+}: Readonly<CountryComboboxProps>): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const priorityCountries = getPriorityCountries();
   const selected = COUNTRIES.find((c) => c.code === value);
@@ -105,11 +105,11 @@ function CountryItem({
   country,
   isSelected,
   onSelect,
-}: {
+}: Readonly<{
   country: Country;
   isSelected: boolean;
   onSelect: () => void;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   return (
     <CommandItem
       value={`${country.name} ${country.code}`}
