@@ -31,26 +31,36 @@ balo-app/
 
 ### Vitest Workspace Config
 
-The workspace is defined in `vitest.config.ts` at the monorepo root. Each app is registered as a `project`. **When adding a new package that needs tests, add it to the `projects` array** — otherwise Vitest won't discover its test files:
+The root workspace is defined in `vitest.config.ts` at the monorepo root. It discovers **unit tests only** — integration tests have their own config:
 
 ```typescript
-// vitest.config.ts
-import { defineWorkspace } from 'vitest/config';
+// vitest.config.ts (root — unit tests)
+import { defineConfig } from 'vitest/config';
 
-export default defineWorkspace([
-  'apps/web/vitest.config.ts', // jsdom env, React Testing Library
-  'apps/api/vitest.config.ts', // node env, Fastify inject
-  {
-    // Integration tests — real Postgres via Testcontainers
-    test: {
-      name: 'integration',
-      include: ['packages/db/**/*.integration.test.ts'],
-      globalSetup: './packages/db/src/test/global-setup.ts',
-      setupFiles: ['./packages/db/src/test/setup.ts'],
-      poolOptions: { threads: { singleThread: true } },
-    },
+export default defineConfig({
+  test: {
+    projects: ['apps/web', 'apps/api', 'packages/db', 'packages/shared'],
   },
-]);
+});
+```
+
+Integration tests use a **separate config file** at `packages/db/vitest.config.integration.ts` and are run via `pnpm test:integration`. They are NOT part of the root workspace:
+
+```typescript
+// packages/db/vitest.config.integration.ts
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    include: ['src/**/*.integration.test.ts'],
+    globalSetup: './src/test/global-setup.ts',
+    setupFiles: ['./src/test/setup-integration.ts'],
+    fileParallelism: false,
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
+    passWithNoTests: true,
+  },
+});
 ```
 
 Each per-package config sets the correct environment (`jsdom` vs `node`) and any package-specific globals or setup files.
@@ -366,8 +376,9 @@ Never name a repository integration test `*.test.ts` — it will be picked up by
 
 ```
 packages/db/src/test/
-  global-setup.ts   — Testcontainers Postgres 16 lifecycle: spin up, run migrations, expose TEST_DATABASE_URL
-  setup.ts          — Per-test transaction rollback: BEGIN before each test, ROLLBACK after
+  global-setup.ts        — Testcontainers Postgres 16 lifecycle: spin up, run migrations, expose TEST_DATABASE_URL
+  setup-integration.ts   — Per-test Drizzle transaction wrapper: wraps each test in db.transaction(), forces rollback after
+  test-client.ts         — Creates postgres-js + Drizzle client from TEST_DATABASE_URL (max:1 pool)
   factories/
     index.ts
     user.factory.ts
@@ -377,11 +388,12 @@ packages/db/src/test/
 
 ### Transaction rollback pattern
 
-Each test is automatically wrapped in a transaction that rolls back after. This means:
+Each test is automatically wrapped in a **Drizzle `db.transaction()` call** that is force-rolled-back after. This deliberately uses Drizzle's transaction API (not raw `BEGIN`/`ROLLBACK`) so that repository methods calling `db.transaction()` internally produce `SAVEPOINT` instead of trying to acquire a second connection on the `max:1` pool (which would deadlock). This means:
 
 - No manual `cleanTables()` calls needed
 - No test data leaks between tests
-- Tests run in serial (`singleThread: true`) to avoid concurrent transaction conflicts
+- Nested `db.transaction()` calls in repository code work correctly via SAVEPOINTs
+- Tests run with `fileParallelism: false` to avoid concurrent transaction conflicts
 
 ### Repository test pattern
 

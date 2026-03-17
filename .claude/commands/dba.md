@@ -112,14 +112,15 @@ file in the same PR. Tests run against a real Postgres 16 instance via Testconta
 **Infrastructure** (already set up — do not recreate):
 
 - `packages/db/src/test/global-setup.ts` — container lifecycle + migrations
-- `packages/db/src/test/setup.ts` — per-test `BEGIN` / `ROLLBACK`
+- `packages/db/src/test/setup-integration.ts` — per-test Drizzle transaction wrapper (auto-rollback via SAVEPOINT)
 - `packages/db/src/test/factories/` — `userFactory`, `expertFactory`, `expertDraftFactory`
 
 **Key rules:**
 
 - File must be named `*.integration.test.ts` — not `*.test.ts`
 - Use factories for all test data — never raw inserts
-- Transaction rollback is automatic — no manual cleanup needed
-- Tests run serially (`singleThread: true`) — no shared state issues
+- Drizzle transaction wrapper auto-rollbacks — no manual cleanup needed
+- Nested `db.transaction()` in repos produces SAVEPOINTs (no deadlocks on max:1 pool)
+- Tests run with `fileParallelism: false` — no shared state issues
 
 See `.claude/skills/testing/SKILL.md` for examples.

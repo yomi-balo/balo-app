@@ -27,10 +27,11 @@ packages/db/
 │   │   ├── users.ts
 │   │   ├── experts.ts
 │   │   └── index.ts
-│   ├── test/                # Integration test infrastructure
-│   │   ├── global-setup.ts  # Testcontainers lifecycle (Postgres 16 + migrations)
-│   │   ├── setup.ts         # Per-test transaction rollback
-│   │   └── factories/       # userFactory, expertFactory, expertDraftFactory
+│   ├── test/                       # Integration test infrastructure
+│   │   ├── global-setup.ts         # Testcontainers lifecycle (Postgres 16 + migrations)
+│   │   ├── setup-integration.ts    # Per-test Drizzle transaction wrapper (auto-rollback)
+│   │   ├── test-client.ts          # postgres-js + Drizzle client (max:1 pool)
+│   │   └── factories/              # userFactory, expertFactory, expertDraftFactory
 │   ├── client.ts            # Drizzle client (postgres-js)
 │   └── index.ts             # Package entry point
 ├── drizzle/                 # Generated migrations (do not edit)
