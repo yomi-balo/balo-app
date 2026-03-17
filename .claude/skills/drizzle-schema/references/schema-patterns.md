@@ -122,17 +122,27 @@ preferences: jsonb('preferences').$type<UserPreferences>().default({}),
 ### Dates & Times
 
 ```typescript
-// Timestamps (most common)
-scheduledAt: timestamp('scheduled_at').notNull(),
-expiresAt: timestamp('expires_at'),
+// Timestamps — ALWAYS use { withTimezone: true } (TIMESTAMPTZ in Postgres)
+// Plain timestamp() (TIMESTAMP WITHOUT TIME ZONE) is ambiguous and causes
+// silent bugs when servers or users span timezones. No exceptions.
+scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+expiresAt:   timestamp('expires_at',   { withTimezone: true }),
+approvedAt:  timestamp('approved_at',  { withTimezone: true }),
+lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 
-// Date only (no time component)
+// Date only (no time component — for calendar dates like birthdays, leave dates)
+// Use date() not timestamp() when you only care about the calendar date,
+// not a specific moment. Stored as YYYY-MM-DD, no timezone conversion.
 import { date } from 'drizzle-orm/pg-core';
 dateOfBirth: date('date_of_birth'),
 
 // Duration in minutes (store as integer)
 durationMinutes: integer('duration_minutes').notNull(),
 ```
+
+**Rule: `{ withTimezone: true }` on every `timestamp()`. No exceptions.**
+There is no scenario where storing a timestamp without timezone context is correct on Balo.
+If you are unsure whether to use `timestamp` or `date`, ask: "Is this a specific moment in time, or just a calendar date?" Moments → `timestamp({ withTimezone: true })`. Calendar dates (no time) → `date()`.
 
 ### Enums
 

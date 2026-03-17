@@ -48,14 +48,15 @@ Then read the existing schema files in `packages/db/src/schema/` to understand c
 ## Core Rules
 
 1. Every table has `id` (uuid, primary key), `created_at`, `updated_at`
-2. Every table has RLS enabled with policies for SELECT, INSERT, UPDATE, DELETE
-3. Soft deletes via `deleted_at` timestamp — add to RLS policies to filter
-4. Foreign keys explicit with ON DELETE behaviour specified
-5. Indexes on every column used in WHERE, JOIN, or ORDER BY
-6. Use Drizzle relations for type-safe joins
-7. Export inferred types (`typeof table.$inferSelect`) for other layers
-8. Repository functions handle transactions where atomicity matters
-9. No raw SQL unless Drizzle genuinely cannot express the query
+2. Every `timestamp()` column uses `{ withTimezone: true }` (TIMESTAMPTZ). No exceptions. Use `...timestamps` and `...softDelete` from `packages/db/src/schema/helpers.ts` for standard columns.
+3. Every table has RLS enabled with policies for SELECT, INSERT, UPDATE, DELETE
+4. Soft deletes via `deleted_at` timestamp — add to RLS policies to filter
+5. Foreign keys explicit with ON DELETE behaviour specified
+6. Indexes on every column used in WHERE, JOIN, or ORDER BY
+7. Use Drizzle relations for type-safe joins
+8. Export inferred types (`typeof table.$inferSelect`) for other layers
+9. Repository functions handle transactions where atomicity matters
+10. No raw SQL unless Drizzle genuinely cannot express the query
 
 ## Process
 
@@ -76,6 +77,7 @@ Then read the existing schema files in `packages/db/src/schema/` to understand c
 Every DBA task must produce:
 
 - [ ] Schema file(s) created/updated
+- [ ] All `timestamp()` columns use `{ withTimezone: true }` — use `...timestamps` / `...softDelete` helpers
 - [ ] RLS policies for all new tables
 - [ ] Indexes for query patterns
 - [ ] Migration generated and reviewed
@@ -90,7 +92,27 @@ Every DBA task must produce:
 
 ### Timestamps
 
-Every table gets `created_at` and `updated_at` with defaults.
+Use the shared helpers from `packages/db/src/schema/helpers.ts`:
+
+```typescript
+import { timestamps, softDelete } from './helpers';
+
+export const myTable = pgTable('my_table', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ...timestamps,   // createdAt, updatedAt — both TIMESTAMPTZ
+  ...softDelete,   // deletedAt — TIMESTAMPTZ, nullable
+});
+```
+
+**Never** write `timestamp('col')` without `{ withTimezone: true }`. The helpers enforce this automatically. For any timestamp column not covered by the helpers (e.g. `scheduledAt`, `approvedAt`, `expiresAt`), always add `{ withTimezone: true }` explicitly:
+
+```typescript
+// Correct
+scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+
+// Wrong — ambiguous, breaks across timezones
+scheduledAt: timestamp('scheduled_at').notNull(),
+```
 
 ### Soft Deletes
 
