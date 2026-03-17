@@ -34,6 +34,7 @@ Then read the existing schema files in `packages/db/src/schema/` to understand c
 - RLS policies for every table
 - Database indexes
 - Repository pattern implementations (`packages/db/src/repositories/`)
+- Integration tests for every repository file (`packages/db/src/repositories/`)
 - Query optimization
 - Type exports from schema for other layers
 
@@ -81,6 +82,9 @@ Every DBA task must produce:
 - [ ] Types exported
 - [ ] Foreign keys and constraints verified
 - [ ] No breaking changes to existing queries (or breaking changes documented)
+- [ ] Integration test file (`*.integration.test.ts`) created for every new repository file
+- [ ] All exported repository methods covered (happy path + key error cases)
+- [ ] `pnpm test:integration` passes locally
 
 ## Common Patterns
 
@@ -99,3 +103,24 @@ Always reference users via `user_id` with foreign key to users table. Never stor
 ### Multi-tenant Considerations
 
 Design schemas to support future vertical expansion. Avoid hardcoding Salesforce-specific concepts in generic tables.
+
+## Repository Testing
+
+Every new file in `packages/db/src/repositories/` ships with a `*.integration.test.ts`
+file in the same PR. Tests run against a real Postgres 16 instance via Testcontainers.
+
+**Infrastructure** (already set up — do not recreate):
+
+- `packages/db/src/test/global-setup.ts` — container lifecycle + migrations
+- `packages/db/src/test/setup-integration.ts` — per-test Drizzle transaction wrapper (auto-rollback via SAVEPOINT)
+- `packages/db/src/test/factories/` — `userFactory`, `expertFactory`, `expertDraftFactory`
+
+**Key rules:**
+
+- File must be named `*.integration.test.ts` — not `*.test.ts`
+- Use factories for all test data — never raw inserts
+- Drizzle transaction wrapper auto-rollbacks — no manual cleanup needed
+- Nested `db.transaction()` in repos produces SAVEPOINTs (no deadlocks on max:1 pool)
+- Tests run with `fileParallelism: false` — no shared state issues
+
+See `.claude/skills/testing/SKILL.md` for examples.
