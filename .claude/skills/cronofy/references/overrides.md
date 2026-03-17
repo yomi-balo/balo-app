@@ -151,7 +151,8 @@ function buildAvailableSlots(
   to: Date,
   busy: FreeBusySlot[],
   rule: AvailabilityRule | null,
-  overrides: AvailabilityOverride[]
+  overrides: AvailabilityOverride[],
+  expertTimezone: string    // required — overrides are date-local, not UTC
 ): AvailableSlot[] {
   const slots: AvailableSlot[] = [];
   const slotDuration = 30 * 60 * 1000;
@@ -161,7 +162,8 @@ function buildAvailableSlots(
     const slotEnd = new Date(cursor.getTime() + slotDuration);
 
     // 1. Check overrides FIRST — they take absolute precedence
-    if (isWithinOverride(cursor, overrides)) {
+    // isWithinOverride expands YYYY-MM-DD to UTC range using expertTimezone
+    if (isWithinOverride(cursor, overrides, expertTimezone)) {
       cursor = slotEnd;
       continue;
     }
@@ -188,14 +190,21 @@ function buildAvailableSlots(
   return slots;
 }
 
+// See references/timezone.md for the full implementation using date-fns-tz.
+// The key point: expand YYYY-MM-DD to UTC range using the expert's timezone
+// before comparing against the UTC slot time.
 function isWithinOverride(
-  date: Date,
-  overrides: AvailabilityOverride[]
+  slotUtc: Date,
+  overrides: AvailabilityOverride[],
+  expertTimezone: string
 ): boolean {
-  const dateStr = date.toISOString().slice(0, 10); // "YYYY-MM-DD"
-  return overrides.some(
-    (o) => dateStr >= o.startDate && dateStr <= o.endDate
-  );
+  // Import fromZonedTime from date-fns-tz
+  for (const override of overrides) {
+    const overrideStartUtc = fromZonedTime(`${override.startDate}T00:00:00`, expertTimezone);
+    const overrideEndUtc   = fromZonedTime(`${override.endDate}T23:59:59`,   expertTimezone);
+    if (slotUtc >= overrideStartUtc && slotUtc <= overrideEndUtc) return true;
+  }
+  return false;
 }
 ```
 
