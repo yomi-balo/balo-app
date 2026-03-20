@@ -2,6 +2,7 @@ import { pgTable, uuid, text, boolean, timestamp } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { userModeEnum, userStatusEnum, platformRoleEnum, signupIntentEnum } from './enums';
 import { companyMembers } from './companies';
+import { timestamps, softDelete } from './helpers';
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -31,10 +32,9 @@ export const users = pgTable('users', {
   status: userStatusEnum('status').default('active').notNull(),
 
   // Timestamps
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  lastActiveAt: timestamp('last_active_at'),
-  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  ...timestamps,
+  lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
+  ...softDelete,
 });
 
 // Relations

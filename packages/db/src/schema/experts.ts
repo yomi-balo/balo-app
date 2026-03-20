@@ -17,6 +17,7 @@ import { verticals, skills, supportTypes, certifications } from './verticals';
 import { languages } from './languages';
 import { industries } from './industries';
 import { expertPayoutDetails } from './payouts';
+import { timestamps } from './helpers';
 
 export const expertProfiles = pgTable(
   'expert_profiles',
@@ -66,11 +67,13 @@ export const expertProfiles = pgTable(
 
     // Application lifecycle
     applicationStatus: applicationStatusEnum('application_status').default('draft').notNull(),
-    submittedAt: timestamp('submitted_at'),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
-    approvedAt: timestamp('approved_at'),
+    // Calendar / availability
+    timezone: text('timezone').notNull().default('UTC'),
+
+    ...timestamps,
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
   },
   (table) => ({
     userVerticalIdx: uniqueIndex('expert_user_vertical_idx').on(table.userId, table.verticalId),
@@ -94,8 +97,7 @@ export const expertSkills = pgTable(
 
     proficiency: integer('proficiency').notNull().default(0),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     uniqueSkillIdx: uniqueIndex('expert_skill_unique_idx').on(
@@ -121,8 +123,7 @@ export const expertCertifications = pgTable(
     expiresAt: date('expires_at'),
     credentialUrl: text('credential_url'),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     expertCertIdx: uniqueIndex('expert_cert_unique_idx').on(
@@ -145,8 +146,7 @@ export const expertLanguages = pgTable(
 
     proficiency: languageProficiencyEnum('proficiency').notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     expertLangUniqueIdx: uniqueIndex('expert_lang_unique_idx').on(
@@ -169,7 +169,7 @@ export const expertIndustries = pgTable(
       .references(() => industries.id, { onDelete: 'restrict' })
       .notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     expertIndustryUniqueIdx: uniqueIndex('expert_industry_unique_idx').on(
@@ -191,15 +191,14 @@ export const workHistory = pgTable(
 
     role: text('role').notNull(),
     company: text('company').notNull(),
-    startedAt: timestamp('started_at').notNull(),
-    endedAt: timestamp('ended_at'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
     isCurrent: boolean('is_current').default(false).notNull(),
     responsibilities: text('responsibilities'),
 
     sortOrder: integer('sort_order').default(0).notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     expertProfileIdx: index('work_history_profile_idx').on(table.expertProfileId),

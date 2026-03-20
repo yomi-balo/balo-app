@@ -2,6 +2,7 @@ import { pgTable, uuid, text, boolean, integer, timestamp, uniqueIndex } from 'd
 import { relations } from 'drizzle-orm';
 import { companyRoleEnum } from './enums';
 import { users } from './users';
+import { timestamps } from './helpers';
 
 export const companies = pgTable('companies', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -16,8 +17,7 @@ export const companies = pgTable('companies', {
   creditBalance: integer('credit_balance').default(0).notNull(),
   stripeCustomerId: text('stripe_customer_id'),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  ...timestamps,
 });
 
 export const companyMembers = pgTable(
@@ -35,7 +35,7 @@ export const companyMembers = pgTable(
     role: companyRoleEnum('role').notNull().default('member'),
 
     invitedById: uuid('invited_by_id').references(() => users.id),
-    joinedAt: timestamp('joined_at').defaultNow().notNull(),
+    joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     companyUserIdx: uniqueIndex('company_user_idx').on(table.companyId, table.userId),
