@@ -99,8 +99,8 @@ import { timestamps, softDelete } from './helpers';
 
 export const myTable = pgTable('my_table', {
   id: uuid('id').primaryKey().defaultRandom(),
-  ...timestamps,   // createdAt, updatedAt — both TIMESTAMPTZ
-  ...softDelete,   // deletedAt — TIMESTAMPTZ, nullable
+  ...timestamps, // createdAt, updatedAt — both TIMESTAMPTZ
+  ...softDelete, // deletedAt — TIMESTAMPTZ, nullable
 });
 ```
 
