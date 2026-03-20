@@ -13,10 +13,7 @@ import { cronofyUser } from '@/lib/cronofy';
 import { db } from '@/db';
 import { calendarConnections } from '@/db/schema';
 
-export async function registerPushChannel(
-  expertId: string,
-  accessToken: string
-): Promise<void> {
+export async function registerPushChannel(expertId: string, accessToken: string): Promise<void> {
   const client = cronofyUser(accessToken);
 
   // Close any existing channel first (idempotent reconnect)
@@ -36,7 +33,8 @@ export async function registerPushChannel(
     },
   });
 
-  await db.update(calendarConnections)
+  await db
+    .update(calendarConnections)
     .set({ channelId: channel.channel_id, updatedAt: new Date() })
     .where(eq(calendarConnections.expertId, expertId));
 }
@@ -88,7 +86,8 @@ export async function handleCronofyWebhook(
   }
 
   // Update last_synced_at
-  await db.update(calendarConnections)
+  await db
+    .update(calendarConnections)
     .set({ lastSyncedAt: new Date() })
     .where(eq(calendarConnections.id, connection.id));
 
@@ -115,10 +114,9 @@ export async function handleCronofyWebhook(
 import { Worker, Queue } from 'bullmq';
 import { getFreeBusySlots } from '@/services/cronofy/free-busy';
 
-export const rebuildAvailabilityCacheQueue = new Queue(
-  'rebuild-availability-cache',
-  { connection: redis }
-);
+export const rebuildAvailabilityCacheQueue = new Queue('rebuild-availability-cache', {
+  connection: redis,
+});
 
 export const rebuildAvailabilityCacheWorker = new Worker(
   'rebuild-availability-cache',
@@ -128,7 +126,8 @@ export const rebuildAvailabilityCacheWorker = new Worker(
     // Get the expert's next available slot
     const earliestAvailable = await calculateEarliestAvailable(expertId);
 
-    await db.insert(availabilityCache)
+    await db
+      .insert(availabilityCache)
       .values({ expertId, earliestAvailableAt: earliestAvailable, updatedAt: new Date() })
       .onConflictDoUpdate({
         target: availabilityCache.expertId,
@@ -141,9 +140,7 @@ export const rebuildAvailabilityCacheWorker = new Worker(
   { connection: redis }
 );
 
-async function calculateEarliestAvailable(
-  expertId: string
-): Promise<Date | null> {
+async function calculateEarliestAvailable(expertId: string): Promise<Date | null> {
   const now = new Date();
   const sixtyDaysOut = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
@@ -181,22 +178,26 @@ await stalenessCheckJob.add(
 );
 
 // Worker:
-new Worker('staleness-check', async () => {
-  const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+new Worker(
+  'staleness-check',
+  async () => {
+    const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
 
-  const staleConnections = await db.query.calendarConnections.findMany({
-    where: and(
-      eq(calendarConnections.status, 'connected'),
-      lt(calendarConnections.lastSyncedAt, staleThreshold)
-    ),
-  });
+    const staleConnections = await db.query.calendarConnections.findMany({
+      where: and(
+        eq(calendarConnections.status, 'connected'),
+        lt(calendarConnections.lastSyncedAt, staleThreshold)
+      ),
+    });
 
-  for (const conn of staleConnections) {
-    await rebuildAvailabilityCacheQueue.add(
-      'rebuild-availability-cache',
-      { expertId: conn.expertId },
-      { jobId: `availability-${conn.expertId}` }
-    );
-  }
-}, { connection: redis });
+    for (const conn of staleConnections) {
+      await rebuildAvailabilityCacheQueue.add(
+        'rebuild-availability-cache',
+        { expertId: conn.expertId },
+        { jobId: `availability-${conn.expertId}` }
+      );
+    }
+  },
+  { connection: redis }
+);
 ```

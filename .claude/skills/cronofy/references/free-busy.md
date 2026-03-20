@@ -16,15 +16,11 @@ import redis from '@/lib/redis';
 
 interface FreeBusySlot {
   start: string; // ISO string
-  end: string;   // ISO string
+  end: string; // ISO string
   status: 'busy' | 'tentative';
 }
 
-export async function getFreeBusy(
-  expertId: string,
-  from: Date,
-  to: Date
-): Promise<FreeBusySlot[]> {
+export async function getFreeBusy(expertId: string, from: Date, to: Date): Promise<FreeBusySlot[]> {
   const cacheKey = `free-busy:${expertId}:${from.toISOString().slice(0, 10)}`;
 
   // Check Redis cache first
@@ -82,7 +78,7 @@ import { getAvailabilityRule } from './availability-rules';
 
 interface AvailableSlot {
   start: string; // ISO
-  end: string;   // ISO
+  end: string; // ISO
 }
 
 export async function getAvailableSlots(
@@ -123,10 +119,7 @@ function buildAvailableSlots(
     }
 
     // Check if overlaps any busy period
-    const isBusy = busy.some(
-      (b) =>
-        new Date(b.start) < slotEnd && new Date(b.end) > cursor
-    );
+    const isBusy = busy.some((b) => new Date(b.start) < slotEnd && new Date(b.end) > cursor);
 
     if (!isBusy) {
       slots.push({
@@ -171,6 +164,7 @@ export async function getExpertAvailability(
 ## Cache Invalidation
 
 Invalidate Redis cache when:
+
 - Expert updates their availability rule (BAL-195)
 - Expert toggles a sub-calendar conflict-check setting
 - Consultation is booked (slot becomes unavailable)

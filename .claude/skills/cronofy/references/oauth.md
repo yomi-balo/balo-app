@@ -35,6 +35,7 @@ export async function getCronofyAuthUrl(expertId: string): Promise<string> {
 ```
 
 **Scope explanation for Balo:**
+
 - `read_write` — required for create/delete events
 - `list_calendars` — enumerate sub-calendars
 - `read_events` — for push notification delivery (Cronofy needs this internally)
@@ -52,10 +53,7 @@ import { db } from '@/db';
 import { calendarConnections } from '@/db/schema';
 import { encrypt } from '@/lib/encryption';
 
-export async function handleCronofyCallback(
-  code: string,
-  state: string
-): Promise<void> {
+export async function handleCronofyCallback(code: string, state: string): Promise<void> {
   const { expertId } = JSON.parse(Buffer.from(state, 'base64').toString());
 
   // Exchange code for tokens
@@ -81,7 +79,8 @@ export async function handleCronofyCallback(
 
   const expiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000);
 
-  await db.insert(calendarConnections)
+  await db
+    .insert(calendarConnections)
     .values({
       expertId,
       cronofySub: tokenResponse.sub,
@@ -144,7 +143,8 @@ async function refreshAccessToken(connection: CalendarConnection): Promise<strin
 
   const expiresAt = new Date(Date.now() + refreshed.expires_in * 1000);
 
-  await db.update(calendarConnections)
+  await db
+    .update(calendarConnections)
     .set({
       accessToken: encrypt(refreshed.access_token),
       tokenExpiresAt: expiresAt,
@@ -184,10 +184,8 @@ export async function disconnectCalendar(expertId: string): Promise<void> {
   });
 
   // Remove from DB
-  await db.delete(calendarConnections)
-    .where(eq(calendarConnections.expertId, expertId));
-  await db.delete(calendarSubCalendars)
-    .where(eq(calendarSubCalendars.connectionId, connection.id));
+  await db.delete(calendarConnections).where(eq(calendarConnections.expertId, expertId));
+  await db.delete(calendarSubCalendars).where(eq(calendarSubCalendars.connectionId, connection.id));
 }
 ```
 

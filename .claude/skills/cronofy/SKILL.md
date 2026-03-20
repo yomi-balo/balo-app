@@ -17,6 +17,7 @@ description: >
 ## Balo-Specific Context
 
 Cronofy is Balo's calendar infrastructure for V1. It handles:
+
 - **OAuth connection** — expert connects Google / Outlook calendar via Cronofy Individual Connect
 - **Sub-calendar listing** — surfaces all calendars (Work, Personal, etc.) for the conflict-check toggle UI
 - **Push notifications** — Cronofy notifies Balo's webhook when an expert's calendar changes
@@ -69,17 +70,17 @@ Consultation cancelled
 
 Read the relevant reference file before implementing any feature:
 
-| Task | Reference File |
-|------|---------------|
-| OAuth connect / token exchange / refresh | `references/oauth.md` |
-| List calendars + sub-calendar toggle logic | `references/calendars.md` |
+| Task                                           | Reference File                     |
+| ---------------------------------------------- | ---------------------------------- |
+| OAuth connect / token exchange / refresh       | `references/oauth.md`              |
+| List calendars + sub-calendar toggle logic     | `references/calendars.md`          |
 | Push notifications — register + handle webhook | `references/push-notifications.md` |
-| Free/busy fetch + Redis cache pattern | `references/free-busy.md` |
-| Write / delete consultation events | `references/events.md` |
-| Availability Rules (BAL-195 weekly schedule) | `references/availability-rules.md` |
-| Date overrides — holidays, leave, block days | `references/overrides.md` |
-| Timezone storage + timezone change handling | `references/timezone.md` |
-| Error handling + token expiry recovery | `references/errors.md` |
+| Free/busy fetch + Redis cache pattern          | `references/free-busy.md`          |
+| Write / delete consultation events             | `references/events.md`             |
+| Availability Rules (BAL-195 weekly schedule)   | `references/availability-rules.md` |
+| Date overrides — holidays, leave, block days   | `references/overrides.md`          |
+| Timezone storage + timezone change handling    | `references/timezone.md`           |
+| Error handling + token expiry recovery         | `references/errors.md`             |
 
 ---
 
@@ -108,6 +109,7 @@ export function cronofyUser(accessToken: string) {
 ```
 
 **Environment variables required:**
+
 ```
 CRONOFY_CLIENT_ID=
 CRONOFY_CLIENT_SECRET=
@@ -124,14 +126,16 @@ CRONOFY_WEBHOOK_SECRET=       # for verifying push notification authenticity
 // calendar_connections table
 export const calendarConnections = pgTable('calendar_connections', {
   id: uuid('id').primaryKey().defaultRandom(),
-  expertId: uuid('expert_id').notNull().references(() => experts.id),
-  cronofySub: text('cronofy_sub').notNull(),           // Cronofy account sub
-  accessToken: text('access_token').notNull(),          // encrypted at rest
-  refreshToken: text('refresh_token').notNull(),        // encrypted at rest
+  expertId: uuid('expert_id')
+    .notNull()
+    .references(() => experts.id),
+  cronofySub: text('cronofy_sub').notNull(), // Cronofy account sub
+  accessToken: text('access_token').notNull(), // encrypted at rest
+  refreshToken: text('refresh_token').notNull(), // encrypted at rest
   tokenExpiresAt: timestamp('token_expires_at').notNull(),
   status: text('status').notNull().default('connected'), // connected | auth_error
   lastSyncedAt: timestamp('last_synced_at'),
-  channelId: text('channel_id'),                        // push notification channel
+  channelId: text('channel_id'), // push notification channel
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -139,10 +143,12 @@ export const calendarConnections = pgTable('calendar_connections', {
 // calendar_sub_calendars table
 export const calendarSubCalendars = pgTable('calendar_sub_calendars', {
   id: uuid('id').primaryKey().defaultRandom(),
-  connectionId: uuid('connection_id').notNull().references(() => calendarConnections.id),
-  calendarId: text('calendar_id').notNull(),             // Cronofy calendar_id
+  connectionId: uuid('connection_id')
+    .notNull()
+    .references(() => calendarConnections.id),
+  calendarId: text('calendar_id').notNull(), // Cronofy calendar_id
   name: text('name').notNull(),
-  provider: text('provider').notNull(),                  // google | outlook
+  provider: text('provider').notNull(), // google | outlook
   isPrimary: boolean('is_primary').notNull().default(false),
   conflictCheck: boolean('conflict_check').notNull().default(true),
   color: text('color'),
@@ -150,7 +156,9 @@ export const calendarSubCalendars = pgTable('calendar_sub_calendars', {
 
 // availability_cache table (one row per expert — NOT full event sync)
 export const availabilityCache = pgTable('availability_cache', {
-  expertId: uuid('expert_id').primaryKey().references(() => experts.id),
+  expertId: uuid('expert_id')
+    .primaryKey()
+    .references(() => experts.id),
   // TIMESTAMPTZ (not plain timestamp) — stored as UTC, unambiguous across timezones
   earliestAvailableAt: timestamp('earliest_available_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),

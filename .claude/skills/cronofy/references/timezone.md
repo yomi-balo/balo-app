@@ -39,7 +39,7 @@ Common values: `"Australia/Melbourne"`, `"America/New_York"`, `"Europe/London"`.
 
 ### 1. Availability Rule tzid (Cronofy)
 
-When saving the weekly schedule, `tzid` must reflect the expert's *current* timezone.
+When saving the weekly schedule, `tzid` must reflect the expert's _current_ timezone.
 "Mon 9am–5pm" means 9am in wherever they are, not 9am UTC.
 
 ```typescript
@@ -58,7 +58,7 @@ export async function upsertAvailabilityRule(
 
   await client.upsertAvailabilityRule({
     availability_rule_id: AVAILABILITY_RULE_ID,
-    tzid: expert!.timezone,   // <-- always use expert's current timezone, not hardcoded
+    tzid: expert!.timezone, // <-- always use expert's current timezone, not hardcoded
     weekly_periods: buildWeeklyPeriods(schedule),
   });
 
@@ -82,14 +82,8 @@ function isWithinOverride(
 ): boolean {
   for (const override of overrides) {
     // Convert the date boundary to UTC using expert's timezone
-    const overrideStartUtc = fromZonedTime(
-      `${override.startDate}T00:00:00`,
-      expertTimezone
-    );
-    const overrideEndUtc = fromZonedTime(
-      `${override.endDate}T23:59:59`,
-      expertTimezone
-    );
+    const overrideStartUtc = fromZonedTime(`${override.startDate}T00:00:00`, expertTimezone);
+    const overrideEndUtc = fromZonedTime(`${override.endDate}T23:59:59`, expertTimezone);
 
     if (slotUtc >= overrideStartUtc && slotUtc <= overrideEndUtc) {
       return true;
@@ -142,7 +136,8 @@ export async function handleExpertTimezoneChange(
   newTimezone: string
 ): Promise<void> {
   // 1. Persist new timezone to DB
-  await db.update(experts)
+  await db
+    .update(experts)
     .set({ timezone: newTimezone, updatedAt: new Date() })
     .where(eq(experts.id, expertId));
 
@@ -167,7 +162,7 @@ export async function handleExpertTimezoneChange(
 }
 ```
 
-**Order matters:** Update DB timezone *before* re-saving the Availability Rule, because
+**Order matters:** Update DB timezone _before_ re-saving the Availability Rule, because
 `upsertAvailabilityRule` reads the expert's timezone from the DB.
 
 ---
@@ -181,6 +176,7 @@ pnpm add date-fns-tz
 ```
 
 Key functions:
+
 - `fromZonedTime(localDateStr, timezone)` — convert local time string to UTC Date
 - `toZonedTime(utcDate, timezone)` — convert UTC Date to local Date object
 - `format(zonedDate, pattern, { timeZone })` — format a date in a specific timezone

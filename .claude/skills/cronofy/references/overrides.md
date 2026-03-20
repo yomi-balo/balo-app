@@ -16,10 +16,12 @@ full control without an additional Cronofy API dependency.
 ```typescript
 export const availabilityOverrides = pgTable('availability_overrides', {
   id: uuid('id').primaryKey().defaultRandom(),
-  expertId: uuid('expert_id').notNull().references(() => experts.id),
-  startDate: date('start_date').notNull(),     // inclusive, e.g. "2026-04-18"
-  endDate: date('end_date').notNull(),         // inclusive, e.g. "2026-04-22"
-  label: text('label'),                        // optional expert-facing note e.g. "Easter break"
+  expertId: uuid('expert_id')
+    .notNull()
+    .references(() => experts.id),
+  startDate: date('start_date').notNull(), // inclusive, e.g. "2026-04-18"
+  endDate: date('end_date').notNull(), // inclusive, e.g. "2026-04-22"
+  label: text('label'), // optional expert-facing note e.g. "Easter break"
   createdAt: timestamp('created_at').defaultNow(),
 });
 ```
@@ -40,18 +42,17 @@ import { rebuildAvailabilityCacheQueue } from '@/jobs/availability';
 interface OverrideInput {
   expertId: string;
   startDate: string; // "YYYY-MM-DD"
-  endDate: string;   // "YYYY-MM-DD"
+  endDate: string; // "YYYY-MM-DD"
   label?: string;
 }
 
-export async function upsertAvailabilityOverride(
-  input: OverrideInput
-): Promise<string> {
+export async function upsertAvailabilityOverride(input: OverrideInput): Promise<string> {
   if (input.endDate < input.startDate) {
     throw new Error('endDate must be >= startDate');
   }
 
-  const [override] = await db.insert(availabilityOverrides)
+  const [override] = await db
+    .insert(availabilityOverrides)
     .values(input)
     .returning({ id: availabilityOverrides.id });
 
@@ -80,13 +81,12 @@ export async function deleteAvailabilityOverride(
   expertId: string,
   overrideId: string
 ): Promise<void> {
-  await db.delete(availabilityOverrides)
-    .where(
-      and(
-        eq(availabilityOverrides.id, overrideId),
-        eq(availabilityOverrides.expertId, expertId) // ownership check
-      )
-    );
+  await db.delete(availabilityOverrides).where(
+    and(
+      eq(availabilityOverrides.id, overrideId),
+      eq(availabilityOverrides.expertId, expertId) // ownership check
+    )
+  );
 
   // Same reasoning as upsert — deleting an override may free up the
   // earliest available slot, so the cache must rebuild immediately.
@@ -152,7 +152,7 @@ function buildAvailableSlots(
   busy: FreeBusySlot[],
   rule: AvailabilityRule | null,
   overrides: AvailabilityOverride[],
-  expertTimezone: string    // required — overrides are date-local, not UTC
+  expertTimezone: string // required — overrides are date-local, not UTC
 ): AvailableSlot[] {
   const slots: AvailableSlot[] = [];
   const slotDuration = 30 * 60 * 1000;
@@ -175,9 +175,7 @@ function buildAvailableSlots(
     }
 
     // 3. Check calendar free/busy
-    const isBusy = busy.some(
-      (b) => new Date(b.start) < slotEnd && new Date(b.end) > cursor
-    );
+    const isBusy = busy.some((b) => new Date(b.start) < slotEnd && new Date(b.end) > cursor);
     if (isBusy) {
       cursor = slotEnd;
       continue;
@@ -201,7 +199,7 @@ function isWithinOverride(
   // Import fromZonedTime from date-fns-tz
   for (const override of overrides) {
     const overrideStartUtc = fromZonedTime(`${override.startDate}T00:00:00`, expertTimezone);
-    const overrideEndUtc   = fromZonedTime(`${override.endDate}T23:59:59`,   expertTimezone);
+    const overrideEndUtc = fromZonedTime(`${override.endDate}T23:59:59`, expertTimezone);
     if (slotUtc >= overrideStartUtc && slotUtc <= overrideEndUtc) return true;
   }
   return false;

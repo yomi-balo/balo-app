@@ -32,7 +32,7 @@ interface WeeklySchedule {
 
 interface TimeRange {
   start: string; // "HH:MM" e.g. "09:00"
-  end: string;   // "HH:MM" e.g. "17:00"
+  end: string; // "HH:MM" e.g. "17:00"
 }
 
 export async function upsertAvailabilityRule(
@@ -57,7 +57,15 @@ export async function upsertAvailabilityRule(
 }
 
 function buildWeeklyPeriods(schedule: WeeklySchedule) {
-  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
+  const days = [
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+    'sunday',
+  ] as const;
   const result = [];
 
   for (const day of days) {
@@ -78,16 +86,17 @@ function buildWeeklyPeriods(schedule: WeeklySchedule) {
 ```
 
 **Availability rule shape sent to Cronofy:**
+
 ```json
 {
   "availability_rule_id": "balo_work_hours",
   "tzid": "Australia/Melbourne",
   "weekly_periods": [
-    { "day": "monday",    "start_time": "09:00", "end_time": "17:00" },
-    { "day": "tuesday",   "start_time": "09:00", "end_time": "17:00" },
+    { "day": "monday", "start_time": "09:00", "end_time": "17:00" },
+    { "day": "tuesday", "start_time": "09:00", "end_time": "17:00" },
     { "day": "wednesday", "start_time": "09:00", "end_time": "12:00" },
-    { "day": "thursday",  "start_time": "09:00", "end_time": "17:00" },
-    { "day": "friday",    "start_time": "09:00", "end_time": "17:00" }
+    { "day": "thursday", "start_time": "09:00", "end_time": "17:00" },
+    { "day": "friday", "start_time": "09:00", "end_time": "17:00" }
   ]
 }
 ```
@@ -99,9 +108,7 @@ function buildWeeklyPeriods(schedule: WeeklySchedule) {
 Used to pre-populate the schedule editor when expert returns to BAL-195 settings.
 
 ```typescript
-export async function getAvailabilityRule(
-  expertId: string
-): Promise<WeeklySchedule | null> {
+export async function getAvailabilityRule(expertId: string): Promise<WeeklySchedule | null> {
   const accessToken = await getValidAccessToken(expertId);
   const client = cronofyUser(accessToken);
 
@@ -143,14 +150,19 @@ stored Availability Rule when calculating free/busy. This is already handled in 
 via `getAvailableSlots` which uses `getAvailabilityRule` to filter candidate slots.
 
 Alternatively, if using Cronofy's Availability API directly (not free/busy), set:
+
 ```json
 {
-  "participants": [{
-    "members": [{
-      "sub": "EXPERT_SUB",
-      "managed_availability": true
-    }]
-  }]
+  "participants": [
+    {
+      "members": [
+        {
+          "sub": "EXPERT_SUB",
+          "managed_availability": true
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -165,9 +177,11 @@ export async function deleteAvailabilityRule(expertId: string): Promise<void> {
   const accessToken = await getValidAccessToken(expertId);
   const client = cronofyUser(accessToken);
 
-  await client.deleteAvailabilityRule({
-    availability_rule_id: AVAILABILITY_RULE_ID,
-  }).catch(() => {}); // Best effort — rule may not exist
+  await client
+    .deleteAvailabilityRule({
+      availability_rule_id: AVAILABILITY_RULE_ID,
+    })
+    .catch(() => {}); // Best effort — rule may not exist
 
   await invalidateAvailabilityCache(expertId);
 }

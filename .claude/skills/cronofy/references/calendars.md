@@ -9,10 +9,7 @@ import { cronofyUser } from '@/lib/cronofy';
 import { db } from '@/db';
 import { calendarSubCalendars, calendarConnections } from '@/db/schema';
 
-export async function listAndStoreCalendars(
-  expertId: string,
-  accessToken: string
-): Promise<void> {
+export async function listAndStoreCalendars(expertId: string, accessToken: string): Promise<void> {
   const client = cronofyUser(accessToken);
   const { calendars } = await client.listCalendars();
 
@@ -39,8 +36,7 @@ export async function listAndStoreCalendars(
   );
 
   // Upsert sub-calendars
-  await db.delete(calendarSubCalendars)
-    .where(eq(calendarSubCalendars.connectionId, connection.id));
+  await db.delete(calendarSubCalendars).where(eq(calendarSubCalendars.connectionId, connection.id));
 
   if (writableCalendars.length > 0) {
     await db.insert(calendarSubCalendars).values(
@@ -136,12 +132,15 @@ export async function updateCalendarConflictCheck(
     throw new Error('Cannot disable conflict checking on primary calendar');
   }
 
-  await db.update(calendarSubCalendars)
+  await db
+    .update(calendarSubCalendars)
     .set({ conflictCheck })
-    .where(and(
-      eq(calendarSubCalendars.connectionId, connection.id),
-      eq(calendarSubCalendars.calendarId, calendarId)
-    ));
+    .where(
+      and(
+        eq(calendarSubCalendars.connectionId, connection.id),
+        eq(calendarSubCalendars.calendarId, calendarId)
+      )
+    );
 
   // Invalidate availability cache since conflict calendars changed
   await invalidateAvailabilityCache(expertId);

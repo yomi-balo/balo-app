@@ -23,9 +23,7 @@ interface ConsultationEventParams {
   meetingUrl: string; // Daily.co room URL
 }
 
-export async function createConsultationEvent(
-  params: ConsultationEventParams
-): Promise<string> {
+export async function createConsultationEvent(params: ConsultationEventParams): Promise<string> {
   const { expertId, consultationId, clientFirstName, start, end, meetingUrl } = params;
 
   const accessToken = await getValidAccessToken(expertId);
@@ -119,14 +117,11 @@ export async function createConsultationEventSafe(
   params: ConsultationEventParams
 ): Promise<string | null> {
   try {
-    return await withRetry(
-      () => createConsultationEvent(params),
-      {
-        attempts: 4,
-        backoff: [5_000, 30_000, 120_000, 600_000], // 5s, 30s, 2m, 10m
-        retryIf: (err) => isTransientError(err),
-      }
-    );
+    return await withRetry(() => createConsultationEvent(params), {
+      attempts: 4,
+      backoff: [5_000, 30_000, 120_000, 600_000], // 5s, 30s, 2m, 10m
+      retryIf: (err) => isTransientError(err),
+    });
   } catch (err) {
     // After 4 attempts, mark consultation as calendar_write_failed
     // Admin is alerted — booking is held, not cancelled
