@@ -359,6 +359,7 @@ See `.claude/skills/testing/SKILL.md` → "Database Integration Tests" for the f
 - ❌ `any` types on schema columns
 - ❌ `serial()` or `integer().generatedAlwaysAsIdentity()` for IDs — use `uuid()`
 - ❌ Boolean `isDeleted` — use `deletedAt` timestamp
+- ❌ `timestamp('col')` without `{ withTimezone: true }` — always use TIMESTAMPTZ. Use `...timestamps` helper.
 - ❌ Raw SQL queries when Drizzle can express it
 - ❌ Forgetting RLS on new tables
 - ❌ Forgetting indexes on foreign keys
