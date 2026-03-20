@@ -2,6 +2,7 @@ import { pgTable, uuid, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core
 import { relations } from 'drizzle-orm';
 import { agencyRoleEnum } from './enums';
 import { users } from './users';
+import { timestamps } from './helpers';
 
 export const agencies = pgTable('agencies', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -12,8 +13,7 @@ export const agencies = pgTable('agencies', {
 
   stripeConnectId: text('stripe_connect_id'),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  ...timestamps,
 });
 
 export const agencyMembers = pgTable(
@@ -30,7 +30,7 @@ export const agencyMembers = pgTable(
     role: agencyRoleEnum('role').notNull().default('expert'),
 
     invitedById: uuid('invited_by_id').references(() => users.id),
-    joinedAt: timestamp('joined_at').defaultNow().notNull(),
+    joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     agencyUserIdx: uniqueIndex('agency_user_idx').on(table.agencyId, table.userId),

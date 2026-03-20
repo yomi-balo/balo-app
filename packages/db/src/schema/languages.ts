@@ -1,15 +1,7 @@
-import {
-  pgTable,
-  uuid,
-  text,
-  integer,
-  boolean,
-  timestamp,
-  uniqueIndex,
-  index,
-} from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, boolean, uniqueIndex, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { expertLanguages } from './experts';
+import { timestamps } from './helpers';
 
 export const languages = pgTable(
   'languages',
@@ -23,8 +15,7 @@ export const languages = pgTable(
     sortOrder: integer('sort_order').default(0).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     codeIdx: uniqueIndex('languages_code_idx').on(table.code),

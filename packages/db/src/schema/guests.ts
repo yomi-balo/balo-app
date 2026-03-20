@@ -17,9 +17,9 @@ export const meetingGuests = pgTable('meeting_guests', {
   emailDomain: text('email_domain'),
 
   convertedToUserId: uuid('converted_to_user_id').references(() => users.id),
-  convertedAt: timestamp('converted_at'),
+  convertedAt: timestamp('converted_at', { withTimezone: true }),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type MeetingGuest = typeof meetingGuests.$inferSelect;

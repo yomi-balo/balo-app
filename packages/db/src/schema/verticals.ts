@@ -1,14 +1,6 @@
-import {
-  pgTable,
-  uuid,
-  text,
-  boolean,
-  integer,
-  timestamp,
-  uniqueIndex,
-  index,
-} from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, boolean, integer, uniqueIndex, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
+import { timestamps } from './helpers';
 
 export const verticals = pgTable('verticals', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -20,8 +12,7 @@ export const verticals = pgTable('verticals', {
 
   isActive: boolean('is_active').default(true).notNull(),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  ...timestamps,
 });
 
 export const skillCategories = pgTable(
@@ -39,8 +30,7 @@ export const skillCategories = pgTable(
     sortOrder: integer('sort_order').default(0).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     verticalSlugIdx: uniqueIndex('skill_cat_vertical_slug_idx').on(table.verticalId, table.slug),
@@ -66,8 +56,7 @@ export const skills = pgTable(
     sortOrder: integer('sort_order').default(0),
     isActive: boolean('is_active').default(true).notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     verticalSlugIdx: uniqueIndex('skill_vertical_slug_idx').on(table.verticalId, table.slug),
@@ -86,8 +75,7 @@ export const supportTypes = pgTable('support_types', {
   sortOrder: integer('sort_order').default(0),
   isActive: boolean('is_active').default(true).notNull(),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  ...timestamps,
 });
 
 export const certificationCategories = pgTable(
@@ -101,8 +89,7 @@ export const certificationCategories = pgTable(
     sortOrder: integer('sort_order').default(0).notNull(),
     isActive: boolean('is_active').default(true).notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     slugIdx: uniqueIndex('cert_cat_slug_idx').on(table.slug),
@@ -129,8 +116,7 @@ export const certifications = pgTable(
 
     isActive: boolean('is_active').default(true).notNull(),
 
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    ...timestamps,
   },
   (table) => ({
     verticalSlugIdx: uniqueIndex('cert_vertical_slug_idx').on(table.verticalId, table.slug),

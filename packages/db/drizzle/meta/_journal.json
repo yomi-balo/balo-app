@@ -78,6 +78,13 @@
       "when": 1773697835942,
       "tag": "0010_flowery_namora",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1774030277178,
+      "tag": "0011_migrate_timestamps_to_timestamptz",
+      "breakpoints": true
     }
   ]
 }
