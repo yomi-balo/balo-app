@@ -1,11 +1,11 @@
 import { Html, Head, Body, Container, Heading, Text, Button, Hr } from '@react-email/components';
 
 interface WelcomeEmailProps {
-  recipientName: string;
-  baseUrl: string;
+  readonly recipientName: string;
+  readonly baseUrl: string;
 }
 
-export function WelcomeEmail({ recipientName, baseUrl }: WelcomeEmailProps) {
+export function WelcomeEmail({ recipientName, baseUrl }: Readonly<WelcomeEmailProps>) {
   return (
     <Html>
       <Head />

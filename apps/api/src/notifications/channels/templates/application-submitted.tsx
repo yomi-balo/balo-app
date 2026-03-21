@@ -1,10 +1,12 @@
 import { Html, Head, Body, Container, Heading, Text, Section, Hr } from '@react-email/components';
 
 interface ApplicationSubmittedEmailProps {
-  recipientName: string;
+  readonly recipientName: string;
 }
 
-export function ApplicationSubmittedEmail({ recipientName }: ApplicationSubmittedEmailProps) {
+export function ApplicationSubmittedEmail({
+  recipientName,
+}: Readonly<ApplicationSubmittedEmailProps>) {
   return (
     <Html>
       <Head />
