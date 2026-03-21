@@ -42,24 +42,24 @@ balo-app/                          Turborepo monorepo
 
 ## Tech Stack
 
-| Layer          | Technology                       | Notes                               |
-| -------------- | -------------------------------- | ----------------------------------- |
-| Frontend       | Next.js 14 (App Router)          | Server components by default        |
-| Backend API    | Fastify                          | Zod validation on all inputs        |
-| Database       | Supabase (Postgres)              | Drizzle ORM with postgres-js driver |
-| Auth           | WorkOS                           | Custom UI (not hosted AuthKit)      |
-| Payments       | Stripe Connect                   | Australia region, 25% markup model  |
-| Queue          | BullMQ on Redis (Railway)        | Background jobs, notifications      |
-| UI             | Shadcn/ui + shadcnspace + Motion | Monday.com-inspired density         |
-| Styling        | Tailwind CSS                     | CSS variables for theming           |
-| Real-time      | Supabase Realtime                | Case-centric chat (in-house)        |
-| Search         | Algolia                          | Expert discovery                    |
-| Analytics      | PostHog                          | Feature flags + product analytics   |
-| Error tracking | Sentry                           | Separate projects for web + API     |
-| Email          | Resend                           | Via notification engine (BullMQ)    |
-| Video          | Daily.co                         | Call Object SDK for custom UI       |
-| File storage   | Cloudflare R2                    | S3-compatible                       |
-| Deployment     | Vercel (web) + Railway (API)     | Auto-deploy from GitHub             |
+| Layer          | Technology                       | Notes                                                          |
+| -------------- | -------------------------------- | -------------------------------------------------------------- |
+| Frontend       | Next.js 14 (App Router)          | Server components by default                                   |
+| Backend API    | Fastify                          | Zod validation on all inputs                                   |
+| Database       | Supabase (Postgres)              | Drizzle ORM with postgres-js driver                            |
+| Auth           | WorkOS                           | Custom UI (not hosted AuthKit)                                 |
+| Payments       | Stripe (single account)          | Client payments only, 25% markup. Expert payouts via Airwallex |
+| Queue          | BullMQ on Redis (Railway)        | Background jobs, notifications                                 |
+| UI             | Shadcn/ui + shadcnspace + Motion | Monday.com-inspired density                                    |
+| Styling        | Tailwind CSS                     | CSS variables for theming                                      |
+| Real-time      | Ably                             | Case-centric chat                                              |
+| Search         | PostgreSQL FTS (pg_trgm + GIN)   | Expert discovery — no external service                         |
+| Analytics      | PostHog                          | Feature flags + product analytics                              |
+| Error tracking | SonarQube                        | CI quality gate                                                |
+| Email          | Brevo + React Email              | Via notification engine (BullMQ)                               |
+| Video          | Daily.co                         | Call Object SDK for custom UI                                  |
+| File storage   | Cloudflare R2                    | S3-compatible                                                  |
+| Deployment     | Vercel (web) + Railway (API)     | Auto-deploy from GitHub                                        |
 
 ## Skills — READ BEFORE CODING
 

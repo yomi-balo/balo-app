@@ -3,7 +3,7 @@
 ## File Structure
 
 ```
-packages/api/src/lib/notifications/
+apps/api/src/notifications/
 ├── publisher.ts              # Event publishing (see event-publishing.md)
 ├── events.ts                 # Event registry (see event-publishing.md)
 ├── engine/

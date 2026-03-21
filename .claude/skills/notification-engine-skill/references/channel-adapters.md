@@ -28,22 +28,29 @@ export interface ChannelAdapter {
 }
 ```
 
-## Email Adapter (Resend)
+## Email Adapter (Brevo + React Email)
+
+Email delivery uses **Brevo** (`@getbrevo/brevo`) as the transport and **React Email** (`@react-email/render`) for HTML generation. Templates are JSX components compiled to HTML at send time — do NOT use Brevo's template builder.
 
 ```ts
 // channels/email.adapter.ts
 
 import { Worker } from 'bullmq';
-import { Resend } from 'resend';
+import * as brevo from '@getbrevo/brevo';
+import { render } from '@react-email/render';
 import { redis } from '@/lib/redis';
 import { db } from '@/lib/db';
 import { notificationLog, users } from '@balo/db/schema';
 import { eq } from 'drizzle-orm';
-import { renderEmailTemplate } from './email-templates';
+import { getEmailTemplate } from './templates';
 import { logger } from '@/lib/logger';
 import type { DeliveryPayload } from './types';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const brevoClient = new brevo.TransactionalEmailsApi();
+brevoClient.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY!);
+
+const FROM_EMAIL = process.env.BREVO_SENDER_EMAIL ?? 'notifications@balo.expert';
+const FROM_NAME = 'Balo';
 
 const emailWorker = new Worker(
   'notification-email',
@@ -61,28 +68,27 @@ const emailWorker = new Worker(
       return;
     }
 
-    // 2. Render template
-    const { subject, html, text } = renderEmailTemplate(payload.template, {
+    // 2. Render React Email template to HTML
+    const { component: EmailComponent, subject } = getEmailTemplate(payload.template, {
       ...payload.data,
       ...payload.payload,
       recipientName: user.firstName ?? 'there',
     });
 
-    // 3. Send via Resend
-    try {
-      const result = await resend.emails.send({
-        from: 'Balo <notifications@balo.expert>',
-        to: user.email,
-        subject,
-        html,
-        text, // Plain text fallback
-        tags: [
-          { name: 'event', value: payload.event },
-          { name: 'template', value: payload.template },
-        ],
-      });
+    const html = await render(EmailComponent);
 
-      await logNotification(payload, 'sent', undefined, { resendId: result.data?.id });
+    // 3. Send via Brevo
+    try {
+      const sendSmtpEmail = new brevo.SendSmtpEmail();
+      sendSmtpEmail.to = [{ email: user.email, name: user.firstName ?? undefined }];
+      sendSmtpEmail.sender = { email: FROM_EMAIL, name: FROM_NAME };
+      sendSmtpEmail.subject = subject;
+      sendSmtpEmail.htmlContent = html; // React Email output
+
+      const result = await brevoClient.sendTransacEmail(sendSmtpEmail);
+      const messageId = result.body?.messageId;
+
+      await logNotification(payload, 'sent', undefined, { brevoMessageId: messageId });
       logger.info({ template: payload.template, to: user.email }, 'Email sent');
     } catch (error) {
       await logNotification(payload, 'failed', (error as Error).message);
@@ -91,81 +97,68 @@ const emailWorker = new Worker(
   },
   {
     connection: redis,
-    concurrency: 5, // Respect Resend rate limits
+    concurrency: 5,
   }
 );
 ```
 
 ### Email Templates
 
-Templates are TypeScript functions that return `{ subject, html, text }`. Keep them in one place.
+Templates are React Email JSX components. Each template module exports a component and a `subject` factory.
 
 ```ts
-// channels/email-templates/index.ts
+// channels/templates/index.ts
 
-interface EmailOutput {
+import React from 'react';
+import { WelcomeEmail } from './welcome';
+import { BookingConfirmedExpertEmail } from './booking-confirmed-expert';
+import { BookingConfirmedClientEmail } from './booking-confirmed-client';
+
+interface TemplateOutput {
+  component: React.ReactElement;
   subject: string;
-  html: string;
-  text: string;
 }
 
-type TemplateRenderer = (data: Record<string, any>) => EmailOutput;
+const templates: Record<string, (data: Record<string, any>) => TemplateOutput> = {
+  'welcome': (data) => ({
+    component: <WelcomeEmail recipientName={data.recipientName} />,
+    subject: `Welcome to Balo`,
+  }),
 
-const templates: Record<string, TemplateRenderer> = {
   'booking-confirmed-expert': (data) => ({
+    component: <BookingConfirmedExpertEmail data={data} />,
     subject: `New booking from ${data.client?.firstName ?? 'a client'}`,
-    html: bookingConfirmedExpertHtml(data),
-    text: `You have a new booking on ${formatDate(data.payload.scheduledAt)}. Log in to Balo to view details.`,
   }),
 
   'booking-confirmed-client': (data) => ({
-    subject: `Booking confirmed with ${data.expert?.user?.firstName ?? 'your expert'}`,
-    html: bookingConfirmedClientHtml(data),
-    text: `Your consultation is confirmed for ${formatDate(data.payload.scheduledAt)}.`,
+    component: <BookingConfirmedClientEmail data={data} />,
+    subject: `Consultation confirmed with ${data.expert?.user?.firstName ?? 'your expert'}`,
   }),
 
   'booking-reminder': (data) => ({
-    subject: `Reminder: Consultation in 30 minutes`,
-    html: bookingReminderHtml(data),
-    text: `Your consultation starts in 30 minutes. Join at balo.expert/cases/${data.payload.caseId}`,
+    component: <BookingReminderEmail data={data} />,
+    subject: `Reminder: Your consultation starts in 30 minutes`,
   }),
 
   'payment-receipt': (data) => ({
+    component: <PaymentReceiptEmail data={data} />,
     subject: `Payment receipt — $${(data.payload.amountCents / 100).toFixed(2)}`,
-    html: paymentReceiptHtml(data),
-    text: `Payment of $${(data.payload.amountCents / 100).toFixed(2)} confirmed. ${data.payload.description}`,
   }),
-
-  welcome: (data) => ({
-    subject: `Welcome to Balo`,
-    html: welcomeHtml(data),
-    text: `Welcome to Balo, ${data.recipientName}! Get started at balo.expert`,
-  }),
-
-  // ... add more templates here
 };
 
-export function renderEmailTemplate(templateName: string, data: Record<string, any>): EmailOutput {
-  const renderer = templates[templateName];
-  if (!renderer) {
+export function getEmailTemplate(templateName: string, data: Record<string, any>): TemplateOutput {
+  const factory = templates[templateName];
+  if (!factory) {
     throw new Error(`Unknown email template: ${templateName}`);
   }
-  return renderer(data);
+  return factory(data);
 }
 ```
 
-### Email HTML Approach
-
-Two options — pick based on complexity:
-
-**Option A: React Email (recommended for Balo)**
-
-```bash
-pnpm add @react-email/components --filter api
-```
+### React Email Component Pattern
 
 ```tsx
-// channels/email-templates/booking-confirmed-expert.tsx
+// channels/templates/booking-confirmed-expert.tsx
 import {
   Html,
   Head,
@@ -175,13 +168,15 @@ import {
   Heading,
   Text,
   Button,
-  Hr,
 } from '@react-email/components';
 
-export function BookingConfirmedExpertEmail({ data }: { data: Record<string, any> }) {
+interface Props {
+  data: Record<string, any>;
+}
+
+export function BookingConfirmedExpertEmail({ data }: Props) {
   const clientName = data.client?.firstName ?? 'A client';
   const date = formatDate(data.payload.scheduledAt);
-  const rate = `$${(data.payload.rateCents / 100).toFixed(0)}/hr`;
 
   return (
     <Html>
@@ -205,9 +200,6 @@ export function BookingConfirmedExpertEmail({ data }: { data: Record<string, any
             <Text>
               <strong>Duration:</strong> {data.payload.durationMinutes} minutes
             </Text>
-            <Text>
-              <strong>Rate:</strong> {rate}
-            </Text>
           </Section>
 
           <Button
@@ -217,7 +209,6 @@ export function BookingConfirmedExpertEmail({ data }: { data: Record<string, any
               color: '#fff',
               padding: '12px 24px',
               borderRadius: 8,
-              textDecoration: 'none',
               marginTop: 16,
             }}
           >
@@ -230,28 +221,12 @@ export function BookingConfirmedExpertEmail({ data }: { data: Record<string, any
 }
 ```
 
-**Option B: Simple string templates (for quick start)**
+### Required env vars
 
-```ts
-function bookingConfirmedExpertHtml(data: Record<string, any>): string {
-  return `
-    <div style="font-family: Inter, sans-serif; max-width: 560px; margin: 0 auto;">
-      <h2>New booking</h2>
-      <p>${data.client?.firstName ?? 'A client'} has booked a consultation with you.</p>
-      <div style="background: #fff; border-radius: 12px; padding: 24px; border: 1px solid #e2e8f0;">
-        <p><strong>Date:</strong> ${formatDate(data.payload.scheduledAt)}</p>
-        <p><strong>Duration:</strong> ${data.payload.durationMinutes} minutes</p>
-      </div>
-      <a href="https://balo.expert/cases/${data.payload.caseId ?? ''}"
-         style="display: inline-block; background: #2563EB; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; margin-top: 16px;">
-        View Booking
-      </a>
-    </div>
-  `;
-}
 ```
-
-Start with Option B, migrate to React Email when you have 10+ templates.
+BREVO_API_KEY=         # Brevo API key (transactional email)
+BREVO_SENDER_EMAIL=    # From address, e.g. notifications@balo.expert (optional — defaults to notifications@balo.expert)
+```
 
 ## In-App Notification Adapter
 

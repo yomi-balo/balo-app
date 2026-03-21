@@ -19,8 +19,8 @@ When invoked standalone (not via `/implement`), read the task or PRD provided an
 - **Payments:** Stripe (single account — client payments only, 25% markup). Expert payouts via Airwallex (see airwallex-payouts skill). No Stripe Connect.
 - **Queue:** BullMQ on Redis for async jobs
 - **UI:** Shadcn/ui + shadcnspace + Motion + Tailwind
-- **Real-time:** Supabase Realtime for case-centric chat
-- **Search:** Algolia
+- **Real-time:** Ably for case-centric chat
+- **Search:** PostgreSQL FTS (`pg_trgm` + GIN index) — no external search service
 
 ## Skills
 
@@ -33,7 +33,7 @@ The project has skill files in `.claude/skills/` that define Balo-specific patte
 3. **Type safety end-to-end:** Shared types in `packages/shared`, Zod schemas for runtime validation.
 4. **Multi-tenant ready:** No hardcoded Salesforce concepts in generic tables. Design for future verticals.
 5. **Explicit over implicit:** Name things clearly. No abbreviations. No magic.
-6. **Observable by default:** Every feature must define its logging error paths and analytics events upfront. If a user can do it, we track it. If it can fail, we log it.
+6. **Observable by default:** Every feature must define its logging, error paths, and analytics events upfront. If a user can do it, we track it. If it can fail, we log it.
 7. **Data-driven over repetitive:** When a design calls for lists of similar items (reference data, config, routes), specify them as compact data structures that code can iterate over — not as individual blocks the builder will copy-paste.
 
 ## Process
