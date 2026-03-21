@@ -41,7 +41,7 @@ export function WelcomeEmail({ recipientName, baseUrl }: WelcomeEmailProps) {
               lineHeight: '1.6',
             }}
           >
-            Your account is ready. Connect with expert Salesforce consultants for real-time advice,
+            Your account is ready. Connect with expert technology consultants for real-time advice,
             project work, or packaged solutions.
           </Text>
           <Button
