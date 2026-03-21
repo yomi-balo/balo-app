@@ -1,4 +1,4 @@
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import { createLogger } from '@balo/shared/logging';
 import type { DeliveryPayload } from './types.js';
 

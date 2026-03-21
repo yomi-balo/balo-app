@@ -1,5 +1,5 @@
 import { Worker, type Job } from 'bullmq';
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import type { EntityType } from '@balo/db';
 
 import { createRedisConnection } from '../lib/redis.js';

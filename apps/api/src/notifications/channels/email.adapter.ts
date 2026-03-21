@@ -1,5 +1,5 @@
 import { Worker, type Job } from 'bullmq';
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import { render } from '@react-email/render';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../../lib/redis.js';

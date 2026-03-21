@@ -120,4 +120,40 @@ describe('dispatch', () => {
     const deliveryPayload = mockAdd.mock.calls[0][1];
     expect(deliveryPayload.recipientId).toBe('expert-789');
   });
+
+  it('resolves client recipient from payload.recipientId', async () => {
+    const clientRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'client',
+    };
+
+    const clientContext: RuleContext = {
+      ...baseContext,
+      payload: { correlationId: 'corr-123', recipientId: 'client-001' },
+      data: {},
+    };
+
+    await dispatch(clientRule, clientContext);
+
+    const deliveryPayload = mockAdd.mock.calls[0][1];
+    expect(deliveryPayload.recipientId).toBe('client-001');
+  });
+
+  it('falls back to data.client.id when payload.recipientId is absent', async () => {
+    const clientRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'client',
+    };
+
+    const clientContext: RuleContext = {
+      ...baseContext,
+      payload: { correlationId: 'corr-123' },
+      data: { client: { id: 'client-002' } },
+    };
+
+    await dispatch(clientRule, clientContext);
+
+    const deliveryPayload = mockAdd.mock.calls[0][1];
+    expect(deliveryPayload.recipientId).toBe('client-002');
+  });
 });
