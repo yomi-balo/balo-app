@@ -1,4 +1,4 @@
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import type { RuleContext } from './rules.js';
 
 export async function resolveContext(

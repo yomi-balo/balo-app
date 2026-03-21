@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindById = vi.fn();
 
-vi.mock('module', () => ({
+vi.mock('node:module', () => ({
   createRequire: vi.fn(() => () => ({
     usersRepository: { findById: mockFindById },
   })),

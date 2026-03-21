@@ -36,7 +36,7 @@ describe('getEmailTemplate', () => {
 
 const mockInsert = vi.fn().mockResolvedValue({});
 
-vi.mock('module', () => ({
+vi.mock('node:module', () => ({
   createRequire: vi.fn(() => () => ({
     notificationLogRepository: { insert: mockInsert },
   })),

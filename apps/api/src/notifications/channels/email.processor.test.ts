@@ -7,7 +7,7 @@ const mockFindById = vi.fn();
 const mockInsert = vi.fn().mockResolvedValue({});
 const mockSendTransacEmail = vi.fn().mockResolvedValue({ messageId: 'brevo-msg-1' });
 
-vi.mock('module', () => ({
+vi.mock('node:module', () => ({
   createRequire: vi.fn(() => () => ({
     usersRepository: { findById: mockFindById },
     notificationLogRepository: { insert: mockInsert },
