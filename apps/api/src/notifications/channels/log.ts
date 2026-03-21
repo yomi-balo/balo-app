@@ -1,12 +1,13 @@
 import { createRequire } from 'node:module';
 import { createLogger } from '@balo/shared/logging';
+import type { NotificationChannel } from '../engine/rules.js';
 import type { DeliveryPayload } from './types.js';
 
 const logger = createLogger('notification-log');
 
 export async function logNotification(
   payload: DeliveryPayload,
-  channel: string,
+  channel: NotificationChannel,
   status: 'sent' | 'failed' | 'skipped',
   error?: string,
   metadata?: Record<string, unknown>

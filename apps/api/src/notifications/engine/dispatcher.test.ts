@@ -62,6 +62,30 @@ describe('dispatch', () => {
     );
   });
 
+  it('routes sms channel to notification-sms queue', async () => {
+    const smsRule: NotificationRule = {
+      ...baseRule,
+      channel: 'sms',
+      template: 'booking-urgent-sms',
+    };
+
+    await dispatch(smsRule, baseContext);
+
+    expect(getQueue).toHaveBeenCalledWith('notification-sms');
+  });
+
+  it('routes in-app channel to notification-in-app queue', async () => {
+    const inAppRule: NotificationRule = {
+      ...baseRule,
+      channel: 'in-app',
+      template: 'booking-confirmed',
+    };
+
+    await dispatch(inAppRule, baseContext);
+
+    expect(getQueue).toHaveBeenCalledWith('notification-in-app');
+  });
+
   it('skips dispatch when condition returns false', async () => {
     const ruleWithCondition: NotificationRule = {
       ...baseRule,
