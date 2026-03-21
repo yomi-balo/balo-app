@@ -40,7 +40,7 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
   const user = await usersRepository.findById(payload.recipientId);
   if (!user?.email) {
     log.warn({ recipientId: payload.recipientId }, 'No email for recipient');
-    await logNotification(payload, 'email', 'skipped', 'No email address');
+    await logNotification(payload, payload.channel, 'skipped', 'No email address');
     return;
   }
 
@@ -69,13 +69,13 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
     });
     const messageId = result?.messageId;
 
-    await logNotification(payload, 'email', 'sent', undefined, {
+    await logNotification(payload, payload.channel, 'sent', undefined, {
       brevoMessageId: messageId,
     });
     log.info({ template: payload.template, to: user.email, messageId }, 'Email sent');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    await logNotification(payload, 'email', 'failed', errorMessage);
+    await logNotification(payload, payload.channel, 'failed', errorMessage);
     log.error(
       {
         template: payload.template,

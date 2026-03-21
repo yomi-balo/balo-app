@@ -1,6 +1,8 @@
+import type { NotificationChannel } from '../engine/rules.js';
+
 export interface DeliveryPayload {
   recipientId: string;
-  channel: string; // 'email' | 'sms' | 'in-app' | 'push'
+  channel: NotificationChannel;
   template: string;
   event: string;
   data: Record<string, unknown>;
