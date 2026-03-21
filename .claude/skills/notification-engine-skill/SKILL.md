@@ -89,10 +89,11 @@ Channel Dispatcher
 │  queue    │  queue    │  queue    │  queue    │
 └─────┬─────┴─────┬─────┴─────┬─────┴─────┬─────┘
       ▼           ▼           ▼           ▼
-   Resend     Twilio*    Supabase     Future
-                          insert
+  Brevo +     Twilio*    Supabase     Future
+React Email    (TBD)      insert
 
 * SMS provider TBD — Twilio is a placeholder
+* Email: Brevo (@getbrevo/brevo) + React Email (@react-email/render) for templates
 ```
 
 ## Decision Tree
@@ -114,7 +115,7 @@ Channel Dispatcher
 
 ### NEVER
 
-- ❌ Import Resend, Twilio, or any delivery provider in feature code
+- ❌ Import Brevo, Twilio, or any delivery provider in feature code
 - ❌ Write to the `notifications` table from feature code
 - ❌ Schedule reminder jobs from feature code — the engine handles timing
 - ❌ Put notification logic in Server Actions or route handlers
