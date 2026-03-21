@@ -23,6 +23,7 @@ export const notificationLog = pgTable(
     index('notification_log_correlation_id_idx').on(table.correlationId),
     index('notification_log_recipient_id_idx').on(table.recipientId),
     index('notification_log_created_at_idx').on(table.createdAt),
+    index('notification_log_event_status_idx').on(table.event, table.status),
   ]
 );
 

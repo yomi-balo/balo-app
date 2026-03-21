@@ -1,0 +1,1 @@
+CREATE INDEX "notification_log_event_status_idx" ON "notification_log" USING btree ("event","status");

@@ -2,9 +2,10 @@ import { Html, Head, Body, Container, Heading, Text, Button, Hr } from '@react-e
 
 interface WelcomeEmailProps {
   recipientName: string;
+  baseUrl: string;
 }
 
-export function WelcomeEmail({ recipientName }: WelcomeEmailProps) {
+export function WelcomeEmail({ recipientName, baseUrl }: WelcomeEmailProps) {
   return (
     <Html>
       <Head />
@@ -44,7 +45,7 @@ export function WelcomeEmail({ recipientName }: WelcomeEmailProps) {
             project work, or packaged solutions.
           </Text>
           <Button
-            href="https://balo.expert/dashboard"
+            href={`${baseUrl}/dashboard`}
             style={{
               background: '#2563EB',
               color: '#fff',
