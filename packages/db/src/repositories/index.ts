@@ -12,3 +12,4 @@ export type {
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
 export type { SkillsByCategory, CertificationsByCategory } from './reference-data';
+export { notificationLogRepository } from './notification-log';

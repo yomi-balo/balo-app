@@ -85,6 +85,13 @@
       "when": 1774030277178,
       "tag": "0011_migrate_timestamps_to_timestamptz",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1774076080751,
+      "tag": "0012_supreme_doorman",
+      "breakpoints": true
     }
   ]
 }

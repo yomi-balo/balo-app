@@ -1,0 +1,38 @@
+import { createRequire } from 'module';
+import { createLogger } from '@balo/shared/logging';
+import type { DeliveryPayload } from './types.js';
+
+const logger = createLogger('notification-log');
+
+export async function logNotification(
+  payload: DeliveryPayload,
+  channel: string,
+  status: 'sent' | 'failed' | 'skipped',
+  error?: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
+  try {
+    const { notificationLogRepository } = createRequire(import.meta.url)('@balo/db');
+
+    await notificationLogRepository.insert({
+      event: payload.event,
+      correlationId: payload.payload.correlationId as string,
+      recipientId: payload.recipientId,
+      channel,
+      template: payload.template,
+      status,
+      error: error ?? null,
+      metadata: metadata ?? null,
+    });
+  } catch (logError) {
+    logger.error(
+      {
+        event: payload.event,
+        template: payload.template,
+        error: logError instanceof Error ? logError.message : String(logError),
+        stack: logError instanceof Error ? logError.stack : undefined,
+      },
+      'Failed to write notification log'
+    );
+  }
+}
