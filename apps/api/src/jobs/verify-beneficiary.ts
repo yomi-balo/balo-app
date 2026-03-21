@@ -2,7 +2,7 @@ import { Worker, type Job } from 'bullmq';
 import { createRequire } from 'module';
 import type { EntityType } from '@balo/db';
 
-import { getRedis } from '../lib/redis.js';
+import { createRedisConnection } from '../lib/redis.js';
 import { reconstructFormValues, registerBeneficiary } from '../services/airwallex/beneficiary.js';
 import { AirwallexApiError } from '../services/airwallex/errors.js';
 
@@ -86,7 +86,7 @@ export function startVerifyBeneficiaryWorker(): Worker<VerifyBeneficiaryJobData>
       }
     },
     {
-      connection: getRedis(),
+      connection: createRedisConnection(),
       concurrency: 5,
     }
   );

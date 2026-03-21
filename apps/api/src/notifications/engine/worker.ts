@@ -1,6 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import { createLogger } from '@balo/shared/logging';
-import { getRedis } from '../../lib/redis.js';
+import { createRedisConnection } from '../../lib/redis.js';
 import { notificationRules } from './rules.js';
 import { resolveContext } from './resolver.js';
 import { dispatch } from './dispatcher.js';
@@ -50,7 +50,7 @@ export function startNotificationEventWorker(): Worker<NotificationEventJobData>
       }
     },
     {
-      connection: getRedis(),
+      connection: createRedisConnection(),
       concurrency: 10,
     }
   );

@@ -1,6 +1,5 @@
 import { createLogger } from '@balo/shared/logging';
 import { getQueue } from '../../lib/queue.js';
-import { logNotification } from '../channels/log.js';
 import type { NotificationRule, RuleContext } from './rules.js';
 
 const log = createLogger('notification-dispatcher');
@@ -15,19 +14,9 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
   // 2. Resolve recipient
   const recipientId = resolveRecipient(rule.recipient, context);
   if (!recipientId) {
-    log.warn({ template: rule.template, recipient: rule.recipient }, 'Could not resolve recipient');
-    // Log skipped dispatch to notification_log for observability
-    await logNotification(
-      {
-        recipientId: 'unknown',
-        template: rule.template,
-        event: context.event,
-        data: context.data,
-        payload: context.payload,
-      },
-      rule.channel,
-      'skipped',
-      `Could not resolve recipient: ${rule.recipient}`
+    log.warn(
+      { template: rule.template, recipient: rule.recipient, event: context.event },
+      'Could not resolve recipient — skipping dispatch'
     );
     return;
   }

@@ -2,7 +2,7 @@ import { Worker, type Job } from 'bullmq';
 import { createRequire } from 'module';
 import { render } from '@react-email/render';
 import { createLogger } from '@balo/shared/logging';
-import { getRedis } from '../../lib/redis.js';
+import { createRedisConnection } from '../../lib/redis.js';
 import { getEmailTemplate } from './templates/index.js';
 import { logNotification } from './log.js';
 import type { DeliveryPayload } from './types.js';
@@ -10,13 +10,15 @@ import type { DeliveryPayload } from './types.js';
 const log = createLogger('notification-email');
 
 // Cached Brevo client — created lazily on first use
-let brevoClient: {
+interface BrevoEmailClient {
   transactionalEmails: {
     sendTransacEmail: (params: Record<string, unknown>) => Promise<{ messageId?: string }>;
   };
-} | null = null;
+}
 
-async function getBrevoClient(): Promise<typeof brevoClient> {
+let brevoClient: BrevoEmailClient | null = null;
+
+async function getBrevoClient(): Promise<BrevoEmailClient> {
   if (brevoClient) return brevoClient;
 
   const apiKey = process.env.BREVO_API_KEY;
@@ -25,7 +27,7 @@ async function getBrevoClient(): Promise<typeof brevoClient> {
   }
 
   const { BrevoClient } = await import('@getbrevo/brevo');
-  brevoClient = new BrevoClient({ apiKey });
+  brevoClient = new BrevoClient({ apiKey }) as BrevoEmailClient;
   return brevoClient;
 }
 
@@ -58,7 +60,7 @@ export function startEmailWorker(): Worker<DeliveryPayload> {
       try {
         const client = await getBrevoClient();
 
-        const result = await client!.transactionalEmails.sendTransacEmail({
+        const result = await client.transactionalEmails.sendTransacEmail({
           htmlContent: html,
           sender: {
             email: process.env.BREVO_SENDER_EMAIL ?? 'notifications@balo.expert',
@@ -89,7 +91,7 @@ export function startEmailWorker(): Worker<DeliveryPayload> {
       }
     },
     {
-      connection: getRedis(),
+      connection: createRedisConnection(),
       concurrency: 5,
     }
   );
