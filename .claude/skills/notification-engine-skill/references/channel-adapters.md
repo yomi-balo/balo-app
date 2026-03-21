@@ -160,7 +160,14 @@ export function getEmailTemplate(templateName: string, data: Record<string, any>
 ```tsx
 // channels/templates/booking-confirmed-expert.tsx
 import {
-  Html, Head, Body, Container, Section, Heading, Text, Button,
+  Html,
+  Head,
+  Body,
+  Container,
+  Section,
+  Heading,
+  Text,
+  Button,
 } from '@react-email/components';
 
 interface Props {
@@ -179,14 +186,31 @@ export function BookingConfirmedExpertEmail({ data }: Props) {
           <Heading style={{ fontSize: 20, fontWeight: 600 }}>New booking</Heading>
           <Text>{clientName} has booked a consultation with you.</Text>
 
-          <Section style={{ background: '#fff', borderRadius: 12, padding: 24, border: '1px solid #e2e8f0' }}>
-            <Text><strong>Date:</strong> {date}</Text>
-            <Text><strong>Duration:</strong> {data.payload.durationMinutes} minutes</Text>
+          <Section
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              padding: 24,
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <Text>
+              <strong>Date:</strong> {date}
+            </Text>
+            <Text>
+              <strong>Duration:</strong> {data.payload.durationMinutes} minutes
+            </Text>
           </Section>
 
           <Button
             href={`https://balo.expert/cases/${data.payload.caseId ?? ''}`}
-            style={{ background: '#2563EB', color: '#fff', padding: '12px 24px', borderRadius: 8, marginTop: 16 }}
+            style={{
+              background: '#2563EB',
+              color: '#fff',
+              padding: '12px 24px',
+              borderRadius: 8,
+              marginTop: 16,
+            }}
           >
             View Booking
           </Button>
