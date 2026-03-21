@@ -119,6 +119,7 @@ Before designing anything:
 - Identify the **job to be done** — what is the user trying to accomplish?
 - Identify **where this fits** in existing user journeys — what comes before and after?
 - Identify the **emotional target** — what should the user feel at the end of this flow?
+- Identify notification touchpoints — moments in this flow that should trigger an email or in-app notification to another user. These map to domain events for the notification engine (not email code in the feature itself).
 
 #### 2. Ask Clarifying Questions
 
@@ -338,6 +339,17 @@ How errors feel recoverable at each step. Specific microcopy.
 ## Mobile Adaptations
 
 [What changes at 375px — layout shifts, component swaps, navigation changes]
+
+## Notification Touchpoints
+
+Moments in this flow that should trigger a notification to another user. Maps to domain events for the architect to include in the Notification Events section.
+
+| Moment            | Who gets notified | What they should feel                 | Domain event        |
+| ----------------- | ----------------- | ------------------------------------- | ------------------- |
+| Booking confirmed | Expert            | Immediate acknowledgement, excitement | `booking.confirmed` |
+| Payment received  | Client            | Reassurance + receipt                 | `payment.completed` |
+
+If none, write "No notification touchpoints in this flow."
 
 ## Open Questions
 
