@@ -1,8 +1,15 @@
 import { createLogger } from '@balo/shared/logging';
 import { getQueue } from '../../lib/queue.js';
-import type { NotificationRule, RuleContext } from './rules.js';
+import type { NotificationChannel, NotificationRule, RuleContext } from './rules.js';
 
 const log = createLogger('notification-dispatcher');
+
+/** Maps each notification channel to its BullMQ queue name. */
+const CHANNEL_QUEUES: Record<NotificationChannel, string> = {
+  email: 'notification-email',
+  sms: 'notification-sms',
+  'in-app': 'notification-in-app',
+};
 
 export async function dispatch(rule: NotificationRule, context: RuleContext): Promise<void> {
   // 1. Evaluate condition
@@ -30,11 +37,12 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
     payload: context.payload,
   };
 
-  // 4. Add to email queue with deterministic job ID for dedup
-  const emailQueue = getQueue('notification-email');
+  // 4. Route to the correct channel queue with deterministic job ID for dedup
+  const queueName = CHANNEL_QUEUES[rule.channel];
+  const channelQueue = getQueue(queueName);
   const jobId = `${rule.template}:${recipientId}:${context.payload.correlationId}`;
 
-  await emailQueue.add(rule.template, deliveryPayload, {
+  await channelQueue.add(rule.template, deliveryPayload, {
     jobId,
     attempts: 3,
     backoff: { type: 'exponential', delay: 2000 },

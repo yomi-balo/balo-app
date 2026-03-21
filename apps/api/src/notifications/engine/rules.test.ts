@@ -40,10 +40,11 @@ describe('notificationRules', () => {
     }
   });
 
-  it('all rules use email channel', () => {
+  it('all rules use a valid notification channel', () => {
+    const validChannels = ['email', 'sms', 'in-app'];
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {
-        expect(rule.channel).toBe('email');
+        expect(validChannels).toContain(rule.channel);
       }
     }
   });

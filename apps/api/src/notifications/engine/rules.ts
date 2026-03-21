@@ -1,8 +1,10 @@
+export type NotificationChannel = 'email' | 'sms' | 'in-app';
+
 export interface NotificationRule {
-  channel: 'email'; // Only email for now
+  channel: NotificationChannel;
   recipient: 'self' | 'expert' | 'client' | 'admin';
   template: string;
-  timing: 'immediate'; // No scheduling for BAL-175
+  timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
   priority?: 'normal' | 'critical';
 }
