@@ -33,7 +33,7 @@ The project has skill files in `.claude/skills/` that define Balo-specific patte
 3. **Type safety end-to-end:** Shared types in `packages/shared`, Zod schemas for runtime validation.
 4. **Multi-tenant ready:** No hardcoded Salesforce concepts in generic tables. Design for future verticals.
 5. **Explicit over implicit:** Name things clearly. No abbreviations. No magic.
-6. **Observable by default:** Every feature must define its logging, error paths, and analytics events upfront. If a user can do it, we track it. If it can fail, we log it.
+6. **Observable by default:** Every feature must define its logging, error paths, analytics events, and notification touchpoints upfront. If a user can do it, we track it. If it can fail, we log it. If it affects another user, the notification engine delivers it — feature code NEVER sends email directly.
 7. **Data-driven over repetitive:** When a design calls for lists of similar items (reference data, config, routes), specify them as compact data structures that code can iterate over — not as individual blocks the builder will copy-paste.
 
 ## Process
@@ -119,6 +119,18 @@ The builder will create `lib/analytics/events/{feature}.ts` with these as typed 
 
 Note if this feature establishes or destroys a user session (requires `analytics.identify()` or `analytics.reset()`).
 
+## Notification Events
+
+List every domain event this feature should publish to the notification engine.
+Feature code publishes events; the engine decides channels and recipients.
+NEVER send email directly from feature code — always go through the engine.
+
+| Event               | Trigger                    | Recipients      | Channel | Template name                                          |
+| ------------------- | -------------------------- | --------------- | ------- | ------------------------------------------------------ |
+| `booking.confirmed` | Booking status → confirmed | expert + client | email   | `booking-confirmed-expert`, `booking-confirmed-client` |
+
+If this feature introduces no notification touchpoints, write "None".
+
 ## Open Questions
 
 Anything that needs user input before proceeding.
@@ -142,3 +154,4 @@ so they are not missed when tickets are created.
 4. If the feature touches auth, payments, or data — explicitly reference the governing skill
 5. The plan must be implementable by someone who has never seen the PRD — all context must be in the plan
 6. If the plan introduces new files in `packages/db/src/repositories/`, include a "Testing Requirements" section in the plan output listing each file. These require companion integration test Linear tasks — do not omit them.
+7. If the feature triggers any action that should inform another user (booking, payment, status change, application submitted, etc.), include a "Notification Events" section and read the `notification-engine` skill. Feature code must never send email or SMS directly.
