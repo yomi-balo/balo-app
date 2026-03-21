@@ -228,7 +228,7 @@ track(AUTH_EVENTS.LOGIN_COMPLETED, { method: 'email', is_returning_user: true })
 
 - Feature code publishes domain events via `notificationEvents.publish()`
 - Notification engine (BullMQ) resolves rules, selects channels, delivers
-- Feature code NEVER imports Resend, writes to notification tables, or sends email directly
+- Feature code NEVER imports Brevo, writes to notification tables, or sends email directly
 
 ### UI
 

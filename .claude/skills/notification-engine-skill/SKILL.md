@@ -25,8 +25,8 @@ async function confirmBooking(bookingId: string) {
   const booking = await db.update(bookings).set({ status: 'confirmed' }).returning();
 
   // Now the feature knows about emails, SMS, templates, timing...
-  await resend.emails.send({ to: expert.email, template: 'booking-confirmed' });
-  await resend.emails.send({ to: client.email, template: 'booking-confirmed-client' });
+  await brevo.sendTransacEmail({ to: [{ email: expert.email }], htmlContent: '...' });
+  await brevo.sendTransacEmail({ to: [{ email: client.email }], htmlContent: '...' });
   if (minutesUntilStart < 120) {
     await twilio.messages.create({ to: expert.phone, body: '...' });
   }

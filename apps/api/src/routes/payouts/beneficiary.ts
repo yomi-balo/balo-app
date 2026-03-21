@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import type { EntityType } from '@balo/db';
 
 import { requireInternalAuth } from '../../lib/internal-auth.js';

@@ -21,6 +21,23 @@ export function getRedis(): Redis {
   return redis;
 }
 
+/**
+ * Creates a NEW IORedis connection for BullMQ Workers.
+ * Workers use blocking commands (BRPOPLPUSH) so each worker
+ * MUST have its own dedicated connection — never share the singleton.
+ * Queues (producers) can share the singleton from getRedis().
+ */
+export function createRedisConnection(): Redis {
+  const url = process.env.REDIS_URL;
+  if (!url) {
+    throw new Error('REDIS_URL is not configured');
+  }
+
+  return new Redis(url, {
+    maxRetriesPerRequest: null,
+  });
+}
+
 export async function closeRedis(): Promise<void> {
   if (redis) {
     await redis.quit();
