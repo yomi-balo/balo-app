@@ -31,70 +31,69 @@ async function getBrevoClient(): Promise<BrevoEmailClient> {
   return brevoClient;
 }
 
+/** Exported for testability — called by the BullMQ worker. */
+export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> {
+  const payload = job.data;
+  const { usersRepository } = createRequire(import.meta.url)('@balo/db');
+
+  // 1. Resolve recipient email
+  const user = await usersRepository.findById(payload.recipientId);
+  if (!user?.email) {
+    log.warn({ recipientId: payload.recipientId }, 'No email for recipient');
+    await logNotification(payload, 'email', 'skipped', 'No email address');
+    return;
+  }
+
+  // 2. Render template
+  const recipientName = user.firstName ?? 'there';
+  const { component, subject } = getEmailTemplate(payload.template, {
+    ...payload.data,
+    ...payload.payload,
+    recipientName,
+  });
+
+  const html = await render(component);
+
+  // 3. Send via Brevo
+  try {
+    const client = await getBrevoClient();
+
+    const result = await client.transactionalEmails.sendTransacEmail({
+      htmlContent: html,
+      sender: {
+        email: process.env.BREVO_SENDER_EMAIL ?? 'notifications@balo.expert',
+        name: 'Balo',
+      },
+      subject,
+      to: [{ email: user.email, name: user.firstName ?? undefined }],
+    });
+    const messageId = result?.messageId;
+
+    await logNotification(payload, 'email', 'sent', undefined, {
+      brevoMessageId: messageId,
+    });
+    log.info({ template: payload.template, to: user.email, messageId }, 'Email sent');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await logNotification(payload, 'email', 'failed', errorMessage);
+    log.error(
+      {
+        template: payload.template,
+        recipientId: payload.recipientId,
+        error: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Email delivery failed'
+    );
+    throw error; // Re-throw so BullMQ retries
+  }
+}
+
 export function startEmailWorker(): Worker<DeliveryPayload> {
-  const worker = new Worker<DeliveryPayload>(
-    'notification-email',
-    async (job: Job<DeliveryPayload>) => {
-      const payload = job.data;
-      const { usersRepository } = createRequire(import.meta.url)('@balo/db');
-
-      // 1. Resolve recipient email
-      const user = await usersRepository.findById(payload.recipientId);
-      if (!user?.email) {
-        log.warn({ recipientId: payload.recipientId }, 'No email for recipient');
-        await logNotification(payload, 'email', 'skipped', 'No email address');
-        return;
-      }
-
-      // 2. Render template
-      const recipientName = user.firstName ?? 'there';
-      const { component, subject } = getEmailTemplate(payload.template, {
-        ...payload.data,
-        ...payload.payload,
-        recipientName,
-      });
-
-      const html = await render(component);
-
-      // 3. Send via Brevo
-      try {
-        const client = await getBrevoClient();
-
-        const result = await client.transactionalEmails.sendTransacEmail({
-          htmlContent: html,
-          sender: {
-            email: process.env.BREVO_SENDER_EMAIL ?? 'notifications@balo.expert',
-            name: 'Balo',
-          },
-          subject,
-          to: [{ email: user.email, name: user.firstName ?? undefined }],
-        });
-        const messageId = result?.messageId;
-
-        await logNotification(payload, 'email', 'sent', undefined, {
-          brevoMessageId: messageId,
-        });
-        log.info({ template: payload.template, to: user.email, messageId }, 'Email sent');
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        await logNotification(payload, 'email', 'failed', errorMessage);
-        log.error(
-          {
-            template: payload.template,
-            recipientId: payload.recipientId,
-            error: errorMessage,
-            stack: error instanceof Error ? error.stack : undefined,
-          },
-          'Email delivery failed'
-        );
-        throw error; // Re-throw so BullMQ retries
-      }
-    },
-    {
-      connection: createRedisConnection(),
-      concurrency: 5,
-    }
-  );
+  const worker = new Worker<DeliveryPayload>('notification-email', processEmailJob, {
+    connection: createRedisConnection(),
+    concurrency: 5,
+  });
 
   worker.on('failed', (job, err) => {
     log.error(
