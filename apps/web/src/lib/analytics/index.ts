@@ -1,10 +1,16 @@
-export { initAnalytics, analytics } from './client';
-export { track } from './track';
-export { AUTH_EVENTS } from './events/auth';
-export { ONBOARDING_EVENTS } from './events/onboarding';
-export { EXPERT_EVENTS } from './events/expert';
-export { EXPERT_SETUP_EVENTS } from './events/expert-setup';
-export { EXPERT_RATE_EVENTS } from './events/expert-rate';
-export { EXPERT_PAYOUT_EVENTS } from './events/expert-payouts';
-export { AVATAR_EVENTS } from './events/avatar';
-export type { AllEvents, EventName } from './types';
+// Re-export from shared analytics package.
+// Keeps existing @/lib/analytics imports working across the web app.
+export {
+  initAnalytics,
+  analytics,
+  track,
+  AUTH_EVENTS,
+  ONBOARDING_EVENTS,
+  EXPERT_EVENTS,
+  EXPERT_SETUP_EVENTS,
+  EXPERT_RATE_EVENTS,
+  EXPERT_PAYOUT_EVENTS,
+  AVATAR_EVENTS,
+} from '@balo/analytics/client';
+
+export type { AllEvents, EventName } from '@balo/analytics/client';

@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/node';
+import { shutdownServerAnalytics } from '@balo/analytics/server';
 import { buildApp } from './app.js';
 import { startWorkers } from './jobs/worker.js';
 
@@ -17,6 +18,18 @@ try {
   });
 
   startWorkers(app.log);
+  const shutdown = async () => {
+    try {
+      await shutdownServerAnalytics();
+    } catch (err) {
+      app.log.error(err, 'Failed to flush PostHog events on shutdown');
+    }
+    await app.close();
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 } catch (err) {
   app.log.error(err);
   process.exit(1);
