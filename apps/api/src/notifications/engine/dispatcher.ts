@@ -1,8 +1,27 @@
 import { createLogger } from '@balo/shared/logging';
 import { getQueue } from '../../lib/queue.js';
-import type { NotificationRule, RuleContext } from './rules.js';
+import type { NotificationChannel, NotificationRule, RuleContext } from './rules.js';
 
 const log = createLogger('notification-dispatcher');
+
+/**
+ * Maps a notification channel to its BullMQ queue name.
+ * Adding a new channel: add an entry here + create a worker for the queue.
+ */
+const CHANNEL_QUEUES: Record<NotificationChannel, string> = {
+  email: 'notification-email',
+  sms: 'notification-sms',
+  'in-app': 'notification-in-app',
+  push: 'notification-push',
+};
+
+function getQueueForChannel(channel: NotificationChannel) {
+  const queueName = CHANNEL_QUEUES[channel];
+  if (!queueName) {
+    throw new Error(`No queue configured for channel: ${channel}`);
+  }
+  return getQueue(queueName);
+}
 
 export async function dispatch(rule: NotificationRule, context: RuleContext): Promise<void> {
   // 1. Evaluate condition
@@ -24,17 +43,18 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
   // 3. Build delivery payload
   const deliveryPayload = {
     recipientId,
+    channel: rule.channel,
     template: rule.template,
     event: context.event,
     data: context.data,
     payload: context.payload,
   };
 
-  // 4. Add to email queue with deterministic job ID for dedup
-  const emailQueue = getQueue('notification-email');
+  // 4. Route to the correct channel queue
+  const queue = getQueueForChannel(rule.channel);
   const jobId = `${rule.template}:${recipientId}:${context.payload.correlationId}`;
 
-  await emailQueue.add(rule.template, deliveryPayload, {
+  await queue.add(rule.template, deliveryPayload, {
     jobId,
     attempts: 3,
     backoff: { type: 'exponential', delay: 2000 },

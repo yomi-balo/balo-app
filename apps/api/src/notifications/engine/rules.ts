@@ -1,5 +1,7 @@
+export type NotificationChannel = 'email' | 'sms' | 'in-app' | 'push';
+
 export interface NotificationRule {
-  channel: 'email'; // Only email for now
+  channel: NotificationChannel;
   recipient: 'self' | 'expert' | 'client' | 'admin';
   template: string;
   timing: 'immediate'; // No scheduling for BAL-175

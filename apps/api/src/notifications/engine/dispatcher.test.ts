@@ -49,6 +49,7 @@ describe('dispatch', () => {
       'welcome',
       {
         recipientId: 'user-456',
+        channel: 'email',
         template: 'welcome',
         event: 'user.welcome',
         data: baseContext.data,
@@ -100,6 +101,7 @@ describe('dispatch', () => {
 
     const deliveryPayload = mockAdd.mock.calls[0][1];
     expect(deliveryPayload.recipientId).toBe('user-456');
+    expect(deliveryPayload.channel).toBe('email');
   });
 
   it('resolves expert recipient to data.expert.user.id', async () => {
@@ -119,5 +121,6 @@ describe('dispatch', () => {
 
     const deliveryPayload = mockAdd.mock.calls[0][1];
     expect(deliveryPayload.recipientId).toBe('expert-789');
+    expect(deliveryPayload.channel).toBe('email');
   });
 });
