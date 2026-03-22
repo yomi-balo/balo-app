@@ -10,6 +10,44 @@ vi.mock('posthog-node', () => ({
   },
 }));
 
+describe('shutdownServerAnalytics', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetModules();
+    mockCapture.mockClear();
+    mockShutdown.mockClear();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('flushes and nulls the singleton when an instance exists', async () => {
+    process.env.POSTHOG_API_KEY = 'phc_test_key';
+
+    const { getServerAnalytics, shutdownServerAnalytics } = await import('./posthog-server');
+
+    // Initialize the singleton
+    getServerAnalytics();
+
+    await shutdownServerAnalytics();
+
+    expect(mockShutdown).toHaveBeenCalledOnce();
+  });
+
+  it('is a no-op when no instance exists', async () => {
+    delete process.env.POSTHOG_API_KEY;
+
+    const { shutdownServerAnalytics } = await import('./posthog-server');
+
+    await shutdownServerAnalytics();
+
+    expect(mockShutdown).not.toHaveBeenCalled();
+  });
+});
+
 describe('trackServer', () => {
   const originalEnv = process.env;
 
