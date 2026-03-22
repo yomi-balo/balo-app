@@ -4,7 +4,8 @@ import { useSidebar } from './sidebar-context';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Menu, Bell } from 'lucide-react';
+import { Menu } from 'lucide-react';
+import { NotificationBell } from '@/components/balo/notification-bell';
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -47,19 +48,7 @@ export function TopNav(): React.JSX.Element {
           <h1 className="text-foreground text-base font-semibold">{title}</h1>
         </div>
 
-        {/* Notification bell with red dot */}
-        <div className="relative">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="border-border border"
-            aria-label="Notifications"
-            disabled
-          >
-            <Bell className="text-muted-foreground h-4 w-4" />
-          </Button>
-          <span className="bg-destructive border-background absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border-2" />
-        </div>
+        <NotificationBell />
       </div>
     </header>
   );
