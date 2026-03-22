@@ -10,3 +10,4 @@ export {
   type ExpertPayoutServerEventMap,
 } from './expert-payouts';
 export { AVATAR_EVENTS, type AvatarEventMap } from './avatar';
+export { NOTIFICATION_SERVER_EVENTS, type NotificationServerEventMap } from './notifications';

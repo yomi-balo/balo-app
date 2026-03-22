@@ -1,6 +1,7 @@
 import { startVerifyBeneficiaryWorker } from './verify-beneficiary.js';
 import { startNotificationEventWorker } from '../notifications/engine/worker.js';
 import { startEmailWorker } from '../notifications/channels/email.adapter.js';
+import { startSmsWorker } from '../notifications/channels/sms.adapter.js';
 
 /**
  * Start all BullMQ workers.
@@ -15,5 +16,6 @@ export function startWorkers(logger?: { info: (msg: string) => void }): void {
   startVerifyBeneficiaryWorker();
   startNotificationEventWorker();
   startEmailWorker();
+  startSmsWorker();
   logger?.info('BullMQ workers started');
 }

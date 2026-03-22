@@ -34,4 +34,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'critical',
     },
   ],
+  'booking.confirmed': [
+    {
+      channel: 'sms',
+      recipient: 'expert',
+      template: 'booking-confirmed-sms',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: (ctx) => {
+        // ctx.data.user is hydrated by resolveContext via usersRepository.findById()
+        // smsOptedIn column does not exist yet — condition evaluates to false (dormant)
+        const user = ctx.data.user as { smsOptedIn?: boolean } | undefined;
+        return user?.smsOptedIn === true;
+      },
+    },
+  ],
 };
