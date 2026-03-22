@@ -82,7 +82,16 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 - BullMQ jobs designed for retry with proper backoff config?
 - Database operations that must be atomic use transactions?
 
-### 7. Observability
+### 7. CI & SonarCloud Readiness
+
+SonarCloud enforces ≥80% coverage on new code. Failing this blocks merge. Check:
+
+- **`sonar-project.properties`** — If any new package directory was created (e.g. `packages/foo/src`), verify it is listed in both `sonar.sources` and `sonar.tests`. If missing, flag as CRITICAL.
+- **Coverage config** — New packages must have `coverage` configured in their `vitest.config.ts` (with `provider: 'v8'` and `reporter` including `'lcov'`) so the root `pnpm test:coverage` command generates an lcov report that SonarCloud can read.
+- **Coverage threshold** — New source files (not just test files) should have corresponding tests. If a new `.ts` file has exported functions but no corresponding `.test.ts` file and is not covered by tests elsewhere, flag it. Pure type/constant-only files (interfaces, `as const` objects, re-export barrels) are exempt.
+- **Coverage exclusions** — Infrastructure files that are hard to unit test (e.g. DB client singletons, config bootstrapping) should be added to `sonar.coverage.exclusions` rather than left uncovered.
+
+### 8. Observability
 
 - Every catch block uses structured logger (`log.error()` from `@/lib/logging`), not `console.log` / `console.error`? (Exception: middleware Edge Runtime uses structured `JSON.stringify`)
 - Caught errors log the original error message + stack trace + contextual IDs (userId, caseId, etc.) before returning user-facing message?

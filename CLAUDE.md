@@ -29,6 +29,7 @@ balo-app/                          Turborepo monorepo
 │   │       ├── schema/            Table definitions (one file per domain)
 │   │       ├── repositories/      Data access layer (no raw queries elsewhere)
 │   │       └── client.ts          Drizzle client (postgres-js driver)
+│   ├── analytics/                 PostHog tracking (client + server)
 │   ├── shared/                    Cross-app types, errors, logging
 │   ├── ui/                        Shared UI primitives (future)
 │   ├── eslint-config/             Shared ESLint config
@@ -190,9 +191,9 @@ Do not add new repository files without integration tests. SonarQube will flag c
 
 ### Analytics
 
-**All tracking is client-side only.** PostHog JS SDK runs in the browser. Server components and server actions never call `track()`.
+Event definitions and tracking wrappers live in `packages/analytics` (`@balo/analytics`), shared across `apps/web` (client) and `apps/api` (server). Three subpath exports: `@balo/analytics/client`, `@balo/analytics/server`, `@balo/analytics/events`.
 
-**Use the typed `track()` function** — never call `analytics.track()` directly from feature code:
+**Client-side tracking (browser)** — use the typed `track()` function:
 
 ```typescript
 import { track, AUTH_EVENTS } from '@/lib/analytics';
@@ -200,12 +201,27 @@ import { track, AUTH_EVENTS } from '@/lib/analytics';
 track(AUTH_EVENTS.LOGIN_COMPLETED, { method: 'email', is_returning_user: true });
 ```
 
+**Server-side tracking (API/workers)** — use `trackServer()`:
+
+```typescript
+import { trackServer, EXPERT_PAYOUT_SERVER_EVENTS } from '@balo/analytics/server';
+
+trackServer(EXPERT_PAYOUT_SERVER_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
+  method: 'LOCAL',
+  country_code: 'AU',
+  beneficiary_status: 'verified',
+  distinct_id: userId,
+});
+```
+
+`trackServer` is a no-op when `POSTHOG_API_KEY` is not set (dev, CI).
+
 **Adding a new feature's events:**
 
-1. Create `apps/web/src/lib/analytics/events/<feature>.ts` with `<FEATURE>_EVENTS` constants + `<Feature>EventMap` interface
-2. Re-export from `apps/web/src/lib/analytics/events/index.ts`
-3. Add `& <Feature>EventMap` to `AllEvents` in `apps/web/src/lib/analytics/types.ts`
-4. Re-export event constants from `apps/web/src/lib/analytics/index.ts`
+1. Create `packages/analytics/src/events/<feature>.ts` with `<FEATURE>_EVENTS` constants + `<Feature>EventMap` interface
+2. Re-export from `packages/analytics/src/events/index.ts`
+3. Add `& <Feature>EventMap` to `AllEvents` in `packages/analytics/src/types.ts`
+4. For server-only events: add `<FEATURE>_SERVER_EVENTS` + `<Feature>ServerEventMap` and extend `ServerEvents` in `types.ts`
 
 **Event naming convention:**
 
@@ -222,7 +238,8 @@ track(AUTH_EVENTS.LOGIN_COMPLETED, { method: 'email', is_returning_user: true })
 **Testing:**
 
 - Global mock in `apps/web/src/test/setup.ts` silences analytics in all tests
-- To assert tracking: `import { track } from '@/lib/analytics'; expect(track).toHaveBeenCalledWith(AUTH_EVENTS.LOGIN_COMPLETED, { ... })`
+- Client: `import { track } from '@/lib/analytics'; expect(track).toHaveBeenCalledWith(AUTH_EVENTS.LOGIN_COMPLETED, { ... })`
+- Server: mock `posthog-node` and assert `capture` was called with the correct `distinctId`, `event`, and `properties`
 
 ### Notifications
 

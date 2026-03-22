@@ -1,7 +1,19 @@
-export { AUTH_EVENTS, type AuthEventMap, type AuthMethod } from './auth';
-export { ONBOARDING_EVENTS, type OnboardingEventMap, type OnboardingStepName } from './onboarding';
-export { EXPERT_EVENTS, type ExpertEventMap, type ExpertStepName } from './expert';
-export { EXPERT_SETUP_EVENTS, type ExpertSetupEventMap } from './expert-setup';
-export { EXPERT_RATE_EVENTS, type ExpertRateEventMap } from './expert-rate';
-export { EXPERT_PAYOUT_EVENTS, type ExpertPayoutEventMap } from './expert-payouts';
-export { AVATAR_EVENTS, type AvatarEventMap } from './avatar';
+export {
+  AUTH_EVENTS,
+  type AuthEventMap,
+  type AuthMethod,
+  ONBOARDING_EVENTS,
+  type OnboardingEventMap,
+  type OnboardingStepName,
+  EXPERT_EVENTS,
+  type ExpertEventMap,
+  type ExpertStepName,
+  EXPERT_SETUP_EVENTS,
+  type ExpertSetupEventMap,
+  EXPERT_RATE_EVENTS,
+  type ExpertRateEventMap,
+  EXPERT_PAYOUT_EVENTS,
+  type ExpertPayoutEventMap,
+  AVATAR_EVENTS,
+  type AvatarEventMap,
+} from '@balo/analytics/events';

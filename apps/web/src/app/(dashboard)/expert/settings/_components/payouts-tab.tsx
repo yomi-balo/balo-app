@@ -354,13 +354,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           'Your bank rejected some details. Please review the highlighted fields and try again.'
         );
         toast.error('Bank details validation failed');
-
-        track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_FAILED, {
-          method: transferMethod,
-          country_code: countryCode,
-          error_type: 'validation',
-          beneficiary_status: 'invalid',
-        });
         return;
       }
 
@@ -369,19 +362,8 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
         if (beneficiaryStatus === 'verified') {
           toast.success('Payout details saved and verified');
-          track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
-            method: transferMethod,
-            country_code: countryCode,
-            beneficiary_status: 'verified',
-          });
         } else if (beneficiaryStatus === 'pending_verification') {
           toast.success('Payout details saved — verification in progress');
-          track(EXPERT_PAYOUT_EVENTS.AIRWALLEX_BENEFICIARY_FAILED, {
-            method: transferMethod,
-            country_code: countryCode,
-            error_type: 'outage',
-            beneficiary_status: 'pending_verification',
-          });
         } else {
           toast.success('Payout details saved successfully');
         }
