@@ -34,4 +34,17 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'critical',
     },
   ],
+  'booking.confirmed': [
+    {
+      channel: 'sms',
+      recipient: 'expert',
+      template: 'booking-confirmed-sms',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: (ctx) => {
+        const user = ctx.data.expert as { user?: { smsOptedIn?: boolean } } | undefined;
+        return user?.user?.smsOptedIn === true;
+      },
+    },
+  ],
 };
