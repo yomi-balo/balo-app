@@ -14,8 +14,8 @@ export function getServerAnalytics(): PostHog | null {
 
   instance = new PostHog(apiKey, {
     host: process.env.POSTHOG_HOST || 'https://app.posthog.com',
-    flushAt: 20,
-    flushInterval: 10000,
+    flushAt: 1,
+    flushInterval: 0,
   });
 
   return instance;
