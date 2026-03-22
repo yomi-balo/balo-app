@@ -42,8 +42,10 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
       priority: 'critical',
       condition: (ctx) => {
-        const user = ctx.data.expert as { user?: { smsOptedIn?: boolean } } | undefined;
-        return user?.user?.smsOptedIn === true;
+        // ctx.data.user is hydrated by resolveContext via usersRepository.findById()
+        // smsOptedIn column does not exist yet — condition evaluates to false (dormant)
+        const user = ctx.data.user as { smsOptedIn?: boolean } | undefined;
+        return user?.smsOptedIn === true;
       },
     },
   ],
