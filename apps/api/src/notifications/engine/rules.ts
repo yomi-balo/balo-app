@@ -1,4 +1,4 @@
-export type NotificationChannel = 'email' | 'sms' | 'in-app' | 'push';
+export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
 export interface NotificationRule {
   channel: NotificationChannel;

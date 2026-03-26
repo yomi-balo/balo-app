@@ -36,7 +36,7 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
     });
 
     // 3. Log delivery to notification_log
-    await logNotification(payload, payload.channel, 'sent');
+    await logNotification(payload, 'in-app', 'sent');
 
     // 4. Track analytics
     trackServer(NOTIFICATION_SERVER_EVENTS.IN_APP_SENT, {
@@ -52,7 +52,7 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    await logNotification(payload, payload.channel, 'failed', errorMessage);
+    await logNotification(payload, 'in-app', 'failed', errorMessage);
 
     trackServer(NOTIFICATION_SERVER_EVENTS.IN_APP_FAILED, {
       template: payload.template,
