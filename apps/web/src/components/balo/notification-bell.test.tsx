@@ -96,6 +96,16 @@ describe('NotificationBell', () => {
       expect(screen.getByText('3')).toBeInTheDocument();
     });
 
+    it('uses singular label for exactly 1 unread notification', async () => {
+      mockFetch.mockResolvedValue(makeApiResponse([makeNotification()], 1));
+
+      render(<NotificationBell />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: '1 unread notification' })).toBeInTheDocument();
+      });
+    });
+
     it('shows 9+ when count exceeds 9', async () => {
       mockFetch.mockResolvedValue(makeApiResponse([makeNotification()], 15));
 
@@ -152,6 +162,52 @@ describe('NotificationBell', () => {
 
       // Should navigate to actionUrl
       expect(mockPush).toHaveBeenCalledWith('/cases/case-1');
+    });
+
+    it('does not navigate when notification has no actionUrl', async () => {
+      const notif = makeNotification({ actionUrl: null });
+      mockFetch
+        .mockResolvedValueOnce(makeApiResponse([notif], 1))
+        .mockResolvedValueOnce(makeApiResponse([notif], 1))
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<NotificationBell />);
+
+      await waitFor(() => {
+        expect(screen.getByText('1')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: '1 unread notification' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('New booking')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText('New booking'));
+
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('renders notification without body text', async () => {
+      const notif = makeNotification({ body: null });
+      mockFetch.mockResolvedValue(makeApiResponse([notif], 1));
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+      render(<NotificationBell />);
+
+      await waitFor(() => {
+        expect(screen.getByText('1')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: '1 unread notification' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('New booking')).toBeInTheDocument();
+      });
+
+      // Body text should not be rendered
+      expect(screen.queryByText('Alice booked a consultation')).not.toBeInTheDocument();
     });
   });
 
