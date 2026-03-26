@@ -48,7 +48,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
   const user = await usersRepository.findById(payload.recipientId);
   if (!user?.phone) {
     log.warn({ recipientId: payload.recipientId }, 'No phone for recipient');
-    await logNotification(payload, 'sms', 'skipped', 'No phone number');
+    await logNotification(payload, payload.channel, 'skipped', 'No phone number');
     trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SKIPPED, {
       template: payload.template,
       skip_reason: 'No phone number',
@@ -60,7 +60,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
   // 2. Validate E.164 format
   if (!E164_REGEX.test(user.phone)) {
     log.warn({ recipientId: payload.recipientId }, 'Invalid phone number format');
-    await logNotification(payload, 'sms', 'skipped', 'Invalid phone number format');
+    await logNotification(payload, payload.channel, 'skipped', 'Invalid phone number format');
     trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SKIPPED, {
       template: payload.template,
       skip_reason: 'Invalid phone number format',
@@ -94,7 +94,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
     });
     const messageId = result?.messageId;
 
-    await logNotification(payload, 'sms', 'sent', undefined, {
+    await logNotification(payload, payload.channel, 'sent', undefined, {
       brevoMessageId: messageId,
     });
     trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SENT, {
@@ -105,7 +105,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
     log.info({ template: payload.template, messageId }, 'SMS sent');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    await logNotification(payload, 'sms', 'failed', errorMessage);
+    await logNotification(payload, payload.channel, 'failed', errorMessage);
     trackServer(NOTIFICATION_SERVER_EVENTS.SMS_FAILED, {
       template: payload.template,
       error_type: errorMessage,
