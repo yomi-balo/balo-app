@@ -48,5 +48,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
         return user?.smsOptedIn === true;
       },
     },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'booking-confirmed',
+      timing: 'immediate',
+    },
+  ],
+  'message.received': [
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'new-message',
+      timing: 'immediate',
+    },
   ],
 };
