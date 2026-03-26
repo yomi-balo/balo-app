@@ -54,8 +54,8 @@ export function NotificationBell(): React.JSX.Element {
       const res = await fetch('/api/notifications?unread=true&limit=20');
       if (!res.ok) throw new Error('Failed to fetch');
       const data: NotificationsResponse = await res.json();
-      setNotifications(data.notifications);
-      setUnreadCount(data.unreadCount);
+      setNotifications(data.notifications ?? []);
+      setUnreadCount(data.unreadCount ?? 0);
       setError(false);
     } catch {
       setError(true);
