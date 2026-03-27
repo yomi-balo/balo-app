@@ -42,7 +42,7 @@ export function ExpertDashboard({
             step: key,
             step_number: stepIndex + 1,
             completed_count: completedCount,
-            total: 5,
+            total: 6,
           });
         }
       }

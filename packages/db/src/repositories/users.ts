@@ -155,6 +155,20 @@ export const usersRepository = {
   },
 
   /**
+   * Mark phone as verified, writing phone + verified timestamp atomically.
+   * Both fields are written together so the record never has a verified
+   * timestamp pointing to a different phone number than what was verified.
+   */
+  setPhoneVerified: async (userId: string, phone: string, verifiedAt: Date): Promise<User> => {
+    const [user] = await db
+      .update(users)
+      .set({ phone, phoneVerifiedAt: verifiedAt, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return user!;
+  },
+
+  /**
    * Update last active timestamp
    */
   touch: async (id: string): Promise<void> => {

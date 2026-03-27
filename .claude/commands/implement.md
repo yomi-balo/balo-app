@@ -64,6 +64,26 @@ If the user requests adjustments, re-run the designer with the feedback appended
 
 Save the approved design to `/tmp/balo-design.md`.
 
+### Phase 0.5: Resolver (always runs)
+
+Spawn the resolver sub-agent to verify the ticket's premises against the actual codebase before the architect designs anything:
+
+```bash
+claude -p \
+  --system-prompt "$(cat .claude/commands/resolver.md)" \
+  "Run a pre-flight check on this ticket and update its description with a Pre-flight Check section. Ticket: {TASK_DESCRIPTION}. Linear issue ID: {LINEAR_ISSUE_ID}. Verify every factual claim about the codebase state — dependencies, schemas, existing files, completed sub-tasks. Use the Linear MCP to update the ticket description once done."
+```
+
+**Output:** The Linear ticket description is updated with a `## Pre-flight Check` section listing confirmed claims, objections, and missing context.
+
+**⚠️ If the resolver raises OBJECTIONS:**
+
+- Review each objection
+- Update the ticket description to correct the stale or incorrect claims before proceeding
+- Re-run the resolver only if the objections were substantial enough to warrant a second pass (e.g. the approach fundamentally changes)
+
+**If no objections:** proceed immediately.
+
 ### Phase 1: Architecture (always runs)
 
 Spawn the architect sub-agent:
@@ -156,10 +176,11 @@ If CHANGES_REQUESTED → back to Phase 3 with fix instructions.
 
 ## Rules
 
-1. Never skip Phase 1 (architect) or Phase 6 (review)
+1. Never skip Phase 0.5 (resolver), Phase 1 (architect), or Phase 6 (review)
 2. Always run Phase 5 (security) — no exceptions
 3. Phase 0 (design) is conditional — skip it for backend, infra, bug fixes, refactors, and simple UI additions. When it runs, it requires user approval before proceeding.
-4. Each sub-agent gets a fresh context window — do not pollute with prior agent outputs except the technical plan and design spec
-5. If any agent references a skill, it must read the skill file before acting
-6. Stage changes with `git add -A` before running review agents so they see the full diff
-7. The designer's approved output feeds into the architect, builder, and UX validator — it is the source of truth for what the user experience should be
+4. Phase 0.5 (resolver) always runs, even when Phase 0 (design) is skipped. The resolver checks code reality, not design intent.
+5. Each sub-agent gets a fresh context window — do not pollute with prior agent outputs except the technical plan and design spec
+6. If any agent references a skill, it must read the skill file before acting
+7. Stage changes with `git add -A` before running review agents so they see the full diff
+8. The designer's approved output feeds into the architect, builder, and UX validator — it is the source of truth for what the user experience should be

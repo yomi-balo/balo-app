@@ -1,5 +1,6 @@
 export const CHECKLIST_ITEMS = [
   { key: 'profile', label: 'Complete your profile', tab: 'profile' },
+  { key: 'phone', label: 'Verify your phone', tab: 'profile' },
   { key: 'rate', label: 'Set your rate', tab: 'rate' },
   { key: 'calendar', label: 'Connect calendar', tab: 'schedule' },
   { key: 'availability', label: 'Set your availability', tab: 'schedule' },

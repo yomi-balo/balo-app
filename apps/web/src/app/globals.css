@@ -170,6 +170,15 @@
       transform: translateZ(0) rotate(360deg);
     }
   }
+
+  --animate-shake: shake 0.4s ease-out;
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-5px); }
+    40% { transform: translateX(5px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(4px); }
+  }
 }
 
 @layer base {
@@ -254,6 +263,12 @@
   100% {
     transform: translateY(-90px) rotate(140deg) translateX(15px);
     opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shake {
+    animation: none;
   }
 }
 

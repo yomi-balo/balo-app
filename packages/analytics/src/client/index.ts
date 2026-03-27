@@ -11,6 +11,7 @@ export {
   EXPERT_RATE_EVENTS,
   EXPERT_PAYOUT_EVENTS,
   AVATAR_EVENTS,
+  PHONE_EVENTS,
 } from '../events';
 
 export type {
@@ -24,4 +25,5 @@ export type {
   ExpertRateEventMap,
   ExpertPayoutEventMap,
   AvatarEventMap,
+  PhoneEventMap,
 } from '../events';

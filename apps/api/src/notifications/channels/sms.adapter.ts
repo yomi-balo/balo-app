@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, NOTIFICATION_SERVER_EVENTS } from '@balo/analytics/server';
 import { createRedisConnection } from '../../lib/redis.js';
+import { maskPhone, getBrevoClient } from '../../lib/brevo.js';
 import { getSmsTemplate } from './templates/sms-templates.js';
 import { logNotification } from './log.js';
 import type { DeliveryPayload } from './types.js';
@@ -10,34 +11,6 @@ import type { DeliveryPayload } from './types.js';
 const log = createLogger('notification-sms');
 
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
-
-/** Mask phone number for analytics — show last 4 digits only. */
-function maskPhone(phone: string): string {
-  if (phone.length <= 4) return '****';
-  return '****' + phone.slice(-4);
-}
-
-// Cached Brevo client — created lazily on first use
-interface BrevoSmsClient {
-  transactionalSms: {
-    sendTransacSms: (params: Record<string, unknown>) => Promise<{ messageId?: number }>;
-  };
-}
-
-let brevoClient: BrevoSmsClient | null = null;
-
-async function getBrevoClient(): Promise<BrevoSmsClient> {
-  if (brevoClient) return brevoClient;
-
-  const apiKey = process.env.BREVO_API_KEY;
-  if (!apiKey) {
-    throw new Error('BREVO_API_KEY is not configured');
-  }
-
-  const { BrevoClient } = await import('@getbrevo/brevo');
-  brevoClient = new BrevoClient({ apiKey }) as unknown as BrevoSmsClient;
-  return brevoClient;
-}
 
 /** Exported for testability — called by the BullMQ worker. */
 export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {

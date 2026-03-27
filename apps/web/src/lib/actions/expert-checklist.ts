@@ -8,6 +8,7 @@ import { log } from '@/lib/logging';
 export interface ChecklistStatus {
   items: {
     profile: boolean;
+    phone: boolean;
     rate: boolean;
     calendar: boolean;
     availability: boolean;
@@ -59,6 +60,7 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
       profile.headline.trim().length > 0 &&
       profile.bio.trim().length > 0
     ),
+    phone: Boolean(user.phoneVerifiedAt),
     rate: Boolean(profile.hourlyRate && profile.hourlyRate > 0),
     calendar: Boolean(profile.cronofySyncStatus && profile.cronofySyncStatus !== 'not_connected'),
     availability: false, // TODO: BAL-195 — check availability_slots table
@@ -66,9 +68,9 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   };
 
   const completedCount = Object.values(items).filter(Boolean).length;
-  const allComplete = completedCount === 5;
+  const allComplete = completedCount === 6;
 
-  // When all 5 complete, set searchable = true (idempotent)
+  // When all 6 complete, set searchable = true (idempotent)
   if (allComplete && !profile.searchable) {
     await expertsRepository.updateProfile(expertProfileId, {
       searchable: true,
