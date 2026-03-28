@@ -282,8 +282,6 @@ describe('PhoneVerificationFlow', () => {
       });
 
       // Should have 6 digit inputs
-      const digitInputs = screen.getAllByRole('textbox');
-      // Phone input + 6 OTP inputs = could vary; check by aria-label
       const otpInputs = screen.getAllByLabelText(/Digit \d/);
       expect(otpInputs).toHaveLength(6);
     });
