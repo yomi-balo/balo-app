@@ -604,6 +604,213 @@ function usePhoneOtp(opts: {
   };
 }
 
+// ── OTP Stage Sub-components (extracted to reduce main component complexity) ──
+
+interface OtpActiveAreaProps {
+  otpError: ErrorState | null;
+  attemptsRemaining: number;
+  stage: Stage;
+  shakeKey: number;
+  resendKey: number;
+  maskedPhone: string;
+  onComplete: (code: string) => Promise<void>;
+  onResend: () => void;
+  onChangeNumber: () => void;
+  onRetrySend: () => Promise<void>;
+}
+
+function OtpActiveArea({
+  otpError,
+  attemptsRemaining,
+  stage,
+  shakeKey,
+  resendKey,
+  maskedPhone,
+  onComplete,
+  onResend,
+  onChangeNumber,
+  onRetrySend,
+}: Readonly<OtpActiveAreaProps>): React.JSX.Element {
+  return (
+    <>
+      {/* Masked phone + change number link */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground text-[13px]">Code sent to</span>
+          <span className="bg-primary/5 border-primary/20 text-primary rounded-full border px-2.5 py-0.5 text-[13px] font-semibold">
+            {maskedPhone}
+          </span>
+        </div>
+        {stage === 'otp' && attemptsRemaining > 0 && (
+          <button
+            type="button"
+            onClick={onChangeNumber}
+            className="border-border text-muted-foreground hover:bg-muted rounded-md border px-2.5 py-0.5 text-xs font-semibold"
+          >
+            Change number
+          </button>
+        )}
+      </div>
+
+      {/* Attempts badge */}
+      {otpError &&
+        (otpError === 'wrong_code' || otpError === 'final_attempt') &&
+        attemptsRemaining > 0 && (
+          <div className="mb-2.5 flex justify-center">
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+                attemptsRemaining === 1
+                  ? 'bg-warning/10 border-warning/20 text-warning'
+                  : 'bg-destructive/5 border-destructive/20 text-destructive'
+              )}
+            >
+              <Info className="h-[11px] w-[11px]" />
+              {attemptsRemaining === 1 ? 'Last attempt' : `${attemptsRemaining} attempts left`}
+            </span>
+          </div>
+        )}
+
+      <p className="text-muted-foreground mb-3.5 block text-center text-xs font-semibold">
+        Enter 6-digit code
+      </p>
+
+      {/* Error state 5: locked out */}
+      {otpError === 'locked_out' && (
+        <>
+          <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
+          <div className="mt-3.5">
+            <StatusBanner type="error" icon={Lock}>
+              {ERROR_MESSAGES.locked_out}
+            </StatusBanner>
+            <Button className="mt-3.5 w-full gap-2" size="lg" onClick={onResend}>
+              <Send className="h-3.5 w-3.5" /> Send a new code
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* Error state 6: code expired */}
+      {otpError === 'code_expired' && (
+        <>
+          <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
+          <div className="mt-3.5">
+            <StatusBanner type="error" icon={Clock}>
+              {ERROR_MESSAGES.code_expired}
+            </StatusBanner>
+            <Button className="mt-3.5 w-full gap-2" size="lg" onClick={onResend}>
+              <Send className="h-3.5 w-3.5" /> Send a new code
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* Error state 8: network error */}
+      {otpError === 'network_error' && (
+        <>
+          <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
+          <div className="mt-3.5">
+            <StatusBanner type="info" icon={Wifi}>
+              {ERROR_MESSAGES.network_error}
+            </StatusBanner>
+            <Button
+              variant="outline"
+              className="mt-3.5 w-full gap-2"
+              size="lg"
+              onClick={onRetrySend}
+            >
+              Try again
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* Default: active OTP input */}
+      {otpError !== 'locked_out' && otpError !== 'code_expired' && otpError !== 'network_error' && (
+        <>
+          <OtpBoxes onComplete={onComplete} disabled={stage === 'verifying'} shakeKey={shakeKey} />
+
+          {otpError === 'wrong_code' && attemptsRemaining > 1 && (
+            <FieldMessage type="error">
+              Incorrect code — {attemptsRemaining} attempts remaining
+            </FieldMessage>
+          )}
+
+          {otpError === 'final_attempt' && attemptsRemaining === 1 && (
+            <div className="mt-2">
+              <FieldMessage type="warning">
+                One more wrong attempt will lock you out. Request a new code if unsure.
+              </FieldMessage>
+            </div>
+          )}
+
+          {stage === 'otp' && <ResendRow key={resendKey} onResend={onResend} />}
+
+          {stage === 'verifying' && (
+            <div className="flex items-center justify-center gap-2.5 py-3.5">
+              <Loader2 className="text-primary h-4 w-4 animate-spin" />
+              <span className="text-muted-foreground text-[13px]">Verifying&hellip;</span>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+interface VerifiedViewProps {
+  mode: 'onboarding' | 'settings';
+  initialPhone?: string;
+  e164Phone: string;
+  onChangeNumber: () => void;
+}
+
+function VerifiedView({
+  mode,
+  initialPhone,
+  e164Phone,
+  onChangeNumber,
+}: Readonly<VerifiedViewProps>): React.JSX.Element {
+  const isNumberChange = mode === 'settings' && !!initialPhone;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className="pt-3 pb-1 text-center"
+    >
+      <motion.div
+        initial={{ scale: 0 }}
+        animate={{ scale: [0, 1.25, 1] }}
+        transition={{ duration: 0.4 }}
+        className="bg-success/10 border-success/20 mx-auto mb-3 flex h-[52px] w-[52px] items-center justify-center rounded-full border"
+      >
+        <Check className="text-success h-6 w-6" />
+      </motion.div>
+      <p className="text-foreground mb-1.5 text-base font-bold">
+        {isNumberChange ? 'Number updated' : 'Phone verified'}
+      </p>
+      <p className="text-muted-foreground mb-3 text-[13px] leading-relaxed">
+        {isNumberChange
+          ? 'Your phone number has been changed and verified.'
+          : 'You\u2019ll receive booking alerts and reminders at this number.'}
+      </p>
+      <span className="bg-primary/5 border-primary/20 text-primary inline-block rounded-full border px-3.5 py-1 text-[14px] font-semibold">
+        {e164Phone}
+      </span>
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={onChangeNumber}
+          className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2 transition-colors"
+        >
+          Change phone number
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────
 
 export function PhoneVerificationFlow({
@@ -797,179 +1004,27 @@ export function PhoneVerificationFlow({
             <div className="bg-border mb-5 h-px" />
 
             {otp.stage !== 'verified' && (
-              <>
-                {/* Masked phone + change number link */}
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground text-[13px]">Code sent to</span>
-                    <span className="bg-primary/5 border-primary/20 text-primary rounded-full border px-2.5 py-0.5 text-[13px] font-semibold">
-                      {otp.maskedPhone}
-                    </span>
-                  </div>
-                  {otp.stage === 'otp' && otp.attemptsRemaining > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleChangeNumber}
-                      className="border-border text-muted-foreground hover:bg-muted rounded-md border px-2.5 py-0.5 text-xs font-semibold"
-                    >
-                      Change number
-                    </button>
-                  )}
-                </div>
-
-                {/* Attempts badge */}
-                {otp.otpError &&
-                  (otp.otpError === 'wrong_code' || otp.otpError === 'final_attempt') &&
-                  otp.attemptsRemaining > 0 && (
-                    <div className="mb-2.5 flex justify-center">
-                      <span
-                        className={cn(
-                          'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
-                          otp.attemptsRemaining === 1
-                            ? 'bg-warning/10 border-warning/20 text-warning'
-                            : 'bg-destructive/5 border-destructive/20 text-destructive'
-                        )}
-                      >
-                        <Info className="h-[11px] w-[11px]" />
-                        {otp.attemptsRemaining === 1
-                          ? 'Last attempt'
-                          : `${otp.attemptsRemaining} attempts left`}
-                      </span>
-                    </div>
-                  )}
-
-                <p className="text-muted-foreground mb-3.5 block text-center text-xs font-semibold">
-                  Enter 6-digit code
-                </p>
-
-                {/* Error state 5: locked out */}
-                {otp.otpError === 'locked_out' && (
-                  <>
-                    <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
-                    <div className="mt-3.5">
-                      <StatusBanner type="error" icon={Lock}>
-                        {ERROR_MESSAGES.locked_out}
-                      </StatusBanner>
-                      <Button className="mt-3.5 w-full gap-2" size="lg" onClick={otp.handleResend}>
-                        <Send className="h-3.5 w-3.5" /> Send a new code
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                {/* Error state 6: code expired */}
-                {otp.otpError === 'code_expired' && (
-                  <>
-                    <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
-                    <div className="mt-3.5">
-                      <StatusBanner type="error" icon={Clock}>
-                        {ERROR_MESSAGES.code_expired}
-                      </StatusBanner>
-                      <Button className="mt-3.5 w-full gap-2" size="lg" onClick={otp.handleResend}>
-                        <Send className="h-3.5 w-3.5" /> Send a new code
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                {/* Error state 8: network error */}
-                {otp.otpError === 'network_error' && (
-                  <>
-                    <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
-                    <div className="mt-3.5">
-                      <StatusBanner type="info" icon={Wifi}>
-                        {ERROR_MESSAGES.network_error}
-                      </StatusBanner>
-                      <Button
-                        variant="outline"
-                        className="mt-3.5 w-full gap-2"
-                        size="lg"
-                        onClick={otp.handleSend}
-                      >
-                        Try again
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                {/* Default: active OTP input */}
-                {otp.otpError !== 'locked_out' &&
-                  otp.otpError !== 'code_expired' &&
-                  otp.otpError !== 'network_error' && (
-                    <>
-                      <OtpBoxes
-                        onComplete={otp.handleOtpComplete}
-                        disabled={otp.stage === 'verifying'}
-                        shakeKey={otp.shakeKey}
-                      />
-
-                      {/* Error state 3: wrong code */}
-                      {otp.otpError === 'wrong_code' && otp.attemptsRemaining > 1 && (
-                        <FieldMessage type="error">
-                          Incorrect code — {otp.attemptsRemaining} attempts remaining
-                        </FieldMessage>
-                      )}
-
-                      {/* Error state 4: final attempt */}
-                      {otp.otpError === 'final_attempt' && otp.attemptsRemaining === 1 && (
-                        <div className="mt-2">
-                          <FieldMessage type="warning">
-                            One more wrong attempt will lock you out. Request a new code if unsure.
-                          </FieldMessage>
-                        </div>
-                      )}
-
-                      {otp.stage === 'otp' && (
-                        <ResendRow key={otp.resendKey} onResend={otp.handleResend} />
-                      )}
-
-                      {otp.stage === 'verifying' && (
-                        <div className="flex items-center justify-center gap-2.5 py-3.5">
-                          <Loader2 className="text-primary h-4 w-4 animate-spin" />
-                          <span className="text-muted-foreground text-[13px]">Verifying\u2026</span>
-                        </div>
-                      )}
-                    </>
-                  )}
-              </>
+              <OtpActiveArea
+                otpError={otp.otpError}
+                attemptsRemaining={otp.attemptsRemaining}
+                stage={otp.stage}
+                shakeKey={otp.shakeKey}
+                resendKey={otp.resendKey}
+                maskedPhone={otp.maskedPhone}
+                onComplete={otp.handleOtpComplete}
+                onResend={otp.handleResend}
+                onChangeNumber={handleChangeNumber}
+                onRetrySend={otp.handleSend}
+              />
             )}
 
-            {/* Verified */}
             {otp.stage === 'verified' && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.25 }}
-                className="pt-3 pb-1 text-center"
-              >
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: [0, 1.25, 1] }}
-                  transition={{ duration: 0.4 }}
-                  className="bg-success/10 border-success/20 mx-auto mb-3 flex h-[52px] w-[52px] items-center justify-center rounded-full border"
-                >
-                  <Check className="text-success h-6 w-6" />
-                </motion.div>
-                <p className="text-foreground mb-1.5 text-base font-bold">
-                  {mode === 'settings' && initialPhone ? 'Number updated' : 'Phone verified'}
-                </p>
-                <p className="text-muted-foreground mb-3 text-[13px] leading-relaxed">
-                  {mode === 'settings' && initialPhone
-                    ? 'Your phone number has been changed and verified.'
-                    : "You're set up to receive booking confirmations and SMS alerts."}
-                </p>
-                <span className="bg-success/10 border-success/20 text-success inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-[13px] font-semibold">
-                  <Check className="h-[13px] w-[13px]" />
-                  {otp.e164Phone}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleChangeNumber}
-                  className="text-muted-foreground hover:text-foreground mx-auto mt-3 block text-xs underline underline-offset-[3px]"
-                >
-                  Change phone number
-                </button>
-              </motion.div>
+              <VerifiedView
+                mode={mode}
+                initialPhone={initialPhone}
+                e164Phone={otp.e164Phone}
+                onChangeNumber={handleChangeNumber}
+              />
             )}
           </motion.div>
         )}
