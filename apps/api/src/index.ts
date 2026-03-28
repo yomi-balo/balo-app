@@ -1,5 +1,4 @@
 import * as Sentry from '@sentry/node';
-import { shutdownServerAnalytics } from '@balo/analytics/server';
 import { buildApp } from './app.js';
 import { startWorkers } from './jobs/worker.js';
 
@@ -17,9 +16,14 @@ try {
     host: '0.0.0.0',
   });
 
-  startWorkers(app.log);
+  try {
+    await startWorkers(app.log);
+  } catch (workerErr) {
+    app.log.error(workerErr, 'BullMQ workers failed to start (server continues)');
+  }
   const shutdown = async () => {
     try {
+      const { shutdownServerAnalytics } = await import('@balo/analytics/server');
       await shutdownServerAnalytics();
     } catch (err) {
       app.log.error(err, 'Failed to flush PostHog events on shutdown');

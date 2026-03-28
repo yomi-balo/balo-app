@@ -33,7 +33,6 @@ export default async function ApplicationReviewPage(): Promise<React.JSX.Element
   return (
     <ApplicationReview
       application={result.application}
-      phone={result.phone}
       email={user.email}
       skillsByCategory={result.skillsByCategory}
       supportTypes={result.supportTypes}

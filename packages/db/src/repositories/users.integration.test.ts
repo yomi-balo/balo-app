@@ -3,6 +3,41 @@ import { randomUUID } from 'crypto';
 import { userFactory } from '../test/factories';
 import { usersRepository } from './users';
 
+describe('usersRepository.setPhoneVerified', () => {
+  it('writes phone and phoneVerifiedAt atomically', async () => {
+    const user = await userFactory();
+    const phone = '+61412345678';
+    const verifiedAt = new Date('2026-01-15T10:00:00Z');
+
+    const result = await usersRepository.setPhoneVerified(user.id, phone, verifiedAt);
+
+    expect(result.id).toBe(user.id);
+    expect(result.phone).toBe(phone);
+    expect(result.phoneVerifiedAt).toEqual(verifiedAt);
+  });
+
+  it('bumps updatedAt', async () => {
+    const user = await userFactory();
+    const before = user.updatedAt;
+
+    const result = await usersRepository.setPhoneVerified(user.id, '+61400000000', new Date());
+
+    expect(result.updatedAt!.getTime()).toBeGreaterThanOrEqual(before!.getTime());
+  });
+
+  it('returns undefined for a non-existent userId', async () => {
+    const nonExistentId = randomUUID();
+
+    const result = await usersRepository.setPhoneVerified(
+      nonExistentId,
+      '+61412345678',
+      new Date()
+    );
+
+    expect(result).toBeUndefined();
+  });
+});
+
 describe('usersRepository.update', () => {
   it('updates country and countryCode fields', async () => {
     const user = await userFactory({ country: 'Australia', countryCode: 'AU' });

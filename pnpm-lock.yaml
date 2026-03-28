@@ -88,6 +88,12 @@ importers:
       ioredis:
         specifier: ^5.9.3
         version: 5.9.3
+      jose:
+        specifier: ^6.2.2
+        version: 6.2.2
+      libphonenumber-js:
+        specifier: ^1.12.40
+        version: 1.12.40
       lodash:
         specifier: ^4.17.23
         version: 4.17.23
@@ -216,6 +222,9 @@ importers:
       iron-session:
         specifier: ^8.0.4
         version: 8.0.4
+      libphonenumber-js:
+        specifier: ^1.12.40
+        version: 1.12.40
       lucide-react:
         specifier: ^0.575.0
         version: 0.575.0(react@19.2.0)
@@ -8140,6 +8149,12 @@ packages:
         integrity: sha512-0TpaTfihd4QMNwrz/ob2Bp7X04yuxJkjRGi4aKmOqwhov54i6u79oCv7T+C7lo70MKH6BesI3vscD1yb/yzKXQ==,
       }
 
+  jose@6.2.2:
+    resolution:
+      {
+        integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==,
+      }
+
   joycon@3.1.1:
     resolution:
       {
@@ -8261,6 +8276,12 @@ packages:
         integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==,
       }
     engines: { node: '>= 0.8.0' }
+
+  libphonenumber-js@1.12.40:
+    resolution:
+      {
+        integrity: sha512-HKGs7GowShNls3Zh+7DTr6wYpPk5jC78l508yQQY3e8ZgJChM3A9JZghmMJZuK+5bogSfuTafpjksGSR3aMIEg==,
+      }
 
   light-my-request@6.6.0:
     resolution:
@@ -16445,6 +16466,8 @@ snapshots:
 
   jose@6.1.3: {}
 
+  jose@6.2.2: {}
+
   joycon@3.1.1: {}
 
   js-tokens@4.0.0: {}
@@ -16522,6 +16545,8 @@ snapshots:
     dependencies:
       prelude-ls: 1.2.1
       type-check: 0.4.0
+
+  libphonenumber-js@1.12.40: {}
 
   light-my-request@6.6.0:
     dependencies:

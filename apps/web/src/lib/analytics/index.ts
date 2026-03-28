@@ -11,6 +11,7 @@ export {
   EXPERT_RATE_EVENTS,
   EXPERT_PAYOUT_EVENTS,
   AVATAR_EVENTS,
+  PHONE_EVENTS,
 } from '@balo/analytics/client';
 
 export type { AllEvents, EventName } from '@balo/analytics/client';

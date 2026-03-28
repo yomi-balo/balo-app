@@ -38,7 +38,9 @@
     "R2_BUCKET_NAME",
     "R2_PUBLIC_URL",
     "POSTHOG_API_KEY",
-    "POSTHOG_HOST"
+    "POSTHOG_HOST",
+    "BREVO_API_KEY",
+    "BREVO_SMS_SENDER"
   ],
   "tasks": {
     "build": {

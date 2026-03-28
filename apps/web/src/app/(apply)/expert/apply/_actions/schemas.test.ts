@@ -11,8 +11,6 @@ import {
 
 describe('profileStepSchema', () => {
   const validData = {
-    phone: '412345678',
-    countryCode: '+61',
     yearStartedSalesforce: 2015,
     projectCountMin: 10,
     projectLeadCountMin: 1,
@@ -31,11 +29,6 @@ describe('profileStepSchema', () => {
 
   it('accepts valid input', () => {
     expect(profileStepSchema.safeParse(validData).success).toBe(true);
-  });
-
-  it('rejects phone shorter than 6 digits', () => {
-    const result = profileStepSchema.safeParse({ ...validData, phone: '123' });
-    expect(result.success).toBe(false);
   });
 
   it('rejects year before 2000', () => {
@@ -132,30 +125,6 @@ describe('profileStepSchema', () => {
       projectLeadCountMin: 5,
     });
     expect(result.success).toBe(true);
-  });
-
-  it('rejects phone with non-digit characters', () => {
-    const result = profileStepSchema.safeParse({
-      ...validData,
-      phone: '412-345-678',
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects country code without + prefix', () => {
-    const result = profileStepSchema.safeParse({
-      ...validData,
-      countryCode: '61',
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects country code longer than 5 characters', () => {
-    const result = profileStepSchema.safeParse({
-      ...validData,
-      countryCode: '+123456',
-    });
-    expect(result.success).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   payoutsRepository,
   expertsRepository,
   referenceDataRepository,
+  usersRepository,
   type BeneficiaryStatus,
   type ProfileSettingsData,
   type CertificationsByCategory,
@@ -57,10 +58,19 @@ export default async function ExpertSettingsPage({
   let allIndustries: Array<{ id: string; name: string }> = [];
   let certCategories: CertificationsByCategory[] | null = null;
 
+  // Phone verification state
+  let initialPhoneState: { phone: string | null; phoneVerifiedAt: string | null } = {
+    phone: null,
+    phoneVerifiedAt: null,
+  };
+  let accessToken = '';
+
   try {
     const session = await getSession();
+    accessToken = session?.accessToken ?? '';
+
     if (session?.user?.expertProfileId) {
-      const [payoutDetails, profile, languages, industries, certs] = await Promise.all([
+      const [payoutDetails, profile, languages, industries, certs, userData] = await Promise.all([
         payoutsRepository.findByExpertProfileId(session.user.expertProfileId),
         expertsRepository.findProfileForSettings(session.user.expertProfileId),
         referenceDataRepository.getLanguages(),
@@ -68,7 +78,15 @@ export default async function ExpertSettingsPage({
         session.user.verticalId
           ? referenceDataRepository.getCertificationsByVertical(session.user.verticalId)
           : Promise.resolve([]),
+        usersRepository.findById(session.user.id),
       ]);
+
+      if (userData) {
+        initialPhoneState = {
+          phone: userData.phone ?? null,
+          phoneVerifiedAt: userData.phoneVerifiedAt?.toISOString() ?? null,
+        };
+      }
 
       if (payoutDetails) {
         initialPayoutDetails = {
@@ -124,6 +142,9 @@ export default async function ExpertSettingsPage({
             : null
         }
         certCategories={certCategories}
+        initialPhone={initialPhoneState.phone}
+        phoneVerifiedAt={initialPhoneState.phoneVerifiedAt}
+        accessToken={accessToken}
       />
     </div>
   );

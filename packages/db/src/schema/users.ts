@@ -18,6 +18,7 @@ export const users = pgTable('users', {
   avatarUrl: text('avatar_url'),
   platformRole: platformRoleEnum('platform_role').default('user').notNull(),
   phone: text('phone'),
+  phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
 
   // Preferences
   activeMode: userModeEnum('active_mode').default('client').notNull(),

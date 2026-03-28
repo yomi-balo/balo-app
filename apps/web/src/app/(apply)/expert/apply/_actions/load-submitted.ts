@@ -4,7 +4,6 @@ import { withAuth } from '@/lib/auth/with-auth';
 import {
   expertsRepository,
   referenceDataRepository,
-  usersRepository,
   type ApplicationWithRelations,
   type SkillsByCategory,
   type CertificationsByCategory,
@@ -14,7 +13,6 @@ import { log } from '@/lib/logging';
 
 export interface SubmittedApplicationResult {
   application: ApplicationWithRelations;
-  phone: string | null;
   skillsByCategory: SkillsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
@@ -32,14 +30,12 @@ export const loadSubmittedApplication = withAuth(
 
       if (!existingProfile) return null;
 
-      const [application, skillsByCategory, supportTypes, certsByCategory, dbUser] =
-        await Promise.all([
-          expertsRepository.findApplicationWithRelations(existingProfile.id),
-          referenceDataRepository.getSkillsByVertical(vertical.id),
-          referenceDataRepository.getSupportTypes(),
-          referenceDataRepository.getCertificationsByVertical(vertical.id),
-          usersRepository.findById(session.user.id),
-        ]);
+      const [application, skillsByCategory, supportTypes, certsByCategory] = await Promise.all([
+        expertsRepository.findApplicationWithRelations(existingProfile.id),
+        referenceDataRepository.getSkillsByVertical(vertical.id),
+        referenceDataRepository.getSupportTypes(),
+        referenceDataRepository.getCertificationsByVertical(vertical.id),
+      ]);
 
       if (!application) return null;
 
@@ -50,7 +46,6 @@ export const loadSubmittedApplication = withAuth(
 
       return {
         application,
-        phone: dbUser?.phone ?? null,
         skillsByCategory,
         supportTypes,
         certificationsByCategory: certsByCategory,

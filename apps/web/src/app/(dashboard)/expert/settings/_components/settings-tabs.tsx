@@ -67,6 +67,9 @@ interface SettingsTabsProps {
     industries: Array<{ id: string; name: string }>;
   } | null;
   certCategories: CertificationsByCategory[] | null;
+  initialPhone: string | null;
+  phoneVerifiedAt: string | null;
+  accessToken: string;
 }
 
 export function SettingsTabs({
@@ -77,6 +80,9 @@ export function SettingsTabs({
   profileData,
   referenceData,
   certCategories,
+  initialPhone,
+  phoneVerifiedAt,
+  accessToken,
 }: SettingsTabsProps): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
@@ -192,7 +198,13 @@ export function SettingsTabs({
         >
           {/* Profile sub tabs content */}
           {tab === 'profile' && profileData && referenceData ? (
-            <ProfileTab initialProfile={profileData} referenceData={referenceData} />
+            <ProfileTab
+              initialProfile={profileData}
+              referenceData={referenceData}
+              initialPhone={initialPhone}
+              phoneVerifiedAt={phoneVerifiedAt}
+              accessToken={accessToken}
+            />
           ) : tab === 'profile' && (!profileData || !referenceData) ? (
             <DataLoadError />
           ) : tab === 'expertise' && profileData ? (

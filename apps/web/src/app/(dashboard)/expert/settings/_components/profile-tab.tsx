@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Phone } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -12,8 +12,10 @@ import { cn } from '@/lib/utils';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
 import { extractCityFromTimezone } from '@balo/shared/timezone';
 import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
+import { useRouter } from 'next/navigation';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
+import { PhoneVerificationFlow } from '@/components/balo/phone-verification-flow';
 import { saveProfileAction } from '../_actions/save-profile';
 import { saveCountryAction } from '../_actions/save-country';
 import type { ProfileSettingsData } from '@balo/db';
@@ -76,12 +78,19 @@ interface ProfileTabProps {
     languages: Array<{ id: string; name: string; code: string; flagEmoji: string | null }>;
     industries: Array<{ id: string; name: string }>;
   };
+  initialPhone: string | null;
+  phoneVerifiedAt: string | null;
+  accessToken: string;
 }
 
 export function ProfileTab({
   initialProfile,
   referenceData,
+  initialPhone,
+  phoneVerifiedAt,
+  accessToken,
 }: Readonly<ProfileTabProps>): React.JSX.Element {
+  const router = useRouter();
   const [isSaving, setIsSaving] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(initialProfile.user.avatarUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -198,6 +207,23 @@ export function ProfileTab({
 
   return (
     <div>
+      {/* Phone Number Verification */}
+      <div className="border-border bg-card mb-6 rounded-xl border p-6">
+        <div className="mb-4 flex items-center gap-2">
+          <Phone className="text-primary h-4 w-4" />
+          <h3 className="text-foreground text-sm font-semibold">Phone Number</h3>
+        </div>
+        <PhoneVerificationFlow
+          mode="settings"
+          initialPhone={phoneVerifiedAt ? (initialPhone ?? undefined) : undefined}
+          accessToken={accessToken}
+          onVerified={() => {
+            toast.success('Phone number verified');
+            router.refresh();
+          }}
+        />
+      </div>
+
       {/* Mobile: Collapsible preview */}
       <div className="mb-6 lg:hidden">
         <Collapsible open={previewOpen} onOpenChange={setPreviewOpen}>

@@ -20,7 +20,7 @@ import { StepTerms } from './step-terms';
 interface ExpertApplicationWizardProps {
   draft: ApplicationWithRelations | null;
   referenceData: ReferenceData;
-  user: { id: string; email: string; phone: string | null };
+  user: { id: string; email: string };
 }
 
 function WizardContent(): React.JSX.Element {

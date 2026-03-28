@@ -8,7 +8,7 @@ export interface ExpertSetupEventMap {
     step: string;
     step_number: number;
     completed_count: number;
-    total: 5;
+    total: 6;
   };
   [EXPERT_SETUP_EVENTS.SETUP_ALL_COMPLETE]: Record<string, never>;
 }

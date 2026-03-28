@@ -26,7 +26,6 @@ const mockSyncWorkHistory = vi.fn();
 
 const mockGetSalesforceVertical = vi.fn();
 const mockGetSupportTypes = vi.fn();
-const mockUserUpdate = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
@@ -44,9 +43,6 @@ vi.mock('@balo/db', () => ({
     getSalesforceVertical: (...args: unknown[]) => mockGetSalesforceVertical(...args),
     getSupportTypes: (...args: unknown[]) => mockGetSupportTypes(...args),
   },
-  usersRepository: {
-    update: (...args: unknown[]) => mockUserUpdate(...args),
-  },
 }));
 
 const mockSave = vi.fn();
@@ -62,8 +58,6 @@ import { saveDraftAction } from './save-draft';
 
 function validProfileData() {
   return {
-    phone: '412345678',
-    countryCode: '+61',
     yearStartedSalesforce: 2015,
     projectCountMin: 10,
     projectLeadCountMin: 1,
@@ -94,7 +88,6 @@ describe('saveDraftAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { user: { id: USER_ID, email: 'test@example.com' }, save: mockSave };
     mockUpdateProfile.mockResolvedValue(undefined);
-    mockUserUpdate.mockResolvedValue(undefined);
     mockSyncLanguages.mockResolvedValue(undefined);
     mockSyncIndustries.mockResolvedValue(undefined);
     mockSyncSkills.mockResolvedValue(undefined);
@@ -143,7 +136,7 @@ describe('saveDraftAction', () => {
       setupDraftCreation();
       const result = await saveDraftAction({
         step: 'profile',
-        data: { phone: '123' }, // too short, missing required fields
+        data: { yearStartedSalesforce: 'not-a-number' }, // wrong type, missing required fields
       });
       expect(result.success).toBe(false);
       expect(result.error).toBe('Failed to save. Please try again.');
@@ -234,15 +227,6 @@ describe('saveDraftAction', () => {
         PROFILE_ID,
         expect.objectContaining({ linkedinUrl: null })
       );
-    });
-
-    it('updates phone on user record with country code prefix', async () => {
-      await saveDraftAction({
-        step: 'profile',
-        data: validProfileData(),
-        expertProfileId: PROFILE_ID,
-      });
-      expect(mockUserUpdate).toHaveBeenCalledWith(USER_ID, { phone: '+61412345678' });
     });
 
     it('syncs languages', async () => {
