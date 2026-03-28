@@ -69,9 +69,13 @@ Check `.claude/skills/` for all available skills. Current skills:
 2. Implement backend (API routes, services) first
 3. Implement frontend (pages, components) second
 4. Write tests alongside implementation
-5. Run `tsc --noEmit` — fix all type errors
-6. Run tests — fix all failures
-7. Stage changes with `git add -A`
+5. Run `pnpm typecheck` — fix all type errors before continuing
+6. Run `pnpm test:run` — fix all test failures
+7. Run `pnpm lint` — fix any lint errors (`pnpm lint:fix` for auto-fixable ones)
+8. Run `pnpm format:check` — run `pnpm format` if it fails
+9. Stage changes with `git add -A`
+
+The pre-PR agent (Phase 7 of /implement) will run these again as a final gate. Running them here means fewer surprises there.
 
 ## Code Quality Rules
 
