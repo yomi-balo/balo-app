@@ -1,3 +1,4 @@
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createRequire } from 'node:module';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
@@ -13,12 +14,9 @@ declare module 'fastify' {
   }
 }
 
-// Lazy-loaded jose — dynamic import avoids Node's native ESM loader
-// failing to resolve @balo/shared CJS exports at static analysis time.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let jwks: any = null;
+let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
-async function getJwks(): Promise<unknown> {
+function getJwks(): ReturnType<typeof createRemoteJWKSet> {
   if (jwks) return jwks;
 
   const clientId = process.env.WORKOS_CLIENT_ID;
@@ -26,7 +24,6 @@ async function getJwks(): Promise<unknown> {
     throw new Error('WORKOS_CLIENT_ID is not configured');
   }
 
-  const { createRemoteJWKSet } = await import('jose');
   jwks = createRemoteJWKSet(new URL(`https://api.workos.com/sso/jwks/${clientId}`));
   return jwks;
 }
@@ -44,18 +41,12 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
   const token = header.slice(7);
 
   try {
-    type JoseModule = typeof import('jose');
-    const jose: JoseModule = await import('jose');
-    const { payload } = await jose.jwtVerify(
-      token,
-      (await getJwks()) as Parameters<JoseModule['jwtVerify']>[1]
-    );
+    const { payload } = await jwtVerify(token, getJwks());
     const sub = payload.sub;
     if (!sub) {
       return reply.status(401).send({ error: 'Unauthorized' });
     }
 
-    // Resolve WorkOS user ID to Balo user UUID
     const { usersRepository } = require('@balo/db');
     const user = await usersRepository.findByWorkosId(sub);
     if (!user) {

@@ -41,7 +41,10 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'booking-confirmed-sms',
       timing: 'immediate',
       priority: 'critical',
-      // No condition — all searchable experts have a verified phone
+      condition: (ctx) => {
+        const user = ctx.data.user as { phoneVerifiedAt?: string | Date } | undefined;
+        return !!user?.phoneVerifiedAt;
+      },
     },
     {
       channel: 'in-app',
