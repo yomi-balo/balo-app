@@ -306,6 +306,63 @@ function StatusBanner({
   );
 }
 
+// ── API response handlers (extracted to reduce cognitive complexity) ──
+
+interface SendErrorHandlers {
+  setStage: (s: Stage) => void;
+  setRateLimited: (v: boolean) => void;
+  setCooldownSeconds: (n: number) => void;
+  setPhoneError: (e: string | null) => void;
+}
+
+/** Map a send-otp error response to the correct UI state. */
+function handleSendError(data: Record<string, unknown>, handlers: SendErrorHandlers): void {
+  handlers.setStage('entry');
+
+  const errorMap: Record<string, () => void> = {
+    rate_limited: () => {
+      handlers.setRateLimited(true);
+      handlers.setCooldownSeconds((data.cooldownSeconds as number) ?? 600);
+    },
+    invalid_phone: () => handlers.setPhoneError(ERROR_MESSAGES.invalid_phone),
+    landline_not_supported: () => handlers.setPhoneError(ERROR_MESSAGES.landline_not_supported),
+    brevo_rejected: () => handlers.setPhoneError(ERROR_MESSAGES.brevo_rejected),
+  };
+
+  const handler = errorMap[data.error as string];
+  if (handler) {
+    handler();
+  } else {
+    handlers.setPhoneError(ERROR_MESSAGES.network_error);
+  }
+}
+
+interface VerifyErrorHandlers {
+  setStage: (s: Stage) => void;
+  setAttemptsRemaining: (n: number) => void;
+  setOtpError: (e: ErrorState | null) => void;
+  setShakeKey: (fn: (n: number) => number) => void;
+}
+
+/** Map a verify-otp error response to the correct UI state. */
+function handleVerifyError(data: Record<string, unknown>, handlers: VerifyErrorHandlers): void {
+  const errorType = data.error as string;
+
+  if (errorType === 'locked_out') {
+    handlers.setAttemptsRemaining(0);
+    handlers.setOtpError('locked_out');
+  } else if (errorType === 'code_expired') {
+    handlers.setOtpError('code_expired');
+  } else {
+    const remaining = (data.attemptsRemaining as number) ?? 0;
+    handlers.setAttemptsRemaining(remaining);
+    handlers.setOtpError(remaining === 1 ? 'final_attempt' : 'wrong_code');
+    handlers.setShakeKey((n) => n + 1);
+  }
+
+  handlers.setStage('otp');
+}
+
 // ── Main Component ────────────────────────────────────────────────
 
 export function PhoneVerificationFlow({
@@ -432,26 +489,7 @@ export function PhoneVerificationFlow({
       const data = (await res.json()) as Record<string, unknown>;
 
       if (!res.ok) {
-        setStage('entry');
-
-        if (data.error === 'rate_limited') {
-          setRateLimited(true);
-          setCooldownSeconds((data.cooldownSeconds as number) ?? 600);
-          return;
-        }
-
-        if (data.error === 'invalid_phone' || data.error === 'landline_not_supported') {
-          setPhoneError(ERROR_MESSAGES[data.error as ErrorState]);
-          return;
-        }
-
-        if (data.error === 'brevo_rejected') {
-          setPhoneError(ERROR_MESSAGES.brevo_rejected);
-          return;
-        }
-
-        // Fallback for unknown errors
-        setPhoneError(ERROR_MESSAGES.network_error);
+        handleSendError(data, { setStage, setRateLimited, setCooldownSeconds, setPhoneError });
         return;
       }
 
@@ -485,31 +523,7 @@ export function PhoneVerificationFlow({
         const data = (await res.json()) as Record<string, unknown>;
 
         if (!res.ok) {
-          const errorType = data.error as string;
-
-          if (errorType === 'locked_out') {
-            setAttemptsRemaining(0);
-            setOtpError('locked_out');
-            setStage('otp');
-            return;
-          }
-
-          if (errorType === 'code_expired') {
-            setOtpError('code_expired');
-            setStage('otp');
-            return;
-          }
-
-          const remaining = (data.attemptsRemaining as number) ?? 0;
-          setAttemptsRemaining(remaining);
-
-          if (remaining === 1) {
-            setOtpError('final_attempt');
-          } else {
-            setOtpError('wrong_code');
-          }
-          setShakeKey((n) => n + 1);
-          setStage('otp');
+          handleVerifyError(data, { setStage, setAttemptsRemaining, setOtpError, setShakeKey });
           return;
         }
 
