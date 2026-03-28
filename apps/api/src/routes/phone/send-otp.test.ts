@@ -90,16 +90,16 @@ describe('POST /phone/send-otp', () => {
     mockRedis.ttl.mockResolvedValue(300);
   });
 
-  function inject(body?: unknown) {
+  function inject(body?: Record<string, unknown>) {
     return app.inject({
       method: 'POST',
       url: '/phone/send-otp',
-      payload: body,
+      ...(body && { payload: body }),
     });
   }
 
   it('returns 400 for missing body', async () => {
-    const res = await inject(undefined);
+    const res = await inject();
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_phone');
   });

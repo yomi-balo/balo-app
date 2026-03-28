@@ -84,11 +84,11 @@ describe('POST /phone/verify-otp', () => {
     vi.clearAllMocks();
   });
 
-  function inject(body?: unknown) {
+  function inject(body?: Record<string, unknown>) {
     return app.inject({
       method: 'POST',
       url: '/phone/verify-otp',
-      payload: body,
+      ...(body && { payload: body }),
     });
   }
 
