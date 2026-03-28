@@ -33,22 +33,22 @@ describe('startWorkers', () => {
     vi.clearAllMocks();
   });
 
-  it('skips workers when REDIS_URL is not set', () => {
+  it('skips workers when REDIS_URL is not set', async () => {
     delete process.env.REDIS_URL;
     const logger = { info: vi.fn() };
 
-    startWorkers(logger);
+    await startWorkers(logger);
 
     expect(mockStartVerifyBeneficiary).not.toHaveBeenCalled();
     expect(mockStartInApp).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
-  it('starts all workers when REDIS_URL is set', () => {
+  it('starts all workers when REDIS_URL is set', async () => {
     process.env.REDIS_URL = 'redis://localhost:6379';
     const logger = { info: vi.fn() };
 
-    startWorkers(logger);
+    await startWorkers(logger);
 
     expect(mockStartVerifyBeneficiary).toHaveBeenCalled();
     expect(mockStartNotificationEvent).toHaveBeenCalled();
@@ -60,10 +60,10 @@ describe('startWorkers', () => {
     delete process.env.REDIS_URL;
   });
 
-  it('works without a logger', () => {
+  it('works without a logger', async () => {
     process.env.REDIS_URL = 'redis://localhost:6379';
 
-    expect(() => startWorkers()).not.toThrow();
+    await expect(startWorkers()).resolves.not.toThrow();
 
     expect(mockStartInApp).toHaveBeenCalled();
 

@@ -417,8 +417,6 @@ export function PhoneVerificationFlow({
     };
   }, [localNumber, selectedCountry]);
 
-  const fullPhone = selectedCountry.dial + localNumber.replace(/\s/g, '');
-
   const getMasked = useCallback((): string => {
     const n = localNumber.replace(/\s/g, '');
     return `${selectedCountry.dial} ${'*'.repeat(Math.max(0, n.length - 4))}${n.slice(-4)}`;

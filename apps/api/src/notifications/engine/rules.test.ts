@@ -42,25 +42,25 @@ describe('notificationRules', () => {
     expect(inAppRule!.timing).toBe('immediate');
   });
 
-  it('booking.confirmed SMS rule condition returns false when smsOptedIn is not true', () => {
+  it('booking.confirmed SMS rule condition returns false when phoneVerifiedAt is not set', () => {
     const rules = notificationRules['booking.confirmed'];
     const smsRule = rules!.find((r) => r.channel === 'sms');
     expect(smsRule!.condition).toBeDefined();
     const result = smsRule!.condition!({
       event: 'booking.confirmed',
       payload: {},
-      data: { user: { smsOptedIn: false } },
+      data: { user: { phoneVerifiedAt: null } },
     });
     expect(result).toBe(false);
   });
 
-  it('booking.confirmed SMS rule condition returns true when smsOptedIn is true', () => {
+  it('booking.confirmed SMS rule condition returns true when phoneVerifiedAt is set', () => {
     const rules = notificationRules['booking.confirmed'];
     const smsRule = rules!.find((r) => r.channel === 'sms');
     const result = smsRule!.condition!({
       event: 'booking.confirmed',
       payload: {},
-      data: { user: { smsOptedIn: true } },
+      data: { user: { phoneVerifiedAt: new Date().toISOString() } },
     });
     expect(result).toBe(true);
   });
