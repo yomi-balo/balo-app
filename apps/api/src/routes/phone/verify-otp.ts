@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { timingSafeEqual } from 'node:crypto';
 import { getRedis } from '../../lib/redis.js';
 import { requireAuth } from '../../lib/require-auth.js';
+import { maskPhone } from '../../lib/brevo.js';
 import { verifyOtpBodySchema } from './schema.js';
 
 // @balo/shared is CJS; static ESM import fails under tsx — use createRequire
@@ -11,12 +12,6 @@ const log = createLogger('phone-verify-otp');
 
 /** Max wrong attempts before lockout. */
 const MAX_ATTEMPTS = 3;
-
-/** Mask phone number for logging — show last 4 digits only. */
-function maskPhone(phone: string): string {
-  if (phone.length <= 4) return '****';
-  return '****' + phone.slice(-4);
-}
 
 export async function verifyOtpRoute(fastify: FastifyInstance): Promise<void> {
   fastify.post('/phone/verify-otp', { preHandler: [requireAuth] }, async (request, reply) => {

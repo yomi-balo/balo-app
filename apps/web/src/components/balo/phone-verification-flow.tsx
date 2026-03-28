@@ -480,10 +480,22 @@ function usePhoneOtp(opts: {
   handleResend: () => void;
   handleChangeNumber: () => void;
 } {
+  const {
+    accessToken,
+    selectedCountry,
+    localNumber,
+    e164Phone: initialE164,
+    mode,
+    validatePhone,
+    getMasked,
+    setPhoneError,
+    onVerified,
+  } = opts;
+
   const [stage, setStage] = useState<Stage>(
-    opts.mode === 'settings' && opts.e164Phone ? 'current' : 'entry'
+    mode === 'settings' && initialE164 ? 'current' : 'entry'
   );
-  const [e164Phone, setE164Phone] = useState(opts.e164Phone);
+  const [e164Phone, setE164Phone] = useState(initialE164);
   const [otpError, setOtpError] = useState<ErrorState | null>(null);
   const [attemptsRemaining, setAttemptsRemaining] = useState(3);
   const [shakeKey, setShakeKey] = useState(0);
@@ -493,9 +505,9 @@ function usePhoneOtp(opts: {
   const [rateLimited, setRateLimited] = useState(false);
 
   const handleSend = useCallback(async (): Promise<void> => {
-    if (!opts.validatePhone()) return;
+    if (!validatePhone()) return;
 
-    const phone = opts.selectedCountry.dial + opts.localNumber.replaceAll(/\s/g, '');
+    const phone = selectedCountry.dial + localNumber.replaceAll(/\s/g, '');
     setE164Phone(phone);
     setStage('sending');
     setRateLimited(false);
@@ -505,7 +517,7 @@ function usePhoneOtp(opts: {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${opts.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ phone }),
       });
@@ -513,25 +525,20 @@ function usePhoneOtp(opts: {
       const data = (await res.json()) as Record<string, unknown>;
 
       if (!res.ok) {
-        handleSendError(data, {
-          setStage,
-          setRateLimited,
-          setCooldownSeconds,
-          setPhoneError: opts.setPhoneError,
-        });
+        handleSendError(data, { setStage, setRateLimited, setCooldownSeconds, setPhoneError });
         return;
       }
 
-      setMaskedPhone(opts.getMasked());
+      setMaskedPhone(getMasked());
       setOtpError(null);
       setAttemptsRemaining(3);
       setStage('otp');
       setResendKey((k) => k + 1);
     } catch {
       setStage('entry');
-      opts.setPhoneError(ERROR_MESSAGES.network_error);
+      setPhoneError(ERROR_MESSAGES.network_error);
     }
-  }, [opts]);
+  }, [validatePhone, selectedCountry, localNumber, accessToken, getMasked, setPhoneError]);
 
   const handleOtpComplete = useCallback(
     async (code: string): Promise<void> => {
@@ -543,7 +550,7 @@ function usePhoneOtp(opts: {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${opts.accessToken}`,
+            Authorization: `Bearer ${accessToken}`,
           },
           body: JSON.stringify({ phone: e164Phone, code }),
         });
@@ -559,17 +566,17 @@ function usePhoneOtp(opts: {
 
         track(PHONE_EVENTS.PHONE_VERIFIED, {
           phone_masked: '****' + e164Phone.slice(-4),
-          country_code: opts.selectedCountry.code,
-          source: opts.mode,
+          country_code: selectedCountry.code,
+          source: mode,
         });
 
-        opts.onVerified(e164Phone);
+        onVerified(e164Phone);
       } catch {
         setStage('otp');
         setOtpError('network_error');
       }
     },
-    [opts, e164Phone]
+    [accessToken, e164Phone, selectedCountry, mode, onVerified]
   );
 
   const handleResend = useCallback((): void => {
@@ -583,8 +590,8 @@ function usePhoneOtp(opts: {
     setStage('entry');
     setOtpError(null);
     setRateLimited(false);
-    opts.setPhoneError(null);
-  }, [opts]);
+    setPhoneError(null);
+  }, [setPhoneError]);
 
   return {
     stage,
