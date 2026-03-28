@@ -168,15 +168,33 @@ git diff --staged | claude -p \
 
 If CHANGES_REQUESTED → back to Phase 3 with fix instructions.
 
-### Phase 7: Complete
+### Phase 7: Pre-PR CI Gate (always runs)
+
+After all review phases pass, run the pre-PR gate to catch CI failures before the PR is raised.
+
+Spawn the pre-pr sub-agent:
+
+```bash
+claude -p \
+  --system-prompt "$(cat .claude/commands/pre-pr.md)" \
+  "Run all pre-PR checks on the current branch. The feature implementation is complete and reviewed. Run format, lint, typecheck, build, tests, and SonarCloud readiness checks. Fix what you can, report what you can't."
+```
+
+**Output:** Either a GREEN LIGHT (all checks pass) or BLOCKED with specific issues.
+
+- If GREEN LIGHT → proceed to Phase 8 (complete)
+- If BLOCKED → attempt to fix blockers yourself (type errors, missing tests). If blockers require implementation changes, go back to Phase 3 (build) with fix instructions. Maximum 1 retry of the pre-pr gate after fixes.
+
+### Phase 8: Complete
 
 - Maximum **2 retry loops** across Phases 4-6 combined
 - After 2 retries, present all remaining issues to the user for decision
 - On success, report: what was built, files changed, any suggestions for follow-up tasks
+- **All pre-PR checks must have passed** (Phase 7 green light) before declaring success
 
 ## Rules
 
-1. Never skip Phase 0.5 (resolver), Phase 1 (architect), or Phase 6 (review)
+1. Never skip Phase 0.5 (resolver), Phase 1 (architect), Phase 6 (review), or Phase 7 (pre-PR gate)
 2. Always run Phase 5 (security) — no exceptions
 3. Phase 0 (design) is conditional — skip it for backend, infra, bug fixes, refactors, and simple UI additions. When it runs, it requires user approval before proceeding.
 4. Phase 0.5 (resolver) always runs, even when Phase 0 (design) is skipped. The resolver checks code reality, not design intent.
@@ -184,3 +202,4 @@ If CHANGES_REQUESTED → back to Phase 3 with fix instructions.
 6. If any agent references a skill, it must read the skill file before acting
 7. Stage changes with `git add -A` before running review agents so they see the full diff
 8. The designer's approved output feeds into the architect, builder, and UX validator — it is the source of truth for what the user experience should be
+9. Phase 7 (pre-PR gate) is the last automated check before declaring success — never skip it, even if review passed cleanly
