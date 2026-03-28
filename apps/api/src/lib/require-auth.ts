@@ -1,15 +1,10 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { createRequire } from 'node:module';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { createLogger } from '@balo/shared/logging';
 
+// @balo/shared is CJS; static ESM import fails under tsx — use createRequire
+const require = createRequire(import.meta.url);
+const { createLogger } = require('@balo/shared/logging');
 const log = createLogger('require-auth');
-
-/** Shape of the WorkOS access token JWT claims we care about. */
-export interface WorkOSTokenPayload extends JWTPayload {
-  sub: string; // WorkOS user ID
-  org_id?: string;
-}
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -18,9 +13,12 @@ declare module 'fastify' {
   }
 }
 
-let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+// Lazy-loaded jose — dynamic import avoids Node's native ESM loader
+// failing to resolve @balo/shared CJS exports at static analysis time.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let jwks: any = null;
 
-function getJwks(): ReturnType<typeof createRemoteJWKSet> {
+async function getJwks(): Promise<unknown> {
   if (jwks) return jwks;
 
   const clientId = process.env.WORKOS_CLIENT_ID;
@@ -28,7 +26,7 @@ function getJwks(): ReturnType<typeof createRemoteJWKSet> {
     throw new Error('WORKOS_CLIENT_ID is not configured');
   }
 
-  // WorkOS publishes JWKS at https://api.workos.com/sso/jwks/{clientId}
+  const { createRemoteJWKSet } = await import('jose');
   jwks = createRemoteJWKSet(new URL(`https://api.workos.com/sso/jwks/${clientId}`));
   return jwks;
 }
@@ -46,14 +44,15 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
   const token = header.slice(7);
 
   try {
-    const { payload } = await jwtVerify(token, getJwks());
+    const { jwtVerify } = await import('jose');
+    const { payload } = await jwtVerify(token, await getJwks());
     const sub = payload.sub;
     if (!sub) {
       return reply.status(401).send({ error: 'Unauthorized' });
     }
 
     // Resolve WorkOS user ID to Balo user UUID
-    const { usersRepository } = createRequire(import.meta.url)('@balo/db');
+    const { usersRepository } = require('@balo/db');
     const user = await usersRepository.findByWorkosId(sub);
     if (!user) {
       log.warn({ workosId: sub }, 'No Balo user found for WorkOS ID');

@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { createRequire } from 'node:module';
 import { timingSafeEqual } from 'node:crypto';
-import { createLogger } from '@balo/shared/logging';
 import { getRedis } from '../../lib/redis.js';
 import { requireAuth } from '../../lib/require-auth.js';
 import { verifyOtpBodySchema } from './schema.js';
 
+// @balo/shared is CJS; static ESM import fails under tsx — use createRequire
+const { createLogger } = createRequire(import.meta.url)('@balo/shared/logging');
 const log = createLogger('phone-verify-otp');
 
 /** Max wrong attempts before lockout. */
