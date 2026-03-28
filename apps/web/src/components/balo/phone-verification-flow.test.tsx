@@ -133,8 +133,8 @@ describe('PhoneVerificationFlow', () => {
 
       // Phone input
       expect(screen.getByPlaceholderText('412 345 678')).toBeInTheDocument();
-      // Country picker button
-      expect(screen.getByRole('button', { name: 'Select country code' })).toBeInTheDocument();
+      // Country picker select
+      expect(screen.getByRole('combobox', { name: 'Select country code' })).toBeInTheDocument();
       // Send button
       expect(screen.getByRole('button', { name: /send verification code/i })).toBeInTheDocument();
     });
@@ -195,38 +195,17 @@ describe('PhoneVerificationFlow', () => {
       expect(screen.getByText('+61')).toBeInTheDocument();
     });
 
-    it('opens dropdown and selects a different country', async () => {
+    it('selects a different country via native select', async () => {
       const user = userEvent.setup();
       render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
 
-      await user.click(screen.getByRole('button', { name: 'Select country code' }));
-
-      // Dropdown should be open with listbox
-      expect(screen.getByRole('listbox')).toBeInTheDocument();
-      expect(screen.getByText('New Zealand')).toBeInTheDocument();
+      const select = screen.getByRole('combobox', { name: 'Select country code' });
 
       // Select New Zealand
-      await user.click(screen.getByText('New Zealand'));
+      await user.selectOptions(select, 'NZ');
 
       // Should show +64 dial code now
       expect(screen.getByText('+64')).toBeInTheDocument();
-    });
-
-    it('closes dropdown when clicking outside', async () => {
-      const user = userEvent.setup();
-      render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
-
-      await user.click(screen.getByRole('button', { name: 'Select country code' }));
-      expect(screen.getByRole('listbox')).toBeInTheDocument();
-
-      // Click outside using mousedown event on document body
-      await act(async () => {
-        document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      });
-
-      await waitFor(() => {
-        expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
-      });
     });
   });
 
@@ -951,7 +930,7 @@ describe('PhoneVerificationFlow', () => {
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText('412 345 678')).toBeDisabled();
-        expect(screen.getByRole('button', { name: 'Select country code' })).toBeDisabled();
+        expect(screen.getByRole('combobox', { name: 'Select country code' })).toBeDisabled();
       });
     });
   });

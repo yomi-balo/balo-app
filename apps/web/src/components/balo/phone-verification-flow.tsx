@@ -98,33 +98,14 @@ function CountryPicker({
   selected,
   onChange,
   disabled,
-}: {
+}: Readonly<{
   selected: Country;
   onChange: (c: Country) => void;
   disabled: boolean;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent): void {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
-
+}>): React.JSX.Element {
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen(!open)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label="Select country code"
+    <div className="relative">
+      <div
         className={cn(
           'border-input bg-muted flex h-11 items-center gap-1.5 rounded-[10px] border px-3 whitespace-nowrap',
           disabled ? 'cursor-default opacity-50' : 'cursor-pointer'
@@ -133,34 +114,23 @@ function CountryPicker({
         <span className="text-lg">{selected.flag}</span>
         <span className="text-muted-foreground text-[13px]">{selected.dial}</span>
         <ChevronDown className="text-muted-foreground h-3 w-3" />
-      </button>
-      {open && (
-        <div
-          role="listbox"
-          className="bg-card border-border animate-in fade-in-0 slide-in-from-top-1 absolute top-[calc(100%+6px)] left-0 z-50 min-w-[200px] overflow-hidden rounded-xl border shadow-lg duration-150"
+        <select
+          disabled={disabled}
+          value={selected.code}
+          onChange={(e) => {
+            const match = COUNTRIES.find((c) => c.code === e.target.value);
+            if (match) onChange(match);
+          }}
+          aria-label="Select country code"
+          className="absolute inset-0 cursor-pointer opacity-0"
         >
           {COUNTRIES.map((co) => (
-            <button
-              type="button"
-              key={co.code}
-              role="option"
-              aria-selected={selected.code === co.code}
-              onClick={() => {
-                onChange(co);
-                setOpen(false);
-              }}
-              className={cn(
-                'flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm',
-                selected.code === co.code ? 'bg-primary/5' : 'hover:bg-muted'
-              )}
-            >
-              <span className="text-lg">{co.flag}</span>
-              <span className="text-foreground flex-1 text-left">{co.name}</span>
-              <span className="text-muted-foreground font-mono text-[11px]">{co.dial}</span>
-            </button>
+            <option key={co.code} value={co.code}>
+              {co.flag} {co.name} ({co.dial})
+            </option>
           ))}
-        </div>
-      )}
+        </select>
+      </div>
     </div>
   );
 }
@@ -169,11 +139,11 @@ function OtpBoxes({
   onComplete,
   disabled,
   shakeKey,
-}: {
+}: Readonly<{
   onComplete: (code: string) => void;
   disabled: boolean;
   shakeKey: number;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [values, setValues] = useState<string[]>(['', '', '', '', '', '']);
   const [shaking, setShaking] = useState(false);
@@ -192,7 +162,7 @@ function OtpBoxes({
   }, [shakeKey]);
 
   function handleInput(idx: number, raw: string): void {
-    const digit = raw.replace(/\D/g, '').slice(-1);
+    const digit = raw.replaceAll(/\D/g, '').slice(-1);
     const next = [...values];
     next[idx] = digit;
     setValues(next);
@@ -212,7 +182,7 @@ function OtpBoxes({
 
   function handlePaste(e: ClipboardEvent<HTMLInputElement>): void {
     e.preventDefault();
-    const text = e.clipboardData.getData('text').replace(/\D/g, '');
+    const text = e.clipboardData.getData('text').replaceAll(/\D/g, '');
     const next = ['', '', '', '', '', ''];
     for (let i = 0; i < 6 && i < text.length; i++) {
       next[i] = text[i]!;
@@ -230,7 +200,7 @@ function OtpBoxes({
     <div className={cn('flex justify-center gap-2.5', shaking && 'animate-shake')}>
       {values.map((v, i) => (
         <input
-          key={i}
+          key={`digit-${String(i)}`}
           ref={(el) => {
             inputRefs.current[i] = el;
           }}
@@ -244,11 +214,11 @@ function OtpBoxes({
           onPaste={handlePaste}
           className={cn(
             'h-[58px] w-[52px] rounded-xl border text-center text-[22px] font-bold transition-[border-color,background] duration-150 outline-none',
-            isError
-              ? 'border-destructive/40 bg-destructive/5 text-destructive'
-              : v
-                ? 'border-primary/30 bg-primary/5 text-foreground'
-                : 'border-input bg-card text-foreground',
+            (() => {
+              if (isError) return 'border-destructive/40 bg-destructive/5 text-destructive';
+              if (v) return 'border-primary/30 bg-primary/5 text-foreground';
+              return 'border-input bg-card text-foreground';
+            })(),
             disabled && 'opacity-60'
           )}
           aria-label={`Digit ${i + 1}`}
@@ -261,10 +231,10 @@ function OtpBoxes({
 function ResendRow({
   onResend,
   initialSeconds = RESEND_COOLDOWN_SECONDS,
-}: {
+}: Readonly<{
   onResend: () => void;
   initialSeconds?: number;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const [secs, setSecs] = useState(initialSeconds);
 
   useEffect(() => {
@@ -292,10 +262,10 @@ function ResendRow({
 function FieldMessage({
   type = 'error',
   children,
-}: {
+}: Readonly<{
   type?: 'error' | 'warning' | 'info';
   children: React.ReactNode;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const config = {
     error: { color: 'text-destructive', Icon: Info },
     warning: { color: 'text-warning', Icon: AlertTriangle },
@@ -314,11 +284,11 @@ function StatusBanner({
   type = 'error',
   icon: Icon,
   children,
-}: {
+}: Readonly<{
   type?: 'error' | 'warning' | 'info';
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const styles = {
     error: 'bg-destructive/5 border-destructive/20 text-destructive',
     warning: 'bg-warning/10 border-warning/20 text-warning',
@@ -344,7 +314,7 @@ export function PhoneVerificationFlow({
   accessToken,
   onVerified,
   onCancel,
-}: PhoneVerificationFlowProps): React.JSX.Element {
+}: Readonly<PhoneVerificationFlowProps>): React.JSX.Element {
   const [stage, setStage] = useState<Stage>(
     mode === 'settings' && initialPhone ? 'current' : 'entry'
   );
@@ -402,7 +372,7 @@ export function PhoneVerificationFlow({
     }
 
     debounceRef.current = setTimeout(() => {
-      const fullNumber = selectedCountry.dial + localNumber.replace(/\s/g, '');
+      const fullNumber = selectedCountry.dial + localNumber.replaceAll(/\s/g, '');
       if (!isValidPhoneNumber(fullNumber)) {
         setPhoneError(ERROR_MESSAGES.invalid_phone);
       } else if (parsePhoneNumber(fullNumber).getType() === 'FIXED_LINE') {
@@ -418,12 +388,12 @@ export function PhoneVerificationFlow({
   }, [localNumber, selectedCountry]);
 
   const getMasked = useCallback((): string => {
-    const n = localNumber.replace(/\s/g, '');
+    const n = localNumber.replaceAll(/\s/g, '');
     return `${selectedCountry.dial} ${'*'.repeat(Math.max(0, n.length - 4))}${n.slice(-4)}`;
   }, [localNumber, selectedCountry]);
 
   const validatePhone = useCallback((): boolean => {
-    const n = localNumber.trim().replace(/\s/g, '');
+    const n = localNumber.trim().replaceAll(/\s/g, '');
     if (n.length < 4) {
       setPhoneError(ERROR_MESSAGES.invalid_phone);
       return false;
@@ -444,7 +414,7 @@ export function PhoneVerificationFlow({
   const handleSend = useCallback(async (): Promise<void> => {
     if (!validatePhone()) return;
 
-    const phone = selectedCountry.dial + localNumber.replace(/\s/g, '');
+    const phone = selectedCountry.dial + localNumber.replaceAll(/\s/g, '');
     setE164Phone(phone);
     setStage('sending');
     setRateLimited(false);
@@ -576,7 +546,8 @@ export function PhoneVerificationFlow({
     setRateLimited(false);
   }, []);
 
-  const canSend = localNumber.trim().replace(/\s/g, '').length >= 4 && !phoneError && !rateLimited;
+  const canSend =
+    localNumber.trim().replaceAll(/\s/g, '').length >= 4 && !phoneError && !rateLimited;
 
   // ── Settings: current number view ──────────────────────────────
 
@@ -627,7 +598,10 @@ export function PhoneVerificationFlow({
 
       {/* Phone entry */}
       <div>
-        <label className="text-muted-foreground mb-1.5 block text-xs font-semibold">
+        <label
+          htmlFor="phone-number-input"
+          className="text-muted-foreground mb-1.5 block text-xs font-semibold"
+        >
           Phone number
         </label>
         <div className="flex gap-2.5">
@@ -637,6 +611,7 @@ export function PhoneVerificationFlow({
             disabled={stage !== 'entry'}
           />
           <input
+            id="phone-number-input"
             ref={phoneInputRef}
             type="tel"
             value={localNumber}
@@ -649,11 +624,12 @@ export function PhoneVerificationFlow({
             disabled={stage !== 'entry'}
             className={cn(
               'h-11 flex-1 rounded-[10px] border px-3.5 text-[15px] transition-colors outline-none',
-              phoneError
-                ? 'border-destructive/40 bg-destructive/5'
-                : stage !== 'entry'
-                  ? 'border-input bg-muted text-muted-foreground'
-                  : 'border-input bg-card text-foreground focus:border-primary/40'
+              (() => {
+                if (phoneError) return 'border-destructive/40 bg-destructive/5';
+                if (stage === 'entry')
+                  return 'border-input bg-card text-foreground focus:border-primary/40';
+                return 'border-input bg-muted text-muted-foreground';
+              })()
             )}
           />
         </div>
@@ -758,12 +734,12 @@ export function PhoneVerificationFlow({
                     </div>
                   )}
 
-                <label className="text-muted-foreground mb-3.5 block text-center text-xs font-semibold">
+                <p className="text-muted-foreground mb-3.5 block text-center text-xs font-semibold">
                   Enter 6-digit code
-                </label>
+                </p>
 
                 {/* Error state 5: locked out */}
-                {otpError === 'locked_out' ? (
+                {otpError === 'locked_out' && (
                   <>
                     <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
                     <div className="mt-3.5">
@@ -775,8 +751,10 @@ export function PhoneVerificationFlow({
                       </Button>
                     </div>
                   </>
-                ) : otpError === 'code_expired' ? (
-                  /* Error state 6: code expired */
+                )}
+
+                {/* Error state 6: code expired */}
+                {otpError === 'code_expired' && (
                   <>
                     <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
                     <div className="mt-3.5">
@@ -788,8 +766,10 @@ export function PhoneVerificationFlow({
                       </Button>
                     </div>
                   </>
-                ) : otpError === 'network_error' ? (
-                  /* Error state 8: network error */
+                )}
+
+                {/* Error state 8: network error */}
+                {otpError === 'network_error' && (
                   <>
                     <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
                     <div className="mt-3.5">
@@ -806,40 +786,45 @@ export function PhoneVerificationFlow({
                       </Button>
                     </div>
                   </>
-                ) : (
-                  <>
-                    <OtpBoxes
-                      onComplete={handleOtpComplete}
-                      disabled={stage === 'verifying'}
-                      shakeKey={shakeKey}
-                    />
-
-                    {/* Error state 3: wrong code */}
-                    {otpError === 'wrong_code' && attemptsRemaining > 1 && (
-                      <FieldMessage type="error">
-                        Incorrect code — {attemptsRemaining} attempts remaining
-                      </FieldMessage>
-                    )}
-
-                    {/* Error state 4: final attempt */}
-                    {otpError === 'final_attempt' && attemptsRemaining === 1 && (
-                      <div className="mt-2">
-                        <FieldMessage type="warning">
-                          One more wrong attempt will lock you out. Request a new code if unsure.
-                        </FieldMessage>
-                      </div>
-                    )}
-
-                    {stage === 'otp' && <ResendRow key={resendKey} onResend={handleResend} />}
-
-                    {stage === 'verifying' && (
-                      <div className="flex items-center justify-center gap-2.5 py-3.5">
-                        <Loader2 className="text-primary h-4 w-4 animate-spin" />
-                        <span className="text-muted-foreground text-[13px]">Verifying\u2026</span>
-                      </div>
-                    )}
-                  </>
                 )}
+
+                {/* Default: active OTP input */}
+                {otpError !== 'locked_out' &&
+                  otpError !== 'code_expired' &&
+                  otpError !== 'network_error' && (
+                    <>
+                      <OtpBoxes
+                        onComplete={handleOtpComplete}
+                        disabled={stage === 'verifying'}
+                        shakeKey={shakeKey}
+                      />
+
+                      {/* Error state 3: wrong code */}
+                      {otpError === 'wrong_code' && attemptsRemaining > 1 && (
+                        <FieldMessage type="error">
+                          Incorrect code — {attemptsRemaining} attempts remaining
+                        </FieldMessage>
+                      )}
+
+                      {/* Error state 4: final attempt */}
+                      {otpError === 'final_attempt' && attemptsRemaining === 1 && (
+                        <div className="mt-2">
+                          <FieldMessage type="warning">
+                            One more wrong attempt will lock you out. Request a new code if unsure.
+                          </FieldMessage>
+                        </div>
+                      )}
+
+                      {stage === 'otp' && <ResendRow key={resendKey} onResend={handleResend} />}
+
+                      {stage === 'verifying' && (
+                        <div className="flex items-center justify-center gap-2.5 py-3.5">
+                          <Loader2 className="text-primary h-4 w-4 animate-spin" />
+                          <span className="text-muted-foreground text-[13px]">Verifying\u2026</span>
+                        </div>
+                      )}
+                    </>
+                  )}
               </>
             )}
 
