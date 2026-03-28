@@ -363,41 +363,10 @@ function handleVerifyError(data: Record<string, unknown>, handlers: VerifyErrorH
   handlers.setStage('otp');
 }
 
-// ── Main Component ────────────────────────────────────────────────
+// ── Custom Hooks (extracted to reduce component cognitive complexity) ──
 
-export function PhoneVerificationFlow({
-  mode,
-  initialPhone,
-  accessToken,
-  onVerified,
-  onCancel,
-}: Readonly<PhoneVerificationFlowProps>): React.JSX.Element {
-  const [stage, setStage] = useState<Stage>(
-    mode === 'settings' && initialPhone ? 'current' : 'entry'
-  );
-  const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
-  const [localNumber, setLocalNumber] = useState('');
-  const [e164Phone, setE164Phone] = useState('');
-  const [phoneError, setPhoneError] = useState<string | null>(null);
-  const [otpError, setOtpError] = useState<ErrorState | null>(null);
-  const [attemptsRemaining, setAttemptsRemaining] = useState(3);
-  const [shakeKey, setShakeKey] = useState(0);
-  const [resendKey, setResendKey] = useState(0);
-  const [maskedPhone, setMaskedPhone] = useState('');
-  const [cooldownSeconds, setCooldownSeconds] = useState(0);
-  const [rateLimited, setRateLimited] = useState(false);
-
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const phoneInputRef = useRef<HTMLInputElement>(null);
-
-  // Autofocus phone input when entering the entry stage
-  useEffect(() => {
-    if (stage === 'entry') {
-      phoneInputRef.current?.focus();
-    }
-  }, [stage]);
-
-  // IP detection for default country
+/** Detect user's country via IP on mount. */
+function useCountryDetection(setSelectedCountry: (c: Country) => void): void {
   useEffect(() => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
@@ -417,9 +386,22 @@ export function PhoneVerificationFlow({
       clearTimeout(timeout);
       controller.abort();
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
 
-  // Debounced phone validation
+/** Validate phone input with debounce and on-demand. */
+function usePhoneValidation(
+  localNumber: string,
+  selectedCountry: Country
+): {
+  phoneError: string | null;
+  setPhoneError: (e: string | null) => void;
+  validatePhone: () => boolean;
+  getMasked: () => string;
+} {
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
@@ -468,10 +450,52 @@ export function PhoneVerificationFlow({
     return true;
   }, [localNumber, selectedCountry]);
 
-  const handleSend = useCallback(async (): Promise<void> => {
-    if (!validatePhone()) return;
+  return { phoneError, setPhoneError, validatePhone, getMasked };
+}
 
-    const phone = selectedCountry.dial + localNumber.replaceAll(/\s/g, '');
+/** Handle OTP send/verify API calls and state transitions. */
+function usePhoneOtp(opts: {
+  accessToken: string;
+  selectedCountry: Country;
+  localNumber: string;
+  e164Phone: string;
+  mode: 'onboarding' | 'settings';
+  validatePhone: () => boolean;
+  getMasked: () => string;
+  setPhoneError: (e: string | null) => void;
+  onVerified: (e164: string) => void;
+}): {
+  stage: Stage;
+  setStage: (s: Stage) => void;
+  e164Phone: string;
+  otpError: ErrorState | null;
+  attemptsRemaining: number;
+  shakeKey: number;
+  resendKey: number;
+  maskedPhone: string;
+  cooldownSeconds: number;
+  rateLimited: boolean;
+  handleSend: () => Promise<void>;
+  handleOtpComplete: (code: string) => Promise<void>;
+  handleResend: () => void;
+  handleChangeNumber: () => void;
+} {
+  const [stage, setStage] = useState<Stage>(
+    opts.mode === 'settings' && opts.e164Phone ? 'current' : 'entry'
+  );
+  const [e164Phone, setE164Phone] = useState(opts.e164Phone);
+  const [otpError, setOtpError] = useState<ErrorState | null>(null);
+  const [attemptsRemaining, setAttemptsRemaining] = useState(3);
+  const [shakeKey, setShakeKey] = useState(0);
+  const [resendKey, setResendKey] = useState(0);
+  const [maskedPhone, setMaskedPhone] = useState('');
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const [rateLimited, setRateLimited] = useState(false);
+
+  const handleSend = useCallback(async (): Promise<void> => {
+    if (!opts.validatePhone()) return;
+
+    const phone = opts.selectedCountry.dial + opts.localNumber.replaceAll(/\s/g, '');
     setE164Phone(phone);
     setStage('sending');
     setRateLimited(false);
@@ -481,7 +505,7 @@ export function PhoneVerificationFlow({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${opts.accessToken}`,
         },
         body: JSON.stringify({ phone }),
       });
@@ -489,21 +513,25 @@ export function PhoneVerificationFlow({
       const data = (await res.json()) as Record<string, unknown>;
 
       if (!res.ok) {
-        handleSendError(data, { setStage, setRateLimited, setCooldownSeconds, setPhoneError });
+        handleSendError(data, {
+          setStage,
+          setRateLimited,
+          setCooldownSeconds,
+          setPhoneError: opts.setPhoneError,
+        });
         return;
       }
 
-      // Success
-      setMaskedPhone(getMasked());
+      setMaskedPhone(opts.getMasked());
       setOtpError(null);
       setAttemptsRemaining(3);
       setStage('otp');
       setResendKey((k) => k + 1);
     } catch {
       setStage('entry');
-      setPhoneError(ERROR_MESSAGES.network_error);
+      opts.setPhoneError(ERROR_MESSAGES.network_error);
     }
-  }, [validatePhone, selectedCountry, localNumber, accessToken, getMasked]);
+  }, [opts]);
 
   const handleOtpComplete = useCallback(
     async (code: string): Promise<void> => {
@@ -515,7 +543,7 @@ export function PhoneVerificationFlow({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: `Bearer ${opts.accessToken}`,
           },
           body: JSON.stringify({ phone: e164Phone, code }),
         });
@@ -527,22 +555,21 @@ export function PhoneVerificationFlow({
           return;
         }
 
-        // Verified
         setStage('verified');
 
         track(PHONE_EVENTS.PHONE_VERIFIED, {
           phone_masked: '****' + e164Phone.slice(-4),
-          country_code: selectedCountry.code,
-          source: mode,
+          country_code: opts.selectedCountry.code,
+          source: opts.mode,
         });
 
-        onVerified(e164Phone);
+        opts.onVerified(e164Phone);
       } catch {
         setStage('otp');
         setOtpError('network_error');
       }
     },
-    [accessToken, e164Phone, selectedCountry, mode, onVerified]
+    [opts, e164Phone]
   );
 
   const handleResend = useCallback((): void => {
@@ -554,18 +581,79 @@ export function PhoneVerificationFlow({
 
   const handleChangeNumber = useCallback((): void => {
     setStage('entry');
-    setLocalNumber('');
-    setPhoneError(null);
     setOtpError(null);
     setRateLimited(false);
-  }, []);
+    opts.setPhoneError(null);
+  }, [opts]);
+
+  return {
+    stage,
+    setStage,
+    e164Phone,
+    otpError,
+    attemptsRemaining,
+    shakeKey,
+    resendKey,
+    maskedPhone,
+    cooldownSeconds,
+    rateLimited,
+    handleSend,
+    handleOtpComplete,
+    handleResend,
+    handleChangeNumber,
+  };
+}
+
+// ── Main Component ────────────────────────────────────────────────
+
+export function PhoneVerificationFlow({
+  mode,
+  initialPhone,
+  accessToken,
+  onVerified,
+  onCancel,
+}: Readonly<PhoneVerificationFlowProps>): React.JSX.Element {
+  const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
+  const [localNumber, setLocalNumber] = useState('');
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+
+  useCountryDetection(setSelectedCountry);
+
+  const { phoneError, setPhoneError, validatePhone, getMasked } = usePhoneValidation(
+    localNumber,
+    selectedCountry
+  );
+
+  const otp = usePhoneOtp({
+    accessToken,
+    selectedCountry,
+    localNumber,
+    e164Phone: initialPhone ?? '',
+    mode,
+    validatePhone,
+    getMasked,
+    setPhoneError,
+    onVerified,
+  });
+
+  // Autofocus phone input when entering the entry stage
+  useEffect(() => {
+    if (otp.stage === 'entry') {
+      phoneInputRef.current?.focus();
+    }
+  }, [otp.stage]);
+
+  const handleChangeNumber = useCallback((): void => {
+    otp.handleChangeNumber();
+    setLocalNumber('');
+  }, [otp]);
 
   const canSend =
-    localNumber.trim().replaceAll(/\s/g, '').length >= 4 && !phoneError && !rateLimited;
+    localNumber.trim().replaceAll(/\s/g, '').length >= 4 && !phoneError && !otp.rateLimited;
 
   // ── Settings: current number view ──────────────────────────────
 
-  if (stage === 'current') {
+  if (otp.stage === 'current') {
     return (
       <div>
         <div className="bg-muted border-border flex items-center justify-between rounded-[10px] border p-3.5">
@@ -580,7 +668,7 @@ export function PhoneVerificationFlow({
               </span>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => setStage('entry')}>
+          <Button variant="outline" size="sm" onClick={() => otp.setStage('entry')}>
             Change
           </Button>
         </div>
@@ -596,19 +684,21 @@ export function PhoneVerificationFlow({
   return (
     <div>
       {/* Settings change warning */}
-      {mode === 'settings' && initialPhone && (stage === 'entry' || stage === 'sending') && (
-        <motion.div
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2 }}
-          className="mb-5"
-        >
-          <StatusBanner type="warning" icon={AlertTriangle}>
-            Changing your number requires a new verification code. SMS will switch to the new number
-            once verified.
-          </StatusBanner>
-        </motion.div>
-      )}
+      {mode === 'settings' &&
+        initialPhone &&
+        (otp.stage === 'entry' || otp.stage === 'sending') && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mb-5"
+          >
+            <StatusBanner type="warning" icon={AlertTriangle}>
+              Changing your number requires a new verification code. SMS will switch to the new
+              number once verified.
+            </StatusBanner>
+          </motion.div>
+        )}
 
       {/* Phone entry */}
       <div>
@@ -622,7 +712,7 @@ export function PhoneVerificationFlow({
           <CountryPicker
             selected={selectedCountry}
             onChange={setSelectedCountry}
-            disabled={stage !== 'entry'}
+            disabled={otp.stage !== 'entry'}
           />
           <input
             id="phone-number-input"
@@ -633,14 +723,14 @@ export function PhoneVerificationFlow({
               setLocalNumber(e.target.value);
               setPhoneError(null);
             }}
-            onBlur={stage === 'entry' ? () => validatePhone() : undefined}
+            onBlur={otp.stage === 'entry' ? () => validatePhone() : undefined}
             placeholder="412 345 678"
-            disabled={stage !== 'entry'}
+            disabled={otp.stage !== 'entry'}
             className={cn(
               'h-11 flex-1 rounded-[10px] border px-3.5 text-[15px] transition-colors outline-none',
               (() => {
                 if (phoneError) return 'border-destructive/40 bg-destructive/5';
-                if (stage === 'entry')
+                if (otp.stage === 'entry')
                   return 'border-input bg-card text-foreground focus:border-primary/40';
                 return 'border-input bg-muted text-muted-foreground';
               })()
@@ -651,38 +741,38 @@ export function PhoneVerificationFlow({
         {/* Error state 1: invalid phone / landline */}
         {phoneError && <FieldMessage type="error">{phoneError}</FieldMessage>}
 
-        {stage === 'entry' && !phoneError && !rateLimited && (
+        {otp.stage === 'entry' && !phoneError && !otp.rateLimited && (
           <p className="text-muted-foreground mt-1.5 text-[11px]">
             Include country code if pasting, e.g. {selectedCountry.dial}412345678
           </p>
         )}
 
         {/* Error state 7: rate limited */}
-        {rateLimited && (
+        {otp.rateLimited && (
           <div className="mt-3">
             <StatusBanner type="error" icon={Lock}>
               Too many requests for this number. Please wait{' '}
-              <strong>{Math.ceil(cooldownSeconds / 60)} minutes</strong> before trying again.
+              <strong>{Math.ceil(otp.cooldownSeconds / 60)} minutes</strong> before trying again.
             </StatusBanner>
           </div>
         )}
 
         {/* Send / sending button */}
-        {(stage === 'entry' || stage === 'sending') && (
+        {(otp.stage === 'entry' || otp.stage === 'sending') && (
           <div className="mt-5 flex gap-2.5">
-            {!rateLimited && (
+            {!otp.rateLimited && (
               <Button
-                disabled={!canSend || stage === 'sending'}
-                onClick={handleSend}
+                disabled={!canSend || otp.stage === 'sending'}
+                onClick={otp.handleSend}
                 className="flex-1 gap-2"
                 size="lg"
               >
-                {stage === 'sending' ? (
+                {otp.stage === 'sending' ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Send className="h-3.5 w-3.5" />
                 )}
-                {stage === 'sending' ? 'Sending\u2026' : 'Send verification code'}
+                {otp.stage === 'sending' ? 'Sending\u2026' : 'Send verification code'}
               </Button>
             )}
             {mode === 'settings' && onCancel && (
@@ -696,7 +786,7 @@ export function PhoneVerificationFlow({
 
       {/* OTP section */}
       <AnimatePresence mode="wait">
-        {(stage === 'otp' || stage === 'verifying' || stage === 'verified') && (
+        {(otp.stage === 'otp' || otp.stage === 'verifying' || otp.stage === 'verified') && (
           <motion.div
             key="otp-section"
             initial={{ opacity: 0, y: 10 }}
@@ -706,17 +796,17 @@ export function PhoneVerificationFlow({
           >
             <div className="bg-border mb-5 h-px" />
 
-            {stage !== 'verified' && (
+            {otp.stage !== 'verified' && (
               <>
                 {/* Masked phone + change number link */}
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground text-[13px]">Code sent to</span>
                     <span className="bg-primary/5 border-primary/20 text-primary rounded-full border px-2.5 py-0.5 text-[13px] font-semibold">
-                      {maskedPhone}
+                      {otp.maskedPhone}
                     </span>
                   </div>
-                  {stage === 'otp' && attemptsRemaining > 0 && (
+                  {otp.stage === 'otp' && otp.attemptsRemaining > 0 && (
                     <button
                       type="button"
                       onClick={handleChangeNumber}
@@ -728,22 +818,22 @@ export function PhoneVerificationFlow({
                 </div>
 
                 {/* Attempts badge */}
-                {otpError &&
-                  (otpError === 'wrong_code' || otpError === 'final_attempt') &&
-                  attemptsRemaining > 0 && (
+                {otp.otpError &&
+                  (otp.otpError === 'wrong_code' || otp.otpError === 'final_attempt') &&
+                  otp.attemptsRemaining > 0 && (
                     <div className="mb-2.5 flex justify-center">
                       <span
                         className={cn(
                           'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
-                          attemptsRemaining === 1
+                          otp.attemptsRemaining === 1
                             ? 'bg-warning/10 border-warning/20 text-warning'
                             : 'bg-destructive/5 border-destructive/20 text-destructive'
                         )}
                       >
                         <Info className="h-[11px] w-[11px]" />
-                        {attemptsRemaining === 1
+                        {otp.attemptsRemaining === 1
                           ? 'Last attempt'
-                          : `${attemptsRemaining} attempts left`}
+                          : `${otp.attemptsRemaining} attempts left`}
                       </span>
                     </div>
                   )}
@@ -753,14 +843,14 @@ export function PhoneVerificationFlow({
                 </p>
 
                 {/* Error state 5: locked out */}
-                {otpError === 'locked_out' && (
+                {otp.otpError === 'locked_out' && (
                   <>
                     <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
                     <div className="mt-3.5">
                       <StatusBanner type="error" icon={Lock}>
                         {ERROR_MESSAGES.locked_out}
                       </StatusBanner>
-                      <Button className="mt-3.5 w-full gap-2" size="lg" onClick={handleResend}>
+                      <Button className="mt-3.5 w-full gap-2" size="lg" onClick={otp.handleResend}>
                         <Send className="h-3.5 w-3.5" /> Send a new code
                       </Button>
                     </div>
@@ -768,14 +858,14 @@ export function PhoneVerificationFlow({
                 )}
 
                 {/* Error state 6: code expired */}
-                {otpError === 'code_expired' && (
+                {otp.otpError === 'code_expired' && (
                   <>
                     <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
                     <div className="mt-3.5">
                       <StatusBanner type="error" icon={Clock}>
                         {ERROR_MESSAGES.code_expired}
                       </StatusBanner>
-                      <Button className="mt-3.5 w-full gap-2" size="lg" onClick={handleResend}>
+                      <Button className="mt-3.5 w-full gap-2" size="lg" onClick={otp.handleResend}>
                         <Send className="h-3.5 w-3.5" /> Send a new code
                       </Button>
                     </div>
@@ -783,7 +873,7 @@ export function PhoneVerificationFlow({
                 )}
 
                 {/* Error state 8: network error */}
-                {otpError === 'network_error' && (
+                {otp.otpError === 'network_error' && (
                   <>
                     <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
                     <div className="mt-3.5">
@@ -794,7 +884,7 @@ export function PhoneVerificationFlow({
                         variant="outline"
                         className="mt-3.5 w-full gap-2"
                         size="lg"
-                        onClick={handleSend}
+                        onClick={otp.handleSend}
                       >
                         Try again
                       </Button>
@@ -803,25 +893,25 @@ export function PhoneVerificationFlow({
                 )}
 
                 {/* Default: active OTP input */}
-                {otpError !== 'locked_out' &&
-                  otpError !== 'code_expired' &&
-                  otpError !== 'network_error' && (
+                {otp.otpError !== 'locked_out' &&
+                  otp.otpError !== 'code_expired' &&
+                  otp.otpError !== 'network_error' && (
                     <>
                       <OtpBoxes
-                        onComplete={handleOtpComplete}
-                        disabled={stage === 'verifying'}
-                        shakeKey={shakeKey}
+                        onComplete={otp.handleOtpComplete}
+                        disabled={otp.stage === 'verifying'}
+                        shakeKey={otp.shakeKey}
                       />
 
                       {/* Error state 3: wrong code */}
-                      {otpError === 'wrong_code' && attemptsRemaining > 1 && (
+                      {otp.otpError === 'wrong_code' && otp.attemptsRemaining > 1 && (
                         <FieldMessage type="error">
-                          Incorrect code — {attemptsRemaining} attempts remaining
+                          Incorrect code — {otp.attemptsRemaining} attempts remaining
                         </FieldMessage>
                       )}
 
                       {/* Error state 4: final attempt */}
-                      {otpError === 'final_attempt' && attemptsRemaining === 1 && (
+                      {otp.otpError === 'final_attempt' && otp.attemptsRemaining === 1 && (
                         <div className="mt-2">
                           <FieldMessage type="warning">
                             One more wrong attempt will lock you out. Request a new code if unsure.
@@ -829,9 +919,11 @@ export function PhoneVerificationFlow({
                         </div>
                       )}
 
-                      {stage === 'otp' && <ResendRow key={resendKey} onResend={handleResend} />}
+                      {otp.stage === 'otp' && (
+                        <ResendRow key={otp.resendKey} onResend={otp.handleResend} />
+                      )}
 
-                      {stage === 'verifying' && (
+                      {otp.stage === 'verifying' && (
                         <div className="flex items-center justify-center gap-2.5 py-3.5">
                           <Loader2 className="text-primary h-4 w-4 animate-spin" />
                           <span className="text-muted-foreground text-[13px]">Verifying\u2026</span>
@@ -843,7 +935,7 @@ export function PhoneVerificationFlow({
             )}
 
             {/* Verified */}
-            {stage === 'verified' && (
+            {otp.stage === 'verified' && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -868,7 +960,7 @@ export function PhoneVerificationFlow({
                 </p>
                 <span className="bg-success/10 border-success/20 text-success inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-[13px] font-semibold">
                   <Check className="h-[13px] w-[13px]" />
-                  {e164Phone}
+                  {otp.e164Phone}
                 </span>
                 <button
                   type="button"
