@@ -49,7 +49,7 @@ interface WizardState {
   inviteData: Partial<InviteStepData>;
   termsData: Partial<TermsStepData>;
   referenceData: ReferenceData;
-  user: { id: string; email: string; phone: string | null };
+  user: { id: string; email: string };
 }
 
 interface WizardActions {
@@ -174,14 +174,9 @@ function hydrateStepStatuses(draft: ApplicationWithRelations | null): StepStatus
   return statuses;
 }
 
-function hydrateProfileData(
-  draft: ApplicationWithRelations | null,
-  userPhone: string | null
-): Partial<ProfileStepData> {
+function hydrateProfileData(draft: ApplicationWithRelations | null): Partial<ProfileStepData> {
   if (!draft) {
     return {
-      countryCode: '+61',
-      phone: userPhone?.replace(/^\+\d+/, '') ?? '',
       isSalesforceMvp: false,
       isSalesforceCta: false,
       isCertifiedTrainer: false,
@@ -194,8 +189,6 @@ function hydrateProfileData(
   const linkedinSlug = linkedinUrl ? linkedinUrl.replace('https://linkedin.com/in/', '') : '';
 
   return {
-    countryCode: '+61',
-    phone: userPhone?.replace(/^\+\d+/, '') ?? '',
     yearStartedSalesforce: draft.profile.yearStartedSalesforce ?? undefined,
     projectCountMin: draft.profile.projectCountMin ?? undefined,
     projectLeadCountMin: draft.profile.projectLeadCountMin ?? undefined,
@@ -270,7 +263,7 @@ interface ExpertApplicationProviderProps {
   children: ReactNode;
   draft: ApplicationWithRelations | null;
   referenceData: ReferenceData;
-  user: { id: string; email: string; phone: string | null };
+  user: { id: string; email: string };
 }
 
 export function ExpertApplicationProvider({
@@ -296,7 +289,7 @@ export function ExpertApplicationProvider({
 
   // Per-step form data
   const [profileData, setProfileData] = useState<Partial<ProfileStepData>>(() =>
-    hydrateProfileData(draft, user.phone)
+    hydrateProfileData(draft)
   );
   const [productsData, setProductsData] = useState<Partial<ProductsStepData>>(() =>
     hydrateProductsData(draft)

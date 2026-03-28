@@ -1,7 +1,6 @@
 'use client';
 
 import {
-  Phone,
   Briefcase,
   Award,
   Check,
@@ -268,7 +267,6 @@ function MiniBar({
 
 interface ApplicationReviewProps {
   application: ApplicationWithRelations;
-  phone: string | null;
   email: string;
   skillsByCategory: SkillsByCategory[];
   supportTypes: SupportType[];
@@ -279,7 +277,6 @@ interface ApplicationReviewProps {
 
 export function ApplicationReview({
   application,
-  phone,
   email,
   skillsByCategory,
   supportTypes,
@@ -409,12 +406,11 @@ export function ApplicationReview({
       <div className="flex flex-col gap-9">
         {/* Profile */}
         <motion.div {...slideUp} {...staggerDelay(2)}>
-          <SectionLabel icon={Phone} colorKey="primary">
-            Contact &amp; Experience
+          <SectionLabel icon={Briefcase} colorKey="primary">
+            Experience
           </SectionLabel>
           <Card className="px-6 py-5">
             <div className="grid grid-cols-1 gap-x-8 gap-y-0.5 sm:grid-cols-2">
-              <DataRow label="Phone" value={phone ?? '—'} />
               <DataRow label="Year started" value={profile.yearStartedSalesforce ?? '—'} />
               <DataRow
                 label="Projects involved in"

@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
-import { usersRepository } from '@balo/db';
 import { loadDraftAction } from './_actions/load-draft';
 import { ExpertApplicationWizard } from './_components/expert-application-wizard';
 
@@ -29,15 +28,11 @@ export default async function ExpertApplyPage(): Promise<React.JSX.Element> {
     redirect('/dashboard');
   }
 
-  // Load user phone from DB (not in session)
-  const dbUser = await usersRepository.findById(user.id);
-  const phone = dbUser?.phone ?? null;
-
   return (
     <ExpertApplicationWizard
       draft={draft ?? null}
       referenceData={referenceData}
-      user={{ id: user.id, email: user.email, phone }}
+      user={{ id: user.id, email: user.email }}
     />
   );
 }

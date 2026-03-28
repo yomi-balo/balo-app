@@ -4,16 +4,6 @@ import { z } from 'zod';
 
 export const profileStepSchema = z
   .object({
-    phone: z
-      .string()
-      .min(6, 'Please enter a valid phone number')
-      .max(15, 'Phone number is too long')
-      .regex(/^\d+$/, 'Phone number must contain only digits'),
-    countryCode: z
-      .string()
-      .min(1, 'Country code is required')
-      .max(5, 'Invalid country code')
-      .regex(/^\+\d+$/, 'Country code must start with + followed by digits'),
     yearStartedSalesforce: z
       .number({ message: 'Select a valid value' })
       .int()

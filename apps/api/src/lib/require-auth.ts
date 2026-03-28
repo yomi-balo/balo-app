@@ -44,8 +44,12 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
   const token = header.slice(7);
 
   try {
-    const { jwtVerify } = await import('jose');
-    const { payload } = await jwtVerify(token, await getJwks());
+    type JoseModule = typeof import('jose');
+    const jose: JoseModule = await import('jose');
+    const { payload } = await jose.jwtVerify(
+      token,
+      (await getJwks()) as Parameters<JoseModule['jwtVerify']>[1]
+    );
     const sub = payload.sub;
     if (!sub) {
       return reply.status(401).send({ error: 'Unauthorized' });

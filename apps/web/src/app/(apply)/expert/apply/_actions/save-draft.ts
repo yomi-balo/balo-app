@@ -1,7 +1,7 @@
 'use server';
 import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
-import { expertsRepository, referenceDataRepository, usersRepository } from '@balo/db';
+import { expertsRepository, referenceDataRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { z } from 'zod';
 import {
@@ -80,9 +80,6 @@ export const saveDraftAction = withAuth(
             isSalesforceCta: data.isSalesforceCta,
             isCertifiedTrainer: data.isCertifiedTrainer,
           });
-          // Update phone on user record
-          const fullPhone = `${data.countryCode}${data.phone}`;
-          await usersRepository.update(session.user.id, { phone: fullPhone });
           // Sync junction tables
           await expertsRepository.syncLanguages(profileId, data.languages);
           await expertsRepository.syncIndustries(profileId, data.industryIds);

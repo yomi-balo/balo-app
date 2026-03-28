@@ -3,7 +3,7 @@
 import { useEffect, useCallback, useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, X, Phone, Briefcase, Globe, Award, Building2 } from 'lucide-react';
+import { Plus, X, Briefcase, Globe, Award, Building2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -40,19 +40,6 @@ import { ChipPicker } from './chip-picker';
 import { StepHeading, SectionLabel, slideUpVariant, stagger } from './design-system';
 
 // ── Data-driven config ───────────────────────────────────────────
-
-const COUNTRY_CODES = [
-  { value: '+61', label: '+61 Australia', flag: '🇦🇺' },
-  { value: '+1', label: '+1 USA', flag: '🇺🇸' },
-  { value: '+44', label: '+44 UK', flag: '🇬🇧' },
-  { value: '+91', label: '+91 India', flag: '🇮🇳' },
-  { value: '+65', label: '+65 Singapore', flag: '🇸🇬' },
-  { value: '+64', label: '+64 New Zealand', flag: '🇳🇿' },
-  { value: '+49', label: '+49 Germany', flag: '🇩🇪' },
-  { value: '+33', label: '+33 France', flag: '🇫🇷' },
-  { value: '+81', label: '+81 Japan', flag: '🇯🇵' },
-  { value: '+86', label: '+86 China', flag: '🇨🇳' },
-] as const;
 
 const PROJECT_COUNT_OPTIONS = [
   { value: '0', label: 'None' },
@@ -102,8 +89,6 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
   const form = useForm<ProfileStepData>({
     resolver: zodResolver(profileStepSchema),
     defaultValues: {
-      phone: profileData.phone ?? '',
-      countryCode: profileData.countryCode ?? '+61',
       yearStartedSalesforce: profileData.yearStartedSalesforce ?? undefined,
       projectCountMin: profileData.projectCountMin ?? undefined,
       projectLeadCountMin: profileData.projectLeadCountMin ?? undefined,
@@ -161,67 +146,11 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           />
         </div>
 
-        {/* Section 1: Contact Information */}
+        {/* Section 1: Salesforce Experience */}
         <motion.div
           initial={slideUpVariant.initial}
           animate={slideUpVariant.animate}
           transition={{ ...slideUpVariant.transition, ...stagger(0).transition }}
-          className="space-y-4"
-        >
-          <SectionLabel icon={Phone} color="primary">
-            Contact Information
-          </SectionLabel>
-          <div className="grid grid-cols-[140px_1fr] items-start gap-3">
-            <FormField
-              control={form.control}
-              name="countryCode"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Country</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Country" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {COUNTRY_CODES.map((cc) => (
-                        <SelectItem key={cc.value} value={cc.value}>
-                          {cc.flag} {cc.value}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="phone"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    Phone number <span className="text-destructive">*</span>
-                  </FormLabel>
-                  <FormControl>
-                    <Input placeholder="412 345 678" {...field} aria-required="true" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-          <p className="text-muted-foreground text-xs">
-            We&apos;ll only use this to contact you about your application.
-          </p>
-        </motion.div>
-
-        {/* Section 2: Salesforce Experience */}
-        <motion.div
-          initial={slideUpVariant.initial}
-          animate={slideUpVariant.animate}
-          transition={{ ...slideUpVariant.transition, ...stagger(1).transition }}
           className="space-y-4"
         >
           <SectionLabel icon={Briefcase} color="violet">
@@ -358,11 +287,11 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           </p>
         </motion.div>
 
-        {/* Section 3: Languages */}
+        {/* Section 2: Languages */}
         <motion.div
           initial={slideUpVariant.initial}
           animate={slideUpVariant.animate}
-          transition={{ ...slideUpVariant.transition, ...stagger(2).transition }}
+          transition={{ ...slideUpVariant.transition, ...stagger(1).transition }}
           className="space-y-3"
         >
           <div className="flex items-center justify-between">
@@ -491,11 +420,11 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           )}
         </motion.div>
 
-        {/* Section 4: Credentials */}
+        {/* Section 3: Credentials */}
         <motion.div
           initial={slideUpVariant.initial}
           animate={slideUpVariant.animate}
-          transition={{ ...slideUpVariant.transition, ...stagger(3).transition }}
+          transition={{ ...slideUpVariant.transition, ...stagger(2).transition }}
         >
           <div className="from-primary/[0.04] space-y-4 rounded-xl bg-gradient-to-br to-violet-600/[0.06] p-6 ring-1 ring-violet-200/40">
             <div>
@@ -530,11 +459,11 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
           </div>
         </motion.div>
 
-        {/* Section 5: Industries */}
+        {/* Section 4: Industries */}
         <motion.div
           initial={slideUpVariant.initial}
           animate={slideUpVariant.animate}
-          transition={{ ...slideUpVariant.transition, ...stagger(4).transition }}
+          transition={{ ...slideUpVariant.transition, ...stagger(3).transition }}
           className="space-y-3"
         >
           <div>
