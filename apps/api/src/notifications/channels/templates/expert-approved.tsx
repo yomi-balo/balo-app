@@ -9,39 +9,11 @@ import {
   SupportFooter,
 } from './shared.js';
 
-// ── Approved-specific styles ─────────────────────────────────────
-const styles = {
-  hero: {
-    ...shared.heroBase,
-    padding: '32px 40px 28px',
-  },
-  heroHeading: {
-    ...shared.heroHeadingBase,
-    fontSize: '24px',
-    margin: '0 0 8px',
-  } as const,
-  heroSubtext: {
-    ...shared.heroSubtext,
-    fontSize: '14px',
-  } as const,
-  statusPill: {
-    display: 'inline-block',
-    padding: '5px 14px',
-    borderRadius: '20px',
-    background: 'rgba(5, 150, 105, 0.2)',
-    border: '1px solid rgba(5, 150, 105, 0.35)',
-    fontSize: '12px',
-    fontWeight: '600',
-    color: '#6EE7B7',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase' as const,
-    marginBottom: '18px',
-  },
-  ctaButton: {
-    ...shared.ctaButton,
-    fontSize: '14px',
-    padding: '12px 28px',
-  } as const,
+const approvedPillStyle = {
+  ...shared.statusPillBase,
+  background: 'rgba(5, 150, 105, 0.2)',
+  border: '1px solid rgba(5, 150, 105, 0.35)',
+  color: '#6EE7B7',
 };
 
 // ── Template ─────────────────────────────────────────────────────
@@ -60,11 +32,11 @@ export function ExpertApprovedEmail({
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
       {/* ── Hero ── */}
-      <Section style={styles.hero}>
+      <Section style={shared.smallHero}>
         <LogoRow size="small" />
-        <StatusPill label="✓ Approved" style={styles.statusPill} />
-        <Heading style={styles.heroHeading}>You're in, {firstName}!</Heading>
-        <Text style={styles.heroSubtext}>
+        <StatusPill label="✓ Approved" style={approvedPillStyle} />
+        <Heading style={shared.smallHeroHeading}>You're in, {firstName}!</Heading>
+        <Text style={shared.smallHeroSubtext}>
           Your expert application has been approved. Welcome to the network.
         </Text>
       </Section>
@@ -91,9 +63,8 @@ export function ExpertApprovedEmail({
           headingColor={colors.success}
         />
 
-        {/* CTA */}
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
-          <Button style={styles.ctaButton} href={`${baseUrl}/expert/settings`}>
+          <Button style={shared.smallCtaButton} href={`${baseUrl}/expert/settings`}>
             Complete Your Profile →
           </Button>
         </Section>

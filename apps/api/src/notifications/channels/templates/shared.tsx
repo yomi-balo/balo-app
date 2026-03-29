@@ -94,6 +94,47 @@ export const shared = {
     margin: '0',
     lineHeight: '1.55',
   } as const,
+  // ── "Small" hero variant (used by status-pill templates) ──
+  smallHero: {
+    background: `linear-gradient(160deg, ${colors.heroTop} 0%, ${colors.heroBottom} 100%)`,
+    borderRadius: '16px 16px 0 0',
+    textAlign: 'center' as const,
+    padding: '32px 40px 28px',
+  },
+  smallHeroHeading: {
+    fontWeight: '700',
+    color: '#FFFFFF',
+    lineHeight: '1.3',
+    letterSpacing: '-0.3px',
+    fontSize: '24px',
+    margin: '0 0 8px',
+  } as const,
+  smallHeroSubtext: {
+    color: 'rgba(255,255,255,0.65)',
+    margin: '0',
+    lineHeight: '1.55',
+    fontSize: '14px',
+  } as const,
+  smallCtaButton: {
+    background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
+    borderRadius: '10px',
+    color: '#FFFFFF',
+    fontWeight: '650',
+    textDecoration: 'none',
+    display: 'inline-block',
+    fontSize: '14px',
+    padding: '12px 28px',
+  } as const,
+  statusPillBase: {
+    display: 'inline-block',
+    padding: '5px 14px',
+    borderRadius: '20px',
+    fontSize: '12px',
+    fontWeight: '600',
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase' as const,
+    marginBottom: '18px',
+  },
   divider: {
     borderColor: colors.border,
   },
@@ -161,7 +202,7 @@ interface LogoRowProps {
   readonly size?: 'default' | 'small';
 }
 
-/** Balo logo badge + text, centered. Uses a layout table (role=presentation). */
+/** Balo logo badge + text, centered. CSS inline-block layout (no table). */
 export function LogoRow({ size = 'default' }: LogoRowProps) {
   const isSmall = size === 'small';
   const badgeSize = isSmall ? '32px' : '36px';
@@ -169,46 +210,34 @@ export function LogoRow({ size = 'default' }: LogoRowProps) {
   return (
     <Row>
       <Column align="center">
-        <table
-          role="presentation"
-          cellPadding={0}
-          cellSpacing={0}
-          style={{ display: 'inline-table' }}
+        <div
+          style={{
+            display: 'inline-block',
+            width: badgeSize,
+            height: badgeSize,
+            borderRadius: isSmall ? '9px' : '10px',
+            background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
+            color: '#FFFFFF',
+            fontSize: isSmall ? '14px' : '16px',
+            fontWeight: '700',
+            lineHeight: badgeSize,
+            textAlign: 'center' as const,
+            verticalAlign: 'middle',
+          }}
         >
-          <tr>
-            <td>
-              <div
-                style={{
-                  display: 'inline-block',
-                  width: badgeSize,
-                  height: badgeSize,
-                  borderRadius: isSmall ? '9px' : '10px',
-                  background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
-                  color: '#FFFFFF',
-                  fontSize: isSmall ? '14px' : '16px',
-                  fontWeight: '700',
-                  lineHeight: badgeSize,
-                  textAlign: 'center' as const,
-                  verticalAlign: 'middle',
-                }}
-              >
-                B
-              </div>
-            </td>
-            <td style={{ paddingLeft: isSmall ? 9 : 10 }}>
-              <span
-                style={{
-                  fontSize: isSmall ? '18px' : '20px',
-                  fontWeight: '700',
-                  color: '#FFFFFF',
-                  verticalAlign: 'middle',
-                }}
-              >
-                Balo
-              </span>
-            </td>
-          </tr>
-        </table>
+          B
+        </div>
+        <span
+          style={{
+            fontSize: isSmall ? '18px' : '20px',
+            fontWeight: '700',
+            color: '#FFFFFF',
+            verticalAlign: 'middle',
+            paddingLeft: isSmall ? '9px' : '10px',
+          }}
+        >
+          Balo
+        </span>
       </Column>
     </Row>
   );

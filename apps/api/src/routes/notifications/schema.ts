@@ -1,21 +1,21 @@
 import { z } from 'zod';
 
 const userWelcomePayload = z.object({
-  correlationId: z.string().uuid(),
-  userId: z.string().uuid(),
+  correlationId: z.uuid(),
+  userId: z.uuid(),
   role: z.enum(['client', 'expert']),
 });
 
 const expertApplicationSubmittedPayload = z.object({
-  correlationId: z.string().uuid(),
-  userId: z.string().uuid(),
-  applicationId: z.string().uuid(),
+  correlationId: z.uuid(),
+  userId: z.uuid(),
+  applicationId: z.uuid(),
 });
 
 const expertApprovedPayload = z.object({
-  correlationId: z.string().uuid(),
-  userId: z.string().uuid(),
-  expertProfileId: z.string().uuid(),
+  correlationId: z.uuid(),
+  userId: z.uuid(),
+  expertProfileId: z.uuid(),
 });
 
 export const publishBodySchema = z.discriminatedUnion('event', [

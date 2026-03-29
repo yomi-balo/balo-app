@@ -11,40 +11,21 @@ import {
 } from './shared.js';
 
 // ── Application-submitted-specific styles ────────────────────────
-const styles = {
-  hero: {
-    ...shared.heroBase,
-    padding: '32px 40px 28px',
-  },
-  heroHeading: {
-    ...shared.heroHeadingBase,
-    fontSize: '24px',
-    margin: '0 0 8px',
-  } as const,
-  heroSubtext: {
-    ...shared.heroSubtext,
-    fontSize: '14px',
-  } as const,
-  statusPill: {
-    display: 'inline-block',
-    padding: '5px 14px',
-    borderRadius: '20px',
-    background: 'rgba(255,255,255,0.12)',
-    border: '1px solid rgba(255,255,255,0.2)',
-    fontSize: '12px',
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.85)',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase' as const,
-    marginBottom: '18px',
-  },
-  timelineWrapper: {
+const reviewPillStyle = {
+  ...shared.statusPillBase,
+  background: 'rgba(255,255,255,0.12)',
+  border: '1px solid rgba(255,255,255,0.2)',
+  color: 'rgba(255,255,255,0.85)',
+};
+
+const timelineStyles = {
+  wrapper: {
     margin: '28px 0',
     borderRadius: '12px',
     border: `1px solid ${colors.border}`,
     overflow: 'hidden' as const,
   },
-  timelineHeader: {
+  header: {
     padding: '12px 18px',
     background: colors.bg,
     borderBottom: `1px solid ${colors.border}`,
@@ -54,28 +35,23 @@ const styles = {
     textTransform: 'uppercase' as const,
     letterSpacing: '0.07em',
   },
-  timelineRow: {
+  row: {
     padding: '14px 18px',
     borderBottom: `1px solid ${colors.border}`,
     display: 'flex' as const,
     alignItems: 'flex-start',
     gap: '12px',
   },
-  timelineRowLast: {
+  rowLast: {
     padding: '14px 18px',
     display: 'flex' as const,
     alignItems: 'flex-start',
     gap: '12px',
   },
-  stepSub: {
+  sub: {
     fontSize: '12px',
     color: colors.textTertiary,
     margin: 0,
-  } as const,
-  ctaButton: {
-    ...shared.ctaButton,
-    fontSize: '14px',
-    padding: '12px 28px',
   } as const,
 };
 
@@ -99,7 +75,6 @@ function stepLabelStyle(active: boolean): CSSProperties {
   };
 }
 
-// ── Timeline steps data ───────────────────────────────────────────
 const TIMELINE_STEPS = [
   { label: 'Application submitted', sub: 'Done — we have your details', active: true, last: false },
   { label: 'Admin review', sub: 'Typically within 2–3 business days', active: false, last: false },
@@ -139,11 +114,11 @@ export function ApplicationSubmittedEmail({
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
       {/* ── Hero ── */}
-      <Section style={styles.hero}>
+      <Section style={shared.smallHero}>
         <LogoRow size="small" />
-        <StatusPill label="⏳ Under Review" style={styles.statusPill} />
-        <Heading style={styles.heroHeading}>Application received, {firstName}.</Heading>
-        <Text style={styles.heroSubtext}>We'll be in touch within 2–3 business days.</Text>
+        <StatusPill label="⏳ Under Review" style={reviewPillStyle} />
+        <Heading style={shared.smallHeroHeading}>Application received, {firstName}.</Heading>
+        <Text style={shared.smallHeroSubtext}>We'll be in touch within 2–3 business days.</Text>
       </Section>
 
       {/* ── Body card ── */}
@@ -155,14 +130,14 @@ export function ApplicationSubmittedEmail({
         </Text>
 
         {/* Timeline */}
-        <Section style={styles.timelineWrapper}>
-          <div style={styles.timelineHeader}>What to expect</div>
+        <Section style={timelineStyles.wrapper}>
+          <div style={timelineStyles.header}>What to expect</div>
           {TIMELINE_STEPS.map((step) => (
-            <div key={step.label} style={step.last ? styles.timelineRowLast : styles.timelineRow}>
+            <div key={step.label} style={step.last ? timelineStyles.rowLast : timelineStyles.row}>
               <div style={stepDotStyle(step.active)} />
               <div>
                 <p style={stepLabelStyle(step.active)}>{step.label}</p>
-                <p style={styles.stepSub}>{step.sub}</p>
+                <p style={timelineStyles.sub}>{step.sub}</p>
               </div>
             </div>
           ))}
@@ -177,9 +152,8 @@ export function ApplicationSubmittedEmail({
           headingColor={colors.accent}
         />
 
-        {/* CTA */}
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
-          <Button style={styles.ctaButton} href={`${baseUrl}/experts`}>
+          <Button style={shared.smallCtaButton} href={`${baseUrl}/experts`}>
             Browse Experts →
           </Button>
         </Section>
