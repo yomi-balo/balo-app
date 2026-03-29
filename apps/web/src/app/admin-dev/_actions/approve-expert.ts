@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { expertsRepository, usersRepository } from '@balo/db';
 import { getSession } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
+import { publishNotificationEvent } from '@/lib/notifications/publish';
 
 interface ApproveExpertResult {
   success: boolean;
@@ -47,6 +48,15 @@ export async function approveExpertAction(
     log.info('Expert application approved via admin-dev', {
       expertProfileId: profileParsed.data,
       userId: userParsed.data,
+    });
+
+    // Fire-and-forget — must not block the admin action
+    publishNotificationEvent('expert.approved', {
+      correlationId: profileParsed.data,
+      userId: userParsed.data,
+      expertProfileId: profileParsed.data,
+    }).catch(() => {
+      // publishNotificationEvent logs internally
     });
 
     revalidatePath('/admin-dev');

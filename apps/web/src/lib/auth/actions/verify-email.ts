@@ -8,6 +8,7 @@ import { usersRepository } from '@balo/db';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
 import { log } from '@/lib/logging';
+import { publishNotificationEvent } from '@/lib/notifications/publish';
 
 export type VerifyEmailInput = VerifyEmailFormData;
 
@@ -42,6 +43,7 @@ export async function verifyEmailAction(
 
     // 3. Check if user already exists (handles double-submit / retry race conditions)
     let existingUser = await usersRepository.findByWorkosId(workosUser.id);
+    let isNewUser = false;
 
     if (!existingUser) {
       // Create Balo user + personal workspace in a single transaction.
@@ -55,6 +57,7 @@ export async function verifyEmailAction(
         activeMode: 'client',
       });
       existingUser = created.user;
+      isNewUser = true;
     }
 
     // 4. Load company membership (always exists — created at signup or recovery above)
@@ -84,6 +87,17 @@ export async function verifyEmailAction(
     session.accessToken = authResponse.accessToken;
     session.refreshToken = authResponse.refreshToken;
     await session.save();
+
+    if (isNewUser) {
+      // Fire-and-forget — must not block the auth response
+      publishNotificationEvent('user.welcome', {
+        correlationId: user.id,
+        userId: user.id,
+        role: 'client',
+      }).catch(() => {
+        // publishNotificationEvent logs internally
+      });
+    }
 
     log.info('Email verification completed, user created', {
       userId: user.id,

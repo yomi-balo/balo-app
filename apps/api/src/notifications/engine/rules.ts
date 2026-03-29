@@ -34,6 +34,15 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'critical',
     },
   ],
+  'expert.approved': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'expert-approved',
+      timing: 'immediate',
+      priority: 'critical',
+    },
+  ],
   'booking.confirmed': [
     {
       channel: 'sms',

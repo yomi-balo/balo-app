@@ -88,6 +88,31 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('expert.approved', () => {
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.approved',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440000',
+          userId: '550e8400-e29b-41d4-a716-446655440001',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects missing expertProfileId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.approved',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440000',
+          userId: '550e8400-e29b-41d4-a716-446655440001',
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

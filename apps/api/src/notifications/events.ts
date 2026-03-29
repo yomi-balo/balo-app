@@ -12,9 +12,16 @@ export interface ExpertApplicationSubmittedPayload {
   applicationId: string;
 }
 
-export type NotificationEvent = 'user.welcome' | 'expert.application_submitted';
+export interface ExpertApprovedPayload {
+  correlationId: string; // expertProfileId
+  userId: string;
+  expertProfileId: string;
+}
+
+export type NotificationEvent = 'user.welcome' | 'expert.application_submitted' | 'expert.approved';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
+  'expert.approved': ExpertApprovedPayload;
 }

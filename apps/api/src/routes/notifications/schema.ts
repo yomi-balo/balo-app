@@ -12,12 +12,19 @@ const expertApplicationSubmittedPayload = z.object({
   applicationId: z.string().uuid(),
 });
 
+const expertApprovedPayload = z.object({
+  correlationId: z.string().uuid(),
+  userId: z.string().uuid(),
+  expertProfileId: z.string().uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
     event: z.literal('expert.application_submitted'),
     payload: expertApplicationSubmittedPayload,
   }),
+  z.object({ event: z.literal('expert.approved'), payload: expertApprovedPayload }),
 ]);
 
 export type PublishBody = z.infer<typeof publishBodySchema>;
