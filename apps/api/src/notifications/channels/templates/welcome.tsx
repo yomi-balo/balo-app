@@ -1,5 +1,5 @@
-import { Button, Heading, Hr, Link, Section, Text } from '@react-email/components';
-import { colors, shared, EmailShell, LogoRow } from './shared.js';
+import { Button, Heading, Section, Text } from '@react-email/components';
+import { colors, shared, EmailShell, LogoRow, SupportFooter } from './shared.js';
 
 // ── Welcome-specific styles ──────────────────────────────────────
 const styles = {
@@ -123,15 +123,7 @@ export function WelcomeEmail({
           </Button>
         </Section>
 
-        <Hr style={{ ...shared.divider, margin: '28px 0' }} />
-
-        <Text style={{ ...shared.bodyText, fontSize: '13px', margin: 0 }}>
-          Questions? Reply to this email or reach us at{' '}
-          <Link href="mailto:support@getbalo.com" style={{ color: colors.primary }}>
-            support@getbalo.com
-          </Link>
-          . We're happy to help.
-        </Text>
+        <SupportFooter prefix="Questions? We're happy to help." />
       </Section>
     </EmailShell>
   );

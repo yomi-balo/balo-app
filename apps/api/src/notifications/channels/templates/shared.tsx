@@ -3,6 +3,7 @@ import {
   Column,
   Container,
   Head,
+  Hr,
   Html,
   Link,
   Preview,
@@ -10,7 +11,7 @@ import {
   Section,
   Text,
 } from '@react-email/components';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 // ── Design Tokens ────────────────────────────────────────────────
 export const colors = {
@@ -136,7 +137,6 @@ export function EmailShell({ previewText, baseUrl, children }: EmailShellProps) 
         <Container style={shared.container}>
           {children}
 
-          {/* ── Footer ── */}
           <Section style={shared.footer}>
             <Text style={shared.footerText}>
               © {new Date().getFullYear()} Balo Technologies Pty Ltd · Melbourne, Australia
@@ -161,17 +161,20 @@ interface LogoRowProps {
   readonly size?: 'default' | 'small';
 }
 
-/** Balo logo badge + text, centered in a table row. */
+/** Balo logo badge + text, centered. Uses a layout table (role=presentation). */
 export function LogoRow({ size = 'default' }: LogoRowProps) {
-  const badgeSize = size === 'small' ? '32px' : '36px';
-  const fontSize = size === 'small' ? '14px' : '16px';
-  const textSize = size === 'small' ? '18px' : '20px';
-  const gap = size === 'small' ? 9 : 10;
+  const isSmall = size === 'small';
+  const badgeSize = isSmall ? '32px' : '36px';
 
   return (
     <Row>
       <Column align="center">
-        <table cellPadding={0} cellSpacing={0} style={{ display: 'inline-table' }}>
+        <table
+          role="presentation"
+          cellPadding={0}
+          cellSpacing={0}
+          style={{ display: 'inline-table' }}
+        >
           <tr>
             <td>
               <div
@@ -179,10 +182,10 @@ export function LogoRow({ size = 'default' }: LogoRowProps) {
                   display: 'inline-block',
                   width: badgeSize,
                   height: badgeSize,
-                  borderRadius: size === 'small' ? '9px' : '10px',
+                  borderRadius: isSmall ? '9px' : '10px',
                   background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
                   color: '#FFFFFF',
-                  fontSize,
+                  fontSize: isSmall ? '14px' : '16px',
                   fontWeight: '700',
                   lineHeight: badgeSize,
                   textAlign: 'center' as const,
@@ -192,10 +195,10 @@ export function LogoRow({ size = 'default' }: LogoRowProps) {
                 B
               </div>
             </td>
-            <td style={{ paddingLeft: gap }}>
+            <td style={{ paddingLeft: isSmall ? 9 : 10 }}>
               <span
                 style={{
-                  fontSize: textSize,
+                  fontSize: isSmall ? '18px' : '20px',
                   fontWeight: '700',
                   color: '#FFFFFF',
                   verticalAlign: 'middle',
@@ -208,5 +211,79 @@ export function LogoRow({ size = 'default' }: LogoRowProps) {
         </table>
       </Column>
     </Row>
+  );
+}
+
+interface StatusPillProps {
+  readonly label: string;
+  readonly style?: CSSProperties;
+}
+
+/** Pill badge rendered inside the hero section (e.g. "Under Review", "Approved"). */
+export function StatusPill({ label, style }: StatusPillProps) {
+  return (
+    <Row style={{ marginTop: '20px' }}>
+      <Column align="center">
+        <span style={style}>{label}</span>
+      </Column>
+    </Row>
+  );
+}
+
+interface CalloutProps {
+  readonly emoji: string;
+  readonly heading: string;
+  readonly text: string;
+  readonly bg: string;
+  readonly borderColor: string;
+  readonly headingColor: string;
+}
+
+/** Colored callout box with emoji heading and body text. */
+export function Callout({ emoji, heading, text, bg, borderColor, headingColor }: CalloutProps) {
+  return (
+    <Section
+      style={{
+        padding: '16px 18px',
+        borderRadius: '10px',
+        background: bg,
+        border: `1px solid ${borderColor}`,
+        margin: '24px 0',
+      }}
+    >
+      <p style={{ fontSize: '13px', fontWeight: '700', color: headingColor, margin: '0 0 5px' }}>
+        {emoji} {heading}
+      </p>
+      <p
+        style={{
+          fontSize: '13px',
+          color: colors.textSecondary,
+          margin: 0,
+          lineHeight: '1.55',
+        }}
+      >
+        {text}
+      </p>
+    </Section>
+  );
+}
+
+interface SupportFooterProps {
+  readonly prefix?: string;
+}
+
+/** "Questions? Reply to this email..." block with divider. Placed at the bottom of the card. */
+export function SupportFooter({ prefix = 'Questions?' }: SupportFooterProps) {
+  return (
+    <>
+      <Hr style={{ ...shared.divider, margin: '24px 0' }} />
+      <Text style={{ ...shared.bodyText, fontSize: '13px', margin: 0 }}>
+        {prefix} Reply to this email or reach us at{' '}
+        <Link href="mailto:support@getbalo.com" style={{ color: colors.primary }}>
+          support@getbalo.com
+        </Link>
+        .
+      </Text>
+    </>
   );
 }

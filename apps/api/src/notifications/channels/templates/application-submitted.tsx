@@ -1,6 +1,14 @@
-import { Button, Column, Heading, Hr, Link, Row, Section, Text } from '@react-email/components';
+import { Button, Heading, Section, Text } from '@react-email/components';
 import type { CSSProperties } from 'react';
-import { colors, shared, EmailShell, LogoRow } from './shared.js';
+import {
+  colors,
+  shared,
+  EmailShell,
+  LogoRow,
+  StatusPill,
+  Callout,
+  SupportFooter,
+} from './shared.js';
 
 // ── Application-submitted-specific styles ────────────────────────
 const styles = {
@@ -63,25 +71,6 @@ const styles = {
     fontSize: '12px',
     color: colors.textTertiary,
     margin: 0,
-  } as const,
-  callout: {
-    padding: '16px 18px',
-    borderRadius: '10px',
-    background: colors.accentLight,
-    border: `1px solid ${colors.accentBorder}`,
-    margin: '24px 0',
-  },
-  calloutHeading: {
-    fontSize: '13px',
-    fontWeight: '700',
-    color: colors.accent,
-    margin: '0 0 5px',
-  } as const,
-  calloutText: {
-    fontSize: '13px',
-    color: colors.textSecondary,
-    margin: 0,
-    lineHeight: '1.55',
   } as const,
   ctaButton: {
     ...shared.ctaButton,
@@ -152,13 +141,7 @@ export function ApplicationSubmittedEmail({
       {/* ── Hero ── */}
       <Section style={styles.hero}>
         <LogoRow size="small" />
-
-        <Row style={{ marginTop: '20px' }}>
-          <Column align="center">
-            <span style={styles.statusPill}>⏳ Under Review</span>
-          </Column>
-        </Row>
-
+        <StatusPill label="⏳ Under Review" style={styles.statusPill} />
         <Heading style={styles.heroHeading}>Application received, {firstName}.</Heading>
         <Text style={styles.heroSubtext}>We'll be in touch within 2–3 business days.</Text>
       </Section>
@@ -185,14 +168,14 @@ export function ApplicationSubmittedEmail({
           ))}
         </Section>
 
-        {/* Use as client callout */}
-        <Section style={styles.callout}>
-          <p style={styles.calloutHeading}>💡 While you wait</p>
-          <p style={styles.calloutText}>
-            Your Balo account is fully active. You can browse and book consultations with other
-            experts on the platform right now — no approval required.
-          </p>
-        </Section>
+        <Callout
+          emoji="💡"
+          heading="While you wait"
+          text="Your Balo account is fully active. You can browse and book consultations with other experts on the platform right now — no approval required."
+          bg={colors.accentLight}
+          borderColor={colors.accentBorder}
+          headingColor={colors.accent}
+        />
 
         {/* CTA */}
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
@@ -201,15 +184,7 @@ export function ApplicationSubmittedEmail({
           </Button>
         </Section>
 
-        <Hr style={{ ...shared.divider, margin: '24px 0' }} />
-
-        <Text style={{ ...shared.bodyText, fontSize: '13px', margin: 0 }}>
-          Questions about your application? Reply to this email or reach us at{' '}
-          <Link href="mailto:support@getbalo.com" style={{ color: colors.primary }}>
-            support@getbalo.com
-          </Link>
-          .
-        </Text>
+        <SupportFooter prefix="Questions about your application?" />
       </Section>
     </EmailShell>
   );

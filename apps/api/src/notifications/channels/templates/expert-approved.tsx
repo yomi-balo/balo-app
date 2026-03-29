@@ -1,5 +1,13 @@
-import { Button, Column, Heading, Hr, Link, Row, Section, Text } from '@react-email/components';
-import { colors, shared, EmailShell, LogoRow } from './shared.js';
+import { Button, Heading, Section, Text } from '@react-email/components';
+import {
+  colors,
+  shared,
+  EmailShell,
+  LogoRow,
+  StatusPill,
+  Callout,
+  SupportFooter,
+} from './shared.js';
 
 // ── Approved-specific styles ─────────────────────────────────────
 const styles = {
@@ -29,25 +37,6 @@ const styles = {
     textTransform: 'uppercase' as const,
     marginBottom: '18px',
   },
-  callout: {
-    padding: '16px 18px',
-    borderRadius: '10px',
-    background: colors.successLight,
-    border: `1px solid ${colors.successBorder}`,
-    margin: '24px 0',
-  },
-  calloutHeading: {
-    fontSize: '13px',
-    fontWeight: '700',
-    color: colors.success,
-    margin: '0 0 5px',
-  } as const,
-  calloutText: {
-    fontSize: '13px',
-    color: colors.textSecondary,
-    margin: 0,
-    lineHeight: '1.55',
-  } as const,
   ctaButton: {
     ...shared.ctaButton,
     fontSize: '14px',
@@ -73,13 +62,7 @@ export function ExpertApprovedEmail({
       {/* ── Hero ── */}
       <Section style={styles.hero}>
         <LogoRow size="small" />
-
-        <Row style={{ marginTop: '20px' }}>
-          <Column align="center">
-            <span style={styles.statusPill}>✓ Approved</span>
-          </Column>
-        </Row>
-
+        <StatusPill label="✓ Approved" style={styles.statusPill} />
         <Heading style={styles.heroHeading}>You're in, {firstName}!</Heading>
         <Text style={styles.heroSubtext}>
           Your expert application has been approved. Welcome to the network.
@@ -99,14 +82,14 @@ export function ExpertApprovedEmail({
           minutes.
         </Text>
 
-        {/* Next steps callout */}
-        <Section style={styles.callout}>
-          <p style={styles.calloutHeading}>🚀 Get started</p>
-          <p style={styles.calloutText}>
-            Complete your profile and you'll appear in the expert marketplace. Clients can then
-            browse your profile, book consultations, and request projects.
-          </p>
-        </Section>
+        <Callout
+          emoji="🚀"
+          heading="Get started"
+          text="Complete your profile and you'll appear in the expert marketplace. Clients can then browse your profile, book consultations, and request projects."
+          bg={colors.successLight}
+          borderColor={colors.successBorder}
+          headingColor={colors.success}
+        />
 
         {/* CTA */}
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
@@ -115,15 +98,7 @@ export function ExpertApprovedEmail({
           </Button>
         </Section>
 
-        <Hr style={{ ...shared.divider, margin: '24px 0' }} />
-
-        <Text style={{ ...shared.bodyText, fontSize: '13px', margin: 0 }}>
-          Questions? Reply to this email or reach us at{' '}
-          <Link href="mailto:support@getbalo.com" style={{ color: colors.primary }}>
-            support@getbalo.com
-          </Link>
-          .
-        </Text>
+        <SupportFooter />
       </Section>
     </EmailShell>
   );
