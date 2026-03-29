@@ -1,7 +1,18 @@
+/**
+ * DESIGN REFERENCE — email-application-submitted.jsx
+ * BAL-176 · Application confirmation email sent after expert submits application
+ *
+ * Implementation notes for CC:
+ * - This IS the implementation template. Copy to apps/api/src/notifications/templates/
+ * - Uses @react-email/components — already installed as part of BAL-175
+ * - Rendered via Brevo email adapter (not Resend)
+ * - Props: { firstName: string }
+ * - Event: expert.application_submitted
+ */
+
 import {
   Body,
   Button,
-  Column,
   Container,
   Head,
   Heading,
@@ -9,11 +20,11 @@ import {
   Html,
   Link,
   Preview,
-  Row,
   Section,
   Text,
+  Row,
+  Column,
 } from '@react-email/components';
-import type { CSSProperties } from 'react';
 
 // ── Design Tokens ────────────────────────────────────────────────
 const c = {
@@ -24,10 +35,17 @@ const c = {
   textSecondary: '#4B5563',
   textTertiary: '#9CA3AF',
   primary: '#2563EB',
+  primaryLight: '#EFF6FF',
+  primaryBorder: '#BFDBFE',
   accent: '#7C3AED',
   accentLight: '#F5F3FF',
   accentBorder: '#DDD6FE',
   success: '#059669',
+  successLight: '#ECFDF5',
+  successBorder: '#A7F3D0',
+  warning: '#D97706',
+  warningLight: '#FFFBEB',
+  warningBorder: '#FDE68A',
   heroTop: '#1B1A44',
   heroBottom: '#2D2A6E',
 };
@@ -39,17 +57,18 @@ const styles = {
     fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     margin: 0,
     padding: 0,
-  } as const,
+  },
   container: {
     maxWidth: '560px',
     margin: '0 auto',
     padding: '32px 16px 48px',
-  } as const,
+  },
+  // Hero — more restrained than welcome; conveys "in review" status
   hero: {
     background: `linear-gradient(160deg, ${c.heroTop} 0%, ${c.heroBottom} 100%)`,
     borderRadius: '16px 16px 0 0',
     padding: '32px 40px 28px',
-    textAlign: 'center' as const,
+    textAlign: 'center',
   },
   logoBadge: {
     display: 'inline-block',
@@ -61,7 +80,7 @@ const styles = {
     fontSize: '14px',
     fontWeight: '700',
     lineHeight: '32px',
-    textAlign: 'center' as const,
+    textAlign: 'center',
     marginRight: '9px',
     verticalAlign: 'middle',
   },
@@ -70,7 +89,8 @@ const styles = {
     fontWeight: '700',
     color: '#FFFFFF',
     verticalAlign: 'middle',
-  } as const,
+  },
+  // Status pill inside hero
   statusPill: {
     display: 'inline-block',
     padding: '5px 14px',
@@ -81,7 +101,7 @@ const styles = {
     fontWeight: '600',
     color: 'rgba(255,255,255,0.85)',
     letterSpacing: '0.04em',
-    textTransform: 'uppercase' as const,
+    textTransform: 'uppercase',
     marginBottom: '18px',
   },
   heroHeading: {
@@ -91,13 +111,14 @@ const styles = {
     margin: '0 0 8px',
     lineHeight: '1.3',
     letterSpacing: '-0.3px',
-  } as const,
+  },
   heroSubtext: {
     fontSize: '14px',
     color: 'rgba(255,255,255,0.65)',
     margin: '0',
     lineHeight: '1.55',
-  } as const,
+  },
+  // Body card
   card: {
     backgroundColor: c.surface,
     borderRadius: '0 0 16px 16px',
@@ -111,18 +132,19 @@ const styles = {
     fontWeight: '500',
     margin: '0 0 16px',
     lineHeight: '1.6',
-  } as const,
+  },
   bodyText: {
     fontSize: '15px',
     color: c.textSecondary,
     margin: '0 0 18px',
     lineHeight: '1.65',
-  } as const,
+  },
+  // Timeline steps
   timelineWrapper: {
     margin: '28px 0',
     borderRadius: '12px',
     border: `1px solid ${c.border}`,
-    overflow: 'hidden' as const,
+    overflow: 'hidden',
   },
   timelineHeader: {
     padding: '12px 18px',
@@ -131,27 +153,42 @@ const styles = {
     fontSize: '11px',
     fontWeight: '700',
     color: c.textTertiary,
-    textTransform: 'uppercase' as const,
+    textTransform: 'uppercase',
     letterSpacing: '0.07em',
   },
   timelineRow: {
     padding: '14px 18px',
     borderBottom: `1px solid ${c.border}`,
-    display: 'flex' as const,
+    display: 'flex',
     alignItems: 'flex-start',
     gap: '12px',
   },
   timelineRowLast: {
     padding: '14px 18px',
-    display: 'flex' as const,
+    display: 'flex',
     alignItems: 'flex-start',
     gap: '12px',
   },
+  stepDot: (active) => ({
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    background: active ? c.success : c.border,
+    flexShrink: 0,
+    marginTop: '5px',
+  }),
+  stepLabel: (active) => ({
+    fontSize: '13px',
+    fontWeight: '600',
+    color: active ? c.text : c.textTertiary,
+    margin: '0 0 2px',
+  }),
   stepSub: {
     fontSize: '12px',
     color: c.textTertiary,
     margin: 0,
-  } as const,
+  },
+  // "Use as client" callout
   callout: {
     padding: '16px 18px',
     borderRadius: '10px',
@@ -164,15 +201,16 @@ const styles = {
     fontWeight: '700',
     color: c.accent,
     margin: '0 0 5px',
-  } as const,
+  },
   calloutText: {
     fontSize: '13px',
     color: c.textSecondary,
     margin: 0,
     lineHeight: '1.55',
-  } as const,
+  },
+  // CTA
   ctaWrapper: {
-    textAlign: 'center' as const,
+    textAlign: 'center',
     margin: '24px 0 20px',
   },
   ctaButton: {
@@ -184,13 +222,13 @@ const styles = {
     padding: '12px 28px',
     textDecoration: 'none',
     display: 'inline-block',
-  } as const,
+  },
   divider: {
     borderColor: c.border,
     margin: '24px 0',
   },
   footer: {
-    textAlign: 'center' as const,
+    textAlign: 'center',
     padding: '0 16px',
     marginTop: '24px',
   },
@@ -199,58 +237,35 @@ const styles = {
     color: c.textTertiary,
     lineHeight: '1.6',
     margin: '0 0 8px',
-  } as const,
+  },
   footerLink: {
     color: c.textTertiary,
     textDecoration: 'underline',
   },
 };
 
-function stepDotStyle(active: boolean): CSSProperties {
-  return {
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
-    background: active ? c.success : c.border,
-    flexShrink: 0,
-    marginTop: '5px',
-  };
-}
-
-function stepLabelStyle(active: boolean): CSSProperties {
-  return {
-    fontSize: '13px',
-    fontWeight: '600',
-    color: active ? c.text : c.textTertiary,
-    margin: '0 0 2px',
-  };
-}
-
 // ── Timeline steps data ───────────────────────────────────────────
+// Step 1 is always complete (they just submitted)
 const TIMELINE_STEPS = [
   {
     label: 'Application submitted',
     sub: 'Done — we have your details',
     active: true,
-    last: false,
   },
   {
     label: 'Admin review',
     sub: 'Typically within 2–3 business days',
     active: false,
-    last: false,
   },
   {
     label: 'Interview',
     sub: 'A short call with our team to verify your expertise',
     active: false,
-    last: false,
   },
   {
     label: 'Decision & onboarding',
     sub: 'Approval email with next steps, or feedback if not approved',
     active: false,
-    last: false,
   },
   {
     label: 'Go live on the marketplace',
@@ -258,19 +273,11 @@ const TIMELINE_STEPS = [
     active: false,
     last: true,
   },
-] as const;
+];
 
 // ── Template ─────────────────────────────────────────────────────
 
-interface ApplicationSubmittedEmailProps {
-  readonly firstName: string;
-  readonly baseUrl: string;
-}
-
-export function ApplicationSubmittedEmail({
-  firstName = 'there',
-  baseUrl,
-}: Readonly<ApplicationSubmittedEmailProps>) {
+export function ApplicationSubmittedEmail({ firstName = 'there' }) {
   const previewText = `Application received, ${firstName}. Our team will review it within 2–3 business days.`;
 
   return (
@@ -286,6 +293,7 @@ export function ApplicationSubmittedEmail({
         <Container style={styles.container}>
           {/* ── Hero ── */}
           <Section style={styles.hero}>
+            {/* Logo */}
             <Row>
               <Column align="center">
                 <table cellPadding={0} cellSpacing={0} style={{ display: 'inline-table' }}>
@@ -301,6 +309,7 @@ export function ApplicationSubmittedEmail({
               </Column>
             </Row>
 
+            {/* Status pill */}
             <Row style={{ marginTop: '20px' }}>
               <Column align="center">
                 <span style={styles.statusPill}>⏳ Under Review</span>
@@ -322,14 +331,11 @@ export function ApplicationSubmittedEmail({
             {/* Timeline */}
             <Section style={styles.timelineWrapper}>
               <div style={styles.timelineHeader}>What to expect</div>
-              {TIMELINE_STEPS.map((step) => (
-                <div
-                  key={step.label}
-                  style={step.last ? styles.timelineRowLast : styles.timelineRow}
-                >
-                  <div style={stepDotStyle(step.active)} />
+              {TIMELINE_STEPS.map((step, i) => (
+                <div key={i} style={step.last ? styles.timelineRowLast : styles.timelineRow}>
+                  <div style={styles.stepDot(step.active)} />
                   <div>
-                    <p style={stepLabelStyle(step.active)}>{step.label}</p>
+                    <p style={styles.stepLabel(step.active)}>{step.label}</p>
                     <p style={styles.stepSub}>{step.sub}</p>
                   </div>
                 </div>
@@ -347,7 +353,7 @@ export function ApplicationSubmittedEmail({
 
             {/* CTA */}
             <Section style={styles.ctaWrapper}>
-              <Button style={styles.ctaButton} href={`${baseUrl}/experts`}>
+              <Button style={styles.ctaButton} href="https://balo.expert/experts">
                 Browse Experts →
               </Button>
             </Section>
@@ -369,11 +375,11 @@ export function ApplicationSubmittedEmail({
               © {new Date().getFullYear()} Balo Technologies Pty Ltd · Melbourne, Australia
             </Text>
             <Text style={styles.footerText}>
-              <Link href={`${baseUrl}/legal/privacy`} style={styles.footerLink}>
+              <Link href="https://balo.expert/legal/privacy" style={styles.footerLink}>
                 Privacy Policy
               </Link>
               {' · '}
-              <Link href={`${baseUrl}/legal/terms`} style={styles.footerLink}>
+              <Link href="https://balo.expert/legal/terms" style={styles.footerLink}>
                 Terms of Service
               </Link>
             </Text>
@@ -383,3 +389,5 @@ export function ApplicationSubmittedEmail({
     </Html>
   );
 }
+
+export default ApplicationSubmittedEmail;

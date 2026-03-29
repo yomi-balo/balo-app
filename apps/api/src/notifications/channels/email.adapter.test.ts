@@ -7,7 +7,7 @@ import { logNotification } from './log.js';
 describe('getEmailTemplate', () => {
   it('returns welcome template with correct subject', () => {
     const result = getEmailTemplate('welcome', { recipientName: 'Alice' });
-    expect(result.subject).toBe('Welcome to Balo');
+    expect(result.subject).toBe('Welcome to Balo, Alice!');
     expect(result.component).toBeDefined();
   });
 
@@ -15,13 +15,13 @@ describe('getEmailTemplate', () => {
     const result = getEmailTemplate('application-submitted', {
       recipientName: 'Bob',
     });
-    expect(result.subject).toBe('We received your application');
+    expect(result.subject).toBe('Application received, Bob.');
     expect(result.component).toBeDefined();
   });
 
   it('falls back to "there" when recipientName is missing', () => {
     const result = getEmailTemplate('welcome', {});
-    expect(result.subject).toBe('Welcome to Balo');
+    expect(result.subject).toBe('Welcome to Balo, there!');
     expect(result.component).toBeDefined();
   });
 

@@ -4,6 +4,7 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
 import { log } from '@/lib/logging';
+import { publishNotificationEvent } from '@/lib/notifications/publish';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,6 +139,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     const resolved = await resolveOrCreateUser(workosUser);
     await createSession(resolved, accessToken, refreshToken);
+
+    if (resolved.isNewUser) {
+      // Fire-and-forget — must not block the redirect
+      publishNotificationEvent('user.welcome', {
+        correlationId: resolved.user.id,
+        userId: resolved.user.id,
+        role: 'client', // New users always start as clients
+      }).catch(() => {
+        // publishNotificationEvent already logs internally
+      });
+    }
 
     log.info('OAuth callback succeeded', {
       userId: resolved.user.id,

@@ -70,7 +70,7 @@ describe('processEmailJob', () => {
     expect(mockSendTransacEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         htmlContent: '<html>rendered</html>',
-        subject: 'Welcome to Balo',
+        subject: 'Welcome to Balo, Alice!',
         to: [{ email: 'alice@example.com', name: 'Alice' }],
       })
     );

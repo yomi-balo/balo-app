@@ -1,13 +1,11 @@
-// Only events needed for BAL-175 -- add more as features ship
-
 export interface UserWelcomePayload {
-  correlationId: string; // userId
+  correlationId: string;
   userId: string;
   role: 'client' | 'expert';
 }
 
 export interface ExpertApplicationSubmittedPayload {
-  correlationId: string; // applicationId
+  correlationId: string;
   userId: string;
   applicationId: string;
 }

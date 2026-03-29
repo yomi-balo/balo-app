@@ -1,7 +1,18 @@
+/**
+ * DESIGN REFERENCE — email-welcome.jsx
+ * BAL-176 · Welcome email sent after new user signup
+ *
+ * Implementation notes for CC:
+ * - This IS the implementation template. Copy to apps/api/src/notifications/templates/
+ * - Uses @react-email/components — already installed as part of BAL-175
+ * - Rendered via Brevo email adapter (not Resend)
+ * - Props: { firstName: string; role: 'client' | 'expert' }
+ * - Event: user.welcome
+ */
+
 import {
   Body,
   Button,
-  Column,
   Container,
   Head,
   Heading,
@@ -9,15 +20,18 @@ import {
   Html,
   Link,
   Preview,
-  Row,
   Section,
   Text,
+  Row,
+  Column,
+  Img,
 } from '@react-email/components';
 
 // ── Design Tokens ────────────────────────────────────────────────
 const c = {
   bg: '#F8FAFB',
   surface: '#FFFFFF',
+  surfaceSubtle: '#F1F4F8',
   border: '#E0E4EB',
   text: '#111827',
   textSecondary: '#4B5563',
@@ -25,6 +39,9 @@ const c = {
   primary: '#2563EB',
   primaryLight: '#EFF6FF',
   primaryBorder: '#BFDBFE',
+  accent: '#7C3AED',
+  success: '#059669',
+  successLight: '#ECFDF5',
   heroTop: '#1B1A44',
   heroBottom: '#2D2A6E',
 };
@@ -36,17 +53,24 @@ const styles = {
     fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     margin: 0,
     padding: 0,
-  } as const,
+  },
   container: {
     maxWidth: '560px',
     margin: '0 auto',
     padding: '32px 16px 48px',
-  } as const,
+  },
+  // Hero header
   hero: {
     background: `linear-gradient(160deg, ${c.heroTop} 0%, ${c.heroBottom} 100%)`,
     borderRadius: '16px 16px 0 0',
     padding: '36px 40px 32px',
-    textAlign: 'center' as const,
+    textAlign: 'center',
+  },
+  logoRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: '28px',
   },
   logoBadge: {
     display: 'inline-block',
@@ -58,7 +82,7 @@ const styles = {
     fontSize: '16px',
     fontWeight: '700',
     lineHeight: '36px',
-    textAlign: 'center' as const,
+    textAlign: 'center',
     marginRight: '10px',
     verticalAlign: 'middle',
   },
@@ -67,7 +91,7 @@ const styles = {
     fontWeight: '700',
     color: '#FFFFFF',
     verticalAlign: 'middle',
-  } as const,
+  },
   heroHeading: {
     fontSize: '26px',
     fontWeight: '700',
@@ -75,13 +99,14 @@ const styles = {
     margin: '0 0 10px',
     lineHeight: '1.25',
     letterSpacing: '-0.3px',
-  } as const,
+  },
   heroSubtext: {
     fontSize: '15px',
     color: 'rgba(255,255,255,0.70)',
     margin: '0',
     lineHeight: '1.55',
-  } as const,
+  },
+  // Body card
   card: {
     backgroundColor: c.surface,
     borderRadius: '0 0 16px 16px',
@@ -95,13 +120,14 @@ const styles = {
     fontWeight: '500',
     margin: '0 0 16px',
     lineHeight: '1.6',
-  } as const,
+  },
   bodyText: {
     fontSize: '15px',
     color: c.textSecondary,
     margin: '0 0 20px',
     lineHeight: '1.65',
-  } as const,
+  },
+  // Value prop pills
   pillsRow: {
     margin: '28px 0',
   },
@@ -117,8 +143,9 @@ const styles = {
     marginRight: '8px',
     marginBottom: '8px',
   },
+  // CTA button
   ctaWrapper: {
-    textAlign: 'center' as const,
+    textAlign: 'center',
     margin: '32px 0 28px',
   },
   ctaButton: {
@@ -131,13 +158,14 @@ const styles = {
     textDecoration: 'none',
     display: 'inline-block',
     letterSpacing: '0.01em',
-  } as const,
+  },
   divider: {
     borderColor: c.border,
     margin: '28px 0',
   },
+  // Footer
   footer: {
-    textAlign: 'center' as const,
+    textAlign: 'center',
     padding: '0 16px',
     marginTop: '24px',
   },
@@ -146,7 +174,7 @@ const styles = {
     color: c.textTertiary,
     lineHeight: '1.6',
     margin: '0 0 8px',
-  } as const,
+  },
   footerLink: {
     color: c.textTertiary,
     textDecoration: 'underline',
@@ -155,27 +183,18 @@ const styles = {
 
 // ── Template ─────────────────────────────────────────────────────
 
-interface WelcomeEmailProps {
-  readonly firstName: string;
-  readonly role: 'client' | 'expert';
-  readonly baseUrl: string;
-}
-
-export function WelcomeEmail({
-  firstName = 'there',
-  role = 'client',
-  baseUrl,
-}: Readonly<WelcomeEmailProps>) {
+export function WelcomeEmail({ firstName = 'there', role = 'client' }) {
   const isExpert = role === 'expert';
 
   const ctaLabel = isExpert ? 'Complete Your Profile' : 'Find an Expert';
-  const ctaUrl = isExpert ? `${baseUrl}/onboarding` : `${baseUrl}/experts`;
+  const ctaUrl = isExpert ? 'https://balo.expert/onboarding' : 'https://balo.expert/experts';
 
   const previewText = `Welcome to Balo, ${firstName}! Projects, Quick Starts, and expert consultations — all in one place.`;
 
   return (
     <Html lang="en" dir="ltr">
       <Head>
+        {/* DM Sans via Google Fonts — falls back gracefully in email clients */}
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
         `}</style>
@@ -186,6 +205,7 @@ export function WelcomeEmail({
         <Container style={styles.container}>
           {/* ── Hero ── */}
           <Section style={styles.hero}>
+            {/* Logo */}
             <Row>
               <Column align="center">
                 <table cellPadding={0} cellSpacing={0} style={{ display: 'inline-table' }}>
@@ -201,6 +221,7 @@ export function WelcomeEmail({
               </Column>
             </Row>
 
+            {/* Heading */}
             <Heading style={styles.heroHeading}>
               {isExpert
                 ? `Welcome to the network, ${firstName}.`
@@ -243,12 +264,59 @@ export function WelcomeEmail({
               </>
             )}
 
-            {/* Value props — client only */}
+            {/* Value props */}
             {!isExpert && (
               <Section style={styles.pillsRow}>
-                <span style={styles.pill}>Projects</span>
-                <span style={styles.pill}>Quick Starts</span>
-                <span style={styles.pill}>Consultations</span>
+                <span style={styles.pill}>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={c.primary}
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ verticalAlign: 'middle', marginRight: 5 }}
+                  >
+                    <rect x="2" y="7" width="20" height="14" rx="2" />
+                    <path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16" />
+                  </svg>
+                  Projects
+                </span>
+                <span style={styles.pill}>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={c.primary}
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ verticalAlign: 'middle', marginRight: 5 }}
+                  >
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                  Quick Starts
+                </span>
+                <span style={styles.pill}>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={c.primary}
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ verticalAlign: 'middle', marginRight: 5 }}
+                  >
+                    <polygon points="23 7 16 12 23 17 23 7" />
+                    <rect x="1" y="5" width="15" height="14" rx="2" />
+                  </svg>
+                  Consultations
+                </span>
               </Section>
             )}
 
@@ -276,11 +344,11 @@ export function WelcomeEmail({
               © {new Date().getFullYear()} Balo Technologies Pty Ltd · Melbourne, Australia
             </Text>
             <Text style={styles.footerText}>
-              <Link href={`${baseUrl}/legal/privacy`} style={styles.footerLink}>
+              <Link href="https://balo.expert/legal/privacy" style={styles.footerLink}>
                 Privacy Policy
               </Link>
               {' · '}
-              <Link href={`${baseUrl}/legal/terms`} style={styles.footerLink}>
+              <Link href="https://balo.expert/legal/terms" style={styles.footerLink}>
                 Terms of Service
               </Link>
             </Text>
@@ -290,3 +358,6 @@ export function WelcomeEmail({
     </Html>
   );
 }
+
+// Named export for React Email preview renderer
+export default WelcomeEmail;

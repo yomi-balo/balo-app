@@ -17,6 +17,7 @@ describe('notificationEvents.publish', () => {
     const payload = {
       correlationId: 'user-123',
       userId: 'user-123',
+      role: 'client' as const,
     };
 
     await notificationEvents.publish('user.welcome', payload);
@@ -64,6 +65,7 @@ describe('notificationEvents.publish', () => {
     await notificationEvents.publish('user.welcome', {
       correlationId: 'user-1',
       userId: 'user-1',
+      role: 'client' as const,
     });
 
     const after = new Date().toISOString();

@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import * as Sentry from '@sentry/node';
+import { notificationsRoutes } from './routes/notifications/index.js';
 import { payoutsRoutes } from './routes/payouts/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
 
@@ -22,6 +23,7 @@ export async function buildApp(opts?: { logger?: boolean }) {
   });
 
   // Feature routes
+  await fastify.register(notificationsRoutes);
   await fastify.register(payoutsRoutes);
   await fastify.register(phoneRoutes);
 
