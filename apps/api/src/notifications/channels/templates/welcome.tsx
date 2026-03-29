@@ -1,106 +1,26 @@
-import {
-  Body,
-  Button,
-  Column,
-  Container,
-  Head,
-  Heading,
-  Hr,
-  Html,
-  Link,
-  Preview,
-  Row,
-  Section,
-  Text,
-} from '@react-email/components';
+import { Button, Heading, Hr, Link, Section, Text } from '@react-email/components';
+import { colors, shared, EmailShell, LogoRow } from './shared.js';
 
-// ── Design Tokens ────────────────────────────────────────────────
-const c = {
-  bg: '#F8FAFB',
-  surface: '#FFFFFF',
-  border: '#E0E4EB',
-  text: '#111827',
-  textSecondary: '#4B5563',
-  textTertiary: '#9CA3AF',
-  primary: '#2563EB',
-  primaryLight: '#EFF6FF',
-  primaryBorder: '#BFDBFE',
-  heroTop: '#1B1A44',
-  heroBottom: '#2D2A6E',
-};
-
-// ── Styles ───────────────────────────────────────────────────────
+// ── Welcome-specific styles ──────────────────────────────────────
 const styles = {
-  body: {
-    backgroundColor: c.bg,
-    fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    margin: 0,
-    padding: 0,
-  } as const,
-  container: {
-    maxWidth: '560px',
-    margin: '0 auto',
-    padding: '32px 16px 48px',
-  } as const,
   hero: {
-    background: `linear-gradient(160deg, ${c.heroTop} 0%, ${c.heroBottom} 100%)`,
-    borderRadius: '16px 16px 0 0',
+    ...shared.heroBase,
     padding: '36px 40px 32px',
-    textAlign: 'center' as const,
   },
-  logoBadge: {
-    display: 'inline-block',
-    width: '36px',
-    height: '36px',
-    borderRadius: '10px',
-    background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
-    color: '#FFFFFF',
-    fontSize: '16px',
-    fontWeight: '700',
-    lineHeight: '36px',
-    textAlign: 'center' as const,
-    marginRight: '10px',
-    verticalAlign: 'middle',
-  },
-  logoText: {
-    fontSize: '20px',
-    fontWeight: '700',
-    color: '#FFFFFF',
-    verticalAlign: 'middle',
-  } as const,
   heroHeading: {
+    ...shared.heroHeadingBase,
     fontSize: '26px',
-    fontWeight: '700',
-    color: '#FFFFFF',
     margin: '0 0 10px',
     lineHeight: '1.25',
-    letterSpacing: '-0.3px',
   } as const,
   heroSubtext: {
+    ...shared.heroSubtext,
     fontSize: '15px',
     color: 'rgba(255,255,255,0.70)',
-    margin: '0',
-    lineHeight: '1.55',
-  } as const,
-  card: {
-    backgroundColor: c.surface,
-    borderRadius: '0 0 16px 16px',
-    border: `1px solid ${c.border}`,
-    borderTop: 'none',
-    padding: '36px 40px 40px',
-  },
-  greeting: {
-    fontSize: '16px',
-    color: c.text,
-    fontWeight: '500',
-    margin: '0 0 16px',
-    lineHeight: '1.6',
   } as const,
   bodyText: {
-    fontSize: '15px',
-    color: c.textSecondary,
+    ...shared.bodyText,
     margin: '0 0 20px',
-    lineHeight: '1.65',
   } as const,
   pillsRow: {
     margin: '28px 0',
@@ -109,48 +29,20 @@ const styles = {
     display: 'inline-block',
     padding: '8px 14px',
     borderRadius: '8px',
-    backgroundColor: c.primaryLight,
-    border: `1px solid ${c.primaryBorder}`,
+    backgroundColor: colors.primaryLight,
+    border: `1px solid ${colors.primaryBorder}`,
     fontSize: '13px',
     fontWeight: '600',
-    color: c.primary,
+    color: colors.primary,
     marginRight: '8px',
     marginBottom: '8px',
   },
-  ctaWrapper: {
-    textAlign: 'center' as const,
-    margin: '32px 0 28px',
-  },
   ctaButton: {
-    background: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
-    borderRadius: '10px',
-    color: '#FFFFFF',
+    ...shared.ctaButton,
     fontSize: '15px',
-    fontWeight: '650',
     padding: '13px 32px',
-    textDecoration: 'none',
-    display: 'inline-block',
     letterSpacing: '0.01em',
   } as const,
-  divider: {
-    borderColor: c.border,
-    margin: '28px 0',
-  },
-  footer: {
-    textAlign: 'center' as const,
-    padding: '0 16px',
-    marginTop: '24px',
-  },
-  footerText: {
-    fontSize: '12px',
-    color: c.textTertiary,
-    lineHeight: '1.6',
-    margin: '0 0 8px',
-  } as const,
-  footerLink: {
-    color: c.textTertiary,
-    textDecoration: 'underline',
-  },
 };
 
 // ── Template ─────────────────────────────────────────────────────
@@ -167,126 +59,80 @@ export function WelcomeEmail({
   baseUrl,
 }: Readonly<WelcomeEmailProps>) {
   const isExpert = role === 'expert';
-
   const ctaLabel = isExpert ? 'Complete Your Profile' : 'Find an Expert';
   const ctaUrl = isExpert ? `${baseUrl}/onboarding` : `${baseUrl}/experts`;
-
   const previewText = `Welcome to Balo, ${firstName}! Projects, Quick Starts, and expert consultations — all in one place.`;
 
   return (
-    <Html lang="en" dir="ltr">
-      <Head>
-        <style>{`
-          @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-        `}</style>
-      </Head>
-      <Preview>{previewText}</Preview>
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      {/* ── Hero ── */}
+      <Section style={styles.hero}>
+        <LogoRow />
+        <Heading style={styles.heroHeading}>
+          {isExpert ? `Welcome to the network, ${firstName}.` : `Welcome to Balo, ${firstName}.`}
+        </Heading>
+        <Text style={styles.heroSubtext}>
+          {isExpert
+            ? "Your expert application is in. Let's get your profile ready."
+            : 'Projects, Quick Starts, and expert consultations — all in one place.'}
+        </Text>
+      </Section>
 
-      <Body style={styles.body}>
-        <Container style={styles.container}>
-          {/* ── Hero ── */}
-          <Section style={styles.hero}>
-            <Row>
-              <Column align="center">
-                <table cellPadding={0} cellSpacing={0} style={{ display: 'inline-table' }}>
-                  <tr>
-                    <td>
-                      <div style={styles.logoBadge}>B</div>
-                    </td>
-                    <td style={{ paddingLeft: 10 }}>
-                      <span style={styles.logoText}>Balo</span>
-                    </td>
-                  </tr>
-                </table>
-              </Column>
-            </Row>
+      {/* ── Body card ── */}
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>Hi {firstName},</Text>
 
-            <Heading style={styles.heroHeading}>
-              {isExpert
-                ? `Welcome to the network, ${firstName}.`
-                : `Welcome to Balo, ${firstName}.`}
-            </Heading>
-            <Text style={styles.heroSubtext}>
-              {isExpert
-                ? "Your expert application is in. Let's get your profile ready."
-                : 'Projects, Quick Starts, and expert consultations — all in one place.'}
+        {isExpert ? (
+          <>
+            <Text style={styles.bodyText}>
+              We've received your expert application and our team is reviewing it. In the meantime,
+              you can set up your profile so you're ready to go live the moment you're approved.
             </Text>
+            <Text style={styles.bodyText}>
+              Getting started takes about 5 minutes — add your photo, set your rate, connect your
+              calendar, and configure payouts.
+            </Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.bodyText}>
+              You now have access to Balo's network of vetted Salesforce specialists. Get a scoped
+              project delivered, pick up a packaged Quick Start, or jump on a live consultation —
+              whatever fits the problem.
+            </Text>
+            <Text style={styles.bodyText}>
+              No procurement overhead. No hourly minimums. Find the right expert and get moving in
+              minutes.
+            </Text>
+          </>
+        )}
+
+        {/* Value props — client only */}
+        {!isExpert && (
+          <Section style={styles.pillsRow}>
+            <span style={styles.pill}>Projects</span>
+            <span style={styles.pill}>Quick Starts</span>
+            <span style={styles.pill}>Consultations</span>
           </Section>
+        )}
 
-          {/* ── Body card ── */}
-          <Section style={styles.card}>
-            <Text style={styles.greeting}>Hi {firstName},</Text>
+        {/* CTA */}
+        <Section style={{ ...shared.ctaWrapper, margin: '32px 0 28px' }}>
+          <Button style={styles.ctaButton} href={ctaUrl}>
+            {ctaLabel} →
+          </Button>
+        </Section>
 
-            {isExpert ? (
-              <>
-                <Text style={styles.bodyText}>
-                  We've received your expert application and our team is reviewing it. In the
-                  meantime, you can set up your profile so you're ready to go live the moment you're
-                  approved.
-                </Text>
-                <Text style={styles.bodyText}>
-                  Getting started takes about 5 minutes — add your photo, set your rate, connect
-                  your calendar, and configure payouts.
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={styles.bodyText}>
-                  You now have access to Balo's network of vetted Salesforce specialists. Get a
-                  scoped project delivered, pick up a packaged Quick Start, or jump on a live
-                  consultation — whatever fits the problem.
-                </Text>
-                <Text style={styles.bodyText}>
-                  No procurement overhead. No hourly minimums. Find the right expert and get moving
-                  in minutes.
-                </Text>
-              </>
-            )}
+        <Hr style={{ ...shared.divider, margin: '28px 0' }} />
 
-            {/* Value props — client only */}
-            {!isExpert && (
-              <Section style={styles.pillsRow}>
-                <span style={styles.pill}>Projects</span>
-                <span style={styles.pill}>Quick Starts</span>
-                <span style={styles.pill}>Consultations</span>
-              </Section>
-            )}
-
-            {/* CTA */}
-            <Section style={styles.ctaWrapper}>
-              <Button style={styles.ctaButton} href={ctaUrl}>
-                {ctaLabel} →
-              </Button>
-            </Section>
-
-            <Hr style={styles.divider} />
-
-            <Text style={{ ...styles.bodyText, fontSize: '13px', margin: 0 }}>
-              Questions? Reply to this email or reach us at{' '}
-              <Link href="mailto:support@getbalo.com" style={{ color: c.primary }}>
-                support@getbalo.com
-              </Link>
-              . We're happy to help.
-            </Text>
-          </Section>
-
-          {/* ── Footer ── */}
-          <Section style={styles.footer}>
-            <Text style={styles.footerText}>
-              © {new Date().getFullYear()} Balo Technologies Pty Ltd · Melbourne, Australia
-            </Text>
-            <Text style={styles.footerText}>
-              <Link href={`${baseUrl}/legal/privacy`} style={styles.footerLink}>
-                Privacy Policy
-              </Link>
-              {' · '}
-              <Link href={`${baseUrl}/legal/terms`} style={styles.footerLink}>
-                Terms of Service
-              </Link>
-            </Text>
-          </Section>
-        </Container>
-      </Body>
-    </Html>
+        <Text style={{ ...shared.bodyText, fontSize: '13px', margin: 0 }}>
+          Questions? Reply to this email or reach us at{' '}
+          <Link href="mailto:support@getbalo.com" style={{ color: colors.primary }}>
+            support@getbalo.com
+          </Link>
+          . We're happy to help.
+        </Text>
+      </Section>
+    </EmailShell>
   );
 }
