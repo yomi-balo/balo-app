@@ -92,6 +92,23 @@ git diff origin/main...HEAD --name-only | grep "^packages/" | cut -d/ -f1-2 | so
 
 If a new package is missing from `sonar.sources` — add it. This is a CRITICAL failure on CI and easy to fix locally.
 
+**Check code duplication on new files (SonarQube enforces ≤ 3% on new code):**
+
+SonarQube will fail the quality gate if new code has more than 3% duplication. This is the most common unexpected CI failure for template-heavy or pattern-repeat work. Check proactively:
+
+```bash
+# List new/modified non-test source files in this branch
+git diff origin/main...HEAD --name-only | grep -E "\.(ts|tsx)$" | grep -v "\.test\.\|\.spec\.\|/test/"
+```
+
+For each cluster of new files in the same directory (e.g., multiple templates, multiple route handlers, multiple adapters):
+
+1. Read each file and look for repeated blocks: identical style objects, shared constants, duplicated layout/markup, copy-pasted helper functions
+2. If you find blocks of 10+ lines that are identical or near-identical across 2+ new files, **extract them into a shared module** before proceeding
+3. Common patterns that trigger this: email templates sharing design tokens/styles/layout, API route handlers sharing validation logic, adapter files sharing client setup
+
+This is a CRITICAL check — 30% duplication will fail the quality gate even if all other checks pass. Fix duplication by extracting shared code, not by inlining or removing it.
+
 **Check new source files have tests:**
 
 ```bash

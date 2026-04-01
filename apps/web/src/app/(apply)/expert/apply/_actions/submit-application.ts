@@ -3,6 +3,7 @@ import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
+import { publishNotificationEvent } from '@/lib/notifications/publish';
 
 interface SubmitResult {
   success: boolean;
@@ -107,12 +108,15 @@ export const submitApplicationAction = withAuth(
         workHistoryCount: application.workHistory.length,
       });
 
-      // 6. Publish domain event (notification engine)
-      // await notificationEvents.publish('application.submitted', {
-      //   expertProfileId,
-      //   userId: session.user.id,
-      //   email: session.user.email,
-      // });
+      // 6. Publish domain event (notification engine) — fire-and-forget
+      // Note: applicationId === expertProfileId because expert_profiles IS the application record
+      publishNotificationEvent('expert.application_submitted', {
+        correlationId: expertProfileId,
+        userId: session.user.id,
+        applicationId: expertProfileId, // expert_profiles table doubles as the application
+      }).catch(() => {
+        // publishNotificationEvent logs internally
+      });
 
       return { success: true };
     } catch (error) {

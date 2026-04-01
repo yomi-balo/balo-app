@@ -4,6 +4,7 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
 import { log } from '@/lib/logging';
+import { publishNotificationEvent } from '@/lib/notifications/publish';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,6 +139,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     const resolved = await resolveOrCreateUser(workosUser);
     await createSession(resolved, accessToken, refreshToken);
+
+    if (resolved.isNewUser) {
+      // role is always 'client' — experts sign up as clients first,
+      // then apply separately (see expert.application_submitted event).
+      // The 'expert' variant of WelcomeEmail is reserved for a future
+      // expert-specific signup flow.
+      publishNotificationEvent('user.welcome', {
+        correlationId: resolved.user.id,
+        userId: resolved.user.id,
+        role: 'client',
+      }).catch(() => {
+        // publishNotificationEvent already logs internally
+      });
+    }
 
     log.info('OAuth callback succeeded', {
       userId: resolved.user.id,

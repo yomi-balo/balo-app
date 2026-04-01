@@ -55,7 +55,7 @@ describe('dispatch', () => {
         payload: baseContext.payload,
       },
       expect.objectContaining({
-        jobId: 'welcome:user-456:corr-123',
+        jobId: 'welcome--user-456--corr-123',
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 },
       })

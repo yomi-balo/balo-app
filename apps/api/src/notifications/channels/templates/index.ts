@@ -1,6 +1,7 @@
 import React from 'react';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
+import { ExpertApprovedEmail } from './expert-approved.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -12,17 +13,27 @@ const BASE_URL = process.env.APP_URL ?? 'https://balo.expert';
 const templates: Record<string, (data: Record<string, unknown>) => TemplateOutput> = {
   welcome: (data) => ({
     component: React.createElement(WelcomeEmail, {
-      recipientName: (data.recipientName as string) ?? 'there',
+      firstName: (data.recipientName as string) ?? 'there',
+      role: (data.role as 'client' | 'expert') ?? 'client',
       baseUrl: BASE_URL,
     }),
-    subject: 'Welcome to Balo',
+    subject: `Welcome to Balo, ${(data.recipientName as string) ?? 'there'}!`,
   }),
 
   'application-submitted': (data) => ({
     component: React.createElement(ApplicationSubmittedEmail, {
-      recipientName: (data.recipientName as string) ?? 'there',
+      firstName: (data.recipientName as string) ?? 'there',
+      baseUrl: BASE_URL,
     }),
-    subject: 'We received your application',
+    subject: `Application received, ${(data.recipientName as string) ?? 'there'}.`,
+  }),
+
+  'expert-approved': (data) => ({
+    component: React.createElement(ExpertApprovedEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      baseUrl: BASE_URL,
+    }),
+    subject: `You're approved, ${(data.recipientName as string) ?? 'there'}!`,
   }),
 };
 

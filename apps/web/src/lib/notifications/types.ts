@@ -1,20 +1,20 @@
-// Canonical event type definitions — web-side mirror at apps/web/src/lib/notifications/types.ts
-// When adding/changing events here, update the web-side types to match
+// Must stay in sync with apps/api/src/notifications/events.ts
+// Kept separate to avoid cross-app import dependency (web → api)
 
 export interface UserWelcomePayload {
-  correlationId: string; // userId
+  correlationId: string;
   userId: string;
   role: 'client' | 'expert';
 }
 
 export interface ExpertApplicationSubmittedPayload {
-  correlationId: string; // applicationId
+  correlationId: string;
   userId: string;
   applicationId: string;
 }
 
 export interface ExpertApprovedPayload {
-  correlationId: string; // expertProfileId
+  correlationId: string;
   userId: string;
   expertProfileId: string;
 }

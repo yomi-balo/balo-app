@@ -17,6 +17,7 @@ describe('notificationEvents.publish', () => {
     const payload = {
       correlationId: 'user-123',
       userId: 'user-123',
+      role: 'client' as const,
     };
 
     await notificationEvents.publish('user.welcome', payload);
@@ -30,7 +31,7 @@ describe('notificationEvents.publish', () => {
         publishedAt: expect.any(String),
       }),
       expect.objectContaining({
-        jobId: 'user.welcome:user-123',
+        jobId: 'user.welcome--user-123',
         attempts: 3,
         backoff: { type: 'exponential', delay: 1000 },
       })
@@ -53,7 +54,7 @@ describe('notificationEvents.publish', () => {
         payload,
       }),
       expect.objectContaining({
-        jobId: 'expert.application_submitted:app-456',
+        jobId: 'expert.application_submitted--app-456',
       })
     );
   });
@@ -64,6 +65,7 @@ describe('notificationEvents.publish', () => {
     await notificationEvents.publish('user.welcome', {
       correlationId: 'user-1',
       userId: 'user-1',
+      role: 'client' as const,
     });
 
     const after = new Date().toISOString();
