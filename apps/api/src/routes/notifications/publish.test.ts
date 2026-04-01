@@ -157,4 +157,21 @@ describe('POST /notifications/publish', () => {
     expect(res.json()).toEqual({ published: true });
     expect(mockPublish).toHaveBeenCalledWith('expert.application_submitted', payload);
   });
+
+  it('returns 200 and publishes expert.approved event', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      userId: '550e8400-e29b-41d4-a716-446655440001',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+    };
+
+    const res = await inject(
+      { event: 'expert.approved', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ published: true });
+    expect(mockPublish).toHaveBeenCalledWith('expert.approved', payload);
+  });
 });

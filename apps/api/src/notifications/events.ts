@@ -1,4 +1,5 @@
-// Only events needed for BAL-175 -- add more as features ship
+// Canonical event type definitions — web-side mirror at apps/web/src/lib/notifications/types.ts
+// When adding/changing events here, update the web-side types to match
 
 export interface UserWelcomePayload {
   correlationId: string; // userId

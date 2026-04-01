@@ -109,10 +109,11 @@ export const submitApplicationAction = withAuth(
       });
 
       // 6. Publish domain event (notification engine) — fire-and-forget
+      // Note: applicationId === expertProfileId because expert_profiles IS the application record
       publishNotificationEvent('expert.application_submitted', {
         correlationId: expertProfileId,
         userId: session.user.id,
-        applicationId: expertProfileId,
+        applicationId: expertProfileId, // expert_profiles table doubles as the application
       }).catch(() => {
         // publishNotificationEvent logs internally
       });

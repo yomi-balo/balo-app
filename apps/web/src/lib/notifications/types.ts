@@ -1,3 +1,6 @@
+// Must stay in sync with apps/api/src/notifications/events.ts
+// Kept separate to avoid cross-app import dependency (web → api)
+
 export interface UserWelcomePayload {
   correlationId: string;
   userId: string;

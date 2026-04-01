@@ -3,8 +3,14 @@ import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import type { NotificationEvent, EventPayloadMap } from './types';
 
-const getApiUrl = (): string =>
-  process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
+function getApiUrl(): string {
+  const url = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
+  if (!url) {
+    log.warn('API_URL not configured — falling back to localhost:3002');
+    return 'http://localhost:3002';
+  }
+  return url;
+}
 
 /**
  * Publish a notification event from apps/web to the notification engine
