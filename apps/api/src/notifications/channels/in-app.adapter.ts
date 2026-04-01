@@ -1,5 +1,5 @@
 import { Worker, type Job } from 'bullmq';
-import { createRequire } from 'node:module';
+import { userNotificationsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, NOTIFICATION_SERVER_EVENTS } from '@balo/analytics/server';
 import { createRedisConnection } from '../../lib/redis.js';
@@ -21,8 +21,6 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
 
   // 2. Write to user_notifications table
   try {
-    const { userNotificationsRepository } = createRequire(import.meta.url)('@balo/db');
-
     await userNotificationsRepository.insert({
       userId: payload.recipientId,
       event: payload.event,

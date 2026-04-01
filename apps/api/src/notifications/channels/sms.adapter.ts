@@ -1,5 +1,5 @@
 import { Worker, type Job } from 'bullmq';
-import { createRequire } from 'node:module';
+import { usersRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, NOTIFICATION_SERVER_EVENTS } from '@balo/analytics/server';
 import { createRedisConnection } from '../../lib/redis.js';
@@ -15,7 +15,6 @@ const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 /** Exported for testability — called by the BullMQ worker. */
 export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
   const payload = job.data;
-  const { usersRepository } = createRequire(import.meta.url)('@balo/db');
 
   // 1. Resolve recipient phone
   const user = await usersRepository.findById(payload.recipientId);

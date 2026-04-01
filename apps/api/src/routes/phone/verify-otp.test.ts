@@ -45,17 +45,10 @@ vi.mock('@balo/shared/logging', () => ({
   }),
 }));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => (mod: string) => {
-    if (mod === '@balo/db') {
-      return {
-        usersRepository: {
-          setPhoneVerified: mockSetPhoneVerified,
-        },
-      };
-    }
-    return {};
-  }),
+vi.mock('@balo/db', () => ({
+  usersRepository: {
+    setPhoneVerified: mockSetPhoneVerified,
+  },
 }));
 
 vi.mock('@sentry/node', () => ({

@@ -9,9 +9,7 @@ vi.mock('@balo/shared/logging', () => ({
   }),
 }));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({})),
-}));
+vi.mock('@balo/db', () => ({}));
 
 import { buildApp } from '../app.js';
 import { FastifyInstance } from 'fastify';

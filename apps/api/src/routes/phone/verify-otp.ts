@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { createRequire } from 'node:module';
+import { usersRepository } from '@balo/db';
 import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '@balo/shared/logging';
 import { getRedis } from '../../lib/redis.js';
@@ -77,7 +77,6 @@ export async function verifyOtpRoute(fastify: FastifyInstance): Promise<void> {
     await redis.del(otpKey, sendCountKey);
 
     // Write to DB
-    const { usersRepository } = createRequire(import.meta.url)('@balo/db');
     await usersRepository.setPhoneVerified(userId, phone, new Date());
 
     log.info({ userId, phone: masked }, 'Phone verified');

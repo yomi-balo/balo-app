@@ -1,6 +1,5 @@
 import { Worker, type Job } from 'bullmq';
-import { createRequire } from 'node:module';
-import type { EntityType } from '@balo/db';
+import { payoutsRepository, type EntityType } from '@balo/db';
 
 import { createRedisConnection } from '../lib/redis.js';
 import { reconstructFormValues, registerBeneficiary } from '../services/airwallex/beneficiary.js';
@@ -21,9 +20,6 @@ export function startVerifyBeneficiaryWorker(): Worker<VerifyBeneficiaryJobData>
   const worker = new Worker<VerifyBeneficiaryJobData>(
     VERIFY_BENEFICIARY_QUEUE,
     async (job: Job<VerifyBeneficiaryJobData>) => {
-      // Lazy require — @balo/db is CJS; top-level createRequire breaks Vitest transforms
-      const { payoutsRepository } = createRequire(import.meta.url)('@balo/db');
-
       const { expertProfileId, expertName } = job.data;
 
       // Fetch current payout details from DB

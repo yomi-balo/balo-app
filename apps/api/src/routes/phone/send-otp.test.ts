@@ -59,9 +59,7 @@ vi.mock('@balo/shared/logging', () => ({
   }),
 }));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({})),
-}));
+vi.mock('@balo/db', () => ({}));
 
 vi.mock('@sentry/node', () => ({
   captureException: vi.fn(),

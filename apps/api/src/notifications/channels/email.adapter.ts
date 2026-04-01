@@ -1,5 +1,5 @@
 import { Worker, type Job } from 'bullmq';
-import { createRequire } from 'node:module';
+import { usersRepository } from '@balo/db';
 import { render } from '@react-email/render';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../../lib/redis.js';
@@ -34,7 +34,6 @@ async function getBrevoClient(): Promise<BrevoEmailClient> {
 /** Exported for testability — called by the BullMQ worker. */
 export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> {
   const payload = job.data;
-  const { usersRepository } = createRequire(import.meta.url)('@balo/db');
 
   // 1. Resolve recipient email
   const user = await usersRepository.findById(payload.recipientId);
