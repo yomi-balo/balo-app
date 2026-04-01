@@ -36,6 +36,15 @@ vi.mock('../../lib/require-auth.js', () => ({
   },
 }));
 
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 vi.mock('node:module', () => ({
   createRequire: vi.fn(() => (mod: string) => {
     if (mod === '@balo/db') {
@@ -45,15 +54,7 @@ vi.mock('node:module', () => ({
         },
       };
     }
-    // Default: logging
-    return {
-      createLogger: () => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      }),
-    };
+    return {};
   }),
 }));
 
