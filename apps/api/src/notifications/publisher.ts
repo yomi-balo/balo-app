@@ -12,7 +12,7 @@ export const notificationEvents = {
         publishedAt: new Date().toISOString(),
       },
       {
-        jobId: `${event}:${payload.correlationId}`,
+        jobId: `${event}--${payload.correlationId}`,
         attempts: 3,
         backoff: { type: 'exponential', delay: 1000 },
       }

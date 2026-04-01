@@ -40,7 +40,7 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
   // 4. Route to the correct channel queue with deterministic job ID for dedup
   const queueName = CHANNEL_QUEUES[rule.channel];
   const channelQueue = getQueue(queueName);
-  const jobId = `${rule.template}:${recipientId}:${context.payload.correlationId}`;
+  const jobId = `${rule.template}--${recipientId}--${context.payload.correlationId}`;
 
   await channelQueue.add(rule.template, deliveryPayload, {
     jobId,

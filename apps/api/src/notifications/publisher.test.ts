@@ -31,7 +31,7 @@ describe('notificationEvents.publish', () => {
         publishedAt: expect.any(String),
       }),
       expect.objectContaining({
-        jobId: 'user.welcome:user-123',
+        jobId: 'user.welcome--user-123',
         attempts: 3,
         backoff: { type: 'exponential', delay: 1000 },
       })
@@ -54,7 +54,7 @@ describe('notificationEvents.publish', () => {
         payload,
       }),
       expect.objectContaining({
-        jobId: 'expert.application_submitted:app-456',
+        jobId: 'expert.application_submitted--app-456',
       })
     );
   });
