@@ -141,11 +141,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     await createSession(resolved, accessToken, refreshToken);
 
     if (resolved.isNewUser) {
-      // Fire-and-forget — must not block the redirect
+      // role is always 'client' — experts sign up as clients first,
+      // then apply separately (see expert.application_submitted event).
+      // The 'expert' variant of WelcomeEmail is reserved for a future
+      // expert-specific signup flow.
       publishNotificationEvent('user.welcome', {
         correlationId: resolved.user.id,
         userId: resolved.user.id,
-        role: 'client', // New users always start as clients
+        role: 'client',
       }).catch(() => {
         // publishNotificationEvent already logs internally
       });

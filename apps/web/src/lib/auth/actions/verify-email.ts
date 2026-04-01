@@ -89,7 +89,10 @@ export async function verifyEmailAction(
     await session.save();
 
     if (isNewUser) {
-      // Fire-and-forget — must not block the auth response
+      // role is always 'client' — experts sign up as clients first,
+      // then apply separately (see expert.application_submitted event).
+      // The 'expert' variant of WelcomeEmail is reserved for a future
+      // expert-specific signup flow.
       publishNotificationEvent('user.welcome', {
         correlationId: user.id,
         userId: user.id,
