@@ -1,10 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { createRequire } from 'node:module';
+import { createLogger } from '@balo/shared/logging';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
-// @balo/shared is CJS; static ESM import fails under tsx — use createRequire
-const require = createRequire(import.meta.url);
-const { createLogger } = require('@balo/shared/logging');
 const log = createLogger('require-auth');
 
 declare module 'fastify' {

@@ -1,18 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
-// phone routes use createRequire(import.meta.url)('@balo/shared/logging') which
-// tries to load a CJS package that vitest cannot parse. Mock node:module so the
-// module graph resolves cleanly in the test environment.
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({
-    createLogger: () => ({
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    }),
-  })),
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
 }));
+
+vi.mock('@balo/db', () => ({}));
 
 import { buildApp } from '../app.js';
 import { FastifyInstance } from 'fastify';

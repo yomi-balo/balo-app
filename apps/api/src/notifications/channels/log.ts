@@ -1,4 +1,4 @@
-import { createRequire } from 'node:module';
+import { notificationLogRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import type { NotificationChannel } from '../engine/rules.js';
 import type { DeliveryPayload } from './types.js';
@@ -13,8 +13,6 @@ export async function logNotification(
   metadata?: Record<string, unknown>
 ): Promise<void> {
   try {
-    const { notificationLogRepository } = createRequire(import.meta.url)('@balo/db');
-
     await notificationLogRepository.insert({
       event: payload.event,
       correlationId: payload.payload.correlationId as string,

@@ -34,12 +34,12 @@ describe('getEmailTemplate', () => {
 
 // -- Test logNotification ----------------------------------------------------
 
-const mockInsert = vi.fn().mockResolvedValue({});
+const { mockInsert } = vi.hoisted(() => ({
+  mockInsert: vi.fn().mockResolvedValue({}),
+}));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({
-    notificationLogRepository: { insert: mockInsert },
-  })),
+vi.mock('@balo/db', () => ({
+  notificationLogRepository: { insert: mockInsert },
 }));
 
 vi.mock('@balo/shared/logging', () => ({

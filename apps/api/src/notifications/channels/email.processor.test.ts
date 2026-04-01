@@ -3,15 +3,15 @@ import type { Job } from 'bullmq';
 import type { DeliveryPayload } from './types.js';
 
 // Mock dependencies
-const mockFindById = vi.fn();
-const mockInsert = vi.fn().mockResolvedValue({});
-const mockSendTransacEmail = vi.fn().mockResolvedValue({ messageId: 'brevo-msg-1' });
+const { mockFindById, mockInsert, mockSendTransacEmail } = vi.hoisted(() => ({
+  mockFindById: vi.fn(),
+  mockInsert: vi.fn().mockResolvedValue({}),
+  mockSendTransacEmail: vi.fn().mockResolvedValue({ messageId: 'brevo-msg-1' }),
+}));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({
-    usersRepository: { findById: mockFindById },
-    notificationLogRepository: { insert: mockInsert },
-  })),
+vi.mock('@balo/db', () => ({
+  usersRepository: { findById: mockFindById },
+  notificationLogRepository: { insert: mockInsert },
 }));
 
 vi.mock('@react-email/render', () => ({

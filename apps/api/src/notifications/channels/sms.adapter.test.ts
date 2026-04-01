@@ -4,12 +4,12 @@ import type { DeliveryPayload } from './types.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-const mockFindById = vi.fn();
+const { mockFindById } = vi.hoisted(() => ({
+  mockFindById: vi.fn(),
+}));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({
-    usersRepository: { findById: mockFindById },
-  })),
+vi.mock('@balo/db', () => ({
+  usersRepository: { findById: mockFindById },
 }));
 
 vi.mock('@balo/shared/logging', () => ({

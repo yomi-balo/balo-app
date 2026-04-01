@@ -36,25 +36,19 @@ vi.mock('../../lib/require-auth.js', () => ({
   },
 }));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => (mod: string) => {
-    if (mod === '@balo/db') {
-      return {
-        usersRepository: {
-          setPhoneVerified: mockSetPhoneVerified,
-        },
-      };
-    }
-    // Default: logging
-    return {
-      createLogger: () => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      }),
-    };
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   }),
+}));
+
+vi.mock('@balo/db', () => ({
+  usersRepository: {
+    setPhoneVerified: mockSetPhoneVerified,
+  },
 }));
 
 vi.mock('@sentry/node', () => ({

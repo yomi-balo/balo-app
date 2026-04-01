@@ -4,12 +4,12 @@ import type { DeliveryPayload } from './types.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-const mockInsert = vi.fn().mockResolvedValue({ id: 'notif-1' });
+const { mockInsert } = vi.hoisted(() => ({
+  mockInsert: vi.fn().mockResolvedValue({ id: 'notif-1' }),
+}));
 
-vi.mock('node:module', () => ({
-  createRequire: vi.fn(() => () => ({
-    userNotificationsRepository: { insert: mockInsert },
-  })),
+vi.mock('@balo/db', () => ({
+  userNotificationsRepository: { insert: mockInsert },
 }));
 
 vi.mock('@balo/shared/logging', () => ({

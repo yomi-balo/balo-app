@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { createRequire } from 'node:module';
-import type { EntityType } from '@balo/db';
+import { payoutsRepository, type EntityType } from '@balo/db';
 
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { getQueue } from '../../lib/queue.js';
@@ -29,9 +28,6 @@ export async function beneficiaryRoute(fastify: FastifyInstance): Promise<void> 
     '/api/payouts/beneficiary',
     { preHandler: [requireInternalAuth] },
     async (request, reply) => {
-      // Lazy require — @balo/db is CJS; top-level createRequire breaks Vitest transforms
-      const { payoutsRepository } = createRequire(import.meta.url)('@balo/db');
-
       const parsed = bodySchema.safeParse(request.body);
 
       if (!parsed.success) {
