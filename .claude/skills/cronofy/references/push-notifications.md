@@ -156,9 +156,33 @@ async function calculateEarliestAvailable(expertId: string): Promise<Date | null
 
 ---
 
+## Notification Types — All-or-Nothing
+
+You cannot subscribe to a subset of notification types. Once a channel is created, you receive all of:
+
+| `notification.type` | Meaning |
+|---|---|
+| `verification` | Sent immediately on channel creation — respond 200 and return |
+| `change` | Calendar events changed — enqueue cache rebuild |
+| `profile_disconnected` | Expert revoked Cronofy's access from their Google/Outlook settings — mark `status = 'auth_error'` |
+| `profile_connected` | Calendar profile re-connected |
+
+Filter by `notification.type` in the webhook handler. The handler above already covers `change` and `verification`; add a `profile_disconnected` branch to mark the connection as broken.
+
 ## Verification Ping
 
 When a channel is first created, Cronofy sends a verification ping with `notification.type === 'verification'`. The handler above already handles this — respond 200 and return.
+
+## Testing Push Notifications
+
+Trigger test notifications from the Cronofy dashboard without waiting for real calendar activity:
+
+1. Cronofy dashboard → Developer → Applications → your app
+2. Channels tab
+3. Search by account ID (the expert's Cronofy `sub`)
+4. Click "Send test notification"
+
+Use this to validate your webhook handler during development.
 
 ---
 
