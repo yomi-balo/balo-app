@@ -196,6 +196,7 @@ Hard-won knowledge from actual Cronofy support tickets (Jan–Nov 2025). Read be
 When a user completes OAuth but doesn't grant all required scopes, Cronofy enters `initial_sync_pending` state and returns no calendars.
 
 **Symptoms:**
+
 - `userinfo.profiles[0].profile_initial_sync_required === true`
 - No calendars in userinfo output
 - Cronofy telemetry shows `403 Request had insufficient authentication scopes`
@@ -215,6 +216,8 @@ Cronofy uses a browser cookie to merge multiple calendar authorizations made in 
 **Always** include `avoid_linking: true` in `generateAuthorizationUrl`. See `references/oauth.md`.
 
 **If calendars are accidentally merged:** Only Cronofy support can separate them — there is no API for this. Email support@cronofy.com.
+
+**Note:** Cronofy has already enabled Authorization Linking (alpha) for Balo's application. If deterministic linking is ever needed instead of `avoid_linking`, the capability is available without contacting support.
 
 See [same-account-id FAQ](https://docs.cronofy.com/developers/faqs/same-account-id/) for how Cronofy's cookie-based linking works, and [Authorization Linking (alpha)](https://docs.cronofy.com/developers/api-alpha/explicit-linking/) for the deterministic alternative.
 
@@ -253,7 +256,7 @@ const { slots } = await cronofyApp.availability({
   participants: [
     {
       required: 1, // At least 1 expert must be free
-      members: expertSubs.map(sub => ({ sub, managed_availability: true })),
+      members: expertSubs.map((sub) => ({ sub, managed_availability: true })),
     },
   ],
   required_duration: { minutes: 30 },
@@ -266,14 +269,18 @@ This is the correct pattern for the expert search/filter feature. Default rate l
 ### G10. GDPR Deletion Requires Emailing Cronofy Support
 
 `revokeAuthorization` does not delete the user's data from Cronofy. See [Cronofy data management policy](https://docs.cronofy.com/policies/data-management/). For a full GDPR deletion:
+
 1. Revoke the user's authorization via API
 2. Email support@cronofy.com with the user's email and request permanent data deletion
 
 Cronofy support will delete the account and all associated data. **Store `cronofySub` in Balo's DB even after an expert is soft-deleted**, so you can reference it in deletion requests.
 
+**Alternative:** If the user also removes Cronofy's access from their calendar provider (e.g. revokes in Google account settings), Cronofy's [data retention policies](https://docs.cronofy.com/policies/data-management/) will auto-remove their data — no support email needed.
+
 ### G11. Office 365 — IT Admin Approval Required for First User
 
 When an expert with a work/school O365 account connects via Individual Connect:
+
 - The **first user** from their organization will see a Microsoft Entra "admin approval required" screen
 - An IT admin must approve the Cronofy Entra app for their tenant once
 - After that, all users on that domain connect without admin intervention

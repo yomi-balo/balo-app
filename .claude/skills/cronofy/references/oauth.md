@@ -122,10 +122,12 @@ export async function handleCronofyCallback(code: string, state: string): Promis
 
   if (profile?.profile_initial_sync_required) {
     // Connection incomplete — mark as sync_pending, do NOT treat as fully connected.
-    // Frontend should surface the profile relink URL to prompt the expert to re-authorize.
+    // Generate the profile relink URL so the frontend can prompt the expert to re-authorize
+    // with the correct scopes. The relink URL uses a fresh link_token (expires in 5 min).
+    const relinkUrl = profile.profile_relink_url; // TODO: store in DB or return to frontend
     await db
       .update(calendarConnections)
-      .set({ status: 'sync_pending', updatedAt: new Date() })
+      .set({ status: 'sync_pending', relinkUrl, updatedAt: new Date() })
       .where(eq(calendarConnections.expertId, expertId));
     return; // Do not proceed to listCalendars or registerPushChannel yet
   }
