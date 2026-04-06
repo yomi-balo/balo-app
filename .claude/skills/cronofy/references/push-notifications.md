@@ -162,14 +162,39 @@ async function calculateEarliestAvailable(expertId: string): Promise<Date | null
 
 You cannot subscribe to a subset of notification types. Once a channel is created, you receive all of:
 
-| `notification.type` | Meaning |
-|---|---|
-| `verification` | Sent immediately on channel creation — respond 200 and return |
-| `change` | Calendar events changed — enqueue cache rebuild |
+| `notification.type`    | Meaning                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `verification`         | Sent immediately on channel creation — respond 200 and return                                     |
+| `change`               | Calendar events changed — enqueue cache rebuild                                                   |
 | `profile_disconnected` | Expert revoked Cronofy's access from their Google/Outlook settings — mark `status = 'auth_error'` |
-| `profile_connected` | Calendar profile re-connected |
+| `profile_connected`    | Calendar profile re-connected                                                                     |
 
-Filter by `notification.type` in the webhook handler. The handler above already covers `change` and `verification`; add a `profile_disconnected` branch to mark the connection as broken.
+Filter by `notification.type` in the webhook handler. The handler above already covers `change` and `verification`. Add these branches:
+
+```typescript
+// Inside the webhook handler switch/if chain:
+case 'profile_disconnected':
+  // Expert revoked Cronofy's access from their calendar provider settings
+  await db
+    .update(calendarConnections)
+    .set({ status: 'auth_error', updatedAt: new Date() })
+    .where(eq(calendarConnections.expertId, expertId));
+  break;
+
+case 'profile_connected':
+  // Calendar profile re-connected (e.g. after re-authorization)
+  await db
+    .update(calendarConnections)
+    .set({ status: 'connected', updatedAt: new Date() })
+    .where(eq(calendarConnections.expertId, expertId));
+  // Trigger a cache rebuild to pick up any missed changes
+  await rebuildAvailabilityCacheQueue.add(
+    'rebuild-availability-cache',
+    { expertId },
+    { jobId: `availability-${expertId}` }
+  );
+  break;
+```
 
 ## Verification Ping
 

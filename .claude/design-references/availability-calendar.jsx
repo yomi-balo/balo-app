@@ -21,18 +21,18 @@ const c = {
   bg: '#E2E5EC',
   surface: '#FFFFFF',
   surfaceSubtle: '#F1F3F7',
-  border: '#D1D5DB',        // var(--border)
-  borderStrong: '#B5BAC4',  // slightly darker for slot rows
+  border: '#D1D5DB', // var(--border)
+  borderStrong: '#B5BAC4', // slightly darker for slot rows
   divider: '#C8CBD4',
-  text: '#111827',           // var(--foreground)
-  textSecondary: '#4B5563',  // var(--muted-foreground)
+  text: '#111827', // var(--foreground)
+  textSecondary: '#4B5563', // var(--muted-foreground)
   textTertiary: '#9CA3AF',
-  primary: '#2563EB',        // var(--primary)
+  primary: '#2563EB', // var(--primary)
   primaryDark: '#1D4ED8',
   primaryLight: '#EEF4FF',
   primaryBorder: '#BFDBFE',
   primaryGlow: 'rgba(37,99,235,0.12)',
-  success: '#059669',        // var(--success)
+  success: '#059669', // var(--success)
   successLight: '#ECFDF5',
 };
 
@@ -130,9 +130,10 @@ function generateMockSlots() {
     if ([0, 6].includes(dt.getDay())) continue;
     if (Math.random() < 0.22) continue;
     const key = dt.toISOString().slice(0, 10);
-    const hours = [8, 8.5, 9, 9.5, 10, 10.5, 11, 13, 13.5, 14, 14.5, 15, 15.5, 16]
-      .filter(() => Math.random() > 0.4);
-    const slots = hours.map(h => {
+    const hours = [8, 8.5, 9, 9.5, 10, 10.5, 11, 13, 13.5, 14, 14.5, 15, 15.5, 16].filter(
+      () => Math.random() > 0.4
+    );
+    const slots = hours.map((h) => {
       const s = new Date(dt);
       s.setHours(Math.floor(h), h % 1 ? 30 : 0, 0, 0);
       return {
@@ -147,9 +148,13 @@ function generateMockSlots() {
 }
 const MOCK_SLOTS = generateMockSlots();
 
-const fmtTime = iso => new Date(iso).toLocaleTimeString('en-AU', {
-  timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', hour12: true,
-});
+const fmtTime = (iso) =>
+  new Date(iso).toLocaleTimeString('en-AU', {
+    timeZone: 'Australia/Sydney',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 const fmtEndTime = (iso, minutes) => {
   const d = new Date(iso);
   d.setMinutes(d.getMinutes() + minutes);
@@ -174,38 +179,106 @@ function MonthCalendar({ selectedDay, onSelectDay }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   while (cells.length % 7) cells.push(0);
 
-  const getKey = d => d ? new Date(base.getFullYear(), base.getMonth(), d).toISOString().slice(0, 10) : null;
-  const isPast = d => {
+  const getKey = (d) =>
+    d ? new Date(base.getFullYear(), base.getMonth(), d).toISOString().slice(0, 10) : null;
+  const isPast = (d) => {
     if (!d) return false;
-    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const t = new Date();
+    t.setHours(0, 0, 0, 0);
     return new Date(base.getFullYear(), base.getMonth(), d) < t;
   };
-  const isToday = d => d ? new Date(base.getFullYear(), base.getMonth(), d).toDateString() === now.toDateString() : false;
-  const hasSlots = d => !!(d && MOCK_SLOTS[getKey(d)]);
+  const isToday = (d) =>
+    d
+      ? new Date(base.getFullYear(), base.getMonth(), d).toDateString() === now.toDateString()
+      : false;
+  const hasSlots = (d) => !!(d && MOCK_SLOTS[getKey(d)]);
 
   return (
     <div>
       {/* Month navigation */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-        <button onClick={() => setMonthOffset(o => o - 1)} disabled={monthOffset <= 0}
-          style={{ width: 32, height: 32, borderRadius: 8, border: '1.5px solid #C2C7D0', background: '#fff',
-            cursor: monthOffset <= 0 ? 'not-allowed' : 'pointer', opacity: monthOffset <= 0 ? 0.3 : 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth={2}><path d="M15 18l-6-6 6-6"/></svg>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 20,
+        }}
+      >
+        <button
+          onClick={() => setMonthOffset((o) => o - 1)}
+          disabled={monthOffset <= 0}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            border: '1.5px solid #C2C7D0',
+            background: '#fff',
+            cursor: monthOffset <= 0 ? 'not-allowed' : 'pointer',
+            opacity: monthOffset <= 0 ? 0.3 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          <svg
+            width={14}
+            height={14}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#374151"
+            strokeWidth={2}
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
         </button>
-        <span style={{ fontSize: 14, fontWeight: 600, color: '#111827', letterSpacing: '-.01em' }}>{monthLabel}</span>
-        <button onClick={() => setMonthOffset(o => o + 1)}
-          style={{ width: 32, height: 32, borderRadius: 8, border: '1.5px solid #C2C7D0', background: '#fff',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth={2}><path d="M9 18l6-6-6-6"/></svg>
+        <span style={{ fontSize: 14, fontWeight: 600, color: '#111827', letterSpacing: '-.01em' }}>
+          {monthLabel}
+        </span>
+        <button
+          onClick={() => setMonthOffset((o) => o + 1)}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            border: '1.5px solid #C2C7D0',
+            background: '#fff',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          <svg
+            width={14}
+            height={14}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#374151"
+            strokeWidth={2}
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
         </button>
       </div>
 
       {/* Day-of-week headers */}
       <div className="cal-grid" style={{ marginBottom: 8 }}>
         {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((d, i) => (
-          <div key={i} style={{ textAlign: 'center', fontSize: 11, fontWeight: 500,
-            color: '#9CA3AF', paddingBottom: 6, letterSpacing: '.03em' }}>{d}</div>
+          <div
+            key={i}
+            style={{
+              textAlign: 'center',
+              fontSize: 11,
+              fontWeight: 500,
+              color: '#9CA3AF',
+              paddingBottom: 6,
+              letterSpacing: '.03em',
+            }}
+          >
+            {d}
+          </div>
         ))}
       </div>
 
@@ -218,18 +291,47 @@ function MonthCalendar({ selectedDay, onSelectDay }) {
           const past = isPast(d);
           const avail = hasSlots(d);
           const wknd = i % 7 >= 5;
-          const cls = ['cell', avail && !past ? 'avail' : '', isSel ? 'sel' : '', today && !isSel ? 'tod' : ''].join(' ');
+          const cls = [
+            'cell',
+            avail && !past ? 'avail' : '',
+            isSel ? 'sel' : '',
+            today && !isSel ? 'tod' : '',
+          ].join(' ');
           return (
-            <div key={i} className={cls} onClick={avail && !past ? () => onSelectDay(key) : undefined}>
+            <div
+              key={i}
+              className={cls}
+              onClick={avail && !past ? () => onSelectDay(key) : undefined}
+            >
               {d ? (
-                <span style={{ fontSize: 13, lineHeight: 1,
-                  fontWeight: isSel || today ? 600 : 400,
-                  color: isSel ? '#fff' : today ? '#2563EB' : past || wknd ? '#C5C9D0' : '#111827' }}>
+                <span
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1,
+                    fontWeight: isSel || today ? 600 : 400,
+                    color: isSel
+                      ? '#fff'
+                      : today
+                        ? '#2563EB'
+                        : past || wknd
+                          ? '#C5C9D0'
+                          : '#111827',
+                  }}
+                >
                   {d}
                 </span>
               ) : null}
               {avail && !past && !isSel ? (
-                <div style={{ width: 3, height: 3, borderRadius: '50%', background: '#2563EB', position: 'absolute', bottom: 4 }} />
+                <div
+                  style={{
+                    width: 3,
+                    height: 3,
+                    borderRadius: '50%',
+                    background: '#2563EB',
+                    position: 'absolute',
+                    bottom: 4,
+                  }}
+                />
               ) : null}
             </div>
           );
@@ -237,8 +339,16 @@ function MonthCalendar({ selectedDay, onSelectDay }) {
       </div>
 
       {/* Legend */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16,
-        paddingTop: 14, borderTop: '1px solid #EAECF0' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginTop: 16,
+          paddingTop: 14,
+          borderTop: '1px solid #EAECF0',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <div style={{ width: 3, height: 3, borderRadius: '50%', background: '#2563EB' }} />
           <span style={{ fontSize: 10, color: '#9CA3AF' }}>Available</span>
@@ -270,77 +380,169 @@ function SlotsPanel({ dayKey, mode = 'selectable' }) {
     // Auto-reset filter if it would produce empty results on the new day
     if (durFilter && dayKey) {
       const slots = MOCK_SLOTS[dayKey] || [];
-      if (!slots.some(s => s.maxDuration >= durFilter)) {
+      if (!slots.some((s) => s.maxDuration >= durFilter)) {
         setDurFilter(null);
       }
     }
   }, [dayKey]);
 
   // ── No day selected ───────────────────────────────────────────
-  if (!dayKey) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', minHeight: 280, textAlign: 'center', padding: 24 }}>
-      <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#F1F3F7',
-        border: '1.5px solid #D8DCE5', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', margin: '0 auto 14px' }}>
-        <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth={1.5}>
-          <rect x="3" y="4" width="18" height="18" rx="2"/>
-          <path d="M16 2v4M8 2v4M3 10h18"/>
-        </svg>
+  if (!dayKey)
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: 280,
+          textAlign: 'center',
+          padding: 24,
+        }}
+      >
+        <div
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: '50%',
+            background: '#F1F3F7',
+            border: '1.5px solid #D8DCE5',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 14px',
+          }}
+        >
+          <svg
+            width={20}
+            height={20}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#9CA3AF"
+            strokeWidth={1.5}
+          >
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <path d="M16 2v4M8 2v4M3 10h18" />
+          </svg>
+        </div>
+        <p style={{ fontSize: 14, fontWeight: 500, color: '#6B7280', margin: '0 0 4px' }}>
+          Select a date
+        </p>
+        <p style={{ fontSize: 13, color: '#9CA3AF', margin: 0, lineHeight: 1.5 }}>
+          Tap a highlighted day
+          <br />
+          to see available times
+        </p>
       </div>
-      <p style={{ fontSize: 14, fontWeight: 500, color: '#6B7280', margin: '0 0 4px' }}>Select a date</p>
-      <p style={{ fontSize: 13, color: '#9CA3AF', margin: 0, lineHeight: 1.5 }}>
-        Tap a highlighted day<br/>to see available times
-      </p>
-    </div>
-  );
+    );
 
   // ── Booked confirmation ───────────────────────────────────────
-  if (booked) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', minHeight: 280, textAlign: 'center' }}>
-      <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#059669',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
-        <svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5}>
-          <path d="M20 6L9 17l-5-5"/>
-        </svg>
+  if (booked)
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: 280,
+          textAlign: 'center',
+        }}
+      >
+        <div
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: '50%',
+            background: '#059669',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 14px',
+          }}
+        >
+          <svg
+            width={24}
+            height={24}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth={2.5}
+          >
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+        </div>
+        <p style={{ fontSize: 16, fontWeight: 600, color: '#111827', margin: '0 0 5px' }}>
+          Booked!
+        </p>
+        <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>Confirmation email on its way</p>
       </div>
-      <p style={{ fontSize: 16, fontWeight: 600, color: '#111827', margin: '0 0 5px' }}>Booked!</p>
-      <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>Confirmation email on its way</p>
-    </div>
-  );
+    );
 
   const allSlots = MOCK_SLOTS[dayKey] || [];
-  const uniqueDurations = [...new Set(allSlots.map(s => s.maxDuration))].sort((a, b) => a - b);
-  const filtered = durFilter ? allSlots.filter(s => s.maxDuration >= durFilter) : allSlots;
+  const uniqueDurations = [...new Set(allSlots.map((s) => s.maxDuration))].sort((a, b) => a - b);
+  const filtered = durFilter ? allSlots.filter((s) => s.maxDuration >= durFilter) : allSlots;
   const noMatch = durFilter && !filtered.length;
   // Fallback: if filter produces no results, show all slots with a warning
   const showing = noMatch ? allSlots : filtered;
 
   const dt = new Date(dayKey);
   const isToday = dt.toDateString() === new Date().toDateString();
-  const headDate = dt.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
+  const headDate = dt.toLocaleDateString('en-AU', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
 
   // ── Duration confirmation step ────────────────────────────────
   // Triggered after slot selection in selectable mode.
   // User picks exact duration (up to slot's maxDuration) before confirming.
   if (confirmStep && selectedSlot) {
-    const availableDurations = [15, 30, 45, 60].filter(d => d <= selectedSlot.maxDuration);
+    const availableDurations = [15, 30, 45, 60].filter((d) => d <= selectedSlot.maxDuration);
     return (
       <div>
-        <button onClick={() => { setConfirmStep(false); setChosenDuration(null); }}
-          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none',
-            color: '#2563EB', fontSize: 13, fontWeight: 500, padding: '0 0 18px', cursor: 'pointer',
-            fontFamily: 'inherit' }}>
-          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth={2}>
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
+        <button
+          onClick={() => {
+            setConfirmStep(false);
+            setChosenDuration(null);
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            background: 'none',
+            border: 'none',
+            color: '#2563EB',
+            fontSize: 13,
+            fontWeight: 500,
+            padding: '0 0 18px',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          <svg
+            width={13}
+            height={13}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#2563EB"
+            strokeWidth={2}
+          >
+            <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
           Back
         </button>
 
         {/* Selected time recap */}
-        <div style={{ padding: '12px 16px', borderRadius: 10, background: '#EEF4FF',
-          border: '1.5px solid #BFDBFE', marginBottom: 20 }}>
+        <div
+          style={{
+            padding: '12px 16px',
+            borderRadius: 10,
+            background: '#EEF4FF',
+            border: '1.5px solid #BFDBFE',
+            marginBottom: 20,
+          }}
+        >
           <span style={{ fontSize: 16, fontWeight: 600, color: '#1D4ED8' }}>
             {fmtTime(selectedSlot.start)}
           </span>
@@ -349,27 +551,69 @@ function SlotsPanel({ dayKey, mode = 'selectable' }) {
           </span>
         </div>
 
-        <p style={{ fontSize: 11, fontWeight: 600, color: '#9CA3AF', textTransform: 'uppercase',
-          letterSpacing: '.07em', marginBottom: 10 }}>How long do you need?</p>
+        <p
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#9CA3AF',
+            textTransform: 'uppercase',
+            letterSpacing: '.07em',
+            marginBottom: 10,
+          }}
+        >
+          How long do you need?
+        </p>
 
         {/* Duration options */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 20 }}>
-          {availableDurations.map(d => {
+          {availableDurations.map((d) => {
             const isChosen = chosenDuration === d;
             return (
-              <button key={d} onClick={() => setChosenDuration(d)}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px',
-                  borderRadius: 10, border: `1.5px solid ${isChosen ? '#2563EB' : '#C2C7D0'}`,
-                  background: isChosen ? '#EEF4FF' : '#fff', cursor: 'pointer',
-                  textAlign: 'left', fontFamily: 'inherit', transition: 'all .15s' }}>
-                <div style={{ width: 18, height: 18, borderRadius: '50%',
-                  border: `2px solid ${isChosen ? '#2563EB' : '#C2C7D0'}`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  {isChosen && <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#2563EB' }} />}
+              <button
+                key={d}
+                onClick={() => setChosenDuration(d)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '11px 16px',
+                  borderRadius: 10,
+                  border: `1.5px solid ${isChosen ? '#2563EB' : '#C2C7D0'}`,
+                  background: isChosen ? '#EEF4FF' : '#fff',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  fontFamily: 'inherit',
+                  transition: 'all .15s',
+                }}
+              >
+                <div
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: '50%',
+                    border: `2px solid ${isChosen ? '#2563EB' : '#C2C7D0'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  {isChosen && (
+                    <div
+                      style={{ width: 8, height: 8, borderRadius: '50%', background: '#2563EB' }}
+                    />
+                  )}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: isChosen ? 600 : 500,
-                    color: isChosen ? '#1D4ED8' : '#111827' }}>{d} minutes</div>
+                  <div
+                    style={{
+                      fontSize: 14,
+                      fontWeight: isChosen ? 600 : 500,
+                      color: isChosen ? '#1D4ED8' : '#111827',
+                    }}
+                  >
+                    {d} minutes
+                  </div>
                   <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 1 }}>
                     {fmtTime(selectedSlot.start)} – {fmtEndTime(selectedSlot.start, d)}
                   </div>
@@ -380,7 +624,9 @@ function SlotsPanel({ dayKey, mode = 'selectable' }) {
         </div>
 
         <button className="cbtn" disabled={!chosenDuration} onClick={() => setBooked(true)}>
-          {chosenDuration ? `Confirm ${chosenDuration}-min consultation` : 'Select a duration above'}
+          {chosenDuration
+            ? `Confirm ${chosenDuration}-min consultation`
+            : 'Select a duration above'}
         </button>
       </div>
     );
@@ -392,12 +638,25 @@ function SlotsPanel({ dayKey, mode = 'selectable' }) {
       {/* Day heading */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: '#111827', letterSpacing: '-.01em' }}>
+          <span
+            style={{ fontSize: 15, fontWeight: 600, color: '#111827', letterSpacing: '-.01em' }}
+          >
             {isToday ? 'Today' : headDate}
           </span>
           {isToday && (
-            <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 5,
-              background: '#EEF4FF', color: '#2563EB', border: '1px solid #BFDBFE' }}>Today</span>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '2px 8px',
+                borderRadius: 5,
+                background: '#EEF4FF',
+                color: '#2563EB',
+                border: '1px solid #BFDBFE',
+              }}
+            >
+              Today
+            </span>
           )}
         </div>
         <p style={{ fontSize: 12, color: '#9CA3AF', margin: '3px 0 0' }}>
@@ -408,28 +667,69 @@ function SlotsPanel({ dayKey, mode = 'selectable' }) {
 
       {/* Duration filter — ALWAYS VISIBLE, pills can wrap to 2 lines */}
       <div style={{ marginBottom: 16 }}>
-        <p style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase',
-          letterSpacing: '.07em', marginBottom: 8 }}>Duration</p>
+        <p
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#6B7280',
+            textTransform: 'uppercase',
+            letterSpacing: '.07em',
+            marginBottom: 8,
+          }}
+        >
+          Duration
+        </p>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {[null, ...uniqueDurations].map(d => (
-            <button key={d ?? 'all'} className={`dp${durFilter === d ? ' on' : ''}`}
-              onClick={() => { setDurFilter(d); setSelectedSlot(null); }}>
+          {[null, ...uniqueDurations].map((d) => (
+            <button
+              key={d ?? 'all'}
+              className={`dp${durFilter === d ? ' on' : ''}`}
+              onClick={() => {
+                setDurFilter(d);
+                setSelectedSlot(null);
+              }}
+            >
               {d ? `${d} min` : 'Any'}
             </button>
           ))}
         </div>
         {/* Auto-reset warning when filter has no results on this day */}
         {noMatch && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8,
-            fontSize: 12, color: '#D97706' }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth={2}>
-              <circle cx={12} cy={12} r={10}/>
-              <path d="M12 8v4M12 16h.01"/>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              marginTop: 8,
+              fontSize: 12,
+              color: '#D97706',
+            }}
+          >
+            <svg
+              width={12}
+              height={12}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#D97706"
+              strokeWidth={2}
+            >
+              <circle cx={12} cy={12} r={10} />
+              <path d="M12 8v4M12 16h.01" />
             </svg>
             No {durFilter}-min slots today.
-            <button onClick={() => setDurFilter(null)}
-              style={{ background: 'none', border: 'none', color: '#2563EB', fontSize: 12,
-                fontWeight: 600, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
+            <button
+              onClick={() => setDurFilter(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#2563EB',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: 0,
+                fontFamily: 'inherit',
+              }}
+            >
               Show all →
             </button>
           </div>
@@ -441,12 +741,14 @@ function SlotsPanel({ dayKey, mode = 'selectable' }) {
         {showing.map((slot, i) => {
           const isSel = selectedSlot === slot;
           return (
-            <button key={i} className={`slot${isSel ? ' on' : ''}`} onClick={() => setSelectedSlot(slot)}>
+            <button
+              key={i}
+              className={`slot${isSel ? ' on' : ''}`}
+              onClick={() => setSelectedSlot(slot)}
+            >
               <span className="st">{fmtTime(slot.start)}</span>
               {/* Only show maxDuration label when "Any" filter — redundant when filtered */}
-              {(!durFilter || noMatch) && (
-                <span className="sd">up to {slot.maxDuration}m</span>
-              )}
+              {(!durFilter || noMatch) && <span className="sd">up to {slot.maxDuration}m</span>}
             </button>
           );
         })}
@@ -483,10 +785,25 @@ export default function ExpertAvailabilityCalendar({ mode = 'selectable' }) {
       <style>{CSS}</style>
 
       {/* Timezone label */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 12, padding: '0 2px' }}>
-        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth={1.5}>
-          <circle cx={12} cy={12} r={10}/>
-          <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10A15.3 15.3 0 0112 2z"/>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          marginBottom: 12,
+          padding: '0 2px',
+        }}
+      >
+        <svg
+          width={12}
+          height={12}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#9CA3AF"
+          strokeWidth={1.5}
+        >
+          <circle cx={12} cy={12} r={10} />
+          <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10A15.3 15.3 0 0112 2z" />
         </svg>
         <span style={{ fontSize: 12, color: '#9CA3AF' }}>Sydney time</span>
       </div>
@@ -505,15 +822,34 @@ export default function ExpertAvailabilityCalendar({ mode = 'selectable' }) {
 
       {/* Demo mode switcher */}
       <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-        <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 10,
-          background: '#F1F3F7', border: '1px solid #E0E4EB' }}>
-          {['preview', 'selectable'].map(m => (
-            <button key={m} style={{ padding: '5px 14px', borderRadius: 7, fontSize: 12,
-              fontWeight: 550, border: 'none', cursor: 'pointer',
-              background: mode === m ? '#fff' : 'transparent',
-              color: mode === m ? '#111827' : '#9CA3AF',
-              boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
-              fontFamily: 'inherit' }}>{m}</button>
+        <div
+          style={{
+            display: 'inline-flex',
+            gap: 4,
+            padding: 4,
+            borderRadius: 10,
+            background: '#F1F3F7',
+            border: '1px solid #E0E4EB',
+          }}
+        >
+          {['preview', 'selectable'].map((m) => (
+            <button
+              key={m}
+              style={{
+                padding: '5px 14px',
+                borderRadius: 7,
+                fontSize: 12,
+                fontWeight: 550,
+                border: 'none',
+                cursor: 'pointer',
+                background: mode === m ? '#fff' : 'transparent',
+                color: mode === m ? '#111827' : '#9CA3AF',
+                boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
+                fontFamily: 'inherit',
+              }}
+            >
+              {m}
+            </button>
           ))}
         </div>
       </div>
