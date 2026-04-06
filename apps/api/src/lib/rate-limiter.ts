@@ -43,9 +43,8 @@ export async function checkRateLimit(
     throw new Error('Rate limit Redis pipeline returned no results');
   }
 
-  const [incrErr, incrVal] = results[0]!;
-  const [, ,] = results[1]!; // EXPIRE result — not used
-  const [ttlErr, ttlVal] = results[2]!;
+  const [incrErr, incrVal] = results[0];
+  const [ttlErr, ttlVal] = results[2];
 
   if (incrErr || ttlErr) {
     throw new Error(`Rate limit Redis command failed: ${(incrErr ?? ttlErr)!.message}`);
