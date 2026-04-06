@@ -2,7 +2,8 @@ import { Worker, type Job } from 'bullmq';
 import { usersRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, NOTIFICATION_SERVER_EVENTS } from '@balo/analytics/server';
-import { createRedisConnection } from '../../lib/redis.js';
+import { createRedisConnection, getRedis } from '../../lib/redis.js';
+import { checkRateLimit, type RateLimitConfig } from '../../lib/rate-limiter.js';
 import { maskPhone, getBrevoClient } from '../../lib/brevo.js';
 import { getSmsTemplate } from './templates/sms-templates.js';
 import { logNotification } from './log.js';
@@ -11,6 +12,12 @@ import type { DeliveryPayload } from './types.js';
 const log = createLogger('notification-sms');
 
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
+
+const SMS_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'sms:rate',
+  maxRequests: 5,
+  windowSeconds: 3600,
+};
 
 /** Exported for testability — called by the BullMQ worker. */
 export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
@@ -41,7 +48,33 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
     return;
   }
 
-  // 3. Render template
+  // 3. Rate-limit check (fail-open: Redis errors let the SMS through)
+  try {
+    const rateLimitResult = await checkRateLimit(getRedis(), SMS_RATE_LIMIT, payload.recipientId);
+    if (!rateLimitResult.allowed) {
+      log.warn(
+        { recipientId: payload.recipientId, current: rateLimitResult.current },
+        'SMS rate limit exceeded'
+      );
+      await logNotification(payload, 'sms', 'skipped', 'Rate limit exceeded');
+      trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SKIPPED, {
+        template: payload.template,
+        skip_reason: 'Rate limit exceeded',
+        distinct_id: payload.recipientId,
+      });
+      return;
+    }
+  } catch (error) {
+    log.warn(
+      {
+        recipientId: payload.recipientId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'SMS rate limit check failed — allowing SMS through'
+    );
+  }
+
+  // 4. Render template
   const body = getSmsTemplate(payload.template, {
     ...payload.data,
     ...payload.payload,
@@ -54,7 +87,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
     );
   }
 
-  // 4. Send via Brevo
+  // 5. Send via Brevo
   try {
     const client = await getBrevoClient();
 

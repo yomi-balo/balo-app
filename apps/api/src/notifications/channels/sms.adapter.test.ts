@@ -53,6 +53,12 @@ vi.mock('@balo/analytics/server', () => ({
 
 vi.mock('../../lib/redis.js', () => ({
   createRedisConnection: vi.fn(),
+  getRedis: vi.fn(() => ({})),
+}));
+
+const mockCheckRateLimit = vi.fn();
+vi.mock('../../lib/rate-limiter.js', () => ({
+  checkRateLimit: (...args: unknown[]) => mockCheckRateLimit(...args),
 }));
 
 // Import after mocks are set up
@@ -85,6 +91,7 @@ describe('processSmsJob', () => {
       phone: '+61412345678',
       firstName: 'Alice',
     });
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 3600 });
   });
 
   // -- Happy path ----------------------------------------------------------
@@ -200,6 +207,91 @@ describe('processSmsJob', () => {
         skip_reason: 'No phone number',
         distinct_id: 'user-1',
       });
+    });
+  });
+
+  // -- Rate limit ----------------------------------------------------------
+
+  describe('rate limit', () => {
+    it('skips SMS when rate limit is exceeded', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 6, ttlSeconds: 1500 });
+
+      await processSmsJob(makeJob());
+
+      expect(mockSendTransacSms).not.toHaveBeenCalled();
+    });
+
+    it('fires SMS_SKIPPED PostHog event with rate limit skip reason', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 6, ttlSeconds: 1500 });
+
+      await processSmsJob(makeJob());
+
+      expect(mockTrackServer).toHaveBeenCalledWith('notification_sms_skipped', {
+        template: 'booking-confirmed-sms',
+        skip_reason: 'Rate limit exceeded',
+        distinct_id: 'user-1',
+      });
+    });
+
+    it('logs notification with skipped status on rate limit', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 6, ttlSeconds: 1500 });
+
+      await processSmsJob(makeJob());
+
+      expect(mockLogNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientId: 'user-1' }),
+        'sms',
+        'skipped',
+        'Rate limit exceeded'
+      );
+    });
+
+    it('does not throw when rate limited (graceful skip)', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 6, ttlSeconds: 1500 });
+
+      await expect(processSmsJob(makeJob())).resolves.toBeUndefined();
+    });
+
+    it('does not check rate limit when user has no phone', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', phone: null });
+
+      await processSmsJob(makeJob());
+
+      expect(mockCheckRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('does not check rate limit when phone is invalid E.164', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', phone: '0412345678' });
+
+      await processSmsJob(makeJob());
+
+      expect(mockCheckRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('sends SMS when under rate limit', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 3, ttlSeconds: 2000 });
+
+      await processSmsJob(makeJob());
+
+      expect(mockSendTransacSms).toHaveBeenCalled();
+    });
+
+    it('passes correct config to checkRateLimit', async () => {
+      await processSmsJob(makeJob());
+
+      expect(mockCheckRateLimit).toHaveBeenCalledWith(
+        expect.anything(), // redis instance
+        { keyPrefix: 'sms:rate', maxRequests: 5, windowSeconds: 3600 },
+        'user-1'
+      );
+    });
+
+    it('sends SMS when rate limit check fails (fail-open)', async () => {
+      mockCheckRateLimit.mockRejectedValue(new Error('Connection refused'));
+
+      await processSmsJob(makeJob());
+
+      expect(mockSendTransacSms).toHaveBeenCalled();
     });
   });
 
