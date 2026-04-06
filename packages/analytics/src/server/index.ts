@@ -1,5 +1,3 @@
-import 'server-only';
-
 export { getServerAnalytics, shutdownServerAnalytics } from './posthog-server';
 export { trackServer } from './track-server';
 export type { ServerEvents, ServerEventName } from '../types';
