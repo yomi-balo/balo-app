@@ -1,5 +1,7 @@
 # Cronofy Push Notifications
 
+> **Docs:** [Push Notifications API](https://docs.cronofy.com/developers/api/push-notifications/) · [notification.type values](https://docs.cronofy.com/developers/api/push-notifications/#param-notification.type)
+
 Cronofy manages push subscription renewals to Google and Microsoft on Balo's behalf.
 Balo registers one webhook URL per expert and receives notifications when their calendar changes.
 On each notification, Balo recalculates `earliest_available_at` — it does NOT sync individual events.

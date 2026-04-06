@@ -1,5 +1,7 @@
 # Timezone Handling
 
+> **Docs:** [UserInfo endpoint](https://docs.cronofy.com/developers/api/identity/userinfo/) (returns `zoneinfo`) · [Account endpoint](https://docs.cronofy.com/developers/api/identity/account/) (returns `default_tzid`)
+
 ## Storage: Always TIMESTAMPTZ, Never Plain Timestamp
 
 All `timestamp` columns in Balo must use `{ withTimezone: true }` in Drizzle,

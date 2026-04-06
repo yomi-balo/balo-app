@@ -216,15 +216,17 @@ Cronofy uses a browser cookie to merge multiple calendar authorizations made in 
 
 **If calendars are accidentally merged:** Only Cronofy support can separate them — there is no API for this. Email support@cronofy.com.
 
+See [same-account-id FAQ](https://docs.cronofy.com/developers/faqs/same-account-id/) for how Cronofy's cookie-based linking works, and [Authorization Linking (alpha)](https://docs.cronofy.com/developers/api-alpha/explicit-linking/) for the deterministic alternative.
+
 ### G4. Revoke ≠ Delete — You Cannot Remove Calendar Profiles via the API
 
-Calling `revokeAuthorization` removes the access token for Balo's platform but the calendar profile stays on the Cronofy account. Only Cronofy support can permanently remove a calendar profile. This is by design — it allows re-authorization without a full re-sync.
+Calling `revokeAuthorization` ([docs](https://docs.cronofy.com/developers/api/authorization/revoke/)) removes the access token for Balo's platform but the calendar profile stays on the Cronofy account. Only Cronofy support can permanently remove a calendar profile. This is by design — it allows re-authorization without a full re-sync.
 
 **Implication:** Revoking then re-authorizing re-uses the existing profile; it does not start fresh.
 
 ### G5. Availability Rules Survive Revocation
 
-Availability Rules persist on the Cronofy account after authorization is revoked. This is usually desirable (expert's working hours haven't changed). On offboarding, explicitly delete rules before or after revoking. See `references/availability-rules.md` for the delete pattern.
+Availability Rules persist on the Cronofy account after authorization is revoked. This is usually desirable (expert's working hours haven't changed). On offboarding, explicitly delete rules before or after revoking. See `references/availability-rules.md` for the delete pattern and the [Availability Rules API docs](https://docs.cronofy.com/developers/api/scheduling/availability-rules/).
 
 **Edge case:** If the access token is lost before cleanup (e.g. expert deleted from Balo DB), you need to re-authorize to get a token before you can delete the rules.
 
@@ -244,7 +246,7 @@ You cannot subscribe to only specific notification types (e.g. only `profile_dis
 
 ### G9. Bulk Availability — Use One Multi-Participant Call, Not 50 Individual Calls
 
-The Availability API supports querying multiple participants in a single request. Use `required: 1` under `participants` to find slots where at least one expert is available:
+The Availability API supports querying multiple participants in a single request. Use `required: 1` under `participants` ([docs](https://docs.cronofy.com/developers/api/scheduling/availability/#param-participants.required)) to find slots where at least one expert is available:
 
 ```typescript
 const { slots } = await cronofyApp.availability({
@@ -263,7 +265,7 @@ This is the correct pattern for the expert search/filter feature. Default rate l
 
 ### G10. GDPR Deletion Requires Emailing Cronofy Support
 
-`revokeAuthorization` does not delete the user's data from Cronofy. For a full GDPR deletion:
+`revokeAuthorization` does not delete the user's data from Cronofy. See [Cronofy data management policy](https://docs.cronofy.com/policies/data-management/). For a full GDPR deletion:
 1. Revoke the user's authorization via API
 2. Email support@cronofy.com with the user's email and request permanent data deletion
 
@@ -281,6 +283,8 @@ When an expert with a work/school O365 account connects via Individual Connect:
 
 **EWS / Application Impersonation is deprecated:** Microsoft announced this Feb 20, 2024; Cronofy added the warning to their docs Oct 14, 2024. Do not implement EWS flows — use Graph API (Individual Connect) only.
 
+See [admin approval FAQ](https://docs.cronofy.com/calendar-admins/faqs/need-admin-approval-error/) for the exact screen users see and the admin consent link format.
+
 ### G12. Event Attendees — Invitation Emails Are Sent by the Calendar Provider
 
 Invitation emails to attendees are sent by Google/Outlook, not Cronofy. Cronofy has no control over delivery. Add attendees via the `attendees` param in `upsertEvent`.
@@ -289,7 +293,7 @@ Invitation emails to attendees are sent by Google/Outlook, not Cronofy. Cronofy 
 
 ### G13. Rate Limit Increase Requires Emerging Plan + Engineering Approval
 
-To increase the default limits (50 req/sec / 500/min), you must: (a) be on the Emerging plan and (b) provide a use case for Cronofy engineering to review. Use the multi-participant Availability API (G9) before requesting a limit increase.
+To increase the default limits (50 req/sec / 500/min), you must: (a) be on the Emerging plan and (b) provide a use case for Cronofy engineering to review. See [rate limits FAQ](https://docs.cronofy.com/developers/faqs/rate-limits/). Use the multi-participant Availability API (G9) before requesting a limit increase.
 
 ### G14. Brand the OAuth Flow Before Launch
 

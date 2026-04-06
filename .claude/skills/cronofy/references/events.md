@@ -1,5 +1,7 @@
 # Cronofy Events — Write & Delete Consultation Events
 
+> **Docs:** [Upsert Event](https://docs.cronofy.com/developers/api/events/upsert-event/) · [attendees param](https://docs.cronofy.com/developers/api/events/upsert-event/#param-attendees)
+
 Balo writes a calendar event when a consultation is confirmed, and deletes it on cancellation.
 Events are written to the expert's primary calendar only. Event titles are Balo-generated
 and do not expose client PII beyond first name.

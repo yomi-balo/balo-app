@@ -1,5 +1,7 @@
 # Cronofy OAuth — Individual Connect
 
+> **Docs:** [Authorization overview](https://docs.cronofy.com/developers/api/authorization/) · [Account & sub structure](https://docs.cronofy.com/developers/authorization/#calendar-accounts)
+
 ## Flow Overview
 
 ```
@@ -203,7 +205,7 @@ export async function disconnectCalendar(expertId: string): Promise<void> {
     });
   }
 
-  // Revoke Cronofy authorization
+  // Revoke Cronofy authorization — docs: https://docs.cronofy.com/developers/api/authorization/revoke/
   await cronofyApp.revokeAuthorization({
     client_id: process.env.CRONOFY_CLIENT_ID!,
     client_secret: process.env.CRONOFY_CLIENT_SECRET!,

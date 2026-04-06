@@ -1,5 +1,7 @@
 # Cronofy Availability Rules — BAL-195 Weekly Schedule
 
+> **Docs:** [Availability Rules API](https://docs.cronofy.com/developers/api/scheduling/availability-rules/) · [Availability Query API](https://docs.cronofy.com/developers/api/scheduling/availability/) · [participants.required](https://docs.cronofy.com/developers/api/scheduling/availability/#param-participants.required)
+
 Availability Rules let experts define their working hours. Cronofy stores these per account
 and applies them when calculating free/busy. Balo uses a single rule per expert with ID
 `"balo_work_hours"`.
