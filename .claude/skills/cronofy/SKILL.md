@@ -184,3 +184,128 @@ export const availabilityCache = pgTable('availability_cache', {
 7. **Overrides are Balo-side, not Cronofy** — date overrides stored in `availability_overrides`, applied first in slot calculation. See `references/overrides.md`.
 8. **Primary calendar for writes** — consultation events written to primary calendar only.
 9. **Timezone changes require immediate cache rebuild** — update Availability Rule `tzid` in Cronofy and enqueue cache rebuild. Stale cache shows slots calculated against wrong timezone. See `references/timezone.md`.
+
+---
+
+## Real-World Gotchas (from Balo Support History)
+
+Hard-won knowledge from actual Cronofy support tickets (Jan–Nov 2025). Read before implementing any calendar feature.
+
+### G1. Initial Sync Pending — Most Common Failure
+
+When a user completes OAuth but doesn't grant all required scopes, Cronofy enters `initial_sync_pending` state and returns no calendars.
+
+**Symptoms:**
+
+- `userinfo.profiles[0].profile_initial_sync_required === true`
+- No calendars in userinfo output
+- Cronofy telemetry shows `403 Request had insufficient authentication scopes`
+
+**Root cause:** In some Google environments, calendar permissions are toggles the user must manually enable during OAuth — they are not auto-checked. Fast-clicking users miss them.
+
+**Fix:** Always check `profile_initial_sync_required` immediately after the OAuth callback. If `true`, set `status = 'sync_pending'` and return the expert's profile relink URL rather than treating the connection as complete. See `references/oauth.md` for the full post-callback check.
+
+### G2. Link Tokens Expire in 5 Minutes
+
+The `link_token` parameter in Cronofy's auth flow is only valid for **5 minutes**. Never generate one in advance, store it in session, or cache it. Generate fresh immediately before the redirect.
+
+### G3. `avoid_linking: true` Is Mandatory in Auth URL
+
+Cronofy uses a browser cookie to merge multiple calendar authorizations made in the same session into one Cronofy account. Without `avoid_linking`, two different experts connecting from the same browser (common in dev/testing, or shared devices) will have their calendars merged under a single `sub`.
+
+**Always** include `avoid_linking: true` in `generateAuthorizationUrl`. See `references/oauth.md`.
+
+**If calendars are accidentally merged:** Only Cronofy support can separate them — there is no API for this. Email support@cronofy.com.
+
+**Note:** Cronofy has already enabled Authorization Linking (alpha) for Balo's application. If deterministic linking is ever needed instead of `avoid_linking`, the capability is available without contacting support.
+
+See [same-account-id FAQ](https://docs.cronofy.com/developers/faqs/same-account-id/) for how Cronofy's cookie-based linking works, and [Authorization Linking (alpha)](https://docs.cronofy.com/developers/api-alpha/explicit-linking/) for the deterministic alternative.
+
+### G4. Revoke ≠ Delete — You Cannot Remove Calendar Profiles via the API
+
+Calling `revokeAuthorization` ([docs](https://docs.cronofy.com/developers/api/authorization/revoke/)) removes the access token for Balo's platform but the calendar profile stays on the Cronofy account. Only Cronofy support can permanently remove a calendar profile. This is by design — it allows re-authorization without a full re-sync.
+
+**Implication:** Revoking then re-authorizing re-uses the existing profile; it does not start fresh.
+
+### G5. Availability Rules Survive Revocation
+
+Availability Rules persist on the Cronofy account after authorization is revoked. This is usually desirable (expert's working hours haven't changed). On offboarding, explicitly delete rules before or after revoking. See `references/availability-rules.md` for the delete pattern and the [Availability Rules API docs](https://docs.cronofy.com/developers/api/scheduling/availability-rules/).
+
+**Edge case:** If the access token is lost before cleanup (e.g. expert deleted from Balo DB), you need to re-authorize to get a token before you can delete the rules.
+
+### G6. Availability API Always Returns UTC
+
+The Availability Query API returns slots in UTC only. There is no timezone parameter for the response. The frontend must convert slots to the viewer's local timezone. See `references/timezone.md`.
+
+### G7. `zoneinfo` Is Best-Effort — Don't Treat It as Authoritative
+
+The `zoneinfo` field from Cronofy's userinfo/account endpoints is an IANA timezone string, but not all providers expose it. When unavailable, Cronofy defaults to `Etc/UTC`. Use it as a hint to pre-populate the expert's timezone during onboarding — do not rely on it as the ground truth. The expert should confirm their timezone explicitly in the UI.
+
+### G8. Push Notification Channels Are All-or-Nothing
+
+You cannot subscribe to only specific notification types (e.g. only `profile_disconnected`). Once a channel is created, you receive ALL notification types: `change`, `profile_disconnected`, `profile_connected`, `verification`. Filter by `notification.type` in the webhook handler. See `references/push-notifications.md`.
+
+**Testing:** Trigger test push notifications from the Cronofy dashboard: Developer → Applications → your app → Channels tab → search by account ID → send test. Use this instead of waiting for real calendar activity.
+
+### G9. Bulk Availability — Use One Multi-Participant Call, Not 50 Individual Calls
+
+The Availability API supports querying multiple participants in a single request. Use `required: 1` under `participants` ([docs](https://docs.cronofy.com/developers/api/scheduling/availability/#param-participants.required)) to find slots where at least one expert is available:
+
+```typescript
+const { slots } = await cronofyApp.availability({
+  participants: [
+    {
+      required: 1, // At least 1 expert must be free
+      members: expertSubs.map((sub) => ({ sub, managed_availability: true })),
+    },
+  ],
+  required_duration: { minutes: 30 },
+  query_periods: [{ start: startUtc, end: endUtc }],
+});
+```
+
+This is the correct pattern for the expert search/filter feature. Default rate limits are 50 req/sec / 500/min — batching avoids hitting them.
+
+### G10. GDPR Deletion Requires Emailing Cronofy Support
+
+`revokeAuthorization` does not delete the user's data from Cronofy. See [Cronofy data management policy](https://docs.cronofy.com/policies/data-management/). For a full GDPR deletion:
+
+1. Revoke the user's authorization via API
+2. Email support@cronofy.com with the user's email and request permanent data deletion
+
+Cronofy support will delete the account and all associated data. **Store `cronofySub` in Balo's DB even after an expert is soft-deleted**, so you can reference it in deletion requests.
+
+**Alternative:** If the user also removes Cronofy's access from their calendar provider (e.g. revokes in Google account settings), Cronofy's [data retention policies](https://docs.cronofy.com/policies/data-management/) will auto-remove their data — no support email needed.
+
+### G11. Office 365 — IT Admin Approval Required for First User
+
+When an expert with a work/school O365 account connects via Individual Connect:
+
+- The **first user** from their organization will see a Microsoft Entra "admin approval required" screen
+- An IT admin must approve the Cronofy Entra app for their tenant once
+- After that, all users on that domain connect without admin intervention
+- There is no API to check approval status
+
+**UX:** Surface a message explaining the one-time IT admin step if the user encounters the approval screen.
+
+**EWS / Application Impersonation is deprecated:** Microsoft announced this Feb 20, 2024; Cronofy added the warning to their docs Oct 14, 2024. Do not implement EWS flows — use Graph API (Individual Connect) only.
+
+See [admin approval FAQ](https://docs.cronofy.com/calendar-admins/faqs/need-admin-approval-error/) for the exact screen users see and the admin consent link format.
+
+### G12. Event Attendees — Invitation Emails Are Sent by the Calendar Provider
+
+Invitation emails to attendees are sent by Google/Outlook, not Cronofy. Cronofy has no control over delivery. Add attendees via the `attendees` param in `upsertEvent`.
+
+**Duplicate invitations:** If an expert has multiple Google profiles connected under the same Cronofy account (e.g. personal Gmail + work Gmail), the calendar provider may send duplicate invitations. Experts should only connect their primary/work calendar.
+
+### G13. Rate Limit Increase Requires Emerging Plan + Engineering Approval
+
+To increase the default limits (50 req/sec / 500/min), you must: (a) be on the Emerging plan and (b) provide a use case for Cronofy engineering to review. See [rate limits FAQ](https://docs.cronofy.com/developers/faqs/rate-limits/). Use the multi-participant Availability API (G9) before requesting a limit increase.
+
+### G14. Brand the OAuth Flow Before Launch
+
+The Cronofy OAuth screen shows Cronofy branding by default. Configure before go-live: Cronofy dashboard → Developer → Applications → your app → Branding dashboard. Set company name and logo so experts see "Balo" during the calendar connection flow.
+
+### G15. Multiple Calendars on One Account — Conflict Detection Is the Right Behaviour
+
+If an expert connects two Google accounts (e.g. work + personal) in the same browser session, both land in the same Cronofy `sub`. This is expected and useful — Balo can check both for conflicts via the `conflictCheck` toggle. The issue only arises when two **different** experts share a browser session, which `avoid_linking: true` (G3) prevents.

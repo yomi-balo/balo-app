@@ -1,5 +1,7 @@
 # Cronofy Push Notifications
 
+> **Docs:** [Push Notifications API](https://docs.cronofy.com/developers/api/push-notifications/) · [notification.type values](https://docs.cronofy.com/developers/api/push-notifications/#param-notification.type)
+
 Cronofy manages push subscription renewals to Google and Microsoft on Balo's behalf.
 Balo registers one webhook URL per expert and receives notifications when their calendar changes.
 On each notification, Balo recalculates `earliest_available_at` — it does NOT sync individual events.
@@ -156,9 +158,58 @@ async function calculateEarliestAvailable(expertId: string): Promise<Date | null
 
 ---
 
+## Notification Types — All-or-Nothing
+
+You cannot subscribe to a subset of notification types. Once a channel is created, you receive all of:
+
+| `notification.type`    | Meaning                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `verification`         | Sent immediately on channel creation — respond 200 and return                                     |
+| `change`               | Calendar events changed — enqueue cache rebuild                                                   |
+| `profile_disconnected` | Expert revoked Cronofy's access from their Google/Outlook settings — mark `status = 'auth_error'` |
+| `profile_connected`    | Calendar profile re-connected                                                                     |
+
+Filter by `notification.type` in the webhook handler. The handler above already covers `change` and `verification`. Add these branches:
+
+```typescript
+// Inside the webhook handler switch/if chain:
+case 'profile_disconnected':
+  // Expert revoked Cronofy's access from their calendar provider settings
+  await db
+    .update(calendarConnections)
+    .set({ status: 'auth_error', updatedAt: new Date() })
+    .where(eq(calendarConnections.expertId, expertId));
+  break;
+
+case 'profile_connected':
+  // Calendar profile re-connected (e.g. after re-authorization)
+  await db
+    .update(calendarConnections)
+    .set({ status: 'connected', updatedAt: new Date() })
+    .where(eq(calendarConnections.expertId, expertId));
+  // Trigger a cache rebuild to pick up any missed changes
+  await rebuildAvailabilityCacheQueue.add(
+    'rebuild-availability-cache',
+    { expertId },
+    { jobId: `availability-${expertId}` }
+  );
+  break;
+```
+
 ## Verification Ping
 
 When a channel is first created, Cronofy sends a verification ping with `notification.type === 'verification'`. The handler above already handles this — respond 200 and return.
+
+## Testing Push Notifications
+
+Trigger test notifications from the Cronofy dashboard without waiting for real calendar activity:
+
+1. Cronofy dashboard → Developer → Applications → your app
+2. Channels tab
+3. Search by account ID (the expert's Cronofy `sub`)
+4. Click "Send test notification"
+
+Use this to validate your webhook handler during development.
 
 ---
 

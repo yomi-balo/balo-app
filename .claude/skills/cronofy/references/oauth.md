@@ -1,5 +1,7 @@
 # Cronofy OAuth — Individual Connect
 
+> **Docs:** [Authorization overview](https://docs.cronofy.com/developers/api/authorization/) · [Account & sub structure](https://docs.cronofy.com/developers/authorization/#calendar-accounts)
+
 ## Flow Overview
 
 ```
@@ -28,11 +30,21 @@ export async function getCronofyAuthUrl(expertId: string): Promise<string> {
     redirect_uri: process.env.CRONOFY_REDIRECT_URI!,
     scope: 'read_write read_only create_event delete_event list_calendars read_account read_events',
     state,
+    avoid_linking: true, // REQUIRED — prevents cookie-based merging of different experts' calendars
     // Optional: pre-fill with Google/Microsoft
     // provider_name: 'google',
   });
 }
 ```
+
+> **`avoid_linking: true` is mandatory.** Cronofy uses a browser cookie to decide if multiple
+> calendar authorizations in the same session belong to the same user. Without this flag, two
+> different experts authorizing from the same browser (common during dev/testing, or shared devices)
+> will have their calendars silently merged under a single Cronofy `sub`. This is irreversible via
+> the API — only Cronofy support can separate merged accounts.
+
+> **Link tokens expire in 5 minutes.** If the OAuth flow uses the `link_token` parameter, generate
+> it immediately before redirecting. Never pre-generate or cache link tokens.
 
 **Scope explanation for Balo:**
 
@@ -100,6 +112,25 @@ export async function handleCronofyCallback(code: string, state: string): Promis
         updatedAt: new Date(),
       },
     });
+
+  // Verify the connection completed successfully — check for initial sync pending.
+  // In some Google environments, users must manually toggle permission checkboxes during OAuth.
+  // Users who click through quickly miss these toggles, leaving the connection in a broken state
+  // where Cronofy cannot pull down calendars (profile_initial_sync_required === true).
+  const userInfo = await cronofyUser(tokenResponse.access_token).userInfo();
+  const profile = userInfo.profiles?.[0];
+
+  if (profile?.profile_initial_sync_required) {
+    // Connection incomplete — mark as sync_pending, do NOT treat as fully connected.
+    // Generate the profile relink URL so the frontend can prompt the expert to re-authorize
+    // with the correct scopes. The relink URL uses a fresh link_token (expires in 5 min).
+    const relinkUrl = profile.profile_relink_url; // TODO: store in DB or return to frontend
+    await db
+      .update(calendarConnections)
+      .set({ status: 'sync_pending', relinkUrl, updatedAt: new Date() })
+      .where(eq(calendarConnections.expertId, expertId));
+    return; // Do not proceed to listCalendars or registerPushChannel yet
+  }
 
   // Trigger downstream jobs
   await listAndStoreCalendars(expertId, tokenResponse.access_token);
@@ -176,7 +207,7 @@ export async function disconnectCalendar(expertId: string): Promise<void> {
     });
   }
 
-  // Revoke Cronofy authorization
+  // Revoke Cronofy authorization — docs: https://docs.cronofy.com/developers/api/authorization/revoke/
   await cronofyApp.revokeAuthorization({
     client_id: process.env.CRONOFY_CLIENT_ID!,
     client_secret: process.env.CRONOFY_CLIENT_SECRET!,
