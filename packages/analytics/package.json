@@ -2,6 +2,7 @@
   "name": "@balo/analytics",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "main": "./src/client/index.ts",
   "types": "./src/client/index.ts",
   "exports": {
