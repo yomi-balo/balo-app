@@ -68,7 +68,7 @@ Check `.claude/skills/` for all available skills. Current skills:
 1. Read plan and skills
 2. Implement backend (API routes, services) first
 3. Implement frontend (pages, components) second
-4. Write tests alongside implementation
+4. **Write tests alongside each file you implement** — not after all files are done. Finish a component → write its test → move to the next component. This keeps coverage high and produces more testable code.
 5. Run `pnpm typecheck` — fix all type errors before continuing
 6. Run `pnpm test:run` — fix all test failures
 7. Run `pnpm lint` — fix any lint errors (`pnpm lint:fix` for auto-fixable ones)
@@ -76,6 +76,31 @@ Check `.claude/skills/` for all available skills. Current skills:
 9. Stage changes with `git add -A`
 
 The pre-PR agent (Phase 7 of /implement) will run these again as a final gate. Running them here means fewer surprises there.
+
+## Testing Requirements
+
+SonarCloud enforces **≥ 80% coverage on new code**. Every new source file needs a corresponding `.test.ts` or `.test.tsx` file unless it is:
+
+- A pure type-only file (`.d.ts`, or a file that only exports `type`/`interface`)
+- A re-export barrel (`index.ts` that only re-exports)
+- Listed in `sonar.coverage.exclusions` in `sonar-project.properties`
+
+**What to test per file type:**
+
+| File type           | What to test                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| React component     | Renders correctly, props affect output, user interactions fire handlers, conditional rendering branches, accessibility (aria-labels, roles) |
+| Server Action       | Auth gate works (uses `withAuth`), valid input returns expected result, invalid input returns error, logging is called                      |
+| Service / utility   | Happy path, error cases, edge cases, return types                                                                                           |
+| API route (Fastify) | Status codes, response shape, validation errors, auth checks                                                                                |
+
+**Test patterns:**
+
+- Use `@testing-library/react` + `vitest` for React components
+- Mock `motion/react` (framer-motion) in component tests — it causes issues in JSDOM
+- Mock `sonner` toast and analytics `track` function
+- Use `vi.mock()` for external dependencies, not inline mocks
+- Check `apps/web/src/test/setup.ts` for global mocks already configured
 
 ## Code Quality Rules
 
@@ -87,6 +112,17 @@ The pre-PR agent (Phase 7 of /implement) will run these again as a final gate. R
 - Data-driven over repetitive — when generating 3+ items with the same shape (seed rows, route registrations, nav items, form fields), define a compact data array and map over it. Never copy-paste the same object structure with different values.
 - Loading states for every async UI operation
 - Error boundaries for every new route segment
+
+## SonarCloud-Aware Patterns
+
+SonarCloud runs on every PR. Write code that passes its quality gate from the start:
+
+- **`Readonly<>` on all component props** — wrap every React component's props parameter: `({ foo }: Readonly<FooProps>)`
+- **No `void` operator** — don't use `void expression` to suppress unused-variable warnings. Instead, prefix unused params with `_` or restructure the code.
+- **No nested ternaries** — if you have `a ? X : b ? Y : Z`, refactor to `if`/`else`, early returns, or a lookup object.
+- **Associate labels with controls** — every `<label>` needs `htmlFor` matching the control's `id`. Every interactive element in a form needs an accessible name.
+- **Wrap event handlers in `useCallback`** — don't define plain functions inside components for handlers passed as props.
+- **Keep duplication under 3%** — if you're writing 2+ files with similar structure (templates, adapters, route handlers), extract shared logic into a helper. SonarCloud flags 10+ identical lines across files.
 
 ## Performance Rules
 

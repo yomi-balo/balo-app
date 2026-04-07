@@ -73,9 +73,9 @@ If coverage is below threshold: add tests for the uncovered code. SonarCloud enf
 
 ### 6. SonarCloud readiness
 
-SonarCloud cannot be run locally, but you can verify its two most common failure modes:
+SonarCloud cannot be run locally, but you can verify its most common failure modes:
 
-**Check `sonar-project.properties`:**
+**6a. Check `sonar-project.properties`:**
 
 - Any new package directory under `packages/` must be listed in both `sonar.sources` and `sonar.tests`
 - Any infrastructure file that is hard to unit test (DB client singletons, config bootstrapping, entry points) should be in `sonar.coverage.exclusions`
@@ -92,9 +92,9 @@ git diff origin/main...HEAD --name-only | grep "^packages/" | cut -d/ -f1-2 | so
 
 If a new package is missing from `sonar.sources` — add it. This is a CRITICAL failure on CI and easy to fix locally.
 
-**Check code duplication on new files (SonarQube enforces ≤ 3% on new code):**
+**6b. Check code duplication on new files (SonarCloud enforces ≤ 3% on new code):**
 
-SonarQube will fail the quality gate if new code has more than 3% duplication. This is the most common unexpected CI failure for template-heavy or pattern-repeat work. Check proactively:
+SonarCloud will fail the quality gate if new code has more than 3% duplication. This is the most common unexpected CI failure for template-heavy or pattern-repeat work. Check proactively:
 
 ```bash
 # List new/modified non-test source files in this branch
@@ -109,7 +109,7 @@ For each cluster of new files in the same directory (e.g., multiple templates, m
 
 This is a CRITICAL check — 30% duplication will fail the quality gate even if all other checks pass. Fix duplication by extracting shared code, not by inlining or removing it.
 
-**Check new source files have tests:**
+**6c. Check new source files have tests:**
 
 ```bash
 # Find new .ts/.tsx files that aren't test files
@@ -117,6 +117,27 @@ git diff origin/main...HEAD --name-only | grep -E "\.(ts|tsx)$" | grep -v "\.tes
 ```
 
 For each new source file: verify a corresponding `.test.ts` or `.spec.ts` exists, or that the file is in `sonar.coverage.exclusions` (appropriate for pure re-export barrels, type-only files, and config singletons).
+
+**6d. Check for common SonarCloud code smells in new files:**
+
+SonarCloud flags specific code patterns that won't show up in ESLint or TypeScript checks. Scan all new/modified files for these:
+
+| Pattern                                                 | Fix                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `void expression` (e.g. `void someVar`)                 | Remove — prefix unused params with `_` or restructure              |
+| Component props not `Readonly<>`                        | Wrap: `({ foo }: Readonly<FooProps>)`                              |
+| Nested ternaries (`a ? X : b ? Y : Z`)                  | Refactor to `if`/`else`, early returns, or separate JSX blocks     |
+| `<label>` without `htmlFor` / control without `id`      | Add `htmlFor="some-id"` on label and `id="some-id"` on the control |
+| Functions defined inside components (not `useCallback`) | Wrap handlers passed as props in `useCallback`                     |
+| Negated conditions in ternaries (`!x ? A : B`)          | Flip to positive condition (`x ? B : A`)                           |
+
+```bash
+# Quick grep for common SonarCloud patterns in new files
+git diff origin/main...HEAD --name-only | grep -E "\.(tsx?)$" | grep -v "\.test\." | xargs grep -n "void " 2>/dev/null || true
+git diff origin/main...HEAD --name-only | grep -E "\.tsx$" | grep -v "\.test\." | xargs grep -n "}: [A-Z].*Props)" 2>/dev/null || true
+```
+
+For any hits: read the file, fix the pattern, stage the fix. These are auto-fixable and should never be a blocker.
 
 ### 7. Integration tests (if schema or repository files changed)
 
