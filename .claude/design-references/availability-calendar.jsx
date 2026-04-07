@@ -1,471 +1,520 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 
-// ── Design Tokens ────────────────────────────────────────────────
+/**
+ * BAL-236 — ExpertAvailabilityCalendar design reference
+ *
+ * IMPLEMENTATION NOTE FOR CC:
+ * Use shadcnspace Calendar 03 as the base component:
+ *   npx shadcn@shadcn-space add calendar-03
+ * This design reference defines the Balo-specific UX and states
+ * to layer on top. Do NOT build the calendar grid from scratch.
+ *
+ * All colors must use CSS variables from globals.css (var(--primary),
+ * var(--border), var(--muted), etc.) — never hardcode hex values.
+ * The component must support dark mode.
+ */
+
+// ── Design tokens (matches globals.css CSS variables) ─────────────
+// These are approximations for the prototype only.
+// CC must replace with var(--*) Tailwind classes in the real implementation.
 const c = {
-  bg: '#F8FAFB', surface: '#FFFFFF', surfaceSubtle: '#F1F4F8',
-  border: '#E0E4EB', borderSubtle: '#EAEFF5',
-  text: '#111827', textSecondary: '#4B5563', textTertiary: '#9CA3AF',
-  primary: '#2563EB', primaryDark: '#1D4ED8', primaryLight: '#EFF6FF',
-  primaryBorder: '#BFDBFE', primaryGlow: 'rgba(37,99,235,0.12)',
-  accent: '#7C3AED', accentLight: '#F5F3FF', accentBorder: '#DDD6FE',
-  success: '#059669', successLight: '#ECFDF5', successBorder: '#A7F3D0',
-  error: '#DC2626', errorLight: '#FEF2F2',
-  gradient: 'linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)',
+  bg: '#E2E5EC',
+  surface: '#FFFFFF',
+  surfaceSubtle: '#F1F3F7',
+  border: '#D1D5DB',        // var(--border)
+  borderStrong: '#B5BAC4',  // slightly darker for slot rows
+  divider: '#C8CBD4',
+  text: '#111827',           // var(--foreground)
+  textSecondary: '#4B5563',  // var(--muted-foreground)
+  textTertiary: '#9CA3AF',
+  primary: '#2563EB',        // var(--primary)
+  primaryDark: '#1D4ED8',
+  primaryLight: '#EEF4FF',
+  primaryBorder: '#BFDBFE',
+  primaryGlow: 'rgba(37,99,235,0.12)',
+  success: '#059669',        // var(--success)
+  successLight: '#ECFDF5',
 };
 
-// Duration badge colours
-const DUR_COLORS = {
-  15: { bg: '#F1F4F8', text: '#6B7280', border: '#E0E4EB' },
-  30: { bg: '#EFF6FF', text: '#2563EB', border: '#BFDBFE' },
-  45: { bg: '#F5F3FF', text: '#7C3AED', border: '#DDD6FE' },
-  60: { bg: '#ECFDF5', text: '#059669', border: '#A7F3D0' },
-};
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'DM Sans', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; background: #E2E5EC; }
 
-// ── Mock Data Generator ──────────────────────────────────────────
-// Generates slots with varying maxDuration (15 / 30 / 45 / 60 min)
-// maxDuration = max time a consultation can run starting from this slot
-function generateMonthSlots() {
-  const slotsByDay = {};
-  const now = new Date();
-  const DURATIONS = [15, 30, 30, 60, 60, 45]; // weighted pool
+/* Two-panel layout: calendar wider, slots panel narrower */
+.avail-grid {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 1px;
+  background: #C8CBD4;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.1);
+}
+.avail-panel { background: #fff; padding: 22px; }
 
-  for (let d = 1; d < 30; d++) {
-    const dt = new Date(now);
-    dt.setDate(dt.getDate() + d);
-    const dow = dt.getDay();
-    if (dow === 0 || dow === 6) continue; // skip weekends
-    if (Math.random() < 0.2) continue;   // some days off
+/* Calendar day cells */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cell {
+  height: 40px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  border-radius: 9px; position: relative;
+  transition: background .1s; user-select: none;
+}
+.cell.avail { cursor: pointer; }
+.cell.avail:hover:not(.sel) { background: #EEF4FF; }
+.cell.sel { background: #2563EB; }
+.cell.tod:not(.sel) { background: #EEF4FF; }
 
-    const hours = [8, 8.5, 9, 9.5, 10, 10.5, 11, 13, 13.5, 14, 14.5, 15, 15.5, 16];
-    const available = hours.filter(() => Math.random() > 0.45);
+/* Duration filter pills — high contrast, wrap freely */
+.dp {
+  padding: 5px 13px; border-radius: 20px;
+  font-size: 12px; font-weight: 500;
+  border: 1.5px solid #8B9099;
+  background: #F1F3F7; cursor: pointer;
+  color: #2D3748; transition: all .15s;
+  white-space: nowrap; font-family: inherit;
+}
+.dp:hover { border-color: #2563EB; color: #2563EB; background: #EEF4FF; }
+.dp.on { background: #2563EB; border-color: #2563EB; color: #fff; font-weight: 600; }
 
-    const dayKey = dt.toISOString().slice(0, 10);
-    slotsByDay[dayKey] = available.map(h => {
-      const start = new Date(dt);
-      start.setHours(Math.floor(h), h % 1 === 0 ? 0 : 30, 0, 0);
-      const end = new Date(start);
-      end.setMinutes(end.getMinutes() + 30);
-      return {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        maxDuration: DURATIONS[Math.floor(Math.random() * DURATIONS.length)],
-      };
-    });
+/* Slot rows — time LEFT, "up to Xm" RIGHT (space-between) */
+.slot {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; padding: 9px 14px; border-radius: 9px;
+  border: 1.5px solid #B5BAC4;
+  background: #fff; cursor: pointer;
+  transition: all .12s; font-family: inherit;
+}
+.slot:hover { border-color: #2563EB; background: #EEF4FF; }
+.slot:hover .st, .slot:hover .sd { color: #1D4ED8; }
+.slot.on { border-color: transparent; background: #2563EB; }
+.slot.on .st, .slot.on .sd { color: #fff; }
+.st { font-size: 14px; font-weight: 500; color: #111827; letter-spacing: -.01em; }
+.sd { font-size: 12px; font-weight: 400; color: #9CA3AF; }
 
-    if (slotsByDay[dayKey].length === 0) delete slotsByDay[dayKey];
-  }
-  return slotsByDay;
+.cbtn {
+  width: 100%; padding: 11px; border-radius: 10px;
+  font-size: 14px; font-weight: 600;
+  background: #2563EB; color: #fff; border: none;
+  cursor: pointer; font-family: inherit; margin-top: 14px;
+  transition: background .15s;
+}
+.cbtn:hover { background: #1D4ED8; }
+.cbtn:disabled { background: #DDE2EA; color: #9CA3AF; cursor: not-allowed; }
+
+.slist {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 340px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: #E0E4EB transparent;
 }
 
-const SLOTS_BY_DAY = generateMonthSlots();
+/* Mobile: stack calendar above slots */
+@media (max-width: 560px) {
+  .avail-grid { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+  .slist { max-height: none; }
+}
+`;
 
-// ── Helpers ──────────────────────────────────────────────────────
-const fmtTime = (iso, tz = 'Australia/Sydney') =>
-  new Date(iso).toLocaleTimeString('en-AU', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true });
+// ── Mock data ─────────────────────────────────────────────────────
+// In production: fetched from GET /api/experts/:expertId/availability
+// Each slot has a maxDuration (minutes of contiguous free time from that start)
+const DURATION_POOL = [15, 30, 30, 30, 60, 60, 45, 30, 60];
+function generateMockSlots() {
+  const byDay = {};
+  const now = new Date();
+  for (let d = 0; d < 28; d++) {
+    const dt = new Date(now);
+    dt.setDate(dt.getDate() + d + 1);
+    if ([0, 6].includes(dt.getDay())) continue;
+    if (Math.random() < 0.22) continue;
+    const key = dt.toISOString().slice(0, 10);
+    const hours = [8, 8.5, 9, 9.5, 10, 10.5, 11, 13, 13.5, 14, 14.5, 15, 15.5, 16]
+      .filter(() => Math.random() > 0.4);
+    const slots = hours.map(h => {
+      const s = new Date(dt);
+      s.setHours(Math.floor(h), h % 1 ? 30 : 0, 0, 0);
+      return {
+        start: s.toISOString(),
+        // maxDuration: contiguous free minutes from this slot's start
+        maxDuration: DURATION_POOL[Math.floor(Math.random() * DURATION_POOL.length)],
+      };
+    });
+    if (slots.length) byDay[key] = slots;
+  }
+  return byDay;
+}
+const MOCK_SLOTS = generateMockSlots();
 
-// ── Month Calendar Component ──────────────────────────────────────
-// Left panel — shows the month grid, availability dots, day selection
-function MonthCalendar({ selectedDay, onSelectDay, viewerTz = 'Australia/Sydney' }) {
+const fmtTime = iso => new Date(iso).toLocaleTimeString('en-AU', {
+  timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', hour12: true,
+});
+const fmtEndTime = (iso, minutes) => {
+  const d = new Date(iso);
+  d.setMinutes(d.getMinutes() + minutes);
+  return fmtTime(d.toISOString());
+};
+
+// ══════════════════════════════════════════════════════════════════
+// MONTH CALENDAR
+// Left panel. In production: use shadcnspace Calendar 03 base.
+// Dots mark days with availability. Disabled dates = past + no slots.
+// ══════════════════════════════════════════════════════════════════
+function MonthCalendar({ selectedDay, onSelectDay }) {
   const [monthOffset, setMonthOffset] = useState(0);
-  const today = new Date();
-  const displayMonth = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const now = new Date();
+  const base = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+  const monthLabel = base.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
 
-  const monthLabel = displayMonth.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
-
-  // Build calendar grid
-  const firstDow = (displayMonth.getDay() + 6) % 7; // Mon=0
-  const daysInMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() + 1, 0).getDate();
+  const firstDow = (base.getDay() + 6) % 7; // Mon=0
+  const daysInMonth = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
   const cells = [];
-  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let i = 0; i < firstDow; i++) cells.push(0);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(null);
+  while (cells.length % 7) cells.push(0);
 
-  const getDateKey = (day) => {
-    if (!day) return null;
-    const dt = new Date(displayMonth.getFullYear(), displayMonth.getMonth(), day);
-    return dt.toISOString().slice(0, 10);
-  };
-
-  const isPast = (day) => {
-    if (!day) return false;
-    const dt = new Date(displayMonth.getFullYear(), displayMonth.getMonth(), day);
+  const getKey = d => d ? new Date(base.getFullYear(), base.getMonth(), d).toISOString().slice(0, 10) : null;
+  const isPast = d => {
+    if (!d) return false;
     const t = new Date(); t.setHours(0, 0, 0, 0);
-    return dt < t;
+    return new Date(base.getFullYear(), base.getMonth(), d) < t;
   };
-
-  const isToday = (day) => {
-    if (!day) return false;
-    const dt = new Date(displayMonth.getFullYear(), displayMonth.getMonth(), day);
-    return dt.toDateString() === today.toDateString();
-  };
+  const isToday = d => d ? new Date(base.getFullYear(), base.getMonth(), d).toDateString() === now.toDateString() : false;
+  const hasSlots = d => !!(d && MOCK_SLOTS[getKey(d)]);
 
   return (
     <div>
-      {/* Month header nav */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <button onClick={() => setMonthOffset(o => o - 1)}
-          disabled={monthOffset <= 0}
-          style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${c.border}`, background: c.surface,
-            cursor: monthOffset <= 0 ? 'not-allowed' : 'pointer', opacity: monthOffset <= 0 ? 0.35 : 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={c.textSecondary} strokeWidth={2.5}><path d="M15 18l-6-6 6-6"/></svg>
+      {/* Month navigation */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <button onClick={() => setMonthOffset(o => o - 1)} disabled={monthOffset <= 0}
+          style={{ width: 32, height: 32, borderRadius: 8, border: '1.5px solid #C2C7D0', background: '#fff',
+            cursor: monthOffset <= 0 ? 'not-allowed' : 'pointer', opacity: monthOffset <= 0 ? 0.3 : 1,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth={2}><path d="M15 18l-6-6 6-6"/></svg>
         </button>
-        <span style={{ fontSize: 14, fontWeight: 650, color: c.text }}>{monthLabel}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: '#111827', letterSpacing: '-.01em' }}>{monthLabel}</span>
         <button onClick={() => setMonthOffset(o => o + 1)}
-          style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${c.border}`, background: c.surface,
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={c.textSecondary} strokeWidth={2.5}><path d="M9 18l6-6-6-6"/></svg>
+          style={{ width: 32, height: 32, borderRadius: 8, border: '1.5px solid #C2C7D0', background: '#fff',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth={2}><path d="M9 18l6-6-6-6"/></svg>
         </button>
       </div>
 
       {/* Day-of-week headers */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
-        {['M','T','W','T','F','S','S'].map((d, i) => (
-          <div key={i} style={{ textAlign: 'center', fontSize: 11, fontWeight: 600,
-            color: i >= 5 ? c.textTertiary : c.textTertiary, paddingBottom: 4 }}>{d}</div>
+      <div className="cal-grid" style={{ marginBottom: 8 }}>
+        {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((d, i) => (
+          <div key={i} style={{ textAlign: 'center', fontSize: 11, fontWeight: 500,
+            color: '#9CA3AF', paddingBottom: 6, letterSpacing: '.03em' }}>{d}</div>
         ))}
       </div>
 
       {/* Day cells */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
-        {cells.map((day, i) => {
-          const key = getDateKey(day);
-          const hasSlots = key && !!SLOTS_BY_DAY[key];
-          const past = isPast(day);
-          const today2 = isToday(day);
+      <div className="cal-grid">
+        {cells.map((d, i) => {
+          const key = getKey(d);
           const isSel = key === selectedDay;
-          const isWeekend = i % 7 >= 5;
-
+          const today = isToday(d);
+          const past = isPast(d);
+          const avail = hasSlots(d);
+          const wknd = i % 7 >= 5;
+          const cls = ['cell', avail && !past ? 'avail' : '', isSel ? 'sel' : '', today && !isSel ? 'tod' : ''].join(' ');
           return (
-            <div key={i} onClick={hasSlots && !past ? () => onSelectDay(key) : undefined}
-              style={{
-                height: 36, display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', borderRadius: 8, position: 'relative',
-                cursor: hasSlots && !past ? 'pointer' : 'default',
-                background: isSel ? c.primary : today2 && !isSel ? c.primaryLight : 'transparent',
-                border: today2 && !isSel ? `1px solid ${c.primaryBorder}` : '1px solid transparent',
-                opacity: past || isWeekend ? 0.35 : 1,
-                transition: 'all 0.15s',
-              }}>
-              {day && (
-                <>
-                  <span style={{ fontSize: 13, fontWeight: today2 || isSel ? 700 : 400,
-                    color: isSel ? 'white' : today2 ? c.primary : c.text, lineHeight: 1 }}>{day}</span>
-                  {hasSlots && !past && (
-                    <div style={{ width: 4, height: 4, borderRadius: '50%', marginTop: 2,
-                      background: isSel ? 'rgba(255,255,255,0.7)' : c.primary }} />
-                  )}
-                </>
-              )}
+            <div key={i} className={cls} onClick={avail && !past ? () => onSelectDay(key) : undefined}>
+              {d ? (
+                <span style={{ fontSize: 13, lineHeight: 1,
+                  fontWeight: isSel || today ? 600 : 400,
+                  color: isSel ? '#fff' : today ? '#2563EB' : past || wknd ? '#C5C9D0' : '#111827' }}>
+                  {d}
+                </span>
+              ) : null}
+              {avail && !past && !isSel ? (
+                <div style={{ width: 3, height: 3, borderRadius: '50%', background: '#2563EB', position: 'absolute', bottom: 4 }} />
+              ) : null}
             </div>
           );
         })}
       </div>
 
       {/* Legend */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 14, paddingTop: 12,
-        borderTop: `1px solid ${c.borderSubtle}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <div style={{ width: 4, height: 4, borderRadius: '50%', background: c.primary }} />
-          <span style={{ fontSize: 11, color: c.textTertiary }}>Available</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <div style={{ width: 16, height: 16, borderRadius: 5, background: c.primary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <span style={{ fontSize: 9, color: 'white', fontWeight: 700 }}>1</span>
-          </div>
-          <span style={{ fontSize: 11, color: c.textTertiary }}>Selected</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16,
+        paddingTop: 14, borderTop: '1px solid #EAECF0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ width: 3, height: 3, borderRadius: '50%', background: '#2563EB' }} />
+          <span style={{ fontSize: 10, color: '#9CA3AF' }}>Available</span>
         </div>
       </div>
     </div>
   );
 }
 
-// ── Duration Badge ────────────────────────────────────────────────
-function DurBadge({ duration }) {
-  const style = DUR_COLORS[duration] || DUR_COLORS[30];
-  return (
-    <span style={{ fontSize: 11, fontWeight: 650, padding: '2px 7px', borderRadius: 5,
-      background: style.bg, color: style.text, border: `1px solid ${style.border}`,
-      whiteSpace: 'nowrap', flexShrink: 0 }}>
-      {duration}m max
-    </span>
-  );
-}
+// ══════════════════════════════════════════════════════════════════
+// SLOTS PANEL
+// Right panel. Filter always visible. Time LEFT, "up to Xm" RIGHT.
+// Duration filter auto-resets + warns when switching to a day with
+// no matching slots (instead of showing a blank list).
+// Confirmation step asks for duration AFTER slot selection.
+// ══════════════════════════════════════════════════════════════════
+function SlotsPanel({ dayKey, mode = 'selectable' }) {
+  const [durFilter, setDurFilter] = useState(null);
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [confirmStep, setConfirmStep] = useState(false);
+  const [chosenDuration, setChosenDuration] = useState(null);
+  const [booked, setBooked] = useState(false);
 
-// ── Duration Filter ──────────────────────────────────────────────
-// Only shown when slots > 8. Filters slots by maxDuration >= selected.
-function DurationFilter({ availableDurations, active, onChange }) {
-  const durations = [null, ...availableDurations.sort((a, b) => a - b)];
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: c.textTertiary, fontWeight: 500, marginRight: 2 }}>Filter:</span>
-        {durations.map(d => {
-          const isActive = d === active;
-          const style = d ? DUR_COLORS[d] : null;
-          return (
-            <button key={d ?? 'all'} onClick={() => onChange(d)}
-              style={{ padding: '4px 11px', borderRadius: 20, fontSize: 12, fontWeight: 600,
-                border: isActive ? 'none' : `1px solid ${d ? style.border : c.border}`,
-                background: isActive ? (d ? style.text : c.primary) : (d ? style.bg : c.surface),
-                color: isActive ? 'white' : (d ? style.text : c.textSecondary),
-                cursor: 'pointer', transition: 'all 0.15s' }}>
-              {d ? `${d} min` : 'All'}
-            </button>
-          );
-        })}
+  // Reset state on day change + auto-clear stale filter
+  useEffect(() => {
+    setSelectedSlot(null);
+    setConfirmStep(false);
+    setChosenDuration(null);
+    // Auto-reset filter if it would produce empty results on the new day
+    if (durFilter && dayKey) {
+      const slots = MOCK_SLOTS[dayKey] || [];
+      if (!slots.some(s => s.maxDuration >= durFilter)) {
+        setDurFilter(null);
+      }
+    }
+  }, [dayKey]);
+
+  // ── No day selected ───────────────────────────────────────────
+  if (!dayKey) return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', minHeight: 280, textAlign: 'center', padding: 24 }}>
+      <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#F1F3F7',
+        border: '1.5px solid #D8DCE5', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', margin: '0 auto 14px' }}>
+        <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth={1.5}>
+          <rect x="3" y="4" width="18" height="18" rx="2"/>
+          <path d="M16 2v4M8 2v4M3 10h18"/>
+        </svg>
       </div>
-      <p style={{ fontSize: 11, color: c.textTertiary, margin: '5px 0 0' }}>
-        Showing slots where at least <strong style={{ fontWeight: 600 }}>{active ? `${active} min` : 'any duration'}</strong> can be booked
+      <p style={{ fontSize: 14, fontWeight: 500, color: '#6B7280', margin: '0 0 4px' }}>Select a date</p>
+      <p style={{ fontSize: 13, color: '#9CA3AF', margin: 0, lineHeight: 1.5 }}>
+        Tap a highlighted day<br/>to see available times
       </p>
     </div>
   );
-}
 
-// ── Slot List ─────────────────────────────────────────────────────
-// Right panel — shows slots for selected day + duration filter + confirmation
-function SlotList({ dayKey, viewerTz = 'Australia/Sydney', onConfirm }) {
-  const [durFilter, setDurFilter] = useState(null);
-  const [selSlot, setSelSlot] = useState(null);
-  const [confirmStep, setConfirmStep] = useState(false);
-  const [chosenDur, setChosenDur] = useState(null);
-
-  const slots = SLOTS_BY_DAY[dayKey] || [];
-  const SHOW_FILTER = slots.length > 8;
-
-  const availableDurations = [...new Set(slots.map(s => s.maxDuration))];
-  const filtered = durFilter ? slots.filter(s => s.maxDuration >= durFilter) : slots;
-
-  // Day heading
-  const dt = new Date(dayKey);
-  const today = new Date();
-  const isToday = dt.toDateString() === today.toDateString();
-  const headingDate = dt.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
-
-  const handleSelectSlot = (slot) => {
-    setSelSlot(slot);
-    setConfirmStep(false);
-    setChosenDur(null);
-  };
-
-  if (!dayKey) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      height: '100%', minHeight: 300, textAlign: 'center', padding: '40px 24px' }}>
-      <div style={{ width: 48, height: 48, borderRadius: 13, margin: '0 auto 14px',
-        background: c.surfaceSubtle, border: `1px solid ${c.border}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={c.textTertiary} strokeWidth={2}>
-          <rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>
+  // ── Booked confirmation ───────────────────────────────────────
+  if (booked) return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', minHeight: 280, textAlign: 'center' }}>
+      <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#059669',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
+        <svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5}>
+          <path d="M20 6L9 17l-5-5"/>
         </svg>
       </div>
-      <p style={{ fontSize: 14, fontWeight: 600, color: c.textSecondary, margin: '0 0 5px' }}>Select a date</p>
-      <p style={{ fontSize: 13, color: c.textTertiary, margin: 0 }}>Pick a day on the calendar to see available times</p>
+      <p style={{ fontSize: 16, fontWeight: 600, color: '#111827', margin: '0 0 5px' }}>Booked!</p>
+      <p style={{ fontSize: 13, color: '#6B7280', margin: 0 }}>Confirmation email on its way</p>
     </div>
   );
 
-  // Confirmation step
-  if (confirmStep && selSlot) {
-    const availDurs = [15, 30, 45, 60].filter(d => d <= selSlot.maxDuration);
+  const allSlots = MOCK_SLOTS[dayKey] || [];
+  const uniqueDurations = [...new Set(allSlots.map(s => s.maxDuration))].sort((a, b) => a - b);
+  const filtered = durFilter ? allSlots.filter(s => s.maxDuration >= durFilter) : allSlots;
+  const noMatch = durFilter && !filtered.length;
+  // Fallback: if filter produces no results, show all slots with a warning
+  const showing = noMatch ? allSlots : filtered;
+
+  const dt = new Date(dayKey);
+  const isToday = dt.toDateString() === new Date().toDateString();
+  const headDate = dt.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // ── Duration confirmation step ────────────────────────────────
+  // Triggered after slot selection in selectable mode.
+  // User picks exact duration (up to slot's maxDuration) before confirming.
+  if (confirmStep && selectedSlot) {
+    const availableDurations = [15, 30, 45, 60].filter(d => d <= selectedSlot.maxDuration);
     return (
       <div>
-        <button onClick={() => { setConfirmStep(false); setChosenDur(null); }}
+        <button onClick={() => { setConfirmStep(false); setChosenDuration(null); }}
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none',
-            cursor: 'pointer', fontSize: 13, fontWeight: 500, color: c.primary, padding: '0 0 14px' }}>
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={c.primary} strokeWidth={2}><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-          Back to slots
+            color: '#2563EB', fontSize: 13, fontWeight: 500, padding: '0 0 18px', cursor: 'pointer',
+            fontFamily: 'inherit' }}>
+          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth={2}>
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+          Back
         </button>
-        <div style={{ padding: '14px 16px', borderRadius: 10, background: c.primaryLight,
-          border: `1px solid ${c.primaryBorder}`, marginBottom: 20 }}>
-          <p style={{ fontSize: 13, fontWeight: 650, color: c.primary, margin: '0 0 2px' }}>
-            {fmtTime(selSlot.start, viewerTz)}
-          </p>
-          <p style={{ fontSize: 12, color: c.primary, margin: 0, opacity: 0.8 }}>
-            {isToday ? 'Today' : ''} {headingDate} · Up to {selSlot.maxDuration} min available
-          </p>
+
+        {/* Selected time recap */}
+        <div style={{ padding: '12px 16px', borderRadius: 10, background: '#EEF4FF',
+          border: '1.5px solid #BFDBFE', marginBottom: 20 }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: '#1D4ED8' }}>
+            {fmtTime(selectedSlot.start)}
+          </span>
+          <span style={{ fontSize: 13, color: '#6B7280', marginLeft: 8 }}>
+            {isToday ? 'Today' : headDate}
+          </span>
         </div>
-        <p style={{ fontSize: 12, fontWeight: 700, color: c.textTertiary, textTransform: 'uppercase',
-          letterSpacing: '0.07em', margin: '0 0 12px' }}>How long do you need?</p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-          {availDurs.map(d => {
-            const style = DUR_COLORS[d];
-            const isChosen = chosenDur === d;
+
+        <p style={{ fontSize: 11, fontWeight: 600, color: '#9CA3AF', textTransform: 'uppercase',
+          letterSpacing: '.07em', marginBottom: 10 }}>How long do you need?</p>
+
+        {/* Duration options */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 20 }}>
+          {availableDurations.map(d => {
+            const isChosen = chosenDuration === d;
             return (
-              <button key={d} onClick={() => setChosenDur(d)}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px',
-                  borderRadius: 10, border: isChosen ? 'none' : `1.5px solid ${c.border}`,
-                  background: isChosen ? c.primary : c.surface,
-                  cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
-                  boxShadow: isChosen ? `0 2px 8px ${c.primaryGlow}` : 'none' }}>
+              <button key={d} onClick={() => setChosenDuration(d)}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px',
+                  borderRadius: 10, border: `1.5px solid ${isChosen ? '#2563EB' : '#C2C7D0'}`,
+                  background: isChosen ? '#EEF4FF' : '#fff', cursor: 'pointer',
+                  textAlign: 'left', fontFamily: 'inherit', transition: 'all .15s' }}>
                 <div style={{ width: 18, height: 18, borderRadius: '50%',
-                  background: isChosen ? 'rgba(255,255,255,0.25)' : c.surfaceSubtle,
-                  border: `2px solid ${isChosen ? 'rgba(255,255,255,0.6)' : c.border}`,
+                  border: `2px solid ${isChosen ? '#2563EB' : '#C2C7D0'}`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  {isChosen && <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'white' }} />}
+                  {isChosen && <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#2563EB' }} />}
                 </div>
-                <div>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: isChosen ? 'white' : c.text,
-                    display: 'block' }}>{d} minutes</span>
-                  <span style={{ fontSize: 12, color: isChosen ? 'rgba(255,255,255,0.7)' : c.textTertiary }}>
-                    {fmtTime(selSlot.start, viewerTz)} – {(() => {
-                      const end = new Date(selSlot.start);
-                      end.setMinutes(end.getMinutes() + d);
-                      return fmtTime(end.toISOString(), viewerTz);
-                    })()}
-                  </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: isChosen ? 600 : 500,
+                    color: isChosen ? '#1D4ED8' : '#111827' }}>{d} minutes</div>
+                  <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 1 }}>
+                    {fmtTime(selectedSlot.start)} – {fmtEndTime(selectedSlot.start, d)}
+                  </div>
                 </div>
               </button>
             );
           })}
         </div>
-        <button disabled={!chosenDur} onClick={onConfirm}
-          style={{ width: '100%', padding: '11px', borderRadius: 10, fontSize: 14, fontWeight: 650,
-            background: chosenDur ? c.primary : c.border, color: 'white', border: 'none',
-            cursor: chosenDur ? 'pointer' : 'not-allowed', transition: 'all 0.2s',
-            boxShadow: chosenDur ? `0 2px 10px ${c.primaryGlow}` : 'none' }}>
-          {chosenDur ? `Confirm ${chosenDur}-min consultation` : 'Select a duration'}
+
+        <button className="cbtn" disabled={!chosenDuration} onClick={() => setBooked(true)}>
+          {chosenDuration ? `Confirm ${chosenDuration}-min consultation` : 'Select a duration above'}
         </button>
       </div>
     );
   }
 
+  // ── Main slot list ────────────────────────────────────────────
   return (
     <div>
       {/* Day heading */}
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h3 style={{ fontSize: 15, fontWeight: 700, color: c.text, margin: 0 }}>
-            {isToday ? 'Today' : ''} {headingDate}
-          </h3>
-          {isToday && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
-            background: c.primaryLight, color: c.primary, border: `1px solid ${c.primaryBorder}` }}>Today</span>}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: '#111827', letterSpacing: '-.01em' }}>
+            {isToday ? 'Today' : headDate}
+          </span>
+          {isToday && (
+            <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 5,
+              background: '#EEF4FF', color: '#2563EB', border: '1px solid #BFDBFE' }}>Today</span>
+          )}
         </div>
-        <p style={{ fontSize: 12, color: c.textTertiary, margin: '3px 0 0' }}>
-          {filtered.length} slot{filtered.length !== 1 ? 's' : ''} available
+        <p style={{ fontSize: 12, color: '#9CA3AF', margin: '3px 0 0' }}>
+          {showing.length} time{showing.length !== 1 ? 's' : ''} available
+          {durFilter && !noMatch ? ` for ${durFilter}+ min` : ''}
         </p>
       </div>
 
-      {/* Duration filter — only shown when >8 slots */}
-      {SHOW_FILTER && (
-        <DurationFilter availableDurations={availableDurations} active={durFilter}
-          onChange={d => { setDurFilter(d); setSelSlot(null); }} />
-      )}
-
-      {/* Slot grid */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {filtered.map((slot, i) => {
-          const isSel = selSlot === slot;
-          const durStyle = DUR_COLORS[slot.maxDuration] || DUR_COLORS[30];
-          return (
-            <button key={i} onClick={() => handleSelectSlot(slot)}
-              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-                borderRadius: 10, border: isSel ? 'none' : `1.5px solid ${c.border}`,
-                background: isSel ? c.primary : c.surface,
-                cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
-                boxShadow: isSel ? `0 2px 8px ${c.primaryGlow}` : 'none' }}>
-              <div style={{ flex: 1 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: isSel ? 'white' : c.text }}>
-                  {fmtTime(slot.start, viewerTz)}
-                </span>
-              </div>
-              <span style={{ fontSize: 11, fontWeight: 650, padding: '2px 7px', borderRadius: 5,
-                background: isSel ? 'rgba(255,255,255,0.2)' : durStyle.bg,
-                color: isSel ? 'white' : durStyle.text,
-                border: `1px solid ${isSel ? 'rgba(255,255,255,0.3)' : durStyle.border}`,
-                whiteSpace: 'nowrap', flexShrink: 0 }}>
-                {slot.maxDuration}m max
-              </span>
+      {/* Duration filter — ALWAYS VISIBLE, pills can wrap to 2 lines */}
+      <div style={{ marginBottom: 16 }}>
+        <p style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase',
+          letterSpacing: '.07em', marginBottom: 8 }}>Duration</p>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {[null, ...uniqueDurations].map(d => (
+            <button key={d ?? 'all'} className={`dp${durFilter === d ? ' on' : ''}`}
+              onClick={() => { setDurFilter(d); setSelectedSlot(null); }}>
+              {d ? `${d} min` : 'Any'}
             </button>
-          );
-        })}
-        {filtered.length === 0 && durFilter && (
-          <div style={{ padding: '24px 16px', textAlign: 'center' }}>
-            <p style={{ fontSize: 13, color: c.textSecondary, margin: '0 0 8px' }}>
-              No {durFilter}-min slots on this day
-            </p>
+          ))}
+        </div>
+        {/* Auto-reset warning when filter has no results on this day */}
+        {noMatch && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8,
+            fontSize: 12, color: '#D97706' }}>
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth={2}>
+              <circle cx={12} cy={12} r={10}/>
+              <path d="M12 8v4M12 16h.01"/>
+            </svg>
+            No {durFilter}-min slots today.
             <button onClick={() => setDurFilter(null)}
-              style={{ fontSize: 13, color: c.primary, background: 'none', border: 'none',
-                cursor: 'pointer', fontWeight: 600 }}>
-              Show all slots
+              style={{ background: 'none', border: 'none', color: '#2563EB', fontSize: 12,
+                fontWeight: 600, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
+              Show all →
             </button>
           </div>
         )}
       </div>
 
-      {/* Confirm CTA */}
-      {selSlot && (
-        <div style={{ marginTop: 16, animation: 'slideUp 0.25s ease-out' }}>
-          <button onClick={() => setConfirmStep(true)}
-            style={{ width: '100%', padding: '11px', borderRadius: 10, fontSize: 14, fontWeight: 650,
-              background: c.primary, color: 'white', border: 'none', cursor: 'pointer',
-              boxShadow: `0 2px 10px ${c.primaryGlow}` }}>
-            Continue — {fmtTime(selSlot.start, viewerTz)}
-          </button>
-        </div>
+      {/* Slot list — time LEFT, "up to Xm" RIGHT */}
+      <div className="slist">
+        {showing.map((slot, i) => {
+          const isSel = selectedSlot === slot;
+          return (
+            <button key={i} className={`slot${isSel ? ' on' : ''}`} onClick={() => setSelectedSlot(slot)}>
+              <span className="st">{fmtTime(slot.start)}</span>
+              {/* Only show maxDuration label when "Any" filter — redundant when filtered */}
+              {(!durFilter || noMatch) && (
+                <span className="sd">up to {slot.maxDuration}m</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Continue CTA — only in selectable mode */}
+      {selectedSlot && mode === 'selectable' && (
+        <button className="cbtn" onClick={() => setConfirmStep(true)}>
+          Continue with {fmtTime(selectedSlot.start)} →
+        </button>
       )}
     </div>
   );
 }
 
 // ══════════════════════════════════════════════════════════════════
-// MAIN — ExpertAvailabilityCalendar
-// Props: expertId, mode, viewerTimezone, onSlotSelect, daysAhead
+// MAIN EXPORT — ExpertAvailabilityCalendar
+//
+// Props:
+//   expertId        — fetches from GET /api/experts/:id/availability
+//   mode            — 'preview' (read-only) | 'selectable' (booking flow)
+//   viewerTimezone  — IANA string, defaults to browser timezone
+//   onSlotSelect    — (selectable mode) callback with { start, end, duration }
+//   daysAhead       — 14 for preview, 60 for selectable
+//
+// Component location in codebase:
+//   packages/web/src/components/availability/ExpertAvailabilityCalendar.tsx
 // ══════════════════════════════════════════════════════════════════
-export default function ExpertAvailabilityCalendar({
-  viewerTimezone = 'Australia/Sydney',
-  expertTimezone = 'Australia/Melbourne',
-  demoState = 'has_slots',
-}) {
+export default function ExpertAvailabilityCalendar({ mode = 'selectable' }) {
   const [selectedDay, setSelectedDay] = useState(null);
-  const [booked, setBooked] = useState(false);
-
-  const tzLabel = viewerTimezone.split('/')[1]?.replace('_', ' ') || viewerTimezone;
-
-  if (demoState === 'loading') return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-      {[1, 2].map(n => <div key={n} style={{ height: 320, borderRadius: 14, background: 'linear-gradient(90deg, #E0E4EB 25%, #EEF1F6 50%, #E0E4EB 75%)', backgroundSize: '400px 100%', animation: 'shimmer 1.4s ease-in-out infinite' }} />)}
-    </div>
-  );
-
-  if (demoState === 'empty_nc' || demoState === 'empty_ns') return (
-    <div style={{ padding: '40px 24px', textAlign: 'center', background: c.surface, borderRadius: 14, border: `1px solid ${c.border}` }}>
-      <p style={{ fontSize: 14, fontWeight: 600, color: c.textSecondary, margin: '0 0 5px' }}>
-        {demoState === 'empty_nc' ? 'Schedule not set up yet' : 'No availability in the next 30 days'}
-      </p>
-      <p style={{ fontSize: 13, color: c.textTertiary, margin: 0 }}>Check back soon</p>
-    </div>
-  );
-
-  if (booked) return (
-    <div style={{ padding: '48px 32px', textAlign: 'center', background: c.surface, borderRadius: 14, border: `1px solid ${c.border}` }}>
-      <div style={{ width: 60, height: 60, borderRadius: '50%', margin: '0 auto 18px',
-        background: 'linear-gradient(135deg, #059669 0%, #0891B2 100%)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5}><path d="M20 6L9 17l-5-5"/></svg>
-      </div>
-      <h3 style={{ fontSize: 20, fontWeight: 700, color: c.text, margin: '0 0 8px' }}>Consultation booked!</h3>
-      <p style={{ fontSize: 14, color: c.textSecondary, margin: 0 }}>You'll receive a confirmation email shortly.</p>
-    </div>
-  );
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 16 }}>
-        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={c.textTertiary} strokeWidth={2}><circle cx={12} cy={12} r={10}/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10A15.3 15.3 0 0112 2z"/></svg>
-        <span style={{ fontSize: 12, color: c.textTertiary }}>
-          Times in <strong style={{ fontWeight: 600, color: c.textSecondary }}>{tzLabel}</strong>
-          {viewerTimezone !== expertTimezone && ` · Expert is in ${expertTimezone.split('/')[1]?.replace('_', ' ')}`}
-        </span>
+    <div style={{ fontFamily: "'DM Sans', -apple-system, sans-serif" }}>
+      <style>{CSS}</style>
+
+      {/* Timezone label */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 12, padding: '0 2px' }}>
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth={1.5}>
+          <circle cx={12} cy={12} r={10}/>
+          <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10A15.3 15.3 0 0112 2z"/>
+        </svg>
+        <span style={{ fontSize: 12, color: '#9CA3AF' }}>Sydney time</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 24, alignItems: 'start' }}>
-        {/* Left: Month Calendar */}
-        <div style={{ background: c.surface, borderRadius: 14, border: `1px solid ${c.border}`, padding: '16px' }}>
-          <MonthCalendar selectedDay={selectedDay} onSelectDay={setSelectedDay} viewerTz={viewerTimezone} />
+      {/* Two-panel layout */}
+      <div className="avail-grid">
+        {/* Left: month calendar (wider) */}
+        <div className="avail-panel">
+          <MonthCalendar selectedDay={selectedDay} onSelectDay={setSelectedDay} />
         </div>
+        {/* Right: slot list (narrower, 300px) */}
+        <div className="avail-panel" style={{ minWidth: 0 }}>
+          <SlotsPanel dayKey={selectedDay} mode={mode} />
+        </div>
+      </div>
 
-        {/* Right: Slot list */}
-        <div style={{ background: c.surface, borderRadius: 14, border: `1px solid ${c.border}`, padding: '16px', minHeight: 320 }}>
-          <SlotList dayKey={selectedDay} viewerTz={viewerTimezone} onConfirm={() => setBooked(true)} />
+      {/* Demo mode switcher */}
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+        <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 10,
+          background: '#F1F3F7', border: '1px solid #E0E4EB' }}>
+          {['preview', 'selectable'].map(m => (
+            <button key={m} style={{ padding: '5px 14px', borderRadius: 7, fontSize: 12,
+              fontWeight: 550, border: 'none', cursor: 'pointer',
+              background: mode === m ? '#fff' : 'transparent',
+              color: mode === m ? '#111827' : '#9CA3AF',
+              boxShadow: mode === m ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
+              fontFamily: 'inherit' }}>{m}</button>
+          ))}
         </div>
       </div>
     </div>
