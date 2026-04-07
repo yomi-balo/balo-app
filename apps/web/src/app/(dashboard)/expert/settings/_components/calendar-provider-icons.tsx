@@ -2,7 +2,7 @@ interface ProviderIconProps {
   size?: number;
 }
 
-export function GoogleIcon({ size = 20 }: ProviderIconProps): React.JSX.Element {
+export function GoogleIcon({ size = 20 }: Readonly<ProviderIconProps>): React.JSX.Element {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
@@ -25,7 +25,7 @@ export function GoogleIcon({ size = 20 }: ProviderIconProps): React.JSX.Element 
   );
 }
 
-export function MicrosoftIcon({ size = 20 }: ProviderIconProps): React.JSX.Element {
+export function MicrosoftIcon({ size = 20 }: Readonly<ProviderIconProps>): React.JSX.Element {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
       <rect x="1" y="1" width="10.5" height="10.5" fill="#F25022" />

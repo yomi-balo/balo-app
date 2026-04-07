@@ -45,6 +45,7 @@ export function CalendarTab(): React.JSX.Element {
   const connection = useCalendarConnection();
 
   const [viewState, setViewState] = useState<CalendarViewState>(connection ? 'connected' : 'empty');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- setter will be used in BAL-232 OAuth flow
   const [connectingProvider, setConnectingProvider] = useState<CalendarProvider>('google');
 
   const handleConnect = useCallback((provider: CalendarProvider) => {
@@ -53,9 +54,6 @@ export function CalendarTab(): React.JSX.Element {
     // When BAL-232 is ready, this will initiate the OAuth flow:
     // setConnectingProvider(provider);
     // setViewState('connecting');
-    void provider;
-    void setConnectingProvider;
-    void setViewState;
   }, []);
 
   const handleCancelConnect = useCallback(() => {

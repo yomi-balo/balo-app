@@ -29,7 +29,9 @@ interface CalendarConnectedCardProps {
   onToggleConflictCheck: (subCalendarId: string, checked: boolean) => void;
 }
 
-function SyncBadge({ status }: { status: CalendarConnection['status'] }): React.JSX.Element | null {
+function SyncBadge({
+  status,
+}: Readonly<{ status: CalendarConnection['status'] }>): React.JSX.Element | null {
   if (status === 'connected') {
     return (
       <div className="flex items-center gap-1.5">
@@ -65,7 +67,7 @@ export function CalendarConnectedCard({
   provider,
   onDisconnect,
   onToggleConflictCheck,
-}: CalendarConnectedCardProps): React.JSX.Element {
+}: Readonly<CalendarConnectedCardProps>): React.JSX.Element {
   const [expanded, setExpanded] = useState(true);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
@@ -74,16 +76,16 @@ export function CalendarConnectedCard({
   const isError = connection.status === 'auth_error';
   const activeCount = connection.subCalendars.filter((cal) => cal.conflictChecking).length;
 
-  function handleDisconnect(): void {
+  const handleDisconnect = useCallback((): void => {
     track(CALENDAR_EVENTS.DISCONNECT_INITIATED, { provider });
     toast.info('Calendar integration is coming soon.');
     setConfirmDisconnect(false);
     onDisconnect();
-  }
+  }, [provider, onDisconnect]);
 
-  function handleReconnect(): void {
+  const handleReconnect = useCallback((): void => {
     toast.info('Calendar integration is coming soon.');
-  }
+  }, []);
 
   return (
     <Card className="overflow-hidden">
@@ -118,7 +120,7 @@ export function CalendarConnectedCard({
               </span>
             )}
 
-            {isError ? (
+            {isError && (
               <Button
                 variant="destructive"
                 size="sm"
@@ -128,7 +130,8 @@ export function CalendarConnectedCard({
                 <RefreshCw className="h-3 w-3" />
                 Reconnect
               </Button>
-            ) : !confirmDisconnect ? (
+            )}
+            {!isError && !confirmDisconnect && (
               <Button
                 variant="outline"
                 size="sm"
@@ -138,7 +141,7 @@ export function CalendarConnectedCard({
                 <Trash2 className="h-3 w-3" />
                 Disconnect
               </Button>
-            ) : null}
+            )}
           </div>
         </div>
       </div>
@@ -237,10 +240,10 @@ export function CalendarConnectedCard({
 function TargetCalendarSelector({
   connection,
   provider,
-}: {
+}: Readonly<{
   connection: CalendarConnection;
   provider: CalendarProvider;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const primaryCalendar = connection.subCalendars.find((c) => c.primary);
   const defaultValue = connection.targetCalendarId ?? primaryCalendar?.id ?? '';
   const [showSaved, setShowSaved] = useState(false);
@@ -272,7 +275,9 @@ function TargetCalendarSelector({
   return (
     <div className="px-5 py-4">
       <div className="mb-1 flex items-center gap-2">
-        <label className="text-foreground text-sm font-medium">Target calendar</label>
+        <label htmlFor="target-calendar-select" className="text-foreground text-sm font-medium">
+          Target calendar
+        </label>
         <AnimatePresence>
           {showSaved && (
             <motion.span
@@ -291,7 +296,7 @@ function TargetCalendarSelector({
         New consultation events will be created in this calendar.
       </p>
       <Select defaultValue={defaultValue} onValueChange={handleChange}>
-        <SelectTrigger size="sm" className="w-full">
+        <SelectTrigger id="target-calendar-select" size="sm" className="w-full">
           <SelectValue placeholder="Select a calendar" />
         </SelectTrigger>
         <SelectContent>

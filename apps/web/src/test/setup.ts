@@ -32,6 +32,7 @@ vi.mock('@/lib/analytics', async () => {
     EXPERT_PAYOUT_EVENTS: events.EXPERT_PAYOUT_EVENTS,
     AVATAR_EVENTS: events.AVATAR_EVENTS,
     PHONE_EVENTS: events.PHONE_EVENTS,
+    CALENDAR_EVENTS: events.CALENDAR_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

@@ -9,7 +9,9 @@ interface CalendarEmptyStateProps {
   onConnect: (provider: CalendarProvider) => void;
 }
 
-export function CalendarEmptyState({ onConnect }: CalendarEmptyStateProps): React.JSX.Element {
+export function CalendarEmptyState({
+  onConnect,
+}: Readonly<CalendarEmptyStateProps>): React.JSX.Element {
   return (
     <Card className="p-6">
       {/* Section label */}

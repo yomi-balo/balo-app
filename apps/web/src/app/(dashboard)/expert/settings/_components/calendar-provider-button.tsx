@@ -28,7 +28,7 @@ export function CalendarProviderButton({
   provider,
   onClick,
   alreadyConnected = false,
-}: CalendarProviderButtonProps): React.JSX.Element {
+}: Readonly<CalendarProviderButtonProps>): React.JSX.Element {
   const config = PROVIDER_CONFIG[provider];
   const { Icon } = config;
 

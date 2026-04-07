@@ -13,7 +13,7 @@ interface CalendarSubCalendarRowProps {
 export function CalendarSubCalendarRow({
   calendar,
   onToggle,
-}: CalendarSubCalendarRowProps): React.JSX.Element {
+}: Readonly<CalendarSubCalendarRowProps>): React.JSX.Element {
   return (
     <div
       className={cn(

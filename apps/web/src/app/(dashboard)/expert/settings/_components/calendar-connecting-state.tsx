@@ -14,7 +14,7 @@ interface CalendarConnectingStateProps {
 export function CalendarConnectingState({
   provider,
   onCancel,
-}: CalendarConnectingStateProps): React.JSX.Element {
+}: Readonly<CalendarConnectingStateProps>): React.JSX.Element {
   const ProviderIcon = provider === 'google' ? GoogleIcon : MicrosoftIcon;
   const providerName = provider === 'google' ? 'Google Calendar' : 'Microsoft 365';
 

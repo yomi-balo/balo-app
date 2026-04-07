@@ -11,7 +11,7 @@ interface CalendarDisconnectConfirmProps {
 export function CalendarDisconnectConfirm({
   onCancel,
   onConfirm,
-}: CalendarDisconnectConfirmProps): React.JSX.Element {
+}: Readonly<CalendarDisconnectConfirmProps>): React.JSX.Element {
   return (
     <div className="border-warning/30 bg-warning/5 dark:bg-warning/10 flex items-center justify-between gap-4 border-b px-5 py-3">
       <div className="flex items-start gap-2">
