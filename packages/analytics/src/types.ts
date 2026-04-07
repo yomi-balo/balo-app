@@ -6,6 +6,7 @@ import type { ExpertRateEventMap } from './events/expert-rate';
 import type { ExpertPayoutEventMap, ExpertPayoutServerEventMap } from './events/expert-payouts';
 import type { AvatarEventMap } from './events/avatar';
 import type { PhoneEventMap } from './events/phone';
+import type { CalendarEventMap } from './events/calendar';
 import type { NotificationServerEventMap } from './events/notifications';
 
 /** Union of all client-side (browser) event maps. */
@@ -16,7 +17,8 @@ export type AllEvents = AuthEventMap &
   ExpertRateEventMap &
   ExpertPayoutEventMap &
   AvatarEventMap &
-  PhoneEventMap;
+  PhoneEventMap &
+  CalendarEventMap;
 
 export type EventName = keyof AllEvents;
 
