@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { calendarRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { getCronofyAppClient, getCronofyUserClient } from '../../lib/cronofy.js';

@@ -92,11 +92,9 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
       // Classify error into a safe, fixed error code — never leak internal details in URL
       const isExpired = errorMessage.includes('expired');
       const isSignature = errorMessage.includes('signature') || errorMessage.includes('state');
-      const errorCode = isExpired
-        ? 'state_expired'
-        : isSignature
-          ? 'invalid_state'
-          : 'callback_failed';
+      let errorCode = 'callback_failed';
+      if (isExpired) errorCode = 'state_expired';
+      else if (isSignature) errorCode = 'invalid_state';
 
       request.log.error(
         {

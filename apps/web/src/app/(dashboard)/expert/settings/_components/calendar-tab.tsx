@@ -92,7 +92,7 @@ export function CalendarTab(): React.JSX.Element {
     const result = await initiateCalendarConnectAction(provider);
     if (result.success && result.connectUrl) {
       // Redirect to Cronofy OAuth
-      window.location.href = result.connectUrl;
+      globalThis.location.href = result.connectUrl;
     } else {
       toast.error(result.error ?? 'Failed to initiate calendar connection');
       setViewState('empty');
