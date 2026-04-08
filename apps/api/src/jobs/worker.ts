@@ -15,12 +15,14 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startEmailWorker },
     { startSmsWorker },
     { startInAppWorker },
+    { startAvailabilityCacheWorker, startStalenessCheckWorker, registerStalenessCheckCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
     import('../notifications/channels/email.adapter.js'),
     import('../notifications/channels/sms.adapter.js'),
     import('../notifications/channels/in-app.adapter.js'),
+    import('./availability-cache.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -28,5 +30,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   startEmailWorker();
   startSmsWorker();
   startInAppWorker();
+  startAvailabilityCacheWorker();
+  startStalenessCheckWorker();
+  await registerStalenessCheckCron();
   logger?.info('BullMQ workers started');
 }

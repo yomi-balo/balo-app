@@ -22,3 +22,39 @@ export interface CalendarEventMap {
     provider: 'google' | 'microsoft';
   };
 }
+
+// ── Server-side events ──────────────────────────────────────────
+
+export const CALENDAR_SERVER_EVENTS = {
+  OAUTH_COMPLETED: 'calendar_oauth_completed',
+  OAUTH_FAILED: 'calendar_oauth_failed',
+  DISCONNECTED: 'calendar_disconnected',
+  TOKEN_REFRESHED: 'calendar_token_refreshed',
+  WEBHOOK_RECEIVED: 'calendar_webhook_received',
+  AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
+} as const;
+
+export interface CalendarServerEventMap {
+  [CALENDAR_SERVER_EVENTS.OAUTH_COMPLETED]: {
+    provider: string;
+    status: 'connected' | 'sync_pending';
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.OAUTH_FAILED]: {
+    error_message: string;
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.DISCONNECTED]: {
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.TOKEN_REFRESHED]: {
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.WEBHOOK_RECEIVED]: {
+    notification_type: string;
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.AVAILABILITY_CACHE_REBUILT]: {
+    distinct_id: string;
+  };
+}

@@ -17,6 +17,7 @@ import { verticals, skills, supportTypes, certifications } from './verticals';
 import { languages } from './languages';
 import { industries } from './industries';
 import { expertPayoutDetails } from './payouts';
+import { calendarConnections } from './calendar';
 import { timestamps } from './helpers';
 
 export const expertProfiles = pgTable(
@@ -228,6 +229,10 @@ export const expertProfilesRelations = relations(expertProfiles, ({ one, many })
   payoutDetails: one(expertPayoutDetails, {
     fields: [expertProfiles.id],
     references: [expertPayoutDetails.expertProfileId],
+  }),
+  calendarConnection: one(calendarConnections, {
+    fields: [expertProfiles.id],
+    references: [calendarConnections.expertProfileId],
   }),
 }));
 

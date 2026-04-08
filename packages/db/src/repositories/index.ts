@@ -14,3 +14,4 @@ export { payoutsRepository } from './payouts';
 export type { SkillsByCategory, CertificationsByCategory } from './reference-data';
 export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
+export { calendarRepository } from './calendar';
