@@ -12,6 +12,8 @@ const {
   mockRegisterPushChannel,
   mockGetCronofyUserClient,
   mockGetQueue,
+  mockNotificationPublish,
+  mockTrackServer,
 } = vi.hoisted(() => ({
   mockFindConnectionByChannelId: vi.fn(),
   mockUpdateLastSyncedAt: vi.fn(),
@@ -22,6 +24,8 @@ const {
   mockRegisterPushChannel: vi.fn(),
   mockGetCronofyUserClient: vi.fn(),
   mockGetQueue: vi.fn(),
+  mockNotificationPublish: vi.fn(),
+  mockTrackServer: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -54,6 +58,10 @@ vi.mock('../../lib/queue.js', () => ({
   },
 }));
 
+vi.mock('../../notifications/publisher.js', () => ({
+  notificationEvents: { publish: mockNotificationPublish },
+}));
+
 vi.mock('../../lib/redis.js', () => ({
   getRedis: () => ({}),
   createRedisConnection: () => ({}),
@@ -73,10 +81,11 @@ vi.mock('@sentry/node', () => ({
 }));
 
 vi.mock('@balo/analytics/server', () => ({
-  trackServer: vi.fn(),
+  trackServer: mockTrackServer,
   CALENDAR_SERVER_EVENTS: {
     WEBHOOK_RECEIVED: 'calendar_webhook_received',
     AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
+    SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
   },
 }));
 
@@ -215,11 +224,12 @@ describe('calendar webhook routes', () => {
 
   // ── Profile disconnected ──────────────────────────────────────
 
-  it('processes profile_disconnected — sets auth_error and clears cache', async () => {
+  it('processes profile_disconnected — sets auth_error, clears cache, publishes notification', async () => {
     mockFindConnectionByChannelId.mockResolvedValue({
       id: 'conn-1',
       expertProfileId: EXPERT_ID,
     });
+    mockNotificationPublish.mockResolvedValue(undefined);
 
     const res = await injectWebhook({
       notification: { type: 'profile_disconnected' },
@@ -233,6 +243,10 @@ describe('calendar webhook routes', () => {
     expect(res.statusCode).toBe(200);
     expect(mockUpdateConnectionStatus).toHaveBeenCalledWith(EXPERT_ID, 'auth_error');
     expect(mockClearAvailabilityCache).toHaveBeenCalledWith(EXPERT_ID);
+    expect(mockNotificationPublish).toHaveBeenCalledWith('calendar.auth_error', {
+      correlationId: 'conn-1',
+      expertProfileId: EXPERT_ID,
+    });
   });
 
   // ── Profile connected ─────────────────────────────────────────
@@ -265,6 +279,9 @@ describe('calendar webhook routes', () => {
     expect(mockListAndStoreCalendars).toHaveBeenCalledWith(EXPERT_ID, 'access-token');
     expect(mockRegisterPushChannel).toHaveBeenCalledWith(EXPERT_ID, 'access-token');
     expect(mockQueueAdd).toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith('calendar_sync_pending_auto_resolved', {
+      distinct_id: EXPERT_ID,
+    });
   });
 
   it('stays in sync_pending when profile_connected but sync still required', async () => {
