@@ -92,9 +92,14 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
       // Classify error into a safe, fixed error code — never leak internal details in URL
       const isExpired = errorMessage.includes('expired');
       const isSignature = errorMessage.includes('signature') || errorMessage.includes('state');
+      const isO365AdminApproval =
+        errorMessage.includes('access_denied') ||
+        errorMessage.includes('consent_required') ||
+        errorMessage.includes('admin_approval');
       let errorCode = 'callback_failed';
       if (isExpired) errorCode = 'state_expired';
       else if (isSignature) errorCode = 'invalid_state';
+      else if (isO365AdminApproval) errorCode = 'o365_admin_approval';
 
       request.log.error(
         {

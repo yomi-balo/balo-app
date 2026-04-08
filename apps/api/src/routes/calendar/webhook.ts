@@ -56,7 +56,24 @@ async function handleProfileDisconnected(
 ): Promise<void> {
   await calendarRepository.updateConnectionStatus(connection.expertProfileId, 'auth_error');
   await calendarRepository.clearAvailabilityCache(connection.expertProfileId);
-  // TODO(BAL-232 follow-up): Publish domain event for reconnect email via notification engine
+
+  // Publish domain event for reconnect email via notification engine
+  try {
+    const { notificationEvents } = await import('../../notifications/publisher.js');
+    await notificationEvents.publish('calendar.auth_error', {
+      correlationId: connection.id,
+      expertProfileId: connection.expertProfileId,
+    });
+  } catch (err: unknown) {
+    log.error(
+      {
+        expertProfileId: connection.expertProfileId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to publish calendar.auth_error notification event'
+    );
+  }
+
   log.warn(
     { expertProfileId: connection.expertProfileId },
     'Calendar profile disconnected by provider — auth_error set, cache cleared'
@@ -84,6 +101,10 @@ async function handleProfileConnected(
   await listAndStoreCalendars(connection.expertProfileId, accessToken);
   await registerPushChannel(connection.expertProfileId, accessToken);
   await enqueueAvailabilityCacheRebuild(connection.expertProfileId, log);
+
+  trackServer(CALENDAR_SERVER_EVENTS.SYNC_PENDING_AUTO_RESOLVED, {
+    distinct_id: connection.expertProfileId,
+  });
 
   log.info(
     { expertProfileId: connection.expertProfileId },

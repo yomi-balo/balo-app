@@ -4,6 +4,8 @@ import { calendarRepository } from '@balo/db';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { disconnectCalendar, listAndStoreCalendars } from '../../services/cronofy/oauth.js';
 import { withCronofyRetry } from '../../services/cronofy/retry.js';
+import { getValidAccessToken } from '../../services/cronofy/token-manager.js';
+import { getCronofyUserClient } from '../../lib/cronofy.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import type { CalendarProvider, SubCalendar, CalendarConnection } from './types.js';
 
@@ -280,6 +282,63 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
           'Failed to refresh calendars'
         );
         return reply.status(500).send({ error: 'Failed to refresh calendars' });
+      }
+    }
+  );
+
+  /**
+   * GET /api/calendar/relink
+   * Generates a fresh Cronofy profile relink URL for an expert in sync_pending state.
+   * The link_token embedded in the relink URL has a 5-minute TTL,
+   * so we call Cronofy userinfo fresh each time to get a new one.
+   */
+  fastify.get(
+    '/api/calendar/relink',
+    { preHandler: [requireInternalAuth] },
+    async (request, reply) => {
+      const parsed = expertProfileIdSchema.safeParse(request.query);
+
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Invalid query parameters',
+          details: parsed.error.issues.map((i: { message: string }) => i.message),
+        });
+      }
+
+      const { expertProfileId } = parsed.data;
+
+      try {
+        const connection =
+          await calendarRepository.findConnectionByExpertProfileId(expertProfileId);
+        if (!connection) {
+          return reply.status(404).send({ error: 'No calendar connection found' });
+        }
+        if (connection.status !== 'sync_pending') {
+          return reply.status(400).send({ error: 'Connection is not in sync_pending state' });
+        }
+
+        const accessToken = await getValidAccessToken(expertProfileId);
+        const userClient = getCronofyUserClient(accessToken);
+        const userInfo = await userClient.userInfo();
+        const profile = userInfo.profiles?.[0];
+
+        if (!profile?.profile_relink_url) {
+          return reply.status(400).send({
+            error: 'No relink URL available — profile may already be synced',
+          });
+        }
+
+        trackServer(CALENDAR_SERVER_EVENTS.RELINK_URL_GENERATED, {
+          distinct_id: expertProfileId,
+        });
+
+        return reply.send({ relinkUrl: profile.profile_relink_url });
+      } catch (err: unknown) {
+        request.log.error(
+          { expertProfileId, error: err instanceof Error ? err.message : String(err) },
+          'Failed to generate relink URL'
+        );
+        return reply.status(500).send({ error: 'Failed to generate relink URL' });
       }
     }
   );

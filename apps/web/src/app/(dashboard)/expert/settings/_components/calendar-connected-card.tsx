@@ -27,6 +27,7 @@ interface CalendarConnectedCardProps {
   connection: CalendarConnection;
   provider: CalendarProvider;
   onDisconnect: () => void;
+  onReconnect: (provider: CalendarProvider) => void;
   onToggleConflictCheck: (
     subCalendarId: string,
     checked: boolean,
@@ -49,8 +50,8 @@ function SyncBadge({
   if (status === 'sync_pending') {
     return (
       <div className="flex items-center gap-1.5">
-        <RefreshCw className="text-primary h-3 w-3 animate-spin" />
-        <span className="text-primary text-xs font-semibold">Syncing...</span>
+        <div className="bg-warning h-[7px] w-[7px] rounded-full" />
+        <span className="text-warning text-xs font-semibold">Permissions incomplete</span>
       </div>
     );
   }
@@ -71,6 +72,7 @@ export function CalendarConnectedCard({
   connection,
   provider,
   onDisconnect,
+  onReconnect,
   onToggleConflictCheck,
 }: Readonly<CalendarConnectedCardProps>): React.JSX.Element {
   const [expanded, setExpanded] = useState(true);
@@ -94,8 +96,8 @@ export function CalendarConnectedCard({
   }, [provider, onDisconnect]);
 
   const handleReconnect = useCallback((): void => {
-    toast.info('Calendar integration is coming soon.');
-  }, []);
+    onReconnect(provider);
+  }, [onReconnect, provider]);
 
   return (
     <Card className="overflow-hidden">

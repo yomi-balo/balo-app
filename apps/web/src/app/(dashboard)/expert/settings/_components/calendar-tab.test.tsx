@@ -28,6 +28,14 @@ vi.mock('../_actions/disconnect-calendar', () => ({
   disconnectCalendarAction: vi.fn(),
 }));
 
+vi.mock('../_actions/toggle-conflict-check', () => ({
+  toggleConflictCheckAction: vi.fn(),
+}));
+
+vi.mock('../_actions/fix-calendar-permissions', () => ({
+  fixCalendarPermissionsAction: vi.fn(),
+}));
+
 vi.mock('motion/react', () => {
   const MOTION_PROPS = new Set([
     'variants',
@@ -113,7 +121,7 @@ describe('CalendarTab', () => {
     });
   });
 
-  it('tracks connect event when Microsoft is clicked', async () => {
+  it('shows O365 guidance modal when Microsoft is clicked', async () => {
     const user = userEvent.setup();
     render(<CalendarTab />);
 
@@ -123,8 +131,11 @@ describe('CalendarTab', () => {
 
     await user.click(screen.getByText('Microsoft 365'));
 
-    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
-      provider: 'microsoft',
+    // Should show O365 guidance instead of directly connecting
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.O365_GUIDANCE_SHOWN, expect.any(Object));
+    await waitFor(() => {
+      expect(screen.getByText('Connect Microsoft 365')).toBeInTheDocument();
+      expect(screen.getByText('Your IT admin may need to approve this once')).toBeInTheDocument();
     });
   });
 });

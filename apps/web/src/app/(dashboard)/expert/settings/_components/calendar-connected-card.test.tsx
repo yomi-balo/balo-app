@@ -99,6 +99,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -111,6 +112,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="microsoft"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -123,6 +125,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -135,10 +138,11 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection({ status: 'sync_pending' })}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
-    expect(screen.getByText('Syncing...')).toBeInTheDocument();
+    expect(screen.getByText('Permissions incomplete')).toBeInTheDocument();
   });
 
   it('shows error state when status is auth_error', () => {
@@ -147,6 +151,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection({ status: 'auth_error' })}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -161,6 +166,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -173,6 +179,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -186,6 +193,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -198,6 +206,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -211,6 +220,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -229,6 +239,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={onDisconnect}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -252,6 +263,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={onDisconnect}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -271,6 +283,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -282,19 +295,21 @@ describe('CalendarConnectedCard', () => {
     expect(screen.queryByText('Yes, disconnect')).not.toBeInTheDocument();
   });
 
-  it('shows Reconnect button in error state and shows toast on click', async () => {
+  it('shows Reconnect button in error state and calls onReconnect on click', async () => {
     const user = userEvent.setup();
+    const mockOnReconnect = vi.fn();
     render(
       <CalendarConnectedCard
         connection={makeConnection({ status: 'auth_error' })}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={mockOnReconnect}
         onToggleConflictCheck={vi.fn()}
       />
     );
 
     await user.click(screen.getByText('Reconnect'));
-    expect(toast.info).toHaveBeenCalledWith('Calendar integration is coming soon.');
+    expect(mockOnReconnect).toHaveBeenCalledWith('google');
   });
 
   it('renders target calendar selector', () => {
@@ -303,6 +318,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -318,6 +334,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection()}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );
@@ -332,6 +349,7 @@ describe('CalendarConnectedCard', () => {
         connection={makeConnection({ status: 'auth_error' })}
         provider="google"
         onDisconnect={vi.fn()}
+        onReconnect={vi.fn()}
         onToggleConflictCheck={vi.fn()}
       />
     );

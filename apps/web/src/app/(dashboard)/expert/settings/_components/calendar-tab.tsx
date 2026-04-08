@@ -10,11 +10,17 @@ import { track, CALENDAR_EVENTS } from '@/lib/analytics';
 import { CalendarEmptyState } from './calendar-empty-state';
 import { CalendarConnectingState } from './calendar-connecting-state';
 import { CalendarConnectedCard } from './calendar-connected-card';
+import { CalendarSyncPendingCard } from './calendar-sync-pending-card';
+import { CalendarO365GuidanceModal } from './calendar-o365-guidance-modal';
+import { CalendarO365WaitingCard } from './calendar-o365-waiting-card';
+import { CalendarSessionExpiredCard } from './calendar-session-expired-card';
 import { CalendarTrustRow } from './calendar-trust-row';
+import { useCalendarPolling } from '../_hooks/use-calendar-polling';
 import { getCalendarConnectionAction } from '../_actions/get-calendar-connection';
 import { initiateCalendarConnectAction } from '../_actions/initiate-calendar-connect';
 import { disconnectCalendarAction } from '../_actions/disconnect-calendar';
 import { toggleConflictCheckAction } from '../_actions/toggle-conflict-check';
+import { fixCalendarPermissionsAction } from '../_actions/fix-calendar-permissions';
 import type { CalendarConnection, CalendarProvider } from '../_types/calendar';
 
 // ── Animation variants (matches payouts-tab + rate-tab) ──────
@@ -34,7 +40,17 @@ const itemVariants = {
 
 // ── View state derivation ────────────────────────────────────
 
-type CalendarViewState = 'loading' | 'empty' | 'connecting' | 'connected';
+type CalendarViewState =
+  | 'loading'
+  | 'empty'
+  | 'connecting'
+  | 'connected'
+  | 'sync_pending'
+  | 'o365_guidance'
+  | 'o365_waiting'
+  | 'session_expired';
+
+const TEN_MINUTES_MS = 10 * 60 * 1000;
 
 // ── Component ────────────────────────────────────────────────
 
@@ -53,7 +69,11 @@ export function CalendarTab(): React.JSX.Element {
         const data = await getCalendarConnectionAction();
         if (cancelled) return;
         setConnection(data);
-        setViewState(data ? 'connected' : 'empty');
+        if (data) {
+          setViewState(data.status === 'sync_pending' ? 'sync_pending' : 'connected');
+        } else {
+          setViewState('empty');
+        }
       } catch {
         if (cancelled) return;
         setViewState('empty');
@@ -68,30 +88,116 @@ export function CalendarTab(): React.JSX.Element {
 
   // Handle OAuth callback results from search params
   useEffect(() => {
+    let cancelled = false;
     const calendarConnected = searchParams.get('calendar_connected');
     const calendarError = searchParams.get('calendar_error');
+    const calendarStatus = searchParams.get('calendar_status');
 
     if (calendarConnected === 'true') {
+      if (calendarStatus === 'sync_pending') {
+        toast.warning('Calendar connected but some permissions need fixing.');
+        void getCalendarConnectionAction().then((data) => {
+          if (cancelled) return;
+          setConnection(data);
+          setViewState('sync_pending');
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
       toast.success('Calendar connected successfully!');
-      // Re-fetch connection data
       void getCalendarConnectionAction().then((data) => {
+        if (cancelled) return;
         setConnection(data);
         setViewState(data ? 'connected' : 'empty');
       });
     } else if (calendarError) {
+      if (calendarError === 'o365_admin_approval') {
+        setViewState('o365_waiting');
+        return () => {
+          cancelled = true;
+        };
+      }
+      if (calendarError === 'state_expired' || calendarError === 'callback_failed') {
+        void getCalendarConnectionAction().then((data) => {
+          if (cancelled) return;
+          if (data) {
+            setConnection(data);
+            setViewState(data.status === 'sync_pending' ? 'sync_pending' : 'connected');
+          } else {
+            setViewState('session_expired');
+          }
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
       toast.error(`Calendar connection failed: ${calendarError}`);
       setViewState('empty');
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams]);
 
-  const handleConnect = useCallback(async (provider: CalendarProvider) => {
-    track(CALENDAR_EVENTS.CONNECT_INITIATED, { provider });
-    setConnectingProvider(provider);
-    setViewState('connecting');
+  // Poll for sync_pending → connected transition
+  useCalendarPolling({
+    enabled: viewState === 'sync_pending',
+    intervalMs: 5_000,
+    onStatusChange: (conn) => {
+      if (conn.status === 'connected') {
+        setConnection(conn);
+        setViewState('connected');
+        toast.success('Calendar synced successfully!');
+        track(CALENDAR_EVENTS.SYNC_PENDING_RESOLVED, {
+          provider: conn.subCalendars[0]?.provider ?? connectingProvider,
+        });
+      }
+    },
+  });
 
-    const result = await initiateCalendarConnectAction(provider);
+  // 10-minute timeout for connecting state
+  useEffect(() => {
+    if (viewState !== 'connecting') return;
+    const timer = setTimeout(() => {
+      track(CALENDAR_EVENTS.CONNECTING_TIMEOUT, { provider: connectingProvider });
+      setViewState('session_expired');
+    }, TEN_MINUTES_MS);
+    return () => clearTimeout(timer);
+  }, [viewState, connectingProvider]);
+
+  const handleConnect = useCallback(
+    async (provider: CalendarProvider) => {
+      // O365 guidance intercept
+      if (provider === 'microsoft' && viewState !== 'o365_guidance') {
+        track(CALENDAR_EVENTS.O365_GUIDANCE_SHOWN, {} as Record<string, never>);
+        setConnectingProvider('microsoft');
+        setViewState('o365_guidance');
+        return;
+      }
+
+      track(CALENDAR_EVENTS.CONNECT_INITIATED, { provider });
+      setConnectingProvider(provider);
+      setViewState('connecting');
+
+      const result = await initiateCalendarConnectAction(provider);
+      if (result.success && result.connectUrl) {
+        globalThis.location.href = result.connectUrl;
+      } else {
+        toast.error(result.error ?? 'Failed to initiate calendar connection');
+        setViewState('empty');
+      }
+    },
+    [viewState]
+  );
+
+  const handleO365Continue = useCallback(async () => {
+    track(CALENDAR_EVENTS.O365_GUIDANCE_CONTINUED, {} as Record<string, never>);
+    track(CALENDAR_EVENTS.CONNECT_INITIATED, { provider: 'microsoft' });
+    setViewState('connecting');
+    const result = await initiateCalendarConnectAction('microsoft');
     if (result.success && result.connectUrl) {
-      // Redirect to Cronofy OAuth
       globalThis.location.href = result.connectUrl;
     } else {
       toast.error(result.error ?? 'Failed to initiate calendar connection');
@@ -100,8 +206,11 @@ export function CalendarTab(): React.JSX.Element {
   }, []);
 
   const handleCancelConnect = useCallback(() => {
+    if (viewState === 'o365_guidance') {
+      track(CALENDAR_EVENTS.O365_GUIDANCE_CANCELLED, {} as Record<string, never>);
+    }
     setViewState('empty');
-  }, []);
+  }, [viewState]);
 
   const handleDisconnect = useCallback(async () => {
     const result = await disconnectCalendarAction();
@@ -112,6 +221,33 @@ export function CalendarTab(): React.JSX.Element {
       toast.error(result.error ?? 'Failed to disconnect calendar');
     }
   }, []);
+
+  const handleReconnect = useCallback(async (provider: CalendarProvider) => {
+    track(CALENDAR_EVENTS.RECONNECT_CLICKED, { provider });
+    track(CALENDAR_EVENTS.CONNECT_INITIATED, { provider });
+    setConnectingProvider(provider);
+    setViewState('connecting');
+
+    const result = await initiateCalendarConnectAction(provider);
+    if (result.success && result.connectUrl) {
+      globalThis.location.href = result.connectUrl;
+    } else {
+      toast.error(result.error ?? 'Failed to initiate calendar reconnection');
+      setViewState('connected');
+    }
+  }, []);
+
+  const handleFixPermissions = useCallback(async () => {
+    const provider = connection?.subCalendars[0]?.provider ?? connectingProvider;
+    track(CALENDAR_EVENTS.FIX_PERMISSIONS_CLICKED, { provider });
+
+    const result = await fixCalendarPermissionsAction();
+    if (result.success && result.relinkUrl) {
+      globalThis.location.href = result.relinkUrl;
+    } else {
+      toast.error('Failed to generate permission fix link. Please try again.');
+    }
+  }, [connection, connectingProvider]);
 
   const handleToggleConflictCheck = useCallback(
     async (subCalendarId: string, checked: boolean, provider: CalendarProvider) => {
@@ -131,6 +267,13 @@ export function CalendarTab(): React.JSX.Element {
     },
     []
   );
+
+  // Centered states hide the trust row
+  const hideTrustRow =
+    viewState === 'connecting' ||
+    viewState === 'loading' ||
+    viewState === 'o365_waiting' ||
+    viewState === 'session_expired';
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -164,13 +307,49 @@ export function CalendarTab(): React.JSX.Element {
             connection={connection}
             provider={connection.subCalendars[0]?.provider ?? connectingProvider}
             onDisconnect={handleDisconnect}
+            onReconnect={handleReconnect}
             onToggleConflictCheck={handleToggleConflictCheck}
+          />
+        )}
+
+        {viewState === 'sync_pending' && connection && (
+          <CalendarSyncPendingCard
+            connection={connection}
+            provider={connection.subCalendars[0]?.provider ?? connectingProvider}
+            onFixPermissions={handleFixPermissions}
+          />
+        )}
+
+        {viewState === 'o365_guidance' && (
+          <CalendarO365GuidanceModal
+            onContinue={handleO365Continue}
+            onCancel={handleCancelConnect}
+          />
+        )}
+
+        {viewState === 'o365_waiting' && (
+          <CalendarO365WaitingCard
+            onTryAgain={() => {
+              track(CALENDAR_EVENTS.O365_WAITING_TRY_AGAIN, {} as Record<string, never>);
+              void handleConnect('microsoft');
+            }}
+            onCancel={handleCancelConnect}
+          />
+        )}
+
+        {viewState === 'session_expired' && (
+          <CalendarSessionExpiredCard
+            provider={connectingProvider}
+            onTryAgain={() => {
+              track(CALENDAR_EVENTS.SESSION_EXPIRED_TRY_AGAIN, { provider: connectingProvider });
+              void handleConnect(connectingProvider);
+            }}
           />
         )}
       </motion.div>
 
-      {/* Trust row — shown always except during connecting/loading */}
-      {viewState !== 'connecting' && viewState !== 'loading' && (
+      {/* Trust row — hidden for centered/loading states */}
+      {!hideTrustRow && (
         <motion.div variants={itemVariants}>
           <CalendarTrustRow />
         </motion.div>

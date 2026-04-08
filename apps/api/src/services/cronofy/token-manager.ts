@@ -84,8 +84,18 @@ async function refreshAccessToken(
       // Refresh token revoked — mark auth_error, clear cache
       await calendarRepository.updateConnectionStatus(expertProfileId, 'auth_error');
       await calendarRepository.clearAvailabilityCache(expertProfileId);
-      // TODO: Publish domain event for reconnect email via notification engine.
-      // Requires notification rule + Brevo template setup (separate task).
+
+      // Publish domain event for reconnect email via notification engine (best-effort)
+      try {
+        const { notificationEvents } = await import('../../notifications/publisher.js');
+        await notificationEvents.publish('calendar.auth_error', {
+          correlationId: expertProfileId,
+          expertProfileId,
+        });
+      } catch {
+        // Best effort — auth_error is already persisted in DB
+      }
+
       throw new CalendarAuthError(`Calendar authorization revoked for expert ${expertProfileId}`);
     }
 
