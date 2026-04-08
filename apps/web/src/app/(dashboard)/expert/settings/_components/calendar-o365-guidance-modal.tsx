@@ -62,10 +62,10 @@ export function CalendarO365GuidanceModal({
           What to expect
         </p>
         <div className="mb-1 space-y-2">
-          {STEPS.map((text, i) => (
-            <div key={i} className="flex items-start gap-2.5">
+          {STEPS.map((text, step) => (
+            <div key={text} className="flex items-start gap-2.5">
               <div className="bg-muted border-border text-muted-foreground flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold">
-                {i + 1}
+                {step + 1}
               </div>
               <span className="text-muted-foreground pt-0.5 text-[13px] leading-snug">{text}</span>
             </div>

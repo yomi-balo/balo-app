@@ -54,10 +54,10 @@ export function CalendarO365WaitingCard({
           What to do next
         </p>
         <div className="space-y-2">
-          {INSTRUCTIONS.map((text, i) => (
-            <div key={i} className="flex gap-2">
+          {INSTRUCTIONS.map((text, step) => (
+            <div key={text} className="flex gap-2">
               <div className="bg-primary/10 border-primary/20 text-primary flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-bold">
-                {i + 1}
+                {step + 1}
               </div>
               <span className="text-muted-foreground text-[13px] leading-snug">{text}</span>
             </div>
