@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { motion } from 'motion/react';
-import { Calendar } from 'lucide-react';
+import { Calendar, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { IconBadge } from '@/components/balo/icon-badge';
 import { track, CALENDAR_EVENTS } from '@/lib/analytics';
@@ -10,6 +11,10 @@ import { CalendarEmptyState } from './calendar-empty-state';
 import { CalendarConnectingState } from './calendar-connecting-state';
 import { CalendarConnectedCard } from './calendar-connected-card';
 import { CalendarTrustRow } from './calendar-trust-row';
+import { getCalendarConnectionAction } from '../_actions/get-calendar-connection';
+import { initiateCalendarConnectAction } from '../_actions/initiate-calendar-connect';
+import { disconnectCalendarAction } from '../_actions/disconnect-calendar';
+import { toggleConflictCheckAction } from '../_actions/toggle-conflict-check';
 import type { CalendarConnection, CalendarProvider } from '../_types/calendar';
 
 // ── Animation variants (matches payouts-tab + rate-tab) ──────
@@ -29,50 +34,100 @@ const itemVariants = {
 
 // ── View state derivation ────────────────────────────────────
 
-type CalendarViewState = 'empty' | 'connecting' | 'connected';
-
-/**
- * Hook placeholder for BAL-232 integration.
- * Returns null (empty state) until the calendar backend is built.
- */
-function useCalendarConnection(): CalendarConnection | null {
-  return null;
-}
+type CalendarViewState = 'loading' | 'empty' | 'connecting' | 'connected';
 
 // ── Component ────────────────────────────────────────────────
 
 export function CalendarTab(): React.JSX.Element {
-  const connection = useCalendarConnection();
-
-  const [viewState, setViewState] = useState<CalendarViewState>(connection ? 'connected' : 'empty');
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- setter will be used in BAL-232 OAuth flow
+  const searchParams = useSearchParams();
+  const [connection, setConnection] = useState<CalendarConnection | null>(null);
+  const [viewState, setViewState] = useState<CalendarViewState>('loading');
   const [connectingProvider, setConnectingProvider] = useState<CalendarProvider>('google');
 
-  const handleConnect = useCallback((provider: CalendarProvider) => {
+  // Fetch connection on mount
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchConnection(): Promise<void> {
+      try {
+        const data = await getCalendarConnectionAction();
+        if (cancelled) return;
+        setConnection(data);
+        setViewState(data ? 'connected' : 'empty');
+      } catch {
+        if (cancelled) return;
+        setViewState('empty');
+      }
+    }
+
+    void fetchConnection();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Handle OAuth callback results from search params
+  useEffect(() => {
+    const calendarConnected = searchParams.get('calendar_connected');
+    const calendarError = searchParams.get('calendar_error');
+
+    if (calendarConnected === 'true') {
+      toast.success('Calendar connected successfully!');
+      // Re-fetch connection data
+      void getCalendarConnectionAction().then((data) => {
+        setConnection(data);
+        setViewState(data ? 'connected' : 'empty');
+      });
+    } else if (calendarError) {
+      toast.error(`Calendar connection failed: ${calendarError}`);
+      setViewState('empty');
+    }
+  }, [searchParams]);
+
+  const handleConnect = useCallback(async (provider: CalendarProvider) => {
     track(CALENDAR_EVENTS.CONNECT_INITIATED, { provider });
-    toast.info('Calendar integration is coming soon.');
-    // When BAL-232 is ready, this will initiate the OAuth flow:
-    // setConnectingProvider(provider);
-    // setViewState('connecting');
+    setConnectingProvider(provider);
+    setViewState('connecting');
+
+    const result = await initiateCalendarConnectAction(provider);
+    if (result.success && result.connectUrl) {
+      // Redirect to Cronofy OAuth
+      globalThis.location.href = result.connectUrl;
+    } else {
+      toast.error(result.error ?? 'Failed to initiate calendar connection');
+      setViewState('empty');
+    }
   }, []);
 
   const handleCancelConnect = useCallback(() => {
     setViewState('empty');
   }, []);
 
-  const handleDisconnect = useCallback(() => {
-    // Stub: BAL-232 will handle the real disconnect flow
-    setViewState('empty');
+  const handleDisconnect = useCallback(async () => {
+    const result = await disconnectCalendarAction();
+    if (result.success) {
+      setConnection(null);
+      setViewState('empty');
+    } else {
+      toast.error(result.error ?? 'Failed to disconnect calendar');
+    }
   }, []);
 
   const handleToggleConflictCheck = useCallback(
-    (subCalendarId: string, checked: boolean, provider: CalendarProvider) => {
+    async (subCalendarId: string, checked: boolean, provider: CalendarProvider) => {
       track(CALENDAR_EVENTS.SUB_CALENDAR_TOGGLED, {
         sub_calendar_id: subCalendarId,
         conflict_checking: checked,
         provider,
       });
-      toast.info('Calendar integration is coming soon.');
+
+      const result = await toggleConflictCheckAction({
+        subCalendarId,
+        conflictChecking: checked,
+      });
+      if (!result.success) {
+        toast.error(result.error ?? 'Failed to update conflict checking');
+      }
     },
     []
   );
@@ -92,6 +147,12 @@ export function CalendarTab(): React.JSX.Element {
 
       {/* View state content */}
       <motion.div variants={itemVariants}>
+        {viewState === 'loading' && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
+          </div>
+        )}
+
         {viewState === 'empty' && <CalendarEmptyState onConnect={handleConnect} />}
 
         {viewState === 'connecting' && (
@@ -108,8 +169,8 @@ export function CalendarTab(): React.JSX.Element {
         )}
       </motion.div>
 
-      {/* Trust row — shown always except during connecting */}
-      {viewState !== 'connecting' && (
+      {/* Trust row — shown always except during connecting/loading */}
+      {viewState !== 'connecting' && viewState !== 'loading' && (
         <motion.div variants={itemVariants}>
           <CalendarTrustRow />
         </motion.div>

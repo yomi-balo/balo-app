@@ -11,5 +11,10 @@ export {
 } from './expert-payouts';
 export { AVATAR_EVENTS, type AvatarEventMap } from './avatar';
 export { PHONE_EVENTS, type PhoneEventMap } from './phone';
-export { CALENDAR_EVENTS, type CalendarEventMap } from './calendar';
+export {
+  CALENDAR_EVENTS,
+  type CalendarEventMap,
+  CALENDAR_SERVER_EVENTS,
+  type CalendarServerEventMap,
+} from './calendar';
 export { NOTIFICATION_SERVER_EVENTS, type NotificationServerEventMap } from './notifications';

@@ -22,7 +22,7 @@ vi.mock('../_lib/calendar-api', () => ({
   calendarApiFetch: (...args: unknown[]) => mockCalendarApiFetch(...args),
 }));
 
-import { disconnectCalendarAction } from './disconnect-calendar';
+import { initiateCalendarConnectAction } from './initiate-calendar-connect';
 
 const EXPERT_SESSION = {
   user: {
@@ -34,7 +34,7 @@ const EXPERT_SESSION = {
   save: mockSave,
 };
 
-describe('disconnectCalendarAction', () => {
+describe('initiateCalendarConnectAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
@@ -42,17 +42,7 @@ describe('disconnectCalendarAction', () => {
 
   it('throws when no session user', async () => {
     mockSessionObj = { save: mockSave };
-    await expect(disconnectCalendarAction()).rejects.toThrow('Unauthorized');
-  });
-
-  it('returns success when API call succeeds', async () => {
-    mockCalendarApiFetch.mockResolvedValueOnce({ success: true });
-    const result = await disconnectCalendarAction();
-    expect(result).toEqual({ success: true });
-    expect(mockCalendarApiFetch).toHaveBeenCalledWith('/api/calendar/disconnect', {
-      method: 'POST',
-      body: JSON.stringify({ expertProfileId: 'profile-1' }),
-    });
+    await expect(initiateCalendarConnectAction('google')).rejects.toThrow('Unauthorized');
   });
 
   it('returns error when no expert profile', async () => {
@@ -60,13 +50,33 @@ describe('disconnectCalendarAction', () => {
       user: { id: 'user-1', email: 'e@e.com', activeMode: 'expert' },
       save: mockSave,
     };
-    const result = await disconnectCalendarAction();
+    const result = await initiateCalendarConnectAction('google');
     expect(result).toEqual({ success: false, error: 'No expert profile found' });
+  });
+
+  it('returns connectUrl on success', async () => {
+    mockCalendarApiFetch.mockResolvedValueOnce({ authUrl: 'https://cronofy.com/auth/url' });
+
+    const result = await initiateCalendarConnectAction('google');
+
+    expect(result).toEqual({
+      success: true,
+      connectUrl: 'https://cronofy.com/auth/url',
+    });
+    expect(mockCalendarApiFetch).toHaveBeenCalledWith('/api/calendar/connect', {
+      method: 'POST',
+      body: JSON.stringify({ expertProfileId: 'profile-1', provider: 'google' }),
+    });
   });
 
   it('returns error when API call fails', async () => {
     mockCalendarApiFetch.mockRejectedValueOnce(new Error('Network error'));
-    const result = await disconnectCalendarAction();
-    expect(result).toEqual({ success: false, error: 'Network error' });
+
+    const result = await initiateCalendarConnectAction('microsoft');
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Failed to initiate calendar connection',
+    });
   });
 });

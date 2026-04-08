@@ -4,6 +4,7 @@ import * as Sentry from '@sentry/node';
 import { notificationsRoutes } from './routes/notifications/index.js';
 import { payoutsRoutes } from './routes/payouts/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
+import { calendarRoutes } from './routes/calendar/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   const fastify = Fastify({ logger: opts?.logger ?? true });
@@ -26,6 +27,7 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await fastify.register(notificationsRoutes);
   await fastify.register(payoutsRoutes);
   await fastify.register(phoneRoutes);
+  await fastify.register(calendarRoutes);
 
   return fastify;
 }

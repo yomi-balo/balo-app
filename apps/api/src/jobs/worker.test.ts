@@ -7,9 +7,17 @@ const mockStartNotificationEvent = vi.fn();
 const mockStartEmail = vi.fn();
 const mockStartSms = vi.fn();
 const mockStartInApp = vi.fn();
+const mockStartAvailabilityCache = vi.fn();
+const mockStartStalenessCheck = vi.fn();
+const mockRegisterStalenessCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
+}));
+vi.mock('./availability-cache.js', () => ({
+  startAvailabilityCacheWorker: () => mockStartAvailabilityCache(),
+  startStalenessCheckWorker: () => mockStartStalenessCheck(),
+  registerStalenessCheckCron: () => mockRegisterStalenessCron(),
 }));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
@@ -41,6 +49,7 @@ describe('startWorkers', () => {
 
     expect(mockStartVerifyBeneficiary).not.toHaveBeenCalled();
     expect(mockStartInApp).not.toHaveBeenCalled();
+    expect(mockStartAvailabilityCache).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -55,6 +64,9 @@ describe('startWorkers', () => {
     expect(mockStartEmail).toHaveBeenCalled();
     expect(mockStartSms).toHaveBeenCalled();
     expect(mockStartInApp).toHaveBeenCalled();
+    expect(mockStartAvailabilityCache).toHaveBeenCalled();
+    expect(mockStartStalenessCheck).toHaveBeenCalled();
+    expect(mockRegisterStalenessCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;
