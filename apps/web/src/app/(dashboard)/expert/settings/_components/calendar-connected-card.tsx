@@ -19,6 +19,7 @@ import { track, CALENDAR_EVENTS } from '@/lib/analytics';
 import { GoogleIcon, MicrosoftIcon } from './calendar-provider-icons';
 import { CalendarSubCalendarRow } from './calendar-sub-calendar-row';
 import { CalendarDisconnectConfirm } from './calendar-disconnect-confirm';
+import { disconnectCalendarAction } from '../_actions/disconnect-calendar';
 import { setTargetCalendarAction } from '../_actions/set-target-calendar';
 import type { CalendarConnection, CalendarProvider } from '../_types/calendar';
 
@@ -80,11 +81,16 @@ export function CalendarConnectedCard({
   const isError = connection.status === 'auth_error';
   const activeCount = connection.subCalendars.filter((cal) => cal.conflictChecking).length;
 
-  const handleDisconnect = useCallback((): void => {
+  const handleDisconnect = useCallback(async (): Promise<void> => {
     track(CALENDAR_EVENTS.DISCONNECT_INITIATED, { provider });
-    toast.info('Calendar integration is coming soon.');
     setConfirmDisconnect(false);
-    onDisconnect();
+    const result = await disconnectCalendarAction();
+    if (result.success) {
+      toast.success('Calendar disconnected.');
+      onDisconnect();
+    } else {
+      toast.info(result.error ?? 'Calendar integration is coming soon.');
+    }
   }, [provider, onDisconnect]);
 
   const handleReconnect = useCallback((): void => {

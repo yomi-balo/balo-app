@@ -7,6 +7,16 @@ import type { CalendarConnection, SubCalendar } from '../_types/calendar';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
+const mockDisconnectAction = vi.fn();
+vi.mock('../_actions/disconnect-calendar', () => ({
+  disconnectCalendarAction: (...args: unknown[]) => mockDisconnectAction(...args),
+}));
+
+const mockSetTargetAction = vi.fn();
+vi.mock('../_actions/set-target-calendar', () => ({
+  setTargetCalendarAction: (...args: unknown[]) => mockSetTargetAction(...args),
+}));
+
 vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
 }));
@@ -36,11 +46,6 @@ vi.mock('motion/react', () => {
     AnimatePresence: ({ children }: React.PropsWithChildren) => children,
   };
 });
-
-const mockSetTargetCalendarAction = vi.fn();
-vi.mock('../_actions/set-target-calendar', () => ({
-  setTargetCalendarAction: (...args: unknown[]) => mockSetTargetCalendarAction(...args),
-}));
 
 import { CalendarConnectedCard } from './calendar-connected-card';
 import { toast } from 'sonner';
@@ -78,7 +83,14 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
 describe('CalendarConnectedCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSetTargetCalendarAction.mockResolvedValue({ success: false });
+    mockDisconnectAction.mockResolvedValue({
+      success: false,
+      error: 'Calendar integration is not yet available.',
+    });
+    mockSetTargetAction.mockResolvedValue({
+      success: false,
+      error: 'Calendar integration is not yet available.',
+    });
   });
 
   it('renders the provider label', () => {
@@ -208,7 +220,8 @@ describe('CalendarConnectedCard', () => {
     expect(screen.getByText(/Disconnecting will stop syncing/)).toBeInTheDocument();
   });
 
-  it('calls onDisconnect and tracks event when confirmed', async () => {
+  it('calls disconnectCalendarAction, onDisconnect, and tracks event on success', async () => {
+    mockDisconnectAction.mockResolvedValueOnce({ success: true });
     const onDisconnect = vi.fn();
     const user = userEvent.setup();
     render(
@@ -226,7 +239,29 @@ describe('CalendarConnectedCard', () => {
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.DISCONNECT_INITIATED, {
       provider: 'google',
     });
+    expect(mockDisconnectAction).toHaveBeenCalledOnce();
     expect(onDisconnect).toHaveBeenCalledOnce();
+    expect(toast.success).toHaveBeenCalledWith('Calendar disconnected.');
+  });
+
+  it('shows error toast and does not call onDisconnect when action fails', async () => {
+    const onDisconnect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CalendarConnectedCard
+        connection={makeConnection()}
+        provider="google"
+        onDisconnect={onDisconnect}
+        onToggleConflictCheck={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByText('Disconnect all calendars'));
+    await user.click(screen.getByText('Yes, disconnect'));
+
+    expect(mockDisconnectAction).toHaveBeenCalledOnce();
+    expect(onDisconnect).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith('Calendar integration is not yet available.');
   });
 
   it('hides confirmation when cancel is clicked', async () => {
