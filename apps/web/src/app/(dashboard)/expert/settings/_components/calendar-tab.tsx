@@ -60,58 +60,38 @@ export function CalendarTab(): React.JSX.Element {
   const [viewState, setViewState] = useState<CalendarViewState>('loading');
   const [connectingProvider, setConnectingProvider] = useState<CalendarProvider>('google');
 
-  // Fetch connection on mount
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchConnection(): Promise<void> {
-      try {
-        const data = await getCalendarConnectionAction();
-        if (cancelled) return;
-        setConnection(data);
-        if (data) {
-          setViewState(data.status === 'sync_pending' ? 'sync_pending' : 'connected');
-        } else {
-          setViewState('empty');
-        }
-      } catch {
-        if (cancelled) return;
-        setViewState('empty');
-      }
-    }
-
-    void fetchConnection();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Handle OAuth callback results from search params
+  // Fetch connection and handle OAuth callback search params.
+  // Merged into a single effect to avoid race conditions between the mount fetch
+  // and searchParams-derived state (e.g. o365_admin_approval sets viewState synchronously
+  // but the async fetch could overwrite it).
   useEffect(() => {
     let cancelled = false;
     const calendarConnected = searchParams.get('calendar_connected');
     const calendarError = searchParams.get('calendar_error');
     const calendarStatus = searchParams.get('calendar_status');
 
+    // ── OAuth callback results take priority over mount fetch ───
     if (calendarConnected === 'true') {
       if (calendarStatus === 'sync_pending') {
         toast.warning('Calendar connected but some permissions need fixing.');
-        void getCalendarConnectionAction().then((data) => {
-          if (cancelled) return;
-          setConnection(data);
-          setViewState('sync_pending');
-        });
-        return () => {
-          cancelled = true;
-        };
+      } else {
+        toast.success('Calendar connected successfully!');
       }
-      toast.success('Calendar connected successfully!');
       void getCalendarConnectionAction().then((data) => {
         if (cancelled) return;
         setConnection(data);
-        setViewState(data ? 'connected' : 'empty');
+        if (calendarStatus === 'sync_pending') {
+          setViewState('sync_pending');
+        } else {
+          setViewState(data ? 'connected' : 'empty');
+        }
       });
-    } else if (calendarError) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (calendarError) {
       if (calendarError === 'o365_admin_approval') {
         setViewState('o365_waiting');
         return () => {
@@ -134,7 +114,26 @@ export function CalendarTab(): React.JSX.Element {
       }
       toast.error(`Calendar connection failed: ${calendarError}`);
       setViewState('empty');
+      return () => {
+        cancelled = true;
+      };
     }
+
+    // ── Default: fetch connection on mount (no callback params) ──
+    void getCalendarConnectionAction()
+      .then((data) => {
+        if (cancelled) return;
+        setConnection(data);
+        if (data) {
+          setViewState(data.status === 'sync_pending' ? 'sync_pending' : 'connected');
+        } else {
+          setViewState('empty');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setViewState('empty');
+      });
 
     return () => {
       cancelled = true;
@@ -153,6 +152,10 @@ export function CalendarTab(): React.JSX.Element {
         track(CALENDAR_EVENTS.SYNC_PENDING_RESOLVED, {
           provider: conn.subCalendars[0]?.provider ?? connectingProvider,
         });
+      } else if (conn.status === 'auth_error') {
+        setConnection(conn);
+        setViewState('connected'); // CalendarConnectedCard handles auth_error rendering
+        toast.error('Calendar connection lost. Please reconnect.');
       }
     },
   });
@@ -169,8 +172,13 @@ export function CalendarTab(): React.JSX.Element {
 
   const handleConnect = useCallback(
     async (provider: CalendarProvider) => {
-      // O365 guidance intercept
-      if (provider === 'microsoft' && viewState !== 'o365_guidance') {
+      // O365 guidance intercept — skip for retries from o365_waiting or session_expired
+      if (
+        provider === 'microsoft' &&
+        viewState !== 'o365_guidance' &&
+        viewState !== 'o365_waiting' &&
+        viewState !== 'session_expired'
+      ) {
         track(CALENDAR_EVENTS.O365_GUIDANCE_SHOWN, {} as Record<string, never>);
         setConnectingProvider('microsoft');
         setViewState('o365_guidance');
