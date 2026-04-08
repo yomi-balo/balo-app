@@ -13,13 +13,13 @@ import {
   Briefcase,
   Award,
 } from 'lucide-react';
-import { TabPlaceholder } from './tab-placeholder';
 import { RateTab } from './rate-tab';
 import { PayoutsTab, type PayoutDetailsSummary } from './payouts-tab';
 import { ProfileTab } from './profile-tab';
 import { ExpertiseTab } from './expertise-tab';
 import { WorkHistoryTab } from './work-history-tab';
 import { CertificationsTab } from './certifications-tab';
+import { CalendarTab } from './calendar-tab';
 import { cn } from '@/lib/utils';
 import type {
   ProfileSettingsData,
@@ -237,13 +237,7 @@ export function SettingsTabs({
             </div>
           ) : tab === 'schedule' ? (
             <div className="mx-auto max-w-[620px]">
-              <TabPlaceholder
-                icon={Calendar}
-                iconColor="#7C3AED"
-                title="Schedule"
-                description="Connect your calendars and set weekly availability for consultations."
-                task="BAL-194 / BAL-195"
-              />
+              <CalendarTab />
             </div>
           ) : null}
         </motion.div>
