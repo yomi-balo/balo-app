@@ -66,15 +66,15 @@ export function CalendarTab(): React.JSX.Element {
   }, []);
 
   const handleToggleConflictCheck = useCallback(
-    (subCalendarId: string, checked: boolean) => {
+    (subCalendarId: string, checked: boolean, provider: CalendarProvider) => {
       track(CALENDAR_EVENTS.SUB_CALENDAR_TOGGLED, {
         sub_calendar_id: subCalendarId,
         conflict_checking: checked,
-        provider: connectingProvider,
+        provider,
       });
       toast.info('Calendar integration is coming soon.');
     },
-    [connectingProvider]
+    []
   );
 
   return (

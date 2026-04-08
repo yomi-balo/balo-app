@@ -26,7 +26,11 @@ interface CalendarConnectedCardProps {
   connection: CalendarConnection;
   provider: CalendarProvider;
   onDisconnect: () => void;
-  onToggleConflictCheck: (subCalendarId: string, checked: boolean) => void;
+  onToggleConflictCheck: (
+    subCalendarId: string,
+    checked: boolean,
+    provider: CalendarProvider
+  ) => void;
 }
 
 function SyncBadge({
@@ -139,7 +143,7 @@ export function CalendarConnectedCard({
                 onClick={() => setConfirmDisconnect(true)}
               >
                 <Trash2 className="h-3 w-3" />
-                Disconnect
+                Disconnect all calendars
               </Button>
             )}
           </div>

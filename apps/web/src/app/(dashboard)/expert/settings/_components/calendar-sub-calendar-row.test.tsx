@@ -65,7 +65,7 @@ describe('CalendarSubCalendarRow', () => {
     await user.click(
       screen.getByRole('switch', { name: 'Use Work Calendar for conflict checking' })
     );
-    expect(onToggle).toHaveBeenCalledWith('cal-1', true);
+    expect(onToggle).toHaveBeenCalledWith('cal-1', true, 'google');
   });
 
   it('does not call onToggle when primary calendar switch is clicked', async () => {

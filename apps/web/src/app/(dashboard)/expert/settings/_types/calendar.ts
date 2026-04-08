@@ -7,6 +7,7 @@ export interface SubCalendar {
   provider: CalendarProvider;
   primary: boolean;
   conflictChecking: boolean;
+  color?: string;
 }
 
 export interface CalendarConnection {

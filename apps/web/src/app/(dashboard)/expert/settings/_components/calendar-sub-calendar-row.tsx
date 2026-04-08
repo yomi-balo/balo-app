@@ -7,7 +7,7 @@ import type { SubCalendar } from '../_types/calendar';
 
 interface CalendarSubCalendarRowProps {
   calendar: SubCalendar;
-  onToggle: (id: string, checked: boolean) => void;
+  onToggle: (id: string, checked: boolean, provider: SubCalendar['provider']) => void;
 }
 
 export function CalendarSubCalendarRow({
@@ -23,7 +23,7 @@ export function CalendarSubCalendarRow({
       {/* Calendar color dot */}
       <div
         className="h-2.5 w-2.5 shrink-0 rounded-full"
-        style={{ backgroundColor: 'var(--primary)' }}
+        style={{ backgroundColor: calendar.color ?? 'var(--primary)' }}
         aria-hidden="true"
       />
 
@@ -54,7 +54,9 @@ export function CalendarSubCalendarRow({
         )}
         <Switch
           checked={calendar.conflictChecking}
-          onCheckedChange={(checked) => !calendar.primary && onToggle(calendar.id, checked)}
+          onCheckedChange={(checked) =>
+            !calendar.primary && onToggle(calendar.id, checked, calendar.provider)
+          }
           disabled={calendar.primary}
           aria-label={`Use ${calendar.name} for conflict checking`}
         />

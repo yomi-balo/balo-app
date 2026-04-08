@@ -189,7 +189,7 @@ describe('CalendarConnectedCard', () => {
         onToggleConflictCheck={vi.fn()}
       />
     );
-    expect(screen.getByText('Disconnect')).toBeInTheDocument();
+    expect(screen.getByText('Disconnect all calendars')).toBeInTheDocument();
   });
 
   it('shows disconnect confirmation when Disconnect is clicked', async () => {
@@ -203,7 +203,7 @@ describe('CalendarConnectedCard', () => {
       />
     );
 
-    await user.click(screen.getByText('Disconnect'));
+    await user.click(screen.getByText('Disconnect all calendars'));
     expect(screen.getByText('Yes, disconnect')).toBeInTheDocument();
     expect(screen.getByText(/Disconnecting will stop syncing/)).toBeInTheDocument();
   });
@@ -220,7 +220,7 @@ describe('CalendarConnectedCard', () => {
       />
     );
 
-    await user.click(screen.getByText('Disconnect'));
+    await user.click(screen.getByText('Disconnect all calendars'));
     await user.click(screen.getByText('Yes, disconnect'));
 
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.DISCONNECT_INITIATED, {
@@ -240,7 +240,7 @@ describe('CalendarConnectedCard', () => {
       />
     );
 
-    await user.click(screen.getByText('Disconnect'));
+    await user.click(screen.getByText('Disconnect all calendars'));
     expect(screen.getByText('Yes, disconnect')).toBeInTheDocument();
 
     await user.click(screen.getByText('Cancel'));
