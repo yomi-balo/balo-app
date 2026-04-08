@@ -3,6 +3,9 @@ import { calendarRepository } from '@balo/db';
 import { getQueue } from '../../lib/queue.js';
 import { AVAILABILITY_CACHE_QUEUE } from '../../jobs/availability-cache.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
+import { getValidAccessToken } from '../../services/cronofy/token-manager.js';
+import { listAndStoreCalendars, registerPushChannel } from '../../services/cronofy/oauth.js';
+import { getCronofyUserClient } from '../../lib/cronofy.js';
 
 // ── Webhook types ───────────────────────────────────────────────
 
@@ -107,17 +110,58 @@ export async function calendarWebhookRoutes(fastify: FastifyInstance): Promise<v
         }
 
         case 'profile_disconnected': {
+          // Expert revoked Cronofy's access from their calendar provider settings
           await calendarRepository.updateConnectionStatus(connection.expertProfileId, 'auth_error');
+          await calendarRepository.clearAvailabilityCache(connection.expertProfileId);
+
+          // TODO: Publish domain event for reconnect email via notification engine.
+          // Requires notification rule + Brevo template setup (separate task).
           request.log.warn(
             { expertProfileId: connection.expertProfileId },
-            'Calendar profile disconnected by provider'
+            'Calendar profile disconnected by provider — auth_error set, cache cleared, reconnect email pending notification engine setup'
           );
           break;
         }
 
         case 'profile_connected': {
-          await calendarRepository.updateConnectionStatus(connection.expertProfileId, 'connected');
-          await enqueueAvailabilityCacheRebuild(connection.expertProfileId, request.log);
+          // Calendar profile sync completed — re-check userinfo before transitioning to connected
+          try {
+            const accessToken = await getValidAccessToken(connection.expertProfileId);
+            const userClient = getCronofyUserClient(accessToken);
+            const userInfo = await userClient.userInfo();
+            const profile = userInfo.profiles?.[0];
+
+            if (profile?.profile_initial_sync_required) {
+              // Sync still not complete — stay in sync_pending
+              request.log.info(
+                { expertProfileId: connection.expertProfileId },
+                'profile_connected received but initial sync still required'
+              );
+              break;
+            }
+
+            // Sync complete — transition to connected, re-fetch calendars, re-register push channel
+            await calendarRepository.updateConnectionStatus(
+              connection.expertProfileId,
+              'connected'
+            );
+            await listAndStoreCalendars(connection.expertProfileId, accessToken);
+            await registerPushChannel(connection.expertProfileId, accessToken);
+            await enqueueAvailabilityCacheRebuild(connection.expertProfileId, request.log);
+
+            request.log.info(
+              { expertProfileId: connection.expertProfileId },
+              'Calendar profile connected — calendars listed, push channel registered'
+            );
+          } catch (err: unknown) {
+            request.log.error(
+              {
+                expertProfileId: connection.expertProfileId,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              'Failed to process profile_connected webhook'
+            );
+          }
           break;
         }
 

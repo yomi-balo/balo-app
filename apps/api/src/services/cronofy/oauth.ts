@@ -106,8 +106,7 @@ export function generateCronofyAuthUrl(expertProfileId: string, provider: string
     }
   }
 
-  const scope =
-    'read_write read_only create_event delete_event list_calendars read_account read_events';
+  const scope = 'read_write create_event delete_event list_calendars read_account read_events';
 
   const params = new URLSearchParams({
     response_type: 'code',

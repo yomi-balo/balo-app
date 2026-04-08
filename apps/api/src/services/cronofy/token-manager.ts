@@ -81,9 +81,11 @@ async function refreshAccessToken(
     const errorCode = (err as { error?: string }).error;
 
     if (errorCode === 'invalid_grant') {
-      // Refresh token revoked — mark auth_error
+      // Refresh token revoked — mark auth_error, clear cache
       await calendarRepository.updateConnectionStatus(expertProfileId, 'auth_error');
       await calendarRepository.clearAvailabilityCache(expertProfileId);
+      // TODO: Publish domain event for reconnect email via notification engine.
+      // Requires notification rule + Brevo template setup (separate task).
       throw new CalendarAuthError(`Calendar authorization revoked for expert ${expertProfileId}`);
     }
 
