@@ -19,7 +19,7 @@ export async function getValidAccessToken(expertProfileId: string): Promise<stri
   const expiresIn = connection.tokenExpiresAt.getTime() - Date.now();
 
   if (expiresIn < ONE_HOUR_MS) {
-    return refreshAccessToken(expertProfileId, connection.refreshToken);
+    return refreshAccessToken(expertProfileId, connection.id, connection.refreshToken);
   }
 
   return decryptCalendarToken(connection.accessToken);
@@ -34,7 +34,7 @@ export async function forceRefreshToken(expertProfileId: string): Promise<string
     throw new CalendarNotConnectedError(expertProfileId);
   }
 
-  return refreshAccessToken(expertProfileId, connection.refreshToken);
+  return refreshAccessToken(expertProfileId, connection.id, connection.refreshToken);
 }
 
 /**
@@ -43,6 +43,7 @@ export async function forceRefreshToken(expertProfileId: string): Promise<string
  */
 async function refreshAccessToken(
   expertProfileId: string,
+  connectionId: string,
   encryptedRefreshToken: string
 ): Promise<string> {
   const cronofyApp = getCronofyAppClient();
@@ -89,7 +90,7 @@ async function refreshAccessToken(
       try {
         const { notificationEvents } = await import('../../notifications/publisher.js');
         await notificationEvents.publish('calendar.auth_error', {
-          correlationId: expertProfileId,
+          correlationId: connectionId,
           expertProfileId,
         });
       } catch {
