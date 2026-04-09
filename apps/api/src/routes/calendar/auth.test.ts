@@ -40,10 +40,10 @@ vi.mock('@sentry/node', () => ({
 
 vi.mock('@balo/analytics/server', () => ({
   trackServer: vi.fn(),
-  CALENDAR_SERVER_EVENTS: {
+  CALENDAR_SERVER_EVENTS: Object.freeze({
     OAUTH_COMPLETED: 'calendar_oauth_completed',
     OAUTH_FAILED: 'calendar_oauth_failed',
-  },
+  }),
 }));
 
 import type { FastifyInstance } from 'fastify';
@@ -210,6 +210,32 @@ describe('calendar auth routes', () => {
 
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain('calendar_error=callback_failed');
+    });
+
+    it('redirects with o365_admin_approval error code on access_denied', async () => {
+      mockHandleOAuthCallback.mockRejectedValue(new Error('access_denied by tenant admin'));
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/auth/cronofy/callback',
+        query: { code: 'code', state: 'state' },
+      });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_error=o365_admin_approval');
+    });
+
+    it('redirects with o365_admin_approval error code on consent_required', async () => {
+      mockHandleOAuthCallback.mockRejectedValue(new Error('consent_required'));
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/auth/cronofy/callback',
+        query: { code: 'code', state: 'state' },
+      });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_error=o365_admin_approval');
     });
   });
 });

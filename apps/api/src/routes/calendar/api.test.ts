@@ -78,10 +78,10 @@ vi.mock('@sentry/node', () => ({
 
 vi.mock('@balo/analytics/server', () => ({
   trackServer: vi.fn(),
-  CALENDAR_SERVER_EVENTS: {
+  CALENDAR_SERVER_EVENTS: Object.freeze({
     DISCONNECTED: 'calendar_disconnected',
     RELINK_URL_GENERATED: 'calendar_relink_url_generated',
-  },
+  }),
 }));
 
 import type { FastifyInstance } from 'fastify';

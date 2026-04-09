@@ -82,11 +82,11 @@ vi.mock('@sentry/node', () => ({
 
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
-  CALENDAR_SERVER_EVENTS: {
+  CALENDAR_SERVER_EVENTS: Object.freeze({
     WEBHOOK_RECEIVED: 'calendar_webhook_received',
     AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
     SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
-  },
+  }),
 }));
 
 import type { FastifyInstance } from 'fastify';
