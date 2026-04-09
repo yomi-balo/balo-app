@@ -11,6 +11,8 @@ const {
   mockDisconnectCalendar,
   mockListAndStoreCalendars,
   mockWithCronofyRetry,
+  mockGetValidAccessToken,
+  mockGetCronofyUserClient,
 } = vi.hoisted(() => ({
   mockFindConnectionWithSubCalendars: vi.fn(),
   mockFindConnectionByExpertProfileId: vi.fn(),
@@ -20,6 +22,8 @@ const {
   mockDisconnectCalendar: vi.fn(),
   mockListAndStoreCalendars: vi.fn(),
   mockWithCronofyRetry: vi.fn(),
+  mockGetValidAccessToken: vi.fn(),
+  mockGetCronofyUserClient: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -39,6 +43,15 @@ vi.mock('../../services/cronofy/oauth.js', () => ({
 
 vi.mock('../../services/cronofy/retry.js', () => ({
   withCronofyRetry: mockWithCronofyRetry,
+}));
+
+vi.mock('../../services/cronofy/token-manager.js', () => ({
+  getValidAccessToken: mockGetValidAccessToken,
+}));
+
+vi.mock('../../lib/cronofy.js', () => ({
+  getCronofyUserClient: mockGetCronofyUserClient,
+  getCronofyAppClient: vi.fn(),
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -65,9 +78,10 @@ vi.mock('@sentry/node', () => ({
 
 vi.mock('@balo/analytics/server', () => ({
   trackServer: vi.fn(),
-  CALENDAR_SERVER_EVENTS: {
+  CALENDAR_SERVER_EVENTS: Object.freeze({
     DISCONNECTED: 'calendar_disconnected',
-  },
+    RELINK_URL_GENERATED: 'calendar_relink_url_generated',
+  }),
 }));
 
 import type { FastifyInstance } from 'fastify';
@@ -512,6 +526,122 @@ describe('calendar API routes', () => {
         url: '/api/calendar/refresh-calendars',
         headers: AUTH_HEADERS,
         payload: { expertProfileId: EXPERT_UUID },
+      });
+
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
+  // ── GET /api/calendar/relink ─────────────────────────────────
+
+  describe('GET /api/calendar/relink', () => {
+    it('returns 401 without auth header', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: EXPERT_UUID },
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('returns 400 for invalid expertProfileId', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: 'not-a-uuid' },
+        headers: AUTH_HEADERS,
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 404 when no connection exists', async () => {
+      mockFindConnectionByExpertProfileId.mockResolvedValue(undefined);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: EXPERT_UUID },
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('returns 400 when connection is not in sync_pending state', async () => {
+      mockFindConnectionByExpertProfileId.mockResolvedValue({
+        id: 'conn-1',
+        status: 'connected',
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: EXPERT_UUID },
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('not in sync_pending state');
+    });
+
+    it('returns relink URL on success', async () => {
+      mockFindConnectionByExpertProfileId.mockResolvedValue({
+        id: 'conn-1',
+        status: 'sync_pending',
+      });
+      mockGetValidAccessToken.mockResolvedValue('mock-access-token');
+      mockGetCronofyUserClient.mockReturnValue({
+        userInfo: vi.fn().mockResolvedValue({
+          profiles: [{ profile_relink_url: 'https://app.cronofy.com/relink/abc' }],
+        }),
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: EXPERT_UUID },
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().relinkUrl).toBe('https://app.cronofy.com/relink/abc');
+    });
+
+    it('returns 400 when no relink URL in profile', async () => {
+      mockFindConnectionByExpertProfileId.mockResolvedValue({
+        id: 'conn-1',
+        status: 'sync_pending',
+      });
+      mockGetValidAccessToken.mockResolvedValue('mock-access-token');
+      mockGetCronofyUserClient.mockReturnValue({
+        userInfo: vi.fn().mockResolvedValue({
+          profiles: [{ profile_relink_url: null }],
+        }),
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: EXPERT_UUID },
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('No relink URL available');
+    });
+
+    it('returns 500 when token retrieval fails', async () => {
+      mockFindConnectionByExpertProfileId.mockResolvedValue({
+        id: 'conn-1',
+        status: 'sync_pending',
+      });
+      mockGetValidAccessToken.mockRejectedValue(new Error('Token error'));
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/calendar/relink',
+        query: { expertProfileId: EXPERT_UUID },
+        headers: AUTH_HEADERS,
       });
 
       expect(res.statusCode).toBe(500);

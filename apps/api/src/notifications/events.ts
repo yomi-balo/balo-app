@@ -19,10 +19,20 @@ export interface ExpertApprovedPayload {
   expertProfileId: string;
 }
 
-export type NotificationEvent = 'user.welcome' | 'expert.application_submitted' | 'expert.approved';
+export interface CalendarAuthErrorPayload {
+  correlationId: string; // connectionId
+  expertProfileId: string;
+}
+
+export type NotificationEvent =
+  | 'user.welcome'
+  | 'expert.application_submitted'
+  | 'expert.approved'
+  | 'calendar.auth_error';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'calendar.auth_error': CalendarAuthErrorPayload;
 }

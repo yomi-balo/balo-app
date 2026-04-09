@@ -19,7 +19,7 @@ export async function getValidAccessToken(expertProfileId: string): Promise<stri
   const expiresIn = connection.tokenExpiresAt.getTime() - Date.now();
 
   if (expiresIn < ONE_HOUR_MS) {
-    return refreshAccessToken(expertProfileId, connection.refreshToken);
+    return refreshAccessToken(expertProfileId, connection.id, connection.refreshToken);
   }
 
   return decryptCalendarToken(connection.accessToken);
@@ -34,7 +34,7 @@ export async function forceRefreshToken(expertProfileId: string): Promise<string
     throw new CalendarNotConnectedError(expertProfileId);
   }
 
-  return refreshAccessToken(expertProfileId, connection.refreshToken);
+  return refreshAccessToken(expertProfileId, connection.id, connection.refreshToken);
 }
 
 /**
@@ -43,6 +43,7 @@ export async function forceRefreshToken(expertProfileId: string): Promise<string
  */
 async function refreshAccessToken(
   expertProfileId: string,
+  connectionId: string,
   encryptedRefreshToken: string
 ): Promise<string> {
   const cronofyApp = getCronofyAppClient();
@@ -84,8 +85,18 @@ async function refreshAccessToken(
       // Refresh token revoked — mark auth_error, clear cache
       await calendarRepository.updateConnectionStatus(expertProfileId, 'auth_error');
       await calendarRepository.clearAvailabilityCache(expertProfileId);
-      // TODO: Publish domain event for reconnect email via notification engine.
-      // Requires notification rule + Brevo template setup (separate task).
+
+      // Publish domain event for reconnect email via notification engine (best-effort)
+      try {
+        const { notificationEvents } = await import('../../notifications/publisher.js');
+        await notificationEvents.publish('calendar.auth_error', {
+          correlationId: connectionId,
+          expertProfileId,
+        });
+      } catch {
+        // Best effort — auth_error is already persisted in DB
+      }
+
       throw new CalendarAuthError(`Calendar authorization revoked for expert ${expertProfileId}`);
     }
 

@@ -92,9 +92,32 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
       // Classify error into a safe, fixed error code — never leak internal details in URL
       const isExpired = errorMessage.includes('expired');
       const isSignature = errorMessage.includes('signature') || errorMessage.includes('state');
+      const isO365AdminApproval =
+        errorMessage.includes('access_denied') ||
+        errorMessage.includes('consent_required') ||
+        errorMessage.includes('admin_approval');
       let errorCode = 'callback_failed';
       if (isExpired) errorCode = 'state_expired';
       else if (isSignature) errorCode = 'invalid_state';
+      else if (isO365AdminApproval) errorCode = 'o365_admin_approval';
+
+      // Best-effort: extract provider from the state payload for the error redirect.
+      // The state format is base64(payload).base64(hmac) — we parse payload without
+      // verifying the signature so this works even for expired/tampered states.
+      let providerParam = '';
+      try {
+        const payloadB64 = state.split('.')[0];
+        if (payloadB64) {
+          const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString()) as {
+            provider?: string;
+          };
+          if (payload.provider === 'google' || payload.provider === 'microsoft') {
+            providerParam = `&calendar_provider=${payload.provider}`;
+          }
+        }
+      } catch {
+        // Best effort — provider is cosmetic for the error UI
+      }
 
       request.log.error(
         {
@@ -110,7 +133,9 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
         distinct_id: 'unknown',
       });
 
-      return reply.redirect(`${webAppUrl}${settingsPath}&calendar_error=${errorCode}`);
+      return reply.redirect(
+        `${webAppUrl}${settingsPath}&calendar_error=${errorCode}${providerParam}`
+      );
     }
   });
 }
