@@ -69,6 +69,12 @@ export function CalendarTab(): React.JSX.Element {
     const calendarConnected = searchParams.get('calendar_connected');
     const calendarError = searchParams.get('calendar_error');
     const calendarStatus = searchParams.get('calendar_status');
+    const calendarProvider = searchParams.get('calendar_provider') as CalendarProvider | null;
+
+    // Restore provider from the error redirect URL so session_expired shows the right branding
+    if (calendarProvider) {
+      setConnectingProvider(calendarProvider);
+    }
 
     // ── OAuth callback results take priority over mount fetch ───
     if (calendarConnected === 'true') {
@@ -98,22 +104,17 @@ export function CalendarTab(): React.JSX.Element {
           cancelled = true;
         };
       }
-      if (calendarError === 'state_expired' || calendarError === 'callback_failed') {
-        void getCalendarConnectionAction().then((data) => {
-          if (cancelled) return;
-          if (data) {
-            setConnection(data);
-            setViewState(data.status === 'sync_pending' ? 'sync_pending' : 'connected');
-          } else {
-            setViewState('session_expired');
-          }
-        });
-        return () => {
-          cancelled = true;
-        };
-      }
-      toast.error(`Calendar connection failed: ${calendarError}`);
-      setViewState('empty');
+      // All OAuth handshake failures (expired, invalid state, bad callback, generic)
+      // resolve to session_expired if no existing connection, or preserve existing state.
+      void getCalendarConnectionAction().then((data) => {
+        if (cancelled) return;
+        if (data) {
+          setConnection(data);
+          setViewState(data.status === 'sync_pending' ? 'sync_pending' : 'connected');
+        } else {
+          setViewState('session_expired');
+        }
+      });
       return () => {
         cancelled = true;
       };
@@ -172,11 +173,10 @@ export function CalendarTab(): React.JSX.Element {
 
   const handleConnect = useCallback(
     async (provider: CalendarProvider) => {
-      // O365 guidance intercept — skip for retries from o365_waiting or session_expired
+      // O365 guidance intercept — skip when retrying from session_expired (user already saw it)
       if (
         provider === 'microsoft' &&
         viewState !== 'o365_guidance' &&
-        viewState !== 'o365_waiting' &&
         viewState !== 'session_expired'
       ) {
         track(CALENDAR_EVENTS.O365_GUIDANCE_SHOWN, {} as Record<string, never>);
@@ -339,7 +339,7 @@ export function CalendarTab(): React.JSX.Element {
           <CalendarO365WaitingCard
             onTryAgain={() => {
               track(CALENDAR_EVENTS.O365_WAITING_TRY_AGAIN, {} as Record<string, never>);
-              void handleConnect('microsoft');
+              void handleO365Continue();
             }}
             onCancel={handleCancelConnect}
           />

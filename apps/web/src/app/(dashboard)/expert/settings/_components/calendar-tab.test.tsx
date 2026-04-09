@@ -322,13 +322,14 @@ describe('CalendarTab', () => {
     });
   });
 
-  it('shows error toast for generic calendar errors', async () => {
+  it('shows session_expired for generic calendar errors', async () => {
     mockSearchParams = new URLSearchParams('calendar_error=unknown_error');
+    mockGetCalendarConnection.mockResolvedValue(null);
 
     render(<CalendarTab />);
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Calendar connection failed: unknown_error');
+      expect(screen.getByText('Connection attempt timed out')).toBeInTheDocument();
     });
   });
 
@@ -445,7 +446,7 @@ describe('CalendarTab', () => {
 
   // ── Bug regression: O365 retry from waiting state ────────────
 
-  it('skips guidance modal on "Try connecting again" from O365 waiting state', async () => {
+  it('calls handleO365Continue directly from O365 waiting retry (no guidance loop)', async () => {
     const user = userEvent.setup();
     mockSearchParams = new URLSearchParams('calendar_error=o365_admin_approval');
 
@@ -455,18 +456,47 @@ describe('CalendarTab', () => {
       expect(screen.getByText('Waiting for IT admin approval')).toBeInTheDocument();
     });
 
-    // Click "Try connecting again" — should NOT show guidance modal
+    // Click "Try connecting again" — calls handleO365Continue, skips guidance modal
     await user.click(screen.getByRole('button', { name: /Try connecting again/i }));
 
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.O365_GUIDANCE_CONTINUED, expect.any(Object));
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
       provider: 'microsoft',
     });
     expect(mockInitiateCalendarConnect).toHaveBeenCalledWith('microsoft');
   });
 
+  it('shows session_expired for invalid_state errors (not raw toast)', async () => {
+    mockSearchParams = new URLSearchParams('calendar_error=invalid_state');
+    mockGetCalendarConnection.mockResolvedValue(null);
+
+    render(<CalendarTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Connection attempt timed out')).toBeInTheDocument();
+    });
+  });
+
+  it('restores provider from calendar_provider URL param', async () => {
+    mockSearchParams = new URLSearchParams(
+      'calendar_error=state_expired&calendar_provider=microsoft'
+    );
+    mockGetCalendarConnection.mockResolvedValue(null);
+
+    render(<CalendarTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Connection attempt timed out')).toBeInTheDocument();
+    });
+    // Should show Microsoft branding, not Google
+    expect(screen.getByText(/Microsoft 365 sign-in session expired/i)).toBeInTheDocument();
+  });
+
   it('skips guidance modal on retry from session_expired with Microsoft', async () => {
     const user = userEvent.setup();
-    mockSearchParams = new URLSearchParams('calendar_error=state_expired');
+    mockSearchParams = new URLSearchParams(
+      'calendar_error=state_expired&calendar_provider=microsoft'
+    );
     mockGetCalendarConnection.mockResolvedValue(null);
 
     render(<CalendarTab />);
@@ -475,13 +505,16 @@ describe('CalendarTab', () => {
       expect(screen.getByText('Connection attempt timed out')).toBeInTheDocument();
     });
 
-    // "Try again" should NOT loop back to guidance modal
+    // "Try again" should skip guidance and go directly to connecting
     await user.click(screen.getByRole('button', { name: /Try again/i }));
 
-    // Since connectingProvider defaults to 'google', this tests the google path.
-    // To test the Microsoft path we'd need to set connectingProvider first.
-    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
-      provider: 'google',
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.SESSION_EXPIRED_TRY_AGAIN, {
+      provider: 'microsoft',
     });
+    // Should proceed to connect without showing guidance modal
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
+      provider: 'microsoft',
+    });
+    expect(mockInitiateCalendarConnect).toHaveBeenCalledWith('microsoft');
   });
 });
