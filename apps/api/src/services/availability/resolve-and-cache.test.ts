@@ -179,4 +179,30 @@ describe('resolveAndCacheAvailability', () => {
       expect.objectContaining({ horizonDays: 21, minMinutes: 20 })
     );
   });
+
+  it('falls back to defaults — and produces a valid horizonEnd — when env vars are non-numeric', async () => {
+    // Regression guard: previously the inline `isFiniteNumber` ternary at the
+    // resolve() call covered the resolver input but `horizonEnd` was computed
+    // from the unguarded value, so a non-numeric env produced an Invalid Date
+    // range for the consultations query and silently subtracted zero bookings.
+    process.env.RESOLVER_HORIZON_DAYS = 'abc';
+    process.env.MIN_CONSULTATION_MINUTES = 'not-a-number';
+
+    mockFindTimezone.mockResolvedValue('UTC');
+    mockListRules.mockResolvedValue([]);
+    mockListConsultations.mockResolvedValue([]);
+    mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    // Defaults (14d / 15min) apply, and the consultations query gets a finite
+    // horizonEnd derived from those defaults — not Invalid Date.
+    const expectedEnd = new Date(NOW.getTime() + 14 * 24 * 60 * 60 * 1000);
+    expect(mockListConsultations).toHaveBeenCalledWith(EXPERT_ID, NOW, expectedEnd);
+    expect(Number.isFinite(expectedEnd.getTime())).toBe(true);
+
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ horizonDays: 14, minMinutes: 15 })
+    );
+  });
 });

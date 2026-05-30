@@ -78,12 +78,12 @@ describe('resolve (BAL-243 availability resolver)', () => {
     });
   });
 
-  describe('DST boundary (Australia/Sydney AEDT → AEST)', () => {
+  describe('DST boundary (Australia/Sydney AEDT ↔ AEST)', () => {
     // AEDT (UTC+11) ends Sun 2026-04-05 at 03:00 local → 02:00 AEST (UTC+10).
     // A 09:00 local rule on Apr 5 falls AFTER the transition, so it is AEST.
     // 09:00 Sun Apr 5 Sydney − 10h = 23:00 UTC on Sat 2026-04-04.
     // The wrong answer (using a fixed AEDT offset) would be 22:00 UTC.
-    it('expands the Sunday 09:00 rule using post-DST AEST offset (UTC+10)', () => {
+    it('post-transition Sunday 09:00 rule resolves at AEST (UTC+10)', () => {
       // `now` must sit BEFORE the rule opens so the clipped window's startAt
       // is the raw UTC instant from `fromZonedTime` (not clamped to rangeStart).
       // Friday 2026-04-03 00:00 UTC = Friday 2026-04-03 11:00 AEDT Sydney.
@@ -97,6 +97,53 @@ describe('resolve (BAL-243 availability resolver)', () => {
       );
 
       expect(result.earliestAvailableAt).toEqual(new Date('2026-04-04T23:00:00.000Z'));
+    });
+
+    // Companion to the AEST test: prove the per-date expansion picks up the
+    // AEDT offset BEFORE the transition. A buggy implementation that hard-coded
+    // AEST (UTC+10) for Sydney would pass the test above but fail this one.
+    // AEDT (UTC+11) is in effect on Sun 2026-03-29 (last Sun before transition).
+    // 09:00 Sun Mar 29 Sydney − 11h = 22:00 UTC on Sat 2026-03-28.
+    it('pre-transition Sunday 09:00 rule resolves at AEDT (UTC+11)', () => {
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 0, startTime: '09:00:00', endTime: '17:00:00' }],
+          timezone: 'Australia/Sydney',
+          now: new Date('2026-03-27T00:00:00.000Z'),
+          horizonDays: 14,
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-03-28T22:00:00.000Z'));
+    });
+  });
+
+  describe('DST spring-forward (non-existent local time)', () => {
+    // Sydney AEST → AEDT transition: Sun 2026-10-04. The clock jumps
+    // 02:00 AEST → 03:00 AEDT, so 02:00–02:59 local do not exist.
+    // A rule starting at 02:30 on that Sunday hits the gap. `date-fns-tz` v3
+    // resolves the non-existent local time leniently — interpreting it in the
+    // post-transition (AEDT, UTC+11) offset, which produces a UTC instant
+    // that round-trips BACK to an earlier real local time (01:30 AEST).
+    //
+    // Concretely: fromZonedTime('2026-10-04T02:30:00', 'Australia/Sydney')
+    //   = 2026-10-03T15:30:00Z   (= 01:30 AEST in Sydney, NOT 02:30 or 03:30)
+    //
+    // This locks the v1 behaviour. If date-fns-tz changes semantics, the
+    // assertion breaks and the team decides whether to follow upstream or to
+    // add an explicit shift-forward layer in the resolver.
+    it('non-existent local time maps to the lenient pre-gap UTC instant', () => {
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 0, startTime: '02:30:00', endTime: '04:00:00' }],
+          timezone: 'Australia/Sydney',
+          // Fri 2026-10-02 00:00 UTC = Fri 2026-10-02 10:00 AEST.
+          now: new Date('2026-10-02T00:00:00.000Z'),
+          horizonDays: 14,
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-10-03T15:30:00.000Z'));
     });
   });
 

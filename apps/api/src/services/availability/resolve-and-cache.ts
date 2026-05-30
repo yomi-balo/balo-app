@@ -40,10 +40,18 @@ export async function resolveAndCacheAvailability(
   options: ResolveAndCacheOptions = {}
 ): Promise<{ earliestAvailableAt: Date | null }> {
   const now = options.now ?? new Date();
-  const horizonDays =
-    options.horizonDays ?? parseInt(process.env.RESOLVER_HORIZON_DAYS ?? '14', 10);
-  const minMinutes =
-    options.minMinutes ?? parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10);
+  // Resolve env-or-default once, then guard, so `horizonEnd` and the resolver
+  // input both see the same finite number. A malformed env var (e.g.
+  // RESOLVER_HORIZON_DAYS='abc') would otherwise make `horizonEnd` an Invalid
+  // Date and silently skip subtracting any consultations.
+  const horizonDays = guardedNumber(
+    options.horizonDays ?? parseInt(process.env.RESOLVER_HORIZON_DAYS ?? '14', 10),
+    DEFAULT_HORIZON_DAYS
+  );
+  const minMinutes = guardedNumber(
+    options.minMinutes ?? parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
+    DEFAULT_MIN_MINUTES
+  );
   const busyBlocks = options.busyBlocks ?? [];
 
   const timezone = await expertsRepository.findTimezone(expertProfileId);
@@ -75,8 +83,8 @@ export async function resolveAndCacheAvailability(
     busyBlocks,
     timezone,
     now,
-    horizonDays: isFiniteNumber(horizonDays) ? horizonDays : DEFAULT_HORIZON_DAYS,
-    minMinutes: isFiniteNumber(minMinutes) ? minMinutes : DEFAULT_MIN_MINUTES,
+    horizonDays,
+    minMinutes,
   });
 
   await calendarRepository.upsertAvailabilityCache(expertProfileId, result.earliestAvailableAt);
@@ -95,6 +103,6 @@ export async function resolveAndCacheAvailability(
   return { earliestAvailableAt: result.earliestAvailableAt };
 }
 
-function isFiniteNumber(n: unknown): n is number {
-  return typeof n === 'number' && Number.isFinite(n);
+function guardedNumber(n: unknown, fallback: number): number {
+  return typeof n === 'number' && Number.isFinite(n) ? n : fallback;
 }

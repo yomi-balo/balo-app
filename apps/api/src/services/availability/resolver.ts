@@ -24,9 +24,13 @@ import type {
  * `./resolve-and-cache.ts` is the impure adapter.
  *
  * DST: during spring-forward (e.g. a 02:30 rule on the day the clock jumps
- * 02:00 → 03:00) the local instant does not exist. `fromZonedTime` resolves
- * this with "shift-forward" semantics — returning the next valid UTC instant.
- * This is the deliberate v1 choice; documented per plan §9.
+ * 02:00 → 03:00) the local instant does not exist. `fromZonedTime` v3 resolves
+ * this leniently — it interprets the wall-clock value using the post-transition
+ * offset, which round-trips to an earlier real local time (e.g. Sydney
+ * 2026-10-04 02:30 → 2026-10-03T15:30:00Z, which is 01:30 AEST). For an expert
+ * with a rule starting in the skipped hour on the DST-flip day, this means
+ * the slot opens up to one hour earlier than the wall-clock value suggests —
+ * accepted for v1 (locked by `resolver.test.ts > DST spring-forward`).
  */
 export function resolve(input: ResolverInput): ResolverResult {
   const { rules, baloConsultations, busyBlocks, timezone, now, horizonDays, minMinutes } = input;
