@@ -111,6 +111,19 @@ export const expertsRepository = {
     });
   },
 
+  /**
+   * Focused single-column read of an expert's timezone — used by the availability
+   * resolver wire-up on every webhook + staleness cron run. Returns null if the
+   * profile doesn't exist (so callers can short-circuit without throwing).
+   */
+  async findTimezone(expertProfileId: string): Promise<string | null> {
+    const row = await db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+      columns: { timezone: true },
+    });
+    return row?.timezone ?? null;
+  },
+
   /** Find expert profile by username (for public profile page) */
   async findByUsername(username: string) {
     return db.query.expertProfiles.findFirst({

@@ -2,17 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Hoisted mocks ──────────────────────────────────────────────
 
-const { mockUpsertAvailabilityCache, mockFindStaleConnections, mockQueueAdd } = vi.hoisted(() => ({
-  mockUpsertAvailabilityCache: vi.fn(),
-  mockFindStaleConnections: vi.fn(),
-  mockQueueAdd: vi.fn(),
-}));
+const { mockResolveAndCacheAvailability, mockFindStaleConnections, mockQueueAdd, mockTrackServer } =
+  vi.hoisted(() => ({
+    mockResolveAndCacheAvailability: vi.fn(),
+    mockFindStaleConnections: vi.fn(),
+    mockQueueAdd: vi.fn(),
+    mockTrackServer: vi.fn(),
+  }));
 
 vi.mock('@balo/db', () => ({
   calendarRepository: {
-    upsertAvailabilityCache: mockUpsertAvailabilityCache,
     findStaleConnections: mockFindStaleConnections,
   },
+}));
+
+vi.mock('../services/availability/resolve-and-cache.js', () => ({
+  resolveAndCacheAvailability: mockResolveAndCacheAvailability,
 }));
 
 vi.mock('../lib/redis.js', () => ({
@@ -24,7 +29,7 @@ vi.mock('../lib/queue.js', () => ({
 }));
 
 vi.mock('@balo/analytics/server', () => ({
-  trackServer: vi.fn(),
+  trackServer: mockTrackServer,
   CALENDAR_SERVER_EVENTS: {
     AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
   },
@@ -79,7 +84,7 @@ describe('availability-cache jobs', () => {
   });
 
   describe('startAvailabilityCacheWorker', () => {
-    it('creates a worker that processes availability cache rebuild', async () => {
+    it('delegates to resolveAndCacheAvailability and emits the analytics event', async () => {
       startAvailabilityCacheWorker();
 
       expect(capturedAvailabilityProcessor).toBeDefined();
@@ -89,11 +94,14 @@ describe('availability-cache jobs', () => {
         log: vi.fn(),
       };
 
-      mockUpsertAvailabilityCache.mockResolvedValue(undefined);
+      mockResolveAndCacheAvailability.mockResolvedValue({ earliestAvailableAt: null });
 
       await capturedAvailabilityProcessor!(mockJob);
 
-      expect(mockUpsertAvailabilityCache).toHaveBeenCalledWith('expert-1', null);
+      expect(mockResolveAndCacheAvailability).toHaveBeenCalledWith('expert-1');
+      expect(mockTrackServer).toHaveBeenCalledWith('calendar_availability_cache_rebuilt', {
+        distinct_id: 'expert-1',
+      });
       expect(mockJob.log).toHaveBeenCalledWith(expect.stringContaining('expert-1'));
     });
   });

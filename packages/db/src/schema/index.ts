@@ -14,3 +14,5 @@ export * from './payouts';
 export * from './notifications';
 export * from './user-notifications';
 export * from './calendar';
+export * from './availability';
+export * from './consultations';

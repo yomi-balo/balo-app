@@ -15,3 +15,5 @@ export type { SkillsByCategory, CertificationsByCategory } from './reference-dat
 export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
+export { availabilityRulesRepository } from './availability-rules';
+export { consultationsRepository } from './consultations';
