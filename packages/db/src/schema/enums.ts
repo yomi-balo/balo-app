@@ -22,3 +22,5 @@ export const applicationStatusEnum = pgEnum('application_status', [
   'approved',
   'rejected',
 ]);
+
+export const consultationStatusEnum = pgEnum('consultation_status', ['confirmed', 'cancelled']);

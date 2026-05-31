@@ -3,6 +3,7 @@ import { calendarRepository } from '@balo/db';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
+import { resolveAndCacheAvailability } from '../services/availability/resolve-and-cache.js';
 
 // ── Queue names ──────────────────────────────────────────────────
 
@@ -19,7 +20,13 @@ export interface AvailabilityCacheJobData {
 
 /**
  * Processes availability cache rebuild jobs.
- * Placeholder: updates the timestamp. Full calculation deferred to BAL-195 pt.2.
+ *
+ * Delegates the heavy lifting to `resolveAndCacheAvailability` (load tz +
+ * rules + confirmed consultations, run the pure resolver, upsert the cache).
+ * The worker stays thin: invoke, emit analytics, log.
+ *
+ * BAL-243: `busyBlocks` defaults to `[]` inside the service — BAL-194/195
+ * will wire Cronofy free/busy through this same call site.
  */
 export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData> {
   const worker = new Worker<AvailabilityCacheJobData>(
@@ -27,16 +34,13 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
     async (job: Job<AvailabilityCacheJobData>) => {
       const { expertProfileId } = job.data;
 
-      // Placeholder: update the cache timestamp only.
-      // Full earliest_available_at calculation requires free/busy + availability rules
-      // which will be implemented in BAL-195 pt.2.
-      await calendarRepository.upsertAvailabilityCache(expertProfileId, null);
+      await resolveAndCacheAvailability(expertProfileId);
 
       trackServer(CALENDAR_SERVER_EVENTS.AVAILABILITY_CACHE_REBUILT, {
         distinct_id: expertProfileId,
       });
 
-      job.log(`Availability cache updated for expert ${expertProfileId} (placeholder)`);
+      job.log(`Availability cache rebuilt for expert ${expertProfileId}`);
     },
     {
       connection: createRedisConnection(),
