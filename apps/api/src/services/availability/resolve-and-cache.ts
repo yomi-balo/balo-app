@@ -45,11 +45,11 @@ export async function resolveAndCacheAvailability(
   // RESOLVER_HORIZON_DAYS='abc') would otherwise make `horizonEnd` an Invalid
   // Date and silently skip subtracting any consultations.
   const horizonDays = guardedNumber(
-    options.horizonDays ?? parseInt(process.env.RESOLVER_HORIZON_DAYS ?? '14', 10),
+    options.horizonDays ?? Number.parseInt(process.env.RESOLVER_HORIZON_DAYS ?? '14', 10),
     DEFAULT_HORIZON_DAYS
   );
   const minMinutes = guardedNumber(
-    options.minMinutes ?? parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
+    options.minMinutes ?? Number.parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
     DEFAULT_MIN_MINUTES
   );
   const busyBlocks = options.busyBlocks ?? [];

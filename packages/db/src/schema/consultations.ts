@@ -27,24 +27,18 @@ export const consultations = pgTable(
     ...timestamps,
     ...softDelete,
   },
-  (table) => ({
-    expertProfileIdx: index('consultations_expert_profile_idx').on(table.expertProfileId),
-    expertStatusRangeIdx: index('consultations_expert_status_range_idx').on(
+  // Explicit status check in addition to the enum so the cancelled-then-free
+  // edge case has a clear assertion surface in the integration test.
+  (table) => [
+    index('consultations_expert_profile_idx').on(table.expertProfileId),
+    index('consultations_expert_status_range_idx').on(
       table.expertProfileId,
       table.status,
       table.startAt
     ),
-    startBeforeEndCheck: check(
-      'consultations_start_before_end_check',
-      sql`${table.startAt} < ${table.endAt}`
-    ),
-    // Explicit status check in addition to the enum so the cancelled-then-free
-    // edge case has a clear assertion surface in the integration test.
-    statusCheck: check(
-      'consultations_status_check',
-      sql`${table.status} IN ('confirmed', 'cancelled')`
-    ),
-  })
+    check('consultations_start_before_end_check', sql`${table.startAt} < ${table.endAt}`),
+    check('consultations_status_check', sql`${table.status} IN ('confirmed', 'cancelled')`),
+  ]
 );
 
 export const consultationsRelations = relations(consultations, ({ one }) => ({

@@ -28,18 +28,15 @@ export const availabilityRules = pgTable(
     ...timestamps,
     ...softDelete,
   },
-  (table) => ({
-    expertProfileIdx: index('avail_rules_expert_profile_idx').on(table.expertProfileId),
-    expertDayIdx: index('avail_rules_expert_day_idx').on(table.expertProfileId, table.dayOfWeek),
-    dayCheck: check('avail_rules_day_check', sql`${table.dayOfWeek} BETWEEN 0 AND 6`),
-    startBeforeEndCheck: check(
-      'avail_rules_start_before_end_check',
-      sql`${table.startTime} < ${table.endTime}`
-    ),
-    // Note: no unique constraint on (expert, day, start) — overlapping rules are
-    // allowed in v1; the resolver merges windows. BAL-195's schedule editor may
-    // tighten this later if needed.
-  })
+  // Note: no unique constraint on (expert, day, start) — overlapping rules are
+  // allowed in v1; the resolver merges windows. BAL-195's schedule editor may
+  // tighten this later if needed.
+  (table) => [
+    index('avail_rules_expert_profile_idx').on(table.expertProfileId),
+    index('avail_rules_expert_day_idx').on(table.expertProfileId, table.dayOfWeek),
+    check('avail_rules_day_check', sql`${table.dayOfWeek} BETWEEN 0 AND 6`),
+    check('avail_rules_start_before_end_check', sql`${table.startTime} < ${table.endTime}`),
+  ]
 );
 
 export const availabilityRulesRelations = relations(availabilityRules, ({ one }) => ({
