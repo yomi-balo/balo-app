@@ -138,7 +138,7 @@ function buildWideOpen(args: BuildArgs): BuildResult {
     // (e.g. 09:00 → 10:00 local). Anchored to the first rule's dayOfWeek at its
     // local start_time, converted to UTC the same way the resolver expands
     // rules (offset 0 = flush to the window start, which is what shifts earliest).
-    const anchor = rules[0]!;
+    const anchor = rules[0];
     const slotStart = ruleWindowSlot(args.baselineNow, anchor, args.timezone, 0);
     consultations.push({
       startAt: slotStart,
@@ -181,8 +181,10 @@ function buildSparse(args: BuildArgs): BuildResult {
     // availability — asserted in availability-generator.test.ts.
     const slotStart = utcSlotDaysAhead(args.baselineNow, 3, 11);
     const slotEnd = new Date(slotStart.getTime() + HOUR_MS);
-    consultations.push({ startAt: slotStart, endAt: slotEnd, status: 'confirmed' });
-    consultations.push({ startAt: slotStart, endAt: slotEnd, status: 'cancelled' });
+    consultations.push(
+      { startAt: slotStart, endAt: slotEnd, status: 'confirmed' },
+      { startAt: slotStart, endAt: slotEnd, status: 'cancelled' }
+    );
   } else if (args.rng.bool(0.4)) {
     const start = utcSlotDaysAhead(args.baselineNow, args.rng.int(2, 5), 15);
     consultations.push({
@@ -202,7 +204,7 @@ function buildNextWeek(args: BuildArgs): BuildResult {
   // windows, so the earliest free slot lands in the following week.
   const busyBlocks: BusyBlock[] = [
     {
-      startAt: new Date(args.baselineNow.getTime()),
+      startAt: new Date(args.baselineNow),
       endAt: new Date(args.baselineNow.getTime() + WEEK_MS),
     },
   ];
@@ -233,7 +235,7 @@ function buildBookedSolid(args: BuildArgs): BuildResult {
   // One busy block spanning [baseline, baseline + horizon] removes everything.
   const busyBlocks: BusyBlock[] = [
     {
-      startAt: new Date(args.baselineNow.getTime()),
+      startAt: new Date(args.baselineNow),
       endAt: new Date(args.baselineNow.getTime() + HORIZON_MS + DAY_MS),
     },
   ];
@@ -300,7 +302,7 @@ function ruleWindowSlot(
 }
 
 function floorToHour(d: Date): Date {
-  const copy = new Date(d.getTime());
+  const copy = new Date(d);
   copy.setUTCMinutes(0, 0, 0);
   return copy;
 }

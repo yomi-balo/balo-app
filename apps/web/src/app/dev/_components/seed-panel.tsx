@@ -55,28 +55,34 @@ function summarizeRefresh(s: RefreshSummary): string {
 }
 
 function SummaryRows({ summary }: Readonly<{ summary: AnySummary }>): React.JSX.Element {
-  const entries: [string, string | number][] = [];
+  let entries: [string, string | number][];
   if ('experts' in summary) {
-    entries.push(['Experts', summary.experts.expertsGenerated]);
-    entries.push(['Skills', summary.experts.skillsGenerated]);
-    entries.push(['Rules', summary.availability.availabilityRulesGenerated]);
-    entries.push(['Cache rows', summary.availability.cacheRowsWritten]);
-    entries.push(['Bookable', summary.availability.expertsWithEarliest]);
-    entries.push(['Baseline', summary.experts.baselineAt]);
+    entries = [
+      ['Experts', summary.experts.expertsGenerated],
+      ['Skills', summary.experts.skillsGenerated],
+      ['Rules', summary.availability.availabilityRulesGenerated],
+      ['Cache rows', summary.availability.cacheRowsWritten],
+      ['Bookable', summary.availability.expertsWithEarliest],
+      ['Baseline', summary.experts.baselineAt],
+    ];
   } else if ('expertsGenerated' in summary) {
-    entries.push(['Experts', summary.expertsGenerated]);
-    entries.push(['Skills', summary.skillsGenerated]);
-    entries.push(['Languages', summary.languagesGenerated]);
-    entries.push(['Industries', summary.industriesGenerated]);
-    entries.push(['Seed', summary.seedUsedRng]);
-    entries.push(['Baseline', summary.baselineAt]);
+    entries = [
+      ['Experts', summary.expertsGenerated],
+      ['Skills', summary.skillsGenerated],
+      ['Languages', summary.languagesGenerated],
+      ['Industries', summary.industriesGenerated],
+      ['Seed', summary.seedUsedRng],
+      ['Baseline', summary.baselineAt],
+    ];
   } else {
-    entries.push(['Rules', summary.availabilityRulesGenerated]);
-    entries.push(['Consultations', summary.consultationsSeeded]);
-    entries.push(['Cancelled', summary.consultationsCancelled]);
-    entries.push(['Cache rows', summary.cacheRowsWritten]);
-    entries.push(['Bookable', summary.expertsWithEarliest]);
-    entries.push(['No availability', summary.expertsNullEarliest]);
+    entries = [
+      ['Rules', summary.availabilityRulesGenerated],
+      ['Consultations', summary.consultationsSeeded],
+      ['Cancelled', summary.consultationsCancelled],
+      ['Cache rows', summary.cacheRowsWritten],
+      ['Bookable', summary.expertsWithEarliest],
+      ['No availability', summary.expertsNullEarliest],
+    ];
   }
 
   return (

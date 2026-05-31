@@ -52,11 +52,15 @@ function skillWeightForIndex(idx: number): number {
 
 /** Slugify a name to a username base (lowercase, alnum + hyphen). */
 function baseUsername(first: string, last: string): string {
-  const raw = `${first}-${last}`.toLowerCase();
-  const cleaned = raw
+  // Collapse runs of non-alphanumerics to single spaces, trim, then space→dash.
+  // Avoids the anchored `+` alternation (`/^-+|-+$/g`) that SonarCloud flags as
+  // a super-linear ReDoS pattern (S5852); same slug output.
+  const cleaned = `${first}-${last}`
+    .toLowerCase()
     .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/ /g, '-');
   return cleaned.length > 0 ? cleaned : 'expert';
 }
 
@@ -174,7 +178,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
 function buildLanguages(rng: WeightedRng, taxonomy: SeedTaxonomy): GeneratedExpert['languages'] {
   if (taxonomy.languages.length === 0) return [];
   const result: GeneratedExpert['languages'] = [
-    { languageId: taxonomy.languages[0]!.id, proficiency: 'native' },
+    { languageId: taxonomy.languages[0].id, proficiency: 'native' },
   ];
   const extras = rng.int(0, 2);
   if (taxonomy.languages.length > 1 && extras > 0) {

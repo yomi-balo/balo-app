@@ -112,7 +112,7 @@ async function insertExpert(
     updatedAt: baselineNow,
   };
   const [insertedUser] = await tx.insert(users).values(userRow).returning({ id: users.id });
-  const userId = insertedUser!.id;
+  const userId = insertedUser.id;
 
   const approvedAt = new Date(baselineNow.getTime() - expert.approvedOffsetMs);
   const profileRow: NewExpertProfile = {
@@ -142,7 +142,7 @@ async function insertExpert(
     .insert(expertProfiles)
     .values(profileRow)
     .returning({ id: expertProfiles.id });
-  const expertProfileId = insertedProfile!.id;
+  const expertProfileId = insertedProfile.id;
 
   if (expert.skills.length > 0) {
     const skillRows: NewExpertSkill[] = expert.skills.map((s) => ({
@@ -264,7 +264,7 @@ async function loadSeedExperts(): Promise<{ id: string; index: number; timezone:
 function indexFromEmail(email: string): number | null {
   const match = /^expert(\d+)@/.exec(email);
   if (!match) return null;
-  const n = Number.parseInt(match[1]!, 10);
+  const n = Number.parseInt(match[1], 10);
   return Number.isFinite(n) ? n : null;
 }
 
