@@ -88,7 +88,7 @@ const experts = await db.query.expertProfiles.findMany({
   columns: {
     id: true,
     title: true,
-    hourlyRateCents: true,
+    rateCents: true,
   },
   with: {
     user: {
