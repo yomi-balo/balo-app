@@ -99,13 +99,13 @@ describe('saveRateAction', () => {
     it('accepts zero rate', async () => {
       const result = await saveRateAction({ ratePerMinuteCents: 0 });
       expect(result.success).toBe(true);
-      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { hourlyRate: 0 });
+      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { rateCents: 0 });
     });
 
     it('accepts max rate (5000 cents)', async () => {
       const result = await saveRateAction({ ratePerMinuteCents: 5000 });
       expect(result.success).toBe(true);
-      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { hourlyRate: 5000 });
+      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { rateCents: 5000 });
     });
   });
 
@@ -113,7 +113,7 @@ describe('saveRateAction', () => {
     it('persists rate to database', async () => {
       const result = await saveRateAction({ ratePerMinuteCents: 200 });
       expect(result).toEqual({ success: true });
-      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { hourlyRate: 200 });
+      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { rateCents: 200 });
     });
 
     it('revalidates settings path', async () => {

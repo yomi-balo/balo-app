@@ -57,12 +57,12 @@ describe('generateExperts — determinism', () => {
     const b = gen(60)[34]!;
     expect({
       headline: a.headline,
-      hourlyRate: a.hourlyRate,
+      rateCents: a.rateCents,
       timezone: a.timezone,
       skillIds: a.skills.map((s) => s.skillId),
     }).toEqual({
       headline: b.headline,
-      hourlyRate: b.hourlyRate,
+      rateCents: b.rateCents,
       timezone: b.timezone,
       skillIds: b.skills.map((s) => s.skillId),
     });
@@ -103,10 +103,10 @@ describe('generateExperts — markers & identifiers', () => {
 describe('generateExperts — rate bands', () => {
   it('keeps every rate an integer within [120, 1300] and <= MAX_RATE_CENTS', () => {
     for (const e of gen(200)) {
-      expect(Number.isInteger(e.hourlyRate)).toBe(true);
-      expect(e.hourlyRate).toBeGreaterThanOrEqual(120);
-      expect(e.hourlyRate).toBeLessThanOrEqual(1300);
-      expect(e.hourlyRate).toBeLessThanOrEqual(MAX_RATE_CENTS);
+      expect(Number.isInteger(e.rateCents)).toBe(true);
+      expect(e.rateCents).toBeGreaterThanOrEqual(120);
+      expect(e.rateCents).toBeLessThanOrEqual(1300);
+      expect(e.rateCents).toBeLessThanOrEqual(MAX_RATE_CENTS);
     }
   });
 

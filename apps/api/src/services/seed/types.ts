@@ -39,8 +39,8 @@ export interface GeneratedExpert {
   headline: string;
   bio: string;
   username: string;
-  /** Per-minute rate in CENTS (despite the column being named hourly_rate). */
-  hourlyRate: number;
+  /** Per-minute rate in CENTS. */
+  rateCents: number;
   rateBand: RateBand;
   yearStartedSalesforce: number;
   projectCountMin: number;

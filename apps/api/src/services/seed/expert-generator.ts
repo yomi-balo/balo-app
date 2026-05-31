@@ -100,7 +100,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
 
     // Rate band → per-minute cents.
     const band = rng.pick(RATE_BANDS, rateWeights);
-    const hourlyRate = rng.int(band.min, band.max);
+    const rateCents = rng.int(band.min, band.max);
 
     // Experience.
     const yearsAgo = rng.int(1, 18);
@@ -155,7 +155,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
       headline,
       bio: faker.lorem.paragraph(),
       username: `${baseUsername(firstName, lastName)}-${i}`,
-      hourlyRate,
+      rateCents,
       rateBand: band.band,
       yearStartedSalesforce,
       projectCountMin: rng.pickOne(PROJECT_COUNT_BUCKETS),
