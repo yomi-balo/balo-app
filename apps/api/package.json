@@ -39,6 +39,7 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.4.0",
     "@repo/eslint-config": "workspace:*",
     "@types/lodash": "^4.17.24",
     "@types/node": "^22.15.3",

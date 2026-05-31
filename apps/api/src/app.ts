@@ -29,5 +29,12 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await fastify.register(phoneRoutes);
   await fastify.register(calendarRoutes);
 
+  // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
+  // and @faker-js/faker never load in production.
+  if (process.env.NODE_ENV !== 'production') {
+    const { devRoutes } = await import('./routes/dev/index.js');
+    await fastify.register(devRoutes);
+  }
+
   return fastify;
 }
