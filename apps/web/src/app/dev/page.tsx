@@ -1,4 +1,8 @@
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { SeedPanel } from './_components/seed-panel';
+
+export const dynamic = 'force-dynamic';
 
 const links: {
   section: string;
@@ -89,83 +93,51 @@ const links: {
 ];
 
 export default function DevDashboardPage() {
+  if (process.env.NODE_ENV === 'production') {
+    notFound();
+  }
+
+  const cardClass =
+    'border-border hover:border-muted-foreground/40 hover:bg-muted/50 block rounded-lg border p-4 text-foreground no-underline transition-colors';
+
   return (
-    <>
-      <style>{`
-        .dev-card {
-          display: block;
-          padding: 14px 16px;
-          border-radius: 8px;
-          border: 1px solid #333;
-          text-decoration: none;
-          color: inherit;
-          transition: border-color 0.15s, background-color 0.15s;
-        }
-        .dev-card:hover {
-          border-color: #555;
-          background-color: #1a1a1a;
-        }
-      `}</style>
-      <div
-        style={{
-          minHeight: '100vh',
-          padding: '48px 24px',
-          maxWidth: 720,
-          margin: '0 auto',
-          fontFamily: 'system-ui, -apple-system, sans-serif',
-        }}
-      >
-        <div style={{ marginBottom: 40 }}>
-          <div
-            style={{
-              display: 'inline-block',
-              padding: '4px 10px',
-              borderRadius: 4,
-              backgroundColor: '#2d2d2d',
-              color: '#a78bfa',
-              fontSize: 12,
-              fontWeight: 600,
-              letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-              marginBottom: 12,
-            }}
-          >
+    <div className="bg-background text-foreground min-h-screen px-6 py-12">
+      <div className="mx-auto max-w-3xl">
+        <header className="mb-10">
+          <span className="bg-warning text-warning-foreground mb-3 inline-block rounded px-2.5 py-1 text-xs font-semibold tracking-wide uppercase">
             Development Only
-          </div>
-          <h1 style={{ fontSize: 28, fontWeight: 700, margin: '0 0 4px' }}>Dev Dashboard</h1>
-          <p style={{ color: '#888', fontSize: 14, margin: 0 }}>
+          </span>
+          <h1 className="text-3xl font-semibold tracking-tight">Dev Dashboard</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
             Quick links for local development and verification.
           </p>
+        </header>
+
+        <div className="mb-10">
+          <SeedPanel />
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+        <div className="flex flex-col gap-8">
           {links.map((group) => (
             <section key={group.section}>
-              <h2
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: '#888',
-                  marginBottom: 12,
-                  paddingBottom: 8,
-                  borderBottom: '1px solid #333',
-                }}
-              >
+              <h2 className="text-muted-foreground border-border mb-3 border-b pb-2 text-xs font-semibold tracking-wide uppercase">
                 {group.section}
               </h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="flex flex-col gap-2">
                 {group.items.map((item) => {
                   const content = (
                     <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontWeight: 500, fontSize: 15 }}>{item.label}</span>
-                        {item.external && <span style={{ color: '#666', fontSize: 12 }}>↗</span>}
+                      <div className="flex items-center gap-2">
+                        <span className="text-foreground text-[15px] font-medium">
+                          {item.label}
+                        </span>
+                        {item.external && (
+                          <span className="text-muted-foreground text-xs" aria-hidden="true">
+                            ↗
+                          </span>
+                        )}
                       </div>
-                      <p style={{ color: '#777', fontSize: 13, margin: '4px 0 0' }}>
-                        {item.description}
-                      </p>
+                      <p className="text-muted-foreground mt-1 text-[13px]">{item.description}</p>
                     </>
                   );
 
@@ -175,12 +147,12 @@ export default function DevDashboardPage() {
                       href={item.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="dev-card"
+                      className={cardClass}
                     >
                       {content}
                     </a>
                   ) : (
-                    <Link key={item.href} href={item.href} className="dev-card">
+                    <Link key={item.href} href={item.href} className={cardClass}>
                       {content}
                     </Link>
                   );
@@ -190,6 +162,6 @@ export default function DevDashboardPage() {
           ))}
         </div>
       </div>
-    </>
+    </div>
   );
 }
