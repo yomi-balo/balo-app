@@ -122,7 +122,7 @@ async function insertExpert(
     headline: expert.headline,
     bio: expert.bio,
     username: expert.username,
-    hourlyRate: expert.hourlyRate,
+    rateCents: expert.rateCents,
     availableForWork: true,
     searchable: true,
     yearStartedSalesforce: expert.yearStartedSalesforce,

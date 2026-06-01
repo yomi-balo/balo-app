@@ -84,8 +84,8 @@ stripeAccountId: varchar('stripe_account_id', { length: 255 }),
 // Currency amounts — store in cents as integer
 amountCents: integer('amount_cents').notNull(),
 
-// Rates (use integer cents, not decimal)
-hourlyRateCents: integer('hourly_rate_cents'),
+// Rates (per-minute, integer minor units — e.g. expert_profiles.rate_cents)
+rateCents: integer('rate_cents'),
 
 // Counts
 totalSessions: integer('total_sessions').default(0).notNull(),

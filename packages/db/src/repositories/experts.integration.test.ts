@@ -107,19 +107,19 @@ describe('expertsRepository.updateProfile', () => {
   it('does not affect other columns when not passed', async () => {
     const draft = await expertDraftFactory();
 
-    // Set hourlyRate
+    // Set rateCents
     await expertsRepository.updateProfile(draft.id, {
-      hourlyRate: 150,
+      rateCents: 150,
     });
 
-    // Update only headline — hourlyRate should remain
+    // Update only headline — rateCents should remain
     await expertsRepository.updateProfile(draft.id, {
       headline: 'New headline',
     });
 
     const updated = await expertsRepository.findProfileById(draft.id);
     expect(updated?.headline).toBe('New headline');
-    expect(updated?.hourlyRate).toBe(150);
+    expect(updated?.rateCents).toBe(150);
   });
 });
 

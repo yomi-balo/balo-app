@@ -41,7 +41,7 @@ export const saveRateAction = withAuth(
 
       // 3. Persist to database
       await expertsRepository.updateProfile(session.user.expertProfileId, {
-        hourlyRate: validated.ratePerMinuteCents,
+        rateCents: validated.ratePerMinuteCents,
       });
 
       log.info('Expert rate saved', {

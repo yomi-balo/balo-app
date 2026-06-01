@@ -463,7 +463,7 @@ After first authentication, users must complete onboarding before accessing the 
     → Redirect to /dashboard
    ↓
 6b. EXPERT PATH:
-    → Multi-step: skills, bio, hourly rate, calendar
+    → Multi-step: skills, bio, per-minute rate, calendar
     → Set activeMode='expert', onboardingCompleted=true
     → Create expert_profiles row (approvedAt=null — pending approval)
     → Cache { activeMode: 'expert' } in WorkOS user metadata
@@ -494,7 +494,7 @@ const expertOnboardingSchema = z.object({
   activeMode: z.literal('expert'),
   headline: z.string().min(1),
   bio: z.string().min(10),
-  hourlyRate: z.number().positive(),
+  rateCents: z.number().int().positive(),
   timezone: z.string(),
   verticalId: z.string().uuid(),
   skills: z.array(z.string().uuid()).min(1),
@@ -526,7 +526,7 @@ export const completeOnboarding = withAuth(async (session, input: unknown) => {
         verticalId: validated.verticalId,
         headline: validated.headline,
         bio: validated.bio,
-        hourlyRate: validated.hourlyRate,
+        rateCents: validated.rateCents,
         type: 'freelancer', // default, can change later
       });
     }

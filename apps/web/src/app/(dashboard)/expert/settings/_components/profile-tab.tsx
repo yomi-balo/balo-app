@@ -140,8 +140,8 @@ export function ProfileTab({
       consultationCount: 0,
       rating: null,
       reviewCount: 0,
-      rate: initialProfile.hourlyRate
-        ? centsToDollars(calculateClientRate(initialProfile.hourlyRate))
+      rate: initialProfile.rateCents
+        ? centsToDollars(calculateClientRate(initialProfile.rateCents))
         : 0,
       available: initialProfile.availableForWork ?? false,
       expertise: buildExpertise(initialProfile.skills),

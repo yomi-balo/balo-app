@@ -61,7 +61,7 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
       profile.bio.trim().length > 0
     ),
     phone: Boolean(user.phoneVerifiedAt),
-    rate: Boolean(profile.hourlyRate && profile.hourlyRate > 0),
+    rate: Boolean(profile.rateCents && profile.rateCents > 0),
     calendar: Boolean(profile.cronofySyncStatus && profile.cronofySyncStatus !== 'not_connected'),
     availability: false, // TODO: BAL-195 — check availability_slots table
     payouts: hasPayouts,
@@ -81,5 +81,5 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     });
   }
 
-  return { items, completedCount, allComplete, rateCents: profile.hourlyRate ?? null };
+  return { items, completedCount, allComplete, rateCents: profile.rateCents ?? null };
 });

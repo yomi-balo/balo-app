@@ -221,7 +221,7 @@ interface ExpertCardProps {
     lastName: string;
     title: string;
     avatarUrl: string | null;
-    hourlyRateCents: number;
+    rateCents: number;
     rating: number;
     reviewCount: number;
     topCertification: string;
@@ -233,7 +233,7 @@ interface ExpertCardProps {
 }
 
 export function ExpertCard({ expert, onClick }: ExpertCardProps) {
-  const rate = (expert.hourlyRateCents / 100).toFixed(0);
+  const rate = (expert.rateCents / 100).toFixed(2);
 
   return (
     <motion.div
@@ -411,15 +411,15 @@ For form fields, use `FormDescription` — always visible, works everywhere.
 ```tsx
 <FormField
   control={form.control}
-  name="hourlyRate"
+  name="ratePerMinuteCents"
   render={({ field }) => (
     <FormItem>
-      <FormLabel>Hourly Rate</FormLabel>
+      <FormLabel>Rate per minute</FormLabel>
       <FormControl>
-        <Input type="number" placeholder="150" {...field} />
+        <Input type="number" placeholder="3.50" {...field} />
       </FormControl>
       <FormDescription>
-        This is what you charge per hour. Clients see this rate plus a 25% platform fee.
+        This is what you charge per minute. Clients see this rate plus a 25% platform fee.
       </FormDescription>
       <FormMessage />
     </FormItem>
@@ -431,7 +431,7 @@ For form fields, use `FormDescription` — always visible, works everywhere.
 
 **Examples that need helper text:**
 
-- "Hourly Rate" → explain markup visibility
+- "Rate per minute" → explain markup visibility
 - "Availability Window" → explain what this controls
 - "Slug" → explain where this appears
 

@@ -37,7 +37,7 @@ export const expertProfiles = pgTable(
     headline: text('headline'),
     bio: text('bio'),
     username: text('username'),
-    hourlyRate: integer('hourly_rate'),
+    rateCents: integer('rate_cents'),
 
     trailheadUrl: text('trailhead_url'),
     linkedinUrl: text('linkedin_url'),
