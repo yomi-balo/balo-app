@@ -4,3 +4,4 @@ export type { ServerEvents, ServerEventName } from '../types';
 export { EXPERT_PAYOUT_SERVER_EVENTS } from '../events/expert-payouts';
 export { NOTIFICATION_SERVER_EVENTS } from '../events/notifications';
 export { CALENDAR_SERVER_EVENTS } from '../events/calendar';
+export { SEARCH_SERVER_EVENTS } from '../events/search';

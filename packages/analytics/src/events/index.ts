@@ -18,3 +18,4 @@ export {
   type CalendarServerEventMap,
 } from './calendar';
 export { NOTIFICATION_SERVER_EVENTS, type NotificationServerEventMap } from './notifications';
+export { SEARCH_SERVER_EVENTS, type SearchServerEventMap } from './search';

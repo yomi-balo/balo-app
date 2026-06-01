@@ -134,6 +134,13 @@
       "when": 1780231504251,
       "tag": "0018_rename_hourly_rate_to_rate_cents",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780350501085,
+      "tag": "0019_handy_ink",
+      "breakpoints": true
     }
   ]
 }

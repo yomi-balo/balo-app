@@ -17,3 +17,5 @@ export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export { availabilityRulesRepository } from './availability-rules';
 export { consultationsRepository } from './consultations';
+export { expertSearchRepository } from './expert-search';
+export type { ExpertSearchParams, ExpertSearchRow, FacetCount } from './expert-search';
