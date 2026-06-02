@@ -68,10 +68,10 @@ const AVAILABILITY_TONE_COLOR: Record<AvailabilityTone, string> = {
 function AvatarHeader({
   expert,
   initialsTextClass,
-}: {
+}: Readonly<{
   expert: ExpertCardData;
   initialsTextClass: string;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const [photoError, setPhotoError] = useState(false);
   const gradient = getGradientFromId(expert.id);
   const photoUrl = getAvatarUrl(expert.avatarUrl, 'profile');
@@ -122,9 +122,9 @@ function AvatarHeader({
 
 function AvailabilityPill({
   nextAvailableAt,
-}: {
+}: Readonly<{
   nextAvailableAt: string | null;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const { text, tone } = computeAvailability(nextAvailableAt);
   const color = AVAILABILITY_TONE_COLOR[tone];
 
@@ -151,7 +151,9 @@ function AvailabilityPill({
 
 // ── Agency badge (bottom-right) ──────────────────────────────────
 
-function AgencyBadge({ agency }: { agency: ExpertCardAgency | null }): React.JSX.Element | null {
+function AgencyBadge({
+  agency,
+}: Readonly<{ agency: ExpertCardAgency | null }>): React.JSX.Element | null {
   if (!agency) return null;
 
   if (agency.logoUrl) {
@@ -191,10 +193,10 @@ function AgencyBadge({ agency }: { agency: ExpertCardAgency | null }): React.JSX
 function RatingBadge({
   rating,
   reviewCount,
-}: {
+}: Readonly<{
   rating: number | null;
   reviewCount: number;
-}): React.JSX.Element | null {
+}>): React.JSX.Element | null {
   if (rating == null) return null;
 
   return (
@@ -248,9 +250,9 @@ function HeartButton(): React.JSX.Element {
 
 function DistinctionBadges({
   distinctions,
-}: {
+}: Readonly<{
   distinctions: ExpertCardDistinctions;
-}): React.JSX.Element | null {
+}>): React.JSX.Element | null {
   const list = getDistinctionList(distinctions);
   if (list.length === 0) return null;
 
@@ -279,12 +281,12 @@ function ExpertisePills({
   max,
   showHeading,
   pad,
-}: {
+}: Readonly<{
   expertise: ExpertiseItem[];
   max?: number;
   showHeading?: boolean;
   pad?: boolean;
-}): React.JSX.Element | null {
+}>): React.JSX.Element | null {
   if (expertise.length === 0) return null;
 
   const limit = max ?? 4;
@@ -347,7 +349,7 @@ function ExpertisePills({
 
 // ── Rate display (handles null) ──────────────────────────────────
 
-function GridRate({ rate }: { rate: number | null }): React.JSX.Element {
+function GridRate({ rate }: Readonly<{ rate: number | null }>): React.JSX.Element {
   if (rate == null) {
     return (
       <div className="shrink-0 text-right">
@@ -366,7 +368,7 @@ function GridRate({ rate }: { rate: number | null }): React.JSX.Element {
   );
 }
 
-function ListRate({ rate }: { rate: number | null }): React.JSX.Element {
+function ListRate({ rate }: Readonly<{ rate: number | null }>): React.JSX.Element {
   if (rate == null) {
     return (
       <p className="text-foreground shrink-0 text-right text-lg font-bold">
@@ -410,7 +412,7 @@ function buildGridStats(expert: ExpertCardData): StatItemData[] {
   return stats;
 }
 
-function StatsStrip({ expert }: { expert: ExpertCardData }): React.JSX.Element {
+function StatsStrip({ expert }: Readonly<{ expert: ExpertCardData }>): React.JSX.Element {
   const stats = buildGridStats(expert);
 
   return (
@@ -457,7 +459,7 @@ function buildHeadline(expert: ExpertCardData): string {
 
 // ── CTA buttons ──────────────────────────────────────────────────
 
-function ViewProfileButton({ onClick }: { onClick?: () => void }): React.JSX.Element {
+function ViewProfileButton({ onClick }: Readonly<{ onClick?: () => void }>): React.JSX.Element {
   const className =
     'border-border text-foreground flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border text-xs font-medium transition-colors hover:bg-muted';
   if (onClick) {
@@ -481,7 +483,7 @@ function ViewProfileButton({ onClick }: { onClick?: () => void }): React.JSX.Ele
   );
 }
 
-function BookCallButton({ onClick }: { onClick?: () => void }): React.JSX.Element {
+function BookCallButton({ onClick }: Readonly<{ onClick?: () => void }>): React.JSX.Element {
   const className =
     'from-primary flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md dark:to-violet-500';
   if (onClick) {
@@ -514,14 +516,14 @@ function GridCard({
   highlightedTagline,
   onBook,
   onViewProfile,
-}: {
+}: Readonly<{
   expert: ExpertCardData;
   orderedExpertise: ExpertiseItem[];
   tagline: string;
   highlightedTagline: React.ReactNode;
   onBook?: () => void;
   onViewProfile?: () => void;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   return (
     <motion.div whileHover={{ y: -4 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
       <Card className="dark:hover:shadow-primary/5 flex w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
@@ -594,14 +596,14 @@ function ListRow({
   highlightedTagline,
   onBook,
   onViewProfile,
-}: {
+}: Readonly<{
   expert: ExpertCardData;
   orderedExpertise: ExpertiseItem[];
   tagline: string;
   highlightedTagline: React.ReactNode;
   onBook?: () => void;
   onViewProfile?: () => void;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const meta = buildListMeta(expert);
 
   return (
