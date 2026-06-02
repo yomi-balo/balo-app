@@ -611,7 +611,7 @@ function ListRow({
   const meta = buildListMeta(expert);
 
   return (
-    <Card className="dark:hover:shadow-primary/5 flex gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+    <Card className="dark:hover:shadow-primary/5 flex flex-row gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
       {/* Photo panel */}
       <div className="relative w-60 shrink-0 self-stretch overflow-hidden">
         <AvatarHeader expert={expert} initialsTextClass="text-[28px]" />
