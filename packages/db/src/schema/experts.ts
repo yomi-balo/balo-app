@@ -8,8 +8,9 @@ import {
   date,
   uniqueIndex,
   index,
+  customType,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { expertTypeEnum, applicationStatusEnum, languageProficiencyEnum } from './enums';
 import { users } from './users';
 import { agencies } from './agencies';
@@ -19,6 +20,14 @@ import { industries } from './industries';
 import { expertPayoutDetails } from './payouts';
 import { calendarConnections } from './calendar';
 import { timestamps } from './helpers';
+
+/**
+ * Postgres `tsvector` custom type for full-text search. Never selected or
+ * written directly from application code — it is matched/ranked exclusively via
+ * raw `sql` FTS expressions in the expert-search repository. Declared here only
+ * so drizzle-kit is aware of the generated column and does not try to drop it.
+ */
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 
 export const expertProfiles = pgTable(
   'expert_profiles',
@@ -75,10 +84,20 @@ export const expertProfiles = pgTable(
 
     ...timestamps,
     approvedAt: timestamp('approved_at', { withTimezone: true }),
+
+    // Generated STORED full-text search vector: headline weight A, bio weight B.
+    // Postgres maintains this automatically on every expert_profiles write — no
+    // trigger code, no drift. Skill names (weight C) are folded in at query time
+    // by the expert-search repository, not stored here. Never read/written
+    // directly via Drizzle (excluded from $inferInsert by .generatedAlwaysAs).
+    searchVector: tsvector('search_vector').generatedAlwaysAs(
+      sql`setweight(to_tsvector('english', coalesce(headline, '')), 'A') || setweight(to_tsvector('english', coalesce(bio, '')), 'B')`
+    ),
   },
   (table) => ({
     userVerticalIdx: uniqueIndex('expert_user_vertical_idx').on(table.userId, table.verticalId),
     usernameIdx: uniqueIndex('expert_profiles_username_idx').on(table.username),
+    searchVectorIdx: index('expert_profiles_search_vector_idx').using('gin', table.searchVector),
   })
 );
 

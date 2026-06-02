@@ -74,13 +74,24 @@ export const calendarSubCalendars = pgTable(
 
 // ── Availability Cache ──────────────────────────────────────────
 
-export const availabilityCache = pgTable('availability_cache', {
-  expertProfileId: uuid('expert_profile_id')
-    .primaryKey()
-    .references(() => expertProfiles.id, { onDelete: 'cascade' }),
-  earliestAvailableAt: timestamp('earliest_available_at', { withTimezone: true }),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+export const availabilityCache = pgTable(
+  'availability_cache',
+  {
+    expertProfileId: uuid('expert_profile_id')
+      .primaryKey()
+      .references(() => expertProfiles.id, { onDelete: 'cascade' }),
+    earliestAvailableAt: timestamp('earliest_available_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  // Serves the availability gate (earliest_available_at IS NOT NULL AND > now)
+  // and the `soonest` ORDER BY. The migration hand-augments this to a PARTIAL
+  // index (WHERE earliest_available_at IS NOT NULL) — drizzle-kit cannot express
+  // the partial predicate, so this declaration only keeps drizzle-kit from
+  // re-dropping the index; the migration is the source of truth.
+  (table) => ({
+    earliestIdx: index('availability_cache_earliest_idx').on(table.earliestAvailableAt),
+  })
+);
 
 // ── Relations ───────────────────────────────────────────────────
 

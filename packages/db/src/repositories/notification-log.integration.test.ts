@@ -62,6 +62,8 @@ describe('notificationLogRepository.findByCorrelationId', () => {
     const user = await userFactory({ firstName: 'Corr', lastName: 'Test' });
     const correlationId = randomUUID();
 
+    // Explicit, distinct createdAt so `ORDER BY created_at DESC` is deterministic
+    // (back-to-back inserts otherwise tie on created_at → flaky ordering in CI).
     const first = await notificationLogRepository.insert({
       event: 'project.started',
       correlationId,
@@ -69,6 +71,7 @@ describe('notificationLogRepository.findByCorrelationId', () => {
       channel: 'email',
       template: 'project-started-client',
       status: 'sent',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
     });
 
     const second = await notificationLogRepository.insert({
@@ -78,6 +81,7 @@ describe('notificationLogRepository.findByCorrelationId', () => {
       channel: 'in_app',
       template: 'project-started-notification',
       status: 'sent',
+      createdAt: new Date('2026-01-01T00:00:01.000Z'),
     });
 
     const results = await notificationLogRepository.findByCorrelationId(correlationId);
