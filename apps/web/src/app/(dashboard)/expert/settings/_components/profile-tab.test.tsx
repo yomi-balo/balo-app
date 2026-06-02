@@ -30,7 +30,7 @@ vi.mock('@/components/balo/phone-verification-flow', () => ({
 // test can assert the computed `rate` value. The rate line in ProfileTab feeds
 // directly into `expert.rate`, so reading it here proves the line ran.
 vi.mock('./profile-preview-panel', () => ({
-  ProfilePreviewPanel: ({ expert }: { expert: { rate: number } }) => (
+  ProfilePreviewPanel: ({ expert }: { expert: { rate: number | null } }) => (
     <div data-testid="preview-rate">{String(expert.rate)}</div>
   ),
 }));
@@ -99,9 +99,9 @@ describe('ProfileTab — preview rate computation (line 143-144)', () => {
     expect(screen.getByTestId('preview-rate')).toHaveTextContent(String(expected));
   });
 
-  it('passes rate 0 to the preview when rateCents is null', () => {
+  it('passes null rate to the preview when rateCents is null', () => {
     renderTab(null);
 
-    expect(screen.getByTestId('preview-rate')).toHaveTextContent('0');
+    expect(screen.getByTestId('preview-rate')).toHaveTextContent('null');
   });
 });

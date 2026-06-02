@@ -20,8 +20,8 @@ export function ProfilePreviewPanel({
   headline,
 }: Readonly<ProfilePreviewPanelProps>): React.JSX.Element {
   const completenessFields = [
-    { label: 'Profile photo', done: !!expert.avatarKey },
-    { label: 'Headline', done: !!expert.title && expert.title !== 'Salesforce Expert' },
+    { label: 'Profile photo', done: !!expert.avatarUrl },
+    { label: 'Headline', done: !!expert.headline },
     { label: 'Bio (min 80 chars)', done: (expert.bio?.length ?? 0) >= 80 },
     { label: 'Username', done: username.length >= 3 },
   ];
