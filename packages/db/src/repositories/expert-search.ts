@@ -442,7 +442,19 @@ export const expertSearchRepository = {
       .limit(params.pageSize)
       .offset((params.page - 1) * params.pageSize)) as unknown as SearchSelectRow[];
 
-    const total = rows.length > 0 ? Number(rows[0]!.totalCount) : 0;
+    // `count(*) OVER ()` rides on the returned rows, so a page entirely beyond
+    // the result set (zero rows) carries no total. Fall back to a dedicated
+    // COUNT for that case so `total` stays correct (e.g. page 4 of a 5-row set).
+    let total = rows.length > 0 ? Number(rows[0]!.totalCount) : 0;
+    if (rows.length === 0) {
+      const countRows = (await db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(expertProfiles)
+        .innerJoin(sql`users u`, sql`u.id = ${expertProfiles.userId}`)
+        .leftJoin(sql`availability_cache ac`, sql`ac.expert_profile_id = ${expertProfiles.id}`)
+        .where(and(...conditions))) as Array<{ total: number }>;
+      total = Number(countRows[0]?.total ?? 0);
+    }
 
     const mapped: ExpertSearchRow[] = rows.map((r: SearchSelectRow) => ({
       id: r.id,
