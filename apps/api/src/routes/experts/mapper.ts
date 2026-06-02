@@ -30,5 +30,11 @@ export function mapRowToExpertSearchResult(row: ExpertSearchRow, now: Date): Exp
       ? now.getFullYear() - row.yearStartedSalesforce
       : null,
     consultationCount: row.consultationCount,
+    skills: row.skills.map((s) => ({
+      skillId: s.skillId,
+      skillName: s.skillName,
+      supportTypeSlug: s.supportTypeSlug,
+      proficiency: s.proficiency,
+    })),
   };
 }

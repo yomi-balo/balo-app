@@ -28,6 +28,14 @@ export interface ExpertSearchDistinctions {
   isCertifiedTrainer: boolean;
 }
 
+/** One expert_skills row, flattened with the skill name + support-type slug. */
+export interface ExpertSearchSkill {
+  skillId: string;
+  skillName: string;
+  supportTypeSlug: string;
+  proficiency: number;
+}
+
 export interface ExpertSearchResult {
   /** expert_profiles.id */
   id: string;
@@ -58,6 +66,8 @@ export interface ExpertSearchResult {
   yearsExperience: number | null;
   /** proxy: confirmed, non-deleted consultations; degrades to 0 */
   consultationCount: number;
+  /** expert_skills, proficiency-desc; powers the "Top expert in" pills */
+  skills: ExpertSearchSkill[];
 }
 
 /** Array of objects with the display name (NOT a bare `Record<string, number>`). */

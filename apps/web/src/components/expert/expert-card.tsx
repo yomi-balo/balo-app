@@ -525,8 +525,12 @@ function GridCard({
   onViewProfile?: () => void;
 }>): React.JSX.Element {
   return (
-    <motion.div whileHover={{ y: -4 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
-      <Card className="dark:hover:shadow-primary/5 flex w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+    <motion.div
+      className="h-full"
+      whileHover={{ y: -4 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+    >
+      <Card className="dark:hover:shadow-primary/5 flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
         {/* Photo header */}
         <div className="relative aspect-[5/4]">
           <AvatarHeader expert={expert} initialsTextClass="text-3xl" />

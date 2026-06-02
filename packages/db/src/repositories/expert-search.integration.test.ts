@@ -845,6 +845,41 @@ describe('expertSearchRepository.search — row field hydration', () => {
     expect(row!.agencyName).toBe('No Logo Agency');
     expect(row!.agencyLogoUrl).toBeNull();
   });
+
+  it('hydrates per-expert skills (skill name + support-type slug + proficiency)', async () => {
+    const verticalId = await getVerticalId();
+    const skillName = uniq('Sales Cloud');
+    const skillId = await createSkill(verticalId, skillName);
+    const [supportType] = await db
+      .insert(supportTypes)
+      .values({ name: 'Technical Fix & Support', slug: uniq('st-slug') })
+      .returning();
+    const expert = await searchExpertFactory({
+      verticalId,
+      skills: [{ skillId, supportTypeId: supportType!.id, proficiency: 4 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
+    const row = rows.find((r) => r.id === expert.id);
+    expect(row).toBeDefined();
+    expect(row!.skills).toEqual([
+      {
+        skillId,
+        skillName,
+        supportTypeSlug: supportType!.slug,
+        proficiency: 4,
+      },
+    ]);
+  });
+
+  it('returns an empty skills array for an expert with no skills', async () => {
+    const verticalId = await getVerticalId();
+    const expert = await searchExpertFactory({ verticalId });
+
+    const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
+    const row = rows.find((r) => r.id === expert.id);
+    expect(row!.skills).toEqual([]);
+  });
 });
 
 // ── Pure helper unit-style coverage (executed against the real DB run) ──

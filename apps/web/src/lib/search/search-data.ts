@@ -37,6 +37,14 @@ export interface ExpertSearchDistinctionsDTO {
   isCertifiedTrainer: boolean;
 }
 
+/** One expert_skills row, flattened with the skill name + support-type slug. */
+export interface ExpertSearchSkillDTO {
+  skillId: string;
+  skillName: string;
+  supportTypeSlug: string;
+  proficiency: number;
+}
+
 export interface ExpertSearchResultDTO {
   id: string;
   username: string | null;
@@ -56,6 +64,8 @@ export interface ExpertSearchResultDTO {
   rating: null;
   yearsExperience: number | null;
   consultationCount: number;
+  /** expert_skills, proficiency-desc; powers the "Top expert in" pills. */
+  skills: ExpertSearchSkillDTO[];
 }
 
 export interface FacetCountDTO {

@@ -46,14 +46,67 @@ const baseDto: ExpertSearchResultDTO = {
   rating: null,
   yearsExperience: 9,
   consultationCount: 124,
+  skills: [
+    {
+      skillId: 'sales-cloud',
+      skillName: 'Sales Cloud',
+      supportTypeSlug: 'technical-fix-support',
+      proficiency: 5,
+    },
+    {
+      skillId: 'sales-cloud',
+      skillName: 'Sales Cloud',
+      supportTypeSlug: 'architecture-integrations',
+      proficiency: 4,
+    },
+    {
+      skillId: 'service-cloud',
+      skillName: 'Service Cloud',
+      supportTypeSlug: 'platform-training',
+      proficiency: 3,
+    },
+  ],
 };
 
 describe('mapSearchResultToCardData', () => {
-  it('sets v1 defaults reviewCount:0, expertise:[], rating:null', () => {
+  it('sets v1 defaults reviewCount:0 and rating:null', () => {
     const card = mapSearchResultToCardData(baseDto);
     expect(card.reviewCount).toBe(0);
-    expect(card.expertise).toEqual([]);
     expect(card.rating).toBeNull();
+  });
+
+  it('builds expertise from the DTO skills (product grouping + slug → SkillType)', () => {
+    const card = mapSearchResultToCardData(baseDto);
+    expect(card.expertise).toEqual([
+      { product: 'Sales Cloud', skills: ['technical', 'architecture'] },
+      { product: 'Service Cloud', skills: ['admin'] },
+    ]);
+  });
+
+  it('skips skills with proficiency <= 0 when building expertise', () => {
+    const card = mapSearchResultToCardData({
+      ...baseDto,
+      skills: [
+        {
+          skillId: 'sales-cloud',
+          skillName: 'Sales Cloud',
+          supportTypeSlug: 'technical-fix-support',
+          proficiency: 0,
+        },
+        {
+          skillId: 'service-cloud',
+          skillName: 'Service Cloud',
+          supportTypeSlug: 'platform-training',
+          proficiency: 3,
+        },
+      ],
+    });
+    expect(card.expertise).toEqual([{ product: 'Service Cloud', skills: ['admin'] }]);
+  });
+
+  it('maps an expert with no skills to an empty expertise array', () => {
+    const card = mapSearchResultToCardData({ ...baseDto, skills: [] });
+    expect(card.expertise).toEqual([]);
   });
 
   it('derives initials from the name', () => {

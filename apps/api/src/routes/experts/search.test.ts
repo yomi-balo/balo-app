@@ -95,6 +95,14 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     agencyLogoUrl: null,
     consultationCount: 0,
     languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
+    skills: [
+      {
+        skillId: 'sales-cloud',
+        skillName: 'Sales Cloud',
+        supportTypeSlug: 'technical-fix-support',
+        proficiency: 5,
+      },
+    ],
     ...overrides,
   };
 }
@@ -137,6 +145,19 @@ describe('GET /experts/search', () => {
     expect(body).toHaveProperty('total', 1);
     expect(body.facetCounts).toEqual(EMPTY_FACETS);
     expect(body.experts[0]).toMatchObject({ id: 'expert-1', name: 'Jane Doe', rate: 2.5 });
+  });
+
+  it("passes each expert's skills through to the response", async () => {
+    const res = await inject();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().experts[0].skills).toEqual([
+      {
+        skillId: 'sales-cloud',
+        skillName: 'Sales Cloud',
+        supportTypeSlug: 'technical-fix-support',
+        proficiency: 5,
+      },
+    ]);
   });
 
   it('sets a public Cache-Control header on success', async () => {
