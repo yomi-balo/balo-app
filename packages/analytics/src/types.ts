@@ -8,7 +8,7 @@ import type { AvatarEventMap } from './events/avatar';
 import type { PhoneEventMap } from './events/phone';
 import type { CalendarEventMap, CalendarServerEventMap } from './events/calendar';
 import type { NotificationServerEventMap } from './events/notifications';
-import type { SearchServerEventMap } from './events/search';
+import type { SearchEventMap, SearchServerEventMap } from './events/search';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -19,7 +19,8 @@ export type AllEvents = AuthEventMap &
   ExpertPayoutEventMap &
   AvatarEventMap &
   PhoneEventMap &
-  CalendarEventMap;
+  CalendarEventMap &
+  SearchEventMap;
 
 export type EventName = keyof AllEvents;
 

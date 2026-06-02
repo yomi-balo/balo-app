@@ -13,6 +13,7 @@ export {
   AVATAR_EVENTS,
   PHONE_EVENTS,
   CALENDAR_EVENTS,
+  SEARCH_EVENTS,
 } from '../events';
 
 export type {
@@ -28,4 +29,5 @@ export type {
   AvatarEventMap,
   PhoneEventMap,
   CalendarEventMap,
+  SearchEventMap,
 } from '../events';

@@ -168,6 +168,19 @@ export async function searchRoute(fastify: FastifyInstance): Promise<void> {
         const distinctId = searchDistinctId(request.ip);
         const hasQuery = (query.q?.length ?? 0) > 0;
 
+        // Additive zero-results probe: distinguish "no skills match" from
+        // "matched but none currently bookable". Runs ONLY in the rare
+        // `total === 0 && gate-on` path so the hot path adds zero queries.
+        let wasAvailabilityGated = false;
+        if (total === 0 && availabilityGateEnabled) {
+          const ungatedCount = await expertSearchRepository.countMatchingIgnoringGate({
+            ...searchParams,
+            availabilityGateEnabled: false,
+            timeframe: undefined,
+          });
+          wasAvailabilityGated = ungatedCount > 0;
+        }
+
         // Analytics is best-effort telemetry — a throw here must NOT turn a
         // successful 200 into a 500.
         try {
@@ -195,7 +208,7 @@ export async function searchRoute(fastify: FastifyInstance): Promise<void> {
         }
 
         reply.header('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
-        return { experts, total, facetCounts };
+        return { experts, total, facetCounts, wasAvailabilityGated };
       } catch (error) {
         log.error(
           {

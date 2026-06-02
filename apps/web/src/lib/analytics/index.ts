@@ -13,6 +13,7 @@ export {
   AVATAR_EVENTS,
   PHONE_EVENTS,
   CALENDAR_EVENTS,
+  SEARCH_EVENTS,
 } from '@balo/analytics/client';
 
 export type { AllEvents, EventName } from '@balo/analytics/client';

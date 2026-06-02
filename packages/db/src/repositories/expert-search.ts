@@ -484,6 +484,31 @@ export const expertSearchRepository = {
   },
 
   /**
+   * Count experts matching the SAME filters as `search` (FTS + facets + rate) but
+   * with the availability gate and self-gating timeframe ignored — the caller is
+   * expected to pass `availabilityGateEnabled: false` and `timeframe: undefined`.
+   *
+   * Powers the route's additive `wasAvailabilityGated` flag: when a gated search
+   * returns zero rows, a result of `>= 1` here means matches exist that are simply
+   * not currently bookable. Reuses `buildWhereConditions` and the exact
+   * `from(expertProfiles).innerJoin(users).leftJoin(availability_cache)` shape of
+   * the zero-rows COUNT fallback in `search`. Pure SQL, deterministic with the
+   * injected `now`, no env reads.
+   */
+  async countMatchingIgnoringGate(params: ExpertSearchParams): Promise<number> {
+    const conditions = buildWhereConditions(params, params.now);
+
+    const countRows = (await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(expertProfiles)
+      .innerJoin(sql`users u`, sql`u.id = ${expertProfiles.userId}`)
+      .leftJoin(sql`availability_cache ac`, sql`ac.expert_profile_id = ${expertProfiles.id}`)
+      .where(and(...conditions))) as Array<{ total: number }>;
+
+    return Number(countRows[0]?.total ?? 0);
+  },
+
+  /**
    * Selection-INDEPENDENT facet totals (one GROUP BY per facet group). Respects
    * base visibility + availability gate ONLY — EXCLUDES `q` and all facet
    * selections, so the result depends solely on `(verticalId, gateOn)`.

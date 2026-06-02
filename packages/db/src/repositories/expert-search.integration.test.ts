@@ -347,6 +347,115 @@ describe('expertSearchRepository.search — availability gate', () => {
   });
 });
 
+// ── 6b. countMatchingIgnoringGate (powers wasAvailabilityGated) ──────
+
+describe('expertSearchRepository.countMatchingIgnoringGate', () => {
+  it('returns matches the gated search hides: skill matches but no future availability', async () => {
+    const verticalId = await getVerticalId();
+    const skillId = await createSkill(verticalId, uniq('Skill'));
+    const stId = await createSupportType('Technical');
+
+    // Approved + searchable expert whose skill matches the filter, but with NO
+    // availability-cache row → invisible to a gated search, but a genuine match.
+    await searchExpertFactory({
+      verticalId,
+      skills: [{ skillId, supportTypeId: stId }],
+      earliestAvailableAt: undefined,
+    });
+
+    const gatedSearch = await expertSearchRepository.search(
+      params({
+        verticalId,
+        productIds: [skillId],
+        availabilityGateEnabled: true,
+        now: NOW,
+        pageSize: 50,
+      })
+    );
+    expect(gatedSearch.total).toBe(0);
+
+    // The route builds the probe params with the gate off and timeframe cleared.
+    const ungated = await expertSearchRepository.countMatchingIgnoringGate(
+      params({
+        verticalId,
+        productIds: [skillId],
+        availabilityGateEnabled: false,
+        timeframe: undefined,
+        now: NOW,
+        pageSize: 50,
+      })
+    );
+    expect(ungated).toBe(1);
+  });
+
+  it('both the gated search and the probe count the expert when future availability exists', async () => {
+    const verticalId = await getVerticalId();
+    const skillId = await createSkill(verticalId, uniq('Skill'));
+    const stId = await createSupportType('Technical');
+
+    await searchExpertFactory({
+      verticalId,
+      skills: [{ skillId, supportTypeId: stId }],
+      earliestAvailableAt: new Date(NOW.getTime() + DAY), // future → bookable
+    });
+
+    const gatedSearch = await expertSearchRepository.search(
+      params({
+        verticalId,
+        productIds: [skillId],
+        availabilityGateEnabled: true,
+        now: NOW,
+        pageSize: 50,
+      })
+    );
+    expect(gatedSearch.total).toBeGreaterThanOrEqual(1);
+
+    const ungated = await expertSearchRepository.countMatchingIgnoringGate(
+      params({
+        verticalId,
+        productIds: [skillId],
+        availabilityGateEnabled: false,
+        timeframe: undefined,
+        now: NOW,
+        pageSize: 50,
+      })
+    );
+    expect(ungated).toBeGreaterThanOrEqual(1);
+  });
+
+  it('honours the same facet/rate filters as search (non-matching expert excluded)', async () => {
+    const verticalId = await getVerticalId();
+    const wantedSkill = await createSkill(verticalId, uniq('Wanted'));
+    const otherSkill = await createSkill(verticalId, uniq('Other'));
+    const stId = await createSupportType('Technical');
+
+    // Matches the product filter (no availability).
+    await searchExpertFactory({
+      verticalId,
+      skills: [{ skillId: wantedSkill, supportTypeId: stId }],
+      earliestAvailableAt: undefined,
+    });
+    // Does NOT match the product filter → must not be counted.
+    await searchExpertFactory({
+      verticalId,
+      skills: [{ skillId: otherSkill, supportTypeId: stId }],
+      earliestAvailableAt: undefined,
+    });
+
+    const ungated = await expertSearchRepository.countMatchingIgnoringGate(
+      params({
+        verticalId,
+        productIds: [wantedSkill],
+        availabilityGateEnabled: false,
+        timeframe: undefined,
+        now: NOW,
+        pageSize: 50,
+      })
+    );
+    expect(ungated).toBe(1);
+  });
+});
+
 // ── 7. Timeframe ranges ─────────────────────────────────────────────
 
 describe('expertSearchRepository.search — timeframe ranges (gate-independent)', () => {

@@ -78,4 +78,12 @@ export interface ExpertSearchResponse {
     /** per languages.id */
     languages: FacetCount[];
   };
+  /**
+   * `true` only when the result set is empty BECAUSE the availability gate is on
+   * AND at least one expert would have matched the same filters with the gate
+   * (and self-gating timeframe) ignored. Lets the zero-results UI distinguish
+   * "no skills match" from "matched but none currently bookable". Always `false`
+   * when `total > 0` or the gate is off (no extra query on the hot path).
+   */
+  wasAvailabilityGated: boolean;
 }
