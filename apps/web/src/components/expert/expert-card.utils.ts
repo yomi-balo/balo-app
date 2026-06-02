@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { createElement } from 'react';
-import type { ExpertiseItem, SkillType } from './expert-card.types';
+import { getCountryByCode } from '@/lib/constants/countries';
+import type { ExpertCardDistinctions, ExpertiseItem, SkillType } from './expert-card.types';
 
 // ── Deterministic gradient avatar ────────────────────────────────
 
@@ -104,4 +105,107 @@ export function highlightTagline(tagline: string, orderBy?: string[]): ReactNode
     }
     return part;
   });
+}
+
+// ── Render-time availability ─────────────────────────────────────
+
+export type AvailabilityTone = 'live' | 'soon' | 'later' | 'none';
+export interface AvailabilityState {
+  text: string;
+  tone: AvailabilityTone;
+}
+
+const MIN = 60_000; // ms in a minute
+const LIVE_WINDOW_MIN = 15; // <= 15 min out (incl. past) → "Available now"
+const SOON_WINDOW_MIN = 6 * 60; // < 6h out, same day → "Free in ~Xh"
+
+function isSameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function isNextLocalDay(now: Date, next: Date): boolean {
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  return isSameLocalDay(tomorrow, next);
+}
+
+function formatTime(d: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: d.getMinutes() ? '2-digit' : undefined,
+    hour12: true,
+  }).format(d); // "9 AM", "2 PM", "9:30 AM"
+}
+
+function formatWeekday(d: Date): string {
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d); // "Tue"
+}
+
+/**
+ * Render-time availability state from a single ISO timestamp.
+ * Computed, never stored. `now` is injectable for deterministic tests.
+ */
+export function computeAvailability(
+  nextAvailableAt: string | null,
+  now: Date = new Date()
+): AvailabilityState {
+  if (!nextAvailableAt) return { text: 'No availability', tone: 'none' };
+  const next = new Date(nextAvailableAt);
+  if (Number.isNaN(next.getTime())) return { text: 'No availability', tone: 'none' };
+
+  const diffMin = (next.getTime() - now.getTime()) / MIN;
+
+  // past or imminent
+  if (diffMin <= LIVE_WINDOW_MIN) return { text: 'Available now', tone: 'live' };
+
+  if (isSameLocalDay(now, next)) {
+    if (diffMin < SOON_WINDOW_MIN) {
+      const hours = Math.max(1, Math.round(diffMin / 60));
+      return { text: `Free in ~${hours}h`, tone: 'soon' };
+    }
+    return { text: 'Available today', tone: 'soon' };
+  }
+
+  if (isNextLocalDay(now, next)) {
+    return { text: `Next: tomorrow ${formatTime(next)}`, tone: 'later' };
+  }
+  return { text: `Next: ${formatWeekday(next)} ${formatTime(next)}`, tone: 'later' };
+}
+
+// ── Country display ──────────────────────────────────────────────
+
+export function getCountryDisplay(code: string | null): { name: string; flag: string } | null {
+  if (!code) return null;
+  const c = getCountryByCode(code.toUpperCase());
+  return c ? { name: c.name, flag: c.flag } : null;
+}
+
+// ── Distinctions ─────────────────────────────────────────────────
+
+const DISTINCTIONS = [
+  {
+    key: 'isSalesforceMvp',
+    label: 'Salesforce MVP',
+    cls: 'text-warning bg-warning/10 border-warning/30',
+  },
+  {
+    key: 'isSalesforceCta',
+    label: 'CTA',
+    cls: 'text-violet-600 dark:text-violet-400 bg-violet-500/10 border-violet-500/30',
+  },
+  {
+    key: 'isCertifiedTrainer',
+    label: 'Certified Trainer',
+    cls: 'text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
+  },
+] as const;
+
+export function getDistinctionList(
+  d: ExpertCardDistinctions
+): ReadonlyArray<{ label: string; cls: string }> {
+  return DISTINCTIONS.filter((x) => d[x.key]).map(({ label, cls }) => ({ label, cls }));
 }

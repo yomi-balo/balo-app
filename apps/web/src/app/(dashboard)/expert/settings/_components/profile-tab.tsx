@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
-import { extractCityFromTimezone } from '@balo/shared/timezone';
 import type { ExpertCardData, ExpertiseItem, SkillType } from '@/components/expert';
 import { useRouter } from 'next/navigation';
 import { ProfileForm } from './profile-form';
@@ -117,44 +116,48 @@ export function ProfileTab({
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
 
   // Build ExpertCardData from form watch values + initial profile
-  const expertCardData: ExpertCardData = useMemo(() => {
-    const city = extractCityFromTimezone(initialProfile.user.timezone);
-    const cc = countryCode || initialProfile.user.countryCode;
-    let location = '';
-    if (cc && city) location = `${city}, ${cc}`;
-    else if (cc) location = cc;
-    else if (city) location = city;
-
-    return {
+  const expertCardData: ExpertCardData = useMemo(
+    () => ({
       id: initialProfile.id,
+      username: initialProfile.username,
       name: fullName,
       initials,
-      avatarKey: avatarUrl,
-      title: watchedValues.headline || initialProfile.headline || 'Salesforce Expert',
+      avatarUrl,
+      headline: watchedValues.headline?.trim() || initialProfile.headline || null,
       bio: watchedValues.bio?.trim() || null,
-      location,
-      yearsExp: initialProfile.yearStartedSalesforce
-        ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
-        : 0,
-      certifications: initialProfile.certifications?.length ?? 0,
-      consultationCount: 0,
-      rating: null,
-      reviewCount: 0,
+      countryCode: countryCode || initialProfile.user.countryCode || null,
       rate: initialProfile.rateCents
         ? centsToDollars(calculateClientRate(initialProfile.rateCents))
-        : 0,
-      available: initialProfile.availableForWork ?? false,
+        : null,
+      nextAvailableAt: null,
+      languages: initialProfile.languages.map((l) => ({
+        name: l.language.name,
+        flagEmoji: l.language.flagEmoji,
+      })),
+      agency: null,
+      distinctions: {
+        isSalesforceMvp: initialProfile.isSalesforceMvp,
+        isSalesforceCta: initialProfile.isSalesforceCta,
+        isCertifiedTrainer: initialProfile.isCertifiedTrainer,
+      },
+      rating: null,
+      reviewCount: 0,
+      yearsExperience: initialProfile.yearStartedSalesforce
+        ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
+        : null,
+      consultationCount: 0,
       expertise: buildExpertise(initialProfile.skills),
-    };
-  }, [
-    initialProfile,
-    fullName,
-    initials,
-    avatarUrl,
-    watchedValues.headline,
-    watchedValues.bio,
-    countryCode,
-  ]);
+    }),
+    [
+      initialProfile,
+      fullName,
+      initials,
+      avatarUrl,
+      watchedValues.headline,
+      watchedValues.bio,
+      countryCode,
+    ]
+  );
 
   const handleSave = async (): Promise<void> => {
     const valid = await form.trigger();
