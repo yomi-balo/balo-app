@@ -213,7 +213,7 @@ function RatingBadge({
   );
 }
 
-// ── Heart button (top-right, grid only) — visual-only ────────────
+// ── Heart button (top-right, grid + list) — visual-only ──────────
 
 function HeartButton(): React.JSX.Element {
   const [liked, setLiked] = useState(false);
@@ -616,6 +616,7 @@ function ListRow({
       <div className="relative w-60 shrink-0 self-stretch overflow-hidden">
         <AvatarHeader expert={expert} initialsTextClass="text-[28px]" />
         <AvailabilityPill nextAvailableAt={expert.nextAvailableAt} />
+        <HeartButton />
         <AgencyBadge agency={expert.agency} />
         <RatingBadge rating={expert.rating} reviewCount={expert.reviewCount} />
       </div>

@@ -308,7 +308,7 @@ describe('ExpertCard', () => {
     expect(onBook).toHaveBeenCalledOnce();
   });
 
-  it('toggles the favorite heart aria-label on click (grid only)', async () => {
+  it('toggles the favorite heart aria-label on click', async () => {
     const user = userEvent.setup();
     render(<ExpertCard expert={makeExpert()} />);
 
@@ -317,8 +317,8 @@ describe('ExpertCard', () => {
     expect(screen.getByRole('button', { name: /remove from favorites/i })).toBeInTheDocument();
   });
 
-  it('omits the favorite heart in the list variant', () => {
+  it('renders the favorite heart in the list variant too', () => {
     render(<ExpertCard expert={makeExpert()} variant="list" />);
-    expect(screen.queryByRole('button', { name: /favorites/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add to favorites/i })).toBeInTheDocument();
   });
 });
