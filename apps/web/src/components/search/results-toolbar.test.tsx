@@ -27,15 +27,7 @@ beforeEach(() => {
 
 function renderToolbar(overrides: Partial<React.ComponentProps<typeof ResultsToolbar>> = {}) {
   return render(
-    <ResultsToolbar
-      shown={6}
-      total={8}
-      layout="grid"
-      sort="best_match"
-      activeCount={0}
-      onOpenFilters={vi.fn()}
-      {...overrides}
-    />
+    <ResultsToolbar shown={6} total={8} layout="grid" sort="best_match" {...overrides} />
   );
 }
 
@@ -89,14 +81,15 @@ describe('ResultsToolbar', () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it('calls onOpenFilters from the mobile Filters button and shows the active-count badge', async () => {
-    const user = userEvent.setup();
-    const onOpenFilters = vi.fn();
-    renderToolbar({ activeCount: 3, onOpenFilters });
-    const filtersBtn = screen.getByRole('button', { name: /filters/i });
-    expect(filtersBtn).toHaveTextContent('3');
-    await user.click(filtersBtn);
-    expect(onOpenFilters).toHaveBeenCalledTimes(1);
+  it('does not render a mobile Filters button (the one-tap MobileComposerBar owns it)', () => {
+    renderToolbar({ total: 8 });
+    expect(screen.queryByRole('button', { name: /filters/i })).not.toBeInTheDocument();
+  });
+
+  it('renders a sort control in the mobile row', () => {
+    renderToolbar();
+    // The sort control (Radix Select → combobox) is the only mobile control left.
+    expect(screen.getAllByRole('combobox', { name: 'Sort experts' }).length).toBeGreaterThan(0);
   });
 
   it('layout toggle buttons are keyboard-reachable and labelled', () => {

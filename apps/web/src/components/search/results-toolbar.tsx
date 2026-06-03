@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { Grid3x3, List, Shield, SlidersHorizontal } from 'lucide-react';
+import { Grid3x3, List, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { track, SEARCH_EVENTS } from '@/lib/analytics';
 import type { SortValue } from '@/lib/search/filters';
@@ -17,8 +17,6 @@ interface ResultsToolbarProps {
   total: number;
   layout: Layout;
   sort: SortValue;
-  activeCount: number;
-  onOpenFilters: () => void;
 }
 
 const LAYOUT_OPTIONS: ReadonlyArray<{ value: Layout; Icon: typeof Grid3x3; label: string }> = [
@@ -31,8 +29,6 @@ export function ResultsToolbar({
   total,
   layout,
   sort,
-  activeCount,
-  onOpenFilters,
 }: Readonly<ResultsToolbarProps>): React.JSX.Element {
   const { setChromeParam } = useUpdateSearchParams();
 
@@ -102,24 +98,10 @@ export function ResultsToolbar({
         </div>
       </div>
 
-      {/* Mobile controls row: Filters button (+badge) + full-width sort */}
-      <div className="mt-3.5 flex gap-2.5 md:hidden">
-        <button
-          type="button"
-          onClick={onOpenFilters}
-          className="border-border bg-card text-foreground focus-visible:ring-ring flex h-11 flex-1 items-center justify-center gap-2 rounded-[10px] border text-sm font-semibold focus-visible:ring-2 focus-visible:outline-none"
-        >
-          <SlidersHorizontal className="h-4 w-4" />
-          Filters
-          {activeCount > 0 && (
-            <span className="bg-primary text-primary-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-bold">
-              {activeCount}
-            </span>
-          )}
-        </button>
-        <div className="flex-1">
-          <SortDropdown sort={sort} full />
-        </div>
+      {/* Mobile controls row: full-width sort. The filter trigger is the
+          one-tap MobileComposerBar (BAL-249), not duplicated here. */}
+      <div className="mt-3.5 md:hidden">
+        <SortDropdown sort={sort} full />
       </div>
     </div>
   );

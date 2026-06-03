@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
-import userEvent from '@testing-library/user-event';
-import { EMPTY_FILTERS } from '@/lib/search/filters';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
@@ -11,37 +9,19 @@ vi.mock('next/navigation', () => ({
 
 import { ResultsControls } from './results-controls';
 
-const facetCounts = {
-  products: [{ id: 'p1', name: 'Agentforce', count: 18 }],
-  supportTypes: [],
-  languages: [],
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   window.scrollTo = vi.fn();
 });
 
 describe('ResultsControls', () => {
-  it('renders the toolbar and opens the filter sheet from the mobile Filters button', async () => {
-    const user = userEvent.setup();
-    render(
-      <ResultsControls
-        shown={1}
-        total={5}
-        layout="grid"
-        sort="best_match"
-        activeCount={0}
-        filters={EMPTY_FILTERS}
-        facetCounts={facetCounts}
-      />
-    );
+  it('renders the results toolbar (count + sort) without owning a filter sheet', () => {
+    render(<ResultsControls shown={1} total={5} layout="grid" sort="best_match" />);
 
-    // Sheet closed initially.
-    expect(screen.queryByRole('dialog', { name: 'Filters' })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /filters/i }));
-
-    expect(screen.getByRole('dialog', { name: 'Filters' })).toBeInTheDocument();
+    expect(screen.getByText(/of 5 experts/)).toBeInTheDocument();
+    // The mobile filter trigger now lives in the one-tap MobileComposerBar.
+    expect(screen.queryByRole('button', { name: /filters/i })).not.toBeInTheDocument();
+    // No filter sheet is mounted here anymore.
+    expect(screen.queryByRole('dialog', { name: 'Search & filter' })).not.toBeInTheDocument();
   });
 });
