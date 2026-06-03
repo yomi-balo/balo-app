@@ -40,16 +40,20 @@ describe('userNotificationsRepository.findUnreadByUserId', () => {
   it('returns only unread notifications for the given user in desc order', async () => {
     const user = await userFactory({ firstName: 'Unread', lastName: 'Test' });
 
+    // Explicit, distinct createdAt so `ORDER BY created_at DESC` is deterministic
+    // (back-to-back inserts otherwise tie on created_at → flaky ordering in CI).
     const first = await userNotificationsRepository.insert({
       userId: user.id,
       event: 'case.created',
       title: 'First notification',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
     });
 
     const second = await userNotificationsRepository.insert({
       userId: user.id,
       event: 'case.assigned',
       title: 'Second notification',
+      createdAt: new Date('2026-01-01T00:00:01.000Z'),
     });
 
     const results = await userNotificationsRepository.findUnreadByUserId(user.id);

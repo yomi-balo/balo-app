@@ -346,6 +346,8 @@ Every new file added to `packages/db/src/repositories/` **must** ship with a cor
 `*.integration.test.ts` file in the same PR. This is a hard requirement — SonarQube will
 flag the PR if repository files are uncovered.
 
+> Repository coverage comes from `*.integration.test.ts` and counts toward the Sonar gate — see [docs/coverage-policy.md](../../../docs/coverage-policy.md).
+
 1. Create `{name}.integration.test.ts` alongside the repository file
 2. Use factories from `packages/db/src/test/factories/` to seed test data
 3. Transaction rollback is handled globally — no `cleanTables()` or manual teardown
