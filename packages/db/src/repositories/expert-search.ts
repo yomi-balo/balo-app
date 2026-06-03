@@ -1,4 +1,4 @@
-import { and, eq, gte, lte, isNotNull, inArray, exists, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, isNotNull, inArray, exists, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import {
   expertProfiles,
@@ -30,6 +30,14 @@ export interface ExpertSearchParams {
   now: Date; // injected for deterministic gate/timeframe boundaries
 }
 
+/** One expert_skills row joined to its skill name + support-type slug. */
+export interface ExpertSearchSkillRow {
+  skillId: string;
+  skillName: string;
+  supportTypeSlug: string;
+  proficiency: number;
+}
+
 export interface ExpertSearchRow {
   id: string;
   username: string | null;
@@ -49,6 +57,7 @@ export interface ExpertSearchRow {
   agencyLogoUrl: string | null;
   consultationCount: number;
   languages: { name: string; flagEmoji: string | null }[];
+  skills: ExpertSearchSkillRow[];
 }
 
 export interface FacetCount {
@@ -385,6 +394,50 @@ interface SearchSelectRow {
   totalCount: number;
 }
 
+// ── Internal: per-expert skills for the result page ──────────────
+
+/**
+ * Fetch the skills for a page of experts in ONE query (join expert_skills →
+ * skills → support_types), grouped in JS into `ExpertSearchSkillRow[]` per
+ * expert and ordered proficiency-desc. Returns an empty map for an empty input
+ * (no query issued) so the hot path stays a single round-trip when there are no
+ * rows. The web orders/limits to 4 in the card, so we just return the expert's
+ * skills proficiency-desc here.
+ */
+async function fetchSkillsByExpert(
+  expertProfileIds: string[]
+): Promise<Map<string, ExpertSearchSkillRow[]>> {
+  const byExpert = new Map<string, ExpertSearchSkillRow[]>();
+  if (expertProfileIds.length === 0) return byExpert;
+
+  const rows = await db
+    .select({
+      expertProfileId: expertSkills.expertProfileId,
+      skillId: expertSkills.skillId,
+      skillName: skills.name,
+      supportTypeSlug: supportTypes.slug,
+      proficiency: expertSkills.proficiency,
+    })
+    .from(expertSkills)
+    .innerJoin(skills, eq(skills.id, expertSkills.skillId))
+    .innerJoin(supportTypes, eq(supportTypes.id, expertSkills.supportTypeId))
+    .where(inArray(expertSkills.expertProfileId, expertProfileIds))
+    .orderBy(desc(expertSkills.proficiency));
+
+  for (const row of rows) {
+    const list = byExpert.get(row.expertProfileId) ?? [];
+    list.push({
+      skillId: row.skillId,
+      skillName: row.skillName,
+      supportTypeSlug: row.supportTypeSlug,
+      proficiency: row.proficiency,
+    });
+    byExpert.set(row.expertProfileId, list);
+  }
+
+  return byExpert;
+}
+
 // ── Repository ───────────────────────────────────────────────────
 
 export const expertSearchRepository = {
@@ -456,6 +509,12 @@ export const expertSearchRepository = {
       total = Number(countRows[0]?.total ?? 0);
     }
 
+    // Per-expert skills for the page (one extra query; skipped when the page is
+    // empty). Grouped in JS into ExpertSearchSkillRow[] per expert, joining the
+    // skill name + support-type slug and ordered proficiency-desc.
+    const expertIds = rows.map((r) => r.id);
+    const skillsByExpert = await fetchSkillsByExpert(expertIds);
+
     const mapped: ExpertSearchRow[] = rows.map((r: SearchSelectRow) => ({
       id: r.id,
       username: r.username,
@@ -478,9 +537,35 @@ export const expertSearchRepository = {
         name: l.name,
         flagEmoji: l.flagEmoji,
       })),
+      skills: skillsByExpert.get(r.id) ?? [],
     }));
 
     return { rows: mapped, total };
+  },
+
+  /**
+   * Count experts matching the SAME filters as `search` (FTS + facets + rate) but
+   * with the availability gate and self-gating timeframe ignored — the caller is
+   * expected to pass `availabilityGateEnabled: false` and `timeframe: undefined`.
+   *
+   * Powers the route's additive `wasAvailabilityGated` flag: when a gated search
+   * returns zero rows, a result of `>= 1` here means matches exist that are simply
+   * not currently bookable. Reuses `buildWhereConditions` and the exact
+   * `from(expertProfiles).innerJoin(users).leftJoin(availability_cache)` shape of
+   * the zero-rows COUNT fallback in `search`. Pure SQL, deterministic with the
+   * injected `now`, no env reads.
+   */
+  async countMatchingIgnoringGate(params: ExpertSearchParams): Promise<number> {
+    const conditions = buildWhereConditions(params, params.now);
+
+    const countRows = (await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(expertProfiles)
+      .innerJoin(sql`users u`, sql`u.id = ${expertProfiles.userId}`)
+      .leftJoin(sql`availability_cache ac`, sql`ac.expert_profile_id = ${expertProfiles.id}`)
+      .where(and(...conditions))) as Array<{ total: number }>;
+
+    return Number(countRows[0]?.total ?? 0);
   },
 
   /**

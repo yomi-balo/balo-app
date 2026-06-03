@@ -7,6 +7,7 @@ const {
   mockResolveVerticalId,
   mockSearch,
   mockFacetCounts,
+  mockCountMatchingIgnoringGate,
   mockCheckRateLimit,
   mockTrackServer,
   mockRedisGet,
@@ -19,6 +20,7 @@ const {
     mockResolveVerticalId: vi.fn(),
     mockSearch: vi.fn(),
     mockFacetCounts: vi.fn(),
+    mockCountMatchingIgnoringGate: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     mockTrackServer: vi.fn(),
     mockRedisGet: redisGet,
@@ -34,6 +36,7 @@ vi.mock('@balo/db', () => ({
     resolveVerticalId: mockResolveVerticalId,
     search: mockSearch,
     facetCounts: mockFacetCounts,
+    countMatchingIgnoringGate: mockCountMatchingIgnoringGate,
   },
 }));
 
@@ -92,6 +95,14 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     agencyLogoUrl: null,
     consultationCount: 0,
     languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
+    skills: [
+      {
+        skillId: 'sales-cloud',
+        skillName: 'Sales Cloud',
+        supportTypeSlug: 'technical-fix-support',
+        proficiency: 5,
+      },
+    ],
     ...overrides,
   };
 }
@@ -115,6 +126,8 @@ describe('GET /experts/search', () => {
     mockResolveVerticalId.mockResolvedValue(VERTICAL_ID);
     mockSearch.mockResolvedValue({ rows: [buildRow()], total: 1 });
     mockFacetCounts.mockResolvedValue(EMPTY_FACETS);
+    mockCountMatchingIgnoringGate.mockResolvedValue(0);
+    delete process.env.EXPERT_SEARCH_AVAILABILITY_GATE;
     // Facet cache: miss by default → route computes live via facetCounts.
     mockRedisGet.mockResolvedValue(null);
     mockRedisSet.mockResolvedValue('OK');
@@ -132,6 +145,19 @@ describe('GET /experts/search', () => {
     expect(body).toHaveProperty('total', 1);
     expect(body.facetCounts).toEqual(EMPTY_FACETS);
     expect(body.experts[0]).toMatchObject({ id: 'expert-1', name: 'Jane Doe', rate: 2.5 });
+  });
+
+  it("passes each expert's skills through to the response", async () => {
+    const res = await inject();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().experts[0].skills).toEqual([
+      {
+        skillId: 'sales-cloud',
+        skillName: 'Sales Cloud',
+        supportTypeSlug: 'technical-fix-support',
+        proficiency: 5,
+      },
+    ]);
   });
 
   it('sets a public Cache-Control header on success', async () => {
@@ -295,5 +321,50 @@ describe('GET /experts/search', () => {
     const res = await inject('?q=agentforce');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toHaveProperty('total', 1);
+  });
+
+  // ── wasAvailabilityGated (additive zero-results probe) ──────────────────────
+
+  describe('wasAvailabilityGated', () => {
+    it('is false (no probe) when there are results', async () => {
+      process.env.EXPERT_SEARCH_AVAILABILITY_GATE = 'on';
+      mockSearch.mockResolvedValue({ rows: [buildRow()], total: 1 });
+      const res = await inject('?q=agentforce');
+      expect(res.statusCode).toBe(200);
+      expect(res.json().wasAvailabilityGated).toBe(false);
+      expect(mockCountMatchingIgnoringGate).not.toHaveBeenCalled();
+    });
+
+    it('is false (no probe) when total is 0 but the gate is off', async () => {
+      delete process.env.EXPERT_SEARCH_AVAILABILITY_GATE;
+      mockSearch.mockResolvedValue({ rows: [], total: 0 });
+      const res = await inject('?q=nomatch');
+      expect(res.statusCode).toBe(200);
+      expect(res.json().wasAvailabilityGated).toBe(false);
+      expect(mockCountMatchingIgnoringGate).not.toHaveBeenCalled();
+    });
+
+    it('is true when total is 0, gate is on, and the ungated probe finds matches', async () => {
+      process.env.EXPERT_SEARCH_AVAILABILITY_GATE = 'on';
+      mockSearch.mockResolvedValue({ rows: [], total: 0 });
+      mockCountMatchingIgnoringGate.mockResolvedValue(3);
+      const res = await inject('?q=nomatch&timeframe=today');
+      expect(res.statusCode).toBe(200);
+      expect(res.json().wasAvailabilityGated).toBe(true);
+      // Probe ignores the gate and the self-gating timeframe filter.
+      expect(mockCountMatchingIgnoringGate).toHaveBeenCalledWith(
+        expect.objectContaining({ availabilityGateEnabled: false, timeframe: undefined })
+      );
+    });
+
+    it('is false when total is 0, gate is on, and the ungated probe finds nothing', async () => {
+      process.env.EXPERT_SEARCH_AVAILABILITY_GATE = 'on';
+      mockSearch.mockResolvedValue({ rows: [], total: 0 });
+      mockCountMatchingIgnoringGate.mockResolvedValue(0);
+      const res = await inject('?q=nomatch');
+      expect(res.statusCode).toBe(200);
+      expect(res.json().wasAvailabilityGated).toBe(false);
+      expect(mockCountMatchingIgnoringGate).toHaveBeenCalledOnce();
+    });
   });
 });

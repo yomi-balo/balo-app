@@ -41,6 +41,52 @@ const SKILL_LABELS_LOWER: Record<SkillType, string> = Object.fromEntries(
   Object.entries(SKILL_LABELS).map(([k, v]) => [k, v.toLowerCase()])
 ) as Record<SkillType, string>;
 
+// ── Expertise builder (support-type slug → SkillType grouping) ───
+
+/** Map support-type slugs to the ExpertCard `SkillType` the pills render. */
+const SUPPORT_TYPE_SLUG_MAP: Record<string, SkillType> = {
+  'technical-fix-support': 'technical',
+  'architecture-integrations': 'architecture',
+  'strategy-best-practices': 'strategy',
+  'platform-training': 'admin',
+};
+
+/**
+ * Structural input for `buildExpertise`. Decoupled from `@balo/db` on purpose so
+ * this util stays web-only and can be fed by either the profile-settings shape
+ * (`ProfileSettingsData['skills']`) or the search DTO (adapted in the mapper).
+ */
+export interface ExpertiseSkillInput {
+  skillId: string;
+  proficiency: number;
+  skill: { name: string };
+  supportType: { slug: string };
+}
+
+/**
+ * Group flat expert-skill rows into `ExpertiseItem[]` (one entry per product,
+ * carrying its mapped `SkillType`s). Insertion order is preserved, rows with
+ * `proficiency <= 0` are skipped, each `SkillType` is deduped per product, and
+ * unknown support-type slugs are ignored.
+ */
+export function buildExpertise(skills: ReadonlyArray<ExpertiseSkillInput>): ExpertiseItem[] {
+  const groups = new Map<string, ExpertiseItem>();
+
+  for (const s of skills) {
+    if (s.proficiency <= 0) continue;
+    const key = s.skillId;
+    if (!groups.has(key)) {
+      groups.set(key, { product: s.skill.name, skills: [] });
+    }
+    const mapped = SUPPORT_TYPE_SLUG_MAP[s.supportType.slug];
+    if (mapped && !groups.get(key)!.skills.includes(mapped)) {
+      groups.get(key)!.skills.push(mapped);
+    }
+  }
+
+  return Array.from(groups.values());
+}
+
 // ── Expertise ordering ───────────────────────────────────────────
 
 export function getOrderedExpertise(

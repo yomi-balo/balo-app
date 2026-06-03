@@ -213,7 +213,7 @@ function RatingBadge({
   );
 }
 
-// ── Heart button (top-right, grid only) — visual-only ────────────
+// ── Heart button (top-right, grid + list) — visual-only ──────────
 
 function HeartButton(): React.JSX.Element {
   const [liked, setLiked] = useState(false);
@@ -525,8 +525,12 @@ function GridCard({
   onViewProfile?: () => void;
 }>): React.JSX.Element {
   return (
-    <motion.div whileHover={{ y: -4 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
-      <Card className="dark:hover:shadow-primary/5 flex w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+    <motion.div
+      className="h-full"
+      whileHover={{ y: -4 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+    >
+      <Card className="dark:hover:shadow-primary/5 flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
         {/* Photo header */}
         <div className="relative aspect-[5/4]">
           <AvatarHeader expert={expert} initialsTextClass="text-3xl" />
@@ -607,11 +611,12 @@ function ListRow({
   const meta = buildListMeta(expert);
 
   return (
-    <Card className="dark:hover:shadow-primary/5 flex gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+    <Card className="dark:hover:shadow-primary/5 flex min-h-[256px] flex-row gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
       {/* Photo panel */}
       <div className="relative w-60 shrink-0 self-stretch overflow-hidden">
         <AvatarHeader expert={expert} initialsTextClass="text-[28px]" />
         <AvailabilityPill nextAvailableAt={expert.nextAvailableAt} />
+        <HeartButton />
         <AgencyBadge agency={expert.agency} />
         <RatingBadge rating={expert.rating} reviewCount={expert.reviewCount} />
       </div>
@@ -650,6 +655,8 @@ function ListRow({
           <ExpertisePills expertise={orderedExpertise} max={5} showHeading={false} pad={false} />
         </div>
 
+        {/* CTAs pinned to the bottom; shorter cards get whitespace above them so
+            every row matches the tallest card's height. */}
         <div className="mt-auto flex gap-2.5">
           <div className="flex max-w-[200px] flex-1">
             <ViewProfileButton onClick={onViewProfile} />

@@ -3,7 +3,12 @@
 // under TZ=UTC for the same-day / tomorrow boundaries to line up. Run via:
 //   TZ=UTC pnpm exec vitest run src/components/expert/expert-card.utils.test.ts
 import { describe, it, expect } from 'vitest';
-import { computeAvailability, getCountryDisplay } from './expert-card.utils';
+import {
+  buildExpertise,
+  computeAvailability,
+  getCountryDisplay,
+  type ExpertiseSkillInput,
+} from './expert-card.utils';
 
 // Fixed reference point for the whole availability suite: Tuesday 2026-06-02 09:00 UTC.
 const NOW = new Date('2026-06-02T09:00:00Z');
@@ -109,5 +114,66 @@ describe('getCountryDisplay', () => {
 
   it('returns null for a null code', () => {
     expect(getCountryDisplay(null)).toBeNull();
+  });
+});
+
+describe('buildExpertise', () => {
+  const skill = (over: Partial<ExpertiseSkillInput> = {}): ExpertiseSkillInput => ({
+    skillId: 'sales-cloud',
+    proficiency: 3,
+    skill: { name: 'Sales Cloud' },
+    supportType: { slug: 'technical-fix-support' },
+    ...over,
+  });
+
+  it('returns an empty array for no skills', () => {
+    expect(buildExpertise([])).toEqual([]);
+  });
+
+  it('groups multiple support types under one product (insertion order)', () => {
+    const result = buildExpertise([
+      skill({ supportType: { slug: 'technical-fix-support' } }),
+      skill({ supportType: { slug: 'architecture-integrations' } }),
+    ]);
+    expect(result).toEqual([{ product: 'Sales Cloud', skills: ['technical', 'architecture'] }]);
+  });
+
+  it('keeps distinct products in first-seen order', () => {
+    const result = buildExpertise([
+      skill({ skillId: 'service', skill: { name: 'Service Cloud' } }),
+      skill({ skillId: 'sales', skill: { name: 'Sales Cloud' } }),
+    ]);
+    expect(result.map((e) => e.product)).toEqual(['Service Cloud', 'Sales Cloud']);
+  });
+
+  it('maps every support-type slug to its SkillType', () => {
+    const result = buildExpertise([
+      skill({ supportType: { slug: 'technical-fix-support' } }),
+      skill({ supportType: { slug: 'architecture-integrations' } }),
+      skill({ supportType: { slug: 'strategy-best-practices' } }),
+      skill({ supportType: { slug: 'platform-training' } }),
+    ]);
+    expect(result[0]!.skills).toEqual(['technical', 'architecture', 'strategy', 'admin']);
+  });
+
+  it('dedupes a repeated SkillType within a product', () => {
+    const result = buildExpertise([
+      skill({ supportType: { slug: 'technical-fix-support' } }),
+      skill({ supportType: { slug: 'technical-fix-support' } }),
+    ]);
+    expect(result).toEqual([{ product: 'Sales Cloud', skills: ['technical'] }]);
+  });
+
+  it('skips skills with proficiency <= 0', () => {
+    const result = buildExpertise([
+      skill({ proficiency: 0 }),
+      skill({ skillId: 'service', skill: { name: 'Service Cloud' }, proficiency: 2 }),
+    ]);
+    expect(result).toEqual([{ product: 'Service Cloud', skills: ['technical'] }]);
+  });
+
+  it('ignores an unknown support-type slug (still emits the product)', () => {
+    const result = buildExpertise([skill({ supportType: { slug: 'mystery-slug' } })]);
+    expect(result).toEqual([{ product: 'Sales Cloud', skills: [] }]);
   });
 });
