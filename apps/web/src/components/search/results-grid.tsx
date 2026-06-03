@@ -41,8 +41,11 @@ function ListBlock({
   sort,
   page,
 }: Readonly<{ experts: ExpertCardData[]; sort: string; page: number }>): React.JSX.Element {
+  // Single-column grid with `grid-auto-rows: 1fr` so every row equalises to the
+  // TALLEST card's height (no clipping); the card's `min-h` sets a floor so rows
+  // never get too short. Cards stretch to fill their row; CTAs bottom-align.
   return (
-    <div className="flex flex-col gap-4">
+    <div className="grid [grid-auto-rows:1fr] grid-cols-1 gap-4">
       {experts.map((expert, i) => (
         <SearchResultCard
           key={expert.id}
