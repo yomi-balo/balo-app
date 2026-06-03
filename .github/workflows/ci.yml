@@ -77,11 +77,13 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
+      - name: Upload unit lcov artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-unit
+          path: coverage/lcov.info
+          retention-days: 1
 
   integration-tests:
     name: Integration Tests
@@ -98,8 +100,47 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Run Integration Tests
-        run: pnpm test:integration
+      - name: Run Integration Tests with Coverage
+        run: pnpm test:integration:coverage
+
+      - name: Show integration lcov SF paths
+        if: always()
+        run: grep -m3 '^SF:' coverage-integration/lcov.info || true
+
+      - name: Upload integration lcov artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-integration
+          path: coverage-integration/lcov.info
+          retention-days: 1
+
+  sonarcloud:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage
+
+      - name: Download integration coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage-integration
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
 
   e2e-tests:
     name: E2E Tests

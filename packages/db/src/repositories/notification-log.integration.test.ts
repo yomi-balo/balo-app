@@ -117,25 +117,29 @@ describe('notificationLogRepository.findByRecipientId', () => {
   it('returns all logs for a recipient in desc order by createdAt', async () => {
     const user = await userFactory({ firstName: 'Recv', lastName: 'Test' });
 
-    await notificationLogRepository.insert({
+    // Explicit, distinct createdAt so `ORDER BY created_at DESC` is deterministic
+    // (back-to-back inserts otherwise tie on created_at → flaky ordering in CI).
+    const first = await notificationLogRepository.insert({
       event: 'case.created',
       correlationId: randomUUID(),
       recipientId: user.id,
       channel: 'email',
       template: 'case-created',
       status: 'sent',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
     });
 
-    await notificationLogRepository.insert({
+    const second = await notificationLogRepository.insert({
       event: 'case.assigned',
       correlationId: randomUUID(),
       recipientId: user.id,
       channel: 'email',
       template: 'case-assigned',
       status: 'sent',
+      createdAt: new Date('2026-01-01T00:00:01.000Z'),
     });
 
-    await notificationLogRepository.insert({
+    const third = await notificationLogRepository.insert({
       event: 'project.started',
       correlationId: randomUUID(),
       recipientId: user.id,
@@ -143,16 +147,13 @@ describe('notificationLogRepository.findByRecipientId', () => {
       template: 'project-started',
       status: 'failed',
       error: 'Timeout',
+      createdAt: new Date('2026-01-01T00:00:02.000Z'),
     });
 
     const results = await notificationLogRepository.findByRecipientId(user.id);
     expect(results).toHaveLength(3);
-    // Verify desc order by checking createdAt is non-increasing
-    for (let i = 0; i < results.length - 1; i++) {
-      expect(results[i]!.createdAt.getTime()).toBeGreaterThanOrEqual(
-        results[i + 1]!.createdAt.getTime()
-      );
-    }
+    // Most recent first (strict desc order)
+    expect(results.map((r) => r.id)).toEqual([third.id, second.id, first.id]);
   });
 
   it('respects the limit parameter', async () => {

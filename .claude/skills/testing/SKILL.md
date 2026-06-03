@@ -783,6 +783,8 @@ test:
 
 ### Coverage Gating
 
+> Integration-test coverage IS measured by SonarCloud (unioned with unit coverage) — see [docs/coverage-policy.md](../../../docs/coverage-policy.md).
+
 The philosophy is "not about hitting numbers" — but CI should still gate on **coverage regression** (not absolute thresholds). Configure `vitest.config.ts` to fail if changed files drop below their existing coverage:
 
 ```typescript

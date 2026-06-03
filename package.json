@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "test:integration": "pnpm --filter @balo/db test:integration",
+    "test:integration:coverage": "pnpm --filter @balo/db test:integration:coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "prepare": "husky"
