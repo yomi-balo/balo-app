@@ -19,6 +19,7 @@ import { PillRow, type PillOption } from './pill-row';
 import { ProductSelector } from './product-selector';
 import { TIMEFRAME_OPTIONS, ANY_TIMEFRAME } from './constants';
 import { useFacetRequery } from './use-facet-requery';
+import { useFacetSelection } from './use-facet-selection';
 
 interface FacetCounts {
   products: FacetCountDTO[];
@@ -43,6 +44,12 @@ function summarize(ids: string[], nameMap: Record<string, string>): string | nul
   return ids.length === 1 ? first : `${first} +${ids.length - 1}`;
 }
 
+function summarizeSupport(ids: string[], nameMap: Record<string, string>): string | null {
+  if (ids.length === 0) return null;
+  if (ids.length === 1) return nameMap[ids[0]!] ?? ids[0]!;
+  return `${ids.length} selected`;
+}
+
 function facetsToPillOptions(facets: FacetCountDTO[]): PillOption[] {
   return facets.map((facet) => ({ value: facet.id, label: facet.name }));
 }
@@ -65,14 +72,25 @@ export function UnifiedBar({
   const compact = variant === 'compact';
   const { setParam } = useUpdateSearchParams();
   const requery = useFacetRequery({ hasResults, surface: 'compact_bar', nameMaps });
+  // Local mirror so popover toggles paint instantly; the URL stays the source of
+  // truth (committed sink = the debounced `useFacetRequery`).
+  const {
+    values,
+    toggleArray,
+    setTimeframe,
+    clearProducts: clearSelection,
+  } = useFacetSelection({
+    filters,
+    sink: { mode: 'committed', requery },
+  });
   const [query, setQuery] = useState(filters.q);
   const [openSegment, setOpenSegment] = useState<'product' | 'support' | 'when' | null>(null);
 
-  const selectedProducts = useMemo(() => new Set(filters.products), [filters.products]);
-  const selectedSupport = useMemo(() => new Set(filters.supportTypes), [filters.supportTypes]);
+  const selectedProducts = useMemo(() => new Set(values.products), [values.products]);
+  const selectedSupport = useMemo(() => new Set(values.supportTypes), [values.supportTypes]);
   const selectedTimeframe = useMemo(
-    () => new Set([filters.timeframe ?? ANY_TIMEFRAME]),
-    [filters.timeframe]
+    () => new Set([values.timeframe ?? ANY_TIMEFRAME]),
+    [values.timeframe]
   );
 
   const handleSubmit = useCallback(
@@ -90,39 +108,28 @@ export function UnifiedBar({
     [query, setParam, filters, nameMaps, compact]
   );
 
-  const toggleProduct = useCallback(
-    (id: string) => requery.setArrayValue('products', id, !filters.products.includes(id)),
-    [requery, filters.products]
-  );
+  const toggleProduct = useCallback((id: string) => toggleArray('products', id), [toggleArray]);
   const clearProducts = useCallback(() => {
-    for (const id of filters.products) requery.setArrayValue('products', id, false);
+    clearSelection();
     track(SEARCH_EVENTS.COMPOSER_CLEARED, { surface: compact ? 'compact_bar' : 'hero_bar' });
-  }, [requery, filters.products, compact]);
-  const toggleSupport = useCallback(
-    (id: string) => requery.setArrayValue('supportTypes', id, !filters.supportTypes.includes(id)),
-    [requery, filters.supportTypes]
-  );
+  }, [clearSelection, compact]);
+  const toggleSupport = useCallback((id: string) => toggleArray('supportTypes', id), [toggleArray]);
   const selectTimeframe = useCallback(
     (value: string) => {
-      requery.setTimeframe(value);
+      setTimeframe(value);
       setOpenSegment(null);
     },
-    [requery]
+    [setTimeframe]
   );
 
-  const productSummary = summarize(filters.products, productNameMap);
+  const productSummary = summarize(values.products, productNameMap);
   const supportMap = useMemo(
     () => Object.fromEntries(facetCounts.supportTypes.map((f) => [f.id, f.name])),
     [facetCounts.supportTypes]
   );
-  const supportSummary =
-    filters.supportTypes.length === 0
-      ? null
-      : filters.supportTypes.length === 1
-        ? (supportMap[filters.supportTypes[0]!] ?? filters.supportTypes[0]!)
-        : `${filters.supportTypes.length} selected`;
+  const supportSummary = summarizeSupport(values.supportTypes, supportMap);
   const timeframeSummary =
-    TIMEFRAME_OPTIONS.find((t) => t.value === filters.timeframe)?.label ?? null;
+    TIMEFRAME_OPTIONS.find((t) => t.value === values.timeframe)?.label ?? null;
 
   const onSegmentOpenChange = useCallback(
     (segment: 'product' | 'support' | 'when', open: boolean) => {

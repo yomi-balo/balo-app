@@ -3,8 +3,7 @@
 import { useCallback, useMemo, type ComponentType } from 'react';
 import { Wrench, Clock, DollarSign, Globe, type LucideProps } from 'lucide-react';
 import { track, SEARCH_EVENTS } from '@/lib/analytics';
-import type { SearchFilters, TimeframeValue } from '@/lib/search/filters';
-import { TIMEFRAME_VALUES } from '@/lib/search/filters';
+import type { SearchFilters } from '@/lib/search/filters';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { FacetCountDTO } from '@/lib/search/search-data';
 import type { ComposerNameMaps } from '@/lib/search/composer-analytics';
@@ -13,6 +12,7 @@ import { ProductSelector, type ProductSelectorSurface } from './product-selector
 import { RateRangeSlider } from './rate-range-slider';
 import { TIMEFRAME_OPTIONS, ANY_TIMEFRAME } from './constants';
 import { useFacetRequery, type RefineSurface } from './use-facet-requery';
+import { useFacetSelection } from './use-facet-selection';
 
 interface FacetCounts {
   products: FacetCountDTO[];
@@ -105,64 +105,29 @@ export function FacetControls({
   );
   const requery = useFacetRequery({ hasResults, surface: refineSurface, nameMaps });
 
-  const selectedProducts = useMemo(() => new Set(filters.products), [filters.products]);
-  const selectedSupport = useMemo(() => new Set(filters.supportTypes), [filters.supportTypes]);
-  const selectedLanguages = useMemo(() => new Set(filters.languages), [filters.languages]);
+  // The local mirror paints selection instantly on click; `useFacetRequery`
+  // (committed) / `onPendingChange` (pending) remains the sink and the URL/pending
+  // state remains the source of truth, reconciled back over the mirror when settled.
+  const selection = useFacetSelection({
+    filters,
+    sink: isPending
+      ? { mode: 'pending', filters, onPendingChange: onPendingChange ?? (() => undefined) }
+      : { mode: 'committed', requery },
+  });
+  const { values, toggleArray, setTimeframe, setRate, clearProducts: clearSelection } = selection;
+
+  const selectedProducts = useMemo(() => new Set(values.products), [values.products]);
+  const selectedSupport = useMemo(() => new Set(values.supportTypes), [values.supportTypes]);
+  const selectedLanguages = useMemo(() => new Set(values.languages), [values.languages]);
   const selectedTimeframe = useMemo(
-    () => new Set([filters.timeframe ?? ANY_TIMEFRAME]),
-    [filters.timeframe]
-  );
-
-  const toggleArray = useCallback(
-    (key: 'products' | 'supportTypes' | 'languages', id: string) => {
-      const checked = !filters[key].includes(id);
-      if (isPending) {
-        const current = filters[key];
-        const next = checked ? [...current, id] : current.filter((v) => v !== id);
-        onPendingChange?.({ ...filters, [key]: next });
-        return;
-      }
-      requery.setArrayValue(key, id, checked);
-    },
-    [isPending, filters, onPendingChange, requery]
-  );
-
-  const toggleTimeframe = useCallback(
-    (value: string) => {
-      const next: TimeframeValue | null = (TIMEFRAME_VALUES as readonly string[]).includes(value)
-        ? (value as TimeframeValue)
-        : null;
-      if (isPending) {
-        onPendingChange?.({ ...filters, timeframe: next });
-        return;
-      }
-      requery.setTimeframe(value);
-    },
-    [isPending, filters, onPendingChange, requery]
-  );
-
-  const commitRate = useCallback(
-    (next: { min: number | null; max: number | null }) => {
-      if (isPending) {
-        onPendingChange?.({ ...filters, rateMinDollars: next.min, rateMaxDollars: next.max });
-        return;
-      }
-      requery.setRate(next);
-    },
-    [isPending, filters, onPendingChange, requery]
+    () => new Set([values.timeframe ?? ANY_TIMEFRAME]),
+    [values.timeframe]
   );
 
   const clearProducts = useCallback(() => {
-    if (isPending) {
-      onPendingChange?.({ ...filters, products: [] });
-    } else {
-      // Single navigation: the buffered setters in `useFacetRequery` mutate one
-      // `URLSearchParams` and commit a single debounced `router.replace`, matching
-      // `UnifiedBar.clearProducts` and the plan's single-navigation-commit rule.
-      for (const id of filters.products) requery.setArrayValue('products', id, false);
-    }
+    clearSelection();
     track(SEARCH_EVENTS.COMPOSER_CLEARED, { surface: inSheet ? 'sheet' : 'rail' });
-  }, [isPending, filters, onPendingChange, requery, inSheet]);
+  }, [clearSelection, inSheet]);
 
   return (
     <div className="space-y-[18px] text-sm">
@@ -197,16 +162,16 @@ export function FacetControls({
         <PillRow
           options={TIMEFRAME_OPTIONS}
           selected={selectedTimeframe}
-          onToggle={toggleTimeframe}
+          onToggle={setTimeframe}
           ariaLabel="Availability"
         />
       </Section>
 
       <Section icon={DollarSign} label="Rate (A$ per minute)">
         <RateRangeSlider
-          rateMinDollars={filters.rateMinDollars}
-          rateMaxDollars={filters.rateMaxDollars}
-          onCommit={commitRate}
+          rateMinDollars={values.rateMinDollars}
+          rateMaxDollars={values.rateMaxDollars}
+          onCommit={setRate}
         />
       </Section>
 

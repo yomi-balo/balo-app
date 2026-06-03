@@ -135,6 +135,31 @@ describe('FacetControls — committed mode', () => {
     expect(screen.getAllByRole('slider')).toHaveLength(2);
   });
 
+  it('paints the support pill selected INSTANTLY — before the 500ms debounced commit', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted();
+    const pill = screen.getByRole('button', { name: 'Technical fix' });
+    expect(pill).toHaveAttribute('aria-pressed', 'false');
+    await user.click(pill);
+    // No timer advance past 0 — the optimistic mirror has already flipped it on.
+    vi.advanceTimersByTime(0);
+    expect(pill).toHaveAttribute('aria-pressed', 'true');
+    // …and the URL commit has NOT fired yet (still inside the debounce window).
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('paints a product chip selected instantly in the rail selector', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted();
+    await user.click(screen.getByRole('button', { name: /Products/ }));
+    const chip = screen.getByRole('button', { name: 'Agentforce' });
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+    await user.click(chip);
+    vi.advanceTimersByTime(0);
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
   it('clears all selected products in a SINGLE debounced navigation', async () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams('products=pl1&products=pl2'));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });

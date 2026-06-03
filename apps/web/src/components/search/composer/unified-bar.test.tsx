@@ -137,6 +137,29 @@ describe('UnifiedBar', () => {
     await vi.waitFor(() => expect(mockReplace).toHaveBeenCalled());
   });
 
+  it('paints the product chip selected INSTANTLY (optimistic), before the debounced commit', async () => {
+    const user = userEvent.setup();
+    renderBar('compact');
+    await user.click(screen.getByRole('button', { name: /Product/ }));
+    const chip = await screen.findByRole('button', { name: 'Agentforce' });
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+    await user.click(chip);
+    // The optimistic mirror flips the chip on synchronously — no waiting for the
+    // 500ms requery debounce or the RSC round-trip.
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('reflects the optimistic product selection in the Product segment summary', async () => {
+    const user = userEvent.setup();
+    renderBar('compact');
+    await user.click(screen.getByRole('button', { name: /Product/ }));
+    await user.click(await screen.findByRole('button', { name: 'Agentforce' }));
+    // The bar segment summary updates from the mirror immediately (not "Any").
+    expect(screen.getByRole('button', { name: /Product/ })).toHaveTextContent('Agentforce');
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
   it('renders the "Search" label in hero variant and hides it (icon-only) in compact', () => {
     const { rerender } = renderBar('hero');
     expect(screen.getByRole('button', { name: /^Search$/ })).toHaveTextContent('Search');
@@ -154,6 +177,37 @@ describe('UnifiedBar', () => {
     // Still accessible by name (sr-only) but no visible "Search" text node.
     const button = screen.getByRole('button', { name: /Search/ });
     expect(button.querySelector('.sr-only')).not.toBeNull();
+  });
+
+  it('opens the Support segment and paints the support pill selected INSTANTLY (optimistic)', async () => {
+    const user = userEvent.setup();
+    renderBar('compact');
+    await user.click(screen.getByRole('button', { name: /Support/ }));
+    const pill = await screen.findByRole('button', { name: 'Technical fix' });
+    expect(pill).toHaveAttribute('aria-pressed', 'false');
+    await user.click(pill);
+    // Mirror flips synchronously, before the debounced requery/RSC round-trip.
+    expect(pill).toHaveAttribute('aria-pressed', 'true');
+    expect(mockReplace).not.toHaveBeenCalled();
+    // The Support segment summary reflects the optimistic selection immediately.
+    expect(screen.getByRole('button', { name: /Support/ })).toHaveTextContent('Technical fix');
+    // Eventually commits to the URL via the debounced requery.
+    await vi.waitFor(() => expect(mockReplace).toHaveBeenCalled());
+  });
+
+  it('opens the When segment, selects a timeframe (optimistic), and closes the popover', async () => {
+    const user = userEvent.setup();
+    renderBar('compact');
+    await user.click(screen.getByRole('button', { name: /When/ }));
+    await user.click(await screen.findByRole('button', { name: 'Within 3 days' }));
+    // Timeframe is single-select → selectTimeframe closes the segment popover.
+    await vi.waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Within 3 days' })).not.toBeInTheDocument()
+    );
+    // The When segment summary reflects the chosen timeframe from the mirror.
+    expect(screen.getByRole('button', { name: /When/ })).toHaveTextContent('Within 3 days');
+    // Commits to the URL via the debounced requery.
+    await vi.waitFor(() => expect(mockReplace).toHaveBeenCalled());
   });
 
   it('exposes a search landmark role', () => {
