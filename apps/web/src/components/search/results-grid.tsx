@@ -1,3 +1,6 @@
+'use client';
+
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ExpertCardData } from '@/components/expert';
 import { SearchResultCard } from './search-result-card';
 
@@ -61,7 +64,7 @@ function ListBlock({
  * list shows — realising `effectiveLayout = isMobile ? 'grid' : userChoice` with
  * zero client breakpoint code (no `window`/resize, no hydration mismatch).
  */
-export function ResultsGrid({
+function ResultsBlocks({
   experts,
   layout,
   sort,
@@ -81,4 +84,41 @@ export function ResultsGrid({
   }
 
   return <GridBlock experts={experts} sort={sort} page={page} />;
+}
+
+/**
+ * Results region with a Tier-1 cross-fade between grid and list — Motion's
+ * `AnimatePresence mode="wait"` (out then in, no overlap), keyed by the active
+ * `layout`. Opacity + small y (~8px) over ~200ms easeOut; under
+ * `prefers-reduced-motion` it drops to a quick opacity-only fade (~120ms).
+ * `initial={false}` so the first server-rendered layout does NOT animate in on
+ * page load — only subsequent grid↔list toggles cross-fade. Layout is URL-driven,
+ * so a toggle is a soft navigation that re-renders this client component with a
+ * new `layout`; AnimatePresence sees the key change and runs the transition.
+ *
+ * Deliberately a cross-fade, NOT a shared-element morph (the avatar-glide morph
+ * was prototyped and rejected as too busy at full-grid scale): grid and list stay
+ * two separate components and we simply fade the whole region between them.
+ */
+export function ResultsGrid({
+  experts,
+  layout,
+  sort,
+  page,
+}: Readonly<ResultsGridProps>): React.JSX.Element {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={layout}
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+        transition={{ duration: reduceMotion ? 0.12 : 0.2, ease: 'easeOut' }}
+      >
+        <ResultsBlocks experts={experts} layout={layout} sort={sort} page={page} />
+      </motion.div>
+    </AnimatePresence>
+  );
 }
