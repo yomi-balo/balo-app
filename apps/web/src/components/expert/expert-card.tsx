@@ -611,7 +611,7 @@ function ListRow({
   const meta = buildListMeta(expert);
 
   return (
-    <Card className="dark:hover:shadow-primary/5 flex flex-row gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+    <Card className="dark:hover:shadow-primary/5 flex h-[300px] flex-row gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
       {/* Photo panel */}
       <div className="relative w-60 shrink-0 self-stretch overflow-hidden">
         <AvatarHeader expert={expert} initialsTextClass="text-[28px]" />
@@ -623,7 +623,7 @@ function ListRow({
 
       {/* Content column */}
       <div className="flex min-w-0 flex-1 flex-col p-5">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex shrink-0 items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-foreground text-lg font-semibold">{expert.name}</p>
             <div className="text-muted-foreground mt-1 flex flex-wrap gap-2 text-[13px]">
@@ -638,24 +638,31 @@ function ListRow({
           <ListRate rate={expert.rate} />
         </div>
 
-        <p className="text-foreground mt-3 text-sm">
-          <span className="font-semibold">{buildHeadline(expert)}</span>
-          {tagline && <span className="text-muted-foreground"> &middot; {highlightedTagline}</span>}
-        </p>
-
-        <DistinctionBadges distinctions={expert.distinctions} />
-
-        {expert.bio && (
-          <p className="text-foreground/70 mt-2.5 line-clamp-2 text-[13px] leading-relaxed">
-            {expert.bio}
+        {/* Body — flexes and clips so every list card keeps a uniform fixed
+            height; the CTAs below stay pinned to the bottom (never clipped).
+            "+N more products" already signals any truncated expertise. */}
+        <div className="mt-3 min-h-0 flex-1 overflow-hidden">
+          <p className="text-foreground text-sm">
+            <span className="font-semibold">{buildHeadline(expert)}</span>
+            {tagline && (
+              <span className="text-muted-foreground"> &middot; {highlightedTagline}</span>
+            )}
           </p>
-        )}
 
-        <div className="mt-3 mb-4">
-          <ExpertisePills expertise={orderedExpertise} max={5} showHeading={false} pad={false} />
+          <DistinctionBadges distinctions={expert.distinctions} />
+
+          {expert.bio && (
+            <p className="text-foreground/70 mt-2.5 line-clamp-2 text-[13px] leading-relaxed">
+              {expert.bio}
+            </p>
+          )}
+
+          <div className="mt-3">
+            <ExpertisePills expertise={orderedExpertise} max={5} showHeading={false} pad={false} />
+          </div>
         </div>
 
-        <div className="mt-auto flex gap-2.5">
+        <div className="mt-3 flex shrink-0 gap-2.5">
           <div className="flex max-w-[200px] flex-1">
             <ViewProfileButton onClick={onViewProfile} />
           </div>
