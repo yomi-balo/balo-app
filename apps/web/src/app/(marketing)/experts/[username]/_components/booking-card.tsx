@@ -52,7 +52,7 @@ export function BookingCard({
 
   return (
     <div className="relative z-30 order-first flex flex-col gap-3.5 min-[820px]:sticky min-[820px]:top-20 min-[820px]:order-none">
-      <Card className="gap-0 overflow-hidden p-0 shadow-[0_12px_40px_rgba(27,26,68,0.12)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4)]">
+      <Card className="gap-0 overflow-hidden p-0 shadow-[0_12px_40px_rgba(27,26,68,0.12)] min-[820px]:-mt-[105px] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4)]">
         {/* Rate header */}
         <div className="from-primary/5 border-border/60 border-b bg-gradient-to-br to-violet-500/5 px-6 pt-6 pb-5">
           {rate != null ? (
