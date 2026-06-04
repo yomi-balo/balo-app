@@ -24,3 +24,10 @@ export {
   SEARCH_SERVER_EVENTS,
   type SearchServerEventMap,
 } from './search';
+export {
+  EXPERT_PROFILE_EVENTS,
+  type ExpertProfileEventMap,
+  type ExpertProfileSection,
+  type ExpertProfileCta,
+  type ProfileViewport,
+} from './expert-profile';

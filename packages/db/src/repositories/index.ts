@@ -8,6 +8,7 @@ export type {
   ApplicationLanguageWithRelations,
   ApplicationIndustryWithRelations,
   ProfileSettingsData,
+  PublicExpertProfile,
 } from './experts';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
