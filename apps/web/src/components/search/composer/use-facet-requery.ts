@@ -91,8 +91,8 @@ export function useFacetRequery({
       next.delete('page');
       const query = next.toString();
       router.replace(query ? `${pathname}?${query}` : pathname, SCROLL_OPTIONS);
-      if (typeof window !== 'undefined') {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (typeof globalThis.window !== 'undefined') {
+        globalThis.window.scrollTo({ top: 0, behavior: 'smooth' });
       }
       if (hasResultsRef.current) {
         const snapshot = buildSearchSnapshot(parseSearchParams(next), nameMapsRef.current);

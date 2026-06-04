@@ -39,14 +39,16 @@ interface UnifiedBarProps {
 }
 
 function summarize(ids: string[], nameMap: Record<string, string>): string | null {
-  if (ids.length === 0) return null;
-  const first = nameMap[ids[0]!] ?? ids[0]!;
-  return ids.length === 1 ? first : `${first} +${ids.length - 1}`;
+  const [first] = ids;
+  if (first === undefined) return null;
+  const label = nameMap[first] ?? first;
+  return ids.length === 1 ? label : `${label} +${ids.length - 1}`;
 }
 
 function summarizeSupport(ids: string[], nameMap: Record<string, string>): string | null {
-  if (ids.length === 0) return null;
-  if (ids.length === 1) return nameMap[ids[0]!] ?? ids[0]!;
+  const [first] = ids;
+  if (first === undefined) return null;
+  if (ids.length === 1) return nameMap[first] ?? first;
   return `${ids.length} selected`;
 }
 

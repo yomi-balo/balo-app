@@ -149,11 +149,12 @@ export function useFacetSelection({ filters, sink }: UseFacetSelectionOptions): 
       // tokens never reorder/jump, while the membership guards keep the invariant
       // "mirror == URL at settle" even if two same-id toggles ever coalesce into one
       // batch (no duplicate id, no spurious removal).
-      const next = checked
-        ? current.includes(id)
-          ? current
-          : [...current, id]
-        : current.filter((v) => v !== id);
+      let next: string[];
+      if (checked) {
+        next = current.includes(id) ? current : [...current, id];
+      } else {
+        next = current.filter((v) => v !== id);
+      }
       return next === current ? prev : { ...prev, [key]: next };
     });
     if (active.mode === 'committed') {

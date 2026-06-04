@@ -28,7 +28,8 @@ export function PillRow({
 }: Readonly<PillRowProps>): React.JSX.Element {
   const reduce = useReducedMotion();
   return (
-    <div role="group" aria-label={ariaLabel} className="flex flex-wrap gap-2">
+    <fieldset className="flex flex-wrap gap-2">
+      <legend className="sr-only">{ariaLabel}</legend>
       {options.map((option) => {
         const active = selected.has(option.value);
         return (
@@ -51,6 +52,6 @@ export function PillRow({
           </motion.button>
         );
       })}
-    </div>
+    </fieldset>
   );
 }

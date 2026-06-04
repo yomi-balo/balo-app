@@ -39,13 +39,15 @@ export function MobileComposerBar({
 
   const summary = useMemo(() => {
     const parts: string[] = [];
-    if (filters.products.length > 0) {
-      const first = productNameMap[filters.products[0]!] ?? filters.products[0]!;
+    const [firstProductId] = filters.products;
+    if (firstProductId !== undefined) {
+      const first = productNameMap[firstProductId] ?? firstProductId;
       parts.push(filters.products.length > 1 ? `${first} +${filters.products.length - 1}` : first);
     }
     const supportMap = Object.fromEntries(facetCounts.supportTypes.map((f) => [f.id, f.name]));
-    if (filters.supportTypes.length > 0) {
-      parts.push(supportMap[filters.supportTypes[0]!] ?? filters.supportTypes[0]!);
+    const [firstSupportId] = filters.supportTypes;
+    if (firstSupportId !== undefined) {
+      parts.push(supportMap[firstSupportId] ?? firstSupportId);
     }
     if (filters.timeframe) {
       const label = TIMEFRAME_OPTIONS.find((t) => t.value === filters.timeframe)?.label;
@@ -65,10 +67,10 @@ export function MobileComposerBar({
     filters.supportTypes.length +
     filters.languages.length +
     (filters.timeframe ? 1 : 0) +
-    (filters.rateMinDollars != null ? 1 : 0) +
-    (filters.rateMaxDollars != null ? 1 : 0);
+    (filters.rateMinDollars == null ? 0 : 1) +
+    (filters.rateMaxDollars == null ? 0 : 1);
 
-  const placeholder = filters.q.trim() !== '' ? filters.q : 'Search or filter experts';
+  const placeholder = filters.q.trim() === '' ? 'Search or filter experts' : filters.q;
 
   return (
     <>
@@ -80,7 +82,9 @@ export function MobileComposerBar({
       >
         <Search className="text-muted-foreground h-[19px] w-[19px] shrink-0" aria-hidden />
         <span className="flex min-w-0 flex-1 flex-col">
-          {summary !== '' ? (
+          {summary === '' ? (
+            <span className="text-muted-foreground text-[15px]">{placeholder}</span>
+          ) : (
             <>
               <span className="text-muted-foreground truncate text-[11px] leading-tight">
                 {placeholder}
@@ -89,8 +93,6 @@ export function MobileComposerBar({
                 {summary}
               </span>
             </>
-          ) : (
-            <span className="text-muted-foreground text-[15px]">{placeholder}</span>
           )}
         </span>
         {activeCount > 0 && (
