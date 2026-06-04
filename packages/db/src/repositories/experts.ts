@@ -193,7 +193,18 @@ export const expertsRepository = {
         industries: {
           with: { industry: { columns: { id: true, name: true, slug: true } } },
         },
-        workHistory: { orderBy: (wh, { asc }) => [asc(wh.sortOrder)] },
+        workHistory: {
+          columns: {
+            role: true,
+            company: true,
+            startedAt: true,
+            endedAt: true,
+            isCurrent: true,
+            responsibilities: true,
+            sortOrder: true,
+          },
+          orderBy: (wh, { asc }) => [asc(wh.sortOrder)],
+        },
       },
     });
   },

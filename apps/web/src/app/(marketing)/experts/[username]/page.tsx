@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { expertsRepository } from '@balo/db';
@@ -11,9 +12,18 @@ interface ExpertProfilePageProps {
   params: Promise<{ username: string }>;
 }
 
+/**
+ * Request-scoped memo so `generateMetadata` and the page component share a
+ * single DB query per render (React `cache()` dedupes within one server
+ * request). Without this the gated profile read runs twice on every page load.
+ */
+const loadPublicProfile = cache((username: string) =>
+  expertsRepository.findPublicProfileByUsername(username)
+);
+
 export async function generateMetadata({ params }: ExpertProfilePageProps): Promise<Metadata> {
   const { username } = await params;
-  const profile = await expertsRepository.findPublicProfileByUsername(username);
+  const profile = await loadPublicProfile(username);
 
   if (!profile) {
     return { title: 'Expert Not Found — Balo' };
@@ -38,9 +48,9 @@ export default async function ExpertProfilePage({
 }: ExpertProfilePageProps): Promise<React.JSX.Element> {
   const { username } = await params;
 
-  let profile: Awaited<ReturnType<typeof expertsRepository.findPublicProfileByUsername>>;
+  let profile: Awaited<ReturnType<typeof loadPublicProfile>>;
   try {
-    profile = await expertsRepository.findPublicProfileByUsername(username);
+    profile = await loadPublicProfile(username);
   } catch (error) {
     log.error('Expert profile fetch failed', {
       username,
