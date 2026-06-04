@@ -107,6 +107,7 @@ pnpm format:check           # Prettier check
 - No `any` — use `unknown` and narrow with type guards
 - Explicit return types on exported functions
 - No commented-out code or dead code
+- `noUncheckedIndexedAccess` is on: `arr[0]` / `record[key]` is `T | undefined`. Narrow by destructure + guard (`const [first] = ids; if (first === undefined) return;`), not with `!`. SonarCloud analyzes without this flag, so it flags index-position `!` as "unnecessary" — a false positive; fix by guarding, and re-run `pnpm typecheck` after touching any assertion.
 
 ### Logging
 

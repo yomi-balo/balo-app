@@ -2,6 +2,17 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 
+// JSDOM lacks ResizeObserver, which Radix primitives (Slider, Popover) rely on.
+// Provide a no-op stub so those components mount in component tests.
+if (!('ResizeObserver' in globalThis)) {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
 // Silence structured logger in tests — all auth actions and server code import this.
 // Auto-mock avoids adding vi.mock('@/lib/logging') to every test file.
 vi.mock('@/lib/logging', () => ({

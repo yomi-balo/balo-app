@@ -122,14 +122,15 @@ For each new source file: verify a corresponding `.test.ts` or `.spec.ts` exists
 
 SonarCloud flags specific code patterns that won't show up in ESLint or TypeScript checks. Scan all new/modified files for these:
 
-| Pattern                                                 | Fix                                                                |
-| ------------------------------------------------------- | ------------------------------------------------------------------ |
-| `void expression` (e.g. `void someVar`)                 | Remove — prefix unused params with `_` or restructure              |
-| Component props not `Readonly<>`                        | Wrap: `({ foo }: Readonly<FooProps>)`                              |
-| Nested ternaries (`a ? X : b ? Y : Z`)                  | Refactor to `if`/`else`, early returns, or separate JSX blocks     |
-| `<label>` without `htmlFor` / control without `id`      | Add `htmlFor="some-id"` on label and `id="some-id"` on the control |
-| Functions defined inside components (not `useCallback`) | Wrap handlers passed as props in `useCallback`                     |
-| Negated conditions in ternaries (`!x ? A : B`)          | Flip to positive condition (`x ? B : A`)                           |
+| Pattern                                                           | Fix                                                                                                                                                                                    |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `void expression` (e.g. `void someVar`)                           | Remove — prefix unused params with `_` or restructure                                                                                                                                  |
+| Component props not `Readonly<>`                                  | Wrap: `({ foo }: Readonly<FooProps>)`                                                                                                                                                  |
+| Nested ternaries (`a ? X : b ? Y : Z`)                            | Refactor to `if`/`else`, early returns, or separate JSX blocks                                                                                                                         |
+| `<label>` without `htmlFor` / control without `id`                | Add `htmlFor="some-id"` on label and `id="some-id"` on the control                                                                                                                     |
+| Functions defined inside components (not `useCallback`)           | Wrap handlers passed as props in `useCallback`                                                                                                                                         |
+| Negated conditions in ternaries (`!x ? A : B`)                    | Flip to positive condition (`x ? B : A`)                                                                                                                                               |
+| "Unnecessary" non-null assertion on index access (`map[arr[0]!]`) | Usually a FALSE POSITIVE — `noUncheckedIndexedAccess` is on, so the `!` is load-bearing. Don't delete it; destructure + guard (`const [first] = ids; if (first === undefined) return`) |
 
 ```bash
 # Quick grep for common SonarCloud patterns in new files
@@ -137,7 +138,7 @@ git diff origin/main...HEAD --name-only | grep -E "\.(tsx?)$" | grep -v "\.test\
 git diff origin/main...HEAD --name-only | grep -E "\.tsx$" | grep -v "\.test\." | xargs grep -n "}: [A-Z].*Props)" 2>/dev/null || true
 ```
 
-For any hits: read the file, fix the pattern, stage the fix. These are auto-fixable and should never be a blocker.
+For any hits: read the file, fix the pattern, stage the fix. Most are auto-fixable and should never be a blocker — **except** the non-null-assertion smell: never blind-delete the `!`, since under `noUncheckedIndexedAccess` index-position assertions are load-bearing. Fix by guarding, then **re-run `pnpm typecheck`** to confirm (Sonar analyzes without that flag, so its suggestion can break the build).
 
 ### 7. Integration tests (if schema or repository files changed)
 

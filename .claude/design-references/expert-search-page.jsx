@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 /**
  * Expert Search results page (Balo app theme) — RESPONSIVE reference.
@@ -1633,6 +1634,7 @@ export default function ExpertSearchPage() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   const isMobile = vw <= MOBILE_MAX;
+  const reduceMotion = useReducedMotion();
 
   const [query, setQuery] = useState('');
   const [view, setView] = useState('grid');
@@ -1686,26 +1688,39 @@ export default function ExpertSearchPage() {
             />
             <ActiveChips filters={filters} toggle={toggle} clearAll={clearAll} />
 
-            {effectiveView === 'grid' ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                  gap: isMobile ? 16 : 20,
-                  alignItems: 'stretch',
-                }}
+            {/* Cross-fade between grid and list (mode="wait": out then in).
+                Respects reduced-motion. CC: implement with Motion in prod the
+                same way — key by layout, opacity + small y, ~200ms. */}
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={effectiveView}
+                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+                transition={{ duration: reduceMotion ? 0.12 : 0.2, ease: 'easeOut' }}
               >
-                {EXPERTS.map((e) => (
-                  <ExpertCard key={e.id} expert={e} />
-                ))}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {EXPERTS.map((e) => (
-                  <ExpertListRow key={e.id} expert={e} />
-                ))}
-              </div>
-            )}
+                {effectiveView === 'grid' ? (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                      gap: isMobile ? 16 : 20,
+                      alignItems: 'stretch',
+                    }}
+                  >
+                    {EXPERTS.map((e) => (
+                      <ExpertCard key={e.id} expert={e} />
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {EXPERTS.map((e) => (
+                      <ExpertListRow key={e.id} expert={e} />
+                    ))}
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
 
             <Pagination page={page} setPage={setPage} pages={5} isMobile={isMobile} />
           </div>

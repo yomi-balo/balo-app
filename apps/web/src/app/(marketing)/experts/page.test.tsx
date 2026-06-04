@@ -4,8 +4,14 @@ import type { ExpertSearchResponseDTO, ExpertSearchResultDTO } from '@/lib/searc
 import type { SearchFilters } from '@/lib/search/filters';
 
 // The single mockable seam.
-const { mockSearchExperts } = vi.hoisted(() => ({ mockSearchExperts: vi.fn() }));
+const { mockSearchExperts, mockLoadTaxonomy } = vi.hoisted(() => ({
+  mockSearchExperts: vi.fn(),
+  mockLoadTaxonomy: vi.fn(),
+}));
 vi.mock('@/lib/search/search-data', () => ({ searchExperts: mockSearchExperts }));
+// `load-taxonomy` is a `server-only` repo-direct module — stub it so page tests
+// stay DB-free (mirrors the search-data seam).
+vi.mock('@/lib/search/load-taxonomy', () => ({ loadSearchTaxonomy: mockLoadTaxonomy }));
 
 // Client children use next/navigation hooks.
 vi.mock('next/navigation', () => ({
@@ -57,6 +63,9 @@ async function renderPage(params: Record<string, string | string[]> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   window.scrollTo = vi.fn();
+  mockLoadTaxonomy.mockResolvedValue({
+    groups: [{ id: 'g1', name: 'AI', items: [{ id: 'p1', name: 'Agentforce' }] }],
+  });
 });
 
 describe('ExpertsPage — success state', () => {
