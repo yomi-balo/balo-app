@@ -30,6 +30,7 @@ description: Balo design system and UI component patterns using Shadcn/ui, shadc
 **Create atmosphere, not just layouts.** Backgrounds should create depth — subtle gradients, layered transparencies, gentle texture. Avoid flat white pages with floating cards. The space between and around components matters as much as the components themselves.
 
 **Every detail is intentional.** Shadows should have consistent direction. Border radii should be from a defined set. Spacing should follow a scale. Accidental inconsistency signals carelessness; intentional variation signals sophistication.
+**Empty states are decisions, not afterthoughts — and hiding is the exception, not the default.** When a section has no data, the first question is _not_ "does it have a CTA?" but **"is there an action the user could take from here that moves them forward?"** If yes — they could start, request, or add something — the section **stays** and gets an empty state framed as an invitation centred on that action ("Start a project with Priya"), never defined by absence ("No quick-start packages yet"). Hiding is correct **only** when the section is purely retrospective data the user cannot act on or populate from here (e.g. a reviews list a visitor can't write, completed work history) — and even then, keep nav / scroll-spy data-driven so removal causes no jitter. Hiding a section to avoid designing its empty state is a defect, not a simplification: if you reach for hide because the copy is hard, that's the signal the section probably needs an invitation.
 
 ## Component Stack
 
@@ -275,6 +276,7 @@ If CLI install fails, fetch source from `https://github.com/shadcnspace/shadcnsp
 - ✅ Test at 375px viewport (mobile) minimum
 - ✅ Use Motion for orchestrated transitions — prioritize page load reveals and state changes over scattered micro-interactions
 - ✅ Use semantic color tokens, not hardcoded values
+- ✅ Treat keep-with-an-invitation as the _default_ for empty sections; hide only purely retrospective sections the user can't act on or populate — and state why
 
 ### NEVER
 
@@ -287,3 +289,5 @@ If CLI install fails, fetch source from `https://github.com/shadcnspace/shadcnsp
 - ❌ Forget dark mode variants
 - ❌ Use `font-bold` on headings — use `font-semibold`
 - ❌ Make interactive elements smaller than 44px tap target (mobile)
+- ❌ Define a section by its absence ("No … yet", "No reviews") — lead with the action, or hide the section
+- ❌ Hide a section to dodge writing its empty state — declaring an action "not needed" just to justify a hide is the anti-pattern
