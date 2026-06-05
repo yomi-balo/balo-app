@@ -50,10 +50,11 @@ export function ExpertProfileAnalytics({
 
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const key = entry.target.getAttribute('data-section') as ExpertProfileSection | null;
-          if (key === null || seen.has(key)) continue;
+        for (const entry of entries.filter((e) => e.isIntersecting)) {
+          const key = (entry.target as HTMLElement).dataset.section as
+            | ExpertProfileSection
+            | undefined;
+          if (key === undefined || seen.has(key)) continue;
           seen.add(key);
           track(EXPERT_PROFILE_EVENTS.PROFILE_SECTION_VIEWED, {
             expert_id: expertId,

@@ -123,9 +123,9 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
 
   const currentYear = new Date().getUTCFullYear();
   const yearsExperience =
-    profile.yearStartedSalesforce != null
-      ? Math.max(0, currentYear - profile.yearStartedSalesforce)
-      : null;
+    profile.yearStartedSalesforce == null
+      ? null
+      : Math.max(0, currentYear - profile.yearStartedSalesforce);
 
   const certifications: CertView[] = profile.certifications.map((c) => ({
     id: c.certification.id,
@@ -149,14 +149,14 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     avatarKey: user.avatarUrl,
     countryCode: user.countryCode,
     country: user.country,
-    rate: profile.rateCents != null ? profile.rateCents / 100 : null,
+    rate: profile.rateCents == null ? null : profile.rateCents / 100,
     yearsExperience,
-    // TODO(consultations): no confirmed-count source wired yet — 0 for everyone.
+    // Deferred: no confirmed-count source wired yet — 0 for everyone (consultations feature).
     consultationCount: 0,
     certCount: certifications.length,
     availableForWork: profile.availableForWork,
     baloVerified: true,
-    // TODO(reviews): derive from rating once a reviews feature lands.
+    // Deferred: derive from rating once a reviews feature lands.
     topRated: false,
     skills: mapSkills(profile.skills),
     certifications,

@@ -94,8 +94,8 @@ export function ExpertProfileClient({
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
         const top = visible[0];
         if (!top) return;
-        const key = top.target.getAttribute('data-section') as ProfileSectionKey | null;
-        if (key !== null) setActiveNav(key);
+        const key = (top.target as HTMLElement).dataset.section as ProfileSectionKey | undefined;
+        if (key) setActiveNav(key);
       },
       { rootMargin: '-72px 0px -55% 0px', threshold: 0 }
     );

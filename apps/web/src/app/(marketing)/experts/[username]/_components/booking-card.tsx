@@ -55,22 +55,22 @@ export function BookingCard({
       <Card className="gap-0 overflow-hidden p-0 shadow-[0_12px_40px_rgba(27,26,68,0.12)] min-[820px]:-mt-[105px] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4)]">
         {/* Rate header */}
         <div className="from-primary/5 border-border/60 border-b bg-gradient-to-br to-violet-500/5 px-6 pt-6 pb-5">
-          {rate != null ? (
+          {rate == null ? (
+            <span className="text-foreground text-[22px] font-bold tracking-[-0.01em]">
+              Rate on request
+            </span>
+          ) : (
             <div className="flex items-baseline gap-1.5">
               <span className="text-foreground font-mono text-[32px] font-bold tracking-[-0.02em] tabular-nums">
                 A${rate.toFixed(2)}
               </span>
               <span className="text-muted-foreground/70 text-[15px] font-semibold">/ min</span>
             </div>
-          ) : (
-            <span className="text-foreground text-[22px] font-bold tracking-[-0.01em]">
-              Rate on request
-            </span>
           )}
           <p className="text-muted-foreground mt-1.5 text-[13px]">
-            {rate != null
-              ? 'Pay only for the minutes you use · incl. service fee'
-              : 'Message to discuss scope and pricing'}
+            {rate == null
+              ? 'Message to discuss scope and pricing'
+              : 'Pay only for the minutes you use · incl. service fee'}
           </p>
         </div>
 
