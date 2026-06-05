@@ -80,8 +80,9 @@ export function QuickStartsSection({
           </span>
         </div>
         <p className="text-muted-foreground mb-4 text-[13px] leading-relaxed">
-          Pre-packaged, fixed-price projects you can buy in a click. Need something custom? Start a
-          project and {firstName} will scope a proposal.
+          {hasPackages
+            ? `Pre-packaged, fixed-price projects you can buy in a click. Need something custom? Start a project and ${firstName} will scope a proposal.`
+            : `${firstName} scopes custom, fixed-price projects on request — tailored to exactly what you need.`}
         </p>
 
         {hasPackages ? (
@@ -96,10 +97,12 @@ export function QuickStartsSection({
               <Briefcase className="text-muted-foreground h-5 w-5" aria-hidden="true" />
             </div>
             <div>
-              <p className="text-foreground text-sm font-semibold">No quick-start packages yet</p>
+              <p className="text-foreground text-sm font-semibold">
+                Start a project with {firstName}
+              </p>
               <p className="text-muted-foreground mt-1 max-w-md text-[13px] leading-relaxed">
-                Need something specific? Start a project and {firstName} will scope a proposal for
-                the work you have in mind.
+                Tell {firstName} what you need and you&apos;ll get a proposal to review — no
+                commitment until you accept.
               </p>
             </div>
             <button

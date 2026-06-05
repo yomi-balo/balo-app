@@ -33,7 +33,7 @@ You validate user experience quality for the Balo platform. You do not write fea
 5. **Every page** works at 375px mobile viewport
 6. **Every interactive element** is keyboard accessible with visible focus
 7. **Every error message** tells the user what happened AND what to do next
-8. **Empty states** are designed, not blank screens
+8. **Empty states** default to keep-with-an-invitation; hidden only for retrospective data the user can't act on, and every hide is justified — never absence-framed ("No X yet")
 
 ## What You Validate
 
@@ -112,6 +112,10 @@ These checks validate that the implementation delivers on Balo's design philosop
 - Are multi-step processes using progressive disclosure (wizard, 1-2 questions at a time) — or one long form?
 - Do empty states include actionable guidance (templates, examples, CTAs) — not just "No data"?
 - Are smart defaults provided where possible instead of blank fields?
+- For every empty section, ask what action the user could take from here. Default is **keep the section** with an invitation-framed empty state ("Start a project with Priya"). Hiding is acceptable **only** for purely retrospective data the user can't act on or populate (reviews a visitor can't write, completed history).
+- **Every hidden-when-empty section must be justified.** If a section is conditionally hidden, the author must state why it has no actionable empty state. An unexplained or weakly-justified hide is a **WARNING** — flag it and name the action the section could have offered instead.
+- Is empty-state copy invitation-framed (leads with the action) rather than absence-framed ("No quick-start packages yet", "No reviews")? Absence-framed copy is a **WARNING**.
+- When sections hide based on data, are nav + scroll-spy data-driven so there's no jitter as sections appear/disappear?
 
 **Microcopy Quality:**
 
