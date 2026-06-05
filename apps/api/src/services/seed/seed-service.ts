@@ -19,6 +19,8 @@ import {
   expertIndustries,
   availabilityRules,
   consultations,
+  workHistory,
+  expertCertifications,
   referenceDataRepository,
   asc,
   eq,
@@ -31,6 +33,8 @@ import {
   type NewExpertIndustry,
   type NewAvailabilityRule,
   type NewConsultation,
+  type NewWorkHistory,
+  type NewExpertCertification,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { resolveAndCacheAvailability } from '../availability/resolve-and-cache.js';
@@ -73,14 +77,16 @@ export interface ResetOptions {
 /** Load the live reference taxonomy. Throws loudly if skills are empty. */
 async function loadTaxonomy(): Promise<SeedTaxonomy> {
   const vertical = await referenceDataRepository.getSalesforceVertical();
-  const [grouped, supportTypes, languages, industries] = await Promise.all([
+  const [grouped, supportTypes, languages, industries, certGroups] = await Promise.all([
     referenceDataRepository.getSkillsByVertical(vertical.id),
     referenceDataRepository.getSupportTypes(),
     referenceDataRepository.getLanguages(),
     referenceDataRepository.getIndustries(),
+    referenceDataRepository.getCertificationsByVertical(vertical.id),
   ]);
 
   const skills = grouped.flatMap((g) => g.skills.map((s) => ({ id: s.id, name: s.name })));
+  const certificationIds = certGroups.flatMap((g) => g.certifications.map((c) => c.id));
 
   return {
     verticalId: vertical.id,
@@ -88,6 +94,7 @@ async function loadTaxonomy(): Promise<SeedTaxonomy> {
     supportTypeIds: supportTypes.map((st) => st.id),
     languages: languages.map((l) => ({ id: l.id, name: l.name })),
     industries: industries.map((i) => ({ id: i.id, name: i.name })),
+    certificationIds,
   };
 }
 
@@ -97,7 +104,13 @@ async function insertExpert(
   expert: GeneratedExpert,
   verticalId: string,
   baselineNow: Date
-): Promise<{ skills: number; languages: number; industries: number }> {
+): Promise<{
+  skills: number;
+  languages: number;
+  industries: number;
+  workHistory: number;
+  certifications: number;
+}> {
   const userRow: NewUser = {
     workosId: expert.workosId,
     email: expert.email,
@@ -171,10 +184,38 @@ async function insertExpert(
     await tx.insert(expertIndustries).values(industryRows);
   }
 
+  if (expert.workHistory.length > 0) {
+    const whRows: NewWorkHistory[] = expert.workHistory.map((w) => ({
+      expertProfileId,
+      role: w.role,
+      company: w.company,
+      // Date / Date|null → timestamptz columns.
+      startedAt: w.startedAt,
+      endedAt: w.endedAt,
+      isCurrent: w.isCurrent,
+      responsibilities: w.responsibilities,
+      sortOrder: w.sortOrder,
+    }));
+    await tx.insert(workHistory).values(whRows);
+  }
+
+  if (expert.certifications.length > 0) {
+    const certRows: NewExpertCertification[] = expert.certifications.map((c) => ({
+      expertProfileId,
+      certificationId: c.certificationId,
+      // 'YYYY-MM-DD' string | null → date columns.
+      earnedAt: c.earnedAt,
+      expiresAt: c.expiresAt,
+    }));
+    await tx.insert(expertCertifications).values(certRows);
+  }
+
   return {
     skills: expert.skills.length,
     languages: expert.languages.length,
     industries: expert.industryIds.length,
+    workHistory: expert.workHistory.length,
+    certifications: expert.certifications.length,
   };
 }
 
@@ -196,6 +237,8 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
   let skillsGenerated = 0;
   let languagesGenerated = 0;
   let industriesGenerated = 0;
+  let workHistoryGenerated = 0;
+  let certificationsGenerated = 0;
 
   await db.transaction(async (tx) => {
     await truncateSeedData(tx, 'experts');
@@ -204,6 +247,8 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
       skillsGenerated += counts.skills;
       languagesGenerated += counts.languages;
       industriesGenerated += counts.industries;
+      workHistoryGenerated += counts.workHistory;
+      certificationsGenerated += counts.certifications;
     }
   });
 
@@ -213,6 +258,8 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
       skillsGenerated,
       languagesGenerated,
       industriesGenerated,
+      workHistoryGenerated,
+      certificationsGenerated,
       durationMs: Date.now() - startedAt,
     },
     'Seed: regenerate complete'
@@ -224,6 +271,8 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
     skillsGenerated,
     languagesGenerated,
     industriesGenerated,
+    workHistoryGenerated,
+    certificationsGenerated,
     seedUsedRng: seed,
     baselineAt: baselineNow.toISOString(),
   };

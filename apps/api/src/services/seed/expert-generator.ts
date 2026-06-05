@@ -12,20 +12,36 @@
  * No DB, no env, no I/O.
  */
 import {
+  CERT_COUNT_RANGE,
+  CERT_EARNED_MONTHS_AGO_RANGE,
+  CERT_EXPIRY_MONTHS_AHEAD_RANGE,
+  CERT_HAS_EXPIRY_PROBABILITY,
+  CURRENT_ROLE_MONTHS_RANGE,
   EXPERT_TYPE_WEIGHTS,
   FALLBACK_INDUSTRIES,
+  PAST_ROLE_MONTHS_RANGE,
   PROJECT_COUNT_BUCKETS,
   RATE_BANDS,
+  ROLE_GAP_MONTHS_RANGE,
   SEED_EMAIL_DOMAIN,
   SEED_WORKOS_PREFIX,
   SKILL_COUNT_RANGE,
   SKILL_TIER_BOUNDARIES,
   SKILL_TIER_WEIGHTS,
   TIMEZONE_WEIGHTS,
+  WORK_HISTORY_COUNT_RANGE,
+  WORK_RESPONSIBILITY_SNIPPETS,
+  WORK_ROLE_TITLES,
 } from './constants.js';
 import { HEADLINE_TEMPLATES, renderHeadline } from './headlines.js';
 import { faker, seedFaker, WeightedRng } from './rng.js';
-import type { GeneratedExpert, LanguageProficiency, SeedTaxonomy } from './types.js';
+import type {
+  GeneratedCertification,
+  GeneratedExpert,
+  GeneratedWorkHistory,
+  LanguageProficiency,
+  SeedTaxonomy,
+} from './types.js';
 
 export interface GenerateExpertsInput {
   count: number;
@@ -144,6 +160,24 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
       industry: industryName,
     });
 
+    // Trailing scalar draws — hoisted out of the object literal into source-order
+    // consts (object-literal evaluation is already top-to-bottom, so this does
+    // NOT change the RNG stream). They MUST stay before the new work-history /
+    // certification draws so every existing attribute remains byte-identical.
+    const bio = faker.lorem.paragraph();
+    const username = `${baseUsername(firstName, lastName)}-${i}`;
+    const projectCountMin = rng.pickOne(PROJECT_COUNT_BUCKETS);
+    const projectLeadCountMin = rng.pickOne(PROJECT_COUNT_BUCKETS);
+    const isSalesforceMvp = rng.bool(0.05);
+    const isSalesforceCta = rng.bool(0.05);
+    const isCertifiedTrainer = rng.bool(0.05);
+    const approvedOffsetMs = rng.int(1, 90) * ONE_DAY_MS;
+
+    // NEW draws — appended STRICTLY AFTER all existing draws for this expert so
+    // the count-independence determinism contract holds.
+    const workHistory = buildWorkHistory(rng, baselineNow);
+    const certifications = buildCertifications(rng, taxonomy, baselineNow);
+
     experts.push({
       index: i,
       workosId: `${SEED_WORKOS_PREFIX}${seed}_${i}`,
@@ -153,20 +187,22 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
       timezone,
       type,
       headline,
-      bio: faker.lorem.paragraph(),
-      username: `${baseUsername(firstName, lastName)}-${i}`,
+      bio,
+      username,
       rateCents,
       rateBand: band.band,
       yearStartedSalesforce,
-      projectCountMin: rng.pickOne(PROJECT_COUNT_BUCKETS),
-      projectLeadCountMin: rng.pickOne(PROJECT_COUNT_BUCKETS),
-      isSalesforceMvp: rng.bool(0.05),
-      isSalesforceCta: rng.bool(0.05),
-      isCertifiedTrainer: rng.bool(0.05),
-      approvedOffsetMs: rng.int(1, 90) * ONE_DAY_MS,
+      projectCountMin,
+      projectLeadCountMin,
+      isSalesforceMvp,
+      isSalesforceCta,
+      isCertifiedTrainer,
+      approvedOffsetMs,
       skills,
       languages,
       industryIds,
+      workHistory,
+      certifications,
       // rating / session_count omitted — no columns exist for them yet (see
       // GeneratedExpert in types.ts). Adding draws here would also be dead RNG.
     });
@@ -221,4 +257,122 @@ function resolveIndustryName(
     if (match) return match.name.toLowerCase();
   }
   return rng.pickOne(FALLBACK_INDUSTRIES);
+}
+
+// ── Work history + certifications (BAL-256) ──────────────────────────
+
+/** Subtract whole months from a UTC date (month-accurate). */
+function subMonths(d: Date, m: number): Date {
+  const r = new Date(d.getTime());
+  r.setUTCMonth(r.getUTCMonth() - m);
+  return r;
+}
+
+/** Add whole months to a UTC date (month-accurate). */
+function addMonths(d: Date, m: number): Date {
+  const r = new Date(d.getTime());
+  r.setUTCMonth(r.getUTCMonth() + m);
+  return r;
+}
+
+/** UTC date → ISO `'YYYY-MM-DD'` (the `date` column wire format). */
+function toIsoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Join 1–3 distinct responsibility snippets into one blurb. */
+function pickResponsibilities(rng: WeightedRng): string {
+  const n = rng.int(1, 3);
+  return rng
+    .sampleWeighted(
+      WORK_RESPONSIBILITY_SNIPPETS,
+      WORK_RESPONSIBILITY_SNIPPETS.map(() => 1),
+      n
+    )
+    .join(' ');
+}
+
+/**
+ * 2–4 work-history rows, walking backward from `baselineNow`. Index 0 is the
+ * single open-ended current role (`isCurrent`, `endedAt: null`, `sortOrder: 0`);
+ * older roles are closed spans with strictly increasing `sortOrder` and
+ * non-overlapping, chronologically descending date ranges.
+ */
+function buildWorkHistory(rng: WeightedRng, baselineNow: Date): GeneratedWorkHistory[] {
+  const count = rng.int(WORK_HISTORY_COUNT_RANGE.min, WORK_HISTORY_COUNT_RANGE.max);
+  const out: GeneratedWorkHistory[] = [];
+  let cursorEnd = baselineNow; // exclusive upper bound for the next (older) role
+  for (let i = 0; i < count; i++) {
+    if (i === 0) {
+      const months = rng.int(CURRENT_ROLE_MONTHS_RANGE.min, CURRENT_ROLE_MONTHS_RANGE.max);
+      const startedAt = subMonths(baselineNow, months);
+      out.push({
+        role: rng.pickOne(WORK_ROLE_TITLES),
+        company: faker.company.name(),
+        startedAt,
+        endedAt: null,
+        isCurrent: true,
+        responsibilities: pickResponsibilities(rng),
+        sortOrder: 0,
+      });
+      cursorEnd = startedAt;
+    } else {
+      const gap = rng.int(ROLE_GAP_MONTHS_RANGE.min, ROLE_GAP_MONTHS_RANGE.max);
+      const endedAt = subMonths(cursorEnd, gap);
+      const startedAt = subMonths(
+        endedAt,
+        rng.int(PAST_ROLE_MONTHS_RANGE.min, PAST_ROLE_MONTHS_RANGE.max)
+      );
+      out.push({
+        role: rng.pickOne(WORK_ROLE_TITLES),
+        company: faker.company.name(),
+        startedAt,
+        endedAt,
+        isCurrent: false,
+        responsibilities: pickResponsibilities(rng),
+        sortOrder: i,
+      });
+      cursorEnd = startedAt;
+    }
+  }
+  return out;
+}
+
+/**
+ * 3–8 distinct certification links from the seeded catalog (count clamped to the
+ * catalog size). Empty catalog is NON-fatal → returns `[]`. `earnedAt` is a past
+ * ISO date; `expiresAt` is null or a future ISO date.
+ */
+function buildCertifications(
+  rng: WeightedRng,
+  taxonomy: SeedTaxonomy,
+  baselineNow: Date
+): GeneratedCertification[] {
+  if (taxonomy.certificationIds.length === 0) return [];
+  const n = Math.min(
+    rng.int(CERT_COUNT_RANGE.min, CERT_COUNT_RANGE.max),
+    taxonomy.certificationIds.length
+  );
+  const pickedIds = rng.sampleWeighted(
+    taxonomy.certificationIds,
+    taxonomy.certificationIds.map(() => 1),
+    n
+  );
+  return pickedIds.map((certificationId) => {
+    const earnedAt = toIsoDate(
+      subMonths(
+        baselineNow,
+        rng.int(CERT_EARNED_MONTHS_AGO_RANGE.min, CERT_EARNED_MONTHS_AGO_RANGE.max)
+      )
+    );
+    const expiresAt = rng.bool(CERT_HAS_EXPIRY_PROBABILITY)
+      ? toIsoDate(
+          addMonths(
+            baselineNow,
+            rng.int(CERT_EXPIRY_MONTHS_AHEAD_RANGE.min, CERT_EXPIRY_MONTHS_AHEAD_RANGE.max)
+          )
+        )
+      : null;
+    return { certificationId, earnedAt, expiresAt };
+  });
 }

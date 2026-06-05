@@ -151,8 +151,7 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     country: user.country,
     rate: profile.rateCents == null ? null : profile.rateCents / 100,
     yearsExperience,
-    // Deferred: no confirmed-count source wired yet — 0 for everyone (consultations feature).
-    consultationCount: 0,
+    consultationCount: profile.consultationCount,
     certCount: certifications.length,
     availableForWork: profile.availableForWork,
     baloVerified: true,

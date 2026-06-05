@@ -90,3 +90,38 @@ export const FALLBACK_INDUSTRIES = [
 
 /** Default availability window (LOCAL wall-clock) for WIDE_OPEN weekdays. */
 export const DEFAULT_WINDOW = { start: '09:00', end: '17:00' };
+
+/** Work-history generation tunables. */
+export const WORK_HISTORY_COUNT_RANGE = { min: 2, max: 4 };
+/** Open-ended current role: months since it started (walking back from baseline). */
+export const CURRENT_ROLE_MONTHS_RANGE = { min: 8, max: 60 };
+/** Duration of a closed (past) role in months. */
+export const PAST_ROLE_MONTHS_RANGE = { min: 12, max: 60 };
+/** Gap between consecutive roles in months. */
+export const ROLE_GAP_MONTHS_RANGE = { min: 0, max: 4 };
+export const WORK_ROLE_TITLES = [
+  'Salesforce Consultant',
+  'Senior Salesforce Consultant',
+  'Salesforce Technical Architect',
+  'Salesforce Solution Architect',
+  'Lead Salesforce Developer',
+  'Salesforce Practice Lead',
+  'CRM Delivery Manager',
+  'Principal Consultant',
+] as const;
+export const WORK_RESPONSIBILITY_SNIPPETS = [
+  'Led end-to-end Sales Cloud and Service Cloud implementations.',
+  'Designed scalable data models and integration architecture.',
+  'Mentored junior consultants and ran solution-design workshops.',
+  'Owned release management and CI/CD for managed packages.',
+  'Partnered with stakeholders to translate process into requirements.',
+  'Built Flow and Apex automation against enterprise SLAs.',
+] as const;
+
+/** Certification generation tunables. */
+export const CERT_COUNT_RANGE = { min: 3, max: 8 };
+/** How long ago a cert was earned, in months (date column). */
+export const CERT_EARNED_MONTHS_AGO_RANGE = { min: 3, max: 72 };
+export const CERT_HAS_EXPIRY_PROBABILITY = 0.5;
+/** Future expiry window, in months ahead of baseline (date column). */
+export const CERT_EXPIRY_MONTHS_AHEAD_RANGE = { min: 6, max: 30 };

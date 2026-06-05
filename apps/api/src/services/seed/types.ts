@@ -22,6 +22,34 @@ export interface SeedTaxonomy {
   languages: { id: string; name: string }[];
   /** Industry ids + names for headline rendering. */
   industries: { id: string; name: string }[];
+  /** Certification ids from the seeded catalog (flattened like skills). */
+  certificationIds: string[];
+}
+
+/**
+ * Pre-insert work-history row. `startedAt`/`endedAt` are `Date` because
+ * `work_history.started_at`/`ended_at` are TIMESTAMPTZ columns (Drizzle expects
+ * Date objects).
+ */
+export interface GeneratedWorkHistory {
+  role: string;
+  company: string;
+  startedAt: Date;
+  endedAt: Date | null;
+  isCurrent: boolean;
+  responsibilities: string;
+  sortOrder: number;
+}
+
+/**
+ * Pre-insert certification link. `earnedAt`/`expiresAt` are ISO date STRINGS
+ * (`'YYYY-MM-DD'`) because `expert_certifications.earned_at`/`expires_at` are
+ * `date` columns (Drizzle expects strings, NOT Date objects).
+ */
+export interface GeneratedCertification {
+  certificationId: string;
+  earnedAt: string;
+  expiresAt: string | null;
 }
 
 /** A single generated expert's full in-memory data model (pre-insert). */
@@ -53,6 +81,8 @@ export interface GeneratedExpert {
   skills: { skillId: string; supportTypeId: string; proficiency: number }[];
   languages: { languageId: string; proficiency: LanguageProficiency }[];
   industryIds: string[];
+  workHistory: GeneratedWorkHistory[];
+  certifications: GeneratedCertification[];
   // NOTE: rating / session_count are intentionally NOT generated here. There are
   // no `rating`/`session_count` columns on `expert_profiles`, so any generated
   // values would be dead (never persisted, never surfaced). Seeding them is
@@ -94,6 +124,8 @@ export interface RegenerateSummary {
   skillsGenerated: number;
   languagesGenerated: number;
   industriesGenerated: number;
+  workHistoryGenerated: number;
+  certificationsGenerated: number;
   seedUsedRng: number;
   baselineAt: string;
 }
