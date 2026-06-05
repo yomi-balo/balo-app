@@ -4,6 +4,7 @@ import { db } from '../client';
 import {
   agencies,
   certifications,
+  consultations,
   expertCertifications,
   expertIndustries,
   expertLanguages,
@@ -534,5 +535,45 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     expect(result?.workHistory[0]?.role).toBe('Lead Architect');
     expect(result?.workHistory[0]?.isCurrent).toBe(true);
     expect(result?.workHistory[1]?.role).toBe('Senior Consultant');
+  });
+
+  it('counts only live confirmed consultations in consultationCount', async () => {
+    const user = await userFactory();
+    const username = uniq('consult-count');
+    const expert = await searchExpertFactory({
+      userId: user.id,
+      username,
+      searchable: true,
+    });
+
+    const start = new Date('2026-01-01T10:00:00.000Z');
+    const end = new Date('2026-01-01T11:00:00.000Z');
+    await db.insert(consultations).values([
+      // 2 live confirmed → counted.
+      { expertProfileId: expert.id, startAt: start, endAt: end, status: 'confirmed' },
+      { expertProfileId: expert.id, startAt: start, endAt: end, status: 'confirmed' },
+      // 1 cancelled → excluded.
+      { expertProfileId: expert.id, startAt: start, endAt: end, status: 'cancelled' },
+      // 1 soft-deleted confirmed → excluded.
+      {
+        expertProfileId: expert.id,
+        startAt: start,
+        endAt: end,
+        status: 'confirmed',
+        deletedAt: new Date(),
+      },
+    ]);
+
+    const result = await expertsRepository.findPublicProfileByUsername(username);
+    expect(result?.consultationCount).toBe(2);
+  });
+
+  it('reports a zero consultationCount when the expert has no consultations', async () => {
+    const user = await userFactory();
+    const username = uniq('consult-zero');
+    await searchExpertFactory({ userId: user.id, username, searchable: true });
+
+    const result = await expertsRepository.findPublicProfileByUsername(username);
+    expect(result?.consultationCount).toBe(0);
   });
 });

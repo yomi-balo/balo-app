@@ -40,6 +40,7 @@ function makeTaxonomy(): SeedTaxonomy {
       { id: 'ind-health', name: 'Healthcare' },
       { id: 'ind-retail', name: 'Retail' },
     ],
+    certificationIds: Array.from({ length: 8 }, (_, i) => `cert-${i}`),
   };
 }
 
@@ -145,6 +146,95 @@ describe('generateExperts — skills', () => {
       }
     }
     expect(core).toBeGreaterThan(niche);
+  });
+});
+
+describe('generateExperts — work history', () => {
+  it('generates 2–4 rows with exactly one current open-ended role', () => {
+    for (const e of gen(120)) {
+      expect(e.workHistory.length).toBeGreaterThanOrEqual(2);
+      expect(e.workHistory.length).toBeLessThanOrEqual(4);
+
+      const current = e.workHistory.filter((w) => w.isCurrent);
+      expect(current).toHaveLength(1);
+      const [currentRole] = current;
+      expect(currentRole?.endedAt).toBeNull();
+      expect(currentRole?.sortOrder).toBe(0);
+      expect(currentRole?.startedAt.getTime()).toBeLessThan(BASELINE.getTime());
+    }
+  });
+
+  it('orders rows by sortOrder 0..n-1 with the current role first', () => {
+    for (const e of gen(120)) {
+      const orders = e.workHistory.map((w) => w.sortOrder);
+      expect(orders).toEqual(Array.from({ length: e.workHistory.length }, (_, i) => i));
+      expect(e.workHistory[0]?.isCurrent).toBe(true);
+    }
+  });
+
+  it('keeps every closed span chronological and non-overlapping (newest → oldest)', () => {
+    for (const e of gen(120)) {
+      let previousStart: number | null = null;
+      for (const [i, row] of e.workHistory.entries()) {
+        expect(row.responsibilities.length).toBeGreaterThan(0);
+        if (i === 0) {
+          previousStart = row.startedAt.getTime();
+          continue;
+        }
+        const { endedAt } = row;
+        // Past row: started strictly before it ended.
+        expect(endedAt).not.toBeNull();
+        if (endedAt === null) continue;
+        expect(row.startedAt.getTime()).toBeLessThan(endedAt.getTime());
+        // Non-overlap: this (older) row ended on/before the previous row started.
+        if (previousStart !== null) {
+          expect(endedAt.getTime()).toBeLessThanOrEqual(previousStart);
+        }
+        previousStart = row.startedAt.getTime();
+      }
+    }
+  });
+});
+
+describe('generateExperts — certifications', () => {
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+  it('links 3–8 distinct catalog certs with valid earned/expiry dates', () => {
+    const catalog = new Set(makeTaxonomy().certificationIds);
+    for (const e of gen(120)) {
+      expect(e.certifications.length).toBeGreaterThanOrEqual(3);
+      expect(e.certifications.length).toBeLessThanOrEqual(8);
+
+      const ids = e.certifications.map((c) => c.certificationId);
+      expect(new Set(ids).size).toBe(ids.length); // distinct (unique index safe)
+      for (const c of e.certifications) {
+        expect(catalog.has(c.certificationId)).toBe(true);
+        expect(c.earnedAt).toMatch(ISO_DATE);
+        // earned in the past, on/before baseline.
+        expect(c.earnedAt <= BASELINE.toISOString().slice(0, 10)).toBe(true);
+        if (c.expiresAt !== null) {
+          expect(c.expiresAt).toMatch(ISO_DATE);
+          expect(c.expiresAt > BASELINE.toISOString().slice(0, 10)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('varies the cert count across the population', () => {
+    const counts = new Set(gen(300).map((e) => e.certifications.length));
+    expect(counts.size).toBeGreaterThan(1);
+  });
+
+  it('treats an empty cert catalog as non-fatal (no throw, empty links)', () => {
+    const experts = generateExperts({
+      count: 20,
+      seed: DEFAULT_SEED,
+      taxonomy: { ...makeTaxonomy(), certificationIds: [] },
+      baselineNow: BASELINE,
+    });
+    for (const e of experts) {
+      expect(e.certifications).toEqual([]);
+    }
   });
 });
 

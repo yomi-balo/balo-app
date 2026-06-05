@@ -10,6 +10,7 @@ import {
   languages,
   verticals,
 } from '../schema';
+import { consultationCountExpression } from './_shared/consultation-count';
 
 // ── Public types ─────────────────────────────────────────────────
 
@@ -321,18 +322,6 @@ function relevanceExpression(q: string | null): SQL {
     + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
   )`;
 }
-
-/**
- * consultationCount proxy: confirmed, non-soft-deleted consultations. Real-data
- * no-op at launch (consultations is an empty stub → every expert gets 0), so the
- * tiebreaker is inert until the consultations feature ships completed rollups.
- * Index-supported by `consultations_expert_status_range_idx`.
- */
-const consultationCountExpression = sql`COALESCE((
-  SELECT count(*) FROM consultations c
-  WHERE c.expert_profile_id = ${expertProfiles.id}
-    AND c.status = 'confirmed' AND c.deleted_at IS NULL
-), 0)`;
 
 /** Per-row languages aggregation (avoids N+1) via correlated json_agg. */
 const languagesJsonExpression = sql<{ name: string; flagEmoji: string | null }[]>`COALESCE((

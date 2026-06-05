@@ -12,6 +12,7 @@ function makeProfile(overrides: Partial<PublicExpertProfile> = {}): PublicExpert
     headline: 'Salesforce Architect',
     bio: 'A bio.',
     availableForWork: true,
+    consultationCount: 0,
     user: {
       id: 'user-1',
       firstName: 'Priya',
@@ -67,8 +68,9 @@ describe('mapProfileToView — names & basics', () => {
     expect(view.topRated).toBe(false);
   });
 
-  it('always reports 0 consultations in v1', () => {
-    expect(mapProfileToView(makeProfile()).consultationCount).toBe(0);
+  it('passes through the real consultation count', () => {
+    expect(mapProfileToView(makeProfile({ consultationCount: 3 })).consultationCount).toBe(3);
+    expect(mapProfileToView(makeProfile({ consultationCount: 0 })).consultationCount).toBe(0);
   });
 });
 

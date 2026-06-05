@@ -1,6 +1,7 @@
-import { eq, and, not, inArray, or, like, isNotNull } from 'drizzle-orm';
+import { eq, and, not, inArray, or, like, isNotNull, sql } from 'drizzle-orm';
 import { createLogger } from '@balo/shared/logging';
 import { db } from '../client';
+import { consultationCountExpression } from './_shared/consultation-count';
 import {
   expertProfiles,
   expertSkills,
@@ -164,6 +165,13 @@ export const expertsRepository = {
         rateCents: true,
         yearStartedSalesforce: true,
         availableForWork: true,
+      },
+      // Real confirmed-consultation count for the hero "consultations" stat —
+      // shared scalar subquery so the public read and search list never diverge.
+      extras: {
+        consultationCount: sql<number>`${consultationCountExpression}::int`.as(
+          'consultation_count'
+        ),
       },
       with: {
         user: {
