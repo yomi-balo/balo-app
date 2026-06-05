@@ -1,6 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
-import { afterEach, vi } from 'vitest';
+import { afterEach, expect, vi } from 'vitest';
+import { toHaveNoViolations } from 'jest-axe';
+
+// Register the jest-axe matcher once, globally — component tests call
+// `expect(await axe(container)).toHaveNoViolations()` without per-file setup.
+expect.extend(toHaveNoViolations);
 
 // JSDOM lacks ResizeObserver, which Radix primitives (Slider, Popover) rely on.
 // Provide a no-op stub so those components mount in component tests.
@@ -11,6 +16,33 @@ if (!('ResizeObserver' in globalThis)) {
     disconnect(): void {}
   }
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
+// JSDOM lacks IntersectionObserver, which the expert-profile scroll-spy
+// (expert-profile-client) and section-view analytics (expert-profile-analytics)
+// rely on. Provide a no-op stub so the observer-setup effects run (rather than
+// hitting their `typeof IntersectionObserver === 'undefined'` early-return).
+if (!('IntersectionObserver' in globalThis)) {
+  class IntersectionObserverStub {
+    readonly root: Element | null = null;
+    readonly rootMargin: string = '';
+    readonly thresholds: ReadonlyArray<number> = [];
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  globalThis.IntersectionObserver =
+    IntersectionObserverStub as unknown as typeof IntersectionObserver;
+}
+
+// JSDOM lacks Element.prototype.scrollIntoView, which the StickyNav smooth-jump
+// (via expert-profile-client's handleJump) calls. Stub it so clicking a nav tab
+// in component tests doesn't throw.
+if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = function scrollIntoView(): void {};
 }
 
 // Silence structured logger in tests — all auth actions and server code import this.
@@ -45,6 +77,7 @@ vi.mock('@/lib/analytics', async () => {
     PHONE_EVENTS: events.PHONE_EVENTS,
     CALENDAR_EVENTS: events.CALENDAR_EVENTS,
     SEARCH_EVENTS: events.SEARCH_EVENTS,
+    EXPERT_PROFILE_EVENTS: events.EXPERT_PROFILE_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

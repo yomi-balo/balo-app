@@ -14,6 +14,13 @@ export {
   PHONE_EVENTS,
   CALENDAR_EVENTS,
   SEARCH_EVENTS,
+  EXPERT_PROFILE_EVENTS,
 } from '@balo/analytics/client';
 
-export type { AllEvents, EventName } from '@balo/analytics/client';
+export type {
+  AllEvents,
+  EventName,
+  ExpertProfileSection,
+  ExpertProfileCta,
+  ProfileViewport,
+} from '@balo/analytics/client';

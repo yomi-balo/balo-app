@@ -14,6 +14,7 @@ export {
   PHONE_EVENTS,
   CALENDAR_EVENTS,
   SEARCH_EVENTS,
+  EXPERT_PROFILE_EVENTS,
 } from '../events';
 
 export type {
@@ -30,4 +31,8 @@ export type {
   PhoneEventMap,
   CalendarEventMap,
   SearchEventMap,
+  ExpertProfileEventMap,
+  ExpertProfileSection,
+  ExpertProfileCta,
+  ProfileViewport,
 } from '../events';

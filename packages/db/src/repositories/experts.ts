@@ -1,4 +1,4 @@
-import { eq, and, not, inArray, or, like } from 'drizzle-orm';
+import { eq, and, not, inArray, or, like, isNotNull } from 'drizzle-orm';
 import { createLogger } from '@balo/shared/logging';
 import { db } from '../client';
 import {
@@ -131,6 +131,79 @@ export const expertsRepository = {
       with: {
         user: {
           columns: { id: true, firstName: true, lastName: true, avatarUrl: true },
+        },
+      },
+    });
+  },
+
+  /**
+   * Public profile read for /experts/[username]. Returns the full graph the
+   * detail page renders. Visibility-gated: only approved + searchable profiles
+   * are publicly visible — drafts/unapproved/non-searchable resolve to undefined
+   * (→ 404). Username match is exact (the unique username index).
+   */
+  async findPublicProfileByUsername(username: string) {
+    return db.query.expertProfiles.findFirst({
+      where: and(
+        eq(expertProfiles.username, username),
+        eq(expertProfiles.searchable, true),
+        isNotNull(expertProfiles.approvedAt)
+      ),
+      // Defense-in-depth: explicit allowlist of the ONLY top-level columns the
+      // public view-model + page consume. Keeps sensitive columns
+      // (stripeConnectId, cronofyUserId, cronofySyncStatus, internal flags) out
+      // of the RSC by construction — not just by mapper discipline. If the
+      // mapper/page later needs another column, the type narrows and typecheck
+      // fails until it's added here (the safety mechanism working).
+      columns: {
+        id: true,
+        username: true,
+        agencyId: true,
+        headline: true,
+        bio: true,
+        rateCents: true,
+        yearStartedSalesforce: true,
+        availableForWork: true,
+      },
+      with: {
+        user: {
+          columns: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            avatarUrl: true,
+            country: true,
+            countryCode: true,
+            timezone: true,
+          },
+        },
+        agency: { columns: { id: true, name: true, slug: true, logoUrl: true } },
+        skills: {
+          with: {
+            skill: { columns: { id: true, name: true, slug: true } },
+            supportType: { columns: { id: true, name: true, slug: true } },
+          },
+        },
+        certifications: {
+          with: { certification: { columns: { id: true, name: true, logoUrl: true } } },
+        },
+        languages: {
+          with: { language: { columns: { id: true, name: true, code: true, flagEmoji: true } } },
+        },
+        industries: {
+          with: { industry: { columns: { id: true, name: true, slug: true } } },
+        },
+        workHistory: {
+          columns: {
+            role: true,
+            company: true,
+            startedAt: true,
+            endedAt: true,
+            isCurrent: true,
+            responsibilities: true,
+            sortOrder: true,
+          },
+          orderBy: (wh, { asc }) => [asc(wh.sortOrder)],
         },
       },
     });
@@ -508,4 +581,8 @@ export const expertsRepository = {
 
 export type ProfileSettingsData = NonNullable<
   Awaited<ReturnType<typeof expertsRepository.findProfileForSettings>>
+>;
+
+export type PublicExpertProfile = NonNullable<
+  Awaited<ReturnType<typeof expertsRepository.findPublicProfileByUsername>>
 >;
