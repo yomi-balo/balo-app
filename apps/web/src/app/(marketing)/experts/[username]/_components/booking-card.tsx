@@ -29,6 +29,11 @@ const TRUST_ROWS = [
  * DIRECT child of the two-column grid (its scroll context) — wrapping it in a
  * positioned div would silently kill `position: sticky`.
  *
+ * At ≥820px the inner Card floats up over the hero/nav via a negative top
+ * margin (`-mt-[105px]`). The sticky `top` MUST stay >= that pull-up or the
+ * pinned card is clipped at the viewport top: stuck card top = top − pull-up
+ * (here 112 − 105 = 7px). Bump both together if you change the overlap.
+ *
  * CTAs are stubbed (BAL-252/253/255 replace the handler bodies). Fires a
  * `cta_impression` per CTA on mount.
  */
@@ -51,7 +56,7 @@ export function BookingCard({
   }, [expertId]);
 
   return (
-    <div className="relative z-30 order-first flex flex-col gap-3.5 min-[820px]:sticky min-[820px]:top-20 min-[820px]:order-none">
+    <div className="relative z-30 order-first flex flex-col gap-3.5 min-[820px]:sticky min-[820px]:top-28 min-[820px]:order-none">
       <Card className="gap-0 overflow-hidden p-0 shadow-[0_12px_40px_rgba(27,26,68,0.12)] min-[820px]:-mt-[105px] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4)]">
         {/* Rate header */}
         <div className="from-primary/5 border-border/60 border-b bg-gradient-to-br to-violet-500/5 px-6 pt-6 pb-5">

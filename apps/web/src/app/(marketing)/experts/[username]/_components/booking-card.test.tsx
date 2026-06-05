@@ -79,7 +79,7 @@ describe('BookingCard', () => {
     // ≥820px: normal order + sticky, gated on the custom breakpoint.
     expect(root.className).toContain('min-[820px]:order-none');
     expect(root.className).toContain('min-[820px]:sticky');
-    expect(root.className).toContain('min-[820px]:top-20');
+    expect(root.className).toContain('min-[820px]:top-28');
   });
 
   it('puts the position classes on the card root itself — no wrapper element', () => {
