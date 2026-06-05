@@ -38,7 +38,7 @@ export function ExpertProfileAnalytics({
     track(EXPERT_PROFILE_EVENTS.PROFILE_VIEWED, {
       expert_id: expertId,
       agency_id: agencyId,
-      referrer: typeof document !== 'undefined' ? document.referrer || null : null,
+      referrer: typeof document === 'undefined' ? null : document.referrer || null,
       is_logged_in: isLoggedIn,
       viewport,
     });
