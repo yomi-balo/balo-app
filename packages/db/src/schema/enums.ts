@@ -24,3 +24,10 @@ export const applicationStatusEnum = pgEnum('application_status', [
 ]);
 
 export const consultationStatusEnum = pgEnum('consultation_status', ['confirmed', 'cancelled']);
+
+export const projectRequestStatusEnum = pgEnum('project_request_status', ['draft', 'submitted']);
+export const projectRequestSourceEnum = pgEnum('project_request_source', [
+  'manual',
+  'ai',
+  'quickstart',
+]);

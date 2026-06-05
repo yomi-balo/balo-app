@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
@@ -575,5 +576,24 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
 
     const result = await expertsRepository.findPublicProfileByUsername(username);
     expect(result?.consultationCount).toBe(0);
+  });
+});
+
+// ── findUserIdByProfileId ────────────────────────────────────────────
+
+describe('expertsRepository.findUserIdByProfileId', () => {
+  it('returns the underlying user id for an existing profile', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+
+    const result = await expertsRepository.findUserIdByProfileId(draft.id);
+
+    expect(result).toEqual({ user: { id: user.id } });
+  });
+
+  it('returns undefined for an unknown profile id', async () => {
+    const result = await expertsRepository.findUserIdByProfileId(randomUUID());
+
+    expect(result).toBeUndefined();
   });
 });

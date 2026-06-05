@@ -18,6 +18,14 @@ const expertApprovedPayload = z.object({
   expertProfileId: z.uuid(),
 });
 
+const projectRequestSubmittedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  expertProfileId: z.uuid(),
+  companyId: z.uuid(),
+  title: z.string().min(1),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -25,6 +33,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
     payload: expertApplicationSubmittedPayload,
   }),
   z.object({ event: z.literal('expert.approved'), payload: expertApprovedPayload }),
+  z.object({
+    event: z.literal('project.request_submitted'),
+    payload: projectRequestSubmittedPayload,
+  }),
 ]);
 
 export type PublishBody = z.infer<typeof publishBodySchema>;

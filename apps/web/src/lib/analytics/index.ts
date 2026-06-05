@@ -15,6 +15,7 @@ export {
   CALENDAR_EVENTS,
   SEARCH_EVENTS,
   EXPERT_PROFILE_EVENTS,
+  PROJECT_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -23,4 +24,7 @@ export type {
   ExpertProfileSection,
   ExpertProfileCta,
   ProfileViewport,
+  ProjectEventMap,
+  ProjectEntryMethod,
+  ProjectStep,
 } from '@balo/analytics/client';

@@ -32,6 +32,21 @@ describe('notificationRules', () => {
     expect(rule.priority).toBe('critical');
   });
 
+  it('has rules for project.request_submitted event', () => {
+    const rules = notificationRules['project.request_submitted'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(1);
+  });
+
+  it('project.request_submitted rule has correct config', () => {
+    const [rule] = notificationRules['project.request_submitted']!;
+    expect(rule.channel).toBe('email');
+    expect(rule.recipient).toBe('expert');
+    expect(rule.template).toBe('project-request-submitted');
+    expect(rule.timing).toBe('immediate');
+    expect(rule.priority).toBe('normal');
+  });
+
   it('booking.confirmed has in-app rule for expert', () => {
     const rules = notificationRules['booking.confirmed'];
     expect(rules).toBeDefined();

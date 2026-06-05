@@ -125,6 +125,23 @@ export const expertsRepository = {
     return row?.timezone ?? null;
   },
 
+  /**
+   * Minimal lookup for the notification engine: the expert's underlying user id.
+   * Used by the resolver to hydrate the `expert` recipient from an
+   * `expertProfileId` (e.g. `project.request_submitted`). Returns undefined when
+   * the profile doesn't exist so the resolver can short-circuit.
+   */
+  async findUserIdByProfileId(
+    expertProfileId: string
+  ): Promise<{ user: { id: string } } | undefined> {
+    const row = await db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+      columns: {},
+      with: { user: { columns: { id: true } } },
+    });
+    return row ? { user: { id: row.user.id } } : undefined;
+  },
+
   /** Find expert profile by username (for public profile page) */
   async findByUsername(username: string) {
     return db.query.expertProfiles.findFirst({

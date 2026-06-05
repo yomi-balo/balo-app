@@ -19,10 +19,23 @@ export interface ExpertApprovedPayload {
   expertProfileId: string;
 }
 
-export type NotificationEvent = 'user.welcome' | 'expert.application_submitted' | 'expert.approved';
+export interface ProjectRequestSubmittedPayload {
+  correlationId: string; // projectRequestId
+  projectRequestId: string;
+  expertProfileId: string; // target expert (recipient resolution)
+  companyId: string; // buyer org (context/audit)
+  title: string; // email subject/body
+}
+
+export type NotificationEvent =
+  | 'user.welcome'
+  | 'expert.application_submitted'
+  | 'expert.approved'
+  | 'project.request_submitted';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'project.request_submitted': ProjectRequestSubmittedPayload;
 }

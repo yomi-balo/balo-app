@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
+import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { EmailShell, LogoRow, StatusPill, Callout, SupportFooter } from './shared.js';
 
 describe('WelcomeEmail', () => {
@@ -44,6 +45,19 @@ describe('ExpertApprovedEmail', () => {
   it('returns a React element', () => {
     const element = ExpertApprovedEmail({
       firstName: 'Dave',
+      baseUrl: 'https://app.balo.expert',
+    });
+
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
+describe('ProjectRequestSubmittedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectRequestSubmittedEmail({
+      firstName: 'Erin',
+      projectTitle: 'Lead routing rebuild',
       baseUrl: 'https://app.balo.expert',
     });
 

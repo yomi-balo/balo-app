@@ -6,7 +6,9 @@ import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 import type { ExpertProfileView } from '@/components/expert/profile';
 
-vi.mock('sonner', () => ({ toast: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+}));
 
 const mockTrack = vi.mocked(track);
 const mockToast = vi.mocked(toast);
@@ -15,6 +17,12 @@ const mockToast = vi.mocked(toast);
 // to mock the hook directly (see top-nav.test.tsx / drawer.test.tsx). It only
 // drives the analytics `viewport` value here, not layout — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
+// The mounted ProjectDrawer imports the `'use server'` action (pulls server-only
+// deps at module load). Mock it so the client tree mounts cleanly.
+vi.mock('../_actions/submit-project-request', () => ({
+  submitProjectRequestAction: vi.fn(),
+}));
 
 import { ExpertProfileClient } from './expert-profile-client';
 
@@ -200,22 +208,46 @@ describe('ExpertProfileClient — CTA handlers', () => {
     vi.clearAllMocks();
   });
 
-  it('fires the cta_clicked event + a toast for each booking CTA', async () => {
+  it('toasts "Coming soon" for the still-stubbed book + message CTAs', async () => {
     const user = userEvent.setup();
     render(<ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn />);
 
     await user.click(screen.getByRole('button', { name: /book a consultation/i }));
-    // "Start a project" appears in both the BookingCard and the QuickStarts
-    // empty-state — both route through the same `project` cta handler.
-    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
-    if (startProject) await user.click(startProject);
     await user.click(screen.getByRole('button', { name: /send a message first/i }));
 
     const clickedCtas = mockTrack.mock.calls
       .filter(([event]) => event === EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED)
       .map(([, props]) => (props as { cta: string }).cta);
-    expect(clickedCtas).toEqual(['book', 'project', 'message']);
+    expect(clickedCtas).toEqual(['book', 'message']);
     expect(mockToast).toHaveBeenCalledWith('Coming soon', expect.objectContaining({}));
+  });
+
+  it('opens the ProjectDrawer (not a toast) and still fires cta_clicked {cta:project}', async () => {
+    const user = userEvent.setup();
+    render(<ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn />);
+
+    // The drawer is closed initially — its start-step heading is absent.
+    expect(
+      screen.queryByRole('heading', { name: /start a project with anil pilania/i })
+    ).not.toBeInTheDocument();
+
+    // "Start a project" appears in both the BookingCard and the QuickStarts
+    // empty-state — both route through the same `project` handler.
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+
+    // Drawer opened — start-step heading visible.
+    expect(
+      await screen.findByRole('heading', { name: /start a project with anil pilania/i })
+    ).toBeInTheDocument();
+
+    // Profile-level CTA event still fired with cta:'project'.
+    expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: 'expert-1',
+      cta: 'project',
+    });
+    // No "Coming soon" toast for the project CTA.
+    expect(mockToast).not.toHaveBeenCalled();
   });
 
   it('jumps to a section (and stays green despite scrollIntoView) when a nav tab is clicked', async () => {

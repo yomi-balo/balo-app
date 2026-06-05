@@ -148,6 +148,13 @@
       "when": 1780778733830,
       "tag": "0020_taxonomy_rename_support_type_vertical_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1780836422176,
+      "tag": "0021_bouncy_quasimodo",
+      "breakpoints": true
     }
   ]
 }

@@ -16,3 +16,4 @@ export * from './user-notifications';
 export * from './calendar';
 export * from './availability';
 export * from './consultations';
+export * from './project-requests';

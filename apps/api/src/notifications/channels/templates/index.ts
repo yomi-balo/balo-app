@@ -2,6 +2,7 @@ import React from 'react';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
+import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -34,6 +35,15 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       baseUrl: BASE_URL,
     }),
     subject: `You're approved, ${(data.recipientName as string) ?? 'there'}!`,
+  }),
+
+  'project-request-submitted': (data) => ({
+    component: React.createElement(ProjectRequestSubmittedEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      projectTitle: (data.title as string) ?? 'a new project',
+      baseUrl: BASE_URL,
+    }),
+    subject: `New project request: ${(data.title as string) ?? 'a new project'}`,
   }),
 };
 

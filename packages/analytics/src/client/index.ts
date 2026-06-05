@@ -15,6 +15,7 @@ export {
   CALENDAR_EVENTS,
   SEARCH_EVENTS,
   EXPERT_PROFILE_EVENTS,
+  PROJECT_EVENTS,
 } from '../events';
 
 export type {
@@ -35,4 +36,7 @@ export type {
   ExpertProfileSection,
   ExpertProfileCta,
   ProfileViewport,
+  ProjectEventMap,
+  ProjectEntryMethod,
+  ProjectStep,
 } from '../events';

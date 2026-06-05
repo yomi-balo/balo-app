@@ -18,6 +18,8 @@ export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export { availabilityRulesRepository } from './availability-rules';
 export { consultationsRepository } from './consultations';
+export { projectRequestsRepository } from './project-requests';
+export type { ProjectRequest, NewProjectRequest } from '../schema';
 export { expertSearchRepository } from './expert-search';
 export type {
   ExpertSearchParams,

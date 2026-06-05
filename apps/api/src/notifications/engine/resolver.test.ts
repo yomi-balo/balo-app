@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFindById } = vi.hoisted(() => ({
+const { mockFindById, mockFindUserIdByProfileId } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
+  mockFindUserIdByProfileId: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockFindById },
+  expertsRepository: { findUserIdByProfileId: mockFindUserIdByProfileId },
 }));
 
 import { resolveContext } from './resolver.js';
@@ -56,5 +58,43 @@ describe('resolveContext', () => {
 
     expect(mockFindById).toHaveBeenCalledWith('user-missing');
     expect(context.data.user).toBeUndefined();
+  });
+
+  it('hydrates data.expert when expertProfileId is present in payload', async () => {
+    const mockExpert = { user: { id: 'expert-user-99' } };
+    mockFindUserIdByProfileId.mockResolvedValue(mockExpert);
+
+    const context = await resolveContext('project.request_submitted', {
+      correlationId: 'req-1',
+      projectRequestId: 'req-1',
+      expertProfileId: 'profile-1',
+      companyId: 'company-1',
+      title: 'Lead routing rebuild',
+    });
+
+    expect(mockFindUserIdByProfileId).toHaveBeenCalledWith('profile-1');
+    expect(context.data.expert).toEqual(mockExpert);
+    expect(context.event).toBe('project.request_submitted');
+  });
+
+  it('does not hydrate data.expert when expertProfileId is absent', async () => {
+    await resolveContext('user.welcome', {
+      correlationId: 'user-123',
+      userId: 'user-123',
+    });
+
+    expect(mockFindUserIdByProfileId).not.toHaveBeenCalled();
+  });
+
+  it('sets data.expert to undefined when the expert profile is not found', async () => {
+    mockFindUserIdByProfileId.mockResolvedValue(undefined);
+
+    const context = await resolveContext('project.request_submitted', {
+      correlationId: 'req-2',
+      expertProfileId: 'missing-profile',
+    });
+
+    expect(mockFindUserIdByProfileId).toHaveBeenCalledWith('missing-profile');
+    expect(context.data.expert).toBeUndefined();
   });
 });
