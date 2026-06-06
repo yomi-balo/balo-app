@@ -21,7 +21,7 @@ import { motion } from 'motion/react';
 import Link from 'next/link';
 import type {
   ApplicationWithRelations,
-  SkillsByCategory,
+  ProductsByCategory,
   CertificationsByCategory,
 } from '@balo/db';
 import type { SupportType } from '@balo/db';
@@ -268,7 +268,7 @@ function MiniBar({
 interface ApplicationReviewProps {
   application: ApplicationWithRelations;
   email: string;
-  skillsByCategory: SkillsByCategory[];
+  skillsByCategory: ProductsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
 }
@@ -287,7 +287,7 @@ export function ApplicationReview({
   // Build a skill-to-category map from reference data
   const skillCategoryMap = new Map<string, string>();
   for (const cat of skillsByCategory) {
-    for (const skill of cat.skills) {
+    for (const skill of cat.products) {
       skillCategoryMap.set(skill.id, cat.category.name);
     }
   }

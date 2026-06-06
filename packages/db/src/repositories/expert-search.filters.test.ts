@@ -85,7 +85,7 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
     const conds = buildWhereConditions(params({ productIds: ['p1', 'p2', 'p3'] }), NOW);
     const existsSql = toSql(conds[3]);
     expect(existsSql).toContain('exists');
-    expect(existsSql).toContain('"expert_skills"');
+    expect(existsSql).toContain('"expert_competency"');
     expect(existsSql).toContain('"skill_id" in ($1, $2, $3)');
   });
 

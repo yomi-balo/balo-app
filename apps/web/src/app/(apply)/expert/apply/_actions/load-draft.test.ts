@@ -13,7 +13,7 @@ vi.mock('server-only', () => ({}));
 const mockFindApplicationByUserId = vi.fn();
 const mockFindApplicationWithRelations = vi.fn();
 const mockGetSalesforceVertical = vi.fn();
-const mockGetSkillsByVertical = vi.fn();
+const mockGetProductsByVertical = vi.fn();
 const mockGetSupportTypes = vi.fn();
 const mockGetCertsByVertical = vi.fn();
 const mockGetLanguages = vi.fn();
@@ -26,7 +26,7 @@ vi.mock('@balo/db', () => ({
   },
   referenceDataRepository: {
     getSalesforceVertical: (...args: unknown[]) => mockGetSalesforceVertical(...args),
-    getSkillsByVertical: (...args: unknown[]) => mockGetSkillsByVertical(...args),
+    getProductsByVertical: (...args: unknown[]) => mockGetProductsByVertical(...args),
     getSupportTypes: (...args: unknown[]) => mockGetSupportTypes(...args),
     getCertificationsByVertical: (...args: unknown[]) => mockGetCertsByVertical(...args),
     getLanguages: (...args: unknown[]) => mockGetLanguages(...args),
@@ -54,7 +54,7 @@ const mockInds = [{ id: 'ind-1', name: 'Financial Services' }];
 
 function setupReferenceData(): void {
   mockGetSalesforceVertical.mockResolvedValue(mockVertical);
-  mockGetSkillsByVertical.mockResolvedValue(mockSkills);
+  mockGetProductsByVertical.mockResolvedValue(mockSkills);
   mockGetSupportTypes.mockResolvedValue(mockSupportTypesList);
   mockGetCertsByVertical.mockResolvedValue(mockCerts);
   mockGetLanguages.mockResolvedValue(mockLangs);

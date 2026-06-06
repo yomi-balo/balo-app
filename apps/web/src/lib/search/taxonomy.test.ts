@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import type { SkillsByCategory } from '@balo/db';
+import type { ProductsByCategory } from '@balo/db';
 import {
   buildProductNameMap,
   flattenTaxonomyOptions,
-  mapSkillsByCategoryToTaxonomy,
+  mapProductsByCategoryToTaxonomy,
   EMPTY_TAXONOMY,
   type ProductTaxonomy,
 } from './taxonomy';
@@ -11,11 +11,11 @@ import {
 function category(
   id: string,
   name: string,
-  skills: Array<{ id: string; name: string }>
-): SkillsByCategory {
+  products: Array<{ id: string; name: string }>
+): ProductsByCategory {
   return {
     category: { id, name, slug: name.toLowerCase().replace(/\s+/g, '-'), sortOrder: 0 },
-    skills: skills.map((s, i) => ({ id: s.id, name: s.name, slug: s.name, sortOrder: i })),
+    products: products.map((p, i) => ({ id: p.id, name: p.name, slug: p.name, sortOrder: i })),
   };
 }
 
@@ -24,7 +24,7 @@ const taxonomy: ProductTaxonomy = {
     { id: 'g1', name: 'AI', items: [{ id: 'a1', name: 'Agentforce' }] },
     {
       id: 'g2',
-      name: 'Industries',
+      name: 'Industry Clouds',
       items: [
         { id: 'i1', name: 'Health Cloud' },
         { id: 'i2', name: 'Financial Services Cloud' },
@@ -33,27 +33,31 @@ const taxonomy: ProductTaxonomy = {
   ],
 };
 
-describe('mapSkillsByCategoryToTaxonomy', () => {
-  it('maps categories to groups and skills to items keyed by UUID', () => {
-    const result = mapSkillsByCategoryToTaxonomy([
+describe('mapProductsByCategoryToTaxonomy', () => {
+  it('maps categories to groups and products to items keyed by UUID', () => {
+    const result = mapProductsByCategoryToTaxonomy([
       category('cat-ai', 'AI', [{ id: 'sk-agent', name: 'Agentforce' }]),
-      category('cat-ind', 'Industries', [{ id: 'sk-health', name: 'Health Cloud' }]),
+      category('cat-ind', 'Industry Clouds', [{ id: 'sk-health', name: 'Health Cloud' }]),
     ]);
     expect(result).toEqual({
       groups: [
         { id: 'cat-ai', name: 'AI', items: [{ id: 'sk-agent', name: 'Agentforce' }] },
-        { id: 'cat-ind', name: 'Industries', items: [{ id: 'sk-health', name: 'Health Cloud' }] },
+        {
+          id: 'cat-ind',
+          name: 'Industry Clouds',
+          items: [{ id: 'sk-health', name: 'Health Cloud' }],
+        },
       ],
     });
   });
 
   it('returns an empty groups list for no categories', () => {
-    expect(mapSkillsByCategoryToTaxonomy([])).toEqual(EMPTY_TAXONOMY);
+    expect(mapProductsByCategoryToTaxonomy([])).toEqual(EMPTY_TAXONOMY);
   });
 });
 
 describe('buildProductNameMap', () => {
-  it('maps every skill id to its name across all groups (including Industries)', () => {
+  it('maps every product id to its name across all groups (including Industry Clouds)', () => {
     expect(buildProductNameMap(taxonomy)).toEqual({
       a1: 'Agentforce',
       i1: 'Health Cloud',

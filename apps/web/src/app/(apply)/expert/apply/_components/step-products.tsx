@@ -56,16 +56,16 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
     return referenceData.skillsByCategory
       .map((cat) => ({
         ...cat,
-        skills: cat.skills.filter((s) => s.name.toLowerCase().includes(query)),
+        products: cat.products.filter((s) => s.name.toLowerCase().includes(query)),
       }))
-      .filter((cat) => cat.skills.length > 0);
+      .filter((cat) => cat.products.length > 0);
   }, [referenceData.skillsByCategory, searchQuery]);
 
   // Build flat map of skill id -> name for selected pills
   const skillNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const cat of referenceData.skillsByCategory) {
-      for (const skill of cat.skills) {
+      for (const skill of cat.products) {
         map.set(skill.id, skill.name);
       }
     }
@@ -188,7 +188,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                           {cat.category.name}
                         </p>
                         <ChipPicker
-                          options={cat.skills.map((s) => ({
+                          options={cat.products.map((s) => ({
                             id: s.id,
                             label: s.name,
                           }))}

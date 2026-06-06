@@ -87,8 +87,9 @@ export const saveDraftAction = withAuth(
         }
         case 'products': {
           const data = parsed as ProductsStepData;
-          const supportTypes = await referenceDataRepository.getSupportTypes();
-          await expertsRepository.syncSkills(
+          const vertical = await referenceDataRepository.getSalesforceVertical();
+          const supportTypes = await referenceDataRepository.getSupportTypes(vertical.id);
+          await expertsRepository.syncProducts(
             profileId,
             data.skillIds,
             supportTypes.map((st) => st.id)
@@ -97,7 +98,7 @@ export const saveDraftAction = withAuth(
         }
         case 'assessment': {
           const data = parsed as AssessmentStepData;
-          await expertsRepository.updateSkillProficiency(profileId, data.ratings);
+          await expertsRepository.updateCompetencyProficiency(profileId, data.ratings);
           break;
         }
         case 'certifications': {

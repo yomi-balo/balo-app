@@ -58,7 +58,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   const skillNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const cat of referenceData.skillsByCategory) {
-      for (const skill of cat.skills) {
+      for (const skill of cat.products) {
         map.set(skill.id, skill.name);
       }
     }

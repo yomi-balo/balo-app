@@ -6,7 +6,7 @@ import {
   db,
   users,
   expertProfiles,
-  expertSkills,
+  expertCompetency,
   expertCertifications,
   expertLanguages,
   expertIndustries,
@@ -58,7 +58,9 @@ export async function deleteUserAction(userId: string): Promise<DeleteUserResult
       const profileIds = profileRows.map((r) => r.id);
 
       if (profileIds.length > 0) {
-        await tx.delete(expertSkills).where(inArray(expertSkills.expertProfileId, profileIds));
+        await tx
+          .delete(expertCompetency)
+          .where(inArray(expertCompetency.expertProfileId, profileIds));
         await tx
           .delete(expertCertifications)
           .where(inArray(expertCertifications.expertProfileId, profileIds));

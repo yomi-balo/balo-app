@@ -4,10 +4,10 @@ import { Lock, Shield, AlertCircle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { ApplicationSkillWithRelations } from '@balo/db';
+import type { ApplicationCompetencyWithRelations } from '@balo/db';
 
 interface ExpertiseTabProps {
-  skills: ApplicationSkillWithRelations[];
+  skills: ApplicationCompetencyWithRelations[];
   skillsLocked: boolean;
 }
 
@@ -17,7 +17,7 @@ interface SkillGroup {
   supportTypes: Array<{ name: string; proficiency: number }>;
 }
 
-function groupSkills(skills: ApplicationSkillWithRelations[]): SkillGroup[] {
+function groupSkills(skills: ApplicationCompetencyWithRelations[]): SkillGroup[] {
   const groups = new Map<string, SkillGroup>();
 
   for (const skill of skills) {

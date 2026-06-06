@@ -1,6 +1,11 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../client';
-import { availabilityCache, expertProfiles, expertSkills, type ExpertProfile } from '../../schema';
+import {
+  availabilityCache,
+  expertProfiles,
+  expertCompetency,
+  type ExpertProfile,
+} from '../../schema';
 import { expertsRepository } from '../../repositories/experts';
 import { expertFactory } from './expert.factory';
 
@@ -106,9 +111,9 @@ export async function searchExpertFactory(
       .where(eq(expertProfiles.id, profile.id));
   }
 
-  // Skills (skill + support_type pairings).
+  // Competencies (product + support_type pairings).
   if (overrides.skills?.length) {
-    await db.insert(expertSkills).values(
+    await db.insert(expertCompetency).values(
       overrides.skills.map((s) => ({
         expertProfileId: profile.id,
         skillId: s.skillId,

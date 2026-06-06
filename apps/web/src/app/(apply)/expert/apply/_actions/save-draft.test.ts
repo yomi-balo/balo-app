@@ -19,8 +19,8 @@ const mockCreateDraft = vi.fn();
 const mockUpdateProfile = vi.fn();
 const mockSyncLanguages = vi.fn();
 const mockSyncIndustries = vi.fn();
-const mockSyncSkills = vi.fn();
-const mockUpdateSkillProficiency = vi.fn();
+const mockSyncProducts = vi.fn();
+const mockUpdateCompetencyProficiency = vi.fn();
 const mockSyncCertifications = vi.fn();
 const mockSyncWorkHistory = vi.fn();
 
@@ -34,8 +34,8 @@ vi.mock('@balo/db', () => ({
     updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
     syncLanguages: (...args: unknown[]) => mockSyncLanguages(...args),
     syncIndustries: (...args: unknown[]) => mockSyncIndustries(...args),
-    syncSkills: (...args: unknown[]) => mockSyncSkills(...args),
-    updateSkillProficiency: (...args: unknown[]) => mockUpdateSkillProficiency(...args),
+    syncProducts: (...args: unknown[]) => mockSyncProducts(...args),
+    updateCompetencyProficiency: (...args: unknown[]) => mockUpdateCompetencyProficiency(...args),
     syncCertifications: (...args: unknown[]) => mockSyncCertifications(...args),
     syncWorkHistory: (...args: unknown[]) => mockSyncWorkHistory(...args),
   },
@@ -90,8 +90,8 @@ describe('saveDraftAction', () => {
     mockUpdateProfile.mockResolvedValue(undefined);
     mockSyncLanguages.mockResolvedValue(undefined);
     mockSyncIndustries.mockResolvedValue(undefined);
-    mockSyncSkills.mockResolvedValue(undefined);
-    mockUpdateSkillProficiency.mockResolvedValue(undefined);
+    mockSyncProducts.mockResolvedValue(undefined);
+    mockUpdateCompetencyProficiency.mockResolvedValue(undefined);
     mockSyncCertifications.mockResolvedValue(undefined);
     mockSyncWorkHistory.mockResolvedValue(undefined);
   });
@@ -261,7 +261,7 @@ describe('saveDraftAction', () => {
         data: { skillIds: [UUID1, UUID2] },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSyncSkills).toHaveBeenCalledWith(
+      expect(mockSyncProducts).toHaveBeenCalledWith(
         PROFILE_ID,
         [UUID1, UUID2],
         [SUPPORT_TYPE_ID_1, SUPPORT_TYPE_ID_2]
@@ -290,7 +290,7 @@ describe('saveDraftAction', () => {
         data: { ratings },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockUpdateSkillProficiency).toHaveBeenCalledWith(PROFILE_ID, ratings);
+      expect(mockUpdateCompetencyProficiency).toHaveBeenCalledWith(PROFILE_ID, ratings);
     });
   });
 

@@ -14,7 +14,7 @@ import {
   db,
   users,
   expertProfiles,
-  expertSkills,
+  expertCompetency,
   expertLanguages,
   expertIndustries,
   availabilityRules,
@@ -28,7 +28,7 @@ import {
   like,
   type NewUser,
   type NewExpertProfile,
-  type NewExpertSkill,
+  type NewExpertCompetency,
   type NewExpertLanguage,
   type NewExpertIndustry,
   type NewAvailabilityRule,
@@ -78,14 +78,14 @@ export interface ResetOptions {
 async function loadTaxonomy(): Promise<SeedTaxonomy> {
   const vertical = await referenceDataRepository.getSalesforceVertical();
   const [grouped, supportTypes, languages, industries, certGroups] = await Promise.all([
-    referenceDataRepository.getSkillsByVertical(vertical.id),
-    referenceDataRepository.getSupportTypes(),
+    referenceDataRepository.getProductsByVertical(vertical.id),
+    referenceDataRepository.getSupportTypes(vertical.id),
     referenceDataRepository.getLanguages(),
     referenceDataRepository.getIndustries(),
     referenceDataRepository.getCertificationsByVertical(vertical.id),
   ]);
 
-  const skills = grouped.flatMap((g) => g.skills.map((s) => ({ id: s.id, name: s.name })));
+  const skills = grouped.flatMap((g) => g.products.map((s) => ({ id: s.id, name: s.name })));
   const certificationIds = certGroups.flatMap((g) => g.certifications.map((c) => c.id));
 
   return {
@@ -158,13 +158,13 @@ async function insertExpert(
   const expertProfileId = insertedProfile.id;
 
   if (expert.skills.length > 0) {
-    const skillRows: NewExpertSkill[] = expert.skills.map((s) => ({
+    const skillRows: NewExpertCompetency[] = expert.skills.map((s) => ({
       expertProfileId,
       skillId: s.skillId,
       supportTypeId: s.supportTypeId,
       proficiency: s.proficiency,
     }));
-    await tx.insert(expertSkills).values(skillRows);
+    await tx.insert(expertCompetency).values(skillRows);
   }
 
   if (expert.languages.length > 0) {

@@ -11,7 +11,7 @@ import {
   expertProfiles,
   industries,
   languages,
-  skills,
+  products,
   supportTypes,
   workHistory,
 } from '../schema';
@@ -409,12 +409,12 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     const vertical = await referenceDataRepository.getSalesforceVertical();
 
     const [skill] = await db
-      .insert(skills)
+      .insert(products)
       .values({ verticalId: vertical.id, name: 'Apex', slug: uniq('apex') })
       .returning();
     const [supportType] = await db
       .insert(supportTypes)
-      .values({ name: 'Implementation', slug: uniq('implementation') })
+      .values({ verticalId: vertical.id, name: 'Implementation', slug: uniq('implementation') })
       .returning();
     const [language] = await db
       .insert(languages)

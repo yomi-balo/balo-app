@@ -2,10 +2,10 @@ import { and, desc, eq, gte, lte, isNotNull, inArray, exists, sql, type SQL } fr
 import { db } from '../client';
 import {
   expertProfiles,
-  expertSkills,
+  expertCompetency,
   expertLanguages,
   expertIndustries,
-  skills,
+  products,
   supportTypes,
   languages,
   verticals,
@@ -31,8 +31,8 @@ export interface ExpertSearchParams {
   now: Date; // injected for deterministic gate/timeframe boundaries
 }
 
-/** One expert_skills row joined to its skill name + support-type slug. */
-export interface ExpertSearchSkillRow {
+/** One expert_competency row joined to its product name + support-type slug. */
+export interface ExpertSearchCompetencyRow {
   skillId: string;
   skillName: string;
   supportTypeSlug: string;
@@ -58,7 +58,7 @@ export interface ExpertSearchRow {
   agencyLogoUrl: string | null;
   consultationCount: number;
   languages: { name: string; flagEmoji: string | null }[];
-  skills: ExpertSearchSkillRow[];
+  skills: ExpertSearchCompetencyRow[];
 }
 
 export interface FacetCount {
@@ -136,11 +136,11 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
       exists(
         db
           .select({ x: sql`1` })
-          .from(expertSkills)
+          .from(expertCompetency)
           .where(
             and(
-              eq(expertSkills.expertProfileId, expertProfiles.id),
-              inArray(expertSkills.skillId, params.productIds)
+              eq(expertCompetency.expertProfileId, expertProfiles.id),
+              inArray(expertCompetency.skillId, params.productIds)
             )
           )
       )
@@ -152,11 +152,11 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
       exists(
         db
           .select({ x: sql`1` })
-          .from(expertSkills)
+          .from(expertCompetency)
           .where(
             and(
-              eq(expertSkills.expertProfileId, expertProfiles.id),
-              inArray(expertSkills.supportTypeId, params.supportTypeIds)
+              eq(expertCompetency.expertProfileId, expertProfiles.id),
+              inArray(expertCompetency.supportTypeId, params.supportTypeIds)
             )
           )
       )
@@ -237,8 +237,8 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
         ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})
         OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
         OR EXISTS (
-          SELECT 1 FROM ${expertSkills} es
-          JOIN ${skills} s ON s.id = es.skill_id
+          SELECT 1 FROM ${expertCompetency} es
+          JOIN ${products} s ON s.id = es.skill_id
           WHERE es.expert_profile_id = ${expertProfiles.id}
             AND word_similarity(${q}, s.name) > 0.3
         )
@@ -316,7 +316,7 @@ function relevanceExpression(q: string | null): SQL {
     + COALESCE((
         SELECT MAX(ts_rank(setweight(to_tsvector('english', s.name), 'C'),
                            websearch_to_tsquery('english', ${q})))
-        FROM ${expertSkills} es JOIN ${skills} s ON s.id = es.skill_id
+        FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.skill_id
         WHERE es.expert_profile_id = ${expertProfiles.id}
       ), 0)
     + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
@@ -386,32 +386,32 @@ interface SearchSelectRow {
 // ── Internal: per-expert skills for the result page ──────────────
 
 /**
- * Fetch the skills for a page of experts in ONE query (join expert_skills →
- * skills → support_types), grouped in JS into `ExpertSearchSkillRow[]` per
- * expert and ordered proficiency-desc. Returns an empty map for an empty input
- * (no query issued) so the hot path stays a single round-trip when there are no
- * rows. The web orders/limits to 4 in the card, so we just return the expert's
- * skills proficiency-desc here.
+ * Fetch the competencies for a page of experts in ONE query (join
+ * expert_competency → products → support_types), grouped in JS into
+ * `ExpertSearchCompetencyRow[]` per expert and ordered proficiency-desc. Returns
+ * an empty map for an empty input (no query issued) so the hot path stays a
+ * single round-trip when there are no rows. The web orders/limits to 4 in the
+ * card, so we just return the expert's competencies proficiency-desc here.
  */
 async function fetchSkillsByExpert(
   expertProfileIds: string[]
-): Promise<Map<string, ExpertSearchSkillRow[]>> {
-  const byExpert = new Map<string, ExpertSearchSkillRow[]>();
+): Promise<Map<string, ExpertSearchCompetencyRow[]>> {
+  const byExpert = new Map<string, ExpertSearchCompetencyRow[]>();
   if (expertProfileIds.length === 0) return byExpert;
 
   const rows = await db
     .select({
-      expertProfileId: expertSkills.expertProfileId,
-      skillId: expertSkills.skillId,
-      skillName: skills.name,
+      expertProfileId: expertCompetency.expertProfileId,
+      skillId: expertCompetency.skillId,
+      skillName: products.name,
       supportTypeSlug: supportTypes.slug,
-      proficiency: expertSkills.proficiency,
+      proficiency: expertCompetency.proficiency,
     })
-    .from(expertSkills)
-    .innerJoin(skills, eq(skills.id, expertSkills.skillId))
-    .innerJoin(supportTypes, eq(supportTypes.id, expertSkills.supportTypeId))
-    .where(inArray(expertSkills.expertProfileId, expertProfileIds))
-    .orderBy(desc(expertSkills.proficiency));
+    .from(expertCompetency)
+    .innerJoin(products, eq(products.id, expertCompetency.skillId))
+    .innerJoin(supportTypes, eq(supportTypes.id, expertCompetency.supportTypeId))
+    .where(inArray(expertCompetency.expertProfileId, expertProfileIds))
+    .orderBy(desc(expertCompetency.proficiency));
 
   for (const row of rows) {
     const list = byExpert.get(row.expertProfileId) ?? [];
@@ -498,9 +498,9 @@ export const expertSearchRepository = {
       total = Number(countRows[0]?.total ?? 0);
     }
 
-    // Per-expert skills for the page (one extra query; skipped when the page is
-    // empty). Grouped in JS into ExpertSearchSkillRow[] per expert, joining the
-    // skill name + support-type slug and ordered proficiency-desc.
+    // Per-expert competencies for the page (one extra query; skipped when the
+    // page is empty). Grouped in JS into ExpertSearchCompetencyRow[] per expert,
+    // joining the product name + support-type slug and ordered proficiency-desc.
     const expertIds = rows.map((r) => r.id);
     const skillsByExpert = await fetchSkillsByExpert(expertIds);
 
@@ -585,24 +585,24 @@ export const expertSearchRepository = {
     const [productRows, supportTypeRows, languageRows] = await Promise.all([
       db
         .select({
-          id: skills.id,
-          name: skills.name,
-          count: sql<number>`count(DISTINCT ${expertSkills.expertProfileId})::int`,
+          id: products.id,
+          name: products.name,
+          count: sql<number>`count(DISTINCT ${expertCompetency.expertProfileId})::int`,
         })
-        .from(expertSkills)
-        .innerJoin(skills, eq(skills.id, expertSkills.skillId))
-        .where(inArray(expertSkills.expertProfileId, eligibleSet))
-        .groupBy(skills.id, skills.name),
+        .from(expertCompetency)
+        .innerJoin(products, eq(products.id, expertCompetency.skillId))
+        .where(inArray(expertCompetency.expertProfileId, eligibleSet))
+        .groupBy(products.id, products.name),
 
       db
         .select({
           id: supportTypes.id,
           name: supportTypes.name,
-          count: sql<number>`count(DISTINCT ${expertSkills.expertProfileId})::int`,
+          count: sql<number>`count(DISTINCT ${expertCompetency.expertProfileId})::int`,
         })
-        .from(expertSkills)
-        .innerJoin(supportTypes, eq(supportTypes.id, expertSkills.supportTypeId))
-        .where(inArray(expertSkills.expertProfileId, eligibleSet))
+        .from(expertCompetency)
+        .innerJoin(supportTypes, eq(supportTypes.id, expertCompetency.supportTypeId))
+        .where(inArray(expertCompetency.expertProfileId, eligibleSet))
         .groupBy(supportTypes.id, supportTypes.name),
 
       db

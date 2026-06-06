@@ -11,7 +11,7 @@
 import {
   users,
   expertProfiles,
-  expertSkills,
+  expertCompetency,
   expertCertifications,
   expertLanguages,
   expertIndustries,
@@ -93,7 +93,7 @@ async function deleteProfileChildren(tx: Tx, profileIds: string[]): Promise<void
   await tx
     .delete(calendarConnections)
     .where(inArray(calendarConnections.expertProfileId, profileIds));
-  await tx.delete(expertSkills).where(inArray(expertSkills.expertProfileId, profileIds));
+  await tx.delete(expertCompetency).where(inArray(expertCompetency.expertProfileId, profileIds));
   await tx.delete(expertLanguages).where(inArray(expertLanguages.expertProfileId, profileIds));
   await tx.delete(expertIndustries).where(inArray(expertIndustries.expertProfileId, profileIds));
   await tx

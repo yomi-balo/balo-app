@@ -52,8 +52,8 @@ const SKILL_CATEGORIES: Array<[string, string, string[]]> = [
   ['Tableau', 'tableau', ['CRM Analytics', 'Tableau']],
   ['Mulesoft', 'mulesoft', ['MuleSoft']],
   [
-    'Industries',
-    'industries',
+    'Industry Clouds',
+    'industry-clouds',
     [
       'Communications Cloud',
       'Consumer Goods Cloud',
@@ -69,6 +69,71 @@ const SKILL_CATEGORIES: Array<[string, string, string[]]> = [
     ],
   ],
   ['Net Zero Cloud', 'net-zero-cloud', ['Net Zero Cloud']],
+];
+
+/**
+ * Second-vertical taxonomy — intentionally a DIFFERENT shape than Salesforce.
+ * Proves the seeder hardcodes nothing: the same `seedTaxonomyForVertical` loop
+ * drives both verticals. [categoryName, categorySlug, productNames[]]
+ */
+const ACME_CATEGORIES: Array<[string, string, string[]]> = [
+  ['Core Platform', 'core-platform', ['Acme Core', 'Acme Flows']],
+  ['Analytics', 'analytics', ['Acme Insights', 'Acme Reports']],
+];
+
+/**
+ * Support types are now PER-VERTICAL data (vertical slug → [name, slug][]).
+ * Each vertical can carry its own dimensions without slug collisions thanks to
+ * the composite (vertical_id, slug) unique on support_types.
+ */
+const SUPPORT_TYPES_BY_VERTICAL: Record<string, Array<[string, string]>> = {
+  salesforce: [
+    ['Technical Fix / Support', 'technical-fix-support'],
+    ['Architecture / Integrations', 'architecture-integrations'],
+    ['Strategy / Best Practices', 'strategy-best-practices'],
+    ['Platform Training', 'platform-training'],
+  ],
+  acme: [
+    ['Implementation', 'implementation'],
+    ['Optimisation', 'optimisation'],
+    ['Audit', 'audit'],
+  ],
+};
+
+/**
+ * Mock approved + searchable experts for the `acme` vertical. Idempotent by a
+ * stable workosId / email marker. Each picks a product slug + support-type slug
+ * from acme's own taxonomy so search facets surface real acme data.
+ * [workosId, email, firstName, lastName, headline, productSlug, supportTypeSlug]
+ */
+const ACME_EXPERTS: Array<[string, string, string, string, string, string, string]> = [
+  [
+    'seed_acme_0',
+    'acme-expert-0@seed.balo.dev',
+    'Aria',
+    'Stone',
+    'Acme Core implementation lead',
+    'acme-core',
+    'implementation',
+  ],
+  [
+    'seed_acme_1',
+    'acme-expert-1@seed.balo.dev',
+    'Bruno',
+    'Vega',
+    'Acme analytics & reporting specialist',
+    'acme-insights',
+    'optimisation',
+  ],
+  [
+    'seed_acme_2',
+    'acme-expert-2@seed.balo.dev',
+    'Cora',
+    'Lin',
+    'Acme Flows architecture & audit',
+    'acme-flows',
+    'audit',
+  ],
 ];
 
 /** [categoryName, categorySlug, certEntries[]] — cert entry is name or [name, slug] for collisions */
@@ -228,13 +293,157 @@ const INDUSTRIES = [
 ];
 
 // ──────────────────────────────────────────────────────
+// Generic, vertical-agnostic taxonomy seeder
+// ──────────────────────────────────────────────────────
+
+/**
+ * Seed categories → products → support types for ONE vertical. Used for BOTH
+ * Salesforce and the mock `acme` vertical — proving the seeder hardcodes no
+ * vertical-specific taxonomy. Idempotent (onConflictDoNothing on the composite
+ * (vertical_id, slug) uniques).
+ */
+async function seedTaxonomyForVertical(
+  verticalId: string,
+  categories: Array<[string, string, string[]]>,
+  supportTypes: Array<[string, string]>
+): Promise<void> {
+  // Categories.
+  await db
+    .insert(schema.categories)
+    .values(categories.map(([name, slug], i) => ({ name, slug, verticalId, sortOrder: i })))
+    .onConflictDoNothing();
+
+  const catRows = await db
+    .select()
+    .from(schema.categories)
+    .where(eq(schema.categories.verticalId, verticalId));
+  const catMap = Object.fromEntries(catRows.map((c) => [c.slug, c.id]));
+
+  // Products.
+  const productValues = categories.flatMap(([, catSlug, names]) =>
+    names.map((name, i) => ({
+      name,
+      slug: slugify(name),
+      verticalId,
+      categoryId: catMap[catSlug],
+      sortOrder: i,
+    }))
+  );
+  if (productValues.length > 0) {
+    await db.insert(schema.products).values(productValues).onConflictDoNothing();
+  }
+
+  // Support types (vertical-scoped).
+  if (supportTypes.length > 0) {
+    await db
+      .insert(schema.supportTypes)
+      .values(supportTypes.map(([name, slug], i) => ({ name, slug, verticalId, sortOrder: i })))
+      .onConflictDoNothing();
+  }
+}
+
+/**
+ * Seed a handful of approved + searchable experts in the `acme` vertical so
+ * local dev mirrors the data-only path (a second vertical reachable via
+ * `?vertical=acme`). Idempotent: keyed on stable workosId / email markers and
+ * skipped entirely if already present. Each competency draws from acme's own
+ * products + support types.
+ */
+async function seedAcmeExperts(acmeVerticalId: string): Promise<void> {
+  // Resolve acme products + support types by slug (seeded above).
+  const products = await db
+    .select()
+    .from(schema.products)
+    .where(eq(schema.products.verticalId, acmeVerticalId));
+  const productBySlug = Object.fromEntries(products.map((p) => [p.slug, p.id]));
+
+  const supportTypes = await db
+    .select()
+    .from(schema.supportTypes)
+    .where(eq(schema.supportTypes.verticalId, acmeVerticalId));
+  const supportTypeBySlug = Object.fromEntries(supportTypes.map((s) => [s.slug, s.id]));
+
+  for (const [
+    workosId,
+    email,
+    firstName,
+    lastName,
+    headline,
+    productSlug,
+    supportTypeSlug,
+  ] of ACME_EXPERTS) {
+    // Idempotency: skip if this seed user already exists.
+    const [existingUser] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.workosId, workosId))
+      .limit(1);
+    if (existingUser) continue;
+
+    // Each expert's user + profile + competency inserts are atomic, so a
+    // mid-insert crash rolls back cleanly and never leaves a profile-less
+    // seed user for the next run to skip.
+    await db.transaction(async (tx) => {
+      const [user] = await tx
+        .insert(schema.users)
+        .values({
+          workosId,
+          email,
+          emailVerified: true,
+          firstName,
+          lastName,
+          activeMode: 'expert',
+          onboardingCompleted: true,
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (!user) return;
+
+      const now = new Date();
+      const [profile] = await tx
+        .insert(schema.expertProfiles)
+        .values({
+          userId: user.id,
+          verticalId: acmeVerticalId,
+          type: 'freelancer',
+          headline,
+          bio: 'Seeded mock-vertical expert for the taxonomy data-only path.',
+          rateCents: 200,
+          searchable: true,
+          applicationStatus: 'approved',
+          submittedAt: now,
+          approvedAt: now,
+        })
+        .returning();
+      if (!profile) return;
+
+      const productId = productBySlug[productSlug];
+      const supportTypeId = supportTypeBySlug[supportTypeSlug];
+      if (productId && supportTypeId) {
+        await tx
+          .insert(schema.expertCompetency)
+          .values({
+            expertProfileId: profile.id,
+            skillId: productId,
+            supportTypeId,
+            proficiency: 4,
+          })
+          .onConflictDoNothing();
+      }
+    });
+  }
+}
+
+// ──────────────────────────────────────────────────────
 // Seed function
 // ──────────────────────────────────────────────────────
 
 async function seed(): Promise<void> {
   console.log('Seeding reference data...');
 
-  // 1. Verticals
+  // 1. Verticals — Salesforce (live) + an active `acme` MOCK vertical that
+  //    demonstrates the data-only path (its taxonomy + experts are seeded by the
+  //    same generic loop, proving no hardcoding).
   console.log('  Seeding verticals...');
   await db
     .insert(schema.verticals)
@@ -243,6 +452,12 @@ async function seed(): Promise<void> {
         name: 'Salesforce',
         slug: 'salesforce',
         description: 'Salesforce ecosystem',
+        isActive: true,
+      },
+      {
+        name: 'Acme Cloud',
+        slug: 'acme',
+        description: 'Mock vertical for the taxonomy data-driven path',
         isActive: true,
       },
       { name: 'Microsoft', slug: 'microsoft', description: 'Microsoft ecosystem', isActive: false },
@@ -255,50 +470,31 @@ async function seed(): Promise<void> {
     .from(schema.verticals)
     .where(eq(schema.verticals.slug, 'salesforce'))
     .limit(1);
-
   if (!salesforceVertical) {
     throw new Error('Failed to fetch Salesforce vertical after insert');
   }
   const sfId = salesforceVertical.id;
 
-  // 2. Support Types
-  console.log('  Seeding support types...');
-  await db
-    .insert(schema.supportTypes)
-    .values([
-      { name: 'Technical Fix / Support', slug: 'technical-fix-support', sortOrder: 0 },
-      { name: 'Architecture / Integrations', slug: 'architecture-integrations', sortOrder: 1 },
-      { name: 'Strategy / Best Practices', slug: 'strategy-best-practices', sortOrder: 2 },
-      { name: 'Platform Training', slug: 'platform-training', sortOrder: 3 },
-    ])
-    .onConflictDoNothing();
-
-  // 3. Skill Categories + Skills
-  console.log('  Seeding skill categories...');
-  await db
-    .insert(schema.skillCategories)
-    .values(
-      SKILL_CATEGORIES.map(([name, slug], i) => ({ name, slug, verticalId: sfId, sortOrder: i }))
-    )
-    .onConflictDoNothing();
-
-  const categories = await db
+  const [acmeVertical] = await db
     .select()
-    .from(schema.skillCategories)
-    .where(eq(schema.skillCategories.verticalId, sfId));
-  const catMap = Object.fromEntries(categories.map((c) => [c.slug, c.id]));
+    .from(schema.verticals)
+    .where(eq(schema.verticals.slug, 'acme'))
+    .limit(1);
+  if (!acmeVertical) {
+    throw new Error('Failed to fetch Acme vertical after insert');
+  }
+  const acmeId = acmeVertical.id;
 
-  console.log('  Seeding skills...');
-  const skillValues = SKILL_CATEGORIES.flatMap(([, catSlug, names]) =>
-    names.map((name, i) => ({
-      name,
-      slug: slugify(name),
-      verticalId: sfId,
-      categoryId: catMap[catSlug],
-      sortOrder: i,
-    }))
-  );
-  await db.insert(schema.skills).values(skillValues).onConflictDoNothing();
+  // 2. Taxonomy (categories → products → support types) per vertical, via the
+  //    SAME generic seeder — no vertical-specific code path.
+  console.log('  Seeding Salesforce taxonomy...');
+  await seedTaxonomyForVertical(sfId, SKILL_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.salesforce ?? []);
+
+  console.log('  Seeding Acme (mock) taxonomy...');
+  await seedTaxonomyForVertical(acmeId, ACME_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.acme ?? []);
+
+  console.log('  Seeding Acme (mock) experts...');
+  await seedAcmeExperts(acmeId);
 
   // 4. Certification Categories + Certifications
   console.log('  Seeding certification categories...');
@@ -339,8 +535,8 @@ async function seed(): Promise<void> {
   const counts = await Promise.all([
     db.select().from(schema.verticals),
     db.select().from(schema.supportTypes),
-    db.select().from(schema.skillCategories),
-    db.select().from(schema.skills),
+    db.select().from(schema.categories),
+    db.select().from(schema.products),
     db.select().from(schema.certificationCategories),
     db.select().from(schema.certifications),
     db.select().from(schema.languages),
@@ -348,7 +544,7 @@ async function seed(): Promise<void> {
   ]);
 
   console.log(
-    `\nSeed complete. Seeded ${counts[0].length} verticals, ${counts[1].length} support types, ${counts[2].length} skill categories, ${counts[3].length} skills, ${counts[4].length} certification categories, ${counts[5].length} certifications, ${counts[6].length} languages, ${counts[7].length} industries.`
+    `\nSeed complete. Seeded ${counts[0].length} verticals, ${counts[1].length} support types, ${counts[2].length} categories, ${counts[3].length} products, ${counts[4].length} certification categories, ${counts[5].length} certifications, ${counts[6].length} languages, ${counts[7].length} industries.`
   );
   await client.end();
 }

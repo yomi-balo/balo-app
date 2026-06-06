@@ -2,16 +2,16 @@ import { eq, and, asc } from 'drizzle-orm';
 import { db } from '../client';
 import {
   verticals,
-  skills,
-  skillCategories,
+  products,
+  categories,
   supportTypes,
   certifications,
   certificationCategories,
   languages,
   industries,
   type Vertical,
-  type Skill,
-  type SkillCategory,
+  type Product,
+  type Category,
   type SupportType,
   type Certification,
   type CertificationCategory,
@@ -23,9 +23,9 @@ import {
 
 type ReferenceFieldKeys = 'id' | 'name' | 'slug' | 'sortOrder';
 
-export interface SkillsByCategory {
-  category: Pick<SkillCategory, ReferenceFieldKeys>;
-  skills: Pick<Skill, ReferenceFieldKeys>[];
+export interface ProductsByCategory {
+  category: Pick<Category, ReferenceFieldKeys>;
+  products: Pick<Product, ReferenceFieldKeys>[];
 }
 
 export interface CertificationsByCategory {
@@ -36,48 +36,53 @@ export interface CertificationsByCategory {
 // ── Repository ───────────────────────────────────────────────────
 
 export const referenceDataRepository = {
-  /** Get the Salesforce vertical by slug */
-  async getSalesforceVertical(): Promise<Vertical> {
-    const vertical = await db.query.verticals.findFirst({
-      where: eq(verticals.slug, 'salesforce'),
+  /** Resolve any vertical by its slug. Returns undefined if not found. */
+  async getVerticalBySlug(slug: string): Promise<Vertical | undefined> {
+    return db.query.verticals.findFirst({
+      where: eq(verticals.slug, slug),
     });
+  },
+
+  /** Get the Salesforce vertical by slug (the default browse/apply vertical) */
+  async getSalesforceVertical(): Promise<Vertical> {
+    const vertical = await this.getVerticalBySlug('salesforce');
     if (!vertical) throw new Error('Salesforce vertical not found');
     return vertical;
   },
 
-  /** All active skills grouped by category for a vertical */
-  async getSkillsByVertical(verticalId: string): Promise<SkillsByCategory[]> {
-    const categories = await db.query.skillCategories.findMany({
-      where: and(eq(skillCategories.verticalId, verticalId), eq(skillCategories.isActive, true)),
+  /** All active products grouped by category for a vertical */
+  async getProductsByVertical(verticalId: string): Promise<ProductsByCategory[]> {
+    const rows = await db.query.categories.findMany({
+      where: and(eq(categories.verticalId, verticalId), eq(categories.isActive, true)),
       with: {
-        skills: {
-          where: eq(skills.isActive, true),
-          orderBy: [asc(skills.sortOrder)],
+        products: {
+          where: eq(products.isActive, true),
+          orderBy: [asc(products.sortOrder)],
         },
       },
-      orderBy: [asc(skillCategories.sortOrder)],
+      orderBy: [asc(categories.sortOrder)],
     });
 
-    return categories.map((cat) => ({
+    return rows.map((cat) => ({
       category: {
         id: cat.id,
         name: cat.name,
         slug: cat.slug,
         sortOrder: cat.sortOrder,
       },
-      skills: cat.skills.map((s) => ({
-        id: s.id,
-        name: s.name,
-        slug: s.slug,
-        sortOrder: s.sortOrder,
+      products: cat.products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        sortOrder: p.sortOrder,
       })),
     }));
   },
 
-  /** All active support types (the 4 assessment dimensions) */
-  async getSupportTypes(): Promise<SupportType[]> {
+  /** All active support types for a vertical (N per vertical, vertical-scoped) */
+  async getSupportTypes(verticalId: string): Promise<SupportType[]> {
     return db.query.supportTypes.findMany({
-      where: eq(supportTypes.isActive, true),
+      where: and(eq(supportTypes.verticalId, verticalId), eq(supportTypes.isActive, true)),
       orderBy: [asc(supportTypes.sortOrder)],
     });
   },

@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockGetVertical, mockGetSkills } = vi.hoisted(() => ({
+const { mockGetVertical, mockGetProducts } = vi.hoisted(() => ({
   mockGetVertical: vi.fn(),
-  mockGetSkills: vi.fn(),
+  mockGetProducts: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   referenceDataRepository: {
     getSalesforceVertical: mockGetVertical,
-    getSkillsByVertical: mockGetSkills,
+    getProductsByVertical: mockGetProducts,
   },
 }));
 
@@ -23,15 +23,15 @@ beforeEach(() => {
 describe('loadSearchTaxonomy', () => {
   it('maps the vertical skills to a ProductTaxonomy', async () => {
     mockGetVertical.mockResolvedValue({ id: 'vert-sf', slug: 'salesforce' });
-    mockGetSkills.mockResolvedValue([
+    mockGetProducts.mockResolvedValue([
       {
         category: { id: 'c1', name: 'AI', slug: 'ai', sortOrder: 0 },
-        skills: [{ id: 's1', name: 'Agentforce', slug: 'agentforce', sortOrder: 0 }],
+        products: [{ id: 's1', name: 'Agentforce', slug: 'agentforce', sortOrder: 0 }],
       },
     ]);
 
     const taxonomy = await loadSearchTaxonomy();
-    expect(mockGetSkills).toHaveBeenCalledWith('vert-sf');
+    expect(mockGetProducts).toHaveBeenCalledWith('vert-sf');
     expect(taxonomy).toEqual({
       groups: [{ id: 'c1', name: 'AI', items: [{ id: 's1', name: 'Agentforce' }] }],
     });

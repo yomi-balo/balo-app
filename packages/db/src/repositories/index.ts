@@ -3,7 +3,7 @@ export { companiesRepository } from './companies';
 export { expertsRepository } from './experts';
 export type {
   ApplicationWithRelations,
-  ApplicationSkillWithRelations,
+  ApplicationCompetencyWithRelations,
   ApplicationCertWithRelations,
   ApplicationLanguageWithRelations,
   ApplicationIndustryWithRelations,
@@ -12,7 +12,7 @@ export type {
 } from './experts';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
-export type { SkillsByCategory, CertificationsByCategory } from './reference-data';
+export type { ProductsByCategory, CertificationsByCategory } from './reference-data';
 export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
@@ -22,6 +22,6 @@ export { expertSearchRepository } from './expert-search';
 export type {
   ExpertSearchParams,
   ExpertSearchRow,
-  ExpertSearchSkillRow,
+  ExpertSearchCompetencyRow,
   FacetCount,
 } from './expert-search';
