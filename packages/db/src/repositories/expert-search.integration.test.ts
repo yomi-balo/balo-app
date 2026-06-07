@@ -305,6 +305,123 @@ describe('expertSearchRepository.search — fuzzy trigram fallback', () => {
   });
 });
 
+// ── 3b. Name search (BAL-263) ───────────────────────────────────────
+//
+// The stored search_vector is generated from headline(A) + bio(B) only — the
+// expert's NAME lives on `users` and was never matched before BAL-263. The name
+// is controlled via userFactory({ firstName, lastName }) + passing `userId`,
+// because the factory's firstName/lastName overrides only feed the username
+// slug (createDraft), NOT the users row that search matches on.
+
+describe('expertSearchRepository.search — name matching (BAL-263)', () => {
+  it('matches an expert by first name, last name, and full name', async () => {
+    const verticalId = await getVerticalId();
+    // Distinctive name that does NOT appear in any default headline/bio so the
+    // match is unambiguously coming from the name predicate.
+    const user = await userFactory({ firstName: 'Zephyrina', lastName: 'Quompublex' });
+    const target = await searchExpertFactory({ verticalId, userId: user.id });
+
+    // A decoy expert with a totally different name + default headline/bio.
+    const decoyUser = await userFactory({ firstName: 'Bartholomew', lastName: 'Krendlewix' });
+    const decoy = await searchExpertFactory({ verticalId, userId: decoyUser.id });
+
+    const byFirst = await expertSearchRepository.search(
+      params({ verticalId, query: 'Zephyrina', pageSize: 50 })
+    );
+    expect(byFirst.rows.map((r) => r.id)).toContain(target.id);
+    expect(byFirst.rows.map((r) => r.id)).not.toContain(decoy.id);
+
+    const byLast = await expertSearchRepository.search(
+      params({ verticalId, query: 'Quompublex', pageSize: 50 })
+    );
+    expect(byLast.rows.map((r) => r.id)).toContain(target.id);
+    expect(byLast.rows.map((r) => r.id)).not.toContain(decoy.id);
+
+    const byFull = await expertSearchRepository.search(
+      params({ verticalId, query: 'Zephyrina Quompublex', pageSize: 50 })
+    );
+    expect(byFull.rows.map((r) => r.id)).toContain(target.id);
+    expect(byFull.rows.map((r) => r.id)).not.toContain(decoy.id);
+  });
+
+  it('matches a minor typo in the name via trigram fuzziness', async () => {
+    const verticalId = await getVerticalId();
+    const user = await userFactory({ firstName: 'Zephyrina', lastName: 'Quompublex' });
+    const target = await searchExpertFactory({ verticalId, userId: user.id });
+
+    // "Zephyrena" — one-character typo, close trigram similarity to "Zephyrina".
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'Zephyrena', pageSize: 50 })
+    );
+    expect(rows.map((r) => r.id)).toContain(target.id);
+  });
+
+  it('ranks a strong name match at the top, above a same-token headline match', async () => {
+    const verticalId = await getVerticalId();
+    // The person we are searching for, by name. Their headline/bio do NOT contain
+    // the query token, so they can only surface (and rank) via the name term.
+    const namedUser = await userFactory({ firstName: 'Mxyzptlk', lastName: 'Consultant' });
+    const named = await searchExpertFactory({
+      verticalId,
+      userId: namedUser.id,
+      headline: 'Senior delivery lead',
+      bio: 'Implementations and rollouts',
+    });
+
+    // A different expert whose HEADLINE contains the same token but whose name is
+    // unrelated — the name-weighted hit must outrank this headline-only hit.
+    const headlineUser = await userFactory({ firstName: 'Greta', lastName: 'Halvorsen' });
+    const headlineMatch = await searchExpertFactory({
+      verticalId,
+      userId: headlineUser.id,
+      headline: 'Mxyzptlk platform architect',
+      bio: 'General work',
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'Mxyzptlk', sort: 'best_match', pageSize: 50 })
+    );
+
+    const ids = rows.map((r) => r.id);
+    const idxNamed = ids.indexOf(named.id);
+    const idxHeadline = ids.indexOf(headlineMatch.id);
+    expect(idxNamed).toBeGreaterThanOrEqual(0);
+    expect(idxHeadline).toBeGreaterThanOrEqual(0);
+    // 0.5 * word_similarity(name) ≈ 0.5 for the exact name token, which dominates
+    // the 0.1 headline bump → the named expert ranks at/near the top.
+    expect(idxNamed).toBeLessThan(idxHeadline);
+  });
+
+  it('does not disturb headline/bio/product matches when the name does not match', async () => {
+    const verticalId = await getVerticalId();
+    // Expert with a default name; surfaces purely on headline FTS.
+    const headlineExpert = await searchExpertFactory({
+      verticalId,
+      headline: 'Agentforce automation specialist',
+      bio: 'I build agentforce bots',
+    });
+    // Expert whose product name matches but whose name + headline do not.
+    const productId = await createProduct(verticalId, 'Agentforce administration');
+    const stId = await createSupportType(verticalId, 'Technical');
+    const productExpert = await searchExpertFactory({
+      verticalId,
+      headline: 'CRM specialist',
+      bio: 'works on opportunities',
+      competencies: [{ productId, supportTypeId: stId }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'agentforce', pageSize: 50 })
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(headlineExpert.id);
+    expect(ids).toContain(productExpert.id);
+    // Headline (A) still outranks the product-name (C) match — the name term,
+    // which neither expert triggers, does not perturb the existing ordering.
+    expect(ids.indexOf(headlineExpert.id)).toBeLessThan(ids.indexOf(productExpert.id));
+  });
+});
+
 // ── 4. OR-within / AND-across ───────────────────────────────────────
 
 describe('expertSearchRepository.search — OR within facet, AND across facets', () => {
