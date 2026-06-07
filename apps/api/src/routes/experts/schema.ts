@@ -16,7 +16,7 @@ export const SORT_VALUES = ['best_match', 'soonest', 'lowest_rate', 'most_experi
 export const searchQuerySchema = z
   .object({
     q: z.string().trim().max(200).optional(),
-    products: uuidArray, // skills.id[]
+    products: uuidArray, // products.id[]
     supportTypes: uuidArray, // support_types.id[] (UUIDs — vertical-scoped, N types per vertical)
     languages: uuidArray, // languages.id[]
     industries: uuidArray, // industries.id[]

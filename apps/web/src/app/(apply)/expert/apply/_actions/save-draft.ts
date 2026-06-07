@@ -91,7 +91,7 @@ export const saveDraftAction = withAuth(
           const supportTypes = await referenceDataRepository.getSupportTypes(vertical.id);
           await expertsRepository.syncProducts(
             profileId,
-            data.skillIds,
+            data.productIds,
             supportTypes.map((st) => st.id)
           );
           break;

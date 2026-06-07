@@ -97,9 +97,9 @@ function findFirstIncompleteStep(draft: ApplicationWithRelations): number {
   // Step 3: Check all skills have at least 1 non-zero rating
   const skillProficiencies = new Map<string, number[]>();
   for (const s of draft.skills) {
-    const arr = skillProficiencies.get(s.skillId) ?? [];
+    const arr = skillProficiencies.get(s.productId) ?? [];
     arr.push(s.proficiency);
-    skillProficiencies.set(s.skillId, arr);
+    skillProficiencies.set(s.productId, arr);
   }
   for (const [, profs] of skillProficiencies) {
     if (!profs.some((p) => p > 0)) return 2;
@@ -145,9 +145,9 @@ function isAssessmentComplete(draft: ApplicationWithRelations): boolean {
   if (draft.skills.length === 0) return false;
   const skillProficiencies = new Map<string, number[]>();
   for (const s of draft.skills) {
-    const arr = skillProficiencies.get(s.skillId) ?? [];
+    const arr = skillProficiencies.get(s.productId) ?? [];
     arr.push(s.proficiency);
-    skillProficiencies.set(s.skillId, arr);
+    skillProficiencies.set(s.productId, arr);
   }
   for (const [, profs] of skillProficiencies) {
     if (!profs.some((p) => p > 0)) return false;
@@ -205,9 +205,9 @@ function hydrateProfileData(draft: ApplicationWithRelations | null): Partial<Pro
 }
 
 function hydrateProductsData(draft: ApplicationWithRelations | null): Partial<ProductsStepData> {
-  if (!draft) return { skillIds: [] };
-  const uniqueSkillIds = [...new Set(draft.skills.map((s) => s.skillId))];
-  return { skillIds: uniqueSkillIds };
+  if (!draft) return { productIds: [] };
+  const uniqueProductIds = [...new Set(draft.skills.map((s) => s.productId))];
+  return { productIds: uniqueProductIds };
 }
 
 function hydrateAssessmentData(
@@ -216,7 +216,7 @@ function hydrateAssessmentData(
   if (!draft) return { ratings: [] };
   return {
     ratings: draft.skills.map((s) => ({
-      skillId: s.skillId,
+      productId: s.productId,
       supportTypeId: s.supportTypeId,
       proficiency: s.proficiency,
     })),

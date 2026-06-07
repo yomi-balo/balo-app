@@ -6,25 +6,25 @@ import { ExpertiseTab } from './expertise-tab';
 // ── Fixtures ─────────────────────────────────────────────────────
 
 // Two competency rows for the same skill across two support types — exercises
-// the `groupSkills` aggregation (grouping by skillId, collecting support types).
+// the `groupSkills` aggregation (grouping by productId, collecting support types).
 const skills = [
   {
     id: 'c1',
-    skillId: 'skill-cpq',
+    productId: 'skill-cpq',
     proficiency: 8,
     skill: { id: 'skill-cpq', name: 'CPQ' },
     supportType: { id: 'st-fix', name: 'Technical Fix', slug: 'technical-fix' },
   },
   {
     id: 'c2',
-    skillId: 'skill-cpq',
+    productId: 'skill-cpq',
     proficiency: 5,
     skill: { id: 'skill-cpq', name: 'CPQ' },
     supportType: { id: 'st-arch', name: 'Architecture', slug: 'architecture' },
   },
   {
     id: 'c3',
-    skillId: 'skill-cases',
+    productId: 'skill-cases',
     proficiency: 6,
     skill: { id: 'skill-cases', name: 'Case Mgmt' },
     supportType: { id: 'st-fix', name: 'Technical Fix', slug: 'technical-fix' },

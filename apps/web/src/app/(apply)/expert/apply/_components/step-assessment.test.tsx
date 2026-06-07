@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
+import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import type { ReferenceData } from '../_actions/load-draft';
 import type { ApplicationWithRelations, SupportType } from '@balo/db';
@@ -86,7 +87,7 @@ const referenceData: ReferenceData = {
 };
 
 // Draft with a selected, rated skill — so `hydrateProductsData` populates
-// productsData.skillIds and an assessment card renders for it.
+// productsData.productIds and an assessment card renders for it.
 const draft = {
   profile: {
     id: 'profile-1',
@@ -100,12 +101,38 @@ const draft = {
     isCertifiedTrainer: false,
   },
   skills: [
-    { id: 'c1', skillId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 6 },
-    { id: 'c2', skillId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
+    { id: 'c1', productId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 6 },
+    { id: 'c2', productId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
   ],
   certifications: [],
   languages: [],
   industries: [],
+  workHistory: [],
+} as unknown as ApplicationWithRelations;
+
+// A fully-hydrated draft: profile + languages + industries populated AND a skill
+// with a non-zero proficiency. This drives `findFirstIncompleteStep` past the
+// early profile/products guards so the proficiency-map loop (context lines
+// 98-106) actually executes against `draft.skills`.
+const completeDraft = {
+  profile: {
+    id: 'profile-2',
+    userId: 'user-1',
+    applicationStatus: 'draft',
+    yearStartedSalesforce: 2018,
+    linkedinUrl: null,
+    trailheadUrl: null,
+    isSalesforceMvp: false,
+    isSalesforceCta: false,
+    isCertifiedTrainer: false,
+  },
+  skills: [
+    { id: 'c1', productId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 7 },
+    { id: 'c2', productId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
+  ],
+  certifications: [],
+  languages: [{ languageId: 'lang-en', proficiency: 'native' }],
+  industries: [{ industryId: 'ind-fin' }],
   workHistory: [],
 } as unknown as ApplicationWithRelations;
 
@@ -136,7 +163,7 @@ describe('StepAssessment', () => {
   });
 
   it('renders an assessment card per selected skill, resolving names via the skill map', () => {
-    // With a hydrated draft, productsData.skillIds = ['skill-cpq'] and the
+    // With a hydrated draft, productsData.productIds = ['skill-cpq'] and the
     // skillNameMap (line ~61) resolves 'skill-cpq' → 'CPQ' for the card title.
     renderStep(draft);
     expect(screen.getByText('CPQ')).toBeInTheDocument();
@@ -152,5 +179,39 @@ describe('StepAssessment', () => {
     // No draft → no selected skills → "0 of 0 products assessed".
     expect(screen.getByText(/0 of 0 products assessed/i)).toBeInTheDocument();
     expect(screen.queryByText('CPQ')).not.toBeInTheDocument();
+  });
+
+  it('hydrates step statuses from a fully-complete draft (exercises the proficiency-map loop)', () => {
+    // With a complete profile + languages + industries + a rated skill, the
+    // provider runs the skill-proficiency grouping loop in
+    // `findFirstIncompleteStep` (context lines 98-106) instead of bailing at
+    // the profile guard. The skill still resolves to a rendered card, and the
+    // pre-rated skill counts as assessed.
+    renderStep(completeDraft);
+    expect(screen.getByText('CPQ')).toBeInTheDocument();
+    expect(screen.getByText(/1 of 1 products assessed/i)).toBeInTheDocument();
+  });
+
+  it('updates a dimension proficiency via the slider (exercises handleChange map)', async () => {
+    const user = userEvent.setup();
+    renderStep(draft);
+
+    // Cards start collapsed; expand the CPQ card to reveal its sliders. The
+    // toggle button's accessible name combines the skill name and its status
+    // badge ("CPQ ... To assess"/"Completed"), so match by substring.
+    await user.click(screen.getByRole('button', { name: /CPQ/ }));
+
+    // Each support type renders a slider thumb (desktop + mobile layouts). Drive
+    // the first one with the keyboard so `handleChange` runs its `.map` predicate
+    // (line 130), updating only the matching productId/supportTypeId rating.
+    const [slider] = screen.getAllByRole('slider');
+    expect(slider).toBeDefined();
+    if (!slider) throw new Error('expected a slider to be rendered');
+
+    slider.focus();
+    await user.keyboard('{ArrowRight}');
+
+    // The CPQ skill already had a non-zero rating, so it stays "assessed".
+    expect(screen.getByText(/1 of 1 products assessed/i)).toBeInTheDocument();
   });
 });

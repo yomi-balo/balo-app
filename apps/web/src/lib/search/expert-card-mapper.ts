@@ -42,9 +42,9 @@ export function mapSearchResultToCardData(result: ExpertSearchResultDTO): Expert
     consultationCount: result.consultationCount,
     expertise: buildExpertise(
       result.skills.map((s) => ({
-        skillId: s.skillId,
+        productId: s.productId,
         proficiency: s.proficiency,
-        skill: { name: s.skillName },
+        skill: { name: s.productName },
         supportType: { slug: s.supportTypeSlug },
       }))
     ),

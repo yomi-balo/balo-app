@@ -65,8 +65,8 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     return map;
   }, [referenceData.skillsByCategory]);
 
-  // Get selected skill IDs from productsData
-  const selectedSkillIds = useMemo(() => productsData.skillIds ?? [], [productsData.skillIds]);
+  // Get selected product IDs from productsData
+  const selectedSkillIds = useMemo(() => productsData.productIds ?? [], [productsData.productIds]);
 
   const supportTypes = referenceData.supportTypes;
 
@@ -76,7 +76,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   // Ensure every selected skill has a rating row for each support type
   useEffect(() => {
     const currentRatings = form.getValues('ratings');
-    const existingKeys = new Set(currentRatings.map((r) => `${r.skillId}:${r.supportTypeId}`));
+    const existingKeys = new Set(currentRatings.map((r) => `${r.productId}:${r.supportTypeId}`));
 
     const newRatings = [...currentRatings];
     let changed = false;
@@ -86,7 +86,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
         const key = `${skillId}:${st.id}`;
         if (!existingKeys.has(key)) {
           newRatings.push({
-            skillId,
+            productId: skillId,
             supportTypeId: st.id,
             proficiency: 0,
           });
@@ -95,8 +95,8 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
       }
     }
 
-    // Remove ratings for skills no longer selected
-    const filteredRatings = newRatings.filter((r) => selectedSkillIds.includes(r.skillId));
+    // Remove ratings for products no longer selected
+    const filteredRatings = newRatings.filter((r) => selectedSkillIds.includes(r.productId));
     if (filteredRatings.length !== newRatings.length) changed = true;
 
     if (changed) {
@@ -127,7 +127,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     (skillId: string, supportTypeId: string, value: number): void => {
       const currentRatings = form.getValues('ratings');
       const updated = currentRatings.map((r) =>
-        r.skillId === skillId && r.supportTypeId === supportTypeId
+        r.productId === skillId && r.supportTypeId === supportTypeId
           ? { ...r, proficiency: value }
           : r
       );
@@ -139,7 +139,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   // Check completion per skill
   const isSkillComplete = useCallback(
     (skillId: string): boolean => {
-      const skillRatings = ratings.filter((r) => r.skillId === skillId);
+      const skillRatings = ratings.filter((r) => r.productId === skillId);
       return skillRatings.some((r) => r.proficiency > 0);
     },
     [ratings]
@@ -201,7 +201,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
           {selectedSkillIds.map((skillId, index) => {
             const dimensions = supportTypes.map((st) => {
               const rating = ratings.find(
-                (r) => r.skillId === skillId && r.supportTypeId === st.id
+                (r) => r.productId === skillId && r.supportTypeId === st.id
               );
               return {
                 supportTypeId: st.id,

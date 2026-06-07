@@ -16,7 +16,7 @@ import { expertFactory } from './expert.factory';
  * here).
  */
 export interface SearchExpertSkillInput {
-  skillId: string;
+  productId: string;
   supportTypeId: string;
   proficiency?: number;
 }
@@ -58,7 +58,7 @@ export interface SearchExpertOverrides {
  * Creates an approved, searchable expert ready to surface in expert-search:
  *   - draft → submitted → approved (via expertFactory)
  *   - sets searchable=true + headline/bio/rateCents/distinctions/experience
- *   - links skills (expert_skills) and languages (syncLanguages)
+ *   - links competencies (expert_competency) and languages (syncLanguages)
  *   - optionally inserts an availability_cache row (configurable earliest slot)
  *
  * Requires the caller to have created any referenced skills/support_types/
@@ -116,7 +116,7 @@ export async function searchExpertFactory(
     await db.insert(expertCompetency).values(
       overrides.skills.map((s) => ({
         expertProfileId: profile.id,
-        skillId: s.skillId,
+        productId: s.productId,
         supportTypeId: s.supportTypeId,
         proficiency: s.proficiency ?? 3,
       }))

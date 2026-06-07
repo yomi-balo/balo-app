@@ -24,12 +24,12 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
   const form = useForm<ProductsStepData>({
     resolver: zodResolver(productsStepSchema),
     defaultValues: {
-      skillIds: productsData.skillIds ?? [],
+      productIds: productsData.productIds ?? [],
     },
     mode: 'onSubmit',
   });
 
-  const selectedSkillIds = form.watch('skillIds');
+  const selectedSkillIds = form.watch('productIds');
 
   // Sync form to context
   useEffect(() => {
@@ -73,9 +73,9 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
   }, [referenceData.skillsByCategory]);
 
   const removeSkill = (id: string): void => {
-    const current = form.getValues('skillIds');
+    const current = form.getValues('productIds');
     form.setValue(
-      'skillIds',
+      'productIds',
       current.filter((s) => s !== id),
       { shouldValidate: false }
     );
@@ -166,7 +166,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
         {/* Categories */}
         <FormField
           control={form.control}
-          name="skillIds"
+          name="productIds"
           render={({ field }) => (
             <FormItem>
               <FormControl>

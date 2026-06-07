@@ -458,7 +458,7 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
       username,
       searchable: true,
       agencyId: agency.id,
-      skills: [{ skillId: skill.id, supportTypeId: supportType.id, proficiency: 8 }],
+      skills: [{ productId: skill.id, supportTypeId: supportType.id, proficiency: 8 }],
       languages: [{ languageId: language.id, proficiency: 'native' }],
     });
 

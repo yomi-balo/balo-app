@@ -33,8 +33,8 @@ export interface ExpertSearchParams {
 
 /** One expert_competency row joined to its product name + support-type slug. */
 export interface ExpertSearchCompetencyRow {
-  skillId: string;
-  skillName: string;
+  productId: string;
+  productName: string;
   supportTypeSlug: string;
   proficiency: number;
 }
@@ -140,7 +140,7 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
           .where(
             and(
               eq(expertCompetency.expertProfileId, expertProfiles.id),
-              inArray(expertCompetency.skillId, params.productIds)
+              inArray(expertCompetency.productId, params.productIds)
             )
           )
       )
@@ -238,7 +238,7 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
         OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
         OR EXISTS (
           SELECT 1 FROM ${expertCompetency} es
-          JOIN ${products} s ON s.id = es.skill_id
+          JOIN ${products} s ON s.id = es.product_id
           WHERE es.expert_profile_id = ${expertProfiles.id}
             AND word_similarity(${q}, s.name) > 0.3
         )
@@ -316,7 +316,7 @@ function relevanceExpression(q: string | null): SQL {
     + COALESCE((
         SELECT MAX(ts_rank(setweight(to_tsvector('english', s.name), 'C'),
                            websearch_to_tsquery('english', ${q})))
-        FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.skill_id
+        FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.product_id
         WHERE es.expert_profile_id = ${expertProfiles.id}
       ), 0)
     + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
@@ -383,7 +383,7 @@ interface SearchSelectRow {
   totalCount: number;
 }
 
-// ── Internal: per-expert skills for the result page ──────────────
+// ── Internal: per-expert products for the result page ──────────────
 
 /**
  * Fetch the competencies for a page of experts in ONE query (join
@@ -393,7 +393,7 @@ interface SearchSelectRow {
  * single round-trip when there are no rows. The web orders/limits to 4 in the
  * card, so we just return the expert's competencies proficiency-desc here.
  */
-async function fetchSkillsByExpert(
+async function fetchProductsByExpert(
   expertProfileIds: string[]
 ): Promise<Map<string, ExpertSearchCompetencyRow[]>> {
   const byExpert = new Map<string, ExpertSearchCompetencyRow[]>();
@@ -402,13 +402,13 @@ async function fetchSkillsByExpert(
   const rows = await db
     .select({
       expertProfileId: expertCompetency.expertProfileId,
-      skillId: expertCompetency.skillId,
-      skillName: products.name,
+      productId: expertCompetency.productId,
+      productName: products.name,
       supportTypeSlug: supportTypes.slug,
       proficiency: expertCompetency.proficiency,
     })
     .from(expertCompetency)
-    .innerJoin(products, eq(products.id, expertCompetency.skillId))
+    .innerJoin(products, eq(products.id, expertCompetency.productId))
     .innerJoin(supportTypes, eq(supportTypes.id, expertCompetency.supportTypeId))
     .where(inArray(expertCompetency.expertProfileId, expertProfileIds))
     .orderBy(desc(expertCompetency.proficiency));
@@ -416,8 +416,8 @@ async function fetchSkillsByExpert(
   for (const row of rows) {
     const list = byExpert.get(row.expertProfileId) ?? [];
     list.push({
-      skillId: row.skillId,
-      skillName: row.skillName,
+      productId: row.productId,
+      productName: row.productName,
       supportTypeSlug: row.supportTypeSlug,
       proficiency: row.proficiency,
     });
@@ -502,7 +502,7 @@ export const expertSearchRepository = {
     // page is empty). Grouped in JS into ExpertSearchCompetencyRow[] per expert,
     // joining the product name + support-type slug and ordered proficiency-desc.
     const expertIds = rows.map((r) => r.id);
-    const skillsByExpert = await fetchSkillsByExpert(expertIds);
+    const productsByExpert = await fetchProductsByExpert(expertIds);
 
     const mapped: ExpertSearchRow[] = rows.map((r: SearchSelectRow) => ({
       id: r.id,
@@ -526,7 +526,7 @@ export const expertSearchRepository = {
         name: l.name,
         flagEmoji: l.flagEmoji,
       })),
-      skills: skillsByExpert.get(r.id) ?? [],
+      skills: productsByExpert.get(r.id) ?? [],
     }));
 
     return { rows: mapped, total };
@@ -590,7 +590,7 @@ export const expertSearchRepository = {
           count: sql<number>`count(DISTINCT ${expertCompetency.expertProfileId})::int`,
         })
         .from(expertCompetency)
-        .innerJoin(products, eq(products.id, expertCompetency.skillId))
+        .innerJoin(products, eq(products.id, expertCompetency.productId))
         .where(inArray(expertCompetency.expertProfileId, eligibleSet))
         .groupBy(products.id, products.name),
 

@@ -108,10 +108,8 @@ export const expertCompetency = pgTable(
     expertProfileId: uuid('expert_profile_id')
       .references(() => expertProfiles.id)
       .notNull(),
-    // Legacy column name retained on purpose: it now FK-references products.id
-    // (renamed from skills). Keeping `skill_id` avoids churning the search DTO,
-    // the web mirror, and the upsert conflict target. See BAL-260 PR notes.
-    skillId: uuid('skill_id')
+    // FK-references products.id (the taxonomy table renamed from skills).
+    productId: uuid('product_id')
       .references(() => products.id)
       .notNull(),
     supportTypeId: uuid('support_type_id')
@@ -125,7 +123,7 @@ export const expertCompetency = pgTable(
   (table) => ({
     uniqueCompetencyIdx: uniqueIndex('expert_competency_unique_idx').on(
       table.expertProfileId,
-      table.skillId,
+      table.productId,
       table.supportTypeId
     ),
   })
@@ -264,9 +262,9 @@ export const expertCompetencyRelations = relations(expertCompetency, ({ one }) =
     references: [expertProfiles.id],
   }),
   // Relation field key `skill` is kept (referenced by `with: { skill: … }`
-  // query usages); only the underlying table renamed (skills → products).
+  // query usages); only the underlying column renamed (skill_id → product_id).
   skill: one(products, {
-    fields: [expertCompetency.skillId],
+    fields: [expertCompetency.productId],
     references: [products.id],
   }),
   supportType: one(supportTypes, {

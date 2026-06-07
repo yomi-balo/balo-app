@@ -57,7 +57,7 @@ const SUPPORT_TYPE_SLUG_MAP: Record<string, SkillType> = {
  * (`ProfileSettingsData['skills']`) or the search DTO (adapted in the mapper).
  */
 export interface ExpertiseSkillInput {
-  skillId: string;
+  productId: string;
   proficiency: number;
   skill: { name: string };
   supportType: { slug: string };
@@ -74,7 +74,7 @@ export function buildExpertise(skills: ReadonlyArray<ExpertiseSkillInput>): Expe
 
   for (const s of skills) {
     if (s.proficiency <= 0) continue;
-    const key = s.skillId;
+    const key = s.productId;
     if (!groups.has(key)) {
       groups.set(key, { product: s.skill.name, skills: [] });
     }

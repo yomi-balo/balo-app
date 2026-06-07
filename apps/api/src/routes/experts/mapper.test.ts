@@ -29,8 +29,8 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     ],
     skills: [
       {
-        skillId: 'sales-cloud',
-        skillName: 'Sales Cloud',
+        productId: 'sales-cloud',
+        productName: 'Sales Cloud',
         supportTypeSlug: 'technical-fix-support',
         proficiency: 5,
       },
@@ -143,12 +143,12 @@ describe('mapRowToExpertSearchResult', () => {
     ).toBe(7);
   });
 
-  it('passes through skills (skillId, skillName, supportTypeSlug, proficiency)', () => {
+  it('passes through skills (productId, productName, supportTypeSlug, proficiency)', () => {
     const result = mapRowToExpertSearchResult(buildRow(), NOW);
     expect(result.skills).toEqual([
       {
-        skillId: 'sales-cloud',
-        skillName: 'Sales Cloud',
+        productId: 'sales-cloud',
+        productName: 'Sales Cloud',
         supportTypeSlug: 'technical-fix-support',
         proficiency: 5,
       },

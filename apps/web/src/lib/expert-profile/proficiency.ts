@@ -1,5 +1,5 @@
 /**
- * Shared proficiency-scale helpers for the 0–10 `expert_skills.proficiency`
+ * Shared proficiency-scale helpers for the 0–10 `expert_competency.proficiency`
  * scale. The expert apply wizard (assessment-card) and the public profile
  * Expertise bars both derive their level label from this single source so the
  * two never drift.

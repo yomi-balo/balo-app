@@ -258,7 +258,7 @@ describe('saveDraftAction', () => {
     it('syncs skills with support type IDs', async () => {
       await saveDraftAction({
         step: 'products',
-        data: { skillIds: [UUID1, UUID2] },
+        data: { productIds: [UUID1, UUID2] },
         expertProfileId: PROFILE_ID,
       });
       expect(mockSyncProducts).toHaveBeenCalledWith(
@@ -271,7 +271,7 @@ describe('saveDraftAction', () => {
     it('fetches support types from reference data', async () => {
       await saveDraftAction({
         step: 'products',
-        data: { skillIds: [UUID1] },
+        data: { productIds: [UUID1] },
         expertProfileId: PROFILE_ID,
       });
       expect(mockGetSupportTypes).toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe('saveDraftAction', () => {
     });
 
     it('updates skill proficiencies', async () => {
-      const ratings = [{ skillId: UUID1, supportTypeId: UUID2, proficiency: 7 }];
+      const ratings = [{ productId: UUID1, supportTypeId: UUID2, proficiency: 7 }];
       await saveDraftAction({
         step: 'assessment',
         data: { ratings },

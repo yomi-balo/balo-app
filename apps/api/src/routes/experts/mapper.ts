@@ -31,8 +31,8 @@ export function mapRowToExpertSearchResult(row: ExpertSearchRow, now: Date): Exp
       : null,
     consultationCount: row.consultationCount,
     skills: row.skills.map((s) => ({
-      skillId: s.skillId,
-      skillName: s.skillName,
+      productId: s.productId,
+      productName: s.productName,
       supportTypeSlug: s.supportTypeSlug,
       proficiency: s.proficiency,
     })),

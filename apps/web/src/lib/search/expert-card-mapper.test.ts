@@ -48,20 +48,20 @@ const baseDto: ExpertSearchResultDTO = {
   consultationCount: 124,
   skills: [
     {
-      skillId: 'sales-cloud',
-      skillName: 'Sales Cloud',
+      productId: 'sales-cloud',
+      productName: 'Sales Cloud',
       supportTypeSlug: 'technical-fix-support',
       proficiency: 5,
     },
     {
-      skillId: 'sales-cloud',
-      skillName: 'Sales Cloud',
+      productId: 'sales-cloud',
+      productName: 'Sales Cloud',
       supportTypeSlug: 'architecture-integrations',
       proficiency: 4,
     },
     {
-      skillId: 'service-cloud',
-      skillName: 'Service Cloud',
+      productId: 'service-cloud',
+      productName: 'Service Cloud',
       supportTypeSlug: 'platform-training',
       proficiency: 3,
     },
@@ -88,14 +88,14 @@ describe('mapSearchResultToCardData', () => {
       ...baseDto,
       skills: [
         {
-          skillId: 'sales-cloud',
-          skillName: 'Sales Cloud',
+          productId: 'sales-cloud',
+          productName: 'Sales Cloud',
           supportTypeSlug: 'technical-fix-support',
           proficiency: 0,
         },
         {
-          skillId: 'service-cloud',
-          skillName: 'Service Cloud',
+          productId: 'service-cloud',
+          productName: 'Service Cloud',
           supportTypeSlug: 'platform-training',
           proficiency: 3,
         },

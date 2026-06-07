@@ -86,7 +86,7 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
     const existsSql = toSql(conds[3]);
     expect(existsSql).toContain('exists');
     expect(existsSql).toContain('"expert_competency"');
-    expect(existsSql).toContain('"skill_id" in ($1, $2, $3)');
+    expect(existsSql).toContain('"product_id" in ($1, $2, $3)');
   });
 
   it('uses support_type_id for the supportTypes facet', () => {

@@ -1362,8 +1362,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "skill_id": {
-          "name": "skill_id",
+        "product_id": {
+          "name": "product_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
@@ -1407,7 +1407,7 @@
               "nulls": "last"
             },
             {
-              "expression": "skill_id",
+              "expression": "product_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1435,11 +1435,11 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "expert_competency_skill_id_products_id_fk": {
-          "name": "expert_competency_skill_id_products_id_fk",
+        "expert_competency_product_id_products_id_fk": {
+          "name": "expert_competency_product_id_products_id_fk",
           "tableFrom": "expert_competency",
           "tableTo": "products",
-          "columnsFrom": ["skill_id"],
+          "columnsFrom": ["product_id"],
           "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"

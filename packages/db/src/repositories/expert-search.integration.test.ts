@@ -154,7 +154,7 @@ describe('expertSearchRepository — vertical-as-data (second vertical, no code 
     // ── 2. Approved + searchable experts in the mock vertical ───────────────
     const mockExpert = await searchExpertFactory({
       verticalId: mock.id,
-      skills: [{ skillId: mockProductId, supportTypeId: mockSupportTypeId }],
+      skills: [{ productId: mockProductId, supportTypeId: mockSupportTypeId }],
     });
 
     // A Salesforce expert that must NOT leak into mock-vertical results.
@@ -162,7 +162,7 @@ describe('expertSearchRepository — vertical-as-data (second vertical, no code 
     const sfSupportTypeId = await createSupportType(sfVerticalId, 'SF Support');
     const sfExpert = await searchExpertFactory({
       verticalId: sfVerticalId,
-      skills: [{ skillId: sfSkillId, supportTypeId: sfSupportTypeId }],
+      skills: [{ productId: sfSkillId, supportTypeId: sfSupportTypeId }],
     });
 
     // ── 3a. resolveVerticalId resolves the mock slug ────────────────────────
@@ -246,7 +246,7 @@ describe('expertSearchRepository.search — weighted A > B > C ranking', () => {
       verticalId,
       headline: 'CRM specialist',
       bio: 'works on opportunities',
-      skills: [{ skillId: skillC, supportTypeId: supportTypeC }],
+      skills: [{ productId: skillC, supportTypeId: supportTypeC }],
     });
 
     const { rows } = await expertSearchRepository.search(
@@ -319,19 +319,19 @@ describe('expertSearchRepository.search — OR within facet, AND across facets',
     // Has skillA + English → included
     const e1 = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillA, supportTypeId: stId }],
+      skills: [{ productId: skillA, supportTypeId: stId }],
       languages: [{ languageId: english }],
     });
     // Has skillB + English → included
     const e2 = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillB, supportTypeId: stId }],
+      skills: [{ productId: skillB, supportTypeId: stId }],
       languages: [{ languageId: english }],
     });
     // Has skillA but only Spanish → excluded (AND across facets)
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillA, supportTypeId: stId }],
+      skills: [{ productId: skillA, supportTypeId: stId }],
       languages: [{ languageId: spanish }],
     });
 
@@ -355,7 +355,7 @@ describe('expertSearchRepository.search — OR within facet, AND across facets',
 // ── 5. supportTypes filter ──────────────────────────────────────────
 
 describe('expertSearchRepository.search — supportTypes filter', () => {
-  it('filters by support_types.id via expert_skills.support_type_id', async () => {
+  it('filters by support_types.id via expert_competency.support_type_id', async () => {
     const verticalId = await getVerticalId();
     const skillId = await createSkill(verticalId, uniq('Skill'));
     const stWanted = await createSupportType(verticalId, 'Architecture');
@@ -363,11 +363,11 @@ describe('expertSearchRepository.search — supportTypes filter', () => {
 
     const wanted = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stWanted }],
+      skills: [{ productId: skillId, supportTypeId: stWanted }],
     });
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stOther }],
+      skills: [{ productId: skillId, supportTypeId: stOther }],
     });
 
     const { rows } = await expertSearchRepository.search(
@@ -442,7 +442,7 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
     // availability-cache row → invisible to a gated search, but a genuine match.
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      skills: [{ productId: skillId, supportTypeId: stId }],
       earliestAvailableAt: undefined,
     });
 
@@ -478,7 +478,7 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
 
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      skills: [{ productId: skillId, supportTypeId: stId }],
       earliestAvailableAt: new Date(NOW.getTime() + DAY), // future → bookable
     });
 
@@ -515,13 +515,13 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
     // Matches the product filter (no availability).
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: wantedSkill, supportTypeId: stId }],
+      skills: [{ productId: wantedSkill, supportTypeId: stId }],
       earliestAvailableAt: undefined,
     });
     // Does NOT match the product filter → must not be counted.
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: otherSkill, supportTypeId: stId }],
+      skills: [{ productId: otherSkill, supportTypeId: stId }],
       earliestAvailableAt: undefined,
     });
 
@@ -702,14 +702,14 @@ describe('expertSearchRepository.facetCounts', () => {
     await searchExpertFactory({
       verticalId,
       skills: [
-        { skillId: skillA, supportTypeId: stTech },
-        { skillId: skillA, supportTypeId: stArch },
+        { productId: skillA, supportTypeId: stTech },
+        { productId: skillA, supportTypeId: stArch },
       ],
       languages: [{ languageId: english }],
     });
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillB, supportTypeId: stTech }],
+      skills: [{ productId: skillB, supportTypeId: stTech }],
       languages: [{ languageId: english }],
     });
 
@@ -738,12 +738,12 @@ describe('expertSearchRepository.facetCounts', () => {
 
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      skills: [{ productId: skillId, supportTypeId: stId }],
       earliestAvailableAt: new Date(NOW.getTime() + DAY), // future → counted when gate ON
     });
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      skills: [{ productId: skillId, supportTypeId: stId }],
       earliestAvailableAt: undefined, // no cache → excluded when gate ON
     });
 
@@ -939,7 +939,7 @@ describe('expertSearchRepository.search — row field hydration', () => {
       .returning();
     const expert = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: supportType!.id, proficiency: 4 }],
+      skills: [{ productId: skillId, supportTypeId: supportType!.id, proficiency: 4 }],
     });
 
     const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
@@ -947,8 +947,8 @@ describe('expertSearchRepository.search — row field hydration', () => {
     expect(row).toBeDefined();
     expect(row!.skills).toEqual([
       {
-        skillId,
-        skillName,
+        productId: skillId,
+        productName: skillName,
         supportTypeSlug: supportType!.slug,
         proficiency: 4,
       },

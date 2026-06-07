@@ -119,7 +119,7 @@ describe('getCountryDisplay', () => {
 
 describe('buildExpertise', () => {
   const skill = (over: Partial<ExpertiseSkillInput> = {}): ExpertiseSkillInput => ({
-    skillId: 'sales-cloud',
+    productId: 'sales-cloud',
     proficiency: 3,
     skill: { name: 'Sales Cloud' },
     supportType: { slug: 'technical-fix-support' },
@@ -140,8 +140,8 @@ describe('buildExpertise', () => {
 
   it('keeps distinct products in first-seen order', () => {
     const result = buildExpertise([
-      skill({ skillId: 'service', skill: { name: 'Service Cloud' } }),
-      skill({ skillId: 'sales', skill: { name: 'Sales Cloud' } }),
+      skill({ productId: 'service', skill: { name: 'Service Cloud' } }),
+      skill({ productId: 'sales', skill: { name: 'Sales Cloud' } }),
     ]);
     expect(result.map((e) => e.product)).toEqual(['Service Cloud', 'Sales Cloud']);
   });
@@ -167,7 +167,7 @@ describe('buildExpertise', () => {
   it('skips skills with proficiency <= 0', () => {
     const result = buildExpertise([
       skill({ proficiency: 0 }),
-      skill({ skillId: 'service', skill: { name: 'Service Cloud' }, proficiency: 2 }),
+      skill({ productId: 'service', skill: { name: 'Service Cloud' }, proficiency: 2 }),
     ]);
     expect(result).toEqual([{ product: 'Service Cloud', skills: ['technical'] }]);
   });

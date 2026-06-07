@@ -31,6 +31,12 @@ ALTER INDEX "skill_vertical_slug_idx" RENAME TO "product_vertical_slug_idx";--> 
 ALTER INDEX "skill_category_id_idx" RENAME TO "product_category_id_idx";--> statement-breakpoint
 ALTER INDEX "expert_skill_unique_idx" RENAME TO "expert_competency_unique_idx";--> statement-breakpoint
 
+-- ── 4b. Rename the competency FK column skill_id → product_id ────────────────
+-- Postgres updates the unique index's column reference transparently on RENAME
+-- COLUMN — no DROP/CREATE needed.
+ALTER TABLE "expert_competency" RENAME COLUMN "skill_id" TO "product_id";--> statement-breakpoint
+ALTER TABLE "expert_competency" RENAME CONSTRAINT "expert_competency_skill_id_products_id_fk" TO "expert_competency_product_id_products_id_fk";--> statement-breakpoint
+
 -- ── 5. support_types → vertical-scoped ──────────────────────────────────────
 -- 5a. Add vertical_id NULLABLE first (existing rows have no value yet).
 ALTER TABLE "support_types" ADD COLUMN "vertical_id" uuid;--> statement-breakpoint

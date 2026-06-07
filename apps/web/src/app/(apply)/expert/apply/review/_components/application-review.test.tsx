@@ -99,7 +99,7 @@ function buildApplication(): ApplicationWithRelations {
     skills: [
       {
         id: 'comp-1',
-        skillId: 'skill-cpq',
+        productId: 'skill-cpq',
         supportTypeId: 'st-fix',
         proficiency: 8,
         skill: { id: 'skill-cpq', name: 'CPQ' },
@@ -107,7 +107,7 @@ function buildApplication(): ApplicationWithRelations {
       },
       {
         id: 'comp-2',
-        skillId: 'skill-cpq',
+        productId: 'skill-cpq',
         supportTypeId: 'st-arch',
         proficiency: 5,
         skill: { id: 'skill-cpq', name: 'CPQ' },
@@ -115,7 +115,7 @@ function buildApplication(): ApplicationWithRelations {
       },
       {
         id: 'comp-3',
-        skillId: 'skill-cases',
+        productId: 'skill-cases',
         supportTypeId: 'st-fix',
         proficiency: 7,
         skill: { id: 'skill-cases', name: 'Case Mgmt' },

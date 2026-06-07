@@ -293,11 +293,11 @@ export function ApplicationReview({
   }
 
   // Group selected skills by category for products section
-  const uniqueSkillIds = [...new Set(skills.map((s) => s.skillId))];
+  const uniqueSkillIds = [...new Set(skills.map((s) => s.productId))];
   const productsByCategory = new Map<string, string[]>();
   for (const skillId of uniqueSkillIds) {
     const categoryName = skillCategoryMap.get(skillId) ?? 'Other';
-    const skillName = skills.find((s) => s.skillId === skillId)?.skill.name ?? '';
+    const skillName = skills.find((s) => s.productId === skillId)?.skill.name ?? '';
     if (!productsByCategory.has(categoryName)) {
       productsByCategory.set(categoryName, []);
     }
@@ -307,10 +307,10 @@ export function ApplicationReview({
   // Group skills for assessment: { skillName → { supportTypeSlug → proficiency } }
   const assessmentMap = new Map<string, { name: string; ratings: Map<string, number> }>();
   for (const s of skills) {
-    if (!assessmentMap.has(s.skillId)) {
-      assessmentMap.set(s.skillId, { name: s.skill.name, ratings: new Map() });
+    if (!assessmentMap.has(s.productId)) {
+      assessmentMap.set(s.productId, { name: s.skill.name, ratings: new Map() });
     }
-    assessmentMap.get(s.skillId)!.ratings.set(s.supportType.slug, s.proficiency);
+    assessmentMap.get(s.productId)!.ratings.set(s.supportType.slug, s.proficiency);
   }
 
   // Build cert-to-category map

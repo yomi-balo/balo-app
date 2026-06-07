@@ -132,25 +132,28 @@ describe('productsStepSchema', () => {
   it('accepts valid input with at least 1 skill', () => {
     expect(
       productsStepSchema.safeParse({
-        skillIds: ['a0000000-0000-4000-8000-000000000001'],
+        productIds: ['a0000000-0000-4000-8000-000000000001'],
       }).success
     ).toBe(true);
   });
 
-  it('rejects empty skillIds', () => {
-    expect(productsStepSchema.safeParse({ skillIds: [] }).success).toBe(false);
+  it('rejects empty productIds', () => {
+    expect(productsStepSchema.safeParse({ productIds: [] }).success).toBe(false);
   });
 
   it('accepts multiple skill IDs', () => {
     expect(
       productsStepSchema.safeParse({
-        skillIds: ['a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002'],
+        productIds: [
+          'a0000000-0000-4000-8000-000000000001',
+          'a0000000-0000-4000-8000-000000000002',
+        ],
       }).success
     ).toBe(true);
   });
 
-  it('rejects non-UUID skillIds', () => {
-    expect(productsStepSchema.safeParse({ skillIds: ['not-a-uuid'] }).success).toBe(false);
+  it('rejects non-UUID productIds', () => {
+    expect(productsStepSchema.safeParse({ productIds: ['not-a-uuid'] }).success).toBe(false);
   });
 });
 
@@ -159,12 +162,12 @@ describe('assessmentStepSchema', () => {
     const result = assessmentStepSchema.safeParse({
       ratings: [
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 7,
         },
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000011',
           proficiency: 0,
         },
@@ -177,12 +180,12 @@ describe('assessmentStepSchema', () => {
     const result = assessmentStepSchema.safeParse({
       ratings: [
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 0,
         },
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000011',
           proficiency: 0,
         },
@@ -195,12 +198,12 @@ describe('assessmentStepSchema', () => {
     const result = assessmentStepSchema.safeParse({
       ratings: [
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 5,
         },
         {
-          skillId: 'a0000000-0000-4000-8000-000000000002',
+          productId: 'a0000000-0000-4000-8000-000000000002',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 3,
         },
@@ -213,17 +216,17 @@ describe('assessmentStepSchema', () => {
     const result = assessmentStepSchema.safeParse({
       ratings: [
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 5,
         },
         {
-          skillId: 'a0000000-0000-4000-8000-000000000002',
+          productId: 'a0000000-0000-4000-8000-000000000002',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 0,
         },
         {
-          skillId: 'a0000000-0000-4000-8000-000000000002',
+          productId: 'a0000000-0000-4000-8000-000000000002',
           supportTypeId: 'a0000000-0000-4000-8000-000000000011',
           proficiency: 0,
         },
@@ -236,7 +239,7 @@ describe('assessmentStepSchema', () => {
     const result = assessmentStepSchema.safeParse({
       ratings: [
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: 11,
         },
@@ -249,7 +252,7 @@ describe('assessmentStepSchema', () => {
     const result = assessmentStepSchema.safeParse({
       ratings: [
         {
-          skillId: 'a0000000-0000-4000-8000-000000000001',
+          productId: 'a0000000-0000-4000-8000-000000000001',
           supportTypeId: 'a0000000-0000-4000-8000-000000000010',
           proficiency: -1,
         },

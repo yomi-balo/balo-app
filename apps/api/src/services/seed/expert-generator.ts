@@ -137,7 +137,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
       if (seenSkillSupport.has(key)) continue;
       seenSkillSupport.add(key);
       skills.push({
-        skillId: entry.skill.id,
+        productId: entry.skill.id,
         supportTypeId,
         proficiency: rng.int(1, 5),
       });

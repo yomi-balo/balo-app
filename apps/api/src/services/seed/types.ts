@@ -78,7 +78,7 @@ export interface GeneratedExpert {
   isCertifiedTrainer: boolean;
   approvedOffsetMs: number;
   // join rows
-  skills: { skillId: string; supportTypeId: string; proficiency: number }[];
+  skills: { productId: string; supportTypeId: string; proficiency: number }[];
   languages: { languageId: string; proficiency: LanguageProficiency }[];
   industryIds: string[];
   workHistory: GeneratedWorkHistory[];

@@ -60,12 +60,12 @@ describe('generateExperts — determinism', () => {
       headline: a.headline,
       rateCents: a.rateCents,
       timezone: a.timezone,
-      skillIds: a.skills.map((s) => s.skillId),
+      productIds: a.skills.map((s) => s.productId),
     }).toEqual({
       headline: b.headline,
       rateCents: b.rateCents,
       timezone: b.timezone,
-      skillIds: b.skills.map((s) => s.skillId),
+      productIds: b.skills.map((s) => s.productId),
     });
   });
 
@@ -124,7 +124,7 @@ describe('generateExperts — skills', () => {
     for (const e of gen(120)) {
       expect(e.skills.length).toBeGreaterThanOrEqual(3);
       expect(e.skills.length).toBeLessThanOrEqual(7);
-      const keys = new Set(e.skills.map((s) => `${s.skillId}:${s.supportTypeId}`));
+      const keys = new Set(e.skills.map((s) => `${s.productId}:${s.supportTypeId}`));
       expect(keys.size).toBe(e.skills.length);
       for (const s of e.skills) {
         expect(s.proficiency).toBeGreaterThanOrEqual(1);
@@ -141,8 +141,8 @@ describe('generateExperts — skills', () => {
     let niche = 0;
     for (const e of experts) {
       for (const s of e.skills) {
-        if (coreIds.has(s.skillId)) core += 1;
-        if (nicheIds.has(s.skillId)) niche += 1;
+        if (coreIds.has(s.productId)) core += 1;
+        if (nicheIds.has(s.productId)) niche += 1;
       }
     }
     expect(core).toBeGreaterThan(niche);

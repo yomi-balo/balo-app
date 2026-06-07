@@ -37,7 +37,7 @@ export const profileStepSchema = z
 // ── Step 2: Products ─────────────────────────────────────────────
 
 export const productsStepSchema = z.object({
-  skillIds: z
+  productIds: z
     .array(z.string().uuid())
     .min(1, 'Please select at least one Salesforce product.')
     .max(50, 'Too many products selected'),
@@ -50,7 +50,7 @@ export const assessmentStepSchema = z
     ratings: z
       .array(
         z.object({
-          skillId: z.string().uuid(),
+          productId: z.string().uuid(),
           supportTypeId: z.string().uuid(),
           proficiency: z.number().int().min(0).max(10),
         })
@@ -59,14 +59,14 @@ export const assessmentStepSchema = z
   })
   .refine(
     (data) => {
-      // Group by skillId, ensure each skill has at least 1 non-zero rating
-      const bySkill = new Map<string, number[]>();
+      // Group by productId, ensure each product has at least 1 non-zero rating
+      const byProduct = new Map<string, number[]>();
       for (const r of data.ratings) {
-        const arr = bySkill.get(r.skillId) ?? [];
+        const arr = byProduct.get(r.productId) ?? [];
         arr.push(r.proficiency);
-        bySkill.set(r.skillId, arr);
+        byProduct.set(r.productId, arr);
       }
-      for (const [, proficiencies] of bySkill) {
+      for (const [, proficiencies] of byProduct) {
         if (!proficiencies.some((p) => p > 0)) return false;
       }
       return true;

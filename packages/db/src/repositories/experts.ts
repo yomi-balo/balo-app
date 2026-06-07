@@ -53,7 +53,7 @@ interface SyncLanguageInput {
 }
 
 interface CompetencyRatingInput {
-  skillId: string;
+  productId: string;
   supportTypeId: string;
   proficiency: number;
 }
@@ -425,7 +425,7 @@ export const expertsRepository = {
    */
   async syncProducts(
     expertProfileId: string,
-    skillIds: string[],
+    productIds: string[],
     supportTypeIds: string[]
   ): Promise<void> {
     await db.transaction(async (tx) => {
@@ -434,28 +434,28 @@ export const expertsRepository = {
         where: eq(expertCompetency.expertProfileId, expertProfileId),
       });
 
-      const existingSkillIds = new Set(existing.map((e) => e.skillId));
+      const existingProductIds = new Set(existing.map((e) => e.productId));
 
       // 2. Delete competencies that are no longer selected
-      const toRemoveSkillIds = [...existingSkillIds].filter((id) => !skillIds.includes(id));
-      if (toRemoveSkillIds.length > 0) {
+      const toRemoveProductIds = [...existingProductIds].filter((id) => !productIds.includes(id));
+      if (toRemoveProductIds.length > 0) {
         await tx
           .delete(expertCompetency)
           .where(
             and(
               eq(expertCompetency.expertProfileId, expertProfileId),
-              inArray(expertCompetency.skillId, toRemoveSkillIds)
+              inArray(expertCompetency.productId, toRemoveProductIds)
             )
           );
       }
 
       // 3. Insert new competencies (not yet in DB) with proficiency=0
-      const newSkillIds = skillIds.filter((id) => !existingSkillIds.has(id));
-      if (newSkillIds.length > 0) {
-        const rows = newSkillIds.flatMap((skillId) =>
+      const newProductIds = productIds.filter((id) => !existingProductIds.has(id));
+      if (newProductIds.length > 0) {
+        const rows = newProductIds.flatMap((productId) =>
           supportTypeIds.map((supportTypeId) => ({
             expertProfileId,
-            skillId,
+            productId,
             supportTypeId,
             proficiency: 0,
           }))
@@ -479,14 +479,14 @@ export const expertsRepository = {
           .insert(expertCompetency)
           .values({
             expertProfileId,
-            skillId: rating.skillId,
+            productId: rating.productId,
             supportTypeId: rating.supportTypeId,
             proficiency: rating.proficiency,
           })
           .onConflictDoUpdate({
             target: [
               expertCompetency.expertProfileId,
-              expertCompetency.skillId,
+              expertCompetency.productId,
               expertCompetency.supportTypeId,
             ],
             set: {

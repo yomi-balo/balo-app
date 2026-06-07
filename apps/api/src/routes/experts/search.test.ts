@@ -97,8 +97,8 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
     skills: [
       {
-        skillId: 'sales-cloud',
-        skillName: 'Sales Cloud',
+        productId: 'sales-cloud',
+        productName: 'Sales Cloud',
         supportTypeSlug: 'technical-fix-support',
         proficiency: 5,
       },
@@ -152,8 +152,8 @@ describe('GET /experts/search', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().experts[0].skills).toEqual([
       {
-        skillId: 'sales-cloud',
-        skillName: 'Sales Cloud',
+        productId: 'sales-cloud',
+        productName: 'Sales Cloud',
         supportTypeSlug: 'technical-fix-support',
         proficiency: 5,
       },

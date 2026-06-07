@@ -21,7 +21,7 @@ function groupSkills(skills: ApplicationCompetencyWithRelations[]): SkillGroup[]
   const groups = new Map<string, SkillGroup>();
 
   for (const skill of skills) {
-    const key = skill.skillId;
+    const key = skill.productId;
     if (!groups.has(key)) {
       groups.set(key, {
         skillName: skill.skill.name,

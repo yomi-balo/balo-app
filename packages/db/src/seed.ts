@@ -424,7 +424,7 @@ async function seedAcmeExperts(acmeVerticalId: string): Promise<void> {
           .insert(schema.expertCompetency)
           .values({
             expertProfileId: profile.id,
-            skillId: productId,
+            productId: productId,
             supportTypeId,
             proficiency: 4,
           })

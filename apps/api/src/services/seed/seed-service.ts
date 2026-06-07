@@ -160,7 +160,7 @@ async function insertExpert(
   if (expert.skills.length > 0) {
     const skillRows: NewExpertCompetency[] = expert.skills.map((s) => ({
       expertProfileId,
-      skillId: s.skillId,
+      productId: s.productId,
       supportTypeId: s.supportTypeId,
       proficiency: s.proficiency,
     }));
