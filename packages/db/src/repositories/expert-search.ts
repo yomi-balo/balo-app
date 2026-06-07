@@ -217,7 +217,7 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
     conditions.push(sql`ac.earliest_available_at <= ${boundary.toISOString()}::timestamptz`);
   }
 
-  // Full-text match: strict FTS OR trigram fuzzy (headline + product names).
+  // Full-text match: strict FTS OR trigram fuzzy (name + headline + product names).
   // Only added when `q` is present — no per-product subquery on a wide-open browse.
   //
   // Fuzzy term uses `word_similarity(q, text) > 0.3` (NOT the whole-string `%`
@@ -230,12 +230,24 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
   // gin_trgm_ops indexes — only the `<% / %>` operators are — so we deliberately
   // do not maintain trigram indexes for it; this fallback runs over the
   // base-visibility-narrowed candidate set.
+  //
+  // Name match (BAL-263): the stored search_vector is generated from headline(A)
+  // + bio(B) only — the expert's NAME lives on `users` (joined as `u` in every
+  // path that consumes these conditions) and is never in the vector. Match it
+  // with trigram word_similarity over "first_name last_name": trigram is the
+  // right matcher for proper nouns (handles a single typed token + minor typos),
+  // whereas the `english` FTS config stems names poorly. Raw `u.first_name` /
+  // `u.last_name` matches how this file already references `u.*` via sql.
+  // FUTURE (scale): an optional `gin_trgm_ops` index on users.first_name /
+  // last_name would accelerate this — skipped pre-PMF (word_similarity as a
+  // function is not index-accelerated anyway; it runs over the narrowed set).
   const q = normalizeQuery(params.query);
   if (q) {
     conditions.push(
       sql`(
         ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})
         OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
+        OR word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.3
         OR EXISTS (
           SELECT 1 FROM ${expertCompetency} es
           JOIN ${products} s ON s.id = es.product_id
@@ -308,6 +320,18 @@ function normalizeQuery(query: string | undefined): string | null {
  * participate via a real `setweight(..., 'C')` term; a small trigram bump keeps
  * fuzzy-only hits above non-matches. Emits literal `0` when `q` is absent (no
  * FTS / product subquery runs at all).
+ *
+ * Name term (BAL-263): the expert's NAME lives on `users` (joined as `u`), not
+ * in the stored search_vector, so without an explicit term a perfect name match
+ * never ranks. A plain fractional coefficient competes poorly with `ts_rank` — a
+ * headline hit's ts_rank alone can exceed it (the original 0.5 lost to a
+ * headline ts_rank in testing). So a STRONG name match (trigram word_similarity
+ * > 0.5 — i.e. a near-exact first/last/full name) instead gets a large fixed
+ * lead (+10) that decisively outranks any topical headline/product score (those
+ * terms sum to well under 10 for real profile text), making "type a person's
+ * name → that person tops the list" hold deterministically. A non-name query
+ * won't clear the 0.5 threshold against a distinct name, so topical ranking is
+ * left untouched (the boost is 0 below threshold).
  */
 function relevanceExpression(q: string | null): SQL {
   if (!q) return sql`0`;
@@ -320,6 +344,11 @@ function relevanceExpression(q: string | null): SQL {
         WHERE es.expert_profile_id = ${expertProfiles.id}
       ), 0)
     + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
+    + (CASE
+         WHEN word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.5
+         THEN 10
+         ELSE 0
+       END)
   )`;
 }
 

@@ -180,6 +180,16 @@ describe('buildWhereConditions — full-text query', () => {
     expect(sql).toContain('"search_vector" @@');
   });
 
+  it('includes a trigram name predicate over users.first_name/last_name (BAL-263)', () => {
+    const conds = buildWhereConditions(params({ query: 'ada lovelace' }), NOW);
+    const sql = toSql(conds[3]);
+    // The name OR-term matches the expert's name on the joined `users u` row,
+    // which the stored search_vector (headline + bio only) never covers.
+    expect(sql).toContain(
+      "word_similarity($3, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.3"
+    );
+  });
+
   it('treats a blank/whitespace q as absent', () => {
     expect(buildWhereConditions(params({ query: '   ' }), NOW)).toHaveLength(3);
   });
