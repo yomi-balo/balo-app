@@ -40,7 +40,8 @@
     "POSTHOG_API_KEY",
     "POSTHOG_HOST",
     "BREVO_API_KEY",
-    "BREVO_SMS_SENDER"
+    "BREVO_SMS_SENDER",
+    "OPS_NOTIFICATION_EMAIL"
   ],
   "tasks": {
     "build": {

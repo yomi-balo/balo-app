@@ -3,7 +3,16 @@ import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
-import { EmailShell, LogoRow, StatusPill, Callout, SupportFooter } from './shared.js';
+import { ProjectMatchRequestedEmail } from './project-match-requested.js';
+import {
+  EmailShell,
+  LogoRow,
+  StatusPill,
+  Callout,
+  SupportFooter,
+  pluralize,
+  buildSelectionSummary,
+} from './shared.js';
 
 describe('WelcomeEmail', () => {
   it('returns a React element for client role', () => {
@@ -63,6 +72,76 @@ describe('ProjectRequestSubmittedEmail', () => {
 
     expect(element).toBeDefined();
     expect(element.type).toBeDefined();
+  });
+
+  it('returns a React element with selection counts', () => {
+    const element = ProjectRequestSubmittedEmail({
+      firstName: 'Erin',
+      projectTitle: 'Lead routing rebuild',
+      baseUrl: 'https://app.balo.expert',
+      tagCount: 3,
+      productCount: 2,
+      documentCount: 1,
+    });
+
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
+describe('ProjectMatchRequestedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectMatchRequestedEmail({
+      projectTitle: 'Lead routing rebuild',
+      companyName: 'Acme Inc',
+      baseUrl: 'https://app.balo.expert',
+    });
+
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('returns a React element with counts and default company name', () => {
+    const element = ProjectMatchRequestedEmail({
+      projectTitle: 'Lead routing rebuild',
+      companyName: 'A client',
+      baseUrl: 'https://app.balo.expert',
+      tagCount: 2,
+      productCount: 0,
+      documentCount: 4,
+    });
+
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
+describe('pluralize', () => {
+  it('uses the singular form for a count of 1', () => {
+    expect(pluralize(1, 'document')).toBe('1 document');
+  });
+
+  it('uses the plural form for counts other than 1', () => {
+    expect(pluralize(0, 'document')).toBe('0 documents');
+    expect(pluralize(3, 'product')).toBe('3 products');
+  });
+});
+
+describe('buildSelectionSummary', () => {
+  it('joins non-zero parts with a middot', () => {
+    expect(buildSelectionSummary({ tagCount: 3, productCount: 2, documentCount: 1 })).toBe(
+      '3 project types · 2 products · 1 document attached'
+    );
+  });
+
+  it('omits zero-count parts', () => {
+    expect(buildSelectionSummary({ tagCount: 1, productCount: 0, documentCount: 0 })).toBe(
+      '1 project type'
+    );
+  });
+
+  it('returns an empty string when everything is zero', () => {
+    expect(buildSelectionSummary({ tagCount: 0, productCount: 0, documentCount: 0 })).toBe('');
   });
 });
 

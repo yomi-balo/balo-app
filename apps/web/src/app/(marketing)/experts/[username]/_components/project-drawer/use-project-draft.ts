@@ -1,33 +1,79 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ProjectRouting } from './send-to-selector';
+import type { ProjectDocumentRef } from '../../_actions/schemas';
 
 export interface ProjectDraft {
+  routing: ProjectRouting;
   title: string;
-  description: string;
-  focusArea: string | null;
-  budget: string | null;
-  timeline: string | null;
+  /** Sanitisable TipTap HTML for the brief. */
+  descriptionHtml: string;
+  tagIds: string[];
+  productIds: string[];
+  /** Only CONFIRMED R2 refs are persisted — in-flight/failed uploads never are. */
+  documents: ProjectDocumentRef[];
 }
 
 const EMPTY_DRAFT: ProjectDraft = {
+  routing: 'direct',
   title: '',
-  description: '',
-  focusArea: null,
-  budget: null,
-  timeline: null,
+  descriptionHtml: '',
+  tagIds: [],
+  productIds: [],
+  documents: [],
 };
 
 const DEBOUNCE_MS = 400;
+
+const DOCUMENT_CONTENT_TYPES = new Set([
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+]);
 
 /** Per-expert localStorage key so drafts never bleed across profiles. */
 function draftKey(expertProfileId: string): string {
   return `balo:project-draft:${expertProfileId}`;
 }
 
+/** Narrow an unknown array to a `string[]` (drops non-strings). */
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string');
+}
+
+/** Narrow an unknown array to validated `ProjectDocumentRef[]`. */
+function readDocuments(value: unknown): ProjectDocumentRef[] {
+  if (!Array.isArray(value)) return [];
+  const docs: ProjectDocumentRef[] = [];
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) continue;
+    const record = item as Record<string, unknown>;
+    const { r2Key, fileName, contentType, sizeBytes } = record;
+    if (
+      typeof r2Key === 'string' &&
+      typeof fileName === 'string' &&
+      typeof contentType === 'string' &&
+      DOCUMENT_CONTENT_TYPES.has(contentType) &&
+      typeof sizeBytes === 'number'
+    ) {
+      docs.push({
+        r2Key,
+        fileName,
+        contentType: contentType as ProjectDocumentRef['contentType'],
+        sizeBytes,
+      });
+    }
+  }
+  return docs;
+}
+
 /**
  * Reads + narrows a persisted draft. Corrupt / legacy shapes silently fall back
- * to an empty draft — no throw, no `console.*` (per the plan).
+ * to defaults — no throw, no `console.*`. Legacy keys (focusArea/budget/timeline,
+ * the old `description`) are silently dropped: we only read the new field set.
  */
 function readDraft(expertProfileId: string): ProjectDraft {
   if (typeof window === 'undefined') return EMPTY_DRAFT;
@@ -38,11 +84,12 @@ function readDraft(expertProfileId: string): ProjectDraft {
     if (typeof parsed !== 'object' || parsed === null) return EMPTY_DRAFT;
     const record = parsed as Record<string, unknown>;
     return {
+      routing: record.routing === 'match' ? 'match' : 'direct',
       title: typeof record.title === 'string' ? record.title : '',
-      description: typeof record.description === 'string' ? record.description : '',
-      focusArea: typeof record.focusArea === 'string' ? record.focusArea : null,
-      budget: typeof record.budget === 'string' ? record.budget : null,
-      timeline: typeof record.timeline === 'string' ? record.timeline : null,
+      descriptionHtml: typeof record.descriptionHtml === 'string' ? record.descriptionHtml : '',
+      tagIds: readStringArray(record.tagIds),
+      productIds: readStringArray(record.productIds),
+      documents: readDocuments(record.documents),
     };
   } catch {
     // Corrupt or inaccessible storage — start fresh.

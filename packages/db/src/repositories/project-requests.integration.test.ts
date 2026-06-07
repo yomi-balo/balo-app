@@ -1,14 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { companies, companyMembers } from '../schema';
-import { userFactory, expertDraftFactory, projectRequestFactory } from '../test/factories';
+import {
+  companies,
+  companyMembers,
+  categories,
+  products,
+  projectRequestTags,
+  projectRequestProducts,
+  projectRequestDocuments,
+} from '../schema';
+import {
+  userFactory,
+  expertDraftFactory,
+  projectRequestFactory,
+  projectTagFactory,
+} from '../test/factories';
+import { referenceDataRepository } from './reference-data';
 import { projectRequestsRepository } from './project-requests';
 
 /**
  * Seeds a creator user + their personal company (owner membership) + a target
- * expert draft, returning the FK ids a `createProjectRequest` call needs. Lets a
- * test drive the repository directly while still exercising real FKs.
+ * expert draft, returning the FK ids a `createProjectRequest` call needs.
  */
 async function seedActors(): Promise<{
   companyId: string;
@@ -38,94 +52,284 @@ async function seedActors(): Promise<{
   };
 }
 
+/** Inserts a product under a fresh category in the seeded Salesforce vertical. */
+async function seedProduct(): Promise<string> {
+  const vertical = await referenceDataRepository.getSalesforceVertical();
+  const suffix = randomUUID().slice(0, 8);
+  const [cat] = await db
+    .insert(categories)
+    .values({ verticalId: vertical.id, name: `Cat ${suffix}`, slug: `cat-${suffix}`, sortOrder: 0 })
+    .returning();
+  if (cat === undefined) {
+    throw new Error('category insert failed');
+  }
+  const [product] = await db
+    .insert(products)
+    .values({
+      verticalId: vertical.id,
+      categoryId: cat.id,
+      name: `Product ${suffix}`,
+      slug: `product-${suffix}`,
+      sortOrder: 0,
+    })
+    .returning();
+  if (product === undefined) {
+    throw new Error('product insert failed');
+  }
+  return product.id;
+}
+
 // ── createProjectRequest ────────────────────────────────────────────
 
 describe('projectRequestsRepository.createProjectRequest', () => {
-  it('inserts with default status=submitted and source=manual, returning a generated id', async () => {
+  it('creates a direct request with empty relation arrays, defaulting status/source/sendTo', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
     const row = await projectRequestsRepository.createProjectRequest({
-      companyId,
-      expertProfileId,
-      createdByUserId,
-      title: 'Lead routing rebuild',
-      description: 'Rebuild lead routing in Flow with proper assignment rules.',
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        title: 'Lead routing rebuild',
+        description: '<p>Rebuild lead routing in Flow with proper assignment rules.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
     });
 
     expect(row.id).toBeDefined();
     expect(row.companyId).toBe(companyId);
     expect(row.expertProfileId).toBe(expertProfileId);
     expect(row.createdByUserId).toBe(createdByUserId);
+    expect(row.sendTo).toBe('direct'); // default
     expect(row.status).toBe('submitted'); // default
     expect(row.source).toBe('manual'); // default
     expect(row.title).toBe('Lead routing rebuild');
     expect(row.createdAt).toBeInstanceOf(Date);
     expect(row.deletedAt).toBeNull();
+
+    // No junction/child rows were written.
+    const tags = await db
+      .select()
+      .from(projectRequestTags)
+      .where(eq(projectRequestTags.projectRequestId, row.id));
+    const prods = await db
+      .select()
+      .from(projectRequestProducts)
+      .where(eq(projectRequestProducts.projectRequestId, row.id));
+    const docs = await db
+      .select()
+      .from(projectRequestDocuments)
+      .where(eq(projectRequestDocuments.projectRequestId, row.id));
+    expect(tags).toHaveLength(0);
+    expect(prods).toHaveLength(0);
+    expect(docs).toHaveLength(0);
   });
 
-  it('leaves optional fields null when omitted', async () => {
-    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+  it('creates a match request (no expert) — sendTo=match, expertProfileId null', async () => {
+    const { companyId, createdByUserId } = await seedActors();
 
     const row = await projectRequestsRepository.createProjectRequest({
-      companyId,
-      expertProfileId,
-      createdByUserId,
-      title: 'Quote builder',
-      description: 'Stand up a CPQ-lite quote builder for the sales team.',
+      request: {
+        companyId,
+        createdByUserId,
+        sendTo: 'match',
+        title: 'Find me an expert',
+        description: '<p>Looking for someone to scope a Service Cloud migration.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
     });
 
-    expect(row.focusArea).toBeNull();
-    expect(row.budget).toBeNull();
-    expect(row.timeline).toBeNull();
-    expect(row.packageId).toBeNull();
+    expect(row.sendTo).toBe('match');
+    expect(row.expertProfileId).toBeNull();
   });
 
-  it('persists optional fields (focusArea / budget / timeline) when provided', async () => {
+  it('inserts tags, products, and documents in one transaction with the parent', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
+    const tagA = await projectTagFactory();
+    const tagB = await projectTagFactory();
+    const productA = await seedProduct();
+    const productB = await seedProduct();
+
     const row = await projectRequestsRepository.createProjectRequest({
-      companyId,
-      expertProfileId,
-      createdByUserId,
-      title: 'Service Cloud migration',
-      description: 'Migrate the legacy case desk to Service Cloud with omni-routing.',
-      focusArea: 'Service Cloud',
-      budget: 'A$5–15k',
-      timeline: '1–3 months',
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        title: 'Full brief',
+        description: '<p>Brief with tags, products, and attachments.</p>',
+      },
+      tagIds: [tagA.id, tagB.id],
+      productIds: [productA, productB],
+      documents: [
+        {
+          r2Key: `project-documents/${companyId}/${createdByUserId}/${randomUUID()}`,
+          fileName: 'scope.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 2048,
+        },
+        {
+          r2Key: `project-documents/${companyId}/${createdByUserId}/${randomUUID()}`,
+          fileName: 'diagram.png',
+          contentType: 'image/png',
+          sizeBytes: 4096,
+        },
+      ],
     });
 
-    expect(row.focusArea).toBe('Service Cloud');
-    expect(row.budget).toBe('A$5–15k');
-    expect(row.timeline).toBe('1–3 months');
+    const tagRows = await db
+      .select()
+      .from(projectRequestTags)
+      .where(eq(projectRequestTags.projectRequestId, row.id));
+    const productRows = await db
+      .select()
+      .from(projectRequestProducts)
+      .where(eq(projectRequestProducts.projectRequestId, row.id));
+    const docRows = await db
+      .select()
+      .from(projectRequestDocuments)
+      .where(eq(projectRequestDocuments.projectRequestId, row.id));
+
+    expect(tagRows.map((t) => t.projectTagId).sort()).toEqual([tagA.id, tagB.id].sort());
+    expect(productRows.map((p) => p.productId).sort()).toEqual([productA, productB].sort());
+    expect(docRows.map((d) => d.fileName).sort()).toEqual(['diagram.png', 'scope.pdf']);
+    expect(docRows.every((d) => d.sizeBytes > 0)).toBe(true);
+  });
+
+  it('rolls back the whole transaction on a duplicate document r2_key (unique constraint)', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+    const dupKey = `project-documents/${companyId}/${createdByUserId}/${randomUUID()}`;
+
+    await expect(
+      projectRequestsRepository.createProjectRequest({
+        request: {
+          companyId,
+          expertProfileId,
+          createdByUserId,
+          title: 'Dup docs',
+          description: '<p>Two documents share an r2 key.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [
+          { r2Key: dupKey, fileName: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1 },
+          { r2Key: dupKey, fileName: 'b.pdf', contentType: 'application/pdf', sizeBytes: 1 },
+        ],
+      })
+    ).rejects.toThrow();
+
+    // Nothing persisted — the parent insert rolled back with the failed child.
+    const docs = await db
+      .select()
+      .from(projectRequestDocuments)
+      .where(eq(projectRequestDocuments.r2Key, dupKey));
+    expect(docs).toHaveLength(0);
+  });
+
+  it('throws when a tag id does not exist (restrict FK)', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+
+    await expect(
+      projectRequestsRepository.createProjectRequest({
+        request: {
+          companyId,
+          expertProfileId,
+          createdByUserId,
+          title: 'Unknown tag',
+          description: '<p>Should violate the project_tag_id FK.</p>',
+        },
+        tagIds: [randomUUID()],
+        productIds: [],
+        documents: [],
+      })
+    ).rejects.toThrow();
   });
 
   it('accepts an explicit source=quickstart and status=draft (BAL-254/255 forward-compat)', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
     const row = await projectRequestsRepository.createProjectRequest({
-      companyId,
-      expertProfileId,
-      createdByUserId,
-      title: 'Quick start: health check',
-      description: 'Productized org health-check package instantiated from a quick start.',
-      source: 'quickstart',
-      status: 'draft',
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        title: 'Quick start: health check',
+        description: '<p>Productized org health-check package from a quick start.</p>',
+        source: 'quickstart',
+        status: 'draft',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
     });
 
     expect(row.source).toBe('quickstart');
     expect(row.status).toBe('draft');
   });
 
+  // ── routing CHECK constraint (both directions) ──────────────────────
+
+  it('rejects a direct request with a null expert (CHECK constraint)', async () => {
+    const { companyId, createdByUserId } = await seedActors();
+
+    await expect(
+      projectRequestsRepository.createProjectRequest({
+        request: {
+          companyId,
+          createdByUserId,
+          sendTo: 'direct',
+          // expertProfileId intentionally omitted → null
+          title: 'Direct without expert',
+          description: '<p>Should violate project_requests_direct_requires_expert.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [],
+      })
+    ).rejects.toThrow();
+  });
+
+  it('rejects a match request with a non-null expert (CHECK constraint)', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+
+    await expect(
+      projectRequestsRepository.createProjectRequest({
+        request: {
+          companyId,
+          expertProfileId,
+          createdByUserId,
+          sendTo: 'match',
+          title: 'Match with expert',
+          description: '<p>Should violate project_requests_direct_requires_expert.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [],
+      })
+    ).rejects.toThrow();
+  });
+
+  // ── FK enforcement ──────────────────────────────────────────────────
+
   it('throws on a non-existent companyId (FK enforcement)', async () => {
     const { expertProfileId, createdByUserId } = await seedActors();
 
     await expect(
       projectRequestsRepository.createProjectRequest({
-        companyId: randomUUID(),
-        expertProfileId,
-        createdByUserId,
-        title: 'Orphan company',
-        description: 'Should fail the company_id foreign key constraint.',
+        request: {
+          companyId: randomUUID(),
+          expertProfileId,
+          createdByUserId,
+          title: 'Orphan company',
+          description: '<p>Should fail the company_id foreign key constraint.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [],
       })
     ).rejects.toThrow();
   });
@@ -135,11 +339,16 @@ describe('projectRequestsRepository.createProjectRequest', () => {
 
     await expect(
       projectRequestsRepository.createProjectRequest({
-        companyId,
-        expertProfileId: randomUUID(),
-        createdByUserId,
-        title: 'Orphan expert',
-        description: 'Should fail the expert_profile_id foreign key constraint.',
+        request: {
+          companyId,
+          expertProfileId: randomUUID(),
+          createdByUserId,
+          title: 'Orphan expert',
+          description: '<p>Should fail the expert_profile_id foreign key constraint.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [],
       })
     ).rejects.toThrow();
   });
@@ -149,11 +358,16 @@ describe('projectRequestsRepository.createProjectRequest', () => {
 
     await expect(
       projectRequestsRepository.createProjectRequest({
-        companyId,
-        expertProfileId,
-        createdByUserId: randomUUID(),
-        title: 'Orphan creator',
-        description: 'Should fail the created_by_user_id foreign key constraint.',
+        request: {
+          companyId,
+          expertProfileId,
+          createdByUserId: randomUUID(),
+          title: 'Orphan creator',
+          description: '<p>Should fail the created_by_user_id foreign key constraint.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [],
       })
     ).rejects.toThrow();
   });

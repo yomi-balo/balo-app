@@ -18,8 +18,27 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
     return;
   }
 
-  // 2. Resolve recipient
-  const recipientId = resolveRecipient(rule.recipient, context);
+  // 2. Resolve recipient. The `admin` recipient is special: it routes to a
+  //    configured ops inbox (a bare email, not a user). For the email channel we
+  //    resolve it to OPS_NOTIFICATION_EMAIL and bypass the user lookup downstream.
+  let recipientId = resolveRecipient(rule.recipient, context);
+  let recipientEmail: string | undefined;
+
+  if (rule.recipient === 'admin' && rule.channel === 'email') {
+    const opsEmail = process.env.OPS_NOTIFICATION_EMAIL;
+    if (!opsEmail) {
+      log.warn(
+        { template: rule.template, event: context.event },
+        'OPS_NOTIFICATION_EMAIL not configured — skipping admin notification'
+      );
+      return;
+    }
+    recipientEmail = opsEmail;
+    // Use the ops email as the recipient identifier for dedup + logging since
+    // there is no user id for an ops inbox.
+    recipientId = opsEmail;
+  }
+
   if (!recipientId) {
     log.warn(
       { template: rule.template, recipient: rule.recipient, event: context.event },
@@ -31,6 +50,7 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
   // 3. Build delivery payload
   const deliveryPayload = {
     recipientId,
+    recipientEmail,
     template: rule.template,
     event: context.event,
     data: context.data,

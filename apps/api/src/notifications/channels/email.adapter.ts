@@ -35,16 +35,26 @@ async function getBrevoClient(): Promise<BrevoEmailClient> {
 export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> {
   const payload = job.data;
 
-  // 1. Resolve recipient email
-  const user = await usersRepository.findById(payload.recipientId);
-  if (!user?.email) {
-    log.warn({ recipientId: payload.recipientId }, 'No email for recipient');
-    await logNotification(payload, 'email', 'skipped', 'No email address');
-    return;
+  // 1. Resolve recipient email + display name.
+  //    A literal `recipientEmail` (e.g. the ops/admin inbox) bypasses the user
+  //    lookup; otherwise resolve the user by id.
+  let toEmail: string;
+  let recipientName: string;
+  if (payload.recipientEmail) {
+    toEmail = payload.recipientEmail;
+    recipientName = 'team';
+  } else {
+    const user = await usersRepository.findById(payload.recipientId);
+    if (!user?.email) {
+      log.warn({ recipientId: payload.recipientId }, 'No email for recipient');
+      await logNotification(payload, 'email', 'skipped', 'No email address');
+      return;
+    }
+    toEmail = user.email;
+    recipientName = user.firstName ?? 'there';
   }
 
   // 2. Render template
-  const recipientName = user.firstName ?? 'there';
   const { component, subject } = getEmailTemplate(payload.template, {
     ...payload.data,
     ...payload.payload,
@@ -64,14 +74,14 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
         name: 'Balo',
       },
       subject,
-      to: [{ email: user.email, name: user.firstName ?? undefined }],
+      to: [{ email: toEmail, name: recipientName }],
     });
     const messageId = result?.messageId;
 
     await logNotification(payload, 'email', 'sent', undefined, {
       brevoMessageId: messageId,
     });
-    log.info({ template: payload.template, to: user.email, messageId }, 'Email sent');
+    log.info({ template: payload.template, to: toEmail, messageId }, 'Email sent');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     await logNotification(payload, 'email', 'failed', errorMessage);

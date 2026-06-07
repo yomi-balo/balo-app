@@ -9,6 +9,7 @@ import {
   type ExpertProfileSection,
 } from '@/lib/analytics';
 import type { ExpertProfileView, ProfileSectionKey } from '@/components/expert/profile';
+import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Hero } from './hero';
 import { StickyNav, type NavSection } from './sticky-nav';
@@ -25,6 +26,7 @@ interface ExpertProfileClientProps {
   view: ExpertProfileView;
   portraitUrl: string | null;
   isLoggedIn: boolean;
+  projectTaxonomies: ProjectRequestTaxonomies;
 }
 
 const SECTION_LABELS: Record<ProfileSectionKey, string> = {
@@ -48,6 +50,7 @@ export function ExpertProfileClient({
   view,
   portraitUrl,
   isLoggedIn,
+  projectTaxonomies,
 }: Readonly<ExpertProfileClientProps>): React.JSX.Element {
   const isMobile = useIsMobile(820);
 
@@ -195,6 +198,9 @@ export function ExpertProfileClient({
         expertProfileId={view.expertId}
         expertName={view.name}
         expertFirstName={view.firstName}
+        expertInitials={view.initials}
+        expertAvatarKey={view.avatarKey}
+        projectTaxonomies={projectTaxonomies}
       />
 
       <ExpertProfileAnalytics

@@ -1,4 +1,4 @@
-import { usersRepository, expertsRepository } from '@balo/db';
+import { usersRepository, expertsRepository, companiesRepository } from '@balo/db';
 import type { RuleContext } from './rules.js';
 
 export async function resolveContext(
@@ -16,6 +16,13 @@ export async function resolveContext(
   // dispatcher's `recipient: 'expert'` resolves to the expert's user id.
   if (typeof payload.expertProfileId === 'string') {
     data.expert = await expertsRepository.findUserIdByProfileId(payload.expertProfileId);
+  }
+
+  // Hydrate the buyer company (e.g. project.match_requested) so the ops template
+  // can name the requesting org. The admin recipient is resolved by the
+  // dispatcher to OPS_NOTIFICATION_EMAIL — this is context only.
+  if (typeof payload.companyId === 'string') {
+    data.company = await companiesRepository.findById(payload.companyId);
   }
 
   return { event, payload, data };

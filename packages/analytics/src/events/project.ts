@@ -14,9 +14,10 @@ export interface ProjectEventMap {
   [PROJECT_EVENTS.PROJECT_STEP_VIEWED]: { expert_id: string; step: ProjectStep };
   [PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED]: {
     expert_id: string;
-    has_budget: boolean;
-    has_timeline: boolean;
-    focus_areas: string[];
+    send_to: 'direct' | 'match';
+    tag_count: number;
+    product_count: number;
+    document_count: number;
     method: ProjectEntryMethod;
   };
 }

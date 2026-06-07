@@ -24,6 +24,20 @@ const projectRequestSubmittedPayload = z.object({
   expertProfileId: z.uuid(),
   companyId: z.uuid(),
   title: z.string().min(1),
+  sendTo: z.literal('direct'),
+  tagIds: z.array(z.uuid()),
+  productIds: z.array(z.uuid()),
+  documentCount: z.number().int().nonnegative(),
+});
+
+const projectMatchRequestedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  companyId: z.uuid(),
+  title: z.string().min(1),
+  tagIds: z.array(z.uuid()),
+  productIds: z.array(z.uuid()),
+  documentCount: z.number().int().nonnegative(),
 });
 
 export const publishBodySchema = z.discriminatedUnion('event', [
@@ -36,6 +50,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.request_submitted'),
     payload: projectRequestSubmittedPayload,
+  }),
+  z.object({
+    event: z.literal('project.match_requested'),
+    payload: projectMatchRequestedPayload,
   }),
 ]);
 

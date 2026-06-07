@@ -26,6 +26,56 @@ function slugify(name: string): string {
 // Seed data definitions (compact format)
 // ──────────────────────────────────────────────────────
 
+/**
+ * Project-type tags — 19 values across 4 groups (BAL-259). Vertical-scoped,
+ * seeded for Salesforce. [groupName, groupSlug, tagNames[]].
+ */
+const PROJECT_TAG_GROUPS: Array<[string, string, string[]]> = [
+  [
+    'Foundational',
+    'foundational',
+    [
+      'New Salesforce Implementation',
+      'Org Merge / Consolidation',
+      'Data Migration / Data Cleanup',
+      'Third-Party Tool Integration',
+    ],
+  ],
+  [
+    'Enhancement & expansion',
+    'enhancement-expansion',
+    [
+      'Feature Enhancement / Customization',
+      'Product / Cloud Expansion',
+      'Mobile Experience Setup / Improvement',
+      'AppExchange App / Custom App Build',
+    ],
+  ],
+  [
+    'Optimization',
+    'optimization',
+    [
+      'System Cleanup / Optimization',
+      'Salesforce Health Check / Audit',
+      'Automation Setup',
+      'Reporting / Dashboard Setup',
+      'Security Review / Access Setup',
+    ],
+  ],
+  [
+    'Enablement & support',
+    'enablement-support',
+    [
+      'Strategy / Best Practices Advisory',
+      'User Onboarding / Training',
+      'Managed Services / Ongoing Support',
+      'Regulatory / Compliance Projects',
+      'Recruitment / Interview Support',
+      'Quality Assurance / Testing Support',
+    ],
+  ],
+];
+
 /** [categoryName, categorySlug, productNames[]] */
 const PRODUCT_CATEGORIES: Array<[string, string, string[]]> = [
   ['AI', 'ai', ['Agentforce']],
@@ -343,6 +393,49 @@ async function seedTaxonomyForVertical(
 }
 
 /**
+ * Seed project-type tag groups → tags for ONE vertical (BAL-259). Mirrors
+ * `seedTaxonomyForVertical`: insert groups, fetch ids by slug, insert tags with
+ * the group id. Tag slugs via `slugify()`; sortOrder from array index.
+ * Idempotent (onConflictDoNothing on the composite (vertical_id, slug) uniques).
+ */
+async function seedProjectTagsForVertical(
+  verticalId: string,
+  groups: Array<[string, string, string[]]>
+): Promise<void> {
+  if (groups.length === 0) return;
+
+  // Tag groups.
+  await db
+    .insert(schema.projectTagGroups)
+    .values(groups.map(([name, slug], i) => ({ name, slug, verticalId, sortOrder: i })))
+    .onConflictDoNothing();
+
+  const groupRows = await db
+    .select()
+    .from(schema.projectTagGroups)
+    .where(eq(schema.projectTagGroups.verticalId, verticalId));
+  const groupMap = Object.fromEntries(groupRows.map((g) => [g.slug, g.id]));
+
+  // Tags. `groupId` is NOT NULL, so resolve-or-throw on the slug map.
+  const tagValues = groups.flatMap(([, groupSlug, names]) => {
+    const groupId = groupMap[groupSlug];
+    if (groupId === undefined) {
+      throw new Error(`Project tag group not found for slug "${groupSlug}"`);
+    }
+    return names.map((name, i) => ({
+      name,
+      slug: slugify(name),
+      verticalId,
+      groupId,
+      sortOrder: i,
+    }));
+  });
+  if (tagValues.length > 0) {
+    await db.insert(schema.projectTags).values(tagValues).onConflictDoNothing();
+  }
+}
+
+/**
  * Seed a handful of approved + searchable experts in the `acme` vertical so
  * local dev mirrors the data-only path (a second vertical reachable via
  * `?vertical=acme`). Idempotent: keyed on stable workosId / email markers and
@@ -494,6 +587,9 @@ async function seed(): Promise<void> {
     SUPPORT_TYPES_BY_VERTICAL.salesforce ?? []
   );
 
+  console.log('  Seeding Salesforce project tags...');
+  await seedProjectTagsForVertical(sfId, PROJECT_TAG_GROUPS);
+
   console.log('  Seeding Acme (mock) taxonomy...');
   await seedTaxonomyForVertical(acmeId, ACME_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.acme ?? []);
 
@@ -545,10 +641,12 @@ async function seed(): Promise<void> {
     db.select().from(schema.certifications),
     db.select().from(schema.languages),
     db.select().from(schema.industries),
+    db.select().from(schema.projectTagGroups),
+    db.select().from(schema.projectTags),
   ]);
 
   console.log(
-    `\nSeed complete. Seeded ${counts[0].length} verticals, ${counts[1].length} support types, ${counts[2].length} categories, ${counts[3].length} products, ${counts[4].length} certification categories, ${counts[5].length} certifications, ${counts[6].length} languages, ${counts[7].length} industries.`
+    `\nSeed complete. Seeded ${counts[0].length} verticals, ${counts[1].length} support types, ${counts[2].length} categories, ${counts[3].length} products, ${counts[4].length} certification categories, ${counts[5].length} certifications, ${counts[6].length} languages, ${counts[7].length} industries, ${counts[8].length} project tag groups, ${counts[9].length} project tags.`
   );
   await client.end();
 }

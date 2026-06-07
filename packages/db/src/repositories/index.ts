@@ -12,7 +12,11 @@ export type {
 } from './experts';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
-export type { ProductsByCategory, CertificationsByCategory } from './reference-data';
+export type {
+  ProductsByCategory,
+  CertificationsByCategory,
+  ProjectTagsByGroup,
+} from './reference-data';
 export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';

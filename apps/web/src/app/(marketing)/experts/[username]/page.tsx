@@ -6,6 +6,7 @@ import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { mapProfileToView } from '@/lib/expert-profile/profile-view';
+import { loadProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import { ExpertProfileClient } from './_components/expert-profile-client';
 
 interface ExpertProfilePageProps {
@@ -66,7 +67,22 @@ export default async function ExpertProfilePage({
 
   const view = mapProfileToView(profile);
   const portraitUrl = getAvatarUrl(view.avatarKey, 'profile');
-  const isLoggedIn = (await getCurrentUser()) !== null;
 
-  return <ExpertProfileClient view={view} portraitUrl={portraitUrl} isLoggedIn={isLoggedIn} />;
+  // Independent reads — run in parallel. `loadProjectRequestTaxonomies` never
+  // throws (degrades to EMPTY), so the drawer renders its picker error state
+  // with Retry rather than the page failing.
+  const [user, projectTaxonomies] = await Promise.all([
+    getCurrentUser(),
+    loadProjectRequestTaxonomies(),
+  ]);
+  const isLoggedIn = user !== null;
+
+  return (
+    <ExpertProfileClient
+      view={view}
+      portraitUrl={portraitUrl}
+      isLoggedIn={isLoggedIn}
+      projectTaxonomies={projectTaxonomies}
+    />
+  );
 }

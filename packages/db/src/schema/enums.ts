@@ -31,3 +31,4 @@ export const projectRequestSourceEnum = pgEnum('project_request_source', [
   'ai',
   'quickstart',
 ]);
+export const projectRequestSendToEnum = pgEnum('project_request_send_to', ['direct', 'match']);

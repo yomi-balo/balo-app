@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFindById, mockFindUserIdByProfileId } = vi.hoisted(() => ({
+const { mockFindById, mockFindUserIdByProfileId, mockCompanyFindById } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
+  mockCompanyFindById: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockFindById },
   expertsRepository: { findUserIdByProfileId: mockFindUserIdByProfileId },
+  companiesRepository: { findById: mockCompanyFindById },
 }));
 
 import { resolveContext } from './resolver.js';
@@ -96,5 +98,31 @@ describe('resolveContext', () => {
 
     expect(mockFindUserIdByProfileId).toHaveBeenCalledWith('missing-profile');
     expect(context.data.expert).toBeUndefined();
+  });
+
+  it('hydrates data.company when companyId is present (e.g. project.match_requested)', async () => {
+    const mockCompany = { id: 'company-1', name: 'Acme Inc' };
+    mockCompanyFindById.mockResolvedValue(mockCompany);
+
+    const context = await resolveContext('project.match_requested', {
+      correlationId: 'req-3',
+      projectRequestId: 'req-3',
+      companyId: 'company-1',
+      title: 'Lead routing rebuild',
+    });
+
+    expect(mockCompanyFindById).toHaveBeenCalledWith('company-1');
+    expect(context.data.company).toEqual(mockCompany);
+    // No expert hydration for match mode.
+    expect(mockFindUserIdByProfileId).not.toHaveBeenCalled();
+  });
+
+  it('does not hydrate data.company when companyId is absent', async () => {
+    await resolveContext('user.welcome', {
+      correlationId: 'user-123',
+      userId: 'user-123',
+    });
+
+    expect(mockCompanyFindById).not.toHaveBeenCalled();
   });
 });

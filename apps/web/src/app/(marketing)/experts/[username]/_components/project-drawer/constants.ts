@@ -38,20 +38,6 @@ export const PROJECT_PATHS: readonly ProjectPath[] = [
   },
 ] as const;
 
-export const PROJECT_AREAS = [
-  'Sales Cloud',
-  'Service Cloud',
-  'Data Cloud',
-  'Integration',
-  'Agentforce',
-  'Flow & Automation',
-  'Other',
-] as const;
-
-export const BUDGETS = ['< A$2k', 'A$2–5k', 'A$5–15k', 'A$15k+', 'Not sure'] as const;
-
-export const TIMELINES = ['ASAP', '2–4 weeks', '1–3 months', 'Flexible'] as const;
-
 /** Stepper steps — the `done` state replaces the stepper with a plain title. */
 export const PROJECT_STEPS = [
   { key: 'start', label: 'Start' },

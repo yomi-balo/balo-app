@@ -3,6 +3,7 @@ import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
+import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -10,6 +11,16 @@ interface TemplateOutput {
 }
 
 const BASE_URL = process.env.APP_URL ?? 'https://balo.expert';
+
+/** Length of an array-valued payload field; 0 when absent or not an array. */
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+/** Coerce a payload field to a non-negative integer count; 0 when absent. */
+function numberCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
 
 const templates: Record<string, (data: Record<string, unknown>) => TemplateOutput> = {
   welcome: (data) => ({
@@ -42,9 +53,28 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       firstName: (data.recipientName as string) ?? 'there',
       projectTitle: (data.title as string) ?? 'a new project',
       baseUrl: BASE_URL,
+      tagCount: arrayLength(data.tagIds),
+      productCount: arrayLength(data.productIds),
+      documentCount: numberCount(data.documentCount),
     }),
     subject: `New project request: ${(data.title as string) ?? 'a new project'}`,
   }),
+
+  'project-match-requested': (data) => {
+    const company = data.company as { name?: string } | undefined;
+    const companyName = company?.name ?? 'A client';
+    return {
+      component: React.createElement(ProjectMatchRequestedEmail, {
+        projectTitle: (data.title as string) ?? 'a new project',
+        companyName,
+        baseUrl: BASE_URL,
+        tagCount: arrayLength(data.tagIds),
+        productCount: arrayLength(data.productIds),
+        documentCount: numberCount(data.documentCount),
+      }),
+      subject: `New unrouted brief: ${(data.title as string) ?? 'a new project'}`,
+    };
+  },
 };
 
 export function getEmailTemplate(

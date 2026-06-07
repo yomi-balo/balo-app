@@ -25,17 +25,34 @@ export interface ProjectRequestSubmittedPayload {
   expertProfileId: string; // target expert (recipient resolution)
   companyId: string; // buyer org (context/audit)
   title: string; // email subject/body
+  sendTo: 'direct'; // always direct for this event (match has its own event)
+  tagIds: string[]; // selected project-type tag ids (counts in template)
+  productIds: string[]; // selected product ids (counts in template)
+  documentCount: number; // number of attached documents (counts in template)
+}
+
+export interface ProjectMatchRequestedPayload {
+  correlationId: string; // projectRequestId
+  projectRequestId: string;
+  companyId: string; // buyer org (recipient/context resolution)
+  title: string; // email subject/body
+  tagIds: string[];
+  productIds: string[];
+  documentCount: number;
+  // No expertProfileId — match mode has no target expert; routes to ops/admin.
 }
 
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
-  | 'project.request_submitted';
+  | 'project.request_submitted'
+  | 'project.match_requested';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
+  'project.match_requested': ProjectMatchRequestedPayload;
 }

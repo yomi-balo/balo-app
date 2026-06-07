@@ -1,4 +1,4 @@
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   verticals,
@@ -9,6 +9,8 @@ import {
   certificationCategories,
   languages,
   industries,
+  projectTagGroups,
+  projectTags,
   type Vertical,
   type Product,
   type Category,
@@ -17,6 +19,8 @@ import {
   type CertificationCategory,
   type Language,
   type Industry,
+  type ProjectTagGroup,
+  type ProjectTag,
 } from '../schema';
 
 // ── Output types ─────────────────────────────────────────────────
@@ -31,6 +35,11 @@ export interface ProductsByCategory {
 export interface CertificationsByCategory {
   category: Pick<CertificationCategory, ReferenceFieldKeys>;
   certifications: Pick<Certification, 'id' | 'name' | 'slug'>[];
+}
+
+export interface ProjectTagsByGroup {
+  group: Pick<ProjectTagGroup, ReferenceFieldKeys>;
+  tags: Pick<ProjectTag, ReferenceFieldKeys>[];
 }
 
 // ── Repository ───────────────────────────────────────────────────
@@ -76,6 +85,34 @@ export const referenceDataRepository = {
         slug: p.slug,
         sortOrder: p.sortOrder,
       })),
+    }));
+  },
+
+  /**
+   * All active project-type tags grouped by tag group for a vertical. Mirrors
+   * `getProductsByVertical`'s grouped shape so the client mapper is reusable.
+   * Unlike the legacy taxonomy tables, project_tag_groups / project_tags carry
+   * `deletedAt`, so every read guards with `isNull(...)`.
+   */
+  async getProjectTagsByVertical(verticalId: string): Promise<ProjectTagsByGroup[]> {
+    const rows = await db.query.projectTagGroups.findMany({
+      where: and(
+        eq(projectTagGroups.verticalId, verticalId),
+        eq(projectTagGroups.isActive, true),
+        isNull(projectTagGroups.deletedAt)
+      ),
+      with: {
+        tags: {
+          where: and(eq(projectTags.isActive, true), isNull(projectTags.deletedAt)),
+          orderBy: [asc(projectTags.sortOrder)],
+        },
+      },
+      orderBy: [asc(projectTagGroups.sortOrder)],
+    });
+
+    return rows.map((g) => ({
+      group: { id: g.id, name: g.name, slug: g.slug, sortOrder: g.sortOrder },
+      tags: g.tags.map((t) => ({ id: t.id, name: t.name, slug: t.slug, sortOrder: t.sortOrder })),
     }));
   },
 

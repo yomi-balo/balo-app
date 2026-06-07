@@ -7,6 +7,7 @@ import {
   StatusPill,
   Callout,
   SupportFooter,
+  buildSelectionSummary,
 } from './shared.js';
 
 // ── Project-request-specific styles ──────────────────────────────
@@ -42,20 +43,35 @@ const projectTitleStyle = {
   lineHeight: '1.5',
 } as const;
 
+const projectSummaryStyle = {
+  fontSize: '13px',
+  fontWeight: '500',
+  color: colors.textSecondary,
+  margin: '8px 0 0',
+  lineHeight: '1.5',
+} as const;
+
 // ── Template ─────────────────────────────────────────────────────
 
 interface ProjectRequestSubmittedEmailProps {
   readonly firstName: string;
   readonly projectTitle: string;
   readonly baseUrl: string;
+  readonly tagCount?: number;
+  readonly productCount?: number;
+  readonly documentCount?: number;
 }
 
 export function ProjectRequestSubmittedEmail({
   firstName = 'there',
   projectTitle = 'a new project',
   baseUrl,
+  tagCount = 0,
+  productCount = 0,
+  documentCount = 0,
 }: Readonly<ProjectRequestSubmittedEmailProps>) {
   const previewText = `${firstName}, you have a new project request: ${projectTitle}`;
+  const summary = buildSelectionSummary({ tagCount, productCount, documentCount });
 
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
@@ -81,6 +97,7 @@ export function ProjectRequestSubmittedEmail({
         <Section style={projectCardStyle}>
           <p style={projectLabelStyle}>Project request</p>
           <p style={projectTitleStyle}>{projectTitle}</p>
+          {summary ? <p style={projectSummaryStyle}>{summary}</p> : null}
         </Section>
 
         <Callout
