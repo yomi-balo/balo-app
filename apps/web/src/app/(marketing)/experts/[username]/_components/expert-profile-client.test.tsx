@@ -42,7 +42,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     availableForWork: true,
     baloVerified: true,
     topRated: false,
-    skills: [
+    competencies: [
       { id: 's1', name: 'Apex', proficiency: 10, level: 'Expert', tone: 'success', pct: 100 },
       { id: 's2', name: 'Flows', proficiency: 5, level: 'Intermediate', tone: 'warning', pct: 50 },
       { id: 's3', name: 'LWC', proficiency: 2, level: 'Beginner', tone: 'muted', pct: 20 },
@@ -101,7 +101,7 @@ function makeSparseView(): ExpertProfileView {
     consultationCount: 0,
     certCount: 0,
     availableForWork: false,
-    skills: [],
+    competencies: [],
     certifications: [],
     languages: [],
     languagesLabel: '',

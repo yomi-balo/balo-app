@@ -16,8 +16,6 @@ const mockGetSalesforceVertical = vi.fn();
 const mockGetProductsByVertical = vi.fn();
 const mockGetSupportTypes = vi.fn();
 const mockGetCertsByVertical = vi.fn();
-const mockGetLanguages = vi.fn();
-const mockGetIndustries = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
@@ -29,8 +27,6 @@ vi.mock('@balo/db', () => ({
     getProductsByVertical: (...args: unknown[]) => mockGetProductsByVertical(...args),
     getSupportTypes: (...args: unknown[]) => mockGetSupportTypes(...args),
     getCertificationsByVertical: (...args: unknown[]) => mockGetCertsByVertical(...args),
-    getLanguages: (...args: unknown[]) => mockGetLanguages(...args),
-    getIndustries: (...args: unknown[]) => mockGetIndustries(...args),
   },
 }));
 
@@ -41,29 +37,22 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => Promise.resolve(mockSessionObj)),
 }));
 
-import { loadDraftAction } from './load-draft';
+import { loadSubmittedApplication } from './load-submitted';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
 const mockVertical = { id: VERTICAL_ID, name: 'Salesforce' };
-const mockProducts = [{ categoryName: 'Sales Cloud', products: [{ id: 'skill-1', name: 'CPQ' }] }];
+const mockProducts = [
+  { category: { id: 'cat-1', name: 'Sales Cloud' }, products: [{ id: 'skill-1' }] },
+];
 const mockSupportTypesList = [{ id: 'st-1', name: 'Technical Support' }];
-const mockCerts = [{ categoryName: 'Administrator', certifications: [{ id: 'cert-1' }] }];
-const mockLangs = [{ id: 'lang-1', name: 'English' }];
-const mockInds = [{ id: 'ind-1', name: 'Financial Services' }];
+const mockCerts = [
+  { category: { id: 'cc-1', name: 'Administrator' }, certifications: [{ id: 'cert-1' }] },
+];
 
-function setupReferenceData(): void {
-  mockGetSalesforceVertical.mockResolvedValue(mockVertical);
-  mockGetProductsByVertical.mockResolvedValue(mockProducts);
-  mockGetSupportTypes.mockResolvedValue(mockSupportTypesList);
-  mockGetCertsByVertical.mockResolvedValue(mockCerts);
-  mockGetLanguages.mockResolvedValue(mockLangs);
-  mockGetIndustries.mockResolvedValue(mockInds);
-}
-
-function mockDraft() {
+function mockApplication() {
   return {
-    profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'draft' },
+    profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'submitted' },
     languages: [],
     industries: [],
     competencies: [],
@@ -72,9 +61,16 @@ function mockDraft() {
   };
 }
 
+function setupReferenceData(): void {
+  mockGetSalesforceVertical.mockResolvedValue(mockVertical);
+  mockGetProductsByVertical.mockResolvedValue(mockProducts);
+  mockGetSupportTypes.mockResolvedValue(mockSupportTypesList);
+  mockGetCertsByVertical.mockResolvedValue(mockCerts);
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
-describe('loadDraftAction', () => {
+describe('loadSubmittedApplication', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { user: { id: USER_ID, email: 'test@example.com' }, save: mockSave };
@@ -84,83 +80,86 @@ describe('loadDraftAction', () => {
   describe('authentication', () => {
     it('throws when session has no user', async () => {
       mockSessionObj = { save: mockSave };
-      await expect(loadDraftAction()).rejects.toThrow('Unauthorized');
+      await expect(loadSubmittedApplication()).rejects.toThrow('Unauthorized');
     });
 
     it('throws when session user has no id', async () => {
       mockSessionObj = { user: {}, save: mockSave };
-      await expect(loadDraftAction()).rejects.toThrow('Unauthorized');
+      await expect(loadSubmittedApplication()).rejects.toThrow('Unauthorized');
     });
   });
 
-  describe('no existing draft', () => {
+  describe('no existing profile', () => {
     beforeEach(() => {
-      mockFindApplicationByUserId.mockResolvedValue(null);
+      mockFindApplicationByUserId.mockResolvedValue(undefined);
     });
 
-    it('returns null draft', async () => {
-      const result = await loadDraftAction();
-      expect(result.draft).toBeNull();
+    it('returns null', async () => {
+      const result = await loadSubmittedApplication();
+      expect(result).toBeNull();
     });
 
-    it('does not call findApplicationWithRelations', async () => {
-      await loadDraftAction();
+    it('does not load reference data or relations', async () => {
+      await loadSubmittedApplication();
       expect(mockFindApplicationWithRelations).not.toHaveBeenCalled();
-    });
-
-    it('returns all reference data', async () => {
-      const result = await loadDraftAction();
-      expect(result.referenceData).toEqual({
-        productsByCategory: mockProducts,
-        supportTypes: mockSupportTypesList,
-        certificationsByCategory: mockCerts,
-        languages: mockLangs,
-        industries: mockInds,
-        vertical: mockVertical,
-      });
+      expect(mockGetProductsByVertical).not.toHaveBeenCalled();
+      expect(mockGetSupportTypes).not.toHaveBeenCalled();
+      expect(mockGetCertsByVertical).not.toHaveBeenCalled();
     });
   });
 
-  describe('existing draft', () => {
-    const draft = mockDraft();
+  describe('existing submitted application', () => {
+    const application = mockApplication();
 
     beforeEach(() => {
       mockFindApplicationByUserId.mockResolvedValue({ id: PROFILE_ID });
-      mockFindApplicationWithRelations.mockResolvedValue(draft);
+      mockFindApplicationWithRelations.mockResolvedValue(application);
     });
 
-    it('returns the draft with relations', async () => {
-      const result = await loadDraftAction();
-      expect(result.draft).toEqual(draft);
-    });
-
-    it('loads draft using the profile ID from findApplicationByUserId', async () => {
-      await loadDraftAction();
-      expect(mockFindApplicationWithRelations).toHaveBeenCalledWith(PROFILE_ID);
+    it('returns the application with reference data', async () => {
+      const result = await loadSubmittedApplication();
+      expect(result).toEqual({
+        application,
+        productsByCategory: mockProducts,
+        supportTypes: mockSupportTypesList,
+        certificationsByCategory: mockCerts,
+      });
     });
 
     it('passes user ID and vertical ID to findApplicationByUserId', async () => {
-      await loadDraftAction();
+      await loadSubmittedApplication();
       expect(mockFindApplicationByUserId).toHaveBeenCalledWith(USER_ID, VERTICAL_ID);
     });
 
-    it('returns reference data alongside the draft', async () => {
-      const result = await loadDraftAction();
-      expect(result.referenceData.vertical).toEqual(mockVertical);
-      expect(result.referenceData.productsByCategory).toEqual(mockProducts);
+    it('loads relations using the profile ID from findApplicationByUserId', async () => {
+      await loadSubmittedApplication();
+      expect(mockFindApplicationWithRelations).toHaveBeenCalledWith(PROFILE_ID);
+    });
+
+    it('loads reference data scoped to the vertical', async () => {
+      await loadSubmittedApplication();
+      expect(mockGetProductsByVertical).toHaveBeenCalledWith(VERTICAL_ID);
+      expect(mockGetSupportTypes).toHaveBeenCalledWith(VERTICAL_ID);
+      expect(mockGetCertsByVertical).toHaveBeenCalledWith(VERTICAL_ID);
+    });
+
+    it('returns null when relations load resolves to null', async () => {
+      mockFindApplicationWithRelations.mockResolvedValue(null);
+      const result = await loadSubmittedApplication();
+      expect(result).toBeNull();
     });
   });
 
   describe('error handling', () => {
-    it('throws when repository throws (for error boundary)', async () => {
+    it('rethrows when getSalesforceVertical fails (for error boundary)', async () => {
       mockGetSalesforceVertical.mockRejectedValue(new Error('DB connection failed'));
-      await expect(loadDraftAction()).rejects.toThrow('DB connection failed');
+      await expect(loadSubmittedApplication()).rejects.toThrow('DB connection failed');
     });
 
-    it('throws when findApplicationWithRelations fails', async () => {
+    it('rethrows when findApplicationWithRelations fails', async () => {
       mockFindApplicationByUserId.mockResolvedValue({ id: PROFILE_ID });
       mockFindApplicationWithRelations.mockRejectedValue(new Error('Query failed'));
-      await expect(loadDraftAction()).rejects.toThrow('Query failed');
+      await expect(loadSubmittedApplication()).rejects.toThrow('Query failed');
     });
   });
 });

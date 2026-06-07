@@ -141,6 +141,13 @@
       "when": 1780350501085,
       "tag": "0019_handy_ink",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1780778733830,
+      "tag": "0020_taxonomy_rename_support_type_vertical_scope",
+      "breakpoints": true
     }
   ]
 }

@@ -7,9 +7,9 @@ import type { ExpertSearchResultDTO } from './search-data';
  * `ExpertCardData` needs three things the DTO shapes differently:
  * - `initials` — derived from `name`.
  * - `reviewCount` — `0` in v1 (rating UI is null-gated and short-circuits).
- * - `expertise` — built from the DTO's flat `skills` via the shared
+ * - `expertise` — built from the DTO's flat `competencies` via the shared
  *   `buildExpertise` (groups by product, maps support-type slug → SkillType).
- *   An expert with no skills yields `[]`, which the card handles cleanly
+ *   An expert with no competencies yields `[]`, which the card handles cleanly
  *   (ExpertisePills returns null; buildHeadline falls back to `headline`).
  * `rating` passes the DTO's `null` straight through.
  */
@@ -41,11 +41,11 @@ export function mapSearchResultToCardData(result: ExpertSearchResultDTO): Expert
     yearsExperience: result.yearsExperience,
     consultationCount: result.consultationCount,
     expertise: buildExpertise(
-      result.skills.map((s) => ({
-        skillId: s.skillId,
-        proficiency: s.proficiency,
-        skill: { name: s.skillName },
-        supportType: { slug: s.supportTypeSlug },
+      result.competencies.map((c) => ({
+        productId: c.productId,
+        proficiency: c.proficiency,
+        product: { name: c.productName },
+        supportType: { slug: c.supportTypeSlug },
       }))
     ),
   };

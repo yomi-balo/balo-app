@@ -7,7 +7,7 @@ import {
   buildExpertise,
   computeAvailability,
   getCountryDisplay,
-  type ExpertiseSkillInput,
+  type ExpertiseCompetencyInput,
 } from './expert-card.utils';
 
 // Fixed reference point for the whole availability suite: Tuesday 2026-06-02 09:00 UTC.
@@ -118,10 +118,10 @@ describe('getCountryDisplay', () => {
 });
 
 describe('buildExpertise', () => {
-  const skill = (over: Partial<ExpertiseSkillInput> = {}): ExpertiseSkillInput => ({
-    skillId: 'sales-cloud',
+  const skill = (over: Partial<ExpertiseCompetencyInput> = {}): ExpertiseCompetencyInput => ({
+    productId: 'sales-cloud',
     proficiency: 3,
-    skill: { name: 'Sales Cloud' },
+    product: { name: 'Sales Cloud' },
     supportType: { slug: 'technical-fix-support' },
     ...over,
   });
@@ -140,8 +140,8 @@ describe('buildExpertise', () => {
 
   it('keeps distinct products in first-seen order', () => {
     const result = buildExpertise([
-      skill({ skillId: 'service', skill: { name: 'Service Cloud' } }),
-      skill({ skillId: 'sales', skill: { name: 'Sales Cloud' } }),
+      skill({ productId: 'service', product: { name: 'Service Cloud' } }),
+      skill({ productId: 'sales', product: { name: 'Sales Cloud' } }),
     ]);
     expect(result.map((e) => e.product)).toEqual(['Service Cloud', 'Sales Cloud']);
   });
@@ -167,7 +167,7 @@ describe('buildExpertise', () => {
   it('skips skills with proficiency <= 0', () => {
     const result = buildExpertise([
       skill({ proficiency: 0 }),
-      skill({ skillId: 'service', skill: { name: 'Service Cloud' }, proficiency: 2 }),
+      skill({ productId: 'service', product: { name: 'Service Cloud' }, proficiency: 2 }),
     ]);
     expect(result).toEqual([{ product: 'Service Cloud', skills: ['technical'] }]);
   });

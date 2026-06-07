@@ -16,8 +16,8 @@ export const SORT_VALUES = ['best_match', 'soonest', 'lowest_rate', 'most_experi
 export const searchQuerySchema = z
   .object({
     q: z.string().trim().max(200).optional(),
-    products: uuidArray, // skills.id[]
-    supportTypes: uuidArray, // support_types.id[] (UUIDs — NOT the stale 4-value enum)
+    products: uuidArray, // products.id[]
+    supportTypes: uuidArray, // support_types.id[] (UUIDs — vertical-scoped, N types per vertical)
     languages: uuidArray, // languages.id[]
     industries: uuidArray, // industries.id[]
     vertical: z.string().trim().min(1).default('salesforce'), // SLUG → resolved to id; never hardcode UUID

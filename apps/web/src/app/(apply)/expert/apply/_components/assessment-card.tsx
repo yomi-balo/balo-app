@@ -19,10 +19,10 @@ interface DimensionRating {
 }
 
 interface AssessmentCardProps {
-  skillId: string;
-  skillName: string;
+  productId: string;
+  productName: string;
   dimensions: DimensionRating[];
-  onChange: (skillId: string, supportTypeId: string, value: number) => void;
+  onChange: (productId: string, supportTypeId: string, value: number) => void;
   isComplete: boolean;
 }
 
@@ -38,8 +38,8 @@ const DIMENSION_ICONS: Record<string, typeof Wrench> = {
 // ── Component ────────────────────────────────────────────────────
 
 export function AssessmentCard({
-  skillId,
-  skillName,
+  productId,
+  productName,
   dimensions,
   onChange,
   isComplete,
@@ -62,7 +62,7 @@ export function AssessmentCard({
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
       >
-        <span className="text-foreground text-sm font-semibold">{skillName}</span>
+        <span className="text-foreground text-sm font-semibold">{productName}</span>
         <Badge
           variant="outline"
           className={cn(
@@ -102,9 +102,9 @@ export function AssessmentCard({
                         max={10}
                         step={1}
                         value={[dim.proficiency]}
-                        onValueChange={([v]) => onChange(skillId, dim.supportTypeId, v ?? 0)}
+                        onValueChange={([v]) => onChange(productId, dim.supportTypeId, v ?? 0)}
                         className="flex-1"
-                        aria-label={`${dim.name} proficiency for ${skillName}`}
+                        aria-label={`${dim.name} proficiency for ${productName}`}
                       />
                       <span className="text-foreground w-6 text-right font-mono text-sm tabular-nums">
                         {dim.proficiency}
@@ -134,8 +134,8 @@ export function AssessmentCard({
                         max={10}
                         step={1}
                         value={[dim.proficiency]}
-                        onValueChange={([v]) => onChange(skillId, dim.supportTypeId, v ?? 0)}
-                        aria-label={`${dim.name} proficiency for ${skillName}`}
+                        onValueChange={([v]) => onChange(productId, dim.supportTypeId, v ?? 0)}
+                        aria-label={`${dim.name} proficiency for ${productName}`}
                       />
                       <div className="flex justify-end gap-2">
                         <span className="text-foreground font-mono text-sm tabular-nums">

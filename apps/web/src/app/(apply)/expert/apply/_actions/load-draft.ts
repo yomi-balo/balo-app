@@ -5,7 +5,7 @@ import {
   expertsRepository,
   referenceDataRepository,
   type ApplicationWithRelations,
-  type SkillsByCategory,
+  type ProductsByCategory,
   type CertificationsByCategory,
   type Vertical,
   type SupportType,
@@ -15,7 +15,7 @@ import {
 import { log } from '@/lib/logging';
 
 export interface ReferenceData {
-  skillsByCategory: SkillsByCategory[];
+  productsByCategory: ProductsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
   languages: Language[];
@@ -37,13 +37,13 @@ export const loadDraftAction = withAuth(async (session): Promise<LoadDraftResult
       vertical.id
     );
 
-    const [draft, skillsByCategory, supportTypes, certsByCategory, languages, industries] =
+    const [draft, productsByCategory, supportTypes, certsByCategory, languages, industries] =
       await Promise.all([
         existingProfile
           ? expertsRepository.findApplicationWithRelations(existingProfile.id)
           : Promise.resolve(null),
-        referenceDataRepository.getSkillsByVertical(vertical.id),
-        referenceDataRepository.getSupportTypes(),
+        referenceDataRepository.getProductsByVertical(vertical.id),
+        referenceDataRepository.getSupportTypes(vertical.id),
         referenceDataRepository.getCertificationsByVertical(vertical.id),
         referenceDataRepository.getLanguages(),
         referenceDataRepository.getIndustries(),
@@ -58,7 +58,7 @@ export const loadDraftAction = withAuth(async (session): Promise<LoadDraftResult
     return {
       draft: draft ?? null,
       referenceData: {
-        skillsByCategory,
+        productsByCategory,
         supportTypes,
         certificationsByCategory: certsByCategory,
         languages,

@@ -14,7 +14,7 @@ import { relations, sql } from 'drizzle-orm';
 import { expertTypeEnum, applicationStatusEnum, languageProficiencyEnum } from './enums';
 import { users } from './users';
 import { agencies } from './agencies';
-import { verticals, skills, supportTypes, certifications } from './verticals';
+import { verticals, products, supportTypes, certifications } from './verticals';
 import { languages } from './languages';
 import { industries } from './industries';
 import { expertPayoutDetails } from './payouts';
@@ -87,7 +87,7 @@ export const expertProfiles = pgTable(
 
     // Generated STORED full-text search vector: headline weight A, bio weight B.
     // Postgres maintains this automatically on every expert_profiles write — no
-    // trigger code, no drift. Skill names (weight C) are folded in at query time
+    // trigger code, no drift. Product names (weight C) are folded in at query time
     // by the expert-search repository, not stored here. Never read/written
     // directly via Drizzle (excluded from $inferInsert by .generatedAlwaysAs).
     searchVector: tsvector('search_vector').generatedAlwaysAs(
@@ -101,15 +101,16 @@ export const expertProfiles = pgTable(
   })
 );
 
-export const expertSkills = pgTable(
-  'expert_skills',
+export const expertCompetency = pgTable(
+  'expert_competency',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     expertProfileId: uuid('expert_profile_id')
       .references(() => expertProfiles.id)
       .notNull(),
-    skillId: uuid('skill_id')
-      .references(() => skills.id)
+    // FK-references products.id (the taxonomy product this competency is in).
+    productId: uuid('product_id')
+      .references(() => products.id)
       .notNull(),
     supportTypeId: uuid('support_type_id')
       .references(() => supportTypes.id)
@@ -120,9 +121,9 @@ export const expertSkills = pgTable(
     ...timestamps,
   },
   (table) => ({
-    uniqueSkillIdx: uniqueIndex('expert_skill_unique_idx').on(
+    uniqueCompetencyIdx: uniqueIndex('expert_competency_unique_idx').on(
       table.expertProfileId,
-      table.skillId,
+      table.productId,
       table.supportTypeId
     ),
   })
@@ -240,7 +241,7 @@ export const expertProfilesRelations = relations(expertProfiles, ({ one, many })
     fields: [expertProfiles.agencyId],
     references: [agencies.id],
   }),
-  skills: many(expertSkills),
+  competencies: many(expertCompetency),
   certifications: many(expertCertifications),
   languages: many(expertLanguages),
   industries: many(expertIndustries),
@@ -255,17 +256,19 @@ export const expertProfilesRelations = relations(expertProfiles, ({ one, many })
   }),
 }));
 
-export const expertSkillsRelations = relations(expertSkills, ({ one }) => ({
+export const expertCompetencyRelations = relations(expertCompetency, ({ one }) => ({
   expertProfile: one(expertProfiles, {
-    fields: [expertSkills.expertProfileId],
+    fields: [expertCompetency.expertProfileId],
     references: [expertProfiles.id],
   }),
-  skill: one(skills, {
-    fields: [expertSkills.skillId],
-    references: [skills.id],
+  // Relation to the product this competency is in (referenced by
+  // `with: { product: … }` query usages).
+  product: one(products, {
+    fields: [expertCompetency.productId],
+    references: [products.id],
   }),
   supportType: one(supportTypes, {
-    fields: [expertSkills.supportTypeId],
+    fields: [expertCompetency.supportTypeId],
     references: [supportTypes.id],
   }),
 }));
@@ -312,8 +315,8 @@ export const workHistoryRelations = relations(workHistory, ({ one }) => ({
 
 export type ExpertProfile = typeof expertProfiles.$inferSelect;
 export type NewExpertProfile = typeof expertProfiles.$inferInsert;
-export type ExpertSkill = typeof expertSkills.$inferSelect;
-export type NewExpertSkill = typeof expertSkills.$inferInsert;
+export type ExpertCompetency = typeof expertCompetency.$inferSelect;
+export type NewExpertCompetency = typeof expertCompetency.$inferInsert;
 export type ExpertCertification = typeof expertCertifications.$inferSelect;
 export type NewExpertCertification = typeof expertCertifications.$inferInsert;
 export type ExpertLanguage = typeof expertLanguages.$inferSelect;

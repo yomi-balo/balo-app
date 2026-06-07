@@ -7,8 +7,9 @@ import {
   expertProfiles,
   industries,
   languages,
-  skillCategories,
-  skills,
+  verticals,
+  categories,
+  products,
   supportTypes,
 } from '../schema';
 import { referenceDataRepository } from './reference-data';
@@ -34,22 +35,22 @@ async function getVerticalId(): Promise<string> {
   return (await referenceDataRepository.getSalesforceVertical()).id;
 }
 
-async function createSkill(verticalId: string, name: string): Promise<string> {
+async function createProduct(verticalId: string, name: string): Promise<string> {
   const [cat] = await db
-    .insert(skillCategories)
+    .insert(categories)
     .values({ verticalId, name: uniq('cat'), slug: uniq('cat-slug') })
     .returning();
   const [row] = await db
-    .insert(skills)
-    .values({ verticalId, categoryId: cat!.id, name, slug: uniq('skill-slug') })
+    .insert(products)
+    .values({ verticalId, categoryId: cat!.id, name, slug: uniq('product-slug') })
     .returning();
   return row!.id;
 }
 
-async function createSupportType(name: string): Promise<string> {
+async function createSupportType(verticalId: string, name: string): Promise<string> {
   const [row] = await db
     .insert(supportTypes)
-    .values({ name, slug: uniq('st-slug') })
+    .values({ verticalId, name, slug: uniq('st-slug') })
     .returning();
   return row!.id;
 }
@@ -115,6 +116,88 @@ describe('expertSearchRepository.resolveVerticalId', () => {
   });
 });
 
+// ── Vertical-as-data: a SECOND vertical adapts with NO code change ──────────
+//
+// Guards the load-bearing acceptance criterion (AC #4 / #2): adding a vertical
+// is a pure DATA operation. We seed an entire second vertical (vertical →
+// categories → products → support types → approved experts) INLINE, using only
+// the generic helpers, with support-type slugs that DIFFER from Salesforce's —
+// which is only possible because support_types is now (vertical_id, slug)-unique
+// rather than globally slug-unique. This whole block fails pre-change (the mock
+// support-type slugs collide on the old global unique) and passes post-change.
+
+/** Insert a brand-new vertical with a unique slug; returns its id + slug. */
+async function createMockVertical(): Promise<{ id: string; slug: string }> {
+  const slug = uniq('mock-vertical');
+  const [row] = await db
+    .insert(verticals)
+    .values({ name: uniq('Mock Vertical'), slug, isActive: true })
+    .returning();
+  return { id: row!.id, slug };
+}
+
+describe('expertSearchRepository — vertical-as-data (second vertical, no code change)', () => {
+  it('isolates search + computes facets purely from the mock vertical data', async () => {
+    const sfVerticalId = await getVerticalId();
+
+    // ── 1. Seed a second vertical entirely as DATA ──────────────────────────
+    const mock = await createMockVertical();
+
+    // Mock products under their own category.
+    const mockProductId = await createProduct(mock.id, uniq('Mock Product'));
+
+    // Mock support types with slugs that DIFFER from Salesforce's — only legal
+    // post-change (composite (vertical_id, slug) unique).
+    const mockSupportTypeId = await createSupportType(mock.id, 'Mock Implementation');
+    await createSupportType(mock.id, 'Mock Audit');
+
+    // ── 2. Approved + searchable experts in the mock vertical ───────────────
+    const mockExpert = await searchExpertFactory({
+      verticalId: mock.id,
+      competencies: [{ productId: mockProductId, supportTypeId: mockSupportTypeId }],
+    });
+
+    // A Salesforce expert that must NOT leak into mock-vertical results.
+    const sfProductId = await createProduct(sfVerticalId, uniq('SF Product'));
+    const sfSupportTypeId = await createSupportType(sfVerticalId, 'SF Support');
+    const sfExpert = await searchExpertFactory({
+      verticalId: sfVerticalId,
+      competencies: [{ productId: sfProductId, supportTypeId: sfSupportTypeId }],
+    });
+
+    // ── 3a. resolveVerticalId resolves the mock slug ────────────────────────
+    const resolved = await expertSearchRepository.resolveVerticalId(mock.slug);
+    expect(resolved).toBe(mock.id);
+
+    // ── 3b. search is vertical-isolated ─────────────────────────────────────
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId: mock.id, pageSize: 50 })
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(mockExpert.id);
+    expect(ids).not.toContain(sfExpert.id);
+
+    // ── 3c. facets are computed from LIVE mock data (not a hardcoded list) ──
+    const facets = await expertSearchRepository.facetCounts(mock.id, false, NOW);
+
+    // Support-type facets are the MOCK ones, never Salesforce's.
+    const supportTypeIds = facets.supportTypes.map((f) => f.id);
+    expect(supportTypeIds).toContain(mockSupportTypeId);
+    expect(supportTypeIds).not.toContain(sfSupportTypeId);
+
+    // Product facets are the mock products.
+    const productIds = facets.products.map((f) => f.id);
+    expect(productIds).toContain(mockProductId);
+    expect(productIds).not.toContain(sfProductId);
+
+    // ── 3d. filtering by the mock support type works ────────────────────────
+    const filtered = await expertSearchRepository.search(
+      params({ verticalId: mock.id, supportTypeIds: [mockSupportTypeId], pageSize: 50 })
+    );
+    expect(filtered.rows.map((r) => r.id)).toEqual([mockExpert.id]);
+  });
+});
+
 // ── 1. FTS relevance ordering ───────────────────────────────────────
 
 describe('expertSearchRepository.search — FTS relevance ordering', () => {
@@ -143,7 +226,7 @@ describe('expertSearchRepository.search — FTS relevance ordering', () => {
 // ── 2. Weighted ranking across all three weights (load-bearing) ─────
 
 describe('expertSearchRepository.search — weighted A > B > C ranking', () => {
-  it('headline(A) outranks bio(B) outranks skill-name(C)', async () => {
+  it('headline(A) outranks bio(B) outranks product-name(C)', async () => {
     const verticalId = await getVerticalId();
     const term = 'pardot';
 
@@ -157,13 +240,13 @@ describe('expertSearchRepository.search — weighted A > B > C ranking', () => {
       headline: 'Senior consultant',
       bio: `deep ${term} marketing automation experience`,
     });
-    const skillC = await createSkill(verticalId, `${term} administration`);
-    const supportTypeC = await createSupportType('Technical');
+    const productC = await createProduct(verticalId, `${term} administration`);
+    const supportTypeC = await createSupportType(verticalId, 'Technical');
     const expertC = await searchExpertFactory({
       verticalId,
       headline: 'CRM specialist',
       bio: 'works on opportunities',
-      skills: [{ skillId: skillC, supportTypeId: supportTypeC }],
+      competencies: [{ productId: productC, supportTypeId: supportTypeC }],
     });
 
     const { rows } = await expertSearchRepository.search(
@@ -179,7 +262,7 @@ describe('expertSearchRepository.search — weighted A > B > C ranking', () => {
     expect(idxB).toBeGreaterThanOrEqual(0);
     expect(idxC).toBeGreaterThanOrEqual(0);
     expect(idxA).toBeLessThan(idxB); // A (headline) > B (bio)
-    expect(idxB).toBeLessThan(idxC); // B (bio) > C (skill name)
+    expect(idxB).toBeLessThan(idxC); // B (bio) > C (product name)
   });
 });
 
@@ -225,37 +308,37 @@ describe('expertSearchRepository.search — fuzzy trigram fallback', () => {
 // ── 4. OR-within / AND-across ───────────────────────────────────────
 
 describe('expertSearchRepository.search — OR within facet, AND across facets', () => {
-  it('(skillA OR skillB) AND english returns union intersected with english speakers', async () => {
+  it('(productA OR productB) AND english returns union intersected with english speakers', async () => {
     const verticalId = await getVerticalId();
-    const skillA = await createSkill(verticalId, uniq('SkillA'));
-    const skillB = await createSkill(verticalId, uniq('SkillB'));
-    const stId = await createSupportType('Technical');
+    const productA = await createProduct(verticalId, uniq('SkillA'));
+    const productB = await createProduct(verticalId, uniq('SkillB'));
+    const stId = await createSupportType(verticalId, 'Technical');
     const english = await createLanguage('English');
     const spanish = await createLanguage('Spanish');
 
-    // Has skillA + English → included
+    // Has productA + English → included
     const e1 = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillA, supportTypeId: stId }],
+      competencies: [{ productId: productA, supportTypeId: stId }],
       languages: [{ languageId: english }],
     });
-    // Has skillB + English → included
+    // Has productB + English → included
     const e2 = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillB, supportTypeId: stId }],
+      competencies: [{ productId: productB, supportTypeId: stId }],
       languages: [{ languageId: english }],
     });
-    // Has skillA but only Spanish → excluded (AND across facets)
+    // Has productA but only Spanish → excluded (AND across facets)
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillA, supportTypeId: stId }],
+      competencies: [{ productId: productA, supportTypeId: stId }],
       languages: [{ languageId: spanish }],
     });
 
     const { rows, total } = await expertSearchRepository.search(
       params({
         verticalId,
-        productIds: [skillA, skillB],
+        productIds: [productA, productB],
         languageIds: [english],
         pageSize: 50,
       })
@@ -272,19 +355,19 @@ describe('expertSearchRepository.search — OR within facet, AND across facets',
 // ── 5. supportTypes filter ──────────────────────────────────────────
 
 describe('expertSearchRepository.search — supportTypes filter', () => {
-  it('filters by support_types.id via expert_skills.support_type_id', async () => {
+  it('filters by support_types.id via expert_competency.support_type_id', async () => {
     const verticalId = await getVerticalId();
-    const skillId = await createSkill(verticalId, uniq('Skill'));
-    const stWanted = await createSupportType('Architecture');
-    const stOther = await createSupportType('Training');
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const stWanted = await createSupportType(verticalId, 'Architecture');
+    const stOther = await createSupportType(verticalId, 'Training');
 
     const wanted = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stWanted }],
+      competencies: [{ productId: productId, supportTypeId: stWanted }],
     });
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stOther }],
+      competencies: [{ productId: productId, supportTypeId: stOther }],
     });
 
     const { rows } = await expertSearchRepository.search(
@@ -350,23 +433,23 @@ describe('expertSearchRepository.search — availability gate', () => {
 // ── 6b. countMatchingIgnoringGate (powers wasAvailabilityGated) ──────
 
 describe('expertSearchRepository.countMatchingIgnoringGate', () => {
-  it('returns matches the gated search hides: skill matches but no future availability', async () => {
+  it('returns matches the gated search hides: product matches but no future availability', async () => {
     const verticalId = await getVerticalId();
-    const skillId = await createSkill(verticalId, uniq('Skill'));
-    const stId = await createSupportType('Technical');
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const stId = await createSupportType(verticalId, 'Technical');
 
-    // Approved + searchable expert whose skill matches the filter, but with NO
+    // Approved + searchable expert whose product matches the filter, but with NO
     // availability-cache row → invisible to a gated search, but a genuine match.
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      competencies: [{ productId: productId, supportTypeId: stId }],
       earliestAvailableAt: undefined,
     });
 
     const gatedSearch = await expertSearchRepository.search(
       params({
         verticalId,
-        productIds: [skillId],
+        productIds: [productId],
         availabilityGateEnabled: true,
         now: NOW,
         pageSize: 50,
@@ -378,7 +461,7 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
     const ungated = await expertSearchRepository.countMatchingIgnoringGate(
       params({
         verticalId,
-        productIds: [skillId],
+        productIds: [productId],
         availabilityGateEnabled: false,
         timeframe: undefined,
         now: NOW,
@@ -390,19 +473,19 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
 
   it('both the gated search and the probe count the expert when future availability exists', async () => {
     const verticalId = await getVerticalId();
-    const skillId = await createSkill(verticalId, uniq('Skill'));
-    const stId = await createSupportType('Technical');
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const stId = await createSupportType(verticalId, 'Technical');
 
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      competencies: [{ productId: productId, supportTypeId: stId }],
       earliestAvailableAt: new Date(NOW.getTime() + DAY), // future → bookable
     });
 
     const gatedSearch = await expertSearchRepository.search(
       params({
         verticalId,
-        productIds: [skillId],
+        productIds: [productId],
         availabilityGateEnabled: true,
         now: NOW,
         pageSize: 50,
@@ -413,7 +496,7 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
     const ungated = await expertSearchRepository.countMatchingIgnoringGate(
       params({
         verticalId,
-        productIds: [skillId],
+        productIds: [productId],
         availabilityGateEnabled: false,
         timeframe: undefined,
         now: NOW,
@@ -425,27 +508,27 @@ describe('expertSearchRepository.countMatchingIgnoringGate', () => {
 
   it('honours the same facet/rate filters as search (non-matching expert excluded)', async () => {
     const verticalId = await getVerticalId();
-    const wantedSkill = await createSkill(verticalId, uniq('Wanted'));
-    const otherSkill = await createSkill(verticalId, uniq('Other'));
-    const stId = await createSupportType('Technical');
+    const wantedProduct = await createProduct(verticalId, uniq('Wanted'));
+    const otherProduct = await createProduct(verticalId, uniq('Other'));
+    const stId = await createSupportType(verticalId, 'Technical');
 
     // Matches the product filter (no availability).
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: wantedSkill, supportTypeId: stId }],
+      competencies: [{ productId: wantedProduct, supportTypeId: stId }],
       earliestAvailableAt: undefined,
     });
     // Does NOT match the product filter → must not be counted.
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: otherSkill, supportTypeId: stId }],
+      competencies: [{ productId: otherProduct, supportTypeId: stId }],
       earliestAvailableAt: undefined,
     });
 
     const ungated = await expertSearchRepository.countMatchingIgnoringGate(
       params({
         verticalId,
-        productIds: [wantedSkill],
+        productIds: [wantedProduct],
         availabilityGateEnabled: false,
         timeframe: undefined,
         now: NOW,
@@ -609,33 +692,33 @@ describe('expertSearchRepository.search — pagination', () => {
 describe('expertSearchRepository.facetCounts', () => {
   it('is selection-independent (applied product filter / q does not change totals) and dedupes', async () => {
     const verticalId = await getVerticalId();
-    const skillA = await createSkill(verticalId, uniq('SkillA'));
-    const skillB = await createSkill(verticalId, uniq('SkillB'));
-    const stTech = await createSupportType('Technical');
-    const stArch = await createSupportType('Architecture');
+    const productA = await createProduct(verticalId, uniq('SkillA'));
+    const productB = await createProduct(verticalId, uniq('SkillB'));
+    const stTech = await createSupportType(verticalId, 'Technical');
+    const stArch = await createSupportType(verticalId, 'Architecture');
     const english = await createLanguage('English');
 
-    // Expert with skillA under TWO support types → count(DISTINCT) must dedupe to 1.
+    // Expert with productA under TWO support types → count(DISTINCT) must dedupe to 1.
     await searchExpertFactory({
       verticalId,
-      skills: [
-        { skillId: skillA, supportTypeId: stTech },
-        { skillId: skillA, supportTypeId: stArch },
+      competencies: [
+        { productId: productA, supportTypeId: stTech },
+        { productId: productA, supportTypeId: stArch },
       ],
       languages: [{ languageId: english }],
     });
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId: skillB, supportTypeId: stTech }],
+      competencies: [{ productId: productB, supportTypeId: stTech }],
       languages: [{ languageId: english }],
     });
 
     const facets = await expertSearchRepository.facetCounts(verticalId, false, NOW);
 
-    const skillAFacet = facets.products.find((f) => f.id === skillA);
-    const skillBFacet = facets.products.find((f) => f.id === skillB);
-    expect(skillAFacet?.count).toBe(1); // deduped despite 2 support-type rows
-    expect(skillBFacet?.count).toBe(1);
+    const productAFacet = facets.products.find((f) => f.id === productA);
+    const productBFacet = facets.products.find((f) => f.id === productB);
+    expect(productAFacet?.count).toBe(1); // deduped despite 2 support-type rows
+    expect(productBFacet?.count).toBe(1);
 
     // English: both experts → 2.
     const englishFacet = facets.languages.find((f) => f.id === english);
@@ -645,30 +728,30 @@ describe('expertSearchRepository.facetCounts', () => {
     // applied filters/q, so facetCounts ignores them by construction. Re-running
     // yields identical totals.
     const facetsAgain = await expertSearchRepository.facetCounts(verticalId, false, NOW);
-    expect(facetsAgain.products.find((f) => f.id === skillA)?.count).toBe(1);
+    expect(facetsAgain.products.find((f) => f.id === productA)?.count).toBe(1);
   });
 
   it('respects the availability gate', async () => {
     const verticalId = await getVerticalId();
-    const skillId = await createSkill(verticalId, uniq('Skill'));
-    const stId = await createSupportType('Technical');
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const stId = await createSupportType(verticalId, 'Technical');
 
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      competencies: [{ productId: productId, supportTypeId: stId }],
       earliestAvailableAt: new Date(NOW.getTime() + DAY), // future → counted when gate ON
     });
     await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: stId }],
+      competencies: [{ productId: productId, supportTypeId: stId }],
       earliestAvailableAt: undefined, // no cache → excluded when gate ON
     });
 
     const gateOff = await expertSearchRepository.facetCounts(verticalId, false, NOW);
-    expect(gateOff.products.find((f) => f.id === skillId)?.count).toBe(2);
+    expect(gateOff.products.find((f) => f.id === productId)?.count).toBe(2);
 
     const gateOn = await expertSearchRepository.facetCounts(verticalId, true, NOW);
-    expect(gateOn.products.find((f) => f.id === skillId)?.count).toBe(1);
+    expect(gateOn.products.find((f) => f.id === productId)?.count).toBe(1);
   });
 });
 
@@ -846,39 +929,39 @@ describe('expertSearchRepository.search — row field hydration', () => {
     expect(row!.agencyLogoUrl).toBeNull();
   });
 
-  it('hydrates per-expert skills (skill name + support-type slug + proficiency)', async () => {
+  it('hydrates per-expert competencies (product name + support-type slug + proficiency)', async () => {
     const verticalId = await getVerticalId();
-    const skillName = uniq('Sales Cloud');
-    const skillId = await createSkill(verticalId, skillName);
+    const productName = uniq('Sales Cloud');
+    const productId = await createProduct(verticalId, productName);
     const [supportType] = await db
       .insert(supportTypes)
-      .values({ name: 'Technical Fix & Support', slug: uniq('st-slug') })
+      .values({ verticalId, name: 'Technical Fix & Support', slug: uniq('st-slug') })
       .returning();
     const expert = await searchExpertFactory({
       verticalId,
-      skills: [{ skillId, supportTypeId: supportType!.id, proficiency: 4 }],
+      competencies: [{ productId: productId, supportTypeId: supportType!.id, proficiency: 4 }],
     });
 
     const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
     const row = rows.find((r) => r.id === expert.id);
     expect(row).toBeDefined();
-    expect(row!.skills).toEqual([
+    expect(row!.competencies).toEqual([
       {
-        skillId,
-        skillName,
+        productId: productId,
+        productName: productName,
         supportTypeSlug: supportType!.slug,
         proficiency: 4,
       },
     ]);
   });
 
-  it('returns an empty skills array for an expert with no skills', async () => {
+  it('returns an empty competencies array for an expert with no competencies', async () => {
     const verticalId = await getVerticalId();
     const expert = await searchExpertFactory({ verticalId });
 
     const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
     const row = rows.find((r) => r.id === expert.id);
-    expect(row!.skills).toEqual([]);
+    expect(row!.competencies).toEqual([]);
   });
 });
 

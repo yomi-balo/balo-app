@@ -11,7 +11,7 @@ import {
   expertProfiles,
   industries,
   languages,
-  skills,
+  products,
   supportTypes,
   workHistory,
 } from '../schema';
@@ -408,13 +408,13 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     // ── Seed taxonomy + agency rows the factory does not create itself ──
     const vertical = await referenceDataRepository.getSalesforceVertical();
 
-    const [skill] = await db
-      .insert(skills)
+    const [product] = await db
+      .insert(products)
       .values({ verticalId: vertical.id, name: 'Apex', slug: uniq('apex') })
       .returning();
     const [supportType] = await db
       .insert(supportTypes)
-      .values({ name: 'Implementation', slug: uniq('implementation') })
+      .values({ verticalId: vertical.id, name: 'Implementation', slug: uniq('implementation') })
       .returning();
     const [language] = await db
       .insert(languages)
@@ -438,7 +438,7 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
       .values({ name: 'Cloud Partners', slug: uniq('cloud-partners'), logoUrl: 'logo-key' })
       .returning();
 
-    if (!skill || !supportType || !language || !industry || !certification || !agency) {
+    if (!product || !supportType || !language || !industry || !certification || !agency) {
       throw new Error('Failed to seed taxonomy rows');
     }
 
@@ -458,7 +458,7 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
       username,
       searchable: true,
       agencyId: agency.id,
-      skills: [{ skillId: skill.id, supportTypeId: supportType.id, proficiency: 8 }],
+      competencies: [{ productId: product.id, supportTypeId: supportType.id, proficiency: 8 }],
       languages: [{ languageId: language.id, proficiency: 'native' }],
     });
 
@@ -507,11 +507,11 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     expect(result?.agency?.slug).toBe(agency.slug);
     expect(result?.agency?.logoUrl).toBe('logo-key');
 
-    // skills (+ nested skill & supportType)
-    expect(result?.skills).toHaveLength(1);
-    expect(result?.skills[0]?.skill.name).toBe('Apex');
-    expect(result?.skills[0]?.supportType.name).toBe('Implementation');
-    expect(result?.skills[0]?.proficiency).toBe(8);
+    // competencies (+ nested product & supportType)
+    expect(result?.competencies).toHaveLength(1);
+    expect(result?.competencies[0]?.product.name).toBe('Apex');
+    expect(result?.competencies[0]?.supportType.name).toBe('Implementation');
+    expect(result?.competencies[0]?.proficiency).toBe(8);
 
     // certifications (+ nested certification)
     expect(result?.certifications).toHaveLength(1);

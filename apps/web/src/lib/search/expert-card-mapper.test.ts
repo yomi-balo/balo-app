@@ -46,22 +46,22 @@ const baseDto: ExpertSearchResultDTO = {
   rating: null,
   yearsExperience: 9,
   consultationCount: 124,
-  skills: [
+  competencies: [
     {
-      skillId: 'sales-cloud',
-      skillName: 'Sales Cloud',
+      productId: 'sales-cloud',
+      productName: 'Sales Cloud',
       supportTypeSlug: 'technical-fix-support',
       proficiency: 5,
     },
     {
-      skillId: 'sales-cloud',
-      skillName: 'Sales Cloud',
+      productId: 'sales-cloud',
+      productName: 'Sales Cloud',
       supportTypeSlug: 'architecture-integrations',
       proficiency: 4,
     },
     {
-      skillId: 'service-cloud',
-      skillName: 'Service Cloud',
+      productId: 'service-cloud',
+      productName: 'Service Cloud',
       supportTypeSlug: 'platform-training',
       proficiency: 3,
     },
@@ -75,7 +75,7 @@ describe('mapSearchResultToCardData', () => {
     expect(card.rating).toBeNull();
   });
 
-  it('builds expertise from the DTO skills (product grouping + slug → SkillType)', () => {
+  it('builds expertise from the DTO competencies (product grouping + slug → SkillType)', () => {
     const card = mapSearchResultToCardData(baseDto);
     expect(card.expertise).toEqual([
       { product: 'Sales Cloud', skills: ['technical', 'architecture'] },
@@ -83,19 +83,19 @@ describe('mapSearchResultToCardData', () => {
     ]);
   });
 
-  it('skips skills with proficiency <= 0 when building expertise', () => {
+  it('skips competencies with proficiency <= 0 when building expertise', () => {
     const card = mapSearchResultToCardData({
       ...baseDto,
-      skills: [
+      competencies: [
         {
-          skillId: 'sales-cloud',
-          skillName: 'Sales Cloud',
+          productId: 'sales-cloud',
+          productName: 'Sales Cloud',
           supportTypeSlug: 'technical-fix-support',
           proficiency: 0,
         },
         {
-          skillId: 'service-cloud',
-          skillName: 'Service Cloud',
+          productId: 'service-cloud',
+          productName: 'Service Cloud',
           supportTypeSlug: 'platform-training',
           proficiency: 3,
         },
@@ -104,8 +104,8 @@ describe('mapSearchResultToCardData', () => {
     expect(card.expertise).toEqual([{ product: 'Service Cloud', skills: ['admin'] }]);
   });
 
-  it('maps an expert with no skills to an empty expertise array', () => {
-    const card = mapSearchResultToCardData({ ...baseDto, skills: [] });
+  it('maps an expert with no competencies to an empty expertise array', () => {
+    const card = mapSearchResultToCardData({ ...baseDto, competencies: [] });
     expect(card.expertise).toEqual([]);
   });
 

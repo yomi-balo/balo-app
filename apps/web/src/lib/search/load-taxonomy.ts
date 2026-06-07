@@ -1,7 +1,7 @@
 import 'server-only';
 import { referenceDataRepository } from '@balo/db';
 import { log } from '@/lib/logging';
-import { mapSkillsByCategoryToTaxonomy, EMPTY_TAXONOMY, type ProductTaxonomy } from './taxonomy';
+import { mapProductsByCategoryToTaxonomy, EMPTY_TAXONOMY, type ProductTaxonomy } from './taxonomy';
 
 /**
  * Load the full browsable product taxonomy for the Search Composer (repo-direct,
@@ -16,8 +16,8 @@ import { mapSkillsByCategoryToTaxonomy, EMPTY_TAXONOMY, type ProductTaxonomy } f
 export async function loadSearchTaxonomy(): Promise<ProductTaxonomy> {
   try {
     const vertical = await referenceDataRepository.getSalesforceVertical();
-    const categories = await referenceDataRepository.getSkillsByVertical(vertical.id);
-    return mapSkillsByCategoryToTaxonomy(categories);
+    const categories = await referenceDataRepository.getProductsByVertical(vertical.id);
+    return mapProductsByCategoryToTaxonomy(categories);
   } catch (error) {
     log.error('Search taxonomy load failed', {
       error: error instanceof Error ? error.message : String(error),

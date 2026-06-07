@@ -24,12 +24,12 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
   const form = useForm<ProductsStepData>({
     resolver: zodResolver(productsStepSchema),
     defaultValues: {
-      skillIds: productsData.skillIds ?? [],
+      productIds: productsData.productIds ?? [],
     },
     mode: 'onSubmit',
   });
 
-  const selectedSkillIds = form.watch('skillIds');
+  const selectedProductIds = form.watch('productIds');
 
   // Sync form to context
   useEffect(() => {
@@ -51,32 +51,32 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
   // Search filtering
   const filteredCategories = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
-    if (!query) return referenceData.skillsByCategory;
+    if (!query) return referenceData.productsByCategory;
 
-    return referenceData.skillsByCategory
+    return referenceData.productsByCategory
       .map((cat) => ({
         ...cat,
-        skills: cat.skills.filter((s) => s.name.toLowerCase().includes(query)),
+        products: cat.products.filter((p) => p.name.toLowerCase().includes(query)),
       }))
-      .filter((cat) => cat.skills.length > 0);
-  }, [referenceData.skillsByCategory, searchQuery]);
+      .filter((cat) => cat.products.length > 0);
+  }, [referenceData.productsByCategory, searchQuery]);
 
-  // Build flat map of skill id -> name for selected pills
-  const skillNameMap = useMemo(() => {
+  // Build flat map of product id -> name for selected pills
+  const productNameMap = useMemo(() => {
     const map = new Map<string, string>();
-    for (const cat of referenceData.skillsByCategory) {
-      for (const skill of cat.skills) {
-        map.set(skill.id, skill.name);
+    for (const cat of referenceData.productsByCategory) {
+      for (const product of cat.products) {
+        map.set(product.id, product.name);
       }
     }
     return map;
-  }, [referenceData.skillsByCategory]);
+  }, [referenceData.productsByCategory]);
 
-  const removeSkill = (id: string): void => {
-    const current = form.getValues('skillIds');
+  const removeProduct = (id: string): void => {
+    const current = form.getValues('productIds');
     form.setValue(
-      'skillIds',
-      current.filter((s) => s !== id),
+      'productIds',
+      current.filter((p) => p !== id),
       { shouldValidate: false }
     );
   };
@@ -97,14 +97,14 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
 
         {/* Selected pills */}
         <AnimatePresence>
-          {selectedSkillIds.length > 0 && (
+          {selectedProductIds.length > 0 && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
               className="border-border flex flex-wrap gap-2 border-b pb-4"
             >
-              {selectedSkillIds.map((id) => (
+              {selectedProductIds.map((id) => (
                 <motion.div
                   key={id}
                   initial={scaleInVariant.initial}
@@ -113,12 +113,12 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                   transition={scaleInVariant.transition}
                 >
                   <Badge variant="secondary" className="gap-1.5 rounded-full px-3 py-1">
-                    {skillNameMap.get(id) ?? id}
+                    {productNameMap.get(id) ?? id}
                     <button
                       type="button"
-                      onClick={() => removeSkill(id)}
+                      onClick={() => removeProduct(id)}
                       className="hover:text-foreground"
-                      aria-label={`Remove ${skillNameMap.get(id) ?? 'product'}`}
+                      aria-label={`Remove ${productNameMap.get(id) ?? 'product'}`}
                     >
                       <X className="h-3 w-3" aria-hidden="true" />
                     </button>
@@ -126,10 +126,10 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                 </motion.div>
               ))}
               <p className="text-muted-foreground mt-1 w-full text-xs">
-                {selectedSkillIds.length} product
-                {selectedSkillIds.length === 1 ? '' : 's'} selected
+                {selectedProductIds.length} product
+                {selectedProductIds.length === 1 ? '' : 's'} selected
               </p>
-              {selectedSkillIds.length >= 5 && (
+              {selectedProductIds.length >= 5 && (
                 <p className="text-success w-full text-xs">Great coverage!</p>
               )}
             </motion.div>
@@ -166,7 +166,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
         {/* Categories */}
         <FormField
           control={form.control}
-          name="skillIds"
+          name="productIds"
           render={({ field }) => (
             <FormItem>
               <FormControl>
@@ -188,7 +188,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                           {cat.category.name}
                         </p>
                         <ChipPicker
-                          options={cat.skills.map((s) => ({
+                          options={cat.products.map((s) => ({
                             id: s.id,
                             label: s.name,
                           }))}

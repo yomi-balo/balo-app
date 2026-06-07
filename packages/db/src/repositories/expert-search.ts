@@ -2,10 +2,10 @@ import { and, desc, eq, gte, lte, isNotNull, inArray, exists, sql, type SQL } fr
 import { db } from '../client';
 import {
   expertProfiles,
-  expertSkills,
+  expertCompetency,
   expertLanguages,
   expertIndustries,
-  skills,
+  products,
   supportTypes,
   languages,
   verticals,
@@ -31,10 +31,10 @@ export interface ExpertSearchParams {
   now: Date; // injected for deterministic gate/timeframe boundaries
 }
 
-/** One expert_skills row joined to its skill name + support-type slug. */
-export interface ExpertSearchSkillRow {
-  skillId: string;
-  skillName: string;
+/** One expert_competency row joined to its product name + support-type slug. */
+export interface ExpertSearchCompetencyRow {
+  productId: string;
+  productName: string;
   supportTypeSlug: string;
   proficiency: number;
 }
@@ -58,7 +58,7 @@ export interface ExpertSearchRow {
   agencyLogoUrl: string | null;
   consultationCount: number;
   languages: { name: string; flagEmoji: string | null }[];
-  skills: ExpertSearchSkillRow[];
+  competencies: ExpertSearchCompetencyRow[];
 }
 
 export interface FacetCount {
@@ -119,7 +119,7 @@ function availabilityGatePredicates(now: Date): SQL[] {
  *     `now + N days` — self-gates even when the availability flag is off.
  *   - Rate bounds exclude null-rate experts only when a bound is set.
  *   - Full-text match (only when `q` present): strict FTS @@ OR trigram fuzzy on
- *     headline OR trigram fuzzy on any skill name.
+ *     headline OR trigram fuzzy on any product name.
  *
  * NOTE: `expert_profiles` has NO `deleted_at` column — do NOT filter it here.
  */
@@ -136,11 +136,11 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
       exists(
         db
           .select({ x: sql`1` })
-          .from(expertSkills)
+          .from(expertCompetency)
           .where(
             and(
-              eq(expertSkills.expertProfileId, expertProfiles.id),
-              inArray(expertSkills.skillId, params.productIds)
+              eq(expertCompetency.expertProfileId, expertProfiles.id),
+              inArray(expertCompetency.productId, params.productIds)
             )
           )
       )
@@ -152,11 +152,11 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
       exists(
         db
           .select({ x: sql`1` })
-          .from(expertSkills)
+          .from(expertCompetency)
           .where(
             and(
-              eq(expertSkills.expertProfileId, expertProfiles.id),
-              inArray(expertSkills.supportTypeId, params.supportTypeIds)
+              eq(expertCompetency.expertProfileId, expertProfiles.id),
+              inArray(expertCompetency.supportTypeId, params.supportTypeIds)
             )
           )
       )
@@ -217,11 +217,11 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
     conditions.push(sql`ac.earliest_available_at <= ${boundary.toISOString()}::timestamptz`);
   }
 
-  // Full-text match: strict FTS OR trigram fuzzy (headline + skill names).
-  // Only added when `q` is present — no per-skill subquery on a wide-open browse.
+  // Full-text match: strict FTS OR trigram fuzzy (headline + product names).
+  // Only added when `q` is present — no per-product subquery on a wide-open browse.
   //
   // Fuzzy term uses `word_similarity(q, text) > 0.3` (NOT the whole-string `%`
-  // operator): `%` compares the ENTIRE headline/skill string to q, so any
+  // operator): `%` compares the ENTIRE headline/product string to q, so any
   // multi-word headline ("Salesforce platform architect") scores far below the
   // 0.3 `%` threshold and a real typo ("salezforce") would never match. The
   // word-similarity form compares q against the best-matching word/extent, which
@@ -237,8 +237,8 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
         ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})
         OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
         OR EXISTS (
-          SELECT 1 FROM ${expertSkills} es
-          JOIN ${skills} s ON s.id = es.skill_id
+          SELECT 1 FROM ${expertCompetency} es
+          JOIN ${products} s ON s.id = es.product_id
           WHERE es.expert_profile_id = ${expertProfiles.id}
             AND word_similarity(${q}, s.name) > 0.3
         )
@@ -304,10 +304,10 @@ function normalizeQuery(query: string | undefined): string | null {
 }
 
 /**
- * Relevance expression. A/B from the stored vector dominate; skills participate
- * via a real `setweight(..., 'C')` term; a small trigram bump keeps fuzzy-only
- * hits above non-matches. Emits literal `0` when `q` is absent (no FTS / skills
- * subquery runs at all).
+ * Relevance expression. A/B from the stored vector dominate; product names
+ * participate via a real `setweight(..., 'C')` term; a small trigram bump keeps
+ * fuzzy-only hits above non-matches. Emits literal `0` when `q` is absent (no
+ * FTS / product subquery runs at all).
  */
 function relevanceExpression(q: string | null): SQL {
   if (!q) return sql`0`;
@@ -316,7 +316,7 @@ function relevanceExpression(q: string | null): SQL {
     + COALESCE((
         SELECT MAX(ts_rank(setweight(to_tsvector('english', s.name), 'C'),
                            websearch_to_tsquery('english', ${q})))
-        FROM ${expertSkills} es JOIN ${skills} s ON s.id = es.skill_id
+        FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.product_id
         WHERE es.expert_profile_id = ${expertProfiles.id}
       ), 0)
     + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
@@ -383,41 +383,41 @@ interface SearchSelectRow {
   totalCount: number;
 }
 
-// ── Internal: per-expert skills for the result page ──────────────
+// ── Internal: per-expert products for the result page ──────────────
 
 /**
- * Fetch the skills for a page of experts in ONE query (join expert_skills →
- * skills → support_types), grouped in JS into `ExpertSearchSkillRow[]` per
- * expert and ordered proficiency-desc. Returns an empty map for an empty input
- * (no query issued) so the hot path stays a single round-trip when there are no
- * rows. The web orders/limits to 4 in the card, so we just return the expert's
- * skills proficiency-desc here.
+ * Fetch the competencies for a page of experts in ONE query (join
+ * expert_competency → products → support_types), grouped in JS into
+ * `ExpertSearchCompetencyRow[]` per expert and ordered proficiency-desc. Returns
+ * an empty map for an empty input (no query issued) so the hot path stays a
+ * single round-trip when there are no rows. The web orders/limits to 4 in the
+ * card, so we just return the expert's competencies proficiency-desc here.
  */
-async function fetchSkillsByExpert(
+async function fetchProductsByExpert(
   expertProfileIds: string[]
-): Promise<Map<string, ExpertSearchSkillRow[]>> {
-  const byExpert = new Map<string, ExpertSearchSkillRow[]>();
+): Promise<Map<string, ExpertSearchCompetencyRow[]>> {
+  const byExpert = new Map<string, ExpertSearchCompetencyRow[]>();
   if (expertProfileIds.length === 0) return byExpert;
 
   const rows = await db
     .select({
-      expertProfileId: expertSkills.expertProfileId,
-      skillId: expertSkills.skillId,
-      skillName: skills.name,
+      expertProfileId: expertCompetency.expertProfileId,
+      productId: expertCompetency.productId,
+      productName: products.name,
       supportTypeSlug: supportTypes.slug,
-      proficiency: expertSkills.proficiency,
+      proficiency: expertCompetency.proficiency,
     })
-    .from(expertSkills)
-    .innerJoin(skills, eq(skills.id, expertSkills.skillId))
-    .innerJoin(supportTypes, eq(supportTypes.id, expertSkills.supportTypeId))
-    .where(inArray(expertSkills.expertProfileId, expertProfileIds))
-    .orderBy(desc(expertSkills.proficiency));
+    .from(expertCompetency)
+    .innerJoin(products, eq(products.id, expertCompetency.productId))
+    .innerJoin(supportTypes, eq(supportTypes.id, expertCompetency.supportTypeId))
+    .where(inArray(expertCompetency.expertProfileId, expertProfileIds))
+    .orderBy(desc(expertCompetency.proficiency));
 
   for (const row of rows) {
     const list = byExpert.get(row.expertProfileId) ?? [];
     list.push({
-      skillId: row.skillId,
-      skillName: row.skillName,
+      productId: row.productId,
+      productName: row.productName,
       supportTypeSlug: row.supportTypeSlug,
       proficiency: row.proficiency,
     });
@@ -498,11 +498,11 @@ export const expertSearchRepository = {
       total = Number(countRows[0]?.total ?? 0);
     }
 
-    // Per-expert skills for the page (one extra query; skipped when the page is
-    // empty). Grouped in JS into ExpertSearchSkillRow[] per expert, joining the
-    // skill name + support-type slug and ordered proficiency-desc.
+    // Per-expert competencies for the page (one extra query; skipped when the
+    // page is empty). Grouped in JS into ExpertSearchCompetencyRow[] per expert,
+    // joining the product name + support-type slug and ordered proficiency-desc.
     const expertIds = rows.map((r) => r.id);
-    const skillsByExpert = await fetchSkillsByExpert(expertIds);
+    const productsByExpert = await fetchProductsByExpert(expertIds);
 
     const mapped: ExpertSearchRow[] = rows.map((r: SearchSelectRow) => ({
       id: r.id,
@@ -526,7 +526,7 @@ export const expertSearchRepository = {
         name: l.name,
         flagEmoji: l.flagEmoji,
       })),
-      skills: skillsByExpert.get(r.id) ?? [],
+      competencies: productsByExpert.get(r.id) ?? [],
     }));
 
     return { rows: mapped, total };
@@ -562,7 +562,7 @@ export const expertSearchRepository = {
    * base visibility + availability gate ONLY — EXCLUDES `q` and all facet
    * selections, so the result depends solely on `(verticalId, gateOn)`.
    * `count(DISTINCT expert_profile_id)` prevents double-counting an expert with
-   * multiple skills mapping to one facet value.
+   * multiple competencies mapping to one facet value.
    */
   async facetCounts(
     verticalId: string,
@@ -585,24 +585,24 @@ export const expertSearchRepository = {
     const [productRows, supportTypeRows, languageRows] = await Promise.all([
       db
         .select({
-          id: skills.id,
-          name: skills.name,
-          count: sql<number>`count(DISTINCT ${expertSkills.expertProfileId})::int`,
+          id: products.id,
+          name: products.name,
+          count: sql<number>`count(DISTINCT ${expertCompetency.expertProfileId})::int`,
         })
-        .from(expertSkills)
-        .innerJoin(skills, eq(skills.id, expertSkills.skillId))
-        .where(inArray(expertSkills.expertProfileId, eligibleSet))
-        .groupBy(skills.id, skills.name),
+        .from(expertCompetency)
+        .innerJoin(products, eq(products.id, expertCompetency.productId))
+        .where(inArray(expertCompetency.expertProfileId, eligibleSet))
+        .groupBy(products.id, products.name),
 
       db
         .select({
           id: supportTypes.id,
           name: supportTypes.name,
-          count: sql<number>`count(DISTINCT ${expertSkills.expertProfileId})::int`,
+          count: sql<number>`count(DISTINCT ${expertCompetency.expertProfileId})::int`,
         })
-        .from(expertSkills)
-        .innerJoin(supportTypes, eq(supportTypes.id, expertSkills.supportTypeId))
-        .where(inArray(expertSkills.expertProfileId, eligibleSet))
+        .from(expertCompetency)
+        .innerJoin(supportTypes, eq(supportTypes.id, expertCompetency.supportTypeId))
+        .where(inArray(expertCompetency.expertProfileId, eligibleSet))
         .groupBy(supportTypes.id, supportTypes.name),
 
       db

@@ -32,7 +32,7 @@ type ArrayKey = (typeof ARRAY_KEYS)[number];
 export interface SearchFilters {
   /** Free-text query; `''` when absent. */
   q: string;
-  /** Skill UUIDs (facetCounts.products[].id). */
+  /** Product UUIDs (facetCounts.products[].id). */
   products: string[];
   /** Support-type UUIDs. */
   supportTypes: string[];

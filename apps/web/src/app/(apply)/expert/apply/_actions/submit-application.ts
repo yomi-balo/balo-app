@@ -58,9 +58,9 @@ export const submitApplicationAction = withAuth(
         };
       }
 
-      // Get unique skill IDs from the skills array
-      const uniqueSkillIds = new Set(application.skills.map((s) => s.skillId));
-      if (uniqueSkillIds.size === 0) {
+      // Get unique product IDs from the competencies array
+      const uniqueProductIds = new Set(application.competencies.map((c) => c.productId));
+      if (uniqueProductIds.size === 0) {
         log.warn('Expert application submission validation failed', {
           userId: session.user.id,
           expertProfileId,
@@ -74,14 +74,14 @@ export const submitApplicationAction = withAuth(
         };
       }
 
-      // Check each skill has at least 1 non-zero dimension
-      const skillProficiencies = new Map<string, number[]>();
-      for (const s of application.skills) {
-        const arr = skillProficiencies.get(s.skillId) ?? [];
-        arr.push(s.proficiency);
-        skillProficiencies.set(s.skillId, arr);
+      // Check each product has at least 1 non-zero dimension
+      const productProficiencies = new Map<string, number[]>();
+      for (const c of application.competencies) {
+        const arr = productProficiencies.get(c.productId) ?? [];
+        arr.push(c.proficiency);
+        productProficiencies.set(c.productId, arr);
       }
-      for (const [, proficiencies] of skillProficiencies) {
+      for (const [, proficiencies] of productProficiencies) {
         if (!proficiencies.some((p) => p > 0)) {
           log.warn('Expert application submission validation failed', {
             userId: session.user.id,
@@ -103,7 +103,7 @@ export const submitApplicationAction = withAuth(
       log.info('Expert application submitted', {
         userId: session.user.id,
         expertProfileId,
-        productsCount: uniqueSkillIds.size,
+        productsCount: uniqueProductIds.size,
         certsCount: application.certifications.length,
         workHistoryCount: application.workHistory.length,
       });

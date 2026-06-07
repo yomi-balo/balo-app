@@ -15,8 +15,8 @@ export const verticals = pgTable('verticals', {
   ...timestamps,
 });
 
-export const skillCategories = pgTable(
-  'skill_categories',
+export const categories = pgTable(
+  'categories',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     verticalId: uuid('vertical_id')
@@ -33,20 +33,20 @@ export const skillCategories = pgTable(
     ...timestamps,
   },
   (table) => ({
-    verticalSlugIdx: uniqueIndex('skill_cat_vertical_slug_idx').on(table.verticalId, table.slug),
-    verticalIdx: index('skill_cat_vertical_id_idx').on(table.verticalId),
-    sortIdx: index('skill_cat_sort_idx').on(table.verticalId, table.sortOrder),
+    verticalSlugIdx: uniqueIndex('category_vertical_slug_idx').on(table.verticalId, table.slug),
+    verticalIdx: index('category_vertical_id_idx').on(table.verticalId),
+    sortIdx: index('category_sort_idx').on(table.verticalId, table.sortOrder),
   })
 );
 
-export const skills = pgTable(
-  'skills',
+export const products = pgTable(
+  'products',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     verticalId: uuid('vertical_id')
       .references(() => verticals.id)
       .notNull(),
-    categoryId: uuid('category_id').references(() => skillCategories.id, { onDelete: 'set null' }),
+    categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
 
     name: text('name').notNull(),
     slug: text('slug').notNull(),
@@ -59,24 +59,34 @@ export const skills = pgTable(
     ...timestamps,
   },
   (table) => ({
-    verticalSlugIdx: uniqueIndex('skill_vertical_slug_idx').on(table.verticalId, table.slug),
-    categoryIdx: index('skill_category_id_idx').on(table.categoryId),
+    verticalSlugIdx: uniqueIndex('product_vertical_slug_idx').on(table.verticalId, table.slug),
+    categoryIdx: index('product_category_id_idx').on(table.categoryId),
   })
 );
 
-export const supportTypes = pgTable('support_types', {
-  id: uuid('id').primaryKey().defaultRandom(),
+export const supportTypes = pgTable(
+  'support_types',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    verticalId: uuid('vertical_id')
+      .references(() => verticals.id, { onDelete: 'cascade' })
+      .notNull(),
 
-  name: text('name').notNull(),
-  slug: text('slug').unique().notNull(),
-  description: text('description'),
-  iconUrl: text('icon_url'),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    description: text('description'),
+    iconUrl: text('icon_url'),
 
-  sortOrder: integer('sort_order').default(0),
-  isActive: boolean('is_active').default(true).notNull(),
+    sortOrder: integer('sort_order').default(0),
+    isActive: boolean('is_active').default(true).notNull(),
 
-  ...timestamps,
-});
+    ...timestamps,
+  },
+  (table) => ({
+    verticalSlugIdx: uniqueIndex('support_type_vertical_slug_idx').on(table.verticalId, table.slug),
+    verticalIdx: index('support_type_vertical_id_idx').on(table.verticalId),
+  })
+);
 
 export const certificationCategories = pgTable(
   'certification_categories',
@@ -126,27 +136,35 @@ export const certifications = pgTable(
 
 // Relations
 export const verticalsRelations = relations(verticals, ({ many }) => ({
-  skills: many(skills),
-  skillCategories: many(skillCategories),
+  products: many(products),
+  categories: many(categories),
+  supportTypes: many(supportTypes),
   certifications: many(certifications),
 }));
 
-export const skillCategoriesRelations = relations(skillCategories, ({ one, many }) => ({
+export const categoriesRelations = relations(categories, ({ one, many }) => ({
   vertical: one(verticals, {
-    fields: [skillCategories.verticalId],
+    fields: [categories.verticalId],
     references: [verticals.id],
   }),
-  skills: many(skills),
+  products: many(products),
 }));
 
-export const skillsRelations = relations(skills, ({ one }) => ({
+export const productsRelations = relations(products, ({ one }) => ({
   vertical: one(verticals, {
-    fields: [skills.verticalId],
+    fields: [products.verticalId],
     references: [verticals.id],
   }),
-  category: one(skillCategories, {
-    fields: [skills.categoryId],
-    references: [skillCategories.id],
+  category: one(categories, {
+    fields: [products.categoryId],
+    references: [categories.id],
+  }),
+}));
+
+export const supportTypesRelations = relations(supportTypes, ({ one }) => ({
+  vertical: one(verticals, {
+    fields: [supportTypes.verticalId],
+    references: [verticals.id],
   }),
 }));
 
@@ -167,10 +185,10 @@ export const certificationsRelations = relations(certifications, ({ one }) => ({
 
 export type Vertical = typeof verticals.$inferSelect;
 export type NewVertical = typeof verticals.$inferInsert;
-export type SkillCategory = typeof skillCategories.$inferSelect;
-export type NewSkillCategory = typeof skillCategories.$inferInsert;
-export type Skill = typeof skills.$inferSelect;
-export type NewSkill = typeof skills.$inferInsert;
+export type Category = typeof categories.$inferSelect;
+export type NewCategory = typeof categories.$inferInsert;
+export type Product = typeof products.$inferSelect;
+export type NewProduct = typeof products.$inferInsert;
 export type SupportType = typeof supportTypes.$inferSelect;
 export type NewSupportType = typeof supportTypes.$inferInsert;
 export type CertificationCategory = typeof certificationCategories.$inferSelect;

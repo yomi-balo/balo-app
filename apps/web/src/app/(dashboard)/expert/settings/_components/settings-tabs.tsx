@@ -209,7 +209,10 @@ export function SettingsTabs({
             <DataLoadError />
           ) : tab === 'expertise' && profileData ? (
             <div className="mx-auto max-w-[620px]">
-              <ExpertiseTab skills={profileData.skills} skillsLocked={profileData.skillsLocked} />
+              <ExpertiseTab
+                competencies={profileData.competencies}
+                skillsLocked={profileData.skillsLocked}
+              />
             </div>
           ) : tab === 'workHistory' && profileData ? (
             <div className="mx-auto max-w-[620px]">

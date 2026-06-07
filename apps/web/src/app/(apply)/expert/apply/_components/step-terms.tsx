@@ -98,7 +98,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
       setSubmitState('success');
 
       track(EXPERT_EVENTS.APPLICATION_SUBMITTED, {
-        products_count: productsData.skillIds?.length ?? 0,
+        products_count: productsData.productIds?.length ?? 0,
         certs_count: certificationsData.certifications?.length ?? 0,
         work_history_count: workHistoryData.entries?.length ?? 0,
         referrals_count: inviteData.emails?.length ?? 0,
@@ -134,8 +134,8 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     {
       label: 'Products',
       value:
-        (productsData.skillIds?.length ?? 0) > 0
-          ? `${productsData.skillIds?.length} selected`
+        (productsData.productIds?.length ?? 0) > 0
+          ? `${productsData.productIds?.length} selected`
           : 'None',
       stepIndex: 1,
     },

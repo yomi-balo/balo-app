@@ -66,15 +66,15 @@ export const ARCHETYPE_THRESHOLDS: { archetype: Archetype; upTo: number }[] = [
 ];
 
 /**
- * Skill weight tiers by position in the flattened taxonomy (seed.ts orders
+ * Product weight tiers by position in the flattened taxonomy (seed.ts orders
  * core clouds first). Indexes below `core` get weight 5, below `mid` weight 3,
- * the rest weight 1. Position-based so it never hardcodes skill names.
+ * the rest weight 1. Position-based so it never hardcodes product names.
  */
-export const SKILL_TIER_BOUNDARIES = { core: 4, mid: 9 };
-export const SKILL_TIER_WEIGHTS = { core: 5, mid: 3, niche: 1 };
+export const PRODUCT_TIER_BOUNDARIES = { core: 4, mid: 9 };
+export const PRODUCT_TIER_WEIGHTS = { core: 5, mid: 3, niche: 1 };
 
-/** Min/max distinct skills per expert. */
-export const SKILL_COUNT_RANGE = { min: 3, max: 7 };
+/** Min/max distinct competencies per expert. */
+export const COMPETENCY_COUNT_RANGE = { min: 3, max: 7 };
 
 /** Fallback industry pool for headline rendering when industries aren't seeded. */
 export const FALLBACK_INDUSTRIES = [

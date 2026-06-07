@@ -4,13 +4,13 @@ import { db } from '../client';
 import { consultationCountExpression } from './_shared/consultation-count';
 import {
   expertProfiles,
-  expertSkills,
+  expertCompetency,
   expertCertifications,
   expertLanguages,
   expertIndustries,
   workHistory,
   type ExpertProfile,
-  type ExpertSkill,
+  type ExpertCompetency,
   type ExpertCertification,
   type ExpertLanguage,
   type ExpertIndustry,
@@ -52,8 +52,8 @@ interface SyncLanguageInput {
   proficiency: 'beginner' | 'intermediate' | 'advanced' | 'native';
 }
 
-interface SkillRatingInput {
-  skillId: string;
+interface CompetencyRatingInput {
+  productId: string;
   supportTypeId: string;
   proficiency: number;
 }
@@ -76,8 +76,8 @@ interface SyncWorkHistoryInput {
 
 // ── Output types ─────────────────────────────────────────────────
 
-export interface ApplicationSkillWithRelations extends ExpertSkill {
-  skill: { id: string; name: string };
+export interface ApplicationCompetencyWithRelations extends ExpertCompetency {
+  product: { id: string; name: string };
   supportType: { id: string; name: string; slug: string };
 }
 
@@ -95,7 +95,7 @@ export interface ApplicationIndustryWithRelations extends ExpertIndustry {
 
 export interface ApplicationWithRelations {
   profile: ExpertProfile;
-  skills: ApplicationSkillWithRelations[];
+  competencies: ApplicationCompetencyWithRelations[];
   certifications: ApplicationCertWithRelations[];
   languages: ApplicationLanguageWithRelations[];
   industries: ApplicationIndustryWithRelations[];
@@ -186,9 +186,9 @@ export const expertsRepository = {
           },
         },
         agency: { columns: { id: true, name: true, slug: true, logoUrl: true } },
-        skills: {
+        competencies: {
           with: {
-            skill: { columns: { id: true, name: true, slug: true } },
+            product: { columns: { id: true, name: true, slug: true } },
             supportType: { columns: { id: true, name: true, slug: true } },
           },
         },
@@ -252,7 +252,7 @@ export const expertsRepository = {
         industries: { with: { industry: true } },
         workHistory: { orderBy: (wh, { asc }) => [asc(wh.sortOrder)] },
         certifications: { with: { certification: true } },
-        skills: { with: { skill: true, supportType: true } },
+        competencies: { with: { product: true, supportType: true } },
       },
     });
   },
@@ -274,7 +274,7 @@ export const expertsRepository = {
     const profile = await db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
       with: {
-        skills: { with: { skill: true, supportType: true } },
+        competencies: { with: { product: true, supportType: true } },
         certifications: { with: { certification: true } },
         languages: { with: { language: true } },
         industries: { with: { industry: true } },
@@ -286,7 +286,7 @@ export const expertsRepository = {
 
     return {
       profile,
-      skills: profile.skills as unknown as ApplicationSkillWithRelations[],
+      competencies: profile.competencies as unknown as ApplicationCompetencyWithRelations[],
       certifications: profile.certifications as unknown as ApplicationCertWithRelations[],
       languages: profile.languages as unknown as ApplicationLanguageWithRelations[],
       industries: profile.industries as unknown as ApplicationIndustryWithRelations[],
@@ -417,58 +417,58 @@ export const expertsRepository = {
   },
 
   /**
-   * Sync selected skills (Step 2).
+   * Sync selected products / competencies (Step 2).
    *
-   * - Deletes skills NOT in the new set (and their proficiency rows).
-   * - Inserts new skills with proficiency=0 for each support type.
-   * - Leaves existing skills + proficiency untouched.
+   * - Deletes competencies NOT in the new set (and their proficiency rows).
+   * - Inserts new competencies with proficiency=0 for each support type.
+   * - Leaves existing competencies + proficiency untouched.
    */
-  async syncSkills(
+  async syncProducts(
     expertProfileId: string,
-    skillIds: string[],
+    productIds: string[],
     supportTypeIds: string[]
   ): Promise<void> {
     await db.transaction(async (tx) => {
-      // 1. Find existing skill rows for this profile
-      const existing = await tx.query.expertSkills.findMany({
-        where: eq(expertSkills.expertProfileId, expertProfileId),
+      // 1. Find existing competency rows for this profile
+      const existing = await tx.query.expertCompetency.findMany({
+        where: eq(expertCompetency.expertProfileId, expertProfileId),
       });
 
-      const existingSkillIds = new Set(existing.map((e) => e.skillId));
+      const existingProductIds = new Set(existing.map((e) => e.productId));
 
-      // 2. Delete skills that are no longer selected
-      const toRemoveSkillIds = [...existingSkillIds].filter((id) => !skillIds.includes(id));
-      if (toRemoveSkillIds.length > 0) {
+      // 2. Delete competencies that are no longer selected
+      const toRemoveProductIds = [...existingProductIds].filter((id) => !productIds.includes(id));
+      if (toRemoveProductIds.length > 0) {
         await tx
-          .delete(expertSkills)
+          .delete(expertCompetency)
           .where(
             and(
-              eq(expertSkills.expertProfileId, expertProfileId),
-              inArray(expertSkills.skillId, toRemoveSkillIds)
+              eq(expertCompetency.expertProfileId, expertProfileId),
+              inArray(expertCompetency.productId, toRemoveProductIds)
             )
           );
       }
 
-      // 3. Insert new skills (not yet in DB) with proficiency=0
-      const newSkillIds = skillIds.filter((id) => !existingSkillIds.has(id));
-      if (newSkillIds.length > 0) {
-        const rows = newSkillIds.flatMap((skillId) =>
+      // 3. Insert new competencies (not yet in DB) with proficiency=0
+      const newProductIds = productIds.filter((id) => !existingProductIds.has(id));
+      if (newProductIds.length > 0) {
+        const rows = newProductIds.flatMap((productId) =>
           supportTypeIds.map((supportTypeId) => ({
             expertProfileId,
-            skillId,
+            productId,
             supportTypeId,
             proficiency: 0,
           }))
         );
-        await tx.insert(expertSkills).values(rows);
+        await tx.insert(expertCompetency).values(rows);
       }
     });
   },
 
-  /** Update skill proficiency ratings (Step 3). Uses upsert via ON CONFLICT. */
-  async updateSkillProficiency(
+  /** Update competency proficiency ratings (Step 3). Uses upsert via ON CONFLICT. */
+  async updateCompetencyProficiency(
     expertProfileId: string,
-    ratings: SkillRatingInput[]
+    ratings: CompetencyRatingInput[]
   ): Promise<void> {
     if (ratings.length === 0) return;
 
@@ -476,18 +476,18 @@ export const expertsRepository = {
     await db.transaction(async (tx) => {
       for (const rating of ratings) {
         await tx
-          .insert(expertSkills)
+          .insert(expertCompetency)
           .values({
             expertProfileId,
-            skillId: rating.skillId,
+            productId: rating.productId,
             supportTypeId: rating.supportTypeId,
             proficiency: rating.proficiency,
           })
           .onConflictDoUpdate({
             target: [
-              expertSkills.expertProfileId,
-              expertSkills.skillId,
-              expertSkills.supportTypeId,
+              expertCompetency.expertProfileId,
+              expertCompetency.productId,
+              expertCompetency.supportTypeId,
             ],
             set: {
               proficiency: rating.proficiency,

@@ -16,18 +16,18 @@ import {
   CERT_EARNED_MONTHS_AGO_RANGE,
   CERT_EXPIRY_MONTHS_AHEAD_RANGE,
   CERT_HAS_EXPIRY_PROBABILITY,
+  COMPETENCY_COUNT_RANGE,
   CURRENT_ROLE_MONTHS_RANGE,
   EXPERT_TYPE_WEIGHTS,
   FALLBACK_INDUSTRIES,
   PAST_ROLE_MONTHS_RANGE,
+  PRODUCT_TIER_BOUNDARIES,
+  PRODUCT_TIER_WEIGHTS,
   PROJECT_COUNT_BUCKETS,
   RATE_BANDS,
   ROLE_GAP_MONTHS_RANGE,
   SEED_EMAIL_DOMAIN,
   SEED_WORKOS_PREFIX,
-  SKILL_COUNT_RANGE,
-  SKILL_TIER_BOUNDARIES,
-  SKILL_TIER_WEIGHTS,
   TIMEZONE_WEIGHTS,
   WORK_HISTORY_COUNT_RANGE,
   WORK_RESPONSIBILITY_SNIPPETS,
@@ -59,11 +59,11 @@ const LANGUAGE_PROFICIENCIES: readonly LanguageProficiency[] = [
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Weight of a skill by its position in the flattened (core-first) taxonomy. */
-function skillWeightForIndex(idx: number): number {
-  if (idx < SKILL_TIER_BOUNDARIES.core) return SKILL_TIER_WEIGHTS.core;
-  if (idx < SKILL_TIER_BOUNDARIES.mid) return SKILL_TIER_WEIGHTS.mid;
-  return SKILL_TIER_WEIGHTS.niche;
+/** Weight of a product by its position in the flattened (core-first) taxonomy. */
+function productWeightForIndex(idx: number): number {
+  if (idx < PRODUCT_TIER_BOUNDARIES.core) return PRODUCT_TIER_WEIGHTS.core;
+  if (idx < PRODUCT_TIER_BOUNDARIES.mid) return PRODUCT_TIER_WEIGHTS.mid;
+  return PRODUCT_TIER_WEIGHTS.niche;
 }
 
 /** Slugify a name to a username base (lowercase, alnum + hyphen). */
@@ -83,9 +83,9 @@ function baseUsername(first: string, last: string): string {
 export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] {
   const { count, seed, taxonomy, baselineNow } = input;
 
-  if (taxonomy.skills.length === 0) {
+  if (taxonomy.products.length === 0) {
     throw new Error(
-      'Seed taxonomy has no skills — run `pnpm --filter db db:seed` before seeding experts.'
+      'Seed taxonomy has no products — run `pnpm --filter db db:seed` before seeding experts.'
     );
   }
   if (taxonomy.supportTypeIds.length === 0) {
@@ -98,7 +98,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
   const rng = new WeightedRng(seed);
 
   const baselineYear = baselineNow.getUTCFullYear();
-  const skillWeights = taxonomy.skills.map((_, i) => skillWeightForIndex(i));
+  const productWeights = taxonomy.products.map((_, i) => productWeightForIndex(i));
   const tzValues = TIMEZONE_WEIGHTS.map((t) => t.value);
   const tzWeights = TIMEZONE_WEIGHTS.map((t) => t.weight);
   const typeValues = EXPERT_TYPE_WEIGHTS.map((t) => t.value);
@@ -122,29 +122,29 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
     const yearsAgo = rng.int(1, 18);
     const yearStartedSalesforce = baselineYear - yearsAgo;
 
-    // Skills: weighted distinct sample, each with a support type + proficiency.
-    const skillCount = rng.int(SKILL_COUNT_RANGE.min, SKILL_COUNT_RANGE.max);
-    const pickedSkillEntries = rng.sampleWeighted(
-      taxonomy.skills.map((s, idx) => ({ skill: s, idx })),
-      skillWeights,
-      skillCount
+    // Competencies: weighted distinct sample, each with a support type + proficiency.
+    const competencyCount = rng.int(COMPETENCY_COUNT_RANGE.min, COMPETENCY_COUNT_RANGE.max);
+    const pickedProductEntries = rng.sampleWeighted(
+      taxonomy.products.map((p, idx) => ({ product: p, idx })),
+      productWeights,
+      competencyCount
     );
-    const seenSkillSupport = new Set<string>();
-    const skills: GeneratedExpert['skills'] = [];
-    for (const entry of pickedSkillEntries) {
+    const seenProductSupport = new Set<string>();
+    const competencies: GeneratedExpert['competencies'] = [];
+    for (const entry of pickedProductEntries) {
       const supportTypeId = rng.pickOne(taxonomy.supportTypeIds);
-      const key = `${entry.skill.id}:${supportTypeId}`;
-      if (seenSkillSupport.has(key)) continue;
-      seenSkillSupport.add(key);
-      skills.push({
-        skillId: entry.skill.id,
+      const key = `${entry.product.id}:${supportTypeId}`;
+      if (seenProductSupport.has(key)) continue;
+      seenProductSupport.add(key);
+      competencies.push({
+        productId: entry.product.id,
         supportTypeId,
         proficiency: rng.int(1, 5),
       });
     }
 
-    // Top-weighted skill name drives the headline `{cloud}` slot.
-    const topCloud = pickedSkillEntries[0]?.skill.name ?? 'Salesforce';
+    // Top-weighted product name drives the headline `{cloud}` slot.
+    const topCloud = pickedProductEntries[0]?.product.name ?? 'Salesforce';
 
     // Languages: English (index 0) always native, plus 0–2 others.
     const languages = buildLanguages(rng, taxonomy);
@@ -198,7 +198,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
       isSalesforceCta,
       isCertifiedTrainer,
       approvedOffsetMs,
-      skills,
+      competencies,
       languages,
       industryIds,
       workHistory,

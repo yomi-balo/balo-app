@@ -54,39 +54,42 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     mode: 'onSubmit',
   });
 
-  // Build a map of skill ID -> name
-  const skillNameMap = useMemo(() => {
+  // Build a map of product ID -> name
+  const productNameMap = useMemo(() => {
     const map = new Map<string, string>();
-    for (const cat of referenceData.skillsByCategory) {
-      for (const skill of cat.skills) {
-        map.set(skill.id, skill.name);
+    for (const cat of referenceData.productsByCategory) {
+      for (const product of cat.products) {
+        map.set(product.id, product.name);
       }
     }
     return map;
-  }, [referenceData.skillsByCategory]);
+  }, [referenceData.productsByCategory]);
 
-  // Get selected skill IDs from productsData
-  const selectedSkillIds = useMemo(() => productsData.skillIds ?? [], [productsData.skillIds]);
+  // Get selected product IDs from productsData
+  const selectedProductIds = useMemo(
+    () => productsData.productIds ?? [],
+    [productsData.productIds]
+  );
 
   const supportTypes = referenceData.supportTypes;
 
   // Current ratings
   const ratings = form.watch('ratings');
 
-  // Ensure every selected skill has a rating row for each support type
+  // Ensure every selected product has a rating row for each support type
   useEffect(() => {
     const currentRatings = form.getValues('ratings');
-    const existingKeys = new Set(currentRatings.map((r) => `${r.skillId}:${r.supportTypeId}`));
+    const existingKeys = new Set(currentRatings.map((r) => `${r.productId}:${r.supportTypeId}`));
 
     const newRatings = [...currentRatings];
     let changed = false;
 
-    for (const skillId of selectedSkillIds) {
+    for (const productId of selectedProductIds) {
       for (const st of supportTypes) {
-        const key = `${skillId}:${st.id}`;
+        const key = `${productId}:${st.id}`;
         if (!existingKeys.has(key)) {
           newRatings.push({
-            skillId,
+            productId,
             supportTypeId: st.id,
             proficiency: 0,
           });
@@ -95,15 +98,15 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
       }
     }
 
-    // Remove ratings for skills no longer selected
-    const filteredRatings = newRatings.filter((r) => selectedSkillIds.includes(r.skillId));
+    // Remove ratings for products no longer selected
+    const filteredRatings = newRatings.filter((r) => selectedProductIds.includes(r.productId));
     if (filteredRatings.length !== newRatings.length) changed = true;
 
     if (changed) {
       form.setValue('ratings', filteredRatings, { shouldDirty: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSkillIds, supportTypes]);
+  }, [selectedProductIds, supportTypes]);
 
   // Sync form to context
   useEffect(() => {
@@ -124,10 +127,10 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
 
   // Handle dimension change
   const handleChange = useCallback(
-    (skillId: string, supportTypeId: string, value: number): void => {
+    (productId: string, supportTypeId: string, value: number): void => {
       const currentRatings = form.getValues('ratings');
       const updated = currentRatings.map((r) =>
-        r.skillId === skillId && r.supportTypeId === supportTypeId
+        r.productId === productId && r.supportTypeId === supportTypeId
           ? { ...r, proficiency: value }
           : r
       );
@@ -136,17 +139,17 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     [form]
   );
 
-  // Check completion per skill
-  const isSkillComplete = useCallback(
-    (skillId: string): boolean => {
-      const skillRatings = ratings.filter((r) => r.skillId === skillId);
-      return skillRatings.some((r) => r.proficiency > 0);
+  // Check completion per product
+  const isProductComplete = useCallback(
+    (productId: string): boolean => {
+      const productRatings = ratings.filter((r) => r.productId === productId);
+      return productRatings.some((r) => r.proficiency > 0);
     },
     [ratings]
   );
 
-  const completedCount = selectedSkillIds.filter((id) => isSkillComplete(id)).length;
-  const allComplete = completedCount === selectedSkillIds.length && selectedSkillIds.length > 0;
+  const completedCount = selectedProductIds.filter((id) => isProductComplete(id)).length;
+  const allComplete = completedCount === selectedProductIds.length && selectedProductIds.length > 0;
 
   return (
     <Form {...form}>
@@ -192,16 +195,16 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
         {/* Progress counter */}
         <div className="bg-muted rounded-lg px-4 py-2.5">
           <p className="text-foreground text-sm font-medium">
-            {completedCount} of {selectedSkillIds.length} products assessed
+            {completedCount} of {selectedProductIds.length} products assessed
           </p>
         </div>
 
         {/* Assessment cards */}
         <div className="space-y-3">
-          {selectedSkillIds.map((skillId, index) => {
+          {selectedProductIds.map((productId, index) => {
             const dimensions = supportTypes.map((st) => {
               const rating = ratings.find(
-                (r) => r.skillId === skillId && r.supportTypeId === st.id
+                (r) => r.productId === productId && r.supportTypeId === st.id
               );
               return {
                 supportTypeId: st.id,
@@ -213,17 +216,17 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
 
             return (
               <motion.div
-                key={skillId}
+                key={productId}
                 initial={slideUpVariant.initial}
                 animate={slideUpVariant.animate}
                 transition={{ ...slideUpVariant.transition, ...stagger(index).transition }}
               >
                 <AssessmentCard
-                  skillId={skillId}
-                  skillName={skillNameMap.get(skillId) ?? skillId}
+                  productId={productId}
+                  productName={productNameMap.get(productId) ?? productId}
                   dimensions={dimensions}
                   onChange={handleChange}
-                  isComplete={isSkillComplete(skillId)}
+                  isComplete={isProductComplete(productId)}
                 />
               </motion.div>
             );

@@ -39,7 +39,7 @@ function makeExpert(overrides: Partial<ExpertSearchResultDTO> = {}): ExpertSearc
     rating: null,
     yearsExperience: 9,
     consultationCount: 124,
-    skills: [],
+    competencies: [],
     ...overrides,
   };
 }

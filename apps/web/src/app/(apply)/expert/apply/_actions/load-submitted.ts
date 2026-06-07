@@ -5,7 +5,7 @@ import {
   expertsRepository,
   referenceDataRepository,
   type ApplicationWithRelations,
-  type SkillsByCategory,
+  type ProductsByCategory,
   type CertificationsByCategory,
 } from '@balo/db';
 import type { SupportType } from '@balo/db';
@@ -13,7 +13,7 @@ import { log } from '@/lib/logging';
 
 export interface SubmittedApplicationResult {
   application: ApplicationWithRelations;
-  skillsByCategory: SkillsByCategory[];
+  productsByCategory: ProductsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
 }
@@ -30,10 +30,10 @@ export const loadSubmittedApplication = withAuth(
 
       if (!existingProfile) return null;
 
-      const [application, skillsByCategory, supportTypes, certsByCategory] = await Promise.all([
+      const [application, productsByCategory, supportTypes, certsByCategory] = await Promise.all([
         expertsRepository.findApplicationWithRelations(existingProfile.id),
-        referenceDataRepository.getSkillsByVertical(vertical.id),
-        referenceDataRepository.getSupportTypes(),
+        referenceDataRepository.getProductsByVertical(vertical.id),
+        referenceDataRepository.getSupportTypes(vertical.id),
         referenceDataRepository.getCertificationsByVertical(vertical.id),
       ]);
 
@@ -46,7 +46,7 @@ export const loadSubmittedApplication = withAuth(
 
       return {
         application,
-        skillsByCategory,
+        productsByCategory,
         supportTypes,
         certificationsByCategory: certsByCategory,
       };

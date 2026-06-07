@@ -3,9 +3,9 @@ import type { ProficiencyTone } from '@/lib/expert-profile/proficiency';
 /** Section keys the StickyNav / scroll-spy operates on. */
 export type ProfileSectionKey = 'about' | 'expertise' | 'quickstarts' | 'work' | 'reviews';
 
-/** One deduped skill bar (max proficiency across the skill's support types). */
-export interface SkillView {
-  /** Skill id — stable React key (display names can collide). */
+/** One deduped competency bar (max proficiency across the product's support types). */
+export interface CompetencyView {
+  /** Product id — stable React key (display names can collide). */
   id: string;
   name: string;
   /** 0–10 proficiency. */
@@ -94,7 +94,7 @@ export interface ExpertProfileView {
   baloVerified: boolean;
   /** Reviews are deferred — always false in v1. */
   topRated: boolean;
-  skills: SkillView[];
+  competencies: CompetencyView[];
   certifications: CertView[];
   languages: LanguageView[];
   /** Comma-joined language names, e.g. "English, Tamil". */
