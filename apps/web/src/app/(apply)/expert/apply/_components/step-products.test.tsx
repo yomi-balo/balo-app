@@ -63,10 +63,10 @@ import { ExpertApplicationProvider } from './expert-application-context';
 // ── Fixtures ─────────────────────────────────────────────────────
 
 // Two categories, each with a `products` array — drives the filtering useMemo
-// (lines ~59,61), the skill-name map loop (line ~68), and the per-category
+// (lines ~59,61), the product-name map loop (line ~68), and the per-category
 // ChipPicker render (line ~191).
 const referenceData: ReferenceData = {
-  skillsByCategory: [
+  productsByCategory: [
     {
       category: { id: 'cat-sales', name: 'Sales Cloud', slug: 'sales-cloud', sortOrder: 0 },
       products: [
@@ -143,7 +143,7 @@ describe('StepProducts', () => {
     // Click the CPQ chip to select it.
     await user.click(screen.getByText('CPQ'));
 
-    // The skillNameMap (line ~68) resolves the id → "CPQ" for the pill label.
+    // The productNameMap (line ~68) resolves the id → "CPQ" for the pill label.
     expect(screen.getByText(/1 product selected/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /remove cpq/i })).toBeInTheDocument();
   });

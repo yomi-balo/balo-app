@@ -17,13 +17,13 @@
 import type { ProductsByCategory } from '@balo/db';
 
 export interface TaxonomyItem {
-  /** Skill UUID — written into `SearchFilters.products[]`. */
+  /** Product UUID — written into `SearchFilters.products[]`. */
   id: string;
   name: string;
 }
 
 export interface TaxonomyGroup {
-  /** Skill-category UUID. */
+  /** Category UUID. */
   id: string;
   name: string;
   items: TaxonomyItem[];
@@ -50,9 +50,9 @@ export function mapProductsByCategoryToTaxonomy(categories: ProductsByCategory[]
 }
 
 /**
- * Build a skill id → name lookup across all groups. Used for selected-token
+ * Build a product id → name lookup across all groups. Used for selected-token
  * labels and analytics product-name arrays. Authoritative over `facetCounts`
- * because it includes zero-supply skills.
+ * because it includes zero-supply products.
  */
 export function buildProductNameMap(taxonomy: ProductTaxonomy): Record<string, string> {
   const map: Record<string, string> = {};

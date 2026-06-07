@@ -27,7 +27,7 @@ function slugify(name: string): string {
 // ──────────────────────────────────────────────────────
 
 /** [categoryName, categorySlug, productNames[]] */
-const SKILL_CATEGORIES: Array<[string, string, string[]]> = [
+const PRODUCT_CATEGORIES: Array<[string, string, string[]]> = [
   ['AI', 'ai', ['Agentforce']],
   ['Data Cloud', 'data-cloud', ['Data Cloud']],
   ['Sales Cloud', 'sales-cloud', ['CPQ', 'Sales Cloud']],
@@ -488,7 +488,11 @@ async function seed(): Promise<void> {
   // 2. Taxonomy (categories → products → support types) per vertical, via the
   //    SAME generic seeder — no vertical-specific code path.
   console.log('  Seeding Salesforce taxonomy...');
-  await seedTaxonomyForVertical(sfId, SKILL_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.salesforce ?? []);
+  await seedTaxonomyForVertical(
+    sfId,
+    PRODUCT_CATEGORIES,
+    SUPPORT_TYPES_BY_VERTICAL.salesforce ?? []
+  );
 
   console.log('  Seeding Acme (mock) taxonomy...');
   await seedTaxonomyForVertical(acmeId, ACME_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.acme ?? []);

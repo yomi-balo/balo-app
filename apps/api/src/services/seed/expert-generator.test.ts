@@ -7,7 +7,7 @@ const BASELINE = new Date('2026-05-31T00:00:00.000Z');
 
 /** A taxonomy resembling the seeded one: core clouds first, then mid, then niche. */
 function makeTaxonomy(): SeedTaxonomy {
-  const skillNames = [
+  const productNames = [
     // core (idx 0-3, weight 5)
     'Sales Cloud',
     'Service Cloud',
@@ -27,7 +27,7 @@ function makeTaxonomy(): SeedTaxonomy {
   ];
   return {
     verticalId: 'vertical-sf',
-    skills: skillNames.map((name, i) => ({ id: `skill-${i}`, name })),
+    products: productNames.map((name, i) => ({ id: `skill-${i}`, name })),
     supportTypeIds: ['support-1', 'support-2', 'support-3', 'support-4'],
     languages: [
       { id: 'lang-en', name: 'English' },
@@ -60,12 +60,12 @@ describe('generateExperts — determinism', () => {
       headline: a.headline,
       rateCents: a.rateCents,
       timezone: a.timezone,
-      productIds: a.skills.map((s) => s.productId),
+      productIds: a.competencies.map((c) => c.productId),
     }).toEqual({
       headline: b.headline,
       rateCents: b.rateCents,
       timezone: b.timezone,
-      productIds: b.skills.map((s) => s.productId),
+      productIds: b.competencies.map((c) => c.productId),
     });
   });
 
@@ -119,30 +119,30 @@ describe('generateExperts — rate bands', () => {
   });
 });
 
-describe('generateExperts — skills', () => {
-  it('assigns 3–7 distinct (skill,supportType) pairs each', () => {
+describe('generateExperts — competencies', () => {
+  it('assigns 3–7 distinct (product,supportType) pairs each', () => {
     for (const e of gen(120)) {
-      expect(e.skills.length).toBeGreaterThanOrEqual(3);
-      expect(e.skills.length).toBeLessThanOrEqual(7);
-      const keys = new Set(e.skills.map((s) => `${s.productId}:${s.supportTypeId}`));
-      expect(keys.size).toBe(e.skills.length);
-      for (const s of e.skills) {
-        expect(s.proficiency).toBeGreaterThanOrEqual(1);
-        expect(s.proficiency).toBeLessThanOrEqual(5);
+      expect(e.competencies.length).toBeGreaterThanOrEqual(3);
+      expect(e.competencies.length).toBeLessThanOrEqual(7);
+      const keys = new Set(e.competencies.map((c) => `${c.productId}:${c.supportTypeId}`));
+      expect(keys.size).toBe(e.competencies.length);
+      for (const c of e.competencies) {
+        expect(c.proficiency).toBeGreaterThanOrEqual(1);
+        expect(c.proficiency).toBeLessThanOrEqual(5);
       }
     }
   });
 
-  it('selects core clouds more often than niche skills', () => {
+  it('selects core clouds more often than niche products', () => {
     const experts = gen(300);
     const coreIds = new Set(['skill-0', 'skill-1', 'skill-2', 'skill-3']);
     const nicheIds = new Set(['skill-9', 'skill-10', 'skill-11', 'skill-12']);
     let core = 0;
     let niche = 0;
     for (const e of experts) {
-      for (const s of e.skills) {
-        if (coreIds.has(s.productId)) core += 1;
-        if (nicheIds.has(s.productId)) niche += 1;
+      for (const c of e.competencies) {
+        if (coreIds.has(c.productId)) core += 1;
+        if (nicheIds.has(c.productId)) niche += 1;
       }
     }
     expect(core).toBeGreaterThan(niche);
@@ -264,15 +264,15 @@ describe('generateExperts — search readiness & languages', () => {
 });
 
 describe('generateExperts — taxonomy guard', () => {
-  it('throws loudly when there are no skills', () => {
+  it('throws loudly when there are no products', () => {
     expect(() =>
       generateExperts({
         count: 5,
         seed: DEFAULT_SEED,
-        taxonomy: { ...makeTaxonomy(), skills: [] },
+        taxonomy: { ...makeTaxonomy(), products: [] },
         baselineNow: BASELINE,
       })
-    ).toThrow(/no skills/i);
+    ).toThrow(/no products/i);
   });
 
   it('throws loudly when there are no support types', () => {

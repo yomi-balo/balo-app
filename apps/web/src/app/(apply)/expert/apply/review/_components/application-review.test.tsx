@@ -49,9 +49,9 @@ import { ApplicationReview } from './application-review';
 
 // ── Fixtures ─────────────────────────────────────────────────────
 
-// Reference taxonomy — drives the `for (const skill of cat.products)` and
+// Reference taxonomy — drives the `for (const product of cat.products)` and
 // `for (const cert of cat.certifications)` category-map loops (lines ~290, ~318).
-const skillsByCategory: ProductsByCategory[] = [
+const productsByCategory: ProductsByCategory[] = [
   {
     category: { id: 'cat-sales', name: 'Sales Cloud', slug: 'sales-cloud', sortOrder: 0 },
     products: [
@@ -96,13 +96,13 @@ function buildApplication(): ApplicationWithRelations {
       isCertifiedTrainer: true,
       submittedAt: new Date('2026-01-15T00:00:00.000Z'),
     },
-    skills: [
+    competencies: [
       {
         id: 'comp-1',
         productId: 'skill-cpq',
         supportTypeId: 'st-fix',
         proficiency: 8,
-        skill: { id: 'skill-cpq', name: 'CPQ' },
+        product: { id: 'skill-cpq', name: 'CPQ' },
         supportType: { id: 'st-fix', name: 'Technical Fix', slug: 'technical-fix' },
       },
       {
@@ -110,7 +110,7 @@ function buildApplication(): ApplicationWithRelations {
         productId: 'skill-cpq',
         supportTypeId: 'st-arch',
         proficiency: 5,
-        skill: { id: 'skill-cpq', name: 'CPQ' },
+        product: { id: 'skill-cpq', name: 'CPQ' },
         supportType: { id: 'st-arch', name: 'Architecture', slug: 'architecture' },
       },
       {
@@ -118,7 +118,7 @@ function buildApplication(): ApplicationWithRelations {
         productId: 'skill-cases',
         supportTypeId: 'st-fix',
         proficiency: 7,
-        skill: { id: 'skill-cases', name: 'Case Mgmt' },
+        product: { id: 'skill-cases', name: 'Case Mgmt' },
         supportType: { id: 'st-fix', name: 'Technical Fix', slug: 'technical-fix' },
       },
     ],
@@ -167,7 +167,7 @@ describe('ApplicationReview', () => {
   function renderReview(
     overrides?: Partial<{
       application: ApplicationWithRelations;
-      skillsByCategory: ProductsByCategory[];
+      productsByCategory: ProductsByCategory[];
       certificationsByCategory: CertificationsByCategory[];
     }>
   ): void {
@@ -175,7 +175,7 @@ describe('ApplicationReview', () => {
       <ApplicationReview
         application={overrides?.application ?? buildApplication()}
         email="jane@example.com"
-        skillsByCategory={overrides?.skillsByCategory ?? skillsByCategory}
+        productsByCategory={overrides?.productsByCategory ?? productsByCategory}
         supportTypes={supportTypes}
         certificationsByCategory={overrides?.certificationsByCategory ?? certificationsByCategory}
       />
@@ -228,16 +228,16 @@ describe('ApplicationReview', () => {
     expect(screen.getByText('Current')).toBeInTheDocument();
   });
 
-  it('falls back to "Other" category when a skill is not in reference data', () => {
-    // Empty taxonomy → skillCategoryMap is empty → every product groups under "Other".
-    renderReview({ skillsByCategory: [] });
+  it('falls back to "Other" category when a product is not in reference data', () => {
+    // Empty taxonomy → productCategoryMap is empty → every product groups under "Other".
+    renderReview({ productsByCategory: [] });
     expect(screen.getByText('Other')).toBeInTheDocument();
   });
 
-  it('omits the products section when there are no skills', () => {
+  it('omits the products section when there are no competencies', () => {
     const app = buildApplication();
-    const noSkills = { ...app, skills: [] } as ApplicationWithRelations;
-    renderReview({ application: noSkills });
+    const noCompetencies = { ...app, competencies: [] } as ApplicationWithRelations;
+    renderReview({ application: noCompetencies });
     expect(screen.queryByText(/product expertise/i)).not.toBeInTheDocument();
   });
 });

@@ -268,7 +268,7 @@ function MiniBar({
 interface ApplicationReviewProps {
   application: ApplicationWithRelations;
   email: string;
-  skillsByCategory: ProductsByCategory[];
+  productsByCategory: ProductsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
 }
@@ -278,39 +278,39 @@ interface ApplicationReviewProps {
 export function ApplicationReview({
   application,
   email,
-  skillsByCategory,
+  productsByCategory,
   supportTypes,
   certificationsByCategory,
 }: Readonly<ApplicationReviewProps>): React.JSX.Element {
-  const { profile, skills, certifications, languages, industries, workHistory } = application;
+  const { profile, competencies, certifications, languages, industries, workHistory } = application;
 
-  // Build a skill-to-category map from reference data
-  const skillCategoryMap = new Map<string, string>();
-  for (const cat of skillsByCategory) {
-    for (const skill of cat.products) {
-      skillCategoryMap.set(skill.id, cat.category.name);
+  // Build a product-to-category map from reference data
+  const productCategoryMap = new Map<string, string>();
+  for (const cat of productsByCategory) {
+    for (const product of cat.products) {
+      productCategoryMap.set(product.id, cat.category.name);
     }
   }
 
-  // Group selected skills by category for products section
-  const uniqueSkillIds = [...new Set(skills.map((s) => s.productId))];
-  const productsByCategory = new Map<string, string[]>();
-  for (const skillId of uniqueSkillIds) {
-    const categoryName = skillCategoryMap.get(skillId) ?? 'Other';
-    const skillName = skills.find((s) => s.productId === skillId)?.skill.name ?? '';
-    if (!productsByCategory.has(categoryName)) {
-      productsByCategory.set(categoryName, []);
+  // Group selected products by category for products section
+  const uniqueProductIds = [...new Set(competencies.map((c) => c.productId))];
+  const productNamesByCategory = new Map<string, string[]>();
+  for (const productId of uniqueProductIds) {
+    const categoryName = productCategoryMap.get(productId) ?? 'Other';
+    const productName = competencies.find((c) => c.productId === productId)?.product.name ?? '';
+    if (!productNamesByCategory.has(categoryName)) {
+      productNamesByCategory.set(categoryName, []);
     }
-    productsByCategory.get(categoryName)!.push(skillName);
+    productNamesByCategory.get(categoryName)!.push(productName);
   }
 
-  // Group skills for assessment: { skillName → { supportTypeSlug → proficiency } }
+  // Group competencies for assessment: { productName → { supportTypeSlug → proficiency } }
   const assessmentMap = new Map<string, { name: string; ratings: Map<string, number> }>();
-  for (const s of skills) {
-    if (!assessmentMap.has(s.productId)) {
-      assessmentMap.set(s.productId, { name: s.skill.name, ratings: new Map() });
+  for (const c of competencies) {
+    if (!assessmentMap.has(c.productId)) {
+      assessmentMap.set(c.productId, { name: c.product.name, ratings: new Map() });
     }
-    assessmentMap.get(s.productId)!.ratings.set(s.supportType.slug, s.proficiency);
+    assessmentMap.get(c.productId)!.ratings.set(c.supportType.slug, c.proficiency);
   }
 
   // Build cert-to-category map
@@ -335,7 +335,7 @@ export function ApplicationReview({
       })
     : 'N/A';
 
-  const totalProducts = uniqueSkillIds.length;
+  const totalProducts = uniqueProductIds.length;
 
   return (
     <div className="mx-auto max-w-[780px] py-8 pb-20">
@@ -554,14 +554,14 @@ export function ApplicationReview({
               </span>
             </div>
             <Card className="px-6 py-5">
-              {[...productsByCategory.entries()].map(([category, skillNames], ci) => (
+              {[...productNamesByCategory.entries()].map(([category, productNames], ci) => (
                 <div
                   key={category}
                   style={{
-                    paddingBottom: ci < productsByCategory.size - 1 ? 16 : 0,
-                    marginBottom: ci < productsByCategory.size - 1 ? 16 : 0,
+                    paddingBottom: ci < productNamesByCategory.size - 1 ? 16 : 0,
+                    marginBottom: ci < productNamesByCategory.size - 1 ? 16 : 0,
                     borderBottom:
-                      ci < productsByCategory.size - 1
+                      ci < productNamesByCategory.size - 1
                         ? `1px solid ${colors.borderSubtle}`
                         : 'none',
                   }}
@@ -573,7 +573,7 @@ export function ApplicationReview({
                     {category}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {skillNames.map((name) => (
+                    {productNames.map((name) => (
                       <span
                         key={name}
                         className="inline-flex items-center gap-1.5 rounded-[20px] px-3 py-1.5 text-[13px] font-medium"
@@ -605,10 +605,10 @@ export function ApplicationReview({
               Self-Assessment
             </SectionLabel>
             <div className="flex flex-col gap-3">
-              {[...assessmentMap.entries()].map(([, { name: skillName, ratings }]) => (
-                <Card key={skillName} className="px-5 py-4" hover>
+              {[...assessmentMap.entries()].map(([, { name: productName, ratings }]) => (
+                <Card key={productName} className="px-5 py-4" hover>
                   <p className="mb-3.5 text-[15px] font-semibold" style={{ color: colors.text }}>
-                    {skillName}
+                    {productName}
                   </p>
                   <div className="grid grid-cols-1 gap-x-6 gap-y-2.5 sm:grid-cols-2">
                     {supportTypes.map((st) => {

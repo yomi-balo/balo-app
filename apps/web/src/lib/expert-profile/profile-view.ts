@@ -3,9 +3,9 @@ import { deriveInitials } from '@/lib/search/expert-card-mapper';
 import type {
   AgencyView,
   CertView,
+  CompetencyView,
   ExpertProfileView,
   LanguageView,
-  SkillView,
   WorkHistoryView,
 } from '@/components/expert/profile/types';
 import { proficiencyToLevel, proficiencyToPct } from './proficiency';
@@ -58,22 +58,22 @@ export function formatDuration(startedAt: Date, endedAt: Date | null): string {
   return parts.join(' ');
 }
 
-function mapSkills(skills: PublicExpertProfile['skills']): SkillView[] {
-  // A skill may appear under several support types — collapse to one bar at the
+function mapCompetencies(competencies: PublicExpertProfile['competencies']): CompetencyView[] {
+  // A product may appear under several support types — collapse to one bar at the
   // MAX proficiency across them.
-  const maxBySkillId = new Map<string, { id: string; name: string; proficiency: number }>();
-  for (const row of skills) {
-    const existing = maxBySkillId.get(row.skill.id);
+  const maxByProductId = new Map<string, { id: string; name: string; proficiency: number }>();
+  for (const row of competencies) {
+    const existing = maxByProductId.get(row.product.id);
     if (!existing || row.proficiency > existing.proficiency) {
-      maxBySkillId.set(row.skill.id, {
-        id: row.skill.id,
-        name: row.skill.name,
+      maxByProductId.set(row.product.id, {
+        id: row.product.id,
+        name: row.product.name,
         proficiency: row.proficiency,
       });
     }
   }
 
-  return [...maxBySkillId.values()]
+  return [...maxByProductId.values()]
     .map(({ id, name, proficiency }) => {
       const level = proficiencyToLevel(proficiency);
       return {
@@ -157,7 +157,7 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     baloVerified: true,
     // Deferred: derive from rating once a reviews feature lands.
     topRated: false,
-    skills: mapSkills(profile.skills),
+    competencies: mapCompetencies(profile.competencies),
     certifications,
     languages,
     languagesLabel: languages.map((l) => l.name).join(', '),

@@ -10,12 +10,12 @@ import { expertsRepository } from '../../repositories/experts';
 import { expertFactory } from './expert.factory';
 
 /**
- * A skill→support-type pairing to attach to the expert. Both IDs must already
- * exist (the integration global-setup seeds ONLY the Salesforce vertical, so the
- * test creates its own `skills` / `support_types` rows inline and passes the IDs
- * here).
+ * A product→support-type pairing to attach to the expert as a competency. Both
+ * IDs must already exist (the integration global-setup seeds ONLY the Salesforce
+ * vertical, so the test creates its own `products` / `support_types` rows inline
+ * and passes the IDs here).
  */
-export interface SearchExpertSkillInput {
+export interface SearchExpertCompetencyInput {
   productId: string;
   supportTypeId: string;
   proficiency?: number;
@@ -46,7 +46,7 @@ export interface SearchExpertOverrides {
   isSalesforceCta?: boolean;
   isCertifiedTrainer?: boolean;
   // Taxonomy links
-  skills?: SearchExpertSkillInput[];
+  competencies?: SearchExpertCompetencyInput[];
   languages?: SearchExpertLanguageInput[];
   // Availability cache. `undefined` → NO cache row at all (LEFT JOIN → null).
   // `null` → a cache row exists with earliest_available_at = NULL.
@@ -61,7 +61,7 @@ export interface SearchExpertOverrides {
  *   - links competencies (expert_competency) and languages (syncLanguages)
  *   - optionally inserts an availability_cache row (configurable earliest slot)
  *
- * Requires the caller to have created any referenced skills/support_types/
+ * Requires the caller to have created any referenced products/support_types/
  * languages rows first (the integration global-setup seeds only the vertical).
  */
 export async function searchExpertFactory(
@@ -112,13 +112,13 @@ export async function searchExpertFactory(
   }
 
   // Competencies (product + support_type pairings).
-  if (overrides.skills?.length) {
+  if (overrides.competencies?.length) {
     await db.insert(expertCompetency).values(
-      overrides.skills.map((s) => ({
+      overrides.competencies.map((c) => ({
         expertProfileId: profile.id,
-        productId: s.productId,
-        supportTypeId: s.supportTypeId,
-        proficiency: s.proficiency ?? 3,
+        productId: c.productId,
+        supportTypeId: c.supportTypeId,
+        proficiency: c.proficiency ?? 3,
       }))
     );
   }

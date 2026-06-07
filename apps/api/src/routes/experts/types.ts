@@ -29,7 +29,7 @@ export interface ExpertSearchDistinctions {
 }
 
 /** One expert_competency row, flattened with the product name + support-type slug. */
-export interface ExpertSearchSkill {
+export interface ExpertSearchCompetency {
   productId: string;
   productName: string;
   supportTypeSlug: string;
@@ -67,7 +67,7 @@ export interface ExpertSearchResult {
   /** proxy: confirmed, non-deleted consultations; degrades to 0 */
   consultationCount: number;
   /** expert_competency, proficiency-desc; powers the "Top expert in" pills */
-  skills: ExpertSearchSkill[];
+  competencies: ExpertSearchCompetency[];
 }
 
 /** Array of objects with the display name (NOT a bare `Record<string, number>`). */
@@ -92,7 +92,7 @@ export interface ExpertSearchResponse {
    * `true` only when the result set is empty BECAUSE the availability gate is on
    * AND at least one expert would have matched the same filters with the gate
    * (and self-gating timeframe) ignored. Lets the zero-results UI distinguish
-   * "no skills match" from "matched but none currently bookable". Always `false`
+   * "no competencies match" from "matched but none currently bookable". Always `false`
    * when `total > 0` or the gate is off (no extra query on the hot path).
    */
   wasAvailabilityGated: boolean;

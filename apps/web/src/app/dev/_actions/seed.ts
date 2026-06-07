@@ -24,7 +24,7 @@ const API_KEY = process.env.INTERNAL_API_SECRET ?? '';
 export interface RegenerateSummary {
   ok: true;
   expertsGenerated: number;
-  skillsGenerated: number;
+  competenciesGenerated: number;
   languagesGenerated: number;
   industriesGenerated: number;
   seedUsedRng: number;

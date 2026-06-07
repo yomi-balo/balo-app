@@ -49,7 +49,7 @@ function makeProfile(rateCents: number | null): ProfileSettingsData {
     availableForWork: true,
     yearStartedSalesforce: 2016,
     certifications: [],
-    skills: [],
+    competencies: [],
     industries: [],
     languages: [],
     workHistory: [],

@@ -36,7 +36,7 @@ interface MockAppOptions {
   profileOverrides?: Record<string, unknown>;
   languages?: Array<{ languageId: string; proficiency: string }>;
   industries?: Array<{ industryId: string }>;
-  skills?: Array<{ productId: string; supportTypeId: string; proficiency: number }>;
+  competencies?: Array<{ productId: string; supportTypeId: string; proficiency: number }>;
   certifications?: unknown[];
   workHistory?: unknown[];
 }
@@ -51,7 +51,7 @@ function mockApplication(opts: MockAppOptions = {}) {
     },
     languages: opts.languages ?? [{ languageId: UUID1, proficiency: 'native' }],
     industries: opts.industries ?? [{ industryId: UUID1 }],
-    skills: opts.skills ?? [{ productId: UUID1, supportTypeId: UUID2, proficiency: 5 }],
+    competencies: opts.competencies ?? [{ productId: UUID1, supportTypeId: UUID2, proficiency: 5 }],
     certifications: opts.certifications ?? [],
     workHistory: opts.workHistory ?? [],
   };
@@ -135,8 +135,8 @@ describe('submitApplicationAction', () => {
       });
     });
 
-    it('returns error with failingStep=products when no skills', async () => {
-      setupValidApplication({ skills: [] });
+    it('returns error with failingStep=products when no competencies', async () => {
+      setupValidApplication({ competencies: [] });
       const result = await submitApplicationAction(PROFILE_ID);
       expect(result).toEqual({
         success: false,
@@ -145,9 +145,9 @@ describe('submitApplicationAction', () => {
       });
     });
 
-    it('returns error with failingStep=assessment when a skill has all-zero proficiencies', async () => {
+    it('returns error with failingStep=assessment when a competency has all-zero proficiencies', async () => {
       setupValidApplication({
-        skills: [
+        competencies: [
           { productId: UUID1, supportTypeId: UUID2, proficiency: 0 },
           {
             productId: UUID1,
@@ -164,9 +164,9 @@ describe('submitApplicationAction', () => {
       });
     });
 
-    it('returns error when one skill has all zeros while another is valid', async () => {
+    it('returns error when one competency has all zeros while another is valid', async () => {
       setupValidApplication({
-        skills: [
+        competencies: [
           { productId: UUID1, supportTypeId: UUID2, proficiency: 8 },
           { productId: UUID2, supportTypeId: UUID2, proficiency: 0 },
           {
@@ -184,9 +184,9 @@ describe('submitApplicationAction', () => {
       });
     });
 
-    it('passes when each skill has at least one non-zero proficiency', async () => {
+    it('passes when each competency has at least one non-zero proficiency', async () => {
       setupValidApplication({
-        skills: [
+        competencies: [
           { productId: UUID1, supportTypeId: UUID2, proficiency: 5 },
           {
             productId: UUID1,

@@ -14,15 +14,15 @@ export type RateBand = 'junior' | 'typical' | 'mid-high' | 'spec';
 /** Live taxonomy snapshot read from the DB and fed into the pure generators. */
 export interface SeedTaxonomy {
   verticalId: string;
-  /** Flattened skills in seed.ts order — core clouds first. */
-  skills: { id: string; name: string }[];
+  /** Flattened products in seed.ts order — core clouds first. */
+  products: { id: string; name: string }[];
   /** Support-type ids (the 4 assessment dimensions). */
   supportTypeIds: string[];
   /** Language ids; index 0 is treated as English (always native). */
   languages: { id: string; name: string }[];
   /** Industry ids + names for headline rendering. */
   industries: { id: string; name: string }[];
-  /** Certification ids from the seeded catalog (flattened like skills). */
+  /** Certification ids from the seeded catalog (flattened like products). */
   certificationIds: string[];
 }
 
@@ -78,7 +78,7 @@ export interface GeneratedExpert {
   isCertifiedTrainer: boolean;
   approvedOffsetMs: number;
   // join rows
-  skills: { productId: string; supportTypeId: string; proficiency: number }[];
+  competencies: { productId: string; supportTypeId: string; proficiency: number }[];
   languages: { languageId: string; proficiency: LanguageProficiency }[];
   industryIds: string[];
   workHistory: GeneratedWorkHistory[];
@@ -121,7 +121,7 @@ export interface AvailabilityPlan {
 export interface RegenerateSummary {
   ok: true;
   expertsGenerated: number;
-  skillsGenerated: number;
+  competenciesGenerated: number;
   languagesGenerated: number;
   industriesGenerated: number;
   workHistoryGenerated: number;

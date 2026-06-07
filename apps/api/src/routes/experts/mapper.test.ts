@@ -27,7 +27,7 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
       { name: 'English', flagEmoji: '🇬🇧' },
       { name: 'French', flagEmoji: null },
     ],
-    skills: [
+    competencies: [
       {
         productId: 'sales-cloud',
         productName: 'Sales Cloud',
@@ -143,9 +143,9 @@ describe('mapRowToExpertSearchResult', () => {
     ).toBe(7);
   });
 
-  it('passes through skills (productId, productName, supportTypeSlug, proficiency)', () => {
+  it('passes through competencies (productId, productName, supportTypeSlug, proficiency)', () => {
     const result = mapRowToExpertSearchResult(buildRow(), NOW);
-    expect(result.skills).toEqual([
+    expect(result.competencies).toEqual([
       {
         productId: 'sales-cloud',
         productName: 'Sales Cloud',
@@ -155,8 +155,10 @@ describe('mapRowToExpertSearchResult', () => {
     ]);
   });
 
-  it('maps an expert with no skills to an empty array', () => {
-    expect(mapRowToExpertSearchResult(buildRow({ skills: [] }), NOW).skills).toEqual([]);
+  it('maps an expert with no competencies to an empty array', () => {
+    expect(mapRowToExpertSearchResult(buildRow({ competencies: [] }), NOW).competencies).toEqual(
+      []
+    );
   });
 
   it('passes through id, username, avatarUrl, headline and bio', () => {

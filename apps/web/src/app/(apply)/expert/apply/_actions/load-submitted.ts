@@ -13,7 +13,7 @@ import { log } from '@/lib/logging';
 
 export interface SubmittedApplicationResult {
   application: ApplicationWithRelations;
-  skillsByCategory: ProductsByCategory[];
+  productsByCategory: ProductsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
 }
@@ -30,7 +30,7 @@ export const loadSubmittedApplication = withAuth(
 
       if (!existingProfile) return null;
 
-      const [application, skillsByCategory, supportTypes, certsByCategory] = await Promise.all([
+      const [application, productsByCategory, supportTypes, certsByCategory] = await Promise.all([
         expertsRepository.findApplicationWithRelations(existingProfile.id),
         referenceDataRepository.getProductsByVertical(vertical.id),
         referenceDataRepository.getSupportTypes(vertical.id),
@@ -46,7 +46,7 @@ export const loadSubmittedApplication = withAuth(
 
       return {
         application,
-        skillsByCategory,
+        productsByCategory,
         supportTypes,
         certificationsByCategory: certsByCategory,
       };

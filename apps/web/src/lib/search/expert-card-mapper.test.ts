@@ -46,7 +46,7 @@ const baseDto: ExpertSearchResultDTO = {
   rating: null,
   yearsExperience: 9,
   consultationCount: 124,
-  skills: [
+  competencies: [
     {
       productId: 'sales-cloud',
       productName: 'Sales Cloud',
@@ -75,7 +75,7 @@ describe('mapSearchResultToCardData', () => {
     expect(card.rating).toBeNull();
   });
 
-  it('builds expertise from the DTO skills (product grouping + slug → SkillType)', () => {
+  it('builds expertise from the DTO competencies (product grouping + slug → SkillType)', () => {
     const card = mapSearchResultToCardData(baseDto);
     expect(card.expertise).toEqual([
       { product: 'Sales Cloud', skills: ['technical', 'architecture'] },
@@ -83,10 +83,10 @@ describe('mapSearchResultToCardData', () => {
     ]);
   });
 
-  it('skips skills with proficiency <= 0 when building expertise', () => {
+  it('skips competencies with proficiency <= 0 when building expertise', () => {
     const card = mapSearchResultToCardData({
       ...baseDto,
-      skills: [
+      competencies: [
         {
           productId: 'sales-cloud',
           productName: 'Sales Cloud',
@@ -104,8 +104,8 @@ describe('mapSearchResultToCardData', () => {
     expect(card.expertise).toEqual([{ product: 'Service Cloud', skills: ['admin'] }]);
   });
 
-  it('maps an expert with no skills to an empty expertise array', () => {
-    const card = mapSearchResultToCardData({ ...baseDto, skills: [] });
+  it('maps an expert with no competencies to an empty expertise array', () => {
+    const card = mapSearchResultToCardData({ ...baseDto, competencies: [] });
     expect(card.expertise).toEqual([]);
   });
 

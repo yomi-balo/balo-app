@@ -140,7 +140,10 @@ export function ExpertProfileClient({
               <AboutSection bio={view.bio} firstName={view.firstName} />
             </section>
             <section id="section-expertise" data-section="expertise" className="scroll-mt-[72px]">
-              <ExpertiseSection skills={view.skills} certifications={view.certifications} />
+              <ExpertiseSection
+                competencies={view.competencies}
+                certifications={view.certifications}
+              />
             </section>
             <section
               id="section-quickstarts"

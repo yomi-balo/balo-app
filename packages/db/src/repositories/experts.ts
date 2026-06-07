@@ -77,7 +77,7 @@ interface SyncWorkHistoryInput {
 // ── Output types ─────────────────────────────────────────────────
 
 export interface ApplicationCompetencyWithRelations extends ExpertCompetency {
-  skill: { id: string; name: string };
+  product: { id: string; name: string };
   supportType: { id: string; name: string; slug: string };
 }
 
@@ -95,7 +95,7 @@ export interface ApplicationIndustryWithRelations extends ExpertIndustry {
 
 export interface ApplicationWithRelations {
   profile: ExpertProfile;
-  skills: ApplicationCompetencyWithRelations[];
+  competencies: ApplicationCompetencyWithRelations[];
   certifications: ApplicationCertWithRelations[];
   languages: ApplicationLanguageWithRelations[];
   industries: ApplicationIndustryWithRelations[];
@@ -186,9 +186,9 @@ export const expertsRepository = {
           },
         },
         agency: { columns: { id: true, name: true, slug: true, logoUrl: true } },
-        skills: {
+        competencies: {
           with: {
-            skill: { columns: { id: true, name: true, slug: true } },
+            product: { columns: { id: true, name: true, slug: true } },
             supportType: { columns: { id: true, name: true, slug: true } },
           },
         },
@@ -252,7 +252,7 @@ export const expertsRepository = {
         industries: { with: { industry: true } },
         workHistory: { orderBy: (wh, { asc }) => [asc(wh.sortOrder)] },
         certifications: { with: { certification: true } },
-        skills: { with: { skill: true, supportType: true } },
+        competencies: { with: { product: true, supportType: true } },
       },
     });
   },
@@ -274,7 +274,7 @@ export const expertsRepository = {
     const profile = await db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
       with: {
-        skills: { with: { skill: true, supportType: true } },
+        competencies: { with: { product: true, supportType: true } },
         certifications: { with: { certification: true } },
         languages: { with: { language: true } },
         industries: { with: { industry: true } },
@@ -286,7 +286,7 @@ export const expertsRepository = {
 
     return {
       profile,
-      skills: profile.skills as unknown as ApplicationCompetencyWithRelations[],
+      competencies: profile.competencies as unknown as ApplicationCompetencyWithRelations[],
       certifications: profile.certifications as unknown as ApplicationCertWithRelations[],
       languages: profile.languages as unknown as ApplicationLanguageWithRelations[],
       industries: profile.industries as unknown as ApplicationIndustryWithRelations[],

@@ -15,9 +15,9 @@ export type ProductSelectorSurface = 'popover' | 'rail' | 'sheet';
 
 interface ProductSelectorProps {
   taxonomy: ProductTaxonomy;
-  /** Currently-selected skill UUIDs. */
+  /** Currently-selected product UUIDs. */
   selectedIds: ReadonlySet<string>;
-  /** Authoritative id→name map (taxonomy-backed, covers zero-supply skills). */
+  /** Authoritative id→name map (taxonomy-backed, covers zero-supply products). */
   nameMap: Record<string, string>;
   onToggle: (id: string) => void;
   onClear: () => void;

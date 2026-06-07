@@ -45,7 +45,7 @@ import { SeedPanel } from './seed-panel';
 const REGEN_SUMMARY = {
   ok: true as const,
   expertsGenerated: 60,
-  skillsGenerated: 312,
+  competenciesGenerated: 312,
   languagesGenerated: 90,
   industriesGenerated: 120,
   seedUsedRng: 20239,

@@ -2,7 +2,7 @@
  * Curated headline templates for seeded experts.
  *
  * Each template uses `{years}`, `{cloud}`, and `{industry}` slots filled by
- * `renderHeadline`. `{cloud}` is the expert's top-weighted seeded skill name;
+ * `renderHeadline`. `{cloud}` is the expert's top-weighted seeded product name;
  * `{industry}` is a seeded industry (or a fallback pool string).
  */
 export const HEADLINE_TEMPLATES: readonly string[] = [

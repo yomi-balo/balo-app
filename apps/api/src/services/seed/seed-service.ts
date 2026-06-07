@@ -74,7 +74,7 @@ export interface ResetOptions {
   baselineNow?: Date;
 }
 
-/** Load the live reference taxonomy. Throws loudly if skills are empty. */
+/** Load the live reference taxonomy. Throws loudly if products are empty. */
 async function loadTaxonomy(): Promise<SeedTaxonomy> {
   const vertical = await referenceDataRepository.getSalesforceVertical();
   const [grouped, supportTypes, languages, industries, certGroups] = await Promise.all([
@@ -85,12 +85,12 @@ async function loadTaxonomy(): Promise<SeedTaxonomy> {
     referenceDataRepository.getCertificationsByVertical(vertical.id),
   ]);
 
-  const skills = grouped.flatMap((g) => g.products.map((s) => ({ id: s.id, name: s.name })));
+  const products = grouped.flatMap((g) => g.products.map((p) => ({ id: p.id, name: p.name })));
   const certificationIds = certGroups.flatMap((g) => g.certifications.map((c) => c.id));
 
   return {
     verticalId: vertical.id,
-    skills,
+    products,
     supportTypeIds: supportTypes.map((st) => st.id),
     languages: languages.map((l) => ({ id: l.id, name: l.name })),
     industries: industries.map((i) => ({ id: i.id, name: i.name })),
@@ -105,7 +105,7 @@ async function insertExpert(
   verticalId: string,
   baselineNow: Date
 ): Promise<{
-  skills: number;
+  competencies: number;
   languages: number;
   industries: number;
   workHistory: number;
@@ -157,14 +157,14 @@ async function insertExpert(
     .returning({ id: expertProfiles.id });
   const expertProfileId = insertedProfile.id;
 
-  if (expert.skills.length > 0) {
-    const skillRows: NewExpertCompetency[] = expert.skills.map((s) => ({
+  if (expert.competencies.length > 0) {
+    const competencyRows: NewExpertCompetency[] = expert.competencies.map((c) => ({
       expertProfileId,
-      productId: s.productId,
-      supportTypeId: s.supportTypeId,
-      proficiency: s.proficiency,
+      productId: c.productId,
+      supportTypeId: c.supportTypeId,
+      proficiency: c.proficiency,
     }));
-    await tx.insert(expertCompetency).values(skillRows);
+    await tx.insert(expertCompetency).values(competencyRows);
   }
 
   if (expert.languages.length > 0) {
@@ -211,7 +211,7 @@ async function insertExpert(
   }
 
   return {
-    skills: expert.skills.length,
+    competencies: expert.competencies.length,
     languages: expert.languages.length,
     industries: expert.industryIds.length,
     workHistory: expert.workHistory.length,
@@ -221,7 +221,7 @@ async function insertExpert(
 
 /**
  * Wipe + regenerate all seed experts (destructive). Inserts users → profiles →
- * skills/languages/industries inside a single transaction.
+ * competencies/languages/industries inside a single transaction.
  */
 export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<RegenerateSummary> {
   const seed = opts.seed ?? DEFAULT_SEED;
@@ -234,7 +234,7 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
   const taxonomy = await loadTaxonomy();
   const experts = generateExperts({ count, seed, taxonomy, baselineNow });
 
-  let skillsGenerated = 0;
+  let competenciesGenerated = 0;
   let languagesGenerated = 0;
   let industriesGenerated = 0;
   let workHistoryGenerated = 0;
@@ -244,7 +244,7 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
     await truncateSeedData(tx, 'experts');
     for (const expert of experts) {
       const counts = await insertExpert(tx, expert, taxonomy.verticalId, baselineNow);
-      skillsGenerated += counts.skills;
+      competenciesGenerated += counts.competencies;
       languagesGenerated += counts.languages;
       industriesGenerated += counts.industries;
       workHistoryGenerated += counts.workHistory;
@@ -255,7 +255,7 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
   log.info(
     {
       expertsGenerated: experts.length,
-      skillsGenerated,
+      competenciesGenerated,
       languagesGenerated,
       industriesGenerated,
       workHistoryGenerated,
@@ -268,7 +268,7 @@ export async function regenerateExperts(opts: RegenerateOptions = {}): Promise<R
   return {
     ok: true,
     expertsGenerated: experts.length,
-    skillsGenerated,
+    competenciesGenerated,
     languagesGenerated,
     industriesGenerated,
     workHistoryGenerated,

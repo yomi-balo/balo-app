@@ -29,7 +29,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
     mode: 'onSubmit',
   });
 
-  const selectedSkillIds = form.watch('productIds');
+  const selectedProductIds = form.watch('productIds');
 
   // Sync form to context
   useEffect(() => {
@@ -51,32 +51,32 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
   // Search filtering
   const filteredCategories = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
-    if (!query) return referenceData.skillsByCategory;
+    if (!query) return referenceData.productsByCategory;
 
-    return referenceData.skillsByCategory
+    return referenceData.productsByCategory
       .map((cat) => ({
         ...cat,
-        products: cat.products.filter((s) => s.name.toLowerCase().includes(query)),
+        products: cat.products.filter((p) => p.name.toLowerCase().includes(query)),
       }))
       .filter((cat) => cat.products.length > 0);
-  }, [referenceData.skillsByCategory, searchQuery]);
+  }, [referenceData.productsByCategory, searchQuery]);
 
-  // Build flat map of skill id -> name for selected pills
-  const skillNameMap = useMemo(() => {
+  // Build flat map of product id -> name for selected pills
+  const productNameMap = useMemo(() => {
     const map = new Map<string, string>();
-    for (const cat of referenceData.skillsByCategory) {
-      for (const skill of cat.products) {
-        map.set(skill.id, skill.name);
+    for (const cat of referenceData.productsByCategory) {
+      for (const product of cat.products) {
+        map.set(product.id, product.name);
       }
     }
     return map;
-  }, [referenceData.skillsByCategory]);
+  }, [referenceData.productsByCategory]);
 
-  const removeSkill = (id: string): void => {
+  const removeProduct = (id: string): void => {
     const current = form.getValues('productIds');
     form.setValue(
       'productIds',
-      current.filter((s) => s !== id),
+      current.filter((p) => p !== id),
       { shouldValidate: false }
     );
   };
@@ -97,14 +97,14 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
 
         {/* Selected pills */}
         <AnimatePresence>
-          {selectedSkillIds.length > 0 && (
+          {selectedProductIds.length > 0 && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
               className="border-border flex flex-wrap gap-2 border-b pb-4"
             >
-              {selectedSkillIds.map((id) => (
+              {selectedProductIds.map((id) => (
                 <motion.div
                   key={id}
                   initial={scaleInVariant.initial}
@@ -113,12 +113,12 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                   transition={scaleInVariant.transition}
                 >
                   <Badge variant="secondary" className="gap-1.5 rounded-full px-3 py-1">
-                    {skillNameMap.get(id) ?? id}
+                    {productNameMap.get(id) ?? id}
                     <button
                       type="button"
-                      onClick={() => removeSkill(id)}
+                      onClick={() => removeProduct(id)}
                       className="hover:text-foreground"
-                      aria-label={`Remove ${skillNameMap.get(id) ?? 'product'}`}
+                      aria-label={`Remove ${productNameMap.get(id) ?? 'product'}`}
                     >
                       <X className="h-3 w-3" aria-hidden="true" />
                     </button>
@@ -126,10 +126,10 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                 </motion.div>
               ))}
               <p className="text-muted-foreground mt-1 w-full text-xs">
-                {selectedSkillIds.length} product
-                {selectedSkillIds.length === 1 ? '' : 's'} selected
+                {selectedProductIds.length} product
+                {selectedProductIds.length === 1 ? '' : 's'} selected
               </p>
-              {selectedSkillIds.length >= 5 && (
+              {selectedProductIds.length >= 5 && (
                 <p className="text-success w-full text-xs">Great coverage!</p>
               )}
             </motion.div>

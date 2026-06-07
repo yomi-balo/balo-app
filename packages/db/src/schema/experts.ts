@@ -87,7 +87,7 @@ export const expertProfiles = pgTable(
 
     // Generated STORED full-text search vector: headline weight A, bio weight B.
     // Postgres maintains this automatically on every expert_profiles write — no
-    // trigger code, no drift. Skill names (weight C) are folded in at query time
+    // trigger code, no drift. Product names (weight C) are folded in at query time
     // by the expert-search repository, not stored here. Never read/written
     // directly via Drizzle (excluded from $inferInsert by .generatedAlwaysAs).
     searchVector: tsvector('search_vector').generatedAlwaysAs(
@@ -108,7 +108,7 @@ export const expertCompetency = pgTable(
     expertProfileId: uuid('expert_profile_id')
       .references(() => expertProfiles.id)
       .notNull(),
-    // FK-references products.id (the taxonomy table renamed from skills).
+    // FK-references products.id (the taxonomy product this competency is in).
     productId: uuid('product_id')
       .references(() => products.id)
       .notNull(),
@@ -241,7 +241,7 @@ export const expertProfilesRelations = relations(expertProfiles, ({ one, many })
     fields: [expertProfiles.agencyId],
     references: [agencies.id],
   }),
-  skills: many(expertCompetency),
+  competencies: many(expertCompetency),
   certifications: many(expertCertifications),
   languages: many(expertLanguages),
   industries: many(expertIndustries),
@@ -261,9 +261,9 @@ export const expertCompetencyRelations = relations(expertCompetency, ({ one }) =
     fields: [expertCompetency.expertProfileId],
     references: [expertProfiles.id],
   }),
-  // Relation field key `skill` is kept (referenced by `with: { skill: … }`
-  // query usages); only the underlying column renamed (skill_id → product_id).
-  skill: one(products, {
+  // Relation to the product this competency is in (referenced by
+  // `with: { product: … }` query usages).
+  product: one(products, {
     fields: [expertCompetency.productId],
     references: [products.id],
   }),

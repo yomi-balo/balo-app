@@ -54,31 +54,33 @@ const SUPPORT_TYPE_SLUG_MAP: Record<string, SkillType> = {
 /**
  * Structural input for `buildExpertise`. Decoupled from `@balo/db` on purpose so
  * this util stays web-only and can be fed by either the profile-settings shape
- * (`ProfileSettingsData['skills']`) or the search DTO (adapted in the mapper).
+ * (`ProfileSettingsData['competencies']`) or the search DTO (adapted in the mapper).
  */
-export interface ExpertiseSkillInput {
+export interface ExpertiseCompetencyInput {
   productId: string;
   proficiency: number;
-  skill: { name: string };
+  product: { name: string };
   supportType: { slug: string };
 }
 
 /**
- * Group flat expert-skill rows into `ExpertiseItem[]` (one entry per product,
+ * Group flat expert-competency rows into `ExpertiseItem[]` (one entry per product,
  * carrying its mapped `SkillType`s). Insertion order is preserved, rows with
  * `proficiency <= 0` are skipped, each `SkillType` is deduped per product, and
  * unknown support-type slugs are ignored.
  */
-export function buildExpertise(skills: ReadonlyArray<ExpertiseSkillInput>): ExpertiseItem[] {
+export function buildExpertise(
+  competencies: ReadonlyArray<ExpertiseCompetencyInput>
+): ExpertiseItem[] {
   const groups = new Map<string, ExpertiseItem>();
 
-  for (const s of skills) {
-    if (s.proficiency <= 0) continue;
-    const key = s.productId;
+  for (const c of competencies) {
+    if (c.proficiency <= 0) continue;
+    const key = c.productId;
     if (!groups.has(key)) {
-      groups.set(key, { product: s.skill.name, skills: [] });
+      groups.set(key, { product: c.product.name, skills: [] });
     }
-    const mapped = SUPPORT_TYPE_SLUG_MAP[s.supportType.slug];
+    const mapped = SUPPORT_TYPE_SLUG_MAP[c.supportType.slug];
     if (mapped && !groups.get(key)!.skills.includes(mapped)) {
       groups.get(key)!.skills.push(mapped);
     }

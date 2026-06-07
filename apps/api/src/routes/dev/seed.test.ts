@@ -70,7 +70,7 @@ describe('dev seed routes — prod gate', () => {
     mockRegenerate.mockResolvedValue({
       ok: true,
       expertsGenerated: 60,
-      skillsGenerated: 300,
+      competenciesGenerated: 300,
       languagesGenerated: 90,
       industriesGenerated: 120,
       seedUsedRng: 20239,

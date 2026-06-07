@@ -7,37 +7,37 @@ import { cn } from '@/lib/utils';
 import type { ApplicationCompetencyWithRelations } from '@balo/db';
 
 interface ExpertiseTabProps {
-  skills: ApplicationCompetencyWithRelations[];
+  competencies: ApplicationCompetencyWithRelations[];
   skillsLocked: boolean;
 }
 
-// Group skills by product (skill.skill.name) and aggregate support types
-interface SkillGroup {
-  skillName: string;
+// Group competencies by product (competency.product.name) and aggregate support types
+interface CompetencyGroup {
+  productName: string;
   supportTypes: Array<{ name: string; proficiency: number }>;
 }
 
-function groupSkills(skills: ApplicationCompetencyWithRelations[]): SkillGroup[] {
-  const groups = new Map<string, SkillGroup>();
+function groupCompetencies(competencies: ApplicationCompetencyWithRelations[]): CompetencyGroup[] {
+  const groups = new Map<string, CompetencyGroup>();
 
-  for (const skill of skills) {
-    const key = skill.productId;
+  for (const competency of competencies) {
+    const key = competency.productId;
     if (!groups.has(key)) {
       groups.set(key, {
-        skillName: skill.skill.name,
+        productName: competency.product.name,
         supportTypes: [],
       });
     }
     groups.get(key)!.supportTypes.push({
-      name: skill.supportType.name,
-      proficiency: skill.proficiency,
+      name: competency.supportType.name,
+      proficiency: competency.proficiency,
     });
   }
 
   return Array.from(groups.values());
 }
 
-const SKILL_COLORS = [
+const PRODUCT_COLORS = [
   {
     text: 'text-blue-600 dark:text-blue-400',
     bg: 'bg-blue-600/10 dark:bg-blue-400/10',
@@ -71,10 +71,10 @@ const SKILL_COLORS = [
 ];
 
 export function ExpertiseTab({
-  skills,
+  competencies,
   skillsLocked,
 }: Readonly<ExpertiseTabProps>): React.JSX.Element {
-  const skillGroups = groupSkills(skills);
+  const competencyGroups = groupCompetencies(competencies);
 
   return (
     <div>
@@ -98,18 +98,18 @@ export function ExpertiseTab({
         </div>
       )}
 
-      {/* Skill cards */}
-      {skillGroups.length === 0 ? (
+      {/* Competency cards */}
+      {competencyGroups.length === 0 ? (
         <div className="border-border rounded-xl border-2 border-dashed p-12 text-center">
           <Shield className="text-muted-foreground mx-auto mb-3 h-8 w-8" />
           <p className="text-muted-foreground text-sm">No skills have been assessed yet.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-3.5">
-          {skillGroups.map(({ skillName, supportTypes }, groupIndex) => {
-            const color = SKILL_COLORS[groupIndex % SKILL_COLORS.length]!;
+          {competencyGroups.map(({ productName, supportTypes }, groupIndex) => {
+            const color = PRODUCT_COLORS[groupIndex % PRODUCT_COLORS.length]!;
             return (
-              <Card key={skillName} className={cn('p-5', skillsLocked && 'opacity-80')}>
+              <Card key={productName} className={cn('p-5', skillsLocked && 'opacity-80')}>
                 <div className="mb-3 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div
@@ -121,7 +121,7 @@ export function ExpertiseTab({
                     >
                       <Shield className={cn('h-[13px] w-[13px]', color.text)} aria-hidden="true" />
                     </div>
-                    <span className="text-foreground text-sm font-semibold">{skillName}</span>
+                    <span className="text-foreground text-sm font-semibold">{productName}</span>
                   </div>
                   {skillsLocked && (
                     <span className="bg-warning/10 text-warning border-warning/30 rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase">

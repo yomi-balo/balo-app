@@ -58,7 +58,7 @@ export interface ExpertSearchRow {
   agencyLogoUrl: string | null;
   consultationCount: number;
   languages: { name: string; flagEmoji: string | null }[];
-  skills: ExpertSearchCompetencyRow[];
+  competencies: ExpertSearchCompetencyRow[];
 }
 
 export interface FacetCount {
@@ -119,7 +119,7 @@ function availabilityGatePredicates(now: Date): SQL[] {
  *     `now + N days` — self-gates even when the availability flag is off.
  *   - Rate bounds exclude null-rate experts only when a bound is set.
  *   - Full-text match (only when `q` present): strict FTS @@ OR trigram fuzzy on
- *     headline OR trigram fuzzy on any skill name.
+ *     headline OR trigram fuzzy on any product name.
  *
  * NOTE: `expert_profiles` has NO `deleted_at` column — do NOT filter it here.
  */
@@ -217,11 +217,11 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
     conditions.push(sql`ac.earliest_available_at <= ${boundary.toISOString()}::timestamptz`);
   }
 
-  // Full-text match: strict FTS OR trigram fuzzy (headline + skill names).
-  // Only added when `q` is present — no per-skill subquery on a wide-open browse.
+  // Full-text match: strict FTS OR trigram fuzzy (headline + product names).
+  // Only added when `q` is present — no per-product subquery on a wide-open browse.
   //
   // Fuzzy term uses `word_similarity(q, text) > 0.3` (NOT the whole-string `%`
-  // operator): `%` compares the ENTIRE headline/skill string to q, so any
+  // operator): `%` compares the ENTIRE headline/product string to q, so any
   // multi-word headline ("Salesforce platform architect") scores far below the
   // 0.3 `%` threshold and a real typo ("salezforce") would never match. The
   // word-similarity form compares q against the best-matching word/extent, which
@@ -304,10 +304,10 @@ function normalizeQuery(query: string | undefined): string | null {
 }
 
 /**
- * Relevance expression. A/B from the stored vector dominate; skills participate
- * via a real `setweight(..., 'C')` term; a small trigram bump keeps fuzzy-only
- * hits above non-matches. Emits literal `0` when `q` is absent (no FTS / skills
- * subquery runs at all).
+ * Relevance expression. A/B from the stored vector dominate; product names
+ * participate via a real `setweight(..., 'C')` term; a small trigram bump keeps
+ * fuzzy-only hits above non-matches. Emits literal `0` when `q` is absent (no
+ * FTS / product subquery runs at all).
  */
 function relevanceExpression(q: string | null): SQL {
   if (!q) return sql`0`;
@@ -526,7 +526,7 @@ export const expertSearchRepository = {
         name: l.name,
         flagEmoji: l.flagEmoji,
       })),
-      skills: productsByExpert.get(r.id) ?? [],
+      competencies: productsByExpert.get(r.id) ?? [],
     }));
 
     return { rows: mapped, total };
@@ -562,7 +562,7 @@ export const expertSearchRepository = {
    * base visibility + availability gate ONLY — EXCLUDES `q` and all facet
    * selections, so the result depends solely on `(verticalId, gateOn)`.
    * `count(DISTINCT expert_profile_id)` prevents double-counting an expert with
-   * multiple skills mapping to one facet value.
+   * multiple competencies mapping to one facet value.
    */
   async facetCounts(
     verticalId: string,

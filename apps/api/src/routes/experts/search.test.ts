@@ -95,7 +95,7 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     agencyLogoUrl: null,
     consultationCount: 0,
     languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
-    skills: [
+    competencies: [
       {
         productId: 'sales-cloud',
         productName: 'Sales Cloud',
@@ -147,10 +147,10 @@ describe('GET /experts/search', () => {
     expect(body.experts[0]).toMatchObject({ id: 'expert-1', name: 'Jane Doe', rate: 2.5 });
   });
 
-  it("passes each expert's skills through to the response", async () => {
+  it("passes each expert's competencies through to the response", async () => {
     const res = await inject();
     expect(res.statusCode).toBe(200);
-    expect(res.json().experts[0].skills).toEqual([
+    expect(res.json().experts[0].competencies).toEqual([
       {
         productId: 'sales-cloud',
         productName: 'Sales Cloud',

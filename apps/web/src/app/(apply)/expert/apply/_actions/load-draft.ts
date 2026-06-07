@@ -15,7 +15,7 @@ import {
 import { log } from '@/lib/logging';
 
 export interface ReferenceData {
-  skillsByCategory: ProductsByCategory[];
+  productsByCategory: ProductsByCategory[];
   supportTypes: SupportType[];
   certificationsByCategory: CertificationsByCategory[];
   languages: Language[];
@@ -37,7 +37,7 @@ export const loadDraftAction = withAuth(async (session): Promise<LoadDraftResult
       vertical.id
     );
 
-    const [draft, skillsByCategory, supportTypes, certsByCategory, languages, industries] =
+    const [draft, productsByCategory, supportTypes, certsByCategory, languages, industries] =
       await Promise.all([
         existingProfile
           ? expertsRepository.findApplicationWithRelations(existingProfile.id)
@@ -58,7 +58,7 @@ export const loadDraftAction = withAuth(async (session): Promise<LoadDraftResult
     return {
       draft: draft ?? null,
       referenceData: {
-        skillsByCategory,
+        productsByCategory,
         supportTypes,
         certificationsByCategory: certsByCategory,
         languages,

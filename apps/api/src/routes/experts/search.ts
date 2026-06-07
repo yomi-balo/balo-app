@@ -168,7 +168,7 @@ export async function searchRoute(fastify: FastifyInstance): Promise<void> {
         const distinctId = searchDistinctId(request.ip);
         const hasQuery = (query.q?.length ?? 0) > 0;
 
-        // Additive zero-results probe: distinguish "no skills match" from
+        // Additive zero-results probe: distinguish "no competencies match" from
         // "matched but none currently bookable". Runs ONLY in the rare
         // `total === 0 && gate-on` path so the hot path adds zero queries.
         let wasAvailabilityGated = false;

@@ -48,7 +48,7 @@ type ActionKey = keyof typeof ICONS;
 
 /** One-line human summary for the toast + success block. */
 function summarizeRegenerate(s: RegenerateSummary): string {
-  return `${s.expertsGenerated} experts • ${s.skillsGenerated} skills • ${s.languagesGenerated} languages • baseline ${s.baselineAt}`;
+  return `${s.expertsGenerated} experts • ${s.competenciesGenerated} competencies • ${s.languagesGenerated} languages • baseline ${s.baselineAt}`;
 }
 function summarizeRefresh(s: RefreshSummary): string {
   return `${s.availabilityRulesGenerated} rules • ${s.consultationsSeeded} consults (${s.consultationsCancelled} cancelled) • ${s.cacheRowsWritten} cache rows • ${s.expertsWithEarliest} bookable / ${s.expertsNullEarliest} none`;
@@ -59,7 +59,7 @@ function SummaryRows({ summary }: Readonly<{ summary: AnySummary }>): React.JSX.
   if ('experts' in summary) {
     entries = [
       ['Experts', summary.experts.expertsGenerated],
-      ['Skills', summary.experts.skillsGenerated],
+      ['Competencies', summary.experts.competenciesGenerated],
       ['Rules', summary.availability.availabilityRulesGenerated],
       ['Cache rows', summary.availability.cacheRowsWritten],
       ['Bookable', summary.availability.expertsWithEarliest],
@@ -68,7 +68,7 @@ function SummaryRows({ summary }: Readonly<{ summary: AnySummary }>): React.JSX.
   } else if ('expertsGenerated' in summary) {
     entries = [
       ['Experts', summary.expertsGenerated],
-      ['Skills', summary.skillsGenerated],
+      ['Competencies', summary.competenciesGenerated],
       ['Languages', summary.languagesGenerated],
       ['Industries', summary.industriesGenerated],
       ['Seed', summary.seedUsedRng],

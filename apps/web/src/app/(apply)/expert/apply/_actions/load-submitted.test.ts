@@ -42,7 +42,7 @@ import { loadSubmittedApplication } from './load-submitted';
 // ── Helpers ──────────────────────────────────────────────────────
 
 const mockVertical = { id: VERTICAL_ID, name: 'Salesforce' };
-const mockSkills = [
+const mockProducts = [
   { category: { id: 'cat-1', name: 'Sales Cloud' }, products: [{ id: 'skill-1' }] },
 ];
 const mockSupportTypesList = [{ id: 'st-1', name: 'Technical Support' }];
@@ -55,7 +55,7 @@ function mockApplication() {
     profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'submitted' },
     languages: [],
     industries: [],
-    skills: [],
+    competencies: [],
     certifications: [],
     workHistory: [],
   };
@@ -63,7 +63,7 @@ function mockApplication() {
 
 function setupReferenceData(): void {
   mockGetSalesforceVertical.mockResolvedValue(mockVertical);
-  mockGetProductsByVertical.mockResolvedValue(mockSkills);
+  mockGetProductsByVertical.mockResolvedValue(mockProducts);
   mockGetSupportTypes.mockResolvedValue(mockSupportTypesList);
   mockGetCertsByVertical.mockResolvedValue(mockCerts);
 }
@@ -120,7 +120,7 @@ describe('loadSubmittedApplication', () => {
       const result = await loadSubmittedApplication();
       expect(result).toEqual({
         application,
-        skillsByCategory: mockSkills,
+        productsByCategory: mockProducts,
         supportTypes: mockSupportTypesList,
         certificationsByCategory: mockCerts,
       });

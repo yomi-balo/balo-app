@@ -4,12 +4,12 @@ import Image from 'next/image';
 import { TrendingUp, Award } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Card } from '@/components/ui/card';
-import { SectionLabel, type SkillView, type CertView } from '@/components/expert/profile';
+import { SectionLabel, type CompetencyView, type CertView } from '@/components/expert/profile';
 import type { ProficiencyTone } from '@/lib/expert-profile/proficiency';
 import { cn } from '@/lib/utils';
 
 interface ExpertiseSectionProps {
-  skills: SkillView[];
+  competencies: CompetencyView[];
   certifications: CertView[];
 }
 
@@ -20,24 +20,26 @@ const LEVEL_BADGE_CLASS: Record<ProficiencyTone, string> = {
   muted: 'text-muted-foreground bg-muted border-border',
 };
 
-function SkillBar({ skill }: Readonly<{ skill: SkillView }>): React.JSX.Element {
+function CompetencyBar({
+  competency,
+}: Readonly<{ competency: CompetencyView }>): React.JSX.Element {
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-foreground text-sm font-medium">{skill.name}</span>
+        <span className="text-foreground text-sm font-medium">{competency.name}</span>
         <span
           className={cn(
             'rounded-md border px-2 py-0.5 text-[11px] font-semibold',
-            LEVEL_BADGE_CLASS[skill.tone]
+            LEVEL_BADGE_CLASS[competency.tone]
           )}
         >
-          {skill.level}
+          {competency.level}
         </span>
       </div>
       <div className="bg-muted h-1.5 overflow-hidden rounded-full">
         <div
           className="from-primary animate-bar-fill h-full rounded-full bg-gradient-to-r to-violet-600 dark:to-violet-500"
-          style={{ width: `${skill.pct}%` }}
+          style={{ width: `${competency.pct}%` }}
         />
       </div>
     </div>
@@ -45,16 +47,16 @@ function SkillBar({ skill }: Readonly<{ skill: SkillView }>): React.JSX.Element 
 }
 
 /**
- * "Expertise" — skill bars (one per skill, max proficiency) plus a
+ * "Expertise" — competency bars (one per product, max proficiency) plus a
  * Certifications sub-block. Empty sub-blocks hide; the whole section shows an
  * empty state only when there is nothing to show.
  */
 export function ExpertiseSection({
-  skills,
+  competencies,
   certifications,
 }: Readonly<ExpertiseSectionProps>): React.JSX.Element {
   const reduce = useReducedMotion();
-  const hasSkills = skills.length > 0;
+  const hasCompetencies = competencies.length > 0;
   const hasCerts = certifications.length > 0;
 
   return (
@@ -69,22 +71,22 @@ export function ExpertiseSection({
           Expertise
         </SectionLabel>
 
-        {!hasSkills && !hasCerts && (
+        {!hasCompetencies && !hasCerts && (
           <p className="text-muted-foreground text-sm leading-relaxed">
             Skills and certifications will appear here once they&apos;re added.
           </p>
         )}
 
-        {hasSkills && (
+        {hasCompetencies && (
           <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-            {skills.map((skill) => (
-              <SkillBar key={skill.id} skill={skill} />
+            {competencies.map((competency) => (
+              <CompetencyBar key={competency.id} competency={competency} />
             ))}
           </div>
         )}
 
         {hasCerts && (
-          <div className={cn('border-border/60 border-t pt-6', hasSkills && 'mt-7')}>
+          <div className={cn('border-border/60 border-t pt-6', hasCompetencies && 'mt-7')}>
             <SectionLabel icon={Award} tone="warning" className="mb-4">
               Salesforce Certifications
             </SectionLabel>

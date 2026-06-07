@@ -46,7 +46,7 @@ import { loadDraftAction } from './load-draft';
 // ── Helpers ──────────────────────────────────────────────────────
 
 const mockVertical = { id: VERTICAL_ID, name: 'Salesforce' };
-const mockSkills = [{ categoryName: 'Sales Cloud', skills: [{ id: 'skill-1', name: 'CPQ' }] }];
+const mockProducts = [{ categoryName: 'Sales Cloud', products: [{ id: 'skill-1', name: 'CPQ' }] }];
 const mockSupportTypesList = [{ id: 'st-1', name: 'Technical Support' }];
 const mockCerts = [{ categoryName: 'Administrator', certifications: [{ id: 'cert-1' }] }];
 const mockLangs = [{ id: 'lang-1', name: 'English' }];
@@ -54,7 +54,7 @@ const mockInds = [{ id: 'ind-1', name: 'Financial Services' }];
 
 function setupReferenceData(): void {
   mockGetSalesforceVertical.mockResolvedValue(mockVertical);
-  mockGetProductsByVertical.mockResolvedValue(mockSkills);
+  mockGetProductsByVertical.mockResolvedValue(mockProducts);
   mockGetSupportTypes.mockResolvedValue(mockSupportTypesList);
   mockGetCertsByVertical.mockResolvedValue(mockCerts);
   mockGetLanguages.mockResolvedValue(mockLangs);
@@ -66,7 +66,7 @@ function mockDraft() {
     profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'draft' },
     languages: [],
     industries: [],
-    skills: [],
+    competencies: [],
     certifications: [],
     workHistory: [],
   };
@@ -111,7 +111,7 @@ describe('loadDraftAction', () => {
     it('returns all reference data', async () => {
       const result = await loadDraftAction();
       expect(result.referenceData).toEqual({
-        skillsByCategory: mockSkills,
+        productsByCategory: mockProducts,
         supportTypes: mockSupportTypesList,
         certificationsByCategory: mockCerts,
         languages: mockLangs,
@@ -147,7 +147,7 @@ describe('loadDraftAction', () => {
     it('returns reference data alongside the draft', async () => {
       const result = await loadDraftAction();
       expect(result.referenceData.vertical).toEqual(mockVertical);
-      expect(result.referenceData.skillsByCategory).toEqual(mockSkills);
+      expect(result.referenceData.productsByCategory).toEqual(mockProducts);
     });
   });
 

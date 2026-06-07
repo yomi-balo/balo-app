@@ -120,7 +120,7 @@ export function ProfileTab({
         ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
         : null,
       consultationCount: 0,
-      expertise: buildExpertise(initialProfile.skills),
+      expertise: buildExpertise(initialProfile.competencies),
     }),
     [
       initialProfile,

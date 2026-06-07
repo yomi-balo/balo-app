@@ -23,7 +23,7 @@ function makeProfile(overrides: Partial<PublicExpertProfile> = {}): PublicExpert
       timezone: 'Australia/Melbourne',
     },
     agency: null,
-    skills: [],
+    competencies: [],
     certifications: [],
     languages: [],
     industries: [],
@@ -106,25 +106,29 @@ describe('mapProfileToView — yearsExperience', () => {
   });
 });
 
-describe('mapProfileToView — skills', () => {
-  it('dedupes a skill across support types to its MAX proficiency and sorts desc', () => {
-    const skills = [
-      { skill: { id: 's1', name: 'Apex' }, supportType: { id: 't1' }, proficiency: 6 },
-      { skill: { id: 's1', name: 'Apex' }, supportType: { id: 't2' }, proficiency: 9 },
-      { skill: { id: 's2', name: 'Flow' }, supportType: { id: 't1' }, proficiency: 4 },
+describe('mapProfileToView — competencies', () => {
+  it('dedupes a product across support types to its MAX proficiency and sorts desc', () => {
+    const competencies = [
+      { product: { id: 's1', name: 'Apex' }, supportType: { id: 't1' }, proficiency: 6 },
+      { product: { id: 's1', name: 'Apex' }, supportType: { id: 't2' }, proficiency: 9 },
+      { product: { id: 's2', name: 'Flow' }, supportType: { id: 't1' }, proficiency: 4 },
     ];
     const view = mapProfileToView(
-      makeProfile({ skills: skills as unknown as PublicExpertProfile['skills'] })
+      makeProfile({ competencies: competencies as unknown as PublicExpertProfile['competencies'] })
     );
-    expect(view.skills).toHaveLength(2);
+    expect(view.competencies).toHaveLength(2);
     // sorted by proficiency desc → Apex (9) first
-    expect(view.skills[0]).toMatchObject({ name: 'Apex', proficiency: 9, level: 'Expert' });
-    expect(view.skills[1]).toMatchObject({ name: 'Flow', proficiency: 4, level: 'Intermediate' });
-    expect(view.skills[0]?.pct).toBe(90);
+    expect(view.competencies[0]).toMatchObject({ name: 'Apex', proficiency: 9, level: 'Expert' });
+    expect(view.competencies[1]).toMatchObject({
+      name: 'Flow',
+      proficiency: 4,
+      level: 'Intermediate',
+    });
+    expect(view.competencies[0]?.pct).toBe(90);
   });
 
-  it('returns an empty array when there are no skills', () => {
-    expect(mapProfileToView(makeProfile()).skills).toEqual([]);
+  it('returns an empty array when there are no competencies', () => {
+    expect(mapProfileToView(makeProfile()).competencies).toEqual([]);
   });
 });
 

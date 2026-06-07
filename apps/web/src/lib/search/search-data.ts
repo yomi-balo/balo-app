@@ -38,7 +38,7 @@ export interface ExpertSearchDistinctionsDTO {
 }
 
 /** One expert_competency row, flattened with the product name + support-type slug. */
-export interface ExpertSearchSkillDTO {
+export interface ExpertSearchCompetencyDTO {
   productId: string;
   productName: string;
   supportTypeSlug: string;
@@ -65,7 +65,7 @@ export interface ExpertSearchResultDTO {
   yearsExperience: number | null;
   consultationCount: number;
   /** expert_competency, proficiency-desc; powers the "Top expert in" pills. */
-  skills: ExpertSearchSkillDTO[];
+  competencies: ExpertSearchCompetencyDTO[];
 }
 
 export interface FacetCountDTO {
@@ -85,7 +85,7 @@ export interface ExpertSearchResponseDTO {
   /**
    * `true` only when `total === 0` because the availability gate is on AND at
    * least one expert would have matched the same filters with the gate ignored.
-   * Lets the zero-results UI distinguish "no skills match" from "matched but none
+   * Lets the zero-results UI distinguish "no competencies match" from "matched but none
    * currently bookable". Always `false` when `total > 0` or the gate is off.
    */
   wasAvailabilityGated: boolean;

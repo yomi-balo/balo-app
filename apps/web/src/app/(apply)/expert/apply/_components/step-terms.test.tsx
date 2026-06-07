@@ -74,7 +74,7 @@ const trackMock = vi.mocked(track);
 // ── Fixtures ─────────────────────────────────────────────────────
 
 const referenceData: ReferenceData = {
-  skillsByCategory: [],
+  productsByCategory: [],
   supportTypes: [],
   certificationsByCategory: [],
   languages: [],
@@ -83,7 +83,7 @@ const referenceData: ReferenceData = {
 };
 
 // A draft with a profile id (so the provider's `expertProfileId` is non-null and
-// `submitApplication` actually calls the action), plus skills/certs/work-history
+// `submitApplication` actually calls the action), plus competencies/certs/work-history
 // so the summary build (incl. the `productsData.productIds?.length` ternary at
 // lines 137-138) renders real counts rather than "None".
 const draft = {
@@ -98,7 +98,7 @@ const draft = {
     isSalesforceCta: false,
     isCertifiedTrainer: false,
   },
-  skills: [
+  competencies: [
     {
       id: 's1',
       productId: '11111111-1111-1111-1111-111111111111',

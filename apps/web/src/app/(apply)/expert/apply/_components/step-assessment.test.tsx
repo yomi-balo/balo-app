@@ -68,9 +68,9 @@ const supportTypes = [
   { id: 'st-arch', name: 'Architecture', slug: 'architecture' },
 ] as unknown as SupportType[];
 
-// Categories with products — drives the skillNameMap loop (line ~61).
+// Categories with products — drives the productNameMap loop (line ~61).
 const referenceData: ReferenceData = {
-  skillsByCategory: [
+  productsByCategory: [
     {
       category: { id: 'cat-sales', name: 'Sales Cloud', slug: 'sales-cloud', sortOrder: 0 },
       products: [
@@ -86,7 +86,7 @@ const referenceData: ReferenceData = {
   vertical: { id: 'vertical-1' } as ReferenceData['vertical'],
 };
 
-// Draft with a selected, rated skill — so `hydrateProductsData` populates
+// Draft with a selected, rated competency — so `hydrateProductsData` populates
 // productsData.productIds and an assessment card renders for it.
 const draft = {
   profile: {
@@ -100,7 +100,7 @@ const draft = {
     isSalesforceCta: false,
     isCertifiedTrainer: false,
   },
-  skills: [
+  competencies: [
     { id: 'c1', productId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 6 },
     { id: 'c2', productId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
   ],
@@ -110,10 +110,10 @@ const draft = {
   workHistory: [],
 } as unknown as ApplicationWithRelations;
 
-// A fully-hydrated draft: profile + languages + industries populated AND a skill
-// with a non-zero proficiency. This drives `findFirstIncompleteStep` past the
-// early profile/products guards so the proficiency-map loop (context lines
-// 98-106) actually executes against `draft.skills`.
+// A fully-hydrated draft: profile + languages + industries populated AND a
+// competency with a non-zero proficiency. This drives `findFirstIncompleteStep`
+// past the early profile/products guards so the proficiency-map loop (context
+// lines 98-106) actually executes against `draft.competencies`.
 const completeDraft = {
   profile: {
     id: 'profile-2',
@@ -126,7 +126,7 @@ const completeDraft = {
     isSalesforceCta: false,
     isCertifiedTrainer: false,
   },
-  skills: [
+  competencies: [
     { id: 'c1', productId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 7 },
     { id: 'c2', productId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
   ],
@@ -164,7 +164,7 @@ describe('StepAssessment', () => {
 
   it('renders an assessment card per selected skill, resolving names via the skill map', () => {
     // With a hydrated draft, productsData.productIds = ['skill-cpq'] and the
-    // skillNameMap (line ~61) resolves 'skill-cpq' → 'CPQ' for the card title.
+    // productNameMap (line ~61) resolves 'skill-cpq' → 'CPQ' for the card title.
     renderStep(draft);
     expect(screen.getByText('CPQ')).toBeInTheDocument();
   });
