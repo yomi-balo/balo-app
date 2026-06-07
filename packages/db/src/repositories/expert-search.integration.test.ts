@@ -387,8 +387,8 @@ describe('expertSearchRepository.search — name matching (BAL-263)', () => {
     const idxHeadline = ids.indexOf(headlineMatch.id);
     expect(idxNamed).toBeGreaterThanOrEqual(0);
     expect(idxHeadline).toBeGreaterThanOrEqual(0);
-    // 0.5 * word_similarity(name) ≈ 0.5 for the exact name token, which dominates
-    // the 0.1 headline bump → the named expert ranks at/near the top.
+    // A strong name match (word_similarity > 0.5) gets the +10 relevance tier,
+    // which decisively outranks the headline-only hit's ts_rank → named tops.
     expect(idxNamed).toBeLessThan(idxHeadline);
   });
 

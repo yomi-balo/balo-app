@@ -321,16 +321,17 @@ function normalizeQuery(query: string | undefined): string | null {
  * fuzzy-only hits above non-matches. Emits literal `0` when `q` is absent (no
  * FTS / product subquery runs at all).
  *
- * Name term (BAL-263): a trigram bump on the expert's NAME ("first_name
- * last_name", joined as `u`). Coefficient 0.5 — deliberately HIGHER than the 0.1
- * headline bump so that typing a person's name surfaces THAT person at/near the
- * top (a strong name hit ≈ word_similarity ~1.0 → +0.5, dwarfing the 0.1
- * headline term and a typical fuzzy headline near-miss). It is still kept ≤ the
- * dominant ts_rank + product-name contributions for an exact topical match, so a
- * non-name query (product/headline term) is not drowned out by an incidental
- * weak name overlap. The name lives on `users`, not in the stored search_vector,
- * so without this term a perfect name match would only ever score the WHERE-side
- * 0 base and never rank above headline/product matches.
+ * Name term (BAL-263): the expert's NAME lives on `users` (joined as `u`), not
+ * in the stored search_vector, so without an explicit term a perfect name match
+ * never ranks. A plain fractional coefficient competes poorly with `ts_rank` — a
+ * headline hit's ts_rank alone can exceed it (the original 0.5 lost to a
+ * headline ts_rank in testing). So a STRONG name match (trigram word_similarity
+ * > 0.5 — i.e. a near-exact first/last/full name) instead gets a large fixed
+ * lead (+10) that decisively outranks any topical headline/product score (those
+ * terms sum to well under 10 for real profile text), making "type a person's
+ * name → that person tops the list" hold deterministically. A non-name query
+ * won't clear the 0.5 threshold against a distinct name, so topical ranking is
+ * left untouched (the boost is 0 below threshold).
  */
 function relevanceExpression(q: string | null): SQL {
   if (!q) return sql`0`;
@@ -343,7 +344,11 @@ function relevanceExpression(q: string | null): SQL {
         WHERE es.expert_profile_id = ${expertProfiles.id}
       ), 0)
     + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
-    + 0.5 * word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, ''))
+    + (CASE
+         WHEN word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.5
+         THEN 10
+         ELSE 0
+       END)
   )`;
 }
 
