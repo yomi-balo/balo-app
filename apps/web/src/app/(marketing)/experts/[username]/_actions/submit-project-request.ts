@@ -6,6 +6,7 @@ import { projectRequestsRepository, referenceDataRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
+import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import { projectRequestInputSchema } from './schemas';
 
 /** Raw (pre-validation) input — `source` and arrays are optional (schema defaults them). */
@@ -27,7 +28,7 @@ export const submitProjectRequestAction = withAuth(
       // 1. Sanitise the HTML brief server-side (the security boundary), then
       //    reject if it collapses to empty/whitespace.
       const safeHtml = sanitizeProjectHtml(input.description);
-      if (safeHtml.replace(/<[^>]*>/g, '').trim().length === 0) {
+      if (isDescriptionEmpty(safeHtml)) {
         log.warn('Project request description empty after sanitise', {
           userId: session.user.id,
         });

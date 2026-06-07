@@ -12,12 +12,34 @@ export const DESCRIPTION_MIN_TEXT = 10;
 export const DESCRIPTION_MAX_TEXT = 4000;
 
 /**
+ * Strip HTML tags with a single linear scan (no regex) — each `<…>` span is
+ * replaced with a space to preserve word boundaries. Avoids the
+ * backtracking-prone `/<[^>]*>/g` pattern (SonarCloud S5852); provably O(n).
+ * Input is sanitised/Tiptap HTML, where a literal `>` in text is already an
+ * entity, so raw `>` only ever closes a tag.
+ */
+function stripHtmlTags(html: string): string {
+  let out = '';
+  let inTag = false;
+  for (const ch of html) {
+    if (ch === '<') {
+      inTag = true;
+    } else if (ch === '>' && inTag) {
+      inTag = false;
+      out += ' ';
+    } else if (!inTag) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
  * Strip tags + decode the handful of entities Tiptap emits, collapse runs of
  * whitespace, and trim. Returns the human-visible text of a fragment of HTML.
  */
 export function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, ' ')
+  return stripHtmlTags(html)
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
