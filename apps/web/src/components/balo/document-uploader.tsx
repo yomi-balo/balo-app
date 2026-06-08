@@ -205,8 +205,9 @@ export function DocumentUploader({
         }));
         const next = [...prev, ...newRows];
         publish(next);
-        // Kick off uploads after state commits.
-        for (const row of newRows) void runUpload(row.id, row.file);
+        // Kick off uploads after state commits. runUpload never rejects (it
+        // catches internally + patches the row); .catch keeps it floating-safe.
+        for (const row of newRows) runUpload(row.id, row.file).catch(() => {});
         return next;
       });
     },
@@ -253,13 +254,18 @@ export function DocumentUploader({
   const handleRetry = useCallback(
     (id: string) => {
       const row = rows.find((r) => r.id === id);
-      if (row) void runUpload(id, row.file);
+      if (row) runUpload(id, row.file).catch(() => {});
     },
     [rows, runUpload]
   );
 
   const atCap = rows.length >= MAX_DOCUMENTS;
   const openPicker = useCallback(() => fileInputRef.current?.click(), []);
+
+  let dropLabel: string;
+  if (isDragging) dropLabel = 'Drop to attach';
+  else if (rows.length === 0) dropLabel = 'Drag files here or browse';
+  else dropLabel = `Add more — ${rows.length} of ${MAX_DOCUMENTS}`;
 
   return (
     <div className="space-y-3">
@@ -289,13 +295,7 @@ export function DocumentUploader({
           )}
         >
           <Upload className="text-muted-foreground h-6 w-6" aria-hidden="true" />
-          <span className="text-foreground text-sm font-semibold">
-            {isDragging
-              ? 'Drop to attach'
-              : rows.length === 0
-                ? 'Drag files here or browse'
-                : `Add more — ${rows.length} of ${MAX_DOCUMENTS}`}
-          </span>
+          <span className="text-foreground text-sm font-semibold">{dropLabel}</span>
           <span className="text-muted-foreground text-xs">
             PDF, PNG, JPEG or WEBP · up to {MAX_DOCUMENTS} files · 5 MB each
           </span>
@@ -309,7 +309,6 @@ export function DocumentUploader({
         accept={DOCUMENT_ACCEPT}
         onChange={handleInputChange}
         className="hidden"
-        aria-hidden="true"
       />
 
       {/* Rejection rows (transient) */}

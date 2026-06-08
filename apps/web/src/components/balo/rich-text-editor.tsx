@@ -18,12 +18,15 @@ export type { RichTextEditorProps, RichTextViewerProps } from './rich-text/types
  * Skeleton shown while Tiptap is being imported — mirrors the bordered container
  * + sticky 44px toolbar so the layout doesn't shift when the editor mounts.
  */
+// Stable keys for the 7 toolbar-button placeholders (one per locked control).
+const TOOLBAR_SKELETON_KEYS = ['bold', 'italic', 'h2', 'h3', 'bullet', 'numbered', 'link'];
+
 function EditorSkeleton(): React.JSX.Element {
   return (
     <div className="border-border bg-card overflow-hidden rounded-[11px] border">
       <div className="border-border bg-muted/40 flex h-11 items-center gap-1.5 border-b px-2">
-        {Array.from({ length: 7 }).map((_, i) => (
-          <div key={i} className="bg-muted h-7 w-7 animate-pulse rounded-md" />
+        {TOOLBAR_SKELETON_KEYS.map((k) => (
+          <div key={k} className="bg-muted h-7 w-7 animate-pulse rounded-md" />
         ))}
       </div>
       <div className="space-y-2 p-3.5">

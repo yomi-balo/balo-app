@@ -92,12 +92,12 @@ export function TaxonomyMultiSelect({
       <div aria-busy="true" aria-live="polite">
         <span className="sr-only">Loading options…</span>
         <div className="bg-muted mb-3 h-11 animate-pulse rounded-[11px]" />
-        {Array.from({ length: 2 }).map((_, g) => (
+        {['sk-g1', 'sk-g2'].map((g) => (
           <div key={g} className="mb-4">
             <div className="bg-muted mb-2.5 h-3 w-28 animate-pulse rounded" />
             <div className="flex flex-wrap gap-2">
-              {Array.from({ length: 3 }).map((_, p) => (
-                <div key={p} className="bg-muted h-9 w-28 animate-pulse rounded-[10px]" />
+              {['p1', 'p2', 'p3'].map((p) => (
+                <div key={`${g}-${p}`} className="bg-muted h-9 w-28 animate-pulse rounded-[10px]" />
               ))}
             </div>
           </div>
