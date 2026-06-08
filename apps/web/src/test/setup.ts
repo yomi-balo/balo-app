@@ -78,6 +78,7 @@ vi.mock('@/lib/analytics', async () => {
     CALENDAR_EVENTS: events.CALENDAR_EVENTS,
     SEARCH_EVENTS: events.SEARCH_EVENTS,
     EXPERT_PROFILE_EVENTS: events.EXPERT_PROFILE_EVENTS,
+    PROJECT_EVENTS: events.PROJECT_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

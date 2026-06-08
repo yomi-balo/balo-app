@@ -1,0 +1,578 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, ChevronLeft, Loader2, Send, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
+import { track, PROJECT_EVENTS, type ProjectStep } from '@/lib/analytics';
+import { Drawer, DrawerHeader, DrawerBody, DrawerFooter, FlowStepper } from '@/components/flow';
+import { InputFloating } from '@/components/enhanced/input-floating';
+import { RichTextEditor, validateDescription } from '@/components/balo/rich-text-editor';
+import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
+import { DocumentUploader } from '@/components/balo/document-uploader';
+import { buildProductNameMap } from '@/lib/search/taxonomy';
+import { cn } from '@/lib/utils';
+import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
+import { submitProjectRequestAction } from '../../_actions/submit-project-request';
+import { refetchProjectTaxonomiesAction } from '../../_actions/refetch-project-taxonomies';
+import type { ProjectDocumentRef } from '../../_actions/schemas';
+import { PROJECT_PATHS, PROJECT_STEPS } from './constants';
+import { FieldLabel } from './field-label';
+import { PathCard } from './path-card';
+import { SendToSelector, type ProjectRouting } from './send-to-selector';
+import { ReviewSummary } from './review-summary';
+import { useProjectDraft } from './use-project-draft';
+
+interface ProjectDrawerProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  expertProfileId: string;
+  expertName: string;
+  expertFirstName: string;
+  expertInitials: string;
+  /** R2 key / http URL for the expert avatar (Direct routing card). */
+  expertAvatarKey: string | null;
+  /** Tags + products taxonomies, loaded RSC-side (EMPTY on load failure). */
+  projectTaxonomies: ProjectRequestTaxonomies;
+}
+
+/** Mutable steps for the stepper (the readonly `as const` tuple isn't assignable). */
+const STEPPER_STEPS = PROJECT_STEPS.map((s) => ({ key: s.key, label: s.label }));
+
+const DESCRIPTION_PLACEHOLDER_SUFFIX = ' later.';
+
+/** Routing-aware copy — keyed off `draft.routing` to drive the whole flow. */
+interface RoutingCopy {
+  /**
+   * Routing-aware framing line above the `manual`-step routing selector. Match
+   * gets an explicit matching promise; Direct stays unframed (the drawer's
+   * "Start a project with {expertName}" heading is sufficient).
+   */
+  manualHeading: string | null;
+  formDescription: string;
+  submitCta: string;
+  successDescription: string;
+  doneHeading: string;
+  doneBody: string;
+  reviewReassurance: string;
+}
+
+function getRoutingCopy(routing: ProjectRouting, firstName: string): RoutingCopy {
+  if (routing === 'direct') {
+    return {
+      manualHeading: null,
+      formDescription: `${firstName} receives this brief directly.`,
+      submitCta: `Send to ${firstName}`,
+      successDescription: `${firstName} will reply with a proposal.`,
+      doneHeading: `Request sent to ${firstName}`,
+      doneBody: `${firstName} will review your brief and reply with a scoped proposal, usually within a day. We'll email you and notify you in-app.`,
+      reviewReassurance: `${firstName} usually replies within a day. You won't be charged anything to send this.`,
+    };
+  }
+  return {
+    manualHeading: "Tell us what you need and we'll match you with the right expert.",
+    formDescription:
+      'Our team reviews your brief and introduces a matched expert, usually within a day.',
+    submitCta: 'Find me an expert',
+    successDescription: "We'll introduce a matched expert soon.",
+    doneHeading: "Request sent — we're finding your expert",
+    doneBody:
+      "Our team will review your brief and introduce a matched expert, usually within a day. We'll email you and notify you in-app.",
+    reviewReassurance:
+      'Our team reviews briefs within a day and introduces a matched expert. No charge to send.',
+  };
+}
+
+/**
+ * Top-level project-request drawer. State machine: `start → manual → review →
+ * done` (the AI path renders as a disabled card only). Built on the shared
+ * `Drawer` / `FlowStepper` flow primitives. Field set (BAL-259): routing
+ * (Direct/Match) → title → rich-text brief → optional tags → optional products →
+ * optional documents. Routing colours the heading, review summary, submit CTA,
+ * and done screen. Autosaves to localStorage and submits via the
+ * `submitProjectRequestAction` Server Action (discriminated union on `sendTo`).
+ */
+export function ProjectDrawer({
+  open,
+  onOpenChange,
+  expertProfileId,
+  expertName,
+  expertFirstName,
+  expertInitials,
+  expertAvatarKey,
+  projectTaxonomies,
+}: Readonly<ProjectDrawerProps>): React.JSX.Element {
+  const [step, setStep] = useState<ProjectStep>('start');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showValidation, setShowValidation] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  // Snapshot of the routing at submit time — the done screen + success toast read
+  // this, NOT the live draft (which `clearDraft()` resets to 'direct' on success).
+  const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>('direct');
+
+  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId);
+  const { routing, title, descriptionHtml, tagIds, productIds } = draft;
+
+  // Local taxonomy state so Retry can refresh without a page reload.
+  const [taxonomies, setTaxonomies] = useState<ProjectRequestTaxonomies>(projectTaxonomies);
+  // The project taxonomy is always seeded, so an empty `groups` at load time means
+  // the RSC load failed (returned EMPTY_TAXONOMY) — surface the error state, not empty.
+  const [tagsError, setTagsError] = useState(projectTaxonomies.tags.groups.length === 0);
+  const [productsError, setProductsError] = useState(
+    projectTaxonomies.products.groups.length === 0
+  );
+  const [retrying, setRetrying] = useState(false);
+
+  useEffect(() => {
+    setTaxonomies(projectTaxonomies);
+    setTagsError(projectTaxonomies.tags.groups.length === 0);
+    setProductsError(projectTaxonomies.products.groups.length === 0);
+  }, [projectTaxonomies]);
+
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  const tagNameMap = useMemo(() => buildProductNameMap(taxonomies.tags), [taxonomies.tags]);
+  const productNameMap = useMemo(
+    () => buildProductNameMap(taxonomies.products),
+    [taxonomies.products]
+  );
+
+  const tagIdSet = useMemo(() => new Set(tagIds), [tagIds]);
+  const productIdSet = useMemo(() => new Set(productIds), [productIds]);
+
+  const trimmedTitle = title.trim();
+  const titleValid = trimmedTitle.length >= 3 && trimmedTitle.length <= 120;
+  const descriptionError = validateDescription(descriptionHtml);
+  const reviewValid = titleValid && descriptionError === null;
+
+  const copy = getRoutingCopy(routing, expertFirstName);
+  // Done screen uses the snapshot (draft is cleared on success).
+  const doneCopy = getRoutingCopy(submittedRouting, expertFirstName);
+
+  // Fire `drawer_opened` once per open (guard against the effect re-running).
+  const openFiredRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      openFiredRef.current = false;
+      return;
+    }
+    if (openFiredRef.current) return;
+    openFiredRef.current = true;
+    setStep('start');
+    setError(null);
+    setShowValidation(false);
+    track(PROJECT_EVENTS.PROJECT_DRAWER_OPENED, { expert_id: expertProfileId });
+  }, [open, expertProfileId]);
+
+  // `step_viewed` on every step change while open.
+  useEffect(() => {
+    if (!open) return;
+    track(PROJECT_EVENTS.PROJECT_STEP_VIEWED, { expert_id: expertProfileId, step });
+  }, [open, step, expertProfileId]);
+
+  // Clear any stale submit error once the user leaves the review step.
+  useEffect(() => {
+    if (step !== 'review') setError(null);
+  }, [step]);
+
+  // Focus the title field when (and only when) the manual step becomes active.
+  useEffect(() => {
+    if (step === 'manual') titleInputRef.current?.focus();
+  }, [step]);
+
+  const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
+
+  const handleSelectManual = useCallback(() => {
+    track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, { expert_id: expertProfileId, method: 'manual' });
+    setStep('manual');
+  }, [expertProfileId]);
+
+  const handleJump = useCallback((key: string) => {
+    if (key === 'start' || key === 'manual' || key === 'review') setStep(key);
+  }, []);
+
+  const handleGoReview = useCallback(() => {
+    setShowValidation(true);
+    if (reviewValid) setStep('review');
+  }, [reviewValid]);
+
+  const handleDocumentsChange = useCallback(
+    (docs: ProjectDocumentRef[]) => setField('documents', docs),
+    [setField]
+  );
+
+  const toggleTag = useCallback(
+    (id: string) => {
+      const next = tagIdSet.has(id) ? tagIds.filter((t) => t !== id) : [...tagIds, id];
+      setField('tagIds', next);
+    },
+    [tagIdSet, tagIds, setField]
+  );
+
+  const toggleProduct = useCallback(
+    (id: string) => {
+      const next = productIdSet.has(id) ? productIds.filter((p) => p !== id) : [...productIds, id];
+      setField('productIds', next);
+    },
+    [productIdSet, productIds, setField]
+  );
+
+  const handleRetryTaxonomies = useCallback(async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const next = await refetchProjectTaxonomiesAction();
+      setTaxonomies(next);
+      setTagsError(next.tags.groups.length === 0);
+      setProductsError(next.products.groups.length === 0);
+    } catch {
+      setTagsError(true);
+      setProductsError(true);
+    } finally {
+      setRetrying(false);
+    }
+  }, [retrying]);
+
+  const handleSubmit = useCallback(async () => {
+    setSubmitting(true);
+    setError(null);
+
+    const base = {
+      title: trimmedTitle,
+      description: descriptionHtml,
+      tagIds,
+      productIds,
+      documents: draft.documents,
+      source: 'manual' as const,
+    };
+    const payload =
+      routing === 'direct'
+        ? { sendTo: 'direct' as const, expertProfileId, ...base }
+        : { sendTo: 'match' as const, ...base };
+
+    const result = await submitProjectRequestAction(payload);
+    setSubmitting(false);
+
+    if (!result.success) {
+      const message = result.error ?? 'Something went wrong. Please try again.';
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
+    track(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
+      expert_id: expertProfileId,
+      send_to: routing,
+      tag_count: tagIds.length,
+      product_count: productIds.length,
+      document_count: draft.documents.length,
+      method: 'manual',
+    });
+    // Snapshot routing for the done screen BEFORE clearing the draft (clear resets
+    // routing to 'direct'), so Match submits keep their done copy.
+    setSubmittedRouting(routing);
+    clearDraft();
+    toast.success('Request sent', { description: copy.successDescription });
+    setStep('done');
+  }, [
+    routing,
+    expertProfileId,
+    trimmedTitle,
+    descriptionHtml,
+    tagIds,
+    productIds,
+    draft.documents,
+    clearDraft,
+    copy.successDescription,
+  ]);
+
+  const submitDisabled = !reviewValid || submitting || uploading;
+
+  const manualBody = (
+    <div className="space-y-6 p-6">
+      <button
+        type="button"
+        onClick={() => setStep('start')}
+        className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded-md text-[13px] font-semibold focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" /> Change entry method
+      </button>
+
+      {/* 2.1 — Send request to */}
+      <div className="space-y-2">
+        {copy.manualHeading !== null && (
+          <p className="text-foreground text-sm leading-relaxed font-medium">
+            {copy.manualHeading}
+          </p>
+        )}
+        <FieldLabel>Send request to</FieldLabel>
+        <SendToSelector
+          value={routing}
+          onChange={(r) => setField('routing', r)}
+          expertName={expertName}
+          expertInitials={expertInitials}
+          expertAvatarKey={expertAvatarKey}
+        />
+        <p className="text-muted-foreground text-xs leading-relaxed">{copy.formDescription}</p>
+      </div>
+
+      {/* 2.2 — Title */}
+      <div className="space-y-2">
+        <InputFloating
+          ref={titleInputRef}
+          label="Project title"
+          value={title}
+          onChange={(e) => setField('title', e.target.value)}
+          aria-invalid={showValidation && !titleValid}
+        />
+        {showValidation && !titleValid && (
+          <p role="alert" className="text-destructive text-xs">
+            {trimmedTitle.length > 120
+              ? 'Keep your title under 120 characters.'
+              : 'Give your project a title (at least 3 characters).'}
+          </p>
+        )}
+      </div>
+
+      {/* 2.3 — Description */}
+      <div className="space-y-2">
+        <FieldLabel>What do you need?</FieldLabel>
+        <RichTextEditor
+          value={descriptionHtml}
+          onChange={(html) => setField('descriptionHtml', html)}
+          placeholder={`Describe the problem or the outcome you're after — bullet points are fine. You can refine it with ${expertFirstName}${DESCRIPTION_PLACEHOLDER_SUFFIX}`}
+        />
+        {showValidation && descriptionError !== null && (
+          <p role="alert" className="text-destructive text-xs">
+            {descriptionError}
+          </p>
+        )}
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          Keep it as short as you like — a rough sketch is fine.
+        </p>
+      </div>
+
+      {/* 2.4 — Project type (tags) */}
+      <div className="space-y-2">
+        <FieldLabel optional>Project type</FieldLabel>
+        <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
+          Pick the categories that best describe this work — helps us scope it.
+        </p>
+        <TaxonomyMultiSelect
+          taxonomy={taxonomies.tags}
+          selectedIds={tagIdSet}
+          nameMap={tagNameMap}
+          onToggle={toggleTag}
+          onClear={() => setField('tagIds', [])}
+          loading={retrying && taxonomies.tags.groups.length === 0}
+          error={tagsError}
+          onRetry={handleRetryTaxonomies}
+          inSheet
+          fieldId="tags"
+          searchPlaceholder="Filter project types…"
+          emptyCopy="Project types couldn't load right now."
+          errorCopy="Couldn't load project types. You can still send your request."
+          noMatchNoun="project types"
+        />
+      </div>
+
+      {/* 2.5 — Products */}
+      <div className="space-y-2">
+        <FieldLabel optional>Salesforce products</FieldLabel>
+        <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
+          Which products does this touch? Same list as expert search.
+        </p>
+        <TaxonomyMultiSelect
+          taxonomy={taxonomies.products}
+          selectedIds={productIdSet}
+          nameMap={productNameMap}
+          onToggle={toggleProduct}
+          onClear={() => setField('productIds', [])}
+          loading={retrying && taxonomies.products.groups.length === 0}
+          error={productsError}
+          onRetry={handleRetryTaxonomies}
+          inSheet
+          fieldId="products"
+          searchPlaceholder="Filter products…"
+          emptyCopy="Products couldn't load right now."
+          errorCopy="Couldn't load products. You can still send your request."
+          noMatchNoun="products"
+        />
+      </div>
+
+      {/* 2.6 — Documents */}
+      <div className="space-y-2">
+        <FieldLabel optional>Attach documents</FieldLabel>
+        <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
+          PDF, PNG, JPEG or WEBP · up to 4 files · 5 MB each.
+        </p>
+        <DocumentUploader
+          onDocumentsChange={handleDocumentsChange}
+          onUploadingChange={setUploading}
+        />
+      </div>
+    </div>
+  );
+
+  return (
+    <Drawer
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Start a project"
+      widthClassName="sm:max-w-[560px]"
+    >
+      <div className="flex h-full flex-col">
+        <DrawerHeader onClose={handleClose}>
+          {step === 'done' ? (
+            <h2 className="text-foreground text-base font-semibold">Request sent</h2>
+          ) : (
+            <FlowStepper steps={STEPPER_STEPS} current={step} onJump={handleJump} />
+          )}
+        </DrawerHeader>
+
+        <DrawerBody>
+          {step === 'start' && (
+            <div className="space-y-5 p-6">
+              <div className="space-y-2">
+                <h2 className="text-foreground text-xl font-semibold tracking-[-0.01em]">
+                  Start a project with {expertName}
+                </h2>
+                <p className="text-muted-foreground text-sm leading-relaxed">
+                  Tell us what you need and {expertFirstName} replies with a scoped proposal. Pick
+                  how you&apos;d like to begin — it only takes a minute or two.
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                {PROJECT_PATHS.map((path) => (
+                  <PathCard
+                    key={path.key}
+                    path={path}
+                    onClick={path.key === 'manual' ? handleSelectManual : undefined}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === 'manual' && manualBody}
+
+          {step === 'review' && (
+            <div className="space-y-4 p-6">
+              <ReviewSummary
+                draft={draft}
+                expertName={expertName}
+                expertInitials={expertInitials}
+                expertAvatarKey={expertAvatarKey}
+                tagNameMap={tagNameMap}
+                productNameMap={productNameMap}
+                onEdit={() => setStep('manual')}
+              />
+              <p className="text-muted-foreground text-xs leading-relaxed">
+                {copy.reviewReassurance}
+              </p>
+              {uploading && <p className="text-muted-foreground text-sm">Finishing uploads…</p>}
+              {error && (
+                <p role="alert" className="text-destructive text-sm">
+                  {error}
+                </p>
+              )}
+            </div>
+          )}
+
+          {step === 'done' && (
+            <div className="px-8 py-12 text-center">
+              <span className="from-primary mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br to-violet-600 text-white shadow-[0_8px_28px_rgba(99,102,241,0.35)] dark:to-violet-500">
+                {submittedRouting === 'match' ? (
+                  <Sparkles className="h-7 w-7" aria-hidden="true" />
+                ) : (
+                  <Send className="h-7 w-7" aria-hidden="true" />
+                )}
+              </span>
+              <h2 className="text-foreground text-xl font-semibold">{doneCopy.doneHeading}</h2>
+              <p className="text-muted-foreground mx-auto mt-2.5 max-w-[340px] text-sm leading-relaxed">
+                {doneCopy.doneBody}
+              </p>
+            </div>
+          )}
+        </DrawerBody>
+
+        {step === 'manual' && (
+          <DrawerFooter>
+            <BackButton onClick={() => setStep('start')} />
+            <PrimaryButton onClick={handleGoReview}>
+              Review <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </PrimaryButton>
+          </DrawerFooter>
+        )}
+
+        {step === 'review' && (
+          <DrawerFooter>
+            <BackButton onClick={() => setStep('manual')} disabled={submitting} />
+            <PrimaryButton onClick={handleSubmit} disabled={submitDisabled}>
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Sending…
+                </>
+              ) : (
+                <>
+                  {routing === 'match' ? (
+                    <Sparkles className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Send className="h-4 w-4" aria-hidden="true" />
+                  )}{' '}
+                  {copy.submitCta}
+                </>
+              )}
+            </PrimaryButton>
+          </DrawerFooter>
+        )}
+
+        {step === 'done' && (
+          <DrawerFooter className="justify-end">
+            <PrimaryButton onClick={handleClose}>Done</PrimaryButton>
+          </DrawerFooter>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+
+function BackButton({
+  onClick,
+  disabled,
+}: Readonly<{ onClick: () => void; disabled?: boolean }>): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="border-border bg-card text-muted-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[11px] border px-4 text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+    >
+      <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Back
+    </button>
+  );
+}
+
+function PrimaryButton({
+  onClick,
+  disabled,
+  children,
+}: Readonly<{
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}>): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'from-primary inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] bg-gradient-to-r to-violet-600 px-6 text-sm font-semibold text-white shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-violet-500/50 focus-visible:outline-none dark:to-violet-500',
+        'enabled:hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none'
+      )}
+    >
+      {children}
+    </button>
+  );
+}

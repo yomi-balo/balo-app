@@ -155,6 +155,32 @@ export const shared = {
   },
 };
 
+// ── Shared Helpers ───────────────────────────────────────────────
+
+/** Pluralise a count: `pluralize(1, 'document') === '1 document'`. */
+export function pluralize(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Build a human "3 project types · 2 products · 1 document" summary from the
+ * selection counts. Zero-count parts are omitted; returns '' when all zero so
+ * callers can hide the line entirely.
+ */
+export function buildSelectionSummary(input: {
+  tagCount: number;
+  productCount: number;
+  documentCount: number;
+}): string {
+  const parts: string[] = [];
+  if (input.tagCount > 0) parts.push(pluralize(input.tagCount, 'project type'));
+  if (input.productCount > 0) parts.push(pluralize(input.productCount, 'product'));
+  if (input.documentCount > 0) {
+    parts.push(`${pluralize(input.documentCount, 'document')} attached`);
+  }
+  return parts.join(' · ');
+}
+
 // ── Shared Layout Components ─────────────────────────────────────
 
 interface EmailShellProps {

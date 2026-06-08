@@ -12,12 +12,18 @@ export type {
 } from './experts';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
-export type { ProductsByCategory, CertificationsByCategory } from './reference-data';
+export type {
+  ProductsByCategory,
+  CertificationsByCategory,
+  ProjectTagsByGroup,
+} from './reference-data';
 export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export { availabilityRulesRepository } from './availability-rules';
 export { consultationsRepository } from './consultations';
+export { projectRequestsRepository } from './project-requests';
+export type { ProjectRequest, NewProjectRequest } from '../schema';
 export { expertSearchRepository } from './expert-search';
 export type {
   ExpertSearchParams,

@@ -5,8 +5,13 @@ import { axe } from 'jest-axe';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 import type { ExpertProfileView } from '@/components/expert/profile';
+import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 
-vi.mock('sonner', () => ({ toast: vi.fn() }));
+const EMPTY_TAXONOMIES = { tags: EMPTY_TAXONOMY, products: EMPTY_TAXONOMY };
+
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+}));
 
 const mockTrack = vi.mocked(track);
 const mockToast = vi.mocked(toast);
@@ -15,6 +20,12 @@ const mockToast = vi.mocked(toast);
 // to mock the hook directly (see top-nav.test.tsx / drawer.test.tsx). It only
 // drives the analytics `viewport` value here, not layout — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
+// The mounted ProjectDrawer imports the `'use server'` action (pulls server-only
+// deps at module load). Mock it so the client tree mounts cleanly.
+vi.mock('../_actions/submit-project-request', () => ({
+  submitProjectRequestAction: vi.fn(),
+}));
 
 import { ExpertProfileClient } from './expert-profile-client';
 
@@ -117,7 +128,12 @@ describe('ExpertProfileClient — full profile', () => {
 
   it('renders the expert name, the section nav, and the booking CTA', () => {
     render(
-      <ExpertProfileClient view={makeView()} portraitUrl="https://cdn.test/anil.png" isLoggedIn />
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl="https://cdn.test/anil.png"
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
     );
 
     // Name appears in the hero.
@@ -136,7 +152,14 @@ describe('ExpertProfileClient — full profile', () => {
   });
 
   it('renders the skills, certifications, work history, and agency lockup', () => {
-    render(<ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn={false} />);
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
 
     expect(screen.getByText('Apex')).toBeInTheDocument();
     expect(screen.getByText('Platform Developer I')).toBeInTheDocument();
@@ -147,7 +170,12 @@ describe('ExpertProfileClient — full profile', () => {
 
   it('falls back to the illustrated portrait when portraitUrl is null', () => {
     const { container } = render(
-      <ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn />
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
     );
     // HeroPortrait is an inline SVG placeholder (no <img>).
     expect(container.querySelector('svg')).toBeTruthy();
@@ -160,7 +188,14 @@ describe('ExpertProfileClient — sparse profile', () => {
   });
 
   it('omits the Work section and drops it from the nav when there is no history', () => {
-    render(<ExpertProfileClient view={makeSparseView()} portraitUrl={null} isLoggedIn={false} />);
+    render(
+      <ExpertProfileClient
+        view={makeSparseView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
     expect(screen.queryByRole('button', { name: 'Work' })).not.toBeInTheDocument();
     // Remaining sections still render.
     expect(screen.getByRole('button', { name: 'About' })).toBeInTheDocument();
@@ -168,7 +203,14 @@ describe('ExpertProfileClient — sparse profile', () => {
   });
 
   it('shows the empty states for bio, expertise, and reviews', () => {
-    render(<ExpertProfileClient view={makeSparseView()} portraitUrl={null} isLoggedIn={false} />);
+    render(
+      <ExpertProfileClient
+        view={makeSparseView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
     expect(screen.getByText(/hasn't added a bio yet/i)).toBeInTheDocument();
     expect(
       screen.getByText(/Skills and certifications will appear here once they're added\./i)
@@ -177,7 +219,14 @@ describe('ExpertProfileClient — sparse profile', () => {
   });
 
   it('shows "Rate on request" and the unavailable state when rate is null and not available', () => {
-    render(<ExpertProfileClient view={makeSparseView()} portraitUrl={null} isLoggedIn={false} />);
+    render(
+      <ExpertProfileClient
+        view={makeSparseView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
     expect(screen.getByText('Rate on request')).toBeInTheDocument();
     // "Currently unavailable" appears in the hero pill and the booking card.
     expect(screen.getAllByText('Currently unavailable').length).toBeGreaterThan(0);
@@ -189,7 +238,12 @@ describe('ExpertProfileClient — sparse profile', () => {
   // pre-existing heading-order finding in the source (an h2 is skipped).
   it('has no accessibility violations', async () => {
     const { container } = render(
-      <ExpertProfileClient view={makeSparseView()} portraitUrl={null} isLoggedIn={false} />
+      <ExpertProfileClient
+        view={makeSparseView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
     );
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -200,27 +254,72 @@ describe('ExpertProfileClient — CTA handlers', () => {
     vi.clearAllMocks();
   });
 
-  it('fires the cta_clicked event + a toast for each booking CTA', async () => {
+  it('toasts "Coming soon" for the still-stubbed book + message CTAs', async () => {
     const user = userEvent.setup();
-    render(<ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn />);
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
 
     await user.click(screen.getByRole('button', { name: /book a consultation/i }));
-    // "Start a project" appears in both the BookingCard and the QuickStarts
-    // empty-state — both route through the same `project` cta handler.
-    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
-    if (startProject) await user.click(startProject);
     await user.click(screen.getByRole('button', { name: /send a message first/i }));
 
     const clickedCtas = mockTrack.mock.calls
       .filter(([event]) => event === EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED)
       .map(([, props]) => (props as { cta: string }).cta);
-    expect(clickedCtas).toEqual(['book', 'project', 'message']);
+    expect(clickedCtas).toEqual(['book', 'message']);
     expect(mockToast).toHaveBeenCalledWith('Coming soon', expect.objectContaining({}));
+  });
+
+  it('opens the ProjectDrawer (not a toast) and still fires cta_clicked {cta:project}', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
+
+    // The drawer is closed initially — its start-step heading is absent.
+    expect(
+      screen.queryByRole('heading', { name: /start a project with anil pilania/i })
+    ).not.toBeInTheDocument();
+
+    // "Start a project" appears in both the BookingCard and the QuickStarts
+    // empty-state — both route through the same `project` handler.
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+
+    // Drawer opened — start-step heading visible.
+    expect(
+      await screen.findByRole('heading', { name: /start a project with anil pilania/i })
+    ).toBeInTheDocument();
+
+    // Profile-level CTA event still fired with cta:'project'.
+    expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: 'expert-1',
+      cta: 'project',
+    });
+    // No "Coming soon" toast for the project CTA.
+    expect(mockToast).not.toHaveBeenCalled();
   });
 
   it('jumps to a section (and stays green despite scrollIntoView) when a nav tab is clicked', async () => {
     const user = userEvent.setup();
-    render(<ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn />);
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
     // handleJump sets active + smooth-scrolls; scrollIntoView is stubbed in setup.
     await user.click(screen.getByRole('button', { name: 'Reviews' }));
     expect(screen.getByRole('button', { name: 'Reviews' })).toHaveAttribute('aria-current', 'true');
@@ -266,7 +365,14 @@ describe('ExpertProfileClient — IntersectionObserver effects', () => {
   }
 
   it('updates the active nav from the scroll-spy and fires section-viewed analytics', () => {
-    render(<ExpertProfileClient view={makeView()} portraitUrl={null} isLoggedIn />);
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
 
     // Two observers are registered: scroll-spy (client) + section-viewed (analytics).
     expect(callbacks.length).toBeGreaterThanOrEqual(2);

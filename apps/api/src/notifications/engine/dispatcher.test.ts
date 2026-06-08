@@ -108,15 +108,42 @@ describe('dispatch', () => {
     expect(mockAdd).toHaveBeenCalledOnce();
   });
 
-  it('warns and skips when recipient cannot be resolved', async () => {
+  it('warns and skips an admin email when OPS_NOTIFICATION_EMAIL is unset', async () => {
+    delete process.env.OPS_NOTIFICATION_EMAIL;
     const adminRule: NotificationRule = {
       ...baseRule,
       recipient: 'admin',
+      template: 'project-match-requested',
     };
 
     await dispatch(adminRule, baseContext);
 
     expect(mockAdd).not.toHaveBeenCalled();
+  });
+
+  it('routes an admin email to OPS_NOTIFICATION_EMAIL via recipientEmail', async () => {
+    process.env.OPS_NOTIFICATION_EMAIL = 'ops@balo.expert';
+    const adminRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'admin',
+      template: 'project-match-requested',
+    };
+    const matchContext: RuleContext = {
+      event: 'project.match_requested',
+      payload: { correlationId: 'req-9' },
+      data: { company: { name: 'Acme' } },
+    };
+
+    await dispatch(adminRule, matchContext);
+
+    expect(getQueue).toHaveBeenCalledWith('notification-email');
+    const deliveryPayload = mockAdd.mock.calls[0][1];
+    expect(deliveryPayload.recipientEmail).toBe('ops@balo.expert');
+    expect(deliveryPayload.recipientId).toBe('ops@balo.expert');
+    const opts = mockAdd.mock.calls[0][2];
+    expect(opts.jobId).toBe('project-match-requested--ops@balo.expert--req-9');
+
+    delete process.env.OPS_NOTIFICATION_EMAIL;
   });
 
   it('resolves self recipient to payload.userId', async () => {

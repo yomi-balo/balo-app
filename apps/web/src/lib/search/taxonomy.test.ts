@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import type { ProductsByCategory } from '@balo/db';
+import type { ProductsByCategory, ProjectTagsByGroup } from '@balo/db';
 import {
   buildProductNameMap,
   flattenTaxonomyOptions,
   mapProductsByCategoryToTaxonomy,
+  mapProjectTagsByGroupToTaxonomy,
   EMPTY_TAXONOMY,
   type ProductTaxonomy,
 } from './taxonomy';
@@ -53,6 +54,56 @@ describe('mapProductsByCategoryToTaxonomy', () => {
 
   it('returns an empty groups list for no categories', () => {
     expect(mapProductsByCategoryToTaxonomy([])).toEqual(EMPTY_TAXONOMY);
+  });
+});
+
+describe('mapProjectTagsByGroupToTaxonomy', () => {
+  function group(
+    id: string,
+    name: string,
+    tags: Array<{ id: string; name: string }>
+  ): ProjectTagsByGroup {
+    return {
+      group: { id, name, slug: name.toLowerCase().replace(/\s+/g, '-'), sortOrder: 0 },
+      tags: tags.map((t, i) => ({ id: t.id, name: t.name, slug: t.name, sortOrder: i })),
+    };
+  }
+
+  it('maps tag groups to groups and tags to items keyed by UUID', () => {
+    const result = mapProjectTagsByGroupToTaxonomy([
+      group('grp-found', 'Foundational', [
+        { id: 'tag-impl', name: 'New Salesforce Implementation' },
+      ]),
+      group('grp-opt', 'Optimization', [{ id: 'tag-auto', name: 'Automation Setup' }]),
+    ]);
+    expect(result).toEqual({
+      groups: [
+        {
+          id: 'grp-found',
+          name: 'Foundational',
+          items: [{ id: 'tag-impl', name: 'New Salesforce Implementation' }],
+        },
+        {
+          id: 'grp-opt',
+          name: 'Optimization',
+          items: [{ id: 'tag-auto', name: 'Automation Setup' }],
+        },
+      ],
+    });
+  });
+
+  it('returns an empty groups list for no tag groups', () => {
+    expect(mapProjectTagsByGroupToTaxonomy([])).toEqual(EMPTY_TAXONOMY);
+  });
+
+  it('produces a taxonomy compatible with buildProductNameMap', () => {
+    const taxonomy = mapProjectTagsByGroupToTaxonomy([
+      group('g', 'G', [
+        { id: 't1', name: 'Tag One' },
+        { id: 't2', name: 'Tag Two' },
+      ]),
+    ]);
+    expect(buildProductNameMap(taxonomy)).toEqual({ t1: 'Tag One', t2: 'Tag Two' });
   });
 });
 

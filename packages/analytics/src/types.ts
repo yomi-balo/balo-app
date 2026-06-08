@@ -10,6 +10,7 @@ import type { CalendarEventMap, CalendarServerEventMap } from './events/calendar
 import type { NotificationServerEventMap } from './events/notifications';
 import type { SearchEventMap, SearchServerEventMap } from './events/search';
 import type { ExpertProfileEventMap } from './events/expert-profile';
+import type { ProjectEventMap } from './events/project';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -22,7 +23,8 @@ export type AllEvents = AuthEventMap &
   PhoneEventMap &
   CalendarEventMap &
   SearchEventMap &
-  ExpertProfileEventMap;
+  ExpertProfileEventMap &
+  ProjectEventMap;
 
 export type EventName = keyof AllEvents;
 

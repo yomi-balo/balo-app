@@ -14,7 +14,7 @@
  * No React, no fetch — pure functions so it is trivially unit-testable.
  */
 
-import type { ProductsByCategory } from '@balo/db';
+import type { ProductsByCategory, ProjectTagsByGroup } from '@balo/db';
 
 export interface TaxonomyItem {
   /** Product UUID — written into `SearchFilters.products[]`. */
@@ -45,6 +45,23 @@ export function mapProductsByCategoryToTaxonomy(categories: ProductsByCategory[]
       id: cat.category.id,
       name: cat.category.name,
       items: cat.products.map((s) => ({ id: s.id, name: s.name })),
+    })),
+  };
+}
+
+/**
+ * Map the repository's `ProjectTagsByGroup[]` shape to the client `ProductTaxonomy`.
+ * Each tag group becomes a group; each tag becomes an item keyed by its UUID.
+ *
+ * The `ProductTaxonomy` shape is intentionally reused (groups[].items[]) so the
+ * picker is taxonomy-shape-agnostic — it renders tags and products identically.
+ */
+export function mapProjectTagsByGroupToTaxonomy(groups: ProjectTagsByGroup[]): ProductTaxonomy {
+  return {
+    groups: groups.map((g) => ({
+      id: g.group.id,
+      name: g.group.name,
+      items: g.tags.map((t) => ({ id: t.id, name: t.name })),
     })),
   };
 }

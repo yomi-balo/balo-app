@@ -9,6 +9,7 @@ import {
   type ExpertProfileSection,
 } from '@/lib/analytics';
 import type { ExpertProfileView, ProfileSectionKey } from '@/components/expert/profile';
+import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Hero } from './hero';
 import { StickyNav, type NavSection } from './sticky-nav';
@@ -19,11 +20,13 @@ import { WorkSection } from './work-section';
 import { ReviewsSection } from './reviews-section';
 import { BookingCard } from './booking-card';
 import { ExpertProfileAnalytics } from './expert-profile-analytics';
+import { ProjectDrawer } from './project-drawer';
 
 interface ExpertProfileClientProps {
   view: ExpertProfileView;
   portraitUrl: string | null;
   isLoggedIn: boolean;
+  projectTaxonomies: ProjectRequestTaxonomies;
 }
 
 const SECTION_LABELS: Record<ProfileSectionKey, string> = {
@@ -47,6 +50,7 @@ export function ExpertProfileClient({
   view,
   portraitUrl,
   isLoggedIn,
+  projectTaxonomies,
 }: Readonly<ExpertProfileClientProps>): React.JSX.Element {
   const isMobile = useIsMobile(820);
 
@@ -59,6 +63,10 @@ export function ExpertProfileClient({
 
   const firstSection = sections[0]?.key ?? 'about';
   const [activeNav, setActiveNav] = useState<ProfileSectionKey>(firstSection);
+
+  // ProjectDrawer (BAL-253) — opened by the `project` CTA from both the
+  // BookingCard and the QuickStarts empty-state.
+  const [projectOpen, setProjectOpen] = useState(false);
 
   // Suppress scroll-spy updates briefly while a programmatic smooth-scroll runs.
   const jumpingRef = useRef(false);
@@ -107,7 +115,7 @@ export function ExpertProfileClient({
     return () => observer.disconnect();
   }, [sections]);
 
-  // ── Stubbed CTA handlers — the seam BAL-252/253/255 replace ──
+  // ── Stubbed CTA handlers — the seam BAL-252/255 still replace (book/message) ──
   const fireCta = useCallback(
     (cta: ExpertProfileCta) => {
       track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta });
@@ -119,8 +127,14 @@ export function ExpertProfileClient({
   );
 
   const onBook = useCallback(() => fireCta('book'), [fireCta]);
-  const onStartProject = useCallback(() => fireCta('project'), [fireCta]);
   const onMessage = useCallback(() => fireCta('message'), [fireCta]);
+
+  // `project` is wired (BAL-253): keep the profile-level CTA event, then open
+  // the ProjectDrawer instead of the "Coming soon" toast.
+  const onStartProject = useCallback(() => {
+    track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'project' });
+    setProjectOpen(true);
+  }, [view.expertId]);
 
   const analyticsSections = useMemo<ExpertProfileSection[]>(
     () => sections.map((s) => s.key),
@@ -177,6 +191,17 @@ export function ExpertProfileClient({
           />
         </div>
       </div>
+
+      <ProjectDrawer
+        open={projectOpen}
+        onOpenChange={setProjectOpen}
+        expertProfileId={view.expertId}
+        expertName={view.name}
+        expertFirstName={view.firstName}
+        expertInitials={view.initials}
+        expertAvatarKey={view.avatarKey}
+        projectTaxonomies={projectTaxonomies}
+      />
 
       <ExpertProfileAnalytics
         expertId={view.expertId}

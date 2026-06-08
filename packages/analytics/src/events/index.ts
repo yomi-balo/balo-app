@@ -31,3 +31,9 @@ export {
   type ExpertProfileCta,
   type ProfileViewport,
 } from './expert-profile';
+export {
+  PROJECT_EVENTS,
+  type ProjectEventMap,
+  type ProjectEntryMethod,
+  type ProjectStep,
+} from './project';

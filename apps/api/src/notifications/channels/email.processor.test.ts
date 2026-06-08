@@ -138,7 +138,26 @@ describe('processEmailJob', () => {
 
     expect(mockSendTransacEmail).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: [{ email: 'noname@example.com', name: undefined }],
+        to: [{ email: 'noname@example.com', name: 'there' }],
+      })
+    );
+  });
+
+  it('uses a literal recipientEmail (ops inbox) and bypasses the user lookup', async () => {
+    const opsPayload: DeliveryPayload = {
+      ...basePayload,
+      recipientId: 'ops@balo.expert',
+      recipientEmail: 'ops@balo.expert',
+      template: 'project-match-requested',
+    };
+
+    await processEmailJob(makeJob(opsPayload));
+
+    // No user lookup for a literal-email recipient.
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockSendTransacEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: [{ email: 'ops@balo.expert', name: 'team' }],
       })
     );
   });
