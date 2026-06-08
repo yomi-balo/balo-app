@@ -20,7 +20,7 @@ import { Separator } from '@/components/ui/separator';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
 import { normalizeLinkUrl } from './plain-text';
-import type { RichTextEditorProps } from './types';
+import { RICH_TEXT_CONTENT_CLASS, type RichTextEditorProps } from './types';
 
 /**
  * StarterKit trimmed to the ADR-1022 locked set. We DISABLE everything outside
@@ -210,8 +210,7 @@ export default function RichTextEditorImpl({
         'aria-label': ariaLabel,
         role: 'textbox',
         'aria-multiline': 'true',
-        class:
-          'prose-sm text-foreground min-h-[180px] max-h-[340px] overflow-y-auto px-3.5 py-3 text-sm leading-relaxed focus:outline-none',
+        class: `text-foreground min-h-[180px] max-h-[340px] overflow-y-auto px-3.5 py-3 text-sm leading-relaxed focus:outline-none ${RICH_TEXT_CONTENT_CLASS}`,
       },
     },
     onUpdate: ({ editor: ed }) => {

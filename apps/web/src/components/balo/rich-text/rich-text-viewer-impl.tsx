@@ -4,7 +4,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import { cn } from '@/lib/utils';
-import type { RichTextViewerProps } from './types';
+import { RICH_TEXT_CONTENT_CLASS, type RichTextViewerProps } from './types';
 
 /**
  * Read-only render of a brief's HTML for the review step. Uses Tiptap in
@@ -39,7 +39,7 @@ export default function RichTextViewerImpl({
     content: value,
     editorProps: {
       attributes: {
-        class: 'prose-sm text-foreground text-sm leading-relaxed focus:outline-none',
+        class: `text-foreground text-sm leading-relaxed focus:outline-none ${RICH_TEXT_CONTENT_CLASS}`,
       },
     },
   });
