@@ -42,12 +42,28 @@ export interface ProjectMatchRequestedPayload {
   // No expertProfileId — match mode has no target expert; routes to ops/admin.
 }
 
+export interface ProjectExploratoryRequestedPayload {
+  correlationId: string; // projectRequestId — dedup
+  recipientId: string; // = createdByUserId → resolves recipient:'client'
+  projectRequestId: string;
+  title: string; // email/in-app body
+}
+
+export interface ProjectExpertInvitedPayload {
+  correlationId: string; // relationshipId — dedup per (expert, request)
+  projectRequestId: string;
+  expertProfileId: string; // → resolver hydrates data.expert; recipient:'expert'
+  title: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
   | 'project.request_submitted'
-  | 'project.match_requested';
+  | 'project.match_requested'
+  | 'project.exploratory_requested'
+  | 'project.expert_invited';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -55,4 +71,6 @@ export interface EventPayloadMap {
   'expert.approved': ExpertApprovedPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;
+  'project.exploratory_requested': ProjectExploratoryRequestedPayload;
+  'project.expert_invited': ProjectExpertInvitedPayload;
 }

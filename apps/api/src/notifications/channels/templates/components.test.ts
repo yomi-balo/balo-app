@@ -4,6 +4,9 @@ import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
+import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
+import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
+import { getEmailTemplate } from './index.js';
 import {
   EmailShell,
   LogoRow,
@@ -113,6 +116,58 @@ describe('ProjectMatchRequestedEmail', () => {
 
     expect(element).toBeDefined();
     expect(element.type).toBeDefined();
+  });
+});
+
+describe('ProjectExploratoryRequestedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectExploratoryRequestedEmail({
+      firstName: 'Dana',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
+describe('ProjectExpertInvitedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectExpertInvitedEmail({
+      firstName: 'Priya',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
+describe('getEmailTemplate — A2 templates', () => {
+  it('resolves project-exploratory-requested with a scoping subject', () => {
+    const { component, subject } = getEmailTemplate('project-exploratory-requested', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Dana',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe("Let's scope your project: CPQ implementation");
+  });
+
+  it('resolves project-expert-invited with an invite subject', () => {
+    const { component, subject } = getEmailTemplate('project-expert-invited', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Priya',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe("You're invited: CPQ implementation");
+  });
+
+  it('throws on an unknown template name', () => {
+    expect(() => getEmailTemplate('does-not-exist', {})).toThrow(/Unknown email template/);
   });
 });
 

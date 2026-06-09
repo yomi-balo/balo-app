@@ -61,6 +61,30 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+  'project.exploratory_requested': [
+    {
+      channel: 'email',
+      recipient: 'client',
+      template: 'project-exploratory-requested',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-exploratory-requested',
+      timing: 'immediate',
+    },
+  ],
+  'project.expert_invited': [
+    {
+      channel: 'email',
+      recipient: 'expert',
+      template: 'project-expert-invited',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   'booking.confirmed': [
     {
       channel: 'sms',

@@ -23,6 +23,16 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: caseId ? `/cases/${caseId}` : undefined,
     };
   },
+
+  'project-exploratory-requested': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Book your exploratory call',
+      body: `Balo wants a quick call about "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

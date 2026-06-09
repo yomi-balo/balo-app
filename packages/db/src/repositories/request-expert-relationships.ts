@@ -117,6 +117,25 @@ export const requestExpertRelationshipsRepository = {
     return row;
   },
 
+  /**
+   * Soft-delete a live relationship (admin "remove invited expert"). Sets
+   * `deletedAt` (and touches `updatedAt`, mirroring `usersRepository.softDelete`
+   * / `calendarRepository.softDeleteConnection`). Filters `deletedAt IS NULL` so
+   * it is idempotent — re-removing an already-removed row is a no-op that returns
+   * `undefined`. The removed relationship then disappears from `listByRequest`
+   * and `findByIdWithRelations` (both filter `deletedAt IS NULL`).
+   */
+  async softDelete(id: string): Promise<RequestExpertRelationship | undefined> {
+    const [updated] = await db
+      .update(requestExpertRelationships)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(eq(requestExpertRelationships.id, id), isNull(requestExpertRelationships.deletedAt))
+      )
+      .returning();
+    return updated;
+  },
+
   /** Live relationship by id (guards `deletedAt`). */
   async findById(id: string): Promise<RequestExpertRelationship | undefined> {
     return db.query.requestExpertRelationships.findFirst({

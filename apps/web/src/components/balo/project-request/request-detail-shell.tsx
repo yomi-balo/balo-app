@@ -136,7 +136,7 @@ export function RequestDetailShell({
           className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
           style={{ animationDelay: '120ms' }}
         >
-          <NudgeBar nudge={nudge} />
+          <NudgeBar nudge={nudge} lens={ctx.lens} status={view.status} requestId={view.id} />
         </div>
       )}
 
@@ -147,7 +147,13 @@ export function RequestDetailShell({
         {ctx.archetype === 'observer' && (
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <RequestContext view={view} variant="full" />
-            {showHealthPanel && <AdminHealthPanel relationships={view.relationships} />}
+            {showHealthPanel && (
+              <AdminHealthPanel
+                requestId={view.id}
+                status={view.status}
+                relationships={view.relationships}
+              />
+            )}
           </div>
         )}
 

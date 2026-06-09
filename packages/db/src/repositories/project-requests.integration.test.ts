@@ -10,6 +10,8 @@ import {
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
+  expressionsOfInterest,
+  conversationMessages,
 } from '../schema';
 import {
   userFactory,
@@ -560,8 +562,134 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     expect(rel?.expertProfileId).toBe(request.expertProfileId);
     expect(rel?.status).toBe('invited');
     expect(rel?.invitedAt).toBeInstanceOf(Date);
+    // `updatedAt` feeds the pipeline-health "last activity" derivation.
+    expect(rel?.updatedAt).toBeInstanceOf(Date);
     expect(rel?.expertProfile.id).toBe(request.expertProfileId);
     expect(rel?.expertProfile.user.id).toBeDefined();
+    // No EOI / message seeded → both child collections are empty.
+    expect(rel?.expressionsOfInterest).toHaveLength(0);
+    expect(rel?.conversationMessages).toHaveLength(0);
+  });
+
+  it('hydrates only the newest live EOI and conversation message per relationship (limit 1, newest-first)', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+
+    // A message sender (a client member or admin in production — any user here).
+    const sender = await userFactory();
+
+    const older = new Date('2026-01-01T00:00:00.000Z');
+    const newer = new Date('2026-02-01T00:00:00.000Z');
+
+    // Two live EOIs with explicit submittedAt — only the newest should hydrate.
+    await db.insert(expressionsOfInterest).values([
+      {
+        relationshipId: relationship.id,
+        projectRequestId: request.id,
+        expertProfileId: request.expertProfileId,
+        message: '<p>Older pitch.</p>',
+        submittedAt: older,
+      },
+      {
+        relationshipId: relationship.id,
+        projectRequestId: request.id,
+        expertProfileId: request.expertProfileId,
+        message: '<p>Newer pitch.</p>',
+        submittedAt: newer,
+      },
+    ]);
+
+    // Two live messages with explicit createdAt — only the newest should hydrate.
+    await db.insert(conversationMessages).values([
+      {
+        relationshipId: relationship.id,
+        senderUserId: sender.id,
+        body: '<p>Older.</p>',
+        createdAt: older,
+      },
+      {
+        relationshipId: relationship.id,
+        senderUserId: sender.id,
+        body: '<p>Newer.</p>',
+        createdAt: newer,
+      },
+    ]);
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+    expect(found).toBeDefined();
+    const [rel] = found?.relationships ?? [];
+    expect(rel).toBeDefined();
+
+    // limit:1 newest-first → exactly the newer EOI / message.
+    expect(rel?.expressionsOfInterest).toHaveLength(1);
+    expect(rel?.expressionsOfInterest[0]?.submittedAt.getTime()).toBe(newer.getTime());
+    expect(rel?.conversationMessages).toHaveLength(1);
+    expect(rel?.conversationMessages[0]?.createdAt.getTime()).toBe(newer.getTime());
+  });
+
+  it('excludes a soft-deleted EOI / message from the newest-first hydration', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+    const sender = await userFactory();
+
+    const live = new Date('2026-01-01T00:00:00.000Z');
+    const deletedNewer = new Date('2026-03-01T00:00:00.000Z');
+
+    // The NEWER rows are soft-deleted → the older live rows must win.
+    await db.insert(expressionsOfInterest).values([
+      {
+        relationshipId: relationship.id,
+        projectRequestId: request.id,
+        expertProfileId: request.expertProfileId,
+        message: '<p>Live pitch.</p>',
+        submittedAt: live,
+      },
+      {
+        relationshipId: relationship.id,
+        projectRequestId: request.id,
+        expertProfileId: request.expertProfileId,
+        message: '<p>Removed pitch.</p>',
+        submittedAt: deletedNewer,
+        deletedAt: new Date(),
+      },
+    ]);
+    await db.insert(conversationMessages).values([
+      {
+        relationshipId: relationship.id,
+        senderUserId: sender.id,
+        body: '<p>Live.</p>',
+        createdAt: live,
+      },
+      {
+        relationshipId: relationship.id,
+        senderUserId: sender.id,
+        body: '<p>Removed.</p>',
+        createdAt: deletedNewer,
+        deletedAt: new Date(),
+      },
+    ]);
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+    const [rel] = found?.relationships ?? [];
+
+    expect(rel?.expressionsOfInterest).toHaveLength(1);
+    expect(rel?.expressionsOfInterest[0]?.submittedAt.getTime()).toBe(live.getTime());
+    expect(rel?.conversationMessages).toHaveLength(1);
+    expect(rel?.conversationMessages[0]?.createdAt.getTime()).toBe(live.getTime());
   });
 
   it('round-trips a null/default budget (legacy-shaped request)', async () => {
