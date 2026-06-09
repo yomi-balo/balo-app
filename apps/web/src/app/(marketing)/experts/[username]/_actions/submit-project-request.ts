@@ -73,6 +73,13 @@ export const submitProjectRequestAction = withAuth(
           source: input.source,
           title: input.title,
           description: safeHtml,
+          // Optional budget/timeline (A1 captures them, AUD-fixed — the form has
+          // no currency picker yet; the column exists for a future multi-currency
+          // ticket). Nullable, so omitting them preserves the existing contract.
+          budgetMinCents: input.budgetMinCents,
+          budgetMaxCents: input.budgetMaxCents,
+          budgetCurrency: 'aud',
+          timeline: input.timeline,
         },
         tagIds: input.tagIds,
         productIds: input.productIds,
@@ -94,6 +101,9 @@ export const submitProjectRequestAction = withAuth(
         tagCount: input.tagIds.length,
         productCount: input.productIds.length,
         documentCount: input.documents.length,
+        // Capture presence only — never the amounts.
+        hasBudget: input.budgetMinCents !== null || input.budgetMaxCents !== null,
+        hasTimeline: input.timeline !== null,
       });
 
       // 5. Publish the routing-appropriate event (fire-and-forget — a

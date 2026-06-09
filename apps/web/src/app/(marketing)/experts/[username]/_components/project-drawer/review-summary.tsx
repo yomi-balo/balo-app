@@ -4,6 +4,7 @@ import { Sparkles, Pencil, FileText, Image as ImageIcon } from 'lucide-react';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { RichTextViewer } from '@/components/balo/rich-text-editor';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
+import { formatBudgetRange } from '@/lib/utils/currency';
 import type { ProjectDraft } from './use-project-draft';
 
 interface ReviewSummaryProps {
@@ -129,6 +130,24 @@ export function ReviewSummary({
 
       <SummaryBlock label="Salesforce products" onEdit={onEdit}>
         <ReadOnlyChips ids={draft.productIds} nameMap={productNameMap} />
+      </SummaryBlock>
+
+      <SummaryBlock label="Budget & timeline" onEdit={onEdit}>
+        <dl className="space-y-1.5">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <dt className="text-muted-foreground">Budget</dt>
+            <dd className="text-foreground text-right font-medium">
+              {formatBudgetRange(draft.budgetMinCents, draft.budgetMaxCents, 'aud') ??
+                'Not specified'}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <dt className="text-muted-foreground">Timeline</dt>
+            <dd className="text-foreground text-right font-medium">
+              {draft.timeline ?? 'Not specified'}
+            </dd>
+          </div>
+        </dl>
       </SummaryBlock>
 
       <SummaryBlock label="Documents" onEdit={onEdit}>

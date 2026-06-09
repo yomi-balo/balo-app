@@ -197,6 +197,46 @@ describe('submitProjectRequestAction', () => {
     });
   });
 
+  describe('budget + timeline', () => {
+    it('threads supplied budget/timeline into the request (AUD-fixed)', async () => {
+      await submitProjectRequestAction(
+        directInput({ budgetMinCents: 4500000, budgetMaxCents: 7000000, timeline: 'End of Q3' })
+      );
+      expect(mockCreateProjectRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            budgetMinCents: 4500000,
+            budgetMaxCents: 7000000,
+            budgetCurrency: 'aud',
+            timeline: 'End of Q3',
+          }),
+        })
+      );
+    });
+
+    it('passes null budget/timeline through with AUD currency when omitted', async () => {
+      await submitProjectRequestAction(directInput());
+      expect(mockCreateProjectRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            budgetMinCents: null,
+            budgetMaxCents: null,
+            budgetCurrency: 'aud',
+            timeline: null,
+          }),
+        })
+      );
+    });
+
+    it('logs budget/timeline presence booleans (never the amounts)', async () => {
+      await submitProjectRequestAction(directInput({ budgetMinCents: 4500000 }));
+      expect(log.info).toHaveBeenCalledWith(
+        'Project request submitted',
+        expect.objectContaining({ hasBudget: true, hasTimeline: false })
+      );
+    });
+  });
+
   describe('match routing', () => {
     it('persists a null expertProfileId for match mode', async () => {
       mockCreateProjectRequest.mockResolvedValue(

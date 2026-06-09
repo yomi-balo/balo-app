@@ -12,6 +12,12 @@ import { expertDraftFactory } from './expert-draft.factory';
  * No companies factory exists yet, so the company + membership are inserted via
  * `db` directly. For FK-violation tests, call `createProjectRequest` with a
  * random uuid for the bad FK rather than going through this factory.
+ *
+ * The optional budget/timeline columns (`budgetMinCents`, `budgetMaxCents`,
+ * `budgetCurrency`, `timeline`) flow through `overrides` like any other
+ * `NewProjectRequest` field — defaulted to `NULL` / `'aud'` by the schema when
+ * not supplied, so existing callers are unaffected. Supply them to seed a
+ * budget/timeline (or an incoherent range, to exercise the DB CHECK).
  */
 export async function projectRequestFactory(
   overrides: Partial<NewProjectRequest> = {}

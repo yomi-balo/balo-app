@@ -28,6 +28,7 @@ export {
   isAllowedTransition,
   InvalidStatusTransitionError,
   type ProjectRequestStatus,
+  type ProjectRequestWithRelations,
 } from './project-requests';
 export type { ProjectRequest, NewProjectRequest } from '../schema';
 export { requestExpertRelationshipsRepository } from './request-expert-relationships';

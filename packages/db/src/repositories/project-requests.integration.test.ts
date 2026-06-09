@@ -16,6 +16,7 @@ import {
   expertDraftFactory,
   projectRequestFactory,
   projectTagFactory,
+  requestExpertRelationshipFactory,
 } from '../test/factories';
 import { referenceDataRepository } from './reference-data';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
@@ -478,5 +479,198 @@ describe('projectRequestsRepository.transitionStatus', () => {
     await expect(
       projectRequestsRepository.transitionStatus({ id: created.id, to: 'accepted' })
     ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
+  });
+});
+
+// ── findByIdWithRelations ────────────────────────────────────────────
+
+describe('projectRequestsRepository.findByIdWithRelations', () => {
+  it('hydrates company, creator, tags, products, documents, relationships, and budget/timeline', async () => {
+    // A request with a budget range + timeline, plus its target expert.
+    const request = await projectRequestFactory({
+      title: 'Hydration brief',
+      budgetMinCents: 4_500_000,
+      budgetMaxCents: 7_000_000,
+      budgetCurrency: 'aud',
+      timeline: 'Target go-live: end of Q3',
+    });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+
+    // Tags (junction rows) + products (junction rows) + documents (child rows).
+    const tagA = await projectTagFactory();
+    const tagB = await projectTagFactory();
+    await db.insert(projectRequestTags).values([
+      { projectRequestId: request.id, projectTagId: tagA.id },
+      { projectRequestId: request.id, projectTagId: tagB.id },
+    ]);
+
+    const productId = await seedProduct();
+    await db.insert(projectRequestProducts).values({ projectRequestId: request.id, productId });
+
+    await db.insert(projectRequestDocuments).values({
+      projectRequestId: request.id,
+      r2Key: `project-documents/${randomUUID()}`,
+      fileName: 'scope.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 2048,
+    });
+
+    // One live relationship for the request's own expert (so expertProfile.user hydrates).
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+
+    expect(found).toBeDefined();
+    if (found === undefined) {
+      throw new Error('expected the request to hydrate');
+    }
+
+    // Top-level row + the new budget/timeline columns round-trip.
+    expect(found.id).toBe(request.id);
+    expect(found.title).toBe('Hydration brief');
+    expect(found.budgetMinCents).toBe(4_500_000);
+    expect(found.budgetMaxCents).toBe(7_000_000);
+    expect(found.budgetCurrency).toBe('aud');
+    expect(found.timeline).toBe('Target go-live: end of Q3');
+
+    // Company + creator.
+    expect(found.company.id).toBe(request.companyId);
+    expect(found.company.name).toBeDefined();
+    expect(found.createdByUser.id).toBe(request.createdByUserId);
+    expect(found.createdByUser.email).toBeDefined();
+
+    // Tags + products + documents.
+    expect(found.tags.map((t) => t.projectTag.id).sort()).toEqual([tagA.id, tagB.id].sort());
+    expect(found.products.map((p) => p.product.id)).toEqual([productId]);
+    expect(found.documents).toHaveLength(1);
+    const [doc] = found.documents;
+    expect(doc?.fileName).toBe('scope.pdf');
+    expect(doc?.sizeBytes).toBe(2048);
+    expect(doc?.contentType).toBe('application/pdf');
+
+    // Relationship + nested expert user identity.
+    expect(found.relationships).toHaveLength(1);
+    const [rel] = found.relationships;
+    expect(rel?.id).toBe(relationship.id);
+    expect(rel?.expertProfileId).toBe(request.expertProfileId);
+    expect(rel?.status).toBe('invited');
+    expect(rel?.invitedAt).toBeInstanceOf(Date);
+    expect(rel?.expertProfile.id).toBe(request.expertProfileId);
+    expect(rel?.expertProfile.user.id).toBeDefined();
+  });
+
+  it('round-trips a null/default budget (legacy-shaped request)', async () => {
+    const request = await projectRequestFactory({ title: 'No budget brief' });
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+
+    expect(found?.budgetMinCents).toBeNull();
+    expect(found?.budgetMaxCents).toBeNull();
+    expect(found?.budgetCurrency).toBe('aud'); // schema default backfill
+    expect(found?.timeline).toBeNull();
+    expect(found?.tags).toHaveLength(0);
+    expect(found?.products).toHaveLength(0);
+    expect(found?.documents).toHaveLength(0);
+    expect(found?.relationships).toHaveLength(0);
+  });
+
+  it('returns undefined for a soft-deleted request', async () => {
+    const request = await projectRequestFactory({ deletedAt: new Date() });
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+
+    expect(found).toBeUndefined();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    const found = await projectRequestsRepository.findByIdWithRelations(randomUUID());
+
+    expect(found).toBeUndefined();
+  });
+
+  it('excludes a soft-deleted child document from the hydrated result', async () => {
+    const request = await projectRequestFactory();
+
+    await db.insert(projectRequestDocuments).values([
+      {
+        projectRequestId: request.id,
+        r2Key: `project-documents/${randomUUID()}`,
+        fileName: 'live.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1024,
+      },
+      {
+        projectRequestId: request.id,
+        r2Key: `project-documents/${randomUUID()}`,
+        fileName: 'removed.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1024,
+        deletedAt: new Date(),
+      },
+    ]);
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+
+    expect(found?.documents.map((d) => d.fileName)).toEqual(['live.pdf']);
+  });
+
+  it('excludes a soft-deleted relationship from the hydrated result', async () => {
+    const request = await projectRequestFactory();
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { deletedAt: new Date() },
+    });
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+
+    expect(found?.relationships).toHaveLength(0);
+  });
+});
+
+// ── budget CHECK constraints ─────────────────────────────────────────
+
+describe('project_requests budget CHECK constraints', () => {
+  it('accepts a one-sided budget (min only, max null)', async () => {
+    const request = await projectRequestFactory({
+      budgetMinCents: 4_500_000,
+      budgetMaxCents: null,
+    });
+
+    expect(request.budgetMinCents).toBe(4_500_000);
+    expect(request.budgetMaxCents).toBeNull();
+  });
+
+  it('accepts a one-sided budget (max only, min null)', async () => {
+    const request = await projectRequestFactory({
+      budgetMinCents: null,
+      budgetMaxCents: 7_000_000,
+    });
+
+    expect(request.budgetMinCents).toBeNull();
+    expect(request.budgetMaxCents).toBe(7_000_000);
+  });
+
+  it('rejects an incoherent range where max < min (project_requests_budget_range)', async () => {
+    await expect(
+      projectRequestFactory({ budgetMinCents: 7_000_000, budgetMaxCents: 4_500_000 })
+    ).rejects.toThrow();
+  });
+
+  it('rejects a negative budget_min_cents (project_requests_budget_min_nonneg)', async () => {
+    await expect(projectRequestFactory({ budgetMinCents: -1 })).rejects.toThrow();
+  });
+
+  it('rejects a negative budget_max_cents (project_requests_budget_max_nonneg)', async () => {
+    await expect(projectRequestFactory({ budgetMaxCents: -1 })).rejects.toThrow();
   });
 });

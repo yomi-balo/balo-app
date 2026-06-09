@@ -58,6 +58,19 @@ export const projectRequests = pgTable(
     title: text('title').notNull(),
     description: text('description').notNull(),
 
+    // Optional budget range. Money as integer minor units + currency, mirroring
+    // `proposals` (request-origination.ts) and `expert_profiles.rate_cents` —
+    // never floats. Both amounts NULLABLE: either side may be omitted for a
+    // one-sided ("from"/"up to") or empty budget. Currency NOT NULL DEFAULT 'aud'
+    // (the platform default; a future picker fills it without a second migration).
+    budgetMinCents: integer('budget_min_cents'),
+    budgetMaxCents: integer('budget_max_cents'),
+    budgetCurrency: text('budget_currency').notNull().default('aud'),
+
+    // Optional free-text timeline — genuinely unstructured business input
+    // ("Target go-live: end of Q3"), not a date. NULLABLE.
+    timeline: text('timeline'),
+
     // Reserved cap — per-request max number of proposals. NULL = no cap.
     // Enforcement intentionally deferred (column only, no logic anywhere yet).
     proposalCap: integer('proposal_cap'),
@@ -85,6 +98,22 @@ export const projectRequests = pgTable(
       'project_requests_direct_requires_expert',
       sql`(${table.sendTo} = 'direct' AND ${table.expertProfileId} IS NOT NULL)
           OR (${table.sendTo} = 'match' AND ${table.expertProfileId} IS NULL)`
+    ),
+    // Budget money invariants (mirror proposals' `proposal_price_cents_nonneg`):
+    // each amount non-negative when present, and a coherent range when BOTH are
+    // present (either side may be NULL for a one-sided/empty budget).
+    check(
+      'project_requests_budget_min_nonneg',
+      sql`${table.budgetMinCents} IS NULL OR ${table.budgetMinCents} >= 0`
+    ),
+    check(
+      'project_requests_budget_max_nonneg',
+      sql`${table.budgetMaxCents} IS NULL OR ${table.budgetMaxCents} >= 0`
+    ),
+    check(
+      'project_requests_budget_range',
+      sql`${table.budgetMinCents} IS NULL OR ${table.budgetMaxCents} IS NULL
+          OR ${table.budgetMaxCents} >= ${table.budgetMinCents}`
     ),
   ]
 );

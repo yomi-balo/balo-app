@@ -13,6 +13,11 @@ export interface ProjectDraft {
   productIds: string[];
   /** Only CONFIRMED R2 refs are persisted — in-flight/failed uploads never are. */
   documents: ProjectDocumentRef[];
+  /** Optional budget range in integer minor units (cents). Null = not specified. */
+  budgetMinCents: number | null;
+  budgetMaxCents: number | null;
+  /** Optional free-text timeline. Null = not specified. */
+  timeline: string | null;
 }
 
 const EMPTY_DRAFT: ProjectDraft = {
@@ -22,6 +27,9 @@ const EMPTY_DRAFT: ProjectDraft = {
   tagIds: [],
   productIds: [],
   documents: [],
+  budgetMinCents: null,
+  budgetMaxCents: null,
+  timeline: null,
 };
 
 const DEBOUNCE_MS = 400;
@@ -42,6 +50,18 @@ function draftKey(expertProfileId: string): string {
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((v): v is string => typeof v === 'string');
+}
+
+/** Narrow an unknown to a non-negative integer, else null. */
+function readNullableCents(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** Narrow an unknown to a non-empty trimmed string, else null. */
+function readNullableTimeline(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /** Narrow an unknown array to validated `ProjectDocumentRef[]`. */
@@ -72,8 +92,11 @@ function readDocuments(value: unknown): ProjectDocumentRef[] {
 
 /**
  * Reads + narrows a persisted draft. Corrupt / legacy shapes silently fall back
- * to defaults — no throw, no `console.*`. Legacy keys (focusArea/budget/timeline,
- * the old `description`) are silently dropped: we only read the new field set.
+ * to defaults — no throw, no `console.*`. The legacy `focusArea` key and the old
+ * free-text `budget` string are silently dropped (we only read the new field
+ * set). Budget is now re-introduced under explicit typed keys — `budgetMinCents`
+ * / `budgetMaxCents` (numbers) and `timeline` (string) — so any legacy free-text
+ * `budget` value is ignored without collision.
  */
 function readDraft(expertProfileId: string): ProjectDraft {
   if (typeof window === 'undefined') return EMPTY_DRAFT;
@@ -90,6 +113,9 @@ function readDraft(expertProfileId: string): ProjectDraft {
       tagIds: readStringArray(record.tagIds),
       productIds: readStringArray(record.productIds),
       documents: readDocuments(record.documents),
+      budgetMinCents: readNullableCents(record.budgetMinCents),
+      budgetMaxCents: readNullableCents(record.budgetMaxCents),
+      timeline: readNullableTimeline(record.timeline),
     };
   } catch {
     // Corrupt or inaccessible storage — start fresh.
