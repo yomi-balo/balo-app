@@ -8,7 +8,18 @@ import {
 } from '../schema';
 
 export const conversationsRepository = {
-  /** Post a message to a relationship's thread. */
+  /**
+   * Post a message to a relationship's thread.
+   *
+   * CONTRACT — bare INSERT, no error isolation. A single un-wrapped
+   * `db.insert(...)` that can throw a raw FK violation (23503) for an unknown
+   * `relationshipId` (ON DELETE cascade) or `senderUserId` (ON DELETE restrict);
+   * this table has no unique constraint. If called INSIDE an open
+   * `db.transaction(...)`, that error ABORTS the transaction (25P02) — every
+   * later statement fails until rollback. The A4 caller MUST isolate this insert
+   * in its own SAVEPOINT (nested `tx.transaction(...)`) so a bad id can't poison
+   * a wider transaction. No production callers yet.
+   */
   async postMessage(input: {
     relationshipId: string;
     senderUserId: string;
@@ -42,7 +53,20 @@ export const conversationsRepository = {
       .orderBy(asc(conversationMessages.createdAt));
   },
 
-  /** Attach a file to a relationship's conversation. Unique r2_key enforced. */
+  /**
+   * Attach a file to a relationship's conversation. Unique r2_key enforced.
+   *
+   * CONTRACT — bare INSERT, no error isolation. A single un-wrapped
+   * `db.insert(...)` that can throw a raw constraint violation: unique (23505)
+   * on a duplicate `r2Key` (`conversation_file_key_idx`), or FK (23503) on an
+   * unknown `relationshipId` (ON DELETE cascade) / `uploadedByUserId` (ON DELETE
+   * restrict). If called INSIDE an open `db.transaction(...)`, that error ABORTS
+   * the transaction (25P02) — every later statement fails until rollback. The A4
+   * caller MUST isolate this insert — its own SAVEPOINT (nested
+   * `tx.transaction(...)`), or pre-empt the duplicate with
+   * `.onConflictDoNothing({ target: conversationFiles.r2Key })` — so a duplicate
+   * upload can't poison a wider transaction. No production callers yet.
+   */
   async addFile(input: {
     relationshipId: string;
     uploadedByUserId: string;

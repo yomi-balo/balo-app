@@ -162,6 +162,13 @@
       "when": 1780974736242,
       "tag": "0022_even_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1780984181665,
+      "tag": "0023_certain_zaladane",
+      "breakpoints": true
     }
   ]
 }

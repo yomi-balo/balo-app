@@ -136,3 +136,23 @@ describe('expressionsOfInterestRepository.listByRequest', () => {
     }
   });
 });
+
+describe('expressions_of_interest composite-FK backstop', () => {
+  it('rejects an EOI whose denormalised project_request_id diverges from the relationship', async () => {
+    const { relationship, expertProfileId } = await requestExpertRelationshipFactory();
+    // A different, valid project request that is NOT this relationship's.
+    const { projectRequestId: otherRequestId } = await requestExpertRelationshipFactory();
+
+    // The composite FK pins (relationship_id, project_request_id) to the relationship's own
+    // pair, so a divergent raw insert is rejected even though otherRequestId is a real
+    // project_requests row. Last DB action (it aborts the tx).
+    await expect(
+      db.insert(expressionsOfInterest).values({
+        relationshipId: relationship.id,
+        projectRequestId: otherRequestId,
+        expertProfileId,
+        message: '<p>Divergent.</p>',
+      })
+    ).rejects.toThrow();
+  });
+});

@@ -2,9 +2,19 @@ export const PROJECT_EVENTS = {
   PROJECT_DRAWER_OPENED: 'project_drawer_opened',
   PROJECT_ENTRY_SELECTED: 'project_entry_selected',
   PROJECT_STEP_VIEWED: 'project_step_viewed',
+  // Legacy ProjectDrawer UI event (manual path), keyed off expert_id — NOT the
+  // persisted request_id — and predating the origination spine. SUPERSEDED by
+  // PROJECT_REQUEST_CREATED: do NOT sum the two in one metric and add no new fire
+  // sites. A1 consolidates — when it wires PROJECT_REQUEST_CREATED it should drop
+  // the single PROJECT_REQUEST_SUBMITTED fire (project-drawer.tsx) so one submit
+  // never emits both (else the creation funnel ~2x double-counts).
   PROJECT_REQUEST_SUBMITTED: 'project_request_submitted',
-  // Request origination contract (BAL-267 / BAL-266) — DEFINED here; FIRED by
-  // the A1–A7 UI slices. Keyed off persisted row ids once the request exists.
+  // Request origination contract (BAL-267 / BAL-266) — DEFINED here; FIRED by the
+  // A1–A7 UI slices. PROJECT_REQUEST_CREATED is the CANONICAL "a project_requests
+  // row was persisted" event and the single source of truth for the creation
+  // funnel: fire it exactly once per created row, at the persisted-row boundary
+  // (right after createProjectRequest resolves), keyed off request_id, for EVERY
+  // source (manual | ai | quickstart). The rest key off persisted row ids too.
   PROJECT_REQUEST_CREATED: 'project_request_created',
   PROJECT_REQUEST_STATUS_TRANSITIONED: 'project_request_status_transitioned',
   PROJECT_EXPERT_INVITED: 'project_expert_invited',

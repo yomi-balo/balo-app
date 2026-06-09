@@ -190,3 +190,26 @@ describe('proposalsRepository list / find', () => {
     expect(byRelationship.map((p) => p.id)).toContain(proposal.id);
   });
 });
+
+describe('proposals composite-FK backstop', () => {
+  it('rejects a proposal whose denormalised project_request_id diverges from the relationship', async () => {
+    const { relationship, expertProfileId } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    // A different, valid project request that is NOT this relationship's.
+    const { projectRequestId: otherRequestId } = await requestExpertRelationshipFactory();
+
+    // The single-column FK accepts otherRequestId (a real project_requests row), but the
+    // composite FK pins (relationship_id, project_request_id) to the relationship's own
+    // pair — so a divergent raw insert is rejected. Last DB action (it aborts the tx).
+    await expect(
+      db.insert(proposals).values({
+        relationshipId: relationship.id,
+        projectRequestId: otherRequestId,
+        expertProfileId,
+        scope: '<p>Divergent.</p>',
+        priceCents: 1000,
+      })
+    ).rejects.toThrow();
+  });
+});

@@ -6,6 +6,8 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  unique,
+  foreignKey,
   check,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -60,6 +62,12 @@ export const requestExpertRelationships = pgTable(
   },
   (t) => [
     uniqueIndex('request_expert_relationship_unique_idx').on(t.projectRequestId, t.expertProfileId),
+    // Composite-FK targets (unique CONSTRAINTs, not just indexes) so proposals /
+    // EOIs can pin their denormalised project_request_id / expert_profile_id to
+    // THIS relationship's ids at the DB level. `id` is already unique, so these
+    // composite uniques are trivially satisfied.
+    unique('request_expert_relationship_id_request_uq').on(t.id, t.projectRequestId),
+    unique('request_expert_relationship_id_expert_uq').on(t.id, t.expertProfileId),
     index('request_expert_relationship_request_idx').on(t.projectRequestId),
     index('request_expert_relationship_expert_idx').on(t.expertProfileId),
     index('request_expert_relationship_invited_by_idx').on(t.invitedByUserId),
@@ -99,6 +107,19 @@ export const expressionsOfInterest = pgTable(
     uniqueIndex('expression_of_interest_relationship_idx').on(t.relationshipId),
     index('expression_of_interest_request_idx').on(t.projectRequestId),
     index('expression_of_interest_expert_idx').on(t.expertProfileId),
+    // DB backstop (see proposals): the denormalised request/expert ids MUST equal
+    // the relationship's own ids. The repo derives them from the locked
+    // relationship; these composite FKs reject any divergent row from raw writes.
+    foreignKey({
+      columns: [t.relationshipId, t.projectRequestId],
+      foreignColumns: [requestExpertRelationships.id, requestExpertRelationships.projectRequestId],
+      name: 'eoi_rel_request_match_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [t.relationshipId, t.expertProfileId],
+      foreignColumns: [requestExpertRelationships.id, requestExpertRelationships.expertProfileId],
+      name: 'eoi_rel_expert_match_fk',
+    }).onDelete('cascade'),
   ]
 );
 
@@ -136,6 +157,19 @@ export const proposals = pgTable(
     index('proposal_request_idx').on(t.projectRequestId),
     index('proposal_expert_idx').on(t.expertProfileId),
     check('proposal_price_cents_nonneg', sql`${t.priceCents} >= 0`),
+    // DB backstop: the denormalised request/expert ids MUST equal the
+    // relationship's own ids (the repo derives them from the locked relationship;
+    // these composite FKs reject any divergent row from raw writes too).
+    foreignKey({
+      columns: [t.relationshipId, t.projectRequestId],
+      foreignColumns: [requestExpertRelationships.id, requestExpertRelationships.projectRequestId],
+      name: 'proposals_rel_request_match_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [t.relationshipId, t.expertProfileId],
+      foreignColumns: [requestExpertRelationships.id, requestExpertRelationships.expertProfileId],
+      name: 'proposals_rel_expert_match_fk',
+    }).onDelete('cascade'),
   ]
 );
 

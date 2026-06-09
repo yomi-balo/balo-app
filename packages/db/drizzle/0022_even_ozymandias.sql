@@ -4,6 +4,24 @@
 -- 'submitted' rows. Replaced with an in-place RENAME (carries existing rows for free) + ordered
 -- ADD VALUE appends. Safe in one transaction on PG15+: we only RENAME and ADD VALUE and never USE a
 -- newly-added label in this migration (SET DEFAULT 'requested' uses the RENAMED — not added — value).
+--
+-- IRREVERSIBLE — no down migration. Postgres has no DROP VALUE for enums and does
+-- not auto-reverse RENAME VALUE, so there is no programmatic rollback. To revert
+-- MANUALLY, post-deploy (operational note only — do NOT run inside this migration):
+--   1. UPDATE project_requests SET status='requested' WHERE status IN
+--      ('exploratory_meeting_requested','experts_invited','eoi_submitted',
+--       'proposal_requested','proposal_submitted','accepted','kickoff_approved');
+--   2. Recreate the prior enum to drop the 7 labels:
+--        ALTER TABLE project_requests ALTER COLUMN status DROP DEFAULT;
+--        ALTER TYPE project_request_status RENAME TO project_request_status_old;
+--        CREATE TYPE project_request_status AS ENUM ('draft','requested');
+--        ALTER TABLE project_requests ALTER COLUMN status TYPE project_request_status
+--          USING status::text::project_request_status;
+--        DROP TYPE project_request_status_old;
+--        ALTER TABLE project_requests ALTER COLUMN status SET DEFAULT 'requested';
+--   3. Only if the pre-0022 label name is required, also:
+--        ALTER TYPE project_request_status RENAME VALUE 'requested' TO 'submitted';
+--        ALTER TABLE project_requests ALTER COLUMN status SET DEFAULT 'submitted';
 ALTER TYPE "public"."project_request_status" RENAME VALUE 'submitted' TO 'requested';--> statement-breakpoint
 ALTER TYPE "public"."project_request_status" ADD VALUE 'exploratory_meeting_requested' AFTER 'requested';--> statement-breakpoint
 ALTER TYPE "public"."project_request_status" ADD VALUE 'experts_invited' AFTER 'exploratory_meeting_requested';--> statement-breakpoint
