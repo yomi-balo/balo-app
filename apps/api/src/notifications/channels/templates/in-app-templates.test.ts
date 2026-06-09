@@ -42,6 +42,46 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-exploratory-requested', () => {
+    it('returns the title, body, and action url', () => {
+      const result = getInAppTemplate('project-exploratory-requested', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Book your exploratory call',
+        body: 'Balo wants a quick call about "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-exploratory-requested', {});
+      expect(result.body).toBe('Balo wants a quick call about "your project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-expert-invited', () => {
+    it('returns the title, body, and action url', () => {
+      const result = getInAppTemplate('project-expert-invited', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: "You're invited to a project",
+        body: 'Balo invited you to express interest in "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-expert-invited', {});
+      expect(result.body).toBe('Balo invited you to express interest in "a new project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

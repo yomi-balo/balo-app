@@ -17,11 +17,29 @@ export interface RequestDocumentView {
   contentType: string;
 }
 
+/** Derived per-expert display state for the admin pipeline-health panel. */
+export type RelationshipState =
+  | 'invited'
+  | 'eoi_in'
+  | 'proposal_requested'
+  | 'proposal_in'
+  | 'accepted'
+  | 'declined';
+
 /** Observer-only relationship projection (admin health panel). */
 export interface RequestRelationshipView {
   id: string;
   expertName: string;
+  /** Raw relationship status (kept for callers that key off the enum). */
   status: string;
+  /** Derived display state for the panel. */
+  state: RelationshipState;
+  /** True when invited + no engagement for >= QUIET_THRESHOLD_DAYS. */
+  isQuiet: boolean;
+  /** Whole days since last activity (for the "Quiet N days" pill copy). */
+  quietDays: number;
+  /** Whether the remove control may show for this row (status === 'invited'). */
+  removable: boolean;
 }
 
 export interface RequestDetailView {
@@ -46,6 +64,24 @@ export interface RequestDetailView {
 }
 
 const DAY_MS = 1000 * 60 * 60 * 24;
+
+/**
+ * Days an `invited` expert may stay silent before the panel flags them "going
+ * quiet". 3 days sits inside a typical 1-business-day review SLA — long enough to
+ * not nag, short enough to surface a stall. Named const, never a magic number.
+ * (Product decision — tunable; flag to reviewer.)
+ */
+export const QUIET_THRESHOLD_DAYS = 3;
+
+/** Raw relationship status → derived panel display state. */
+const RELATIONSHIP_STATE_MAP: Record<string, RelationshipState> = {
+  invited: 'invited',
+  eoi_submitted: 'eoi_in',
+  proposal_requested: 'proposal_requested',
+  proposal_submitted: 'proposal_in',
+  accepted: 'accepted',
+  declined: 'declined',
+};
 
 /**
  * Coarse relative "posted" label. Whole-day granularity is enough for a brief
@@ -79,6 +115,52 @@ function relationshipName(
   const { user } = relationship.expertProfile;
   const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
   return full.length > 0 ? full : 'Invited expert';
+}
+
+/**
+ * Last-activity timestamp for a relationship: the most recent of its invite, its
+ * row's last update, its newest live EOI, and its newest live message. Each child
+ * collection is `limit:1` newest-first (see `findByIdWithRelations`).
+ */
+function lastActivityAt(relationship: ProjectRequestWithRelations['relationships'][number]): Date {
+  // `updatedAt`, plus the newest live EOI / message if present. `invitedAt` seeds
+  // the reduce as its initial value, so the fold always has a base (no empty-array
+  // reduce) and the result is the most-recent of invite / update / EOI / message.
+  const candidates: Date[] = [relationship.updatedAt];
+
+  const [latestEoi] = relationship.expressionsOfInterest;
+  if (latestEoi !== undefined) candidates.push(latestEoi.submittedAt);
+
+  const [latestMessage] = relationship.conversationMessages;
+  if (latestMessage !== undefined) candidates.push(latestMessage.createdAt);
+
+  return candidates.reduce(
+    (max, d) => (d.getTime() > max.getTime() ? d : max),
+    relationship.invitedAt
+  );
+}
+
+/**
+ * Pure per-expert deriver: raw relationship row → panel view-model. `now` is
+ * injectable so the quiet-days math is deterministic in tests.
+ */
+function deriveRelationshipView(
+  relationship: ProjectRequestWithRelations['relationships'][number],
+  now: Date
+): RequestRelationshipView {
+  const state = RELATIONSHIP_STATE_MAP[relationship.status] ?? 'invited';
+  const quietDays = Math.floor((now.getTime() - lastActivityAt(relationship).getTime()) / DAY_MS);
+  const isQuiet = state === 'invited' && quietDays >= QUIET_THRESHOLD_DAYS;
+
+  return {
+    id: relationship.id,
+    expertName: relationshipName(relationship),
+    status: relationship.status,
+    state,
+    isQuiet,
+    quietDays,
+    removable: relationship.status === 'invited',
+  };
 }
 
 /**
@@ -119,11 +201,7 @@ export function mapRequestToDetailView(
     timeline: request.timeline,
     relationships:
       ctx.archetype === 'observer'
-        ? request.relationships.map((r) => ({
-            id: r.id,
-            expertName: relationshipName(r),
-            status: r.status,
-          }))
+        ? request.relationships.map((r) => deriveRelationshipView(r, now))
         : [],
   };
 }

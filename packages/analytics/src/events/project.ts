@@ -63,6 +63,12 @@ export interface ProjectEventMap {
     from: string;
     to: string;
     actor: ProjectActor;
+    /**
+     * ms from request creation → the FIRST admin action (status was `requested`).
+     * Computed server-side in the action and attached client-side. Absent on
+     * later transitions. Powers the "raised → first admin action" metric.
+     */
+    time_to_first_admin_action_ms?: number;
   };
   [PROJECT_EVENTS.PROJECT_EXPERT_INVITED]: {
     request_id: string;

@@ -80,6 +80,44 @@ describe('notificationRules', () => {
     expect(result).toBe(true);
   });
 
+  it('project.exploratory_requested has client email + in-app rules', () => {
+    const rules = notificationRules['project.exploratory_requested'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(2);
+    const email = rules!.find((r) => r.channel === 'email');
+    expect(email).toMatchObject({
+      recipient: 'client',
+      template: 'project-exploratory-requested',
+      timing: 'immediate',
+      priority: 'normal',
+    });
+    const inApp = rules!.find((r) => r.channel === 'in-app');
+    expect(inApp).toMatchObject({
+      recipient: 'client',
+      template: 'project-exploratory-requested',
+      timing: 'immediate',
+    });
+  });
+
+  it('project.expert_invited has expert email + in-app rules', () => {
+    const rules = notificationRules['project.expert_invited'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(2);
+    const email = rules!.find((r) => r.channel === 'email');
+    expect(email).toMatchObject({
+      recipient: 'expert',
+      template: 'project-expert-invited',
+      timing: 'immediate',
+      priority: 'normal',
+    });
+    const inApp = rules!.find((r) => r.channel === 'in-app');
+    expect(inApp).toMatchObject({
+      recipient: 'expert',
+      template: 'project-expert-invited',
+      timing: 'immediate',
+    });
+  });
+
   it('has rules for message.received event', () => {
     const rules = notificationRules['message.received'];
     expect(rules).toBeDefined();

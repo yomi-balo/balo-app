@@ -4,6 +4,8 @@ import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
+import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
+import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -73,6 +75,32 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         documentCount: numberCount(data.documentCount),
       }),
       subject: `New unrouted brief: ${(data.title as string) ?? 'a new project'}`,
+    };
+  },
+
+  'project-exploratory-requested': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    return {
+      component: React.createElement(ProjectExploratoryRequestedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Let's scope your project: ${title}`,
+    };
+  },
+
+  'project-expert-invited': (data) => {
+    const title = (data.title as string) ?? 'a new project';
+    return {
+      component: React.createElement(ProjectExpertInvitedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `You're invited: ${title}`,
     };
   },
 };

@@ -17,6 +17,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { RequestLens, ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import { RequestCard } from './request-card';
+import { NudgeActions } from './nudge-actions';
 
 type NudgeVariant = 'action' | 'waiting' | 'done' | 'commit';
 
@@ -36,6 +37,10 @@ export interface NudgeContent {
 
 interface NudgeBarProps {
   nudge: NudgeContent;
+  /** Viewer lens + request context — required to wire the interactive CTAs. */
+  lens: RequestLens;
+  status: ProjectRequestStatus;
+  requestId: string;
 }
 
 const EYEBROW: Record<NudgeVariant, string> = {
@@ -77,11 +82,18 @@ function accentClasses(variant: NudgeVariant): {
 }
 
 /**
- * Presentational "always nudge" bar — one privileged next step per cell. CTAs are
- * rendered as DISABLED placeholders in A1; the owning sibling slice (A2–A5) wires
- * each. Copy comes from {@link nudgeFor}.
+ * Presentational "always nudge" bar — one privileged next step per cell. Copy
+ * comes from {@link nudgeFor}; the interactive CTA row is delegated to the
+ * {@link NudgeActions} client island, which wires the A2 (BAL-269) triage/invite/
+ * book CTAs to Server Actions and leaves the CTAs owned by later slices disabled.
+ * `NudgeBar` itself stays a server component.
  */
-export function NudgeBar({ nudge }: Readonly<NudgeBarProps>): React.JSX.Element {
+export function NudgeBar({
+  nudge,
+  lens,
+  status,
+  requestId,
+}: Readonly<NudgeBarProps>): React.JSX.Element {
   const { variant, icon: Icon, headline, sub, primary, secondary } = nudge;
   const a = accentClasses(variant);
   const glow = variant === 'action' || variant === 'commit';
@@ -109,29 +121,13 @@ export function NudgeBar({ nudge }: Readonly<NudgeBarProps>): React.JSX.Element 
             <p className="text-muted-foreground mt-0.5 ml-8 text-sm leading-relaxed">{sub}</p>
           )}
           {(primary || secondary) && (
-            <div className="mt-3.5 ml-8 flex flex-wrap items-center gap-2.5">
-              {primary && (
-                <button
-                  type="button"
-                  disabled
-                  // Wired by the owning sibling slice (A2–A5). Disabled placeholder in A1.
-                  className="from-primary inline-flex min-h-9 items-center gap-2 rounded-[10px] bg-gradient-to-r to-violet-600 px-4 text-[13.5px] font-semibold text-white opacity-60 dark:to-violet-500"
-                >
-                  <primary.icon className="h-3.5 w-3.5" aria-hidden="true" />
-                  {primary.label}
-                </button>
-              )}
-              {secondary && (
-                <button
-                  type="button"
-                  disabled
-                  className="border-border bg-card text-muted-foreground inline-flex min-h-9 items-center gap-1.5 rounded-[10px] border px-3.5 text-[13px] font-medium opacity-60"
-                >
-                  <secondary.icon className="h-3.5 w-3.5" aria-hidden="true" />
-                  {secondary.label}
-                </button>
-              )}
-            </div>
+            <NudgeActions
+              lens={lens}
+              status={status}
+              requestId={requestId}
+              primary={primary}
+              secondary={secondary}
+            />
           )}
         </div>
       </div>

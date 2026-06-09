@@ -8,7 +8,39 @@ import type {
 
 vi.mock('server-only', () => ({}));
 
+// AdminHealthPanel + NudgeActions are client islands that import server actions —
+// mock them so the shell renders in JSDOM without hitting the network.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/remove-invited-expert', () => ({
+  removeInvitedExpertAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-exploratory-meeting', () => ({
+  requestExploratoryMeetingAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/book-exploratory', () => ({
+  bookExploratoryMeetingAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/search-experts-for-invite', () => ({
+  searchExpertsForInviteAction: vi.fn(() => Promise.resolve({ success: true, experts: [] })),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/invite-experts', () => ({
+  inviteExpertsAction: vi.fn(),
+}));
+
 import { RequestDetailShell } from './request-detail-shell';
+import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
+
+function relationship(overrides: Partial<RequestRelationshipView> = {}): RequestRelationshipView {
+  return {
+    id: 'rel-1',
+    expertName: 'Priya Nair',
+    status: 'eoi_submitted',
+    state: 'eoi_in',
+    isQuiet: false,
+    quietDays: 0,
+    removable: false,
+    ...overrides,
+  };
+}
 
 function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
   return {
@@ -87,7 +119,7 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
       <RequestDetailShell
         view={view({
           status: 'eoi_submitted',
-          relationships: [{ id: 'rel-1', expertName: 'Priya Nair', status: 'eoi_submitted' }],
+          relationships: [relationship()],
         })}
         ctx={ctx({ lens: 'admin', archetype: 'observer', isOwner: false, canSeeContact: true })}
       />

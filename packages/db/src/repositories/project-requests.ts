@@ -164,11 +164,35 @@ export const projectRequestsRepository = {
         },
         relationships: {
           where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
-          columns: { id: true, expertProfileId: true, status: true, invitedAt: true },
+          // `updatedAt` feeds the pipeline-health "last activity" derivation
+          // alongside the latest live EOI/message timestamps below.
+          columns: {
+            id: true,
+            expertProfileId: true,
+            status: true,
+            invitedAt: true,
+            updatedAt: true,
+          },
           with: {
             expertProfile: {
               columns: { id: true },
               with: { user: { columns: { id: true, firstName: true, lastName: true } } },
+            },
+            // Newest live EOI per relationship — its `submittedAt` is one of the
+            // "last activity" signals. `limit: 1` newest-first, soft-delete-aware.
+            expressionsOfInterest: {
+              where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+              columns: { id: true, submittedAt: true },
+              orderBy: (t, { desc: childDesc }) => [childDesc(t.submittedAt)],
+              limit: 1,
+            },
+            // Newest live conversation message per relationship — its `createdAt`
+            // is the "talking" recency signal. `limit: 1` newest-first, soft-delete-aware.
+            conversationMessages: {
+              where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+              columns: { id: true, createdAt: true },
+              orderBy: (t, { desc: childDesc }) => [childDesc(t.createdAt)],
+              limit: 1,
             },
           },
         },

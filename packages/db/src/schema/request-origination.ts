@@ -61,7 +61,13 @@ export const requestExpertRelationships = pgTable(
     ...softDelete,
   },
   (t) => [
-    uniqueIndex('request_expert_relationship_unique_idx').on(t.projectRequestId, t.expertProfileId),
+    // One LIVE relationship per (request, expert). PARTIAL on `deleted_at IS NULL`
+    // (mirrors the status index below) so a removed (soft-deleted) expert can be
+    // re-invited — the soft-deleted row no longer occupies the unique slot, while
+    // live duplicates are still rejected.
+    uniqueIndex('request_expert_relationship_unique_idx')
+      .on(t.projectRequestId, t.expertProfileId)
+      .where(sql`${t.deletedAt} IS NULL`),
     // Composite-FK targets (unique CONSTRAINTs, not just indexes) so proposals /
     // EOIs can pin their denormalised project_request_id / expert_profile_id to
     // THIS relationship's ids at the DB level. `id` is already unique, so these

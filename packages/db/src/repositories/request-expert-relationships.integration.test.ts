@@ -13,6 +13,7 @@ import {
   requestExpertRelationshipsRepository,
   InvalidRelationshipTransitionError,
 } from './request-expert-relationships';
+import { projectRequestsRepository } from './project-requests';
 
 describe('requestExpertRelationshipsRepository.invite', () => {
   it('creates an invited relationship row', async () => {
@@ -27,6 +28,8 @@ describe('requestExpertRelationshipsRepository.invite', () => {
       invitedByUserId: admin.id,
     });
 
+    expect(row).toBeDefined();
+    if (row === undefined) throw new Error('expected invite to create a row');
     expect(row.id).toBeDefined();
     expect(row.projectRequestId).toBe(request.id);
     expect(row.expertProfileId).toBe(expertId);
@@ -37,17 +40,45 @@ describe('requestExpertRelationshipsRepository.invite', () => {
     expect(row.deletedAt).toBeNull();
   });
 
-  it('rejects a duplicate invite for the same (request, expert) — unique index', async () => {
+  it('returns undefined for a duplicate LIVE invite (idempotent skip, not a throw)', async () => {
     const { projectRequestId, expertProfileId, invitedByUserId } =
       await requestExpertRelationshipFactory();
 
-    await expect(
-      requestExpertRelationshipsRepository.invite({
-        projectRequestId,
-        expertProfileId,
-        invitedByUserId,
-      })
-    ).rejects.toThrow();
+    // The partial unique index is the ON CONFLICT arbiter → DO NOTHING → undefined.
+    const dup = await requestExpertRelationshipsRepository.invite({
+      projectRequestId,
+      expertProfileId,
+      invitedByUserId,
+    });
+
+    expect(dup).toBeUndefined();
+  });
+
+  it('re-invites a previously removed (soft-deleted) expert as a fresh live row', async () => {
+    const { relationship, projectRequestId, expertProfileId, invitedByUserId } =
+      await requestExpertRelationshipFactory();
+
+    // Remove (soft-delete), then invite the same (request, expert) again.
+    await requestExpertRelationshipsRepository.softDelete(relationship.id);
+
+    const reinvited = await requestExpertRelationshipsRepository.invite({
+      projectRequestId,
+      expertProfileId,
+      invitedByUserId,
+    });
+
+    // A fresh row, not the removed one — the soft-deleted row is outside the
+    // partial unique index, so the insert no longer conflicts.
+    expect(reinvited).toBeDefined();
+    expect(reinvited?.id).not.toBe(relationship.id);
+    expect(reinvited?.status).toBe('invited');
+    expect(reinvited?.deletedAt).toBeNull();
+
+    // Exactly one LIVE relationship for the pair (the new one).
+    const live = await requestExpertRelationshipsRepository.listByRequest(projectRequestId);
+    const liveForExpert = live.filter((r) => r.expertProfileId === expertProfileId);
+    expect(liveForExpert).toHaveLength(1);
+    expect(liveForExpert[0]?.id).toBe(reinvited?.id);
   });
 
   it('throws on a non-existent projectRequestId (FK)', async () => {
@@ -109,6 +140,70 @@ describe('requestExpertRelationshipsRepository.findById', () => {
   it('returns undefined for an unknown id', async () => {
     const found = await requestExpertRelationshipsRepository.findById(randomUUID());
     expect(found).toBeUndefined();
+  });
+});
+
+describe('requestExpertRelationshipsRepository.softDelete', () => {
+  it('sets deletedAt (and touches updatedAt) on a live relationship and returns the row', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    const removed = await requestExpertRelationshipsRepository.softDelete(relationship.id);
+
+    expect(removed).toBeDefined();
+    expect(removed?.id).toBe(relationship.id);
+    expect(removed?.deletedAt).toBeInstanceOf(Date);
+
+    // Persisted on disk (not just returned).
+    const [raw] = await db
+      .select()
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect(raw?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('removes the relationship from listByRequest', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const live = await requestExpertRelationshipFactory({ projectRequestId: request.id });
+    const toRemove = await requestExpertRelationshipFactory({ projectRequestId: request.id });
+
+    await requestExpertRelationshipsRepository.softDelete(toRemove.relationship.id);
+
+    const rows = await requestExpertRelationshipsRepository.listByRequest(request.id);
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(live.relationship.id);
+    expect(ids).not.toContain(toRemove.relationship.id);
+  });
+
+  it('removes the relationship from findByIdWithRelations', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+
+    await requestExpertRelationshipsRepository.softDelete(relationship.id);
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+    expect(found?.relationships).toHaveLength(0);
+  });
+
+  it('is idempotent — re-removing an already-removed row returns undefined', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { deletedAt: new Date() },
+    });
+
+    const removed = await requestExpertRelationshipsRepository.softDelete(relationship.id);
+
+    expect(removed).toBeUndefined();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    const removed = await requestExpertRelationshipsRepository.softDelete(randomUUID());
+
+    expect(removed).toBeUndefined();
   });
 });
 

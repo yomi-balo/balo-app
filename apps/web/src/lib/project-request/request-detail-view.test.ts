@@ -1,9 +1,36 @@
 import { describe, it, expect } from 'vitest';
 import type { ProjectRequestWithRelations } from '@balo/db';
-import { mapRequestToDetailView, formatPostedRelative } from './request-detail-view';
+import {
+  mapRequestToDetailView,
+  formatPostedRelative,
+  QUIET_THRESHOLD_DAYS,
+} from './request-detail-view';
 import type { RequestViewerContext } from './resolve-request-lens';
 
 const NOW = new Date('2025-01-10T00:00:00Z');
+
+type Relationship = ProjectRequestWithRelations['relationships'][number];
+
+/** Loosened override shape — lets tests pass a raw status string. */
+type RelOverrides = Omit<Partial<Relationship>, 'status'> & { status?: string };
+
+/** Build a single hydrated relationship row with the A2 last-activity fields. */
+function rel(overrides: RelOverrides = {}): Relationship {
+  return {
+    id: 'rel-1',
+    expertProfileId: 'expert-1',
+    status: 'eoi_submitted',
+    invitedAt: new Date('2025-01-08T00:00:00Z'),
+    updatedAt: new Date('2025-01-08T00:00:00Z'),
+    expertProfile: {
+      id: 'expert-1',
+      user: { id: 'user-expert', firstName: 'Priya', lastName: 'Nair' },
+    },
+    expressionsOfInterest: [],
+    conversationMessages: [],
+    ...overrides,
+  } as Relationship;
+}
 
 function request(
   overrides: Partial<ProjectRequestWithRelations> = {}
@@ -40,18 +67,7 @@ function request(
     documents: [
       { id: 'doc-1', fileName: 'brief.pdf', sizeBytes: 1024, contentType: 'application/pdf' },
     ],
-    relationships: [
-      {
-        id: 'rel-1',
-        expertProfileId: 'expert-1',
-        status: 'eoi_submitted',
-        invitedAt: new Date('2025-01-08T00:00:00Z'),
-        expertProfile: {
-          id: 'expert-1',
-          user: { id: 'user-expert', firstName: 'Priya', lastName: 'Nair' },
-        },
-      },
-    ] as ProjectRequestWithRelations['relationships'],
+    relationships: [rel()],
     ...overrides,
   } as ProjectRequestWithRelations;
 }
@@ -137,13 +153,100 @@ describe('mapRequestToDetailView', () => {
       NOW
     );
     expect(observerView.relationships).toEqual([
-      { id: 'rel-1', expertName: 'Priya Nair', status: 'eoi_submitted' },
+      {
+        id: 'rel-1',
+        expertName: 'Priya Nair',
+        status: 'eoi_submitted',
+        state: 'eoi_in',
+        isQuiet: false,
+        quietDays: expect.any(Number),
+        removable: false,
+      },
     ]);
   });
 
   it('omits the relationships projection for participants', () => {
     const view = mapRequestToDetailView(request(), ctx({ archetype: 'participant' }), NOW);
     expect(view.relationships).toEqual([]);
+  });
+});
+
+describe('mapRequestToDetailView — per-expert derived state (observer lens)', () => {
+  const observerCtx = ctx({ lens: 'admin', archetype: 'observer' });
+
+  function deriveOne(r: RelOverrides, now = NOW) {
+    const view = mapRequestToDetailView(request({ relationships: [rel(r)] }), observerCtx, now);
+    const [first] = view.relationships;
+    if (first === undefined) throw new Error('expected one relationship');
+    return first;
+  }
+
+  it('maps each raw status to its display state', () => {
+    const cases: Array<[string, string]> = [
+      ['invited', 'invited'],
+      ['eoi_submitted', 'eoi_in'],
+      ['proposal_requested', 'proposal_requested'],
+      ['proposal_submitted', 'proposal_in'],
+      ['accepted', 'accepted'],
+      ['declined', 'declined'],
+    ];
+    for (const [status, state] of cases) {
+      expect(deriveOne({ status }).state).toBe(state);
+    }
+  });
+
+  it('marks a row removable only while invited', () => {
+    expect(deriveOne({ status: 'invited' }).removable).toBe(true);
+    expect(deriveOne({ status: 'eoi_submitted' }).removable).toBe(false);
+    expect(deriveOne({ status: 'declined' }).removable).toBe(false);
+  });
+
+  it('uses the most recent activity timestamp for quietDays', () => {
+    // invitedAt 9 days ago, but a message 1 day ago → quietDays = 1, not quiet.
+    const result = deriveOne({
+      status: 'invited',
+      invitedAt: new Date('2025-01-01T00:00:00Z'),
+      updatedAt: new Date('2025-01-01T00:00:00Z'),
+      conversationMessages: [
+        { id: 'm-1', createdAt: new Date('2025-01-09T00:00:00Z') },
+      ] as Relationship['conversationMessages'],
+    });
+    expect(result.quietDays).toBe(1);
+    expect(result.isQuiet).toBe(false);
+  });
+
+  it('flags an invited row quiet at exactly the threshold (N days)', () => {
+    const invitedAt = new Date(NOW.getTime() - QUIET_THRESHOLD_DAYS * 24 * 60 * 60 * 1000);
+    const result = deriveOne({ status: 'invited', invitedAt, updatedAt: invitedAt });
+    expect(result.quietDays).toBe(QUIET_THRESHOLD_DAYS);
+    expect(result.isQuiet).toBe(true);
+  });
+
+  it('does NOT flag quiet just below the threshold (N-1 days)', () => {
+    const invitedAt = new Date(NOW.getTime() - (QUIET_THRESHOLD_DAYS - 1) * 24 * 60 * 60 * 1000);
+    const result = deriveOne({ status: 'invited', invitedAt, updatedAt: invitedAt });
+    expect(result.quietDays).toBe(QUIET_THRESHOLD_DAYS - 1);
+    expect(result.isQuiet).toBe(false);
+  });
+
+  it('never flags a non-invited row quiet, even when stale', () => {
+    const old = new Date('2024-01-01T00:00:00Z');
+    const result = deriveOne({ status: 'eoi_submitted', invitedAt: old, updatedAt: old });
+    expect(result.quietDays).toBeGreaterThan(QUIET_THRESHOLD_DAYS);
+    expect(result.isQuiet).toBe(false);
+  });
+
+  it('prefers the latest EOI submittedAt as a recency signal', () => {
+    const result = deriveOne({
+      status: 'invited',
+      invitedAt: new Date('2025-01-01T00:00:00Z'),
+      updatedAt: new Date('2025-01-01T00:00:00Z'),
+      expressionsOfInterest: [
+        { id: 'eoi-1', submittedAt: new Date('2025-01-10T00:00:00Z') },
+      ] as Relationship['expressionsOfInterest'],
+    });
+    expect(result.quietDays).toBe(0);
+    expect(result.isQuiet).toBe(false);
   });
 });
 
