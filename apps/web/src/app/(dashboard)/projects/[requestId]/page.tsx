@@ -29,7 +29,9 @@ const GENERIC_METADATA: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export async function generateMetadata({ params }: RequestDetailPageProps): Promise<Metadata> {
+export async function generateMetadata({
+  params,
+}: Readonly<RequestDetailPageProps>): Promise<Metadata> {
   const { requestId } = await params;
 
   // Mirror the page body's gating BEFORE specialising the title: Next.js streams
@@ -59,7 +61,7 @@ export async function generateMetadata({ params }: RequestDetailPageProps): Prom
 
 export default async function RequestDetailPage({
   params,
-}: RequestDetailPageProps): Promise<React.JSX.Element> {
+}: Readonly<RequestDetailPageProps>): Promise<React.JSX.Element> {
   const { requestId } = await params;
 
   // The (dashboard) layout gates onboarding/drift; guard the unauthenticated
