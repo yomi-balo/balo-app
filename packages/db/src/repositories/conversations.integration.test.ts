@@ -115,6 +115,15 @@ describe('conversationsRepository files', () => {
       sizeBytes: 1,
     });
 
+    // The first file persisted — assert it BEFORE provoking the violation.
+    const before = await conversationsRepository.listFiles(relationship.id);
+    expect(before).toHaveLength(1);
+
+    // The unique r2_key index rejects the duplicate. This insert is a single
+    // un-wrapped statement, so its failure aborts the surrounding per-test
+    // transaction; we therefore make it the test's last DB action and never
+    // query after it (a post-abort query throws "current transaction is
+    // aborted"). Mirrors the FK-violation tests in this file.
     await expect(
       conversationsRepository.addFile({
         relationshipId: relationship.id,
@@ -125,12 +134,6 @@ describe('conversationsRepository files', () => {
         sizeBytes: 1,
       })
     ).rejects.toThrow();
-
-    const rows = await db
-      .select()
-      .from(conversationFiles)
-      .where(eq(conversationFiles.r2Key, dupKey));
-    expect(rows).toHaveLength(1);
   });
 
   it('excludes soft-deleted files from the list', async () => {
