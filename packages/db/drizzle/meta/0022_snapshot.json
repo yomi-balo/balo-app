@@ -4837,7 +4837,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'usd'"
+          "default": "'aud'"
         },
         "submitted_at": {
           "name": "submitted_at",

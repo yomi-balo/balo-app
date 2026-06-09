@@ -9,7 +9,7 @@ export const proposalsRepository = {
    * proposal (status `submitted`) AND advance the relationship
    * `proposal_requested`→`proposal_submitted`. Denormalised request/expert ids
    * are read FROM the (locked) relationship row, not trusted from the caller.
-   * `priceCents` is integer minor units; `currency` defaults to `usd`.
+   * `priceCents` is integer minor units; `currency` defaults to `aud`.
    *
    * BOUNDARY: does NOT advance request-level status — caller-owned.
    */

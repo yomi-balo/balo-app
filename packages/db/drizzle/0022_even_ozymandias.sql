@@ -58,7 +58,7 @@ CREATE TABLE "proposals" (
 	"status" "proposal_status" DEFAULT 'submitted' NOT NULL,
 	"scope" text NOT NULL,
 	"price_cents" integer NOT NULL,
-	"currency" text DEFAULT 'usd' NOT NULL,
+	"currency" text DEFAULT 'aud' NOT NULL,
 	"submitted_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"accepted_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,

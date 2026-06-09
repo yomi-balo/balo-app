@@ -125,7 +125,7 @@ export const proposals = pgTable(
     // Sanitised HTML scope / SOW summary.
     scope: text('scope').notNull(),
     priceCents: integer('price_cents').notNull(),
-    currency: text('currency').notNull().default('usd'),
+    currency: text('currency').notNull().default('aud'),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
     ...timestamps,

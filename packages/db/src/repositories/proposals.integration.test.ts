@@ -23,7 +23,7 @@ describe('proposalsRepository.submit', () => {
     expect(proposal.expertProfileId).toBe(expertProfileId);
     expect(proposal.status).toBe('submitted');
     expect(proposal.priceCents).toBe(500000);
-    expect(proposal.currency).toBe('usd'); // default
+    expect(proposal.currency).toBe('aud'); // default
     expect(proposal.acceptedAt).toBeNull();
 
     const reloaded = await requestExpertRelationshipsRepository.findById(relationship.id);
@@ -39,10 +39,10 @@ describe('proposalsRepository.submit', () => {
       relationshipId: relationship.id,
       scope: '<p>Scope.</p>',
       priceCents: 100000,
-      currency: 'aud',
+      currency: 'usd',
     });
 
-    expect(proposal.currency).toBe('aud');
+    expect(proposal.currency).toBe('usd');
   });
 
   it('rolls back (no orphan proposal) when the relationship is not in proposal_requested', async () => {
