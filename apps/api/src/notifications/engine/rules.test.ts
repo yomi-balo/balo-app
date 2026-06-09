@@ -99,16 +99,22 @@ describe('notificationRules', () => {
     });
   });
 
-  it('project.expert_invited has a single expert email rule', () => {
+  it('project.expert_invited has expert email + in-app rules', () => {
     const rules = notificationRules['project.expert_invited'];
     expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
-    expect(rules![0]).toMatchObject({
-      channel: 'email',
+    expect(rules).toHaveLength(2);
+    const email = rules!.find((r) => r.channel === 'email');
+    expect(email).toMatchObject({
       recipient: 'expert',
       template: 'project-expert-invited',
       timing: 'immediate',
       priority: 'normal',
+    });
+    const inApp = rules!.find((r) => r.channel === 'in-app');
+    expect(inApp).toMatchObject({
+      recipient: 'expert',
+      template: 'project-expert-invited',
+      timing: 'immediate',
     });
   });
 

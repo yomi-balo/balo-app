@@ -84,6 +84,12 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
       priority: 'normal',
     },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-expert-invited',
+      timing: 'immediate',
+    },
   ],
   'booking.confirmed': [
     {

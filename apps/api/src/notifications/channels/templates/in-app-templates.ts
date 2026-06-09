@@ -33,6 +33,16 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
+
+  'project-expert-invited': (data) => {
+    const title = (data.title as string) ?? 'a new project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: "You're invited to a project",
+      body: `Balo invited you to express interest in "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {
