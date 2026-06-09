@@ -39,11 +39,14 @@ const STATE_META: Record<RelationshipState, { label: string; tone: string }> = {
 };
 
 /**
- * Statuses where admin invite/remove controls are live. Remove additionally
- * requires the row itself to still be `invited` (`rel.removable`). Mirrors the
- * design ref: controls render only for `experts_invited ≤ status < proposal_requested`.
+ * Statuses where the PANEL's invite-another / remove controls are live. Narrower
+ * than the action's first-invite window (`inviteExpertsAction` also allows
+ * `requested` / `exploratory_meeting_requested`, where the FIRST invite happens
+ * on the nudge bar, before this panel renders). Remove additionally requires the
+ * row itself to still be `invited` (`rel.removable`). Mirrors the design ref:
+ * controls render only for `experts_invited ≤ status < proposal_requested`.
  */
-const INVITE_WINDOW_STATUSES = new Set<string>(['experts_invited', 'eoi_submitted']);
+const PANEL_CONTROL_WINDOW_STATUSES = new Set<string>(['experts_invited', 'eoi_submitted']);
 
 function deriveInitials(name: string): string {
   return (
@@ -131,7 +134,7 @@ export function AdminHealthPanel({
   relationships,
 }: Readonly<AdminHealthPanelProps>): React.JSX.Element {
   const [inviteOpen, setInviteOpen] = useState(false);
-  const windowOpen = INVITE_WINDOW_STATUSES.has(status);
+  const windowOpen = PANEL_CONTROL_WINDOW_STATUSES.has(status);
   // The picker pre-filters on expert_profiles ids, but the view-model intentionally
   // does not surface them (only relationship ids cross the boundary). Pass the empty
   // set; the invite action's unique-index dedup is the authoritative, idempotent

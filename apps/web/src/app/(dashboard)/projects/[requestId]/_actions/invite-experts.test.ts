@@ -158,9 +158,10 @@ describe('inviteExpertsAction', () => {
     expect(result.success && result.transitioned).toBe(false);
   });
 
-  it('skips a duplicate invite without aborting the batch', async () => {
+  it('skips a live-duplicate invite (invite() → undefined) without aborting the batch', async () => {
+    // A live duplicate now resolves to `undefined` (ON CONFLICT DO NOTHING), not a throw.
     mockInvite
-      .mockRejectedValueOnce(new Error('duplicate key value violates unique constraint'))
+      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ id: 'rel-2', expertProfileId: EXPERT_B });
     const result = await inviteExpertsAction({
       requestId: REQUEST_ID,
@@ -171,8 +172,8 @@ describe('inviteExpertsAction', () => {
     expect(mockTransitionStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('returns invitedCount 0 with no transition when all are dups', async () => {
-    mockInvite.mockRejectedValue(new Error('duplicate'));
+  it('returns invitedCount 0 with no transition when all are live dups', async () => {
+    mockInvite.mockResolvedValue(undefined);
     const result = await inviteExpertsAction({
       requestId: REQUEST_ID,
       expertProfileIds: [EXPERT_A, EXPERT_B],
@@ -181,6 +182,23 @@ describe('inviteExpertsAction', () => {
     expect(mockTransitionStatus).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  it('surfaces a real invite failure instead of masking it as a dup-skip', async () => {
+    // A genuine error (FK / connection) must NOT be swallowed as a duplicate.
+    mockInvite
+      .mockResolvedValueOnce({ id: 'rel-1', expertProfileId: EXPERT_A })
+      .mockRejectedValueOnce(new Error('connection reset'));
+    const result = await inviteExpertsAction({
+      requestId: REQUEST_ID,
+      expertProfileIds: [EXPERT_A, EXPERT_B],
+    });
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not invite experts. Please try again.',
+    });
+    // A failed batch performs no request-level transition.
+    expect(mockTransitionStatus).not.toHaveBeenCalled();
   });
 
   it('returns a generic error on an unexpected failure', async () => {

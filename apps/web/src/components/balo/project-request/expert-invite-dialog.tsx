@@ -45,6 +45,13 @@ function deriveInitials(name: string): string {
   );
 }
 
+/** Confirm-button label for the current pending/selection state (no nested ternary). */
+function inviteButtonLabel(isInviting: boolean, count: number): string {
+  if (isInviting) return 'Inviting…';
+  if (count === 0) return 'Invite experts';
+  return `Invite ${count} expert${count === 1 ? '' : 's'}`;
+}
+
 /**
  * Admin expert picker — searches experts via `searchExpertsForInviteAction`,
  * multi-selects, and persists via `inviteExpertsAction`. All four async states:
@@ -65,14 +72,20 @@ export function ExpertInviteDialog({
   const [isInviting, startInviting] = useTransition();
   const alreadyInvited = new Set(alreadyInvitedIds);
 
-  const runSearch = useCallback(async (q: string): Promise<void> => {
+  // Fire-and-forget search: returns void (not a promise) so call sites need no
+  // `void` operator and trip no floating-promise lint. Rejections fall through to
+  // the error state alongside an unsuccessful result.
+  const runSearch = useCallback((q: string): void => {
     setLoadState({ kind: 'loading' });
-    const result = await searchExpertsForInviteAction({ q: q.trim() || undefined });
-    if (result.success) {
-      setLoadState({ kind: 'loaded', experts: result.experts });
-    } else {
-      setLoadState({ kind: 'error' });
-    }
+    searchExpertsForInviteAction({ q: q.trim() || undefined })
+      .then((result) => {
+        setLoadState(
+          result.success ? { kind: 'loaded', experts: result.experts } : { kind: 'error' }
+        );
+      })
+      .catch(() => {
+        setLoadState({ kind: 'error' });
+      });
   }, []);
 
   // Load on open; reset on close.
@@ -80,7 +93,7 @@ export function ExpertInviteDialog({
     if (open) {
       setSelected(new Set());
       setQuery('');
-      void runSearch('');
+      runSearch('');
     }
   }, [open, runSearch]);
 
@@ -90,7 +103,7 @@ export function ExpertInviteDialog({
     if (!open) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      void runSearch(query);
+      runSearch(query);
     }, 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -141,9 +154,9 @@ export function ExpertInviteDialog({
           from: result.from,
           to: 'experts_invited',
           actor: 'admin',
-          ...(result.firstAdminActionMs !== undefined
-            ? { time_to_first_admin_action_ms: result.firstAdminActionMs }
-            : {}),
+          ...(result.firstAdminActionMs === undefined
+            ? {}
+            : { time_to_first_admin_action_ms: result.firstAdminActionMs }),
         });
       }
 
@@ -193,7 +206,7 @@ export function ExpertInviteDialog({
             <div className="flex h-40 flex-col items-center justify-center gap-3 text-center">
               <AlertCircle className="text-destructive h-5 w-5" aria-hidden="true" />
               <p className="text-muted-foreground text-sm">Couldn&apos;t load experts.</p>
-              <Button variant="outline" size="sm" onClick={() => void runSearch(query)}>
+              <Button variant="outline" size="sm" onClick={() => runSearch(query)}>
                 Try again
               </Button>
             </div>
@@ -269,11 +282,7 @@ export function ExpertInviteDialog({
           </Button>
           <Button onClick={handleInvite} disabled={isInviting || selected.size === 0}>
             <UserPlus className="h-4 w-4" aria-hidden="true" />
-            {isInviting
-              ? 'Inviting…'
-              : selected.size > 0
-                ? `Invite ${selected.size} expert${selected.size === 1 ? '' : 's'}`
-                : 'Invite experts'}
+            {inviteButtonLabel(isInviting, selected.size)}
           </Button>
         </DialogFooter>
       </DialogContent>

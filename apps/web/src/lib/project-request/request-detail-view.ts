@@ -123,7 +123,10 @@ function relationshipName(
  * collection is `limit:1` newest-first (see `findByIdWithRelations`).
  */
 function lastActivityAt(relationship: ProjectRequestWithRelations['relationships'][number]): Date {
-  const candidates: Date[] = [relationship.invitedAt, relationship.updatedAt];
+  // `updatedAt`, plus the newest live EOI / message if present. `invitedAt` seeds
+  // the reduce as its initial value, so the fold always has a base (no empty-array
+  // reduce) and the result is the most-recent of invite / update / EOI / message.
+  const candidates: Date[] = [relationship.updatedAt];
 
   const [latestEoi] = relationship.expressionsOfInterest;
   if (latestEoi !== undefined) candidates.push(latestEoi.submittedAt);
@@ -131,7 +134,10 @@ function lastActivityAt(relationship: ProjectRequestWithRelations['relationships
   const [latestMessage] = relationship.conversationMessages;
   if (latestMessage !== undefined) candidates.push(latestMessage.createdAt);
 
-  return candidates.reduce((max, d) => (d.getTime() > max.getTime() ? d : max));
+  return candidates.reduce(
+    (max, d) => (d.getTime() > max.getTime() ? d : max),
+    relationship.invitedAt
+  );
 }
 
 /**

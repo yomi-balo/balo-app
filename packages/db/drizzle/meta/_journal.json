@@ -176,6 +176,13 @@
       "when": 1780987514122,
       "tag": "0024_good_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1781009339500,
+      "tag": "0025_hesitant_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }

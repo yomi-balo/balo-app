@@ -45,13 +45,56 @@ const INVITE_WINDOW_STATUSES = new Set<string>([
 ]);
 
 /**
+ * Invite each selected expert, returning only the ones newly invited. `invite()`
+ * returns `undefined` for a LIVE duplicate (idempotent skip); a previously removed
+ * (soft-deleted) expert is re-invited as a fresh row. A genuine error (FK /
+ * connection) is NOT caught here — it propagates to the action's catch so the
+ * admin sees a real failure rather than a silent "skipped".
+ */
+async function inviteEachExpert(
+  requestId: string,
+  expertProfileIds: readonly string[],
+  invitedByUserId: string,
+  title: string
+): Promise<InvitedExpert[]> {
+  const invited: InvitedExpert[] = [];
+  for (const expertProfileId of expertProfileIds) {
+    const rel = await requestExpertRelationshipsRepository.invite({
+      projectRequestId: requestId,
+      expertProfileId,
+      invitedByUserId,
+    });
+    if (rel === undefined) {
+      log.warn('Duplicate invite skipped (live relationship already exists)', {
+        requestId,
+        expertProfileId,
+      });
+      continue;
+    }
+    invited.push({ relationshipId: rel.id, expertProfileId });
+
+    // Fire-and-forget per successful invite — never blocks the batch.
+    publishNotificationEvent('project.expert_invited', {
+      correlationId: rel.id,
+      projectRequestId: requestId,
+      expertProfileId,
+      title,
+    }).catch(() => {
+      // publishNotificationEvent logs internally.
+    });
+  }
+  return invited;
+}
+
+/**
  * Admin triage — invite one or more experts to a request.
  *
- * Loops `invite()` per expert (per-expert dup invites are skipped idempotently),
- * then performs a SINGLE request-level transition to `experts_invited` only when
- * the request is currently `requested`/`exploratory_meeting_requested` and at
- * least one new invite landed. `experts_invited → experts_invited` is illegal, so
- * the "invite another" path performs no transition.
+ * Invites each expert (live dup invites are skipped idempotently; removed experts
+ * can be re-invited), then performs a SINGLE request-level transition to
+ * `experts_invited` only when the request is currently
+ * `requested`/`exploratory_meeting_requested` and at least one new invite landed.
+ * `experts_invited → experts_invited` is illegal, so the "invite another" path
+ * performs no transition.
  */
 export async function inviteExpertsAction(
   input: z.infer<typeof inputSchema>
@@ -79,31 +122,7 @@ export async function inviteExpertsAction(
       return { success: false, error: 'Experts can no longer be invited to this request.' };
     }
 
-    const invited: InvitedExpert[] = [];
-    for (const expertProfileId of expertProfileIds) {
-      try {
-        const rel = await requestExpertRelationshipsRepository.invite({
-          projectRequestId: requestId,
-          expertProfileId,
-          invitedByUserId: admin.id,
-        });
-        invited.push({ relationshipId: rel.id, expertProfileId });
-
-        // Fire-and-forget per successful invite — never blocks the batch.
-        publishNotificationEvent('project.expert_invited', {
-          correlationId: rel.id,
-          projectRequestId: requestId,
-          expertProfileId,
-          title: request.title,
-        }).catch(() => {
-          // publishNotificationEvent logs internally.
-        });
-      } catch {
-        // Unique (project_request_id, expert_profile_id) index → already invited.
-        // Treat as an idempotent skip so a partial overlap doesn't abort the batch.
-        log.warn('Duplicate invite skipped', { requestId, expertProfileId });
-      }
-    }
+    const invited = await inviteEachExpert(requestId, expertProfileIds, admin.id, request.title);
 
     // Single, idempotent request-level transition — only on the FIRST invite.
     const needsTransition = TRANSITION_FROM_STATUSES.has(request.status);

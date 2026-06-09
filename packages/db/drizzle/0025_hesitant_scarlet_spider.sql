@@ -1,0 +1,2 @@
+DROP INDEX "request_expert_relationship_unique_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "request_expert_relationship_unique_idx" ON "request_expert_relationships" USING btree ("project_request_id","expert_profile_id") WHERE "request_expert_relationships"."deleted_at" IS NULL;

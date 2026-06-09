@@ -28,6 +28,8 @@ describe('requestExpertRelationshipsRepository.invite', () => {
       invitedByUserId: admin.id,
     });
 
+    expect(row).toBeDefined();
+    if (row === undefined) throw new Error('expected invite to create a row');
     expect(row.id).toBeDefined();
     expect(row.projectRequestId).toBe(request.id);
     expect(row.expertProfileId).toBe(expertId);
@@ -38,17 +40,45 @@ describe('requestExpertRelationshipsRepository.invite', () => {
     expect(row.deletedAt).toBeNull();
   });
 
-  it('rejects a duplicate invite for the same (request, expert) — unique index', async () => {
+  it('returns undefined for a duplicate LIVE invite (idempotent skip, not a throw)', async () => {
     const { projectRequestId, expertProfileId, invitedByUserId } =
       await requestExpertRelationshipFactory();
 
-    await expect(
-      requestExpertRelationshipsRepository.invite({
-        projectRequestId,
-        expertProfileId,
-        invitedByUserId,
-      })
-    ).rejects.toThrow();
+    // The partial unique index is the ON CONFLICT arbiter → DO NOTHING → undefined.
+    const dup = await requestExpertRelationshipsRepository.invite({
+      projectRequestId,
+      expertProfileId,
+      invitedByUserId,
+    });
+
+    expect(dup).toBeUndefined();
+  });
+
+  it('re-invites a previously removed (soft-deleted) expert as a fresh live row', async () => {
+    const { relationship, projectRequestId, expertProfileId, invitedByUserId } =
+      await requestExpertRelationshipFactory();
+
+    // Remove (soft-delete), then invite the same (request, expert) again.
+    await requestExpertRelationshipsRepository.softDelete(relationship.id);
+
+    const reinvited = await requestExpertRelationshipsRepository.invite({
+      projectRequestId,
+      expertProfileId,
+      invitedByUserId,
+    });
+
+    // A fresh row, not the removed one — the soft-deleted row is outside the
+    // partial unique index, so the insert no longer conflicts.
+    expect(reinvited).toBeDefined();
+    expect(reinvited?.id).not.toBe(relationship.id);
+    expect(reinvited?.status).toBe('invited');
+    expect(reinvited?.deletedAt).toBeNull();
+
+    // Exactly one LIVE relationship for the pair (the new one).
+    const live = await requestExpertRelationshipsRepository.listByRequest(projectRequestId);
+    const liveForExpert = live.filter((r) => r.expertProfileId === expertProfileId);
+    expect(liveForExpert).toHaveLength(1);
+    expect(liveForExpert[0]?.id).toBe(reinvited?.id);
   });
 
   it('throws on a non-existent projectRequestId (FK)', async () => {

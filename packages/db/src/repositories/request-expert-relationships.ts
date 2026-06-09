@@ -95,14 +95,22 @@ export async function advanceRelationshipStatus(
 
 export const requestExpertRelationshipsRepository = {
   /**
-   * Admin invites an expert → creates an `invited` relationship row. The unique
-   * `(project_request_id, expert_profile_id)` index rejects a duplicate invite.
+   * Admin invites an expert → creates an `invited` relationship row.
+   *
+   * Returns `undefined` when a LIVE relationship for this (request, expert)
+   * already exists: the partial unique index
+   * (`request_expert_relationship_unique_idx WHERE deleted_at IS NULL`) is the
+   * `ON CONFLICT` arbiter, so a live duplicate is a clean DO-NOTHING no-op (the
+   * caller treats it as an idempotent skip) rather than a thrown 23505 — which
+   * means a genuine failure (FK / connection) still throws and is never masked.
+   * A previously REMOVED (soft-deleted) expert is outside the partial index, so
+   * re-inviting them inserts a fresh `invited` row.
    */
   async invite(input: {
     projectRequestId: string;
     expertProfileId: string;
     invitedByUserId: string;
-  }): Promise<RequestExpertRelationship> {
+  }): Promise<RequestExpertRelationship | undefined> {
     const [row] = await db
       .insert(requestExpertRelationships)
       .values({
@@ -110,10 +118,15 @@ export const requestExpertRelationshipsRepository = {
         expertProfileId: input.expertProfileId,
         invitedByUserId: input.invitedByUserId,
       })
+      .onConflictDoNothing({
+        target: [
+          requestExpertRelationships.projectRequestId,
+          requestExpertRelationships.expertProfileId,
+        ],
+        // The arbiter is the PARTIAL unique index, so its predicate must be given.
+        where: isNull(requestExpertRelationships.deletedAt),
+      })
       .returning();
-    if (row === undefined) {
-      throw new Error('Failed to create request expert relationship');
-    }
     return row;
   },
 
