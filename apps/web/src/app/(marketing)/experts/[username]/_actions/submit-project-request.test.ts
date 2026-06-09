@@ -80,7 +80,7 @@ function createdRow(overrides: Record<string, unknown> = {}): Record<string, unk
     expertProfileId: EXPERT_PROFILE_ID,
     createdByUserId: USER_ID,
     sendTo: 'direct',
-    status: 'submitted',
+    status: 'requested',
     source: 'manual',
     title: 'Lead routing rebuild',
     description: '<p>Rebuild lead routing in Flow.</p>',
@@ -148,7 +148,7 @@ describe('submitProjectRequestAction', () => {
             createdByUserId: USER_ID,
             sendTo: 'direct',
             expertProfileId: EXPERT_PROFILE_ID,
-            status: 'submitted',
+            status: 'requested',
             source: 'manual',
           }),
         })

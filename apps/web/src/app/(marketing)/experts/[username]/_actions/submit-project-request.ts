@@ -69,7 +69,7 @@ export const submitProjectRequestAction = withAuth(
           createdByUserId: session.user.id,
           sendTo: input.sendTo,
           expertProfileId,
-          status: 'submitted',
+          status: 'requested',
           source: input.source,
           title: input.title,
           description: safeHtml,

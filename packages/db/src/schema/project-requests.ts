@@ -10,6 +10,7 @@ import { expertProfiles } from './experts';
 import { users } from './users';
 import { products } from './verticals';
 import { projectTags } from './project-tags';
+import { requestExpertRelationships } from './request-origination';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -51,11 +52,15 @@ export const projectRequests = pgTable(
     // 'direct' (the public-profile entry path).
     sendTo: projectRequestSendToEnum('send_to').notNull().default('direct'),
 
-    status: projectRequestStatusEnum('status').notNull().default('submitted'),
+    status: projectRequestStatusEnum('status').notNull().default('requested'),
     source: projectRequestSourceEnum('source').notNull().default('manual'),
 
     title: text('title').notNull(),
     description: text('description').notNull(),
+
+    // Reserved cap — per-request max number of proposals. NULL = no cap.
+    // Enforcement intentionally deferred (column only, no logic anywhere yet).
+    proposalCap: integer('proposal_cap'),
 
     // Reserved for BAL-254/255 (a quick-start/package origin). No FK yet — the
     // packages table does not exist; add the FK in the package work to avoid a
@@ -175,6 +180,7 @@ export const projectRequestsRelations = relations(projectRequests, ({ one, many 
   tags: many(projectRequestTags),
   products: many(projectRequestProducts),
   documents: many(projectRequestDocuments),
+  relationships: many(requestExpertRelationships),
 }));
 
 export const projectRequestTagsRelations = relations(projectRequestTags, ({ one }) => ({
