@@ -17,6 +17,8 @@ Your first step is to gather full context:
 
 ## Workflow
 
+**Setup — do this FIRST, before any other phase.** Unless otherwise instructed: switch cleanly to `main`, **pull the latest changes**, and create a new branch off the freshly pulled `main` for the task (use the Linear ticket's `gitBranchName` when available). Syncing `main` up front guarantees the entire run is built on the latest code. Every subsequent phase happens on this branch; **Phase 9 just commits it and raises the PR — it does NOT switch to `main` or pull again** (the sync already happened here).
+
 ### Phase 0: Design (conditional)
 
 **Run design phase when the task involves:**
@@ -191,6 +193,27 @@ claude -p \
 - After 2 retries, present all remaining issues to the user for decision
 - On success, report: what was built, files changed, any suggestions for follow-up tasks
 - **All pre-PR checks must have passed** (Phase 7 green light) before declaring success
+- Then proceed to **Phase 9** to branch, commit, and raise the PR
+
+### Phase 9: Branch, commit & PR (always runs on success, unless otherwise instructed)
+
+Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a pull request. **This is part of the workflow — invoking `/implement` authorizes it; don't ask again unless something is genuinely ambiguous (unrelated changes to exclude, a rebase conflict, or the user said not to raise a PR).**
+
+1. **Confirm you're on the task's feature branch** — the one cut from the latest `main` during **Setup**, so the work is already built on current code. Do **not** switch to `main` or pull here; that sync belongs in Setup, before the build. (Fallback only: if the work somehow ended up on `main`, create the branch now carrying the changes — `git switch -c <gitBranchName>`. If `main` genuinely advanced mid-run and must be integrated, rebase onto `origin/main` and **surface any conflicts to the user — never force-resolve or force-push**.)
+2. **Stage only this task's files.** Drop any unrelated pre-existing working-tree changes from the commit with `git restore --staged <path>` (leave them in the working tree). Verify with `git diff --cached --name-only` before committing.
+3. **Commit.** Follow the repo convention `feat|fix|chore: <concise summary> (BAL-XXX)`, with a body summarizing what shipped and what was deliberately deferred. End the message with the required trailer:
+   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
+   (A `lint-staged` pre-commit hook auto-formats staged files and folds the fixes into the commit — expect that.)
+4. **Push & raise the PR** with the `gh` CLI:
+   ```bash
+   git push -u origin <gitBranchName>
+   gh pr create --base main --head <gitBranchName> \
+     --title "<same as the commit subject>" \
+     --body-file <path-to-body.md>
+   ```
+   The PR body should cover: what & why (link the Linear ticket), what's built, any approved scope additions, security/quality notes, testing (and what's deferred to CI — e.g. integration tests, the production build), and the deliberately-stubbed boundary. End the body with:
+   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
+5. **Report the PR URL.** Then offer to watch CI and/or move the Linear ticket to In Review with the PR attached.
 
 ## Rules
 
@@ -203,3 +226,4 @@ claude -p \
 7. Stage changes with `git add -A` before running review agents so they see the full diff
 8. The designer's approved output feeds into the architect, builder, and UX validator — it is the source of truth for what the user experience should be
 9. Phase 7 (pre-PR gate) is the last automated check before declaring success — never skip it, even if review passed cleanly
+10. Sync `main` and cut the feature branch **at Setup, before any build work** (not at the end), so the whole run is built on the latest code. Phase 9 then always runs on a successful completion unless the user said not to raise a PR: it commits **only this task's files** (exclude unrelated working-tree changes) on that branch, pushes, and raises the PR to `main` with `gh` — it does not re-pull `main`. Never force-push; if `main` must be integrated mid-run, rebase and surface conflicts to the user. Use the Linear ticket's `gitBranchName` and end the commit/PR with the required co-author/footer trailers.
