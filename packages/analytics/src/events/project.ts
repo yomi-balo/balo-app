@@ -23,11 +23,23 @@ export const PROJECT_EVENTS = {
   PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
   PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
   PROJECT_KICKOFF_APPROVED: 'project_kickoff_approved',
+  // Request-detail page (A1 / BAL-268) viewer-occurrence signals, fired from the
+  // client analytics island. DETAIL_VIEWED on mount; PHASE_FLIPPED the first time
+  // a viewer sees this request in Phase 2 (per request+lens, sessionStorage-guarded
+  // — the true server transition is PROJECT_REQUEST_STATUS_TRANSITIONED); DETAIL_DWELL
+  // on tab-hide / unload.
+  PROJECT_REQUEST_DETAIL_VIEWED: 'project_request_detail_viewed',
+  PROJECT_REQUEST_PHASE_FLIPPED: 'project_request_phase_flipped',
+  PROJECT_REQUEST_DETAIL_DWELL: 'project_request_detail_dwell',
 } as const;
 
 export type ProjectEntryMethod = 'manual' | 'ai';
 export type ProjectStep = 'start' | 'manual' | 'review' | 'done';
 export type ProjectActor = 'client' | 'expert' | 'admin';
+/** Viewer lens on the request-detail page (admin is the observer archetype). */
+export type ProjectRequestLens = 'client' | 'expert' | 'admin';
+export type ProjectRequestArchetype = 'participant' | 'observer';
+export type ProjectRequestPhase = 'phase1' | 'phase2';
 
 export interface ProjectEventMap {
   [PROJECT_EVENTS.PROJECT_DRAWER_OPENED]: { expert_id: string };
@@ -85,5 +97,24 @@ export interface ProjectEventMap {
   [PROJECT_EVENTS.PROJECT_KICKOFF_APPROVED]: {
     request_id: string;
     actor: 'admin';
+  };
+  [PROJECT_EVENTS.PROJECT_REQUEST_DETAIL_VIEWED]: {
+    request_id: string;
+    lens: ProjectRequestLens;
+    archetype: ProjectRequestArchetype;
+    status: string;
+    phase: ProjectRequestPhase;
+  };
+  [PROJECT_EVENTS.PROJECT_REQUEST_PHASE_FLIPPED]: {
+    request_id: string;
+    lens: ProjectRequestLens;
+    from_phase: 'phase1';
+    to_phase: 'phase2';
+  };
+  [PROJECT_EVENTS.PROJECT_REQUEST_DETAIL_DWELL]: {
+    request_id: string;
+    lens: ProjectRequestLens;
+    status: string;
+    dwell_ms: number;
   };
 }

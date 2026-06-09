@@ -112,6 +112,71 @@ export const projectRequestsRepository = {
   },
 
   /**
+   * Live request by id, hydrated with the relations the detail page needs:
+   * company, creator, project-type tags, products, brief documents, and the
+   * per-expert relationships (each with its expert's user identity). Returns
+   * `undefined` for a missing or soft-deleted request.
+   *
+   * Soft-delete-aware at EVERY level — the top row AND each child collection
+   * filter `deletedAt IS NULL`. Columns are allow-listed (defense-in-depth,
+   * mirrors `findPublicProfileByUsername`): only what the view-model needs
+   * crosses the boundary. The new budget/timeline columns are included so they
+   * hydrate into the view-model. `users.email` is selected solely as a
+   * contact-name fallback and is dropped server-side in the mapper before any
+   * contact-gated payload reaches the client.
+   */
+  async findByIdWithRelations(id: string) {
+    return db.query.projectRequests.findFirst({
+      where: and(eq(projectRequests.id, id), isNull(projectRequests.deletedAt)),
+      columns: {
+        id: true,
+        companyId: true,
+        expertProfileId: true,
+        createdByUserId: true,
+        sendTo: true,
+        status: true,
+        source: true,
+        title: true,
+        description: true,
+        budgetMinCents: true,
+        budgetMaxCents: true,
+        budgetCurrency: true,
+        timeline: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      with: {
+        company: { columns: { id: true, name: true } },
+        createdByUser: {
+          columns: { id: true, firstName: true, lastName: true, email: true },
+        },
+        tags: {
+          where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+          with: { projectTag: { columns: { id: true, name: true } } },
+        },
+        products: {
+          where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+          with: { product: { columns: { id: true, name: true } } },
+        },
+        documents: {
+          where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+          columns: { id: true, fileName: true, sizeBytes: true, contentType: true },
+        },
+        relationships: {
+          where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+          columns: { id: true, expertProfileId: true, status: true, invitedAt: true },
+          with: {
+            expertProfile: {
+              columns: { id: true },
+              with: { user: { columns: { id: true, firstName: true, lastName: true } } },
+            },
+          },
+        },
+      },
+    });
+  },
+
+  /**
    * Atomically advance a request's status with from→to validation. Reads the
    * current row FOR UPDATE inside the txn (serialising concurrent admin
    * transitions), rejects illegal transitions (`InvalidStatusTransitionError`)
@@ -161,3 +226,13 @@ export const projectRequestsRepository = {
     });
   },
 };
+
+/**
+ * The hydrated request shape the detail page (and its lens resolver / view-model
+ * mapper) consume. `NonNullable` because `findByIdWithRelations` returns
+ * `undefined` for a missing/soft-deleted request; callers that have already
+ * `notFound()`-guarded the undefined branch hold this non-null type.
+ */
+export type ProjectRequestWithRelations = NonNullable<
+  Awaited<ReturnType<typeof projectRequestsRepository.findByIdWithRelations>>
+>;

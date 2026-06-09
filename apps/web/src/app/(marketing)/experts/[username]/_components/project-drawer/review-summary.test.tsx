@@ -24,6 +24,9 @@ const DRAFT: ProjectDraft = {
       sizeBytes: 2048,
     },
   ],
+  budgetMinCents: 4500000,
+  budgetMaxCents: 7000000,
+  timeline: 'Target go-live: end of Q3',
 };
 
 const BASE = {
@@ -59,6 +62,23 @@ describe('ReviewSummary', () => {
       />
     );
     expect(screen.getAllByText('None').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('renders the formatted budget range and timeline', () => {
+    render(<ReviewSummary draft={DRAFT} onEdit={vi.fn()} {...BASE} />);
+    expect(screen.getByText('A$45,000 – A$70,000')).toBeInTheDocument();
+    expect(screen.getByText('Target go-live: end of Q3')).toBeInTheDocument();
+  });
+
+  it('shows "Not specified" when budget + timeline are null', () => {
+    render(
+      <ReviewSummary
+        draft={{ ...DRAFT, budgetMinCents: null, budgetMaxCents: null, timeline: null }}
+        onEdit={vi.fn()}
+        {...BASE}
+      />
+    );
+    expect(screen.getAllByText('Not specified').length).toBe(2);
   });
 
   it('fires onEdit from the Edit links', async () => {

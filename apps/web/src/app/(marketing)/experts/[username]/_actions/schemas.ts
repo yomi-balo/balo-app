@@ -38,6 +38,9 @@ export const documentRefSchema = z.object({
 
 export type ProjectDocumentRef = z.infer<typeof documentRefSchema>;
 
+/** Max length of the free-text timeline (a short phrase, e.g. "end of Q3"). */
+export const MAX_TIMELINE_LENGTH = 120;
+
 const baseProjectRequestFields = {
   title: z.string().trim().min(3, 'Give your project a title').max(120),
   // Raw HTML from the editor. Bounded generously; sanitised server-side before persist.
@@ -46,19 +49,52 @@ const baseProjectRequestFields = {
   productIds: z.array(z.string().uuid()).max(50).default([]),
   documents: z.array(documentRefSchema).max(MAX_DOCUMENTS).default([]),
   source: z.enum(['manual', 'ai', 'quickstart']).default('manual'),
+  // Optional budget range in integer minor units (cents), fixed to AUD in the
+  // action. Both nullable — either side may be omitted for a one-sided budget.
+  budgetMinCents: z.number().int().nonnegative().nullable().default(null),
+  budgetMaxCents: z.number().int().nonnegative().nullable().default(null),
+  // Optional free-text timeline (empty string → null). Genuinely unstructured.
+  timeline: z
+    .string()
+    .trim()
+    .max(MAX_TIMELINE_LENGTH)
+    .nullable()
+    .default(null)
+    .transform((v) => (v === null || v.length === 0 ? null : v)),
 };
 
-export const projectRequestInputSchema = z.discriminatedUnion('sendTo', [
-  z.object({
-    sendTo: z.literal('direct'),
-    expertProfileId: z.string().uuid(),
-    ...baseProjectRequestFields,
-  }),
-  z.object({
-    sendTo: z.literal('match'),
-    // expertProfileId intentionally omitted in match mode
-    ...baseProjectRequestFields,
-  }),
-]);
+/**
+ * When both budget amounts are present, max must be ≥ min (the range is
+ * coherent). Either side may be null (one-sided/empty budget). Shared by both
+ * union branches.
+ */
+function refineBudgetRange(
+  data: { budgetMinCents: number | null; budgetMaxCents: number | null },
+  ctx: z.RefinementCtx
+): void {
+  const { budgetMinCents, budgetMaxCents } = data;
+  if (budgetMinCents !== null && budgetMaxCents !== null && budgetMaxCents < budgetMinCents) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Max budget must be at least the minimum.',
+      path: ['budgetMaxCents'],
+    });
+  }
+}
+
+export const projectRequestInputSchema = z
+  .discriminatedUnion('sendTo', [
+    z.object({
+      sendTo: z.literal('direct'),
+      expertProfileId: z.string().uuid(),
+      ...baseProjectRequestFields,
+    }),
+    z.object({
+      sendTo: z.literal('match'),
+      // expertProfileId intentionally omitted in match mode
+      ...baseProjectRequestFields,
+    }),
+  ])
+  .superRefine(refineBudgetRange);
 
 export type ProjectRequestInput = z.infer<typeof projectRequestInputSchema>;

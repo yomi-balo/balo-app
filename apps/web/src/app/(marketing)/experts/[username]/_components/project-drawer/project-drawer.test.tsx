@@ -259,6 +259,103 @@ describe('ProjectDrawer', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Request sent', expect.objectContaining({}));
   });
 
+  it('captures budget (whole dollars → cents) and timeline into the submit payload', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Budgeted build');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+
+    await user.type(screen.getByLabelText(/min budget/i), '5000');
+    await user.type(screen.getByLabelText(/max budget/i), '12000');
+    await user.type(screen.getByLabelText(/timeline/i), 'Target go-live: end of Q3');
+
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+    await waitFor(() => {
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Whole-dollar input persisted as integer cents.
+          budgetMinCents: 500000,
+          budgetMaxCents: 1200000,
+          timeline: 'Target go-live: end of Q3',
+        })
+      );
+    });
+  });
+
+  it('clears budget back to null when the input is emptied or invalid', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Budget edge cases');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+
+    const minBudget = screen.getByLabelText(/min budget/i);
+    // Typed then fully cleared → null (empty-string branch).
+    await user.type(minBudget, '5000');
+    await user.clear(minBudget);
+    // Non-numeric input → null (invalid branch).
+    await user.type(screen.getByLabelText(/max budget/i), 'abc');
+
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+    await waitFor(() => {
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ budgetMinCents: null, budgetMaxCents: null })
+      );
+    });
+  });
+
+  it('shows the budget-range alert when max is below min', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/min budget/i), '9000');
+    await user.type(screen.getByLabelText(/max budget/i), '1000');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/at least the minimum/i);
+  });
+
+  it('coerces budget input to whole-dollar cents (tolerates commas, ignores decimals)', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Whole-dollar budget');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+
+    // Paste delivers the whole string in a single onChange (models a real paste /
+    // autofill) so the handler's coercion — not intermediate controlled-input
+    // states — is what's under test.
+    // Comma thousands-separator tolerated → 150000 cents (not nulled).
+    await user.click(screen.getByLabelText(/min budget/i));
+    await user.paste('1,500');
+    // A stray decimal collapses to its whole-dollar part → 4500000 cents
+    // (no rounding-up surprise; stored cents stay a multiple of 100).
+    await user.click(screen.getByLabelText(/max budget/i));
+    await user.paste('45000.50');
+
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+    await waitFor(() => {
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ budgetMinCents: 150000, budgetMaxCents: 4500000 })
+      );
+    });
+  });
+
   it('omits expertProfileId and uses Match copy when routing is Match', async () => {
     const user = userEvent.setup();
     renderDrawer();

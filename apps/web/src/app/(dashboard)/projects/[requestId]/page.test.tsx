@@ -1,0 +1,254 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@/test/utils';
+import type { ProjectRequestWithRelations } from '@balo/db';
+import type { SessionUser } from '@/lib/auth/session';
+
+// `rich-text.tsx` (reached through the real shell) imports `server-only`.
+vi.mock('server-only', () => ({}));
+
+// ── Seams the page composes (mirrors the BAL-247/251 RSC page-test precedent) ──
+const {
+  mockFindByIdWithRelations,
+  mockGetCurrentUser,
+  mockNotFound,
+  mockRedirect,
+  mockLogWarn,
+  mockLogError,
+} = vi.hoisted(() => ({
+  mockFindByIdWithRelations: vi.fn(),
+  mockGetCurrentUser: vi.fn(),
+  // notFound()/redirect() must THROW so control flow stops, exactly like Next.
+  mockNotFound: vi.fn(() => {
+    throw new Error('NEXT_NOT_FOUND');
+  }),
+  mockRedirect: vi.fn(() => {
+    throw new Error('NEXT_REDIRECT');
+  }),
+  mockLogWarn: vi.fn(),
+  mockLogError: vi.fn(),
+}));
+
+vi.mock('@balo/db', () => ({
+  projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
+}));
+vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
+vi.mock('next/navigation', () => ({ notFound: mockNotFound, redirect: mockRedirect }));
+vi.mock('@/lib/logging', () => ({ log: { warn: mockLogWarn, error: mockLogError } }));
+
+import RequestDetailPage, { generateMetadata } from './page';
+
+const REQUEST_ID = 'req-1';
+const COMPANY_ID = 'company-1';
+const OTHER_COMPANY_ID = 'company-2';
+const EXPERT_PROFILE_ID = 'expert-1';
+const CONTACT_NAME = 'Dana Whitfield';
+const REQUEST_TITLE = 'CPQ implementation';
+
+function request(
+  overrides: Partial<ProjectRequestWithRelations> = {}
+): ProjectRequestWithRelations {
+  return {
+    id: REQUEST_ID,
+    companyId: COMPANY_ID,
+    expertProfileId: null,
+    createdByUserId: 'user-client',
+    sendTo: 'match',
+    status: 'requested',
+    source: 'manual',
+    title: REQUEST_TITLE,
+    description: '<p>Brief</p>',
+    budgetMinCents: null,
+    budgetMaxCents: null,
+    budgetCurrency: 'aud',
+    timeline: null,
+    createdAt: new Date('2025-01-01T00:00:00Z'),
+    updatedAt: new Date('2025-01-01T00:00:00Z'),
+    company: { id: COMPANY_ID, name: 'Northwind Industrial' },
+    createdByUser: {
+      id: 'user-client',
+      firstName: 'Dana',
+      lastName: 'Whitfield',
+      email: 'dana@northwind.test',
+    },
+    tags: [],
+    products: [],
+    documents: [],
+    relationships: [],
+    ...overrides,
+  } as ProjectRequestWithRelations;
+}
+
+function user(overrides: Partial<SessionUser> = {}): SessionUser {
+  return {
+    id: 'user-x',
+    email: 'x@example.com',
+    firstName: 'X',
+    lastName: 'Y',
+    avatarUrl: null,
+    activeMode: 'client',
+    onboardingCompleted: true,
+    platformRole: 'user',
+    companyId: COMPANY_ID,
+    companyName: 'Northwind Industrial',
+    companyRole: 'owner',
+    ...overrides,
+  };
+}
+
+function liveRelationship(): ProjectRequestWithRelations['relationships'][number] {
+  return {
+    id: 'rel-1',
+    expertProfileId: EXPERT_PROFILE_ID,
+    status: 'invited',
+    invitedAt: new Date('2025-01-01T00:00:00Z'),
+    expertProfile: {
+      id: EXPERT_PROFILE_ID,
+      user: { id: 'user-expert', firstName: 'Priya', lastName: 'Nair' },
+    },
+  } as ProjectRequestWithRelations['relationships'][number];
+}
+
+async function renderPage(requestId = REQUEST_ID) {
+  const ui = await RequestDetailPage({ params: Promise.resolve({ requestId }) });
+  return render(ui);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('RequestDetailPage (RSC) — auth + lens gating', () => {
+  it('redirects to /login when there is no current user', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+    expect(mockRedirect).toHaveBeenCalledWith('/login');
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+  });
+
+  it('calls notFound() when the request is missing (undefined)', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(undefined);
+    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mockNotFound).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a warning and notFound()s for an authenticated stranger (no leak)', async () => {
+    // Different company, no invite, not admin → resolver returns null.
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request());
+
+    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Project request access denied',
+      expect.objectContaining({ requestId: REQUEST_ID })
+    );
+    // The contact name must never reach the rendered tree for a stranger.
+    expect(screen.queryByText(CONTACT_NAME)).not.toBeInTheDocument();
+  });
+
+  it('logs an error and rethrows (to error.tsx) when the load throws', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockRejectedValue(new Error('db down'));
+
+    await expect(renderPage()).rejects.toThrow('db down');
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Failed to load project request detail',
+      expect.objectContaining({ requestId: REQUEST_ID })
+    );
+    expect(mockNotFound).not.toHaveBeenCalled();
+  });
+});
+
+describe('RequestDetailPage (RSC) — authorised lenses render the shell', () => {
+  it('renders the client view (owner) with the request title', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(request());
+
+    await renderPage();
+    expect(
+      screen.getByRole('heading', { name: new RegExp(REQUEST_TITLE, 'i') })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Client')).toBeInTheDocument();
+    // Client never sees their own identity as a "Contact".
+    expect(screen.queryByText(CONTACT_NAME)).not.toBeInTheDocument();
+  });
+
+  it('renders the expert view for an invited expert (live relationship)', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({
+        companyId: OTHER_COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        activeMode: 'expert',
+      })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'experts_invited', relationships: [liveRelationship()] })
+    );
+
+    await renderPage();
+    expect(screen.getByText('Expert')).toBeInTheDocument();
+    // Expert lens sees the named contact.
+    expect(screen.getByText(CONTACT_NAME)).toBeInTheDocument();
+  });
+
+  it('renders the admin observer view', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request({ status: 'eoi_submitted' }));
+
+    await renderPage();
+    expect(screen.getByText('Admin')).toBeInTheDocument();
+  });
+});
+
+describe('RequestDetailPage — generateMetadata (Fix 1: no existence/title leak)', () => {
+  async function meta(requestId = REQUEST_ID) {
+    return generateMetadata({ params: Promise.resolve({ requestId }) });
+  }
+
+  it('returns the GENERIC title for a null user (never echoes the title)', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
+    const result = await meta();
+    expect(result.title).toBe('Project request — Balo');
+    expect(result.robots).toMatchObject({ index: false, follow: false });
+    // Must not have loaded the request to derive a title.
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+  });
+
+  it('returns the GENERIC title for an authenticated stranger (existence not confirmed)', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request());
+
+    const result = await meta();
+    // The real title must NOT appear — a non-participant can't distinguish
+    // doesn't-exist from exists-but-not-yours.
+    expect(result.title).toBe('Project request — Balo');
+    expect(result.title).not.toContain(REQUEST_TITLE);
+  });
+
+  it('returns the GENERIC title when the request is missing', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(undefined);
+    expect((await meta()).title).toBe('Project request — Balo');
+  });
+
+  it('returns the REAL title only for an authorised participant', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(request());
+
+    const result = await meta();
+    expect(result.title).toBe(`${REQUEST_TITLE} — Balo`);
+    expect(result.robots).toMatchObject({ index: false, follow: false });
+  });
+
+  it('falls back to the GENERIC title (leak-free) when the load throws', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockRejectedValue(new Error('db down'));
+    expect((await meta()).title).toBe('Project request — Balo');
+  });
+});

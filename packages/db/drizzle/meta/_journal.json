@@ -169,6 +169,13 @@
       "when": 1780984181665,
       "tag": "0023_certain_zaladane",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1780987514122,
+      "tag": "0024_good_proudstar",
+      "breakpoints": true
     }
   ]
 }

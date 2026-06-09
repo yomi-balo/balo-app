@@ -217,6 +217,93 @@ describe('projectRequestInputSchema', () => {
     });
   });
 
+  describe('budget + timeline', () => {
+    it('defaults budget + timeline to null when omitted (existing contract preserved)', () => {
+      const result = projectRequestInputSchema.safeParse(directInput());
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.budgetMinCents).toBeNull();
+        expect(result.data.budgetMaxCents).toBeNull();
+        expect(result.data.timeline).toBeNull();
+      }
+    });
+
+    it('accepts a valid min/max pair and a timeline', () => {
+      const result = projectRequestInputSchema.safeParse(
+        directInput({ budgetMinCents: 4500000, budgetMaxCents: 7000000, timeline: 'End of Q3' })
+      );
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.budgetMinCents).toBe(4500000);
+        expect(result.data.budgetMaxCents).toBe(7000000);
+        expect(result.data.timeline).toBe('End of Q3');
+      }
+    });
+
+    it('accepts a one-sided budget (min only)', () => {
+      const result = projectRequestInputSchema.safeParse(directInput({ budgetMinCents: 4500000 }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.budgetMinCents).toBe(4500000);
+        expect(result.data.budgetMaxCents).toBeNull();
+      }
+    });
+
+    it('accepts a one-sided budget (max only)', () => {
+      const result = projectRequestInputSchema.safeParse(directInput({ budgetMaxCents: 7000000 }));
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects max < min when both present', () => {
+      const result = projectRequestInputSchema.safeParse(
+        directInput({ budgetMinCents: 7000000, budgetMaxCents: 4500000 })
+      );
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toBe('Max budget must be at least the minimum.');
+      }
+    });
+
+    it('accepts max === min', () => {
+      const result = projectRequestInputSchema.safeParse(
+        directInput({ budgetMinCents: 5000000, budgetMaxCents: 5000000 })
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects negative cents', () => {
+      const result = projectRequestInputSchema.safeParse(directInput({ budgetMinCents: -100 }));
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-integer cents value', () => {
+      const result = projectRequestInputSchema.safeParse(directInput({ budgetMinCents: 1000.5 }));
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a timeline longer than 120 characters', () => {
+      const result = projectRequestInputSchema.safeParse(
+        directInput({ timeline: 'a'.repeat(121) })
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it('coerces an empty-string timeline to null', () => {
+      const result = projectRequestInputSchema.safeParse(directInput({ timeline: '   ' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.timeline).toBeNull();
+      }
+    });
+
+    it('enforces the budget range refine on the match branch too', () => {
+      const result = projectRequestInputSchema.safeParse(
+        matchInput({ budgetMinCents: 7000000, budgetMaxCents: 4500000 })
+      );
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('source', () => {
     it('accepts manual, ai, and quickstart', () => {
       for (const source of ['manual', 'ai', 'quickstart'] as const) {

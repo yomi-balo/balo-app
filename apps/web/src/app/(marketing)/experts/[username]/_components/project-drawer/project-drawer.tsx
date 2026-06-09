@@ -10,6 +10,7 @@ import { RichTextEditor, validateDescription } from '@/components/balo/rich-text
 import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { DocumentUploader } from '@/components/balo/document-uploader';
 import { buildProductNameMap } from '@/lib/search/taxonomy';
+import { centsToDollars, dollarsToCents } from '@/lib/utils/currency';
 import { cn } from '@/lib/utils';
 import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import { submitProjectRequestAction } from '../../_actions/submit-project-request';
@@ -111,7 +112,8 @@ export function ProjectDrawer({
   const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>('direct');
 
   const { draft, setField, clearDraft } = useProjectDraft(expertProfileId);
-  const { routing, title, descriptionHtml, tagIds, productIds } = draft;
+  const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
+    draft;
 
   // Local taxonomy state so Retry can refresh without a page reload.
   const [taxonomies, setTaxonomies] = useState<ProjectRequestTaxonomies>(projectTaxonomies);
@@ -143,7 +145,11 @@ export function ProjectDrawer({
   const trimmedTitle = title.trim();
   const titleValid = trimmedTitle.length >= 3 && trimmedTitle.length <= 120;
   const descriptionError = validateDescription(descriptionHtml);
-  const reviewValid = titleValid && descriptionError === null;
+  // An incoherent budget range (max < min, both present) blocks Review, just like
+  // title/description do. One-sided ranges (either null) are always valid.
+  const budgetRangeInvalid =
+    budgetMinCents !== null && budgetMaxCents !== null && budgetMaxCents < budgetMinCents;
+  const reviewValid = titleValid && descriptionError === null && !budgetRangeInvalid;
 
   const copy = getRoutingCopy(routing, expertFirstName);
   // Done screen uses the snapshot (draft is cleared on success).
@@ -201,6 +207,41 @@ export function ProjectDrawer({
     [setField]
   );
 
+  // Budget inputs are WHOLE DOLLARS (numeric, coarse ranges). We take the part
+  // before any decimal point (a stray "45000.50" collapses to 45000 dollars,
+  // never fractional-dollar cents) then strip every remaining non-digit — so
+  // thousands separators ("1,500") are tolerated — and persist `dollars × 100`
+  // cents. This keeps input ↔ stored cents ↔ formatted display in lock-step
+  // (stored cents are always a multiple of 100). Empty / no digits → null.
+  const handleBudgetChange = useCallback(
+    (key: 'budgetMinCents' | 'budgetMaxCents', raw: string) => {
+      const [wholePart = ''] = raw.split('.');
+      const digits = wholePart.replace(/\D/g, '');
+      if (digits === '') {
+        setField(key, null);
+        return;
+      }
+      const dollars = Number.parseInt(digits, 10);
+      if (!Number.isFinite(dollars)) {
+        setField(key, null);
+        return;
+      }
+      setField(key, dollarsToCents(dollars));
+    },
+    [setField]
+  );
+
+  const handleTimelineChange = useCallback(
+    (raw: string) => setField('timeline', raw.length === 0 ? null : raw),
+    [setField]
+  );
+
+  /** Cents → whole-dollar string for the controlled input (empty when null). */
+  const budgetDollarsValue = useCallback(
+    (cents: number | null): string => (cents === null ? '' : String(centsToDollars(cents))),
+    []
+  );
+
   const toggleTag = useCallback(
     (id: string) => {
       const next = tagIdSet.has(id) ? tagIds.filter((t) => t !== id) : [...tagIds, id];
@@ -244,6 +285,9 @@ export function ProjectDrawer({
       productIds,
       documents: draft.documents,
       source: 'manual' as const,
+      budgetMinCents: draft.budgetMinCents,
+      budgetMaxCents: draft.budgetMaxCents,
+      timeline: draft.timeline,
     };
     const payload =
       routing === 'direct'
@@ -282,6 +326,9 @@ export function ProjectDrawer({
     tagIds,
     productIds,
     draft.documents,
+    draft.budgetMinCents,
+    draft.budgetMaxCents,
+    draft.timeline,
     clearDraft,
     copy.successDescription,
   ]);
@@ -409,6 +456,41 @@ export function ProjectDrawer({
         <DocumentUploader
           onDocumentsChange={handleDocumentsChange}
           onUploadingChange={setUploading}
+        />
+      </div>
+
+      {/* 2.7 — Budget & timeline (optional) */}
+      <div className="space-y-2">
+        <FieldLabel optional>Budget &amp; timeline</FieldLabel>
+        <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
+          Optional — helps the expert scope and price the work.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <InputFloating
+            label="Min budget (A$)"
+            inputMode="numeric"
+            value={budgetDollarsValue(budgetMinCents)}
+            onChange={(e) => handleBudgetChange('budgetMinCents', e.target.value)}
+            aria-invalid={budgetRangeInvalid}
+          />
+          <InputFloating
+            label="Max budget (A$)"
+            inputMode="numeric"
+            value={budgetDollarsValue(budgetMaxCents)}
+            onChange={(e) => handleBudgetChange('budgetMaxCents', e.target.value)}
+            aria-invalid={budgetRangeInvalid}
+          />
+        </div>
+        {budgetRangeInvalid && (
+          <p role="alert" className="text-destructive text-xs">
+            Max budget must be at least the minimum.
+          </p>
+        )}
+        <InputFloating
+          label="Timeline"
+          placeholder="Target go-live: end of Q3"
+          value={draft.timeline ?? ''}
+          onChange={(e) => handleTimelineChange(e.target.value)}
         />
       </div>
     </div>
