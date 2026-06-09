@@ -18,7 +18,7 @@ import {
   projectTagFactory,
 } from '../test/factories';
 import { referenceDataRepository } from './reference-data';
-import { projectRequestsRepository } from './project-requests';
+import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
 
 /**
  * Seeds a creator user + their personal company (owner membership) + a target
@@ -103,7 +103,7 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(row.expertProfileId).toBe(expertProfileId);
     expect(row.createdByUserId).toBe(createdByUserId);
     expect(row.sendTo).toBe('direct'); // default
-    expect(row.status).toBe('submitted'); // default
+    expect(row.status).toBe('requested'); // default
     expect(row.source).toBe('manual'); // default
     expect(row.title).toBe('Lead routing rebuild');
     expect(row.createdAt).toBeInstanceOf(Date);
@@ -398,5 +398,85 @@ describe('projectRequestsRepository.findById', () => {
     const found = await projectRequestsRepository.findById(randomUUID());
 
     expect(found).toBeUndefined();
+  });
+});
+
+// ── transitionStatus ─────────────────────────────────────────────────
+
+describe('projectRequestsRepository.transitionStatus', () => {
+  it('advances a request through a legal transition and persists it', async () => {
+    const created = await projectRequestFactory({ status: 'requested' });
+
+    const updated = await projectRequestsRepository.transitionStatus({
+      id: created.id,
+      to: 'experts_invited',
+    });
+
+    expect(updated.status).toBe('experts_invited');
+
+    // Persisted (not just returned).
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.status).toBe('experts_invited');
+  });
+
+  it('throws InvalidStatusTransitionError on an illegal transition and leaves the row unchanged', async () => {
+    const created = await projectRequestFactory({ status: 'requested' });
+
+    await expect(
+      // requested → accepted is not a legal edge.
+      projectRequestsRepository.transitionStatus({ id: created.id, to: 'accepted' })
+    ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
+
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.status).toBe('requested');
+  });
+
+  it('throws when expectedFrom does not match the live status', async () => {
+    const created = await projectRequestFactory({ status: 'requested' });
+
+    await expect(
+      projectRequestsRepository.transitionStatus({
+        id: created.id,
+        to: 'experts_invited',
+        expectedFrom: 'draft', // live status is 'requested'
+      })
+    ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
+
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.status).toBe('requested');
+  });
+
+  it('advances when expectedFrom matches the live status', async () => {
+    const created = await projectRequestFactory({ status: 'requested' });
+
+    const updated = await projectRequestsRepository.transitionStatus({
+      id: created.id,
+      to: 'experts_invited',
+      expectedFrom: 'requested',
+    });
+
+    expect(updated.status).toBe('experts_invited');
+  });
+
+  it('throws for an unknown id', async () => {
+    await expect(
+      projectRequestsRepository.transitionStatus({ id: randomUUID(), to: 'experts_invited' })
+    ).rejects.toThrow();
+  });
+
+  it('throws for a soft-deleted request', async () => {
+    const created = await projectRequestFactory({ status: 'requested', deletedAt: new Date() });
+
+    await expect(
+      projectRequestsRepository.transitionStatus({ id: created.id, to: 'experts_invited' })
+    ).rejects.toThrow();
+  });
+
+  it('rejects any out-edge from the terminal kickoff_approved status', async () => {
+    const created = await projectRequestFactory({ status: 'kickoff_approved' });
+
+    await expect(
+      projectRequestsRepository.transitionStatus({ id: created.id, to: 'accepted' })
+    ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
   });
 });

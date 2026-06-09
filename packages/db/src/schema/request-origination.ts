@@ -1,0 +1,289 @@
+import {
+  pgTable,
+  uuid,
+  text,
+  integer,
+  timestamp,
+  index,
+  uniqueIndex,
+  check,
+} from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { requestExpertRelationshipStatusEnum, proposalStatusEnum } from './enums';
+import { projectRequests } from './project-requests';
+import { expertProfiles } from './experts';
+import { users } from './users';
+import { timestamps, softDelete } from './helpers';
+
+/**
+ * Request origination spine (BAL-267 / epic BAL-266). The graph that sits behind
+ * a submitted project request: per-expert relationships, expressions of interest,
+ * proposals, and a per-relationship conversation (messages + files).
+ *
+ * `request_expert_relationships` is the per-expert spine: one row per
+ * (request, expert), created at admin invite (`invited`), carrying that single
+ * expert's own status. EOIs, proposals, messages, and files all FK to the
+ * relationship and carry a denormalised `project_request_id` (and, where useful,
+ * `expert_profile_id`) for indexed request-scoped reads.
+ *
+ * Rich text authored by users (`message`, `scope`, `body`) is server-sanitised
+ * HTML — same contract as `project_requests.description`; sanitisation happens in
+ * the web caller, never in @balo/db. Money is integer minor units (`price_cents`)
+ * + `currency`, never floats (mirrors `expert_profiles.rate_cents`).
+ */
+
+/**
+ * request_expert_relationships — the per-expert spine. Born at admin invite.
+ * `projectRequestId`/`expertProfileId` CASCADE (children die with the request /
+ * expert, mirroring project_requests.expert_profile_id); `invitedByUserId`
+ * RESTRICT (preserve admin attribution, mirrors created_by_user_id).
+ */
+export const requestExpertRelationships = pgTable(
+  'request_expert_relationships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectRequestId: uuid('project_request_id')
+      .notNull()
+      .references(() => projectRequests.id, { onDelete: 'cascade' }),
+    expertProfileId: uuid('expert_profile_id')
+      .notNull()
+      .references(() => expertProfiles.id, { onDelete: 'cascade' }),
+    status: requestExpertRelationshipStatusEnum('status').notNull().default('invited'),
+    // The admin who invited this expert. Preserve attribution → restrict.
+    invitedByUserId: uuid('invited_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    invitedAt: timestamp('invited_at', { withTimezone: true }).defaultNow().notNull(),
+    declinedAt: timestamp('declined_at', { withTimezone: true }),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    uniqueIndex('request_expert_relationship_unique_idx').on(t.projectRequestId, t.expertProfileId),
+    index('request_expert_relationship_request_idx').on(t.projectRequestId),
+    index('request_expert_relationship_expert_idx').on(t.expertProfileId),
+    index('request_expert_relationship_invited_by_idx').on(t.invitedByUserId),
+    // "Active relationships at stage X" lists — partial on live rows.
+    index('request_expert_relationship_status_idx')
+      .on(t.projectRequestId, t.status)
+      .where(sql`${t.deletedAt} IS NULL`),
+  ]
+);
+
+/**
+ * expressions_of_interest — an expert's pitch for a request. One live EOI per
+ * relationship (unique on relationship_id). Denormalised request/expert ids for
+ * direct request-scoped reads. All FKs CASCADE (the EOI is meaningless without
+ * the relationship/request/expert).
+ */
+export const expressionsOfInterest = pgTable(
+  'expressions_of_interest',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    relationshipId: uuid('relationship_id')
+      .notNull()
+      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
+    projectRequestId: uuid('project_request_id')
+      .notNull()
+      .references(() => projectRequests.id, { onDelete: 'cascade' }),
+    expertProfileId: uuid('expert_profile_id')
+      .notNull()
+      .references(() => expertProfiles.id, { onDelete: 'cascade' }),
+    // Sanitised HTML pitch (rich text; same contract as request description).
+    message: text('message').notNull(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    uniqueIndex('expression_of_interest_relationship_idx').on(t.relationshipId),
+    index('expression_of_interest_request_idx').on(t.projectRequestId),
+    index('expression_of_interest_expert_idx').on(t.expertProfileId),
+  ]
+);
+
+/**
+ * proposals — the expert's scoped proposal. Money as integer minor units
+ * (`price_cents`) + `currency` (ISO 4217 lowercase, matches Stripe convention).
+ * NON-unique on relationship_id (A5/A6 may resubmit/revise; enforce "exactly one"
+ * in the caller if product wants it). All FKs CASCADE.
+ */
+export const proposals = pgTable(
+  'proposals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    relationshipId: uuid('relationship_id')
+      .notNull()
+      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
+    projectRequestId: uuid('project_request_id')
+      .notNull()
+      .references(() => projectRequests.id, { onDelete: 'cascade' }),
+    expertProfileId: uuid('expert_profile_id')
+      .notNull()
+      .references(() => expertProfiles.id, { onDelete: 'cascade' }),
+    status: proposalStatusEnum('status').notNull().default('submitted'),
+    // Sanitised HTML scope / SOW summary.
+    scope: text('scope').notNull(),
+    priceCents: integer('price_cents').notNull(),
+    currency: text('currency').notNull().default('usd'),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    index('proposal_relationship_idx').on(t.relationshipId),
+    index('proposal_request_idx').on(t.projectRequestId),
+    index('proposal_expert_idx').on(t.expertProfileId),
+    check('proposal_price_cents_nonneg', sql`${t.priceCents} >= 0`),
+  ]
+);
+
+/**
+ * conversation_messages — the per-relationship thread (each expert ↔ client has
+ * its own thread, not per request). `senderUserId` RESTRICT (preserve authorship;
+ * sender is a client member, the expert's user, or an admin — role is derived at
+ * read time, not baked into the row).
+ */
+export const conversationMessages = pgTable(
+  'conversation_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    relationshipId: uuid('relationship_id')
+      .notNull()
+      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
+    senderUserId: uuid('sender_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    // Sanitised HTML message body.
+    body: text('body').notNull(),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    index('conversation_message_relationship_idx').on(t.relationshipId),
+    index('conversation_message_sender_idx').on(t.senderUserId),
+    // Chronological thread fetch — partial on live rows.
+    index('conversation_message_thread_idx')
+      .on(t.relationshipId, t.createdAt)
+      .where(sql`${t.deletedAt} IS NULL`),
+  ]
+);
+
+/**
+ * conversation_files — files shared inside one expert's conversation (distinct
+ * from the request-level brief attachments in project_request_documents). Same R2
+ * column contract. `uploadedByUserId` RESTRICT (attribution).
+ */
+export const conversationFiles = pgTable(
+  'conversation_files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    relationshipId: uuid('relationship_id')
+      .notNull()
+      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
+    uploadedByUserId: uuid('uploaded_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    r2Key: text('r2_key').notNull(),
+    fileName: text('file_name').notNull(),
+    contentType: text('content_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    uniqueIndex('conversation_file_key_idx').on(t.r2Key),
+    index('conversation_file_relationship_idx').on(t.relationshipId),
+    index('conversation_file_uploaded_by_idx').on(t.uploadedByUserId),
+  ]
+);
+
+// ── Relations ──────────────────────────────────────────────────────────
+
+export const requestExpertRelationshipsRelations = relations(
+  requestExpertRelationships,
+  ({ one, many }) => ({
+    projectRequest: one(projectRequests, {
+      fields: [requestExpertRelationships.projectRequestId],
+      references: [projectRequests.id],
+    }),
+    expertProfile: one(expertProfiles, {
+      fields: [requestExpertRelationships.expertProfileId],
+      references: [expertProfiles.id],
+    }),
+    invitedBy: one(users, {
+      fields: [requestExpertRelationships.invitedByUserId],
+      references: [users.id],
+    }),
+    expressionsOfInterest: many(expressionsOfInterest),
+    proposals: many(proposals),
+    conversationMessages: many(conversationMessages),
+    conversationFiles: many(conversationFiles),
+  })
+);
+
+export const expressionsOfInterestRelations = relations(expressionsOfInterest, ({ one }) => ({
+  relationship: one(requestExpertRelationships, {
+    fields: [expressionsOfInterest.relationshipId],
+    references: [requestExpertRelationships.id],
+  }),
+  projectRequest: one(projectRequests, {
+    fields: [expressionsOfInterest.projectRequestId],
+    references: [projectRequests.id],
+  }),
+  expertProfile: one(expertProfiles, {
+    fields: [expressionsOfInterest.expertProfileId],
+    references: [expertProfiles.id],
+  }),
+}));
+
+export const proposalsRelations = relations(proposals, ({ one }) => ({
+  relationship: one(requestExpertRelationships, {
+    fields: [proposals.relationshipId],
+    references: [requestExpertRelationships.id],
+  }),
+  projectRequest: one(projectRequests, {
+    fields: [proposals.projectRequestId],
+    references: [projectRequests.id],
+  }),
+  expertProfile: one(expertProfiles, {
+    fields: [proposals.expertProfileId],
+    references: [expertProfiles.id],
+  }),
+}));
+
+export const conversationMessagesRelations = relations(conversationMessages, ({ one }) => ({
+  relationship: one(requestExpertRelationships, {
+    fields: [conversationMessages.relationshipId],
+    references: [requestExpertRelationships.id],
+  }),
+  sender: one(users, {
+    fields: [conversationMessages.senderUserId],
+    references: [users.id],
+  }),
+}));
+
+export const conversationFilesRelations = relations(conversationFiles, ({ one }) => ({
+  relationship: one(requestExpertRelationships, {
+    fields: [conversationFiles.relationshipId],
+    references: [requestExpertRelationships.id],
+  }),
+  uploadedBy: one(users, {
+    fields: [conversationFiles.uploadedByUserId],
+    references: [users.id],
+  }),
+}));
+
+// ── Type exports ───────────────────────────────────────────────────────
+
+export type RequestExpertRelationship = typeof requestExpertRelationships.$inferSelect;
+export type NewRequestExpertRelationship = typeof requestExpertRelationships.$inferInsert;
+export type ExpressionOfInterest = typeof expressionsOfInterest.$inferSelect;
+export type NewExpressionOfInterest = typeof expressionsOfInterest.$inferInsert;
+export type Proposal = typeof proposals.$inferSelect;
+export type NewProposal = typeof proposals.$inferInsert;
+export type ConversationMessage = typeof conversationMessages.$inferSelect;
+export type NewConversationMessage = typeof conversationMessages.$inferInsert;
+export type ConversationFile = typeof conversationFiles.$inferSelect;
+export type NewConversationFile = typeof conversationFiles.$inferInsert;

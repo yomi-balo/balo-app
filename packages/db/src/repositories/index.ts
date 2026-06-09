@@ -23,7 +23,35 @@ export { calendarRepository } from './calendar';
 export { availabilityRulesRepository } from './availability-rules';
 export { consultationsRepository } from './consultations';
 export { projectRequestsRepository } from './project-requests';
+export {
+  STATUS_TRANSITIONS,
+  isAllowedTransition,
+  InvalidStatusTransitionError,
+  type ProjectRequestStatus,
+} from './project-requests';
 export type { ProjectRequest, NewProjectRequest } from '../schema';
+export { requestExpertRelationshipsRepository } from './request-expert-relationships';
+export {
+  RELATIONSHIP_STATUS_TRANSITIONS,
+  isAllowedRelationshipTransition,
+  InvalidRelationshipTransitionError,
+  type RelationshipStatus,
+} from './request-expert-relationships';
+export { expressionsOfInterestRepository } from './expressions-of-interest';
+export { proposalsRepository } from './proposals';
+export { conversationsRepository } from './conversations';
+export type {
+  RequestExpertRelationship,
+  NewRequestExpertRelationship,
+  ExpressionOfInterest,
+  NewExpressionOfInterest,
+  Proposal,
+  NewProposal,
+  ConversationMessage,
+  NewConversationMessage,
+  ConversationFile,
+  NewConversationFile,
+} from '../schema';
 export { expertSearchRepository } from './expert-search';
 export type {
   ExpertSearchParams,

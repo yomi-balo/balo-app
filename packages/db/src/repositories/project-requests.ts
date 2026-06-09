@@ -9,6 +9,42 @@ import {
   type NewProjectRequest,
 } from '../schema';
 
+export type ProjectRequestStatus = ProjectRequest['status'];
+
+/**
+ * Allowed request-level transitions. Linear spine with an admin-driven invite
+ * branch. `kickoff_approved` is terminal. `draft` is the pre-submit state and
+ * only flows to `requested`. Note: `exploratory_meeting_requested` is OPTIONAL —
+ * a request may go `requested → experts_invited` directly OR via the meeting
+ * state. The request-level status is the max-progress aggregate across all
+ * per-expert relationships, advanced explicitly by the caller — never derived.
+ */
+export const STATUS_TRANSITIONS: Record<ProjectRequestStatus, readonly ProjectRequestStatus[]> = {
+  draft: ['requested'],
+  requested: ['exploratory_meeting_requested', 'experts_invited'],
+  exploratory_meeting_requested: ['experts_invited'],
+  experts_invited: ['eoi_submitted'],
+  eoi_submitted: ['proposal_requested'],
+  proposal_requested: ['proposal_submitted'],
+  proposal_submitted: ['accepted'],
+  accepted: ['kickoff_approved'],
+  kickoff_approved: [],
+};
+
+export function isAllowedTransition(from: ProjectRequestStatus, to: ProjectRequestStatus): boolean {
+  return STATUS_TRANSITIONS[from].includes(to);
+}
+
+export class InvalidStatusTransitionError extends Error {
+  constructor(
+    public readonly from: ProjectRequestStatus,
+    public readonly to: ProjectRequestStatus
+  ) {
+    super(`Invalid project_request status transition: ${from} → ${to}`);
+    this.name = 'InvalidStatusTransitionError';
+  }
+}
+
 export interface ProjectRequestDocumentInput {
   r2Key: string;
   fileName: string;
@@ -72,6 +108,56 @@ export const projectRequestsRepository = {
   async findById(id: string): Promise<ProjectRequest | undefined> {
     return db.query.projectRequests.findFirst({
       where: and(eq(projectRequests.id, id), isNull(projectRequests.deletedAt)),
+    });
+  },
+
+  /**
+   * Atomically advance a request's status with from→to validation. Reads the
+   * current row FOR UPDATE inside the txn (serialising concurrent admin
+   * transitions), rejects illegal transitions (`InvalidStatusTransitionError`)
+   * and missing/soft-deleted rows (`Error`), then persists. Returns the updated
+   * row.
+   *
+   * `expectedFrom` is an optional optimistic-concurrency guard: if provided and
+   * the live status differs, throws (prevents lost-update races between admins).
+   */
+  async transitionStatus(input: {
+    id: string;
+    to: ProjectRequestStatus;
+    expectedFrom?: ProjectRequestStatus;
+  }): Promise<ProjectRequest> {
+    return db.transaction(async (tx) => {
+      // Relational `db.query.*` does not support FOR UPDATE — use the core
+      // builder to lock the row for the duration of the transaction.
+      const [current] = await tx
+        .select()
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, input.id), isNull(projectRequests.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Project request not found: ${input.id}`);
+      }
+
+      if (input.expectedFrom !== undefined && current.status !== input.expectedFrom) {
+        throw new InvalidStatusTransitionError(current.status, input.to);
+      }
+
+      if (!isAllowedTransition(current.status, input.to)) {
+        throw new InvalidStatusTransitionError(current.status, input.to);
+      }
+
+      const [updated] = await tx
+        .update(projectRequests)
+        .set({ status: input.to })
+        .where(eq(projectRequests.id, input.id))
+        .returning();
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update project request: ${input.id}`);
+      }
+
+      return updated;
     });
   },
 };
