@@ -44,7 +44,7 @@ export interface RequestViewerContext {
   archetype: RequestArchetype;
   /** Viewer's company owns the request. */
   isOwner: boolean;
-  /** Viewer's expertProfileId ∈ live relationships. */
+  /** Viewer's expertProfileId ∈ a live, non-declined relationship. */
   isInvitedExpert: boolean;
   /** The viewer-expert's relationship id (null for client/admin) — siblings need this. */
   relationshipId: string | null;
@@ -53,6 +53,19 @@ export interface RequestViewerContext {
 }
 
 const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin']);
+
+type RelationshipStatus = ProjectRequestWithRelations['relationships'][number]['status'];
+
+/**
+ * Terminal-negative relationship statuses that do NOT grant the expert
+ * participant access. A `declined` relationship is still "live" at the DB layer
+ * (`deletedAt IS NULL` — declining only stamps `declinedAt`), but the expert is
+ * no longer a participant and must not see the brief, the client's contact, or
+ * (once A2 lands) the conversation. The admin observer view still lists declined
+ * experts — that comes from the read/mapper, not this resolver. Extend this set
+ * if `removed`/`withdrawn` relationship statuses are added later.
+ */
+const INACTIVE_RELATIONSHIP_STATUSES = new Set<RelationshipStatus>(['declined']);
 
 /**
  * Resolve the viewer's lens/archetype for this request. Pure + synchronous — no
@@ -64,7 +77,7 @@ const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin'
  *  1. platform admin → **observer**, regardless of any other relationship (admins
  *     monitor, never participate — even an admin who also owns the request).
  *  2. company match (`user.companyId === request.companyId`) → **client** owner.
- *  3. expert match (`expertProfileId` present AND ∈ a LIVE relationship) → **expert**.
+ *  3. expert match (`expertProfileId` present AND ∈ a live, non-declined relationship) → **expert**.
  *  4. else → `null` (unauthorised).
  *
  * `canSeeContact = lens !== 'client'` — experts on invite + admins see the named
@@ -105,10 +118,14 @@ export function resolveRequestLens(
     };
   }
 
-  // 3. Invited expert (live relationship only) → expert participant.
+  // 3. Invited expert (live, non-declined relationship) → expert participant.
+  //    A declined relationship stays live at the DB layer (deletedAt IS NULL)
+  //    but no longer grants access — a dropped/declined expert must not see the
+  //    brief, the client's contact, or (once A2 lands) the conversation.
   if (user.expertProfileId !== undefined) {
     const relationship = request.relationships.find(
-      (r) => r.expertProfileId === user.expertProfileId
+      (r) =>
+        r.expertProfileId === user.expertProfileId && !INACTIVE_RELATIONSHIP_STATUSES.has(r.status)
     );
     if (relationship !== undefined) {
       return {

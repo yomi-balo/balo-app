@@ -158,6 +158,47 @@ describe('resolveRequestLens', () => {
     expect(ctx).toBeNull();
   });
 
+  it('gates a declined expert fully — a declined relationship grants no access', () => {
+    // `declined` stays live (deletedAt IS NULL, declinedAt stamped) but the
+    // dropped expert is no longer a participant → notFound() at the page.
+    const ctx = resolveRequestLens(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({
+        status: 'proposal_submitted',
+        relationships: [relationship({ status: 'declined' })],
+      })
+    );
+    expect(ctx).toBeNull();
+  });
+
+  it('still resolves an expert with an active (non-declined) relationship at a late status', () => {
+    const ctx = resolveRequestLens(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({
+        status: 'proposal_submitted',
+        relationships: [relationship({ status: 'proposal_submitted' })],
+      })
+    );
+    expect(ctx?.lens).toBe('expert');
+    expect(ctx?.isInvitedExpert).toBe(true);
+    expect(ctx?.relationshipId).toBe(RELATIONSHIP_ID);
+  });
+
+  it('at acceptance: the accepted expert keeps access, a losing finalist (declined) is gated', () => {
+    // When the client accepts one expert, losing finalists move to `declined`.
+    const acceptedCtx = resolveRequestLens(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({ status: 'accepted', relationships: [relationship({ status: 'accepted' })] })
+    );
+    expect(acceptedCtx?.lens).toBe('expert');
+
+    const declinedCtx = resolveRequestLens(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({ status: 'accepted', relationships: [relationship({ status: 'declined' })] })
+    );
+    expect(declinedCtx).toBeNull();
+  });
+
   it('is activeMode-agnostic: an invited expert in client mode still resolves to the expert lens', () => {
     // Authorization derives from the live relationship, not the viewer's UI mode.
     const ctx = resolveRequestLens(
