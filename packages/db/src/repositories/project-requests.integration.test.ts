@@ -571,7 +571,7 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     expect(rel?.conversationMessages).toHaveLength(0);
   });
 
-  it('hydrates only the newest live EOI and conversation message per relationship (limit 1, newest-first)', async () => {
+  it('hydrates the live EOI and only the newest live conversation message per relationship (messages limit 1, newest-first)', async () => {
     const request = await projectRequestFactory({ status: 'experts_invited' });
     if (request.expertProfileId === null) {
       throw new Error('expected a direct request with a target expert');
@@ -588,25 +588,18 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     const older = new Date('2026-01-01T00:00:00.000Z');
     const newer = new Date('2026-02-01T00:00:00.000Z');
 
-    // Two live EOIs with explicit submittedAt — only the newest should hydrate.
-    await db.insert(expressionsOfInterest).values([
-      {
-        relationshipId: relationship.id,
-        projectRequestId: request.id,
-        expertProfileId: request.expertProfileId,
-        message: '<p>Older pitch.</p>',
-        submittedAt: older,
-      },
-      {
-        relationshipId: relationship.id,
-        projectRequestId: request.id,
-        expertProfileId: request.expertProfileId,
-        message: '<p>Newer pitch.</p>',
-        submittedAt: newer,
-      },
-    ]);
+    // Exactly ONE EOI per relationship — the unique
+    // `expression_of_interest_relationship_idx` enforces 1:1 (a relationship can
+    // never hold two EOIs), so the live one must hydrate as a single-element array.
+    await db.insert(expressionsOfInterest).values({
+      relationshipId: relationship.id,
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      message: '<p>The pitch.</p>',
+      submittedAt: newer,
+    });
 
-    // Two live messages with explicit createdAt — only the newest should hydrate.
+    // Messages are 1:many — two live messages, only the newest should hydrate.
     await db.insert(conversationMessages).values([
       {
         relationshipId: relationship.id,
@@ -627,14 +620,15 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     const [rel] = found?.relationships ?? [];
     expect(rel).toBeDefined();
 
-    // limit:1 newest-first → exactly the newer EOI / message.
+    // The relationship's single live EOI hydrates with its submittedAt.
     expect(rel?.expressionsOfInterest).toHaveLength(1);
     expect(rel?.expressionsOfInterest[0]?.submittedAt.getTime()).toBe(newer.getTime());
+    // messages limit:1 newest-first → exactly the newer message (older excluded by limit).
     expect(rel?.conversationMessages).toHaveLength(1);
     expect(rel?.conversationMessages[0]?.createdAt.getTime()).toBe(newer.getTime());
   });
 
-  it('excludes a soft-deleted EOI / message from the newest-first hydration', async () => {
+  it('excludes a soft-deleted EOI and a soft-deleted message from the hydration', async () => {
     const request = await projectRequestFactory({ status: 'experts_invited' });
     if (request.expertProfileId === null) {
       throw new Error('expected a direct request with a target expert');
@@ -649,24 +643,19 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     const live = new Date('2026-01-01T00:00:00.000Z');
     const deletedNewer = new Date('2026-03-01T00:00:00.000Z');
 
-    // The NEWER rows are soft-deleted → the older live rows must win.
-    await db.insert(expressionsOfInterest).values([
-      {
-        relationshipId: relationship.id,
-        projectRequestId: request.id,
-        expertProfileId: request.expertProfileId,
-        message: '<p>Live pitch.</p>',
-        submittedAt: live,
-      },
-      {
-        relationshipId: relationship.id,
-        projectRequestId: request.id,
-        expertProfileId: request.expertProfileId,
-        message: '<p>Removed pitch.</p>',
-        submittedAt: deletedNewer,
-        deletedAt: new Date(),
-      },
-    ]);
+    // The relationship's single EOI is soft-deleted → no live EOI hydrates.
+    // (The 1:1 unique index means a live + deleted EOI can't co-exist on one
+    // relationship, so the EOI exclusion case is the row being removed outright.)
+    await db.insert(expressionsOfInterest).values({
+      relationshipId: relationship.id,
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      message: '<p>Removed pitch.</p>',
+      submittedAt: deletedNewer,
+      deletedAt: new Date(),
+    });
+
+    // Messages are 1:many — the NEWER message is soft-deleted → the older live one wins.
     await db.insert(conversationMessages).values([
       {
         relationshipId: relationship.id,
@@ -686,8 +675,9 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     const found = await projectRequestsRepository.findByIdWithRelations(request.id);
     const [rel] = found?.relationships ?? [];
 
-    expect(rel?.expressionsOfInterest).toHaveLength(1);
-    expect(rel?.expressionsOfInterest[0]?.submittedAt.getTime()).toBe(live.getTime());
+    // The soft-deleted EOI is excluded → empty.
+    expect(rel?.expressionsOfInterest).toHaveLength(0);
+    // The soft-deleted newer message is excluded → the older live message wins.
     expect(rel?.conversationMessages).toHaveLength(1);
     expect(rel?.conversationMessages[0]?.createdAt.getTime()).toBe(live.getTime());
   });
