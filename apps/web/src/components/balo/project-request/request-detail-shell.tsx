@@ -13,6 +13,8 @@ import { ConversationPlaceholder } from './conversation-placeholder';
 import { AdminHealthPanel } from './admin-health-panel';
 import { RequestDetailAnalytics } from './request-detail-analytics';
 import { StatusStepper } from './status-stepper';
+import { EoiEntry } from './eoi-entry';
+import { ProposalSlot } from './proposal-slot';
 
 interface RequestDetailShellProps {
   view: RequestDetailView;
@@ -160,13 +162,44 @@ export function RequestDetailShell({
         {ctx.archetype === 'participant' && isExpertGated && <ExpertGatedCard />}
 
         {ctx.archetype === 'participant' && !isExpertGated && !isPhase2 && (
-          <RequestContext view={view} variant="full" />
+          <div className="space-y-5">
+            <RequestContext view={view} variant="full" />
+            {/* Expert Phase-1: the EOI-entry card sits under the brief. The client
+                lens never sees it (no `viewerEoi`). */}
+            {ctx.lens === 'expert' && view.viewerEoi && (
+              <EoiEntry
+                requestId={view.id}
+                initialHasEoi={view.viewerEoi.hasLiveEoi}
+                initialMessageHtml={view.viewerEoi.messageHtml}
+              />
+            )}
+          </div>
         )}
 
         {ctx.archetype === 'participant' && !isExpertGated && isPhase2 && (
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
             <ConversationPlaceholder />
-            <RequestContext view={view} variant="compact" />
+            <div className="space-y-5">
+              {/* Expert Phase-2: the gated "Build proposal" header slot + a compact
+                  EOI card so withdraw/resubmit stays reachable once the request has
+                  flipped to the conversation. The client lens gets neither. */}
+              {ctx.lens === 'expert' && (
+                <>
+                  <div className="flex justify-end">
+                    <ProposalSlot requestStatus={view.status} />
+                  </div>
+                  {view.viewerEoi && (
+                    <EoiEntry
+                      requestId={view.id}
+                      initialHasEoi={view.viewerEoi.hasLiveEoi}
+                      initialMessageHtml={view.viewerEoi.messageHtml}
+                      compact
+                    />
+                  )}
+                </>
+              )}
+              <RequestContext view={view} variant="compact" />
+            </div>
           </div>
         )}
       </div>

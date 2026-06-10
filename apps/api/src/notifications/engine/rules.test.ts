@@ -118,6 +118,25 @@ describe('notificationRules', () => {
     });
   });
 
+  it('project.eoi_submitted has client email + in-app rules', () => {
+    const rules = notificationRules['project.eoi_submitted'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(2);
+    const email = rules!.find((r) => r.channel === 'email');
+    expect(email).toMatchObject({
+      recipient: 'client',
+      template: 'project-eoi-submitted',
+      timing: 'immediate',
+      priority: 'normal',
+    });
+    const inApp = rules!.find((r) => r.channel === 'in-app');
+    expect(inApp).toMatchObject({
+      recipient: 'client',
+      template: 'project-eoi-submitted',
+      timing: 'immediate',
+    });
+  });
+
   it('has rules for message.received event', () => {
     const rules = notificationRules['message.received'];
     expect(rules).toBeDefined();

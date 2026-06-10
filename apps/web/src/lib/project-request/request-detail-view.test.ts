@@ -171,6 +171,58 @@ describe('mapRequestToDetailView', () => {
   });
 });
 
+describe('mapRequestToDetailView — viewerEoi (expert lens)', () => {
+  const liveEoi = [
+    { id: 'eoi-1', submittedAt: new Date('2025-01-09T00:00:00Z'), message: '<p>My pitch</p>' },
+  ] as Relationship['expressionsOfInterest'];
+
+  it('returns hasLiveEoi:true + the message HTML when the viewer-expert has a live EOI', () => {
+    const view = mapRequestToDetailView(
+      request({ relationships: [rel({ expressionsOfInterest: liveEoi })] }),
+      ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(view.viewerEoi).toEqual({ hasLiveEoi: true, messageHtml: '<p>My pitch</p>' });
+  });
+
+  it('returns hasLiveEoi:false + null message when the viewer-expert has no live EOI', () => {
+    const view = mapRequestToDetailView(
+      request({ relationships: [rel({ expressionsOfInterest: [] })] }),
+      ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(view.viewerEoi).toEqual({ hasLiveEoi: false, messageHtml: null });
+  });
+
+  it('is null for the client lens (no EOI HTML crosses the boundary)', () => {
+    const view = mapRequestToDetailView(
+      request({ relationships: [rel({ expressionsOfInterest: liveEoi })] }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.viewerEoi).toBeNull();
+    expect(JSON.stringify(view)).not.toContain('My pitch');
+  });
+
+  it('is null for the admin (observer) lens', () => {
+    const view = mapRequestToDetailView(
+      request({ relationships: [rel({ expressionsOfInterest: liveEoi })] }),
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null }),
+      NOW
+    );
+    expect(view.viewerEoi).toBeNull();
+  });
+
+  it('is null when the expert lens has no resolved relationshipId', () => {
+    const view = mapRequestToDetailView(
+      request(),
+      ctx({ lens: 'expert', relationshipId: null }),
+      NOW
+    );
+    expect(view.viewerEoi).toBeNull();
+  });
+});
+
 describe('mapRequestToDetailView — per-expert derived state (observer lens)', () => {
   const observerCtx = ctx({ lens: 'admin', archetype: 'observer' });
 

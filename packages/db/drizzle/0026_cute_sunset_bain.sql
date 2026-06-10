@@ -1,0 +1,2 @@
+DROP INDEX "expression_of_interest_relationship_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "expression_of_interest_relationship_idx" ON "expressions_of_interest" USING btree ("relationship_id") WHERE "expressions_of_interest"."deleted_at" IS NULL;

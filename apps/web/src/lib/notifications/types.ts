@@ -56,6 +56,14 @@ export interface ProjectExpertInvitedPayload {
   title: string;
 }
 
+export interface ProjectEoiSubmittedPayload {
+  correlationId: string; // EOI id — dedup per submission
+  recipientId: string; // = createdByUserId → resolves recipient:'client'
+  projectRequestId: string;
+  title: string; // request title — email/in-app body
+  expertName: string; // invited expert's display name — email/in-app body
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -63,7 +71,8 @@ export type NotificationEvent =
   | 'project.request_submitted'
   | 'project.match_requested'
   | 'project.exploratory_requested'
-  | 'project.expert_invited';
+  | 'project.expert_invited'
+  | 'project.eoi_submitted';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -73,4 +82,5 @@ export interface EventPayloadMap {
   'project.match_requested': ProjectMatchRequestedPayload;
   'project.exploratory_requested': ProjectExploratoryRequestedPayload;
   'project.expert_invited': ProjectExpertInvitedPayload;
+  'project.eoi_submitted': ProjectEoiSubmittedPayload;
 }

@@ -23,6 +23,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     budget: 'A$45,000 – A$70,000',
     timeline: 'Target go-live: end of Q3',
     relationships: [],
+    viewerEoi: null,
     ...overrides,
   };
 }

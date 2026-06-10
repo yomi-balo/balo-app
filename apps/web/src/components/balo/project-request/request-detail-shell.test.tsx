@@ -25,6 +25,20 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/search-experts-for-invi
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/invite-experts', () => ({
   inviteExpertsAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/submit-eoi', () => ({
+  submitEoiAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/withdraw-eoi', () => ({
+  withdrawEoiAction: vi.fn(),
+}));
+
+// EoiEntry mounts the code-split TipTap editor — mock the public module so the
+// shell renders in JSDOM. A minimal contract is enough for shell-level assertions.
+vi.mock('@/components/balo/rich-text-editor', () => ({
+  RichTextEditor: () => <div data-testid="rt-editor" />,
+  RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
+  validateDescription: () => null,
+}));
 
 import { RequestDetailShell } from './request-detail-shell';
 import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
@@ -57,6 +71,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     budget: null,
     timeline: null,
     relationships: [],
+    viewerEoi: null,
     ...overrides,
   };
 }
@@ -112,6 +127,54 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
     expect(screen.queryByText(/isn't open to experts yet/i)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /CPQ implementation/i })).toBeInTheDocument();
     expect(screen.getByText(/submit your expression of interest/i)).toBeInTheDocument();
+  });
+
+  it('expert Phase-1 renders the EoiEntry compose card below the brief', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'experts_invited',
+          viewerEoi: { hasLiveEoi: false, messageHtml: null },
+        })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+      />
+    );
+    expect(screen.getByText('Express your interest')).toBeInTheDocument();
+  });
+
+  it('expert Phase-2 renders the gated ProposalSlot pill (and the EOI card stays reachable)', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'eoi_submitted',
+          viewerEoi: { hasLiveEoi: true, messageHtml: '<p>My pitch</p>' },
+        })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+      />
+    );
+    expect(screen.getByText('Awaiting proposal request')).toBeInTheDocument();
+    expect(screen.getByText('Interest sent')).toBeInTheDocument();
+  });
+
+  it('client Phase-1 does NOT render the EoiEntry card (no viewerEoi)', () => {
+    render(<RequestDetailShell view={view({ status: 'experts_invited' })} ctx={ctx()} />);
+    expect(screen.queryByText('Express your interest')).not.toBeInTheDocument();
+  });
+
+  it('client Phase-2 does NOT render the ProposalSlot or EoiEntry', () => {
+    render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
+    expect(screen.queryByText('Awaiting proposal request')).not.toBeInTheDocument();
+    expect(screen.queryByText('Express your interest')).not.toBeInTheDocument();
   });
 
   it('admin observer renders the full request and (once invited) the health panel', () => {

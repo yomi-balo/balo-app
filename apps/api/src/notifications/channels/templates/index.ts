@@ -6,6 +6,7 @@ import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
+import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -101,6 +102,21 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `You're invited: ${title}`,
+    };
+  },
+
+  'project-eoi-submitted': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    const expertName = (data.expertName as string) ?? 'An expert';
+    return {
+      component: React.createElement(ProjectEoiSubmittedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        expertName,
+        baseUrl: BASE_URL,
+      }),
+      subject: `An expert is interested in ${title}`,
     };
   },
 };

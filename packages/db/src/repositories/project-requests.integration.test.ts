@@ -620,9 +620,11 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     const [rel] = found?.relationships ?? [];
     expect(rel).toBeDefined();
 
-    // The relationship's single live EOI hydrates with its submittedAt.
+    // The relationship's single live EOI hydrates with its submittedAt AND its
+    // sanitised-HTML `message` (read-shape: the expert lens re-reads its own pitch).
     expect(rel?.expressionsOfInterest).toHaveLength(1);
     expect(rel?.expressionsOfInterest[0]?.submittedAt.getTime()).toBe(newer.getTime());
+    expect(rel?.expressionsOfInterest[0]?.message).toBe('<p>The pitch.</p>');
     // messages limit:1 newest-first → exactly the newer message (older excluded by limit).
     expect(rel?.conversationMessages).toHaveLength(1);
     expect(rel?.conversationMessages[0]?.createdAt.getTime()).toBe(newer.getTime());
