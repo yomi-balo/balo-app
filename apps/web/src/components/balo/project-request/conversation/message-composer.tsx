@@ -196,7 +196,8 @@ export function MessageComposer({
         </button>
       </div>
       {(overLimit || showCounter) && (
-        <div className="flex items-center justify-between gap-3 px-3.5 pb-2.5" role="status">
+        // <output> carries an implicit `status` role (polite live region).
+        <output className="flex items-center justify-between gap-3 px-3.5 pb-2.5">
           {overLimit ? (
             <p id="composer-limit-error" className="text-destructive text-xs font-medium">
               Keep your message under {MESSAGE_MAX_TEXT.toLocaleString('en-US')} characters.
@@ -212,7 +213,7 @@ export function MessageComposer({
           >
             {draftLength.toLocaleString('en-US')}/{MESSAGE_MAX_TEXT.toLocaleString('en-US')}
           </span>
-        </div>
+        </output>
       )}
     </div>
   );

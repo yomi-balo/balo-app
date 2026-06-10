@@ -272,11 +272,12 @@ describe('useConversationRealtime', () => {
     authCallback({}, failCallback);
     await waitFor(() => expect(failCallback).toHaveBeenCalledWith('denied', null));
 
-    // Rejection path: the action itself throws.
+    // Rejection path: the action itself throws — the `.message` is extracted
+    // (never '[object Object]' / 'Error: …' default stringification).
     mockTokenAction.mockRejectedValue(new Error('boom'));
     const rejectCallback = vi.fn();
     authCallback({}, rejectCallback);
-    await waitFor(() => expect(rejectCallback).toHaveBeenCalledWith('Error: boom', null));
+    await waitFor(() => expect(rejectCallback).toHaveBeenCalledWith('boom', null));
   });
 
   it('sanitizeRealtimeBodyHtml passes server-built markup through unchanged', () => {

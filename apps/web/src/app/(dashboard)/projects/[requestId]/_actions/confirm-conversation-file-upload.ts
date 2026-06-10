@@ -40,15 +40,77 @@ export type ConfirmConversationFileUploadResult =
 /**
  * True when `error` is a Postgres unique-violation (SQLSTATE 23505) — a double
  * confirm of the same R2 key trips `conversation_file_key_idx`. Mirrors the
- * structural narrowing in `submit-eoi.ts` (no `any`).
+ * structural narrowing in `submit-eoi.ts` (no `any`, no assertion — the `in`
+ * guard narrows `object` to carry `code`).
  */
 function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code: unknown }).code === '23505'
-  );
+  if (typeof error !== 'object' || error === null) return false;
+  return 'code' in error && error.code === '23505';
+}
+
+/** Key shape + provenance: relationship from VALIDATED access, user from session. */
+function validateUploadKey(key: string, relationshipId: string, userId: string): string | null {
+  if (!CONVERSATION_FILE_KEY_PATTERN.test(key)) {
+    return 'Invalid upload key.';
+  }
+  const expectedPrefix = `${CONVERSATION_FILE_PREFIX}${relationshipId}/${userId}/`;
+  if (!key.startsWith(expectedPrefix)) {
+    return 'Invalid upload key.';
+  }
+  return null;
+}
+
+type UploadedObjectCheck =
+  | { ok: true; sizeBytes: number; contentType: string }
+  | { ok: false; error: string };
+
+/**
+ * HEAD-checks the object in R2 — size + type re-checked at the source. A
+ * rejected object is best-effort deleted. Missing/zero size and over-cap are
+ * DIFFERENT failures — don't conflate an empty object under "too large" copy.
+ */
+async function verifyUploadedObject(
+  key: string,
+  claimedContentType: string
+): Promise<UploadedObjectCheck> {
+  const head = await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+
+  const realSize = head.ContentLength;
+  if (realSize === undefined || realSize === 0) {
+    deleteConversationFileFromR2(key).catch(() => {});
+    return { ok: false, error: 'The uploaded file appears to be empty.' };
+  }
+  if (realSize > MAX_CONVERSATION_FILE_BYTES) {
+    deleteConversationFileFromR2(key).catch(() => {});
+    return { ok: false, error: 'Uploaded file is too large. Please try a smaller file.' };
+  }
+
+  const resolvedContentType = head.ContentType ?? claimedContentType;
+  if (!CONVERSATION_ALLOWED_CONTENT_TYPES.has(resolvedContentType)) {
+    deleteConversationFileFromR2(key).catch(() => {});
+    return { ok: false, error: 'This file type is not supported.' };
+  }
+
+  return { ok: true, sizeBytes: realSize, contentType: resolvedContentType };
+}
+
+/** Sharing = you've seen your own activity. Never fail the share over it. */
+async function advanceReadWatermark(
+  requestId: string,
+  relationshipId: string,
+  userId: string,
+  at: Date
+): Promise<void> {
+  try {
+    await conversationsRepository.markThreadRead({ relationshipId, userId, at });
+  } catch (error) {
+    log.warn('Failed to advance read watermark after file share', {
+      requestId,
+      relationshipId,
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
@@ -85,33 +147,15 @@ export async function confirmConversationFileUploadAction(
     }
 
     // 1. Key shape + provenance: relationship from VALIDATED access, user from session.
-    if (!CONVERSATION_FILE_KEY_PATTERN.test(key)) {
-      return { success: false, error: 'Invalid upload key.' };
-    }
-    const expectedPrefix = `${CONVERSATION_FILE_PREFIX}${relationshipId}/${user.id}/`;
-    if (!key.startsWith(expectedPrefix)) {
-      return { success: false, error: 'Invalid upload key.' };
+    const keyError = validateUploadKey(key, relationshipId, user.id);
+    if (keyError !== null) {
+      return { success: false, error: keyError };
     }
 
     // 2. Verify the object in R2 — size + type re-checked at the source.
-    const head = await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-
-    // Missing/zero size and over-cap are DIFFERENT failures — don't conflate
-    // an empty object under "too large" copy.
-    const realSize = head.ContentLength;
-    if (realSize === undefined || realSize === 0) {
-      deleteConversationFileFromR2(key).catch(() => {});
-      return { success: false, error: 'The uploaded file appears to be empty.' };
-    }
-    if (realSize > MAX_CONVERSATION_FILE_BYTES) {
-      deleteConversationFileFromR2(key).catch(() => {});
-      return { success: false, error: 'Uploaded file is too large. Please try a smaller file.' };
-    }
-
-    const resolvedContentType = head.ContentType ?? contentType;
-    if (!CONVERSATION_ALLOWED_CONTENT_TYPES.has(resolvedContentType)) {
-      deleteConversationFileFromR2(key).catch(() => {});
-      return { success: false, error: 'This file type is not supported.' };
+    const verified = await verifyUploadedObject(key, contentType);
+    if (!verified.ok) {
+      return { success: false, error: verified.error };
     }
 
     // 3. The share IS the event — insert the row now (standalone, no wider tx).
@@ -120,8 +164,8 @@ export async function confirmConversationFileUploadAction(
       uploadedByUserId: user.id,
       r2Key: key,
       fileName,
-      contentType: resolvedContentType,
-      sizeBytes: realSize,
+      contentType: verified.contentType,
+      sizeBytes: verified.sizeBytes,
     });
 
     const uploadedByName =
@@ -137,21 +181,7 @@ export async function confirmConversationFileUploadAction(
       createdAtIso: row.createdAt.toISOString(),
     };
 
-    // Sharing = you've seen your own activity. Never fail the share over it.
-    try {
-      await conversationsRepository.markThreadRead({
-        relationshipId,
-        userId: user.id,
-        at: row.createdAt,
-      });
-    } catch (error) {
-      log.warn('Failed to advance read watermark after file share', {
-        requestId,
-        relationshipId,
-        userId: user.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await advanceReadWatermark(requestId, relationshipId, user.id, row.createdAt);
 
     // Awaited but never throws — catches + logs internally.
     await publishConversationEvent(relationshipId, CONVERSATION_EVENT_FILE, fileView);
@@ -177,8 +207,8 @@ export async function confirmConversationFileUploadAction(
       relationshipId,
       userId: user.id,
       fileId: row.id,
-      sizeBytes: realSize,
-      contentType: resolvedContentType,
+      sizeBytes: verified.sizeBytes,
+      contentType: verified.contentType,
     });
 
     return { success: true, file: fileView };

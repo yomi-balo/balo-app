@@ -63,6 +63,46 @@ export function isConversationFilePayload(data: unknown): data is ConversationFi
 /** The only tags a realtime message body may carry (what the server emits). */
 const REALTIME_ALLOWED_TAG = /^<(?:\/?p|br\s*\/?)>$/i;
 
+/** The node-callback Ably hands to `authCallback` implementations. */
+type AblyAuthResultCallback = Parameters<NonNullable<Ably.ClientOptions['authCallback']>>[1];
+
+/**
+ * Best-effort error → string for the auth callback: `Error` and Ably's
+ * `ErrorInfo` both carry a string `.message` (structural narrowing, no `any`);
+ * anything else gets a fixed label instead of '[object Object]'.
+ */
+function authErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message;
+  }
+  return 'Realtime token request failed';
+}
+
+/**
+ * Fetches a token via the Server Action and reports through Ably's
+ * NODE-CALLBACK contract — an async `authCallback` that returns a promise
+ * silently fails (D1), so this stays a `void`-returning function.
+ */
+function fetchRealtimeToken(requestId: string, callback: AblyAuthResultCallback): void {
+  createConversationRealtimeTokenAction({ requestId })
+    .then((result) => {
+      if (result.success) {
+        callback(null, result.tokenRequest);
+      } else {
+        callback(result.error ?? 'Realtime disabled', null);
+      }
+    })
+    .catch((error: unknown) => {
+      callback(authErrorMessage(error), null);
+    });
+}
+
 /**
  * Client-side defense-in-depth for Ably-delivered `bodyHtml` before it can
  * reach `dangerouslySetInnerHTML`: every tag except `<p>`, `</p>`, `<br>` is
@@ -134,19 +174,7 @@ export function useConversationRealtime(input: UseConversationRealtimeInput): {
 
       client = new AblySdk.Realtime({
         // Node-callback style — NOT a promise-returning callback (D1).
-        authCallback: (_tokenParams, callback) => {
-          createConversationRealtimeTokenAction({ requestId })
-            .then((result) => {
-              if (result.success) {
-                callback(null, result.tokenRequest);
-              } else {
-                callback(result.error ?? 'Realtime disabled', null);
-              }
-            })
-            .catch((error: unknown) => {
-              callback(String(error), null);
-            });
-        },
+        authCallback: (_tokenParams, callback) => fetchRealtimeToken(requestId, callback),
       });
 
       client.connection.on('connected', () => {
@@ -164,19 +192,27 @@ export function useConversationRealtime(input: UseConversationRealtimeInput): {
 
       for (const relationshipId of channelsKey.split(',')) {
         const channel = client.channels.get(conversationChannelName(relationshipId));
-        void channel.subscribe(CONVERSATION_EVENT_MESSAGE, (msg: Ably.InboundMessage) => {
-          if (!disposed && isConversationMessagePayload(msg.data)) {
-            onMessageRef.current({
-              ...msg.data,
-              bodyHtml: sanitizeRealtimeBodyHtml(msg.data.bodyHtml),
-            });
-          }
-        });
-        void channel.subscribe(CONVERSATION_EVENT_FILE, (msg: Ably.InboundMessage) => {
-          if (!disposed && isConversationFilePayload(msg.data)) {
-            onFileRef.current(msg.data);
-          }
-        });
+        channel
+          .subscribe(CONVERSATION_EVENT_MESSAGE, (msg: Ably.InboundMessage) => {
+            if (!disposed && isConversationMessagePayload(msg.data)) {
+              onMessageRef.current({
+                ...msg.data,
+                bodyHtml: sanitizeRealtimeBodyHtml(msg.data.bodyHtml),
+              });
+            }
+          })
+          .catch(() => {
+            // Attach failures surface via the connection-state listeners.
+          });
+        channel
+          .subscribe(CONVERSATION_EVENT_FILE, (msg: Ably.InboundMessage) => {
+            if (!disposed && isConversationFilePayload(msg.data)) {
+              onFileRef.current(msg.data);
+            }
+          })
+          .catch(() => {
+            // Attach failures surface via the connection-state listeners.
+          });
       }
     };
 

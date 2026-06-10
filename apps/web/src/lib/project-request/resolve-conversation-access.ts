@@ -62,7 +62,7 @@ export async function resolveConversationAccess(
   }
 
   const ctx = resolveRequestLens(user, request);
-  if (ctx === null || ctx.archetype !== 'participant') {
+  if (ctx?.archetype !== 'participant') {
     return denied(user, requestId, relationshipId, ctx?.lens ?? null);
   }
 

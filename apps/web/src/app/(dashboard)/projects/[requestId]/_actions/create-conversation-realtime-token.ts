@@ -59,7 +59,7 @@ export async function createConversationRealtimeTokenAction(
     }
 
     const ctx = resolveRequestLens(user, request);
-    if (ctx === null || ctx.archetype !== 'participant') {
+    if (ctx?.archetype !== 'participant') {
       log.warn('Realtime token denied', {
         requestId,
         userId: user.id,

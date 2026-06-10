@@ -66,6 +66,32 @@ const EMPTY_THREAD_DATA: ThreadData = {
 const MARK_READ_MIN_INTERVAL_MS = 3000;
 const STAGE_CARD_CLASS = 'flex h-[min(78dvh,760px)] min-h-[520px] flex-col overflow-hidden p-0';
 
+/** Pure list transform: bump one thread's file badge (confirm path). */
+function withBumpedFileCount(
+  threads: ConversationThreadView[],
+  threadId: string
+): ConversationThreadView[] {
+  return threads.map((t) =>
+    t.relationshipId === threadId ? { ...t, fileCount: t.fileCount + 1 } : t
+  );
+}
+
+/** Pure thread transform: prepend a deduped earlier-messages page. */
+function withEarlierMessages(
+  current: ThreadData,
+  earlierPage: ConversationMessageView[],
+  hasEarlier: boolean
+): ThreadData {
+  const known = new Set(current.messages.map((m) => m.id));
+  const earlier = earlierPage.filter((m) => !known.has(m.id));
+  return {
+    ...current,
+    messages: [...earlier, ...current.messages],
+    hasEarlier,
+    loadingEarlier: false,
+  };
+}
+
 const noopSend = (): Promise<boolean> => Promise.resolve(false);
 const noopAttach = (): void => {
   // Disabled composer — nothing to attach to.
@@ -527,11 +553,7 @@ export function ConversationStage({
             if (data === undefined || data.state !== 'ready') return prev;
             return { ...prev, [threadId]: { ...data, files: [shared, ...data.files] } };
           });
-          setThreads((prev) =>
-            prev.map((t) =>
-              t.relationshipId === threadId ? { ...t, fileCount: t.fileCount + 1 } : t
-            )
-          );
+          setThreads((prev) => withBumpedFileCount(prev, threadId));
         }
         lastMarkAtRef.current[threadId] = Date.now();
         track(CONVERSATION_EVENTS.CONVERSATION_FILE_SHARED, {
@@ -609,7 +631,7 @@ export function ConversationStage({
         .then((result) => {
           // Same-tab navigation: the presigned GET forces Content-Disposition
           // attachment, and Safari/iOS block window.open after an await.
-          if (result.success) window.location.assign(result.url);
+          if (result.success) globalThis.location.assign(result.url);
           else toast.error(result.error);
         })
         .catch(() => toast.error('Could not download this file. Please try again.'))
@@ -644,16 +666,9 @@ export function ConversationStage({
           if (current === undefined) return prev;
           if (!result.success)
             return { ...prev, [threadId]: { ...current, loadingEarlier: false } };
-          const known = new Set(current.messages.map((m) => m.id));
-          const earlier = result.messages.filter((m) => !known.has(m.id));
           return {
             ...prev,
-            [threadId]: {
-              ...current,
-              messages: [...earlier, ...current.messages],
-              hasEarlier: result.hasEarlier,
-              loadingEarlier: false,
-            },
+            [threadId]: withEarlierMessages(current, result.messages, result.hasEarlier),
           };
         });
         if (!result.success) toast.error(result.error);
