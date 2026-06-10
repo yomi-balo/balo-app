@@ -69,13 +69,17 @@ describe('expressionsOfInterestRepository.submit', () => {
 
     // The (now PARTIAL) unique index `expression_of_interest_relationship_idx`
     // still rejects a second LIVE EOI at the DB level — a raw insert of a second
-    // live row hits the unique constraint. (Last DB action — it aborts the tx.)
+    // live row hits the unique constraint. Wrapped in db.transaction() so the
+    // violation aborts a SAVEPOINT, not the per-test wrapping transaction —
+    // the row-count assertion below still needs a usable transaction.
     await expect(
-      db.insert(expressionsOfInterest).values({
-        relationshipId: relationship.id,
-        projectRequestId,
-        expertProfileId,
-        message: '<p>Second live — must be rejected by the partial unique index.</p>',
+      db.transaction(async (tx) => {
+        await tx.insert(expressionsOfInterest).values({
+          relationshipId: relationship.id,
+          projectRequestId,
+          expertProfileId,
+          message: '<p>Second live — must be rejected by the partial unique index.</p>',
+        });
       })
     ).rejects.toThrow();
 
