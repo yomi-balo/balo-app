@@ -32,6 +32,39 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/withdraw-eoi', () => ({
   withdrawEoiAction: vi.fn(),
 }));
 
+// Conversation-stage Server Actions (BAL-271) — mocked so the shell renders in
+// JSDOM without touching @balo/db / auth / R2 modules at runtime.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/post-conversation-message', () => ({
+  postConversationMessageAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/mark-thread-read', () => ({
+  markThreadReadAction: vi.fn(() => Promise.resolve({ success: true })),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/fetch-thread', () => ({
+  fetchThreadAction: vi.fn(() =>
+    Promise.resolve({ success: true, messages: [], hasEarlier: false, files: [] })
+  ),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-file-upload', () => ({
+  requestConversationFileUploadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-file-upload', () => ({
+  confirmConversationFileUploadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download', () => ({
+  getConversationFileDownloadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call', () => ({
+  requestConversationCallAction: vi.fn(),
+}));
+vi.mock(
+  '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token',
+  () => ({ createConversationRealtimeTokenAction: vi.fn() })
+);
+
+// useIsMobile reads window.matchMedia (absent in jsdom) — default to desktop.
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
 // EoiEntry mounts the code-split TipTap editor — mock the public module so the
 // shell renders in JSDOM. A minimal contract is enough for shell-level assertions.
 vi.mock('@/components/balo/rich-text-editor', () => ({
@@ -41,7 +74,23 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
 }));
 
 import { RequestDetailShell } from './request-detail-shell';
+import { ConversationStage } from './conversation/conversation-stage';
+import { thread as conversationThread } from '@/test/fixtures/conversation';
 import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
+import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+
+function conversation(overrides: Partial<ConversationView> = {}): ConversationView {
+  return {
+    viewerUserId: 'user-viewer',
+    threads: [conversationThread()],
+    defaultThreadId: 'rel-1',
+    initialMessages: [],
+    initialHasEarlier: false,
+    initialFiles: [],
+    realtimeEnabled: false,
+    ...overrides,
+  };
+}
 
 function relationship(overrides: Partial<RequestRelationshipView> = {}): RequestRelationshipView {
   return {
@@ -95,10 +144,63 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
     expect(screen.queryByText(/Your conversation lives here/i)).not.toBeInTheDocument();
   });
 
-  it('client at Phase 2 renders the conversation placeholder + compact panel', () => {
+  it('client at Phase 2 without a payload renders the empty conversation stage + compact panel', () => {
     render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
     expect(screen.getByText(/Your conversation lives here/i)).toBeInTheDocument();
     expect(screen.getByText('The request')).toBeInTheDocument();
+  });
+
+  it('client at Phase 2 with a payload renders the LIVE conversation stage', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'eoi_submitted' })}
+        ctx={ctx()}
+        conversation={conversation()}
+      />
+    );
+    // The live stage: the expert thread identity + composer, no placeholder copy.
+    expect(screen.getByText('Priya Nair')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message Priya' })).toBeInTheDocument();
+    expect(screen.queryByText(/Your conversation lives here/i)).not.toBeInTheDocument();
+  });
+
+  it('keys the conversation island by request id (remounts across /projects/A → /projects/B)', () => {
+    // The shell is a sync server component — call it and walk the element tree
+    // (RTL can't observe React keys in the DOM).
+    const element = RequestDetailShell({
+      view: view({ status: 'eoi_submitted' }),
+      ctx: ctx(),
+      conversation: conversation(),
+    });
+    const findStage = (node: unknown): React.ReactElement | null => {
+      if (node === null || node === undefined || typeof node !== 'object') return null;
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          const found = findStage(child);
+          if (found !== null) return found;
+        }
+        return null;
+      }
+      const el = node as React.ReactElement<{ children?: unknown }>;
+      if (el.type === ConversationStage) return el;
+      return findStage(el.props?.children);
+    };
+    const stage = findStage(element);
+    expect(stage).not.toBeNull();
+    expect(stage?.key).toBe('req-1');
+  });
+
+  it('Phase 2 renders the mobile slim request bar that opens the details sheet', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'eoi_submitted' })}
+        ctx={ctx()}
+        conversation={conversation()}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Request details: CPQ implementation' })
+    ).toBeInTheDocument();
   });
 
   it('uninvited expert before invite is gated with the lock card', () => {

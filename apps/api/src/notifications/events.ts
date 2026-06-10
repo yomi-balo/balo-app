@@ -69,6 +69,30 @@ export interface ProjectEoiSubmittedPayload {
   expertName: string; // invited expert's display name — email/in-app body
 }
 
+export interface ProjectMessagePostedPayload {
+  correlationId: string; // message id — dedup per message (dispatcher jobId)
+  projectRequestId: string;
+  relationshipId: string;
+  title: string; // request title
+  senderName: string;
+  recipientRole: 'client' | 'expert'; // rule condition routes on this
+  recipientId?: string; // set when recipientRole==='client' (= createdByUserId) → dispatcher 'client' path
+  expertProfileId?: string; // set when recipientRole==='expert' → resolver hydrates data.expert
+  preview: string; // plain-text snippet ≤140 (htmlToPlainText)
+}
+
+export interface ProjectFileSharedPayload {
+  correlationId: string; // file id — dedup per share
+  projectRequestId: string;
+  relationshipId: string;
+  title: string;
+  senderName: string;
+  recipientRole: 'client' | 'expert';
+  recipientId?: string;
+  expertProfileId?: string;
+  fileName: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -78,7 +102,9 @@ export type NotificationEvent =
   | 'project.match_requested'
   | 'project.exploratory_requested'
   | 'project.expert_invited'
-  | 'project.eoi_submitted';
+  | 'project.eoi_submitted'
+  | 'project.message_posted'
+  | 'project.file_shared';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -90,4 +116,6 @@ export interface EventPayloadMap {
   'project.exploratory_requested': ProjectExploratoryRequestedPayload;
   'project.expert_invited': ProjectExpertInvitedPayload;
   'project.eoi_submitted': ProjectEoiSubmittedPayload;
+  'project.message_posted': ProjectMessagePostedPayload;
+  'project.file_shared': ProjectFileSharedPayload;
 }

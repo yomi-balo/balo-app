@@ -174,4 +174,64 @@ describe('POST /notifications/publish', () => {
     expect(res.json()).toEqual({ published: true });
     expect(mockPublish).toHaveBeenCalledWith('expert.approved', payload);
   });
+
+  it('returns 200 and publishes project.message_posted (expert recipient)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440002',
+      title: 'CPQ implementation',
+      senderName: 'Dana Whitfield',
+      recipientRole: 'expert',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
+      preview: 'Quick question about the price migration',
+    };
+
+    const res = await inject(
+      { event: 'project.message_posted', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPublish).toHaveBeenCalledWith('project.message_posted', payload);
+  });
+
+  it('returns 200 and publishes project.file_shared (client recipient)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440002',
+      title: 'CPQ implementation',
+      senderName: 'Priya Nair',
+      recipientRole: 'client',
+      recipientId: '550e8400-e29b-41d4-a716-446655440004',
+      fileName: 'price-book-export.xlsx',
+    };
+
+    const res = await inject(
+      { event: 'project.file_shared', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPublish).toHaveBeenCalledWith('project.file_shared', payload);
+  });
+
+  it('returns 400 when project.message_posted is missing its recipientRole', async () => {
+    const res = await inject(
+      {
+        event: 'project.message_posted',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440000',
+          projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
+          relationshipId: '550e8400-e29b-41d4-a716-446655440002',
+          title: 'CPQ implementation',
+          senderName: 'Dana Whitfield',
+          preview: 'hello',
+        },
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+  });
 });

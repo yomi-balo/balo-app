@@ -16,6 +16,7 @@ export {
   SEARCH_EVENTS,
   EXPERT_PROFILE_EVENTS,
   PROJECT_EVENTS,
+  CONVERSATION_EVENTS,
 } from '../events';
 
 export type {
@@ -39,4 +40,9 @@ export type {
   ProjectEventMap,
   ProjectEntryMethod,
   ProjectStep,
+  ConversationEventMap,
+  ConversationLens,
+  ConversationThreadSelectMethod,
+  ConversationFilesSurface,
+  ConversationCallSurface,
 } from '../events';

@@ -6,20 +6,38 @@ import {
   requestPhase,
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
+import type { ConversationView } from '@/lib/project-request/conversation-view-types';
 import { RequestCard } from './request-card';
 import { RequestContext } from './request-context';
 import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE } from './nudge-bar';
-import { ConversationPlaceholder } from './conversation-placeholder';
 import { AdminHealthPanel } from './admin-health-panel';
 import { RequestDetailAnalytics } from './request-detail-analytics';
 import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
 import { ProposalSlot } from './proposal-slot';
+import { ConversationStage } from './conversation/conversation-stage';
+import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 
 interface RequestDetailShellProps {
   view: RequestDetailView;
   ctx: RequestViewerContext;
+  /**
+   * Phase-2 participant payload (loaded by the page). Optional/null-safe —
+   * a missing payload renders the zero-thread invitation stage, never a crash.
+   */
+  conversation?: ConversationView | null;
 }
+
+/** Defensive fallback when the page passed no conversation payload. */
+const EMPTY_CONVERSATION_VIEW: ConversationView = {
+  viewerUserId: '',
+  threads: [],
+  defaultThreadId: null,
+  initialMessages: [],
+  initialHasEarlier: false,
+  initialFiles: [],
+  realtimeEnabled: false,
+};
 
 const LENS_META = {
   client: {
@@ -96,14 +114,18 @@ function ExpertGatedCard(): React.JSX.Element {
  * layouts from the Lens × Status matrix:
  *  - observer (admin): full RequestContext + AdminHealthPanel (once invited)
  *  - expert-gated: lock card + waiting nudge
+ *  - participant Phase 2: live ConversationStage (main island) + compact panel
+ *    (desktop right column; mobile slim request bar → bottom sheet)
  *  - participant Phase 1: full-width RequestContext hero
- *  - participant Phase 2: ConversationPlaceholder (main) + compact 3-card panel
  *
- * Everything is server-rendered; the only client island is RequestDetailAnalytics.
+ * Everything is server-rendered except the analytics island and the Phase-2
+ * conversation island (+ its mobile request-sheet wrapper, whose CHILDREN stay
+ * server-rendered via RSC composition).
  */
 export function RequestDetailShell({
   view,
   ctx,
+  conversation = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -178,8 +200,45 @@ export function RequestDetailShell({
 
         {ctx.archetype === 'participant' && !isExpertGated && isPhase2 && (
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-            <ConversationPlaceholder />
-            <div className="space-y-5">
+            <div className="min-w-0 space-y-4">
+              {/* Mobile: slim request bar → bottom sheet. Children are the SAME
+                  server-rendered compact panel the desktop right column shows
+                  (RSC composition through the client sheet wrapper). */}
+              <div className="lg:hidden">
+                <MobileRequestSheet title={view.title}>
+                  <div className="space-y-5">
+                    {ctx.lens === 'expert' && (
+                      <>
+                        <div className="flex justify-end">
+                          <ProposalSlot requestStatus={view.status} />
+                        </div>
+                        {view.viewerEoi && (
+                          <EoiEntry
+                            requestId={view.id}
+                            initialHasEoi={view.viewerEoi.hasLiveEoi}
+                            initialMessageHtml={view.viewerEoi.messageHtml}
+                            compact
+                          />
+                        )}
+                      </>
+                    )}
+                    <RequestContext view={view} variant="compact" />
+                  </div>
+                </MobileRequestSheet>
+              </div>
+              {/* key={view.id}: App Router preserves client state across
+                  dynamic-param navigation (/projects/A → /projects/B) — keying
+                  by request remounts the island so A's threads never linger
+                  under B's URL. */}
+              <ConversationStage
+                key={view.id}
+                requestId={view.id}
+                lens={ctx.lens === 'expert' ? 'expert' : 'client'}
+                requestStatus={view.status}
+                view={conversation ?? EMPTY_CONVERSATION_VIEW}
+              />
+            </div>
+            <div className="hidden space-y-5 lg:block">
               {/* Expert Phase-2: the gated "Build proposal" header slot + a compact
                   EOI card so withdraw/resubmit stays reachable once the request has
                   flipped to the conversation. The client lens gets neither. */}

@@ -245,6 +245,42 @@ export const conversationFiles = pgTable(
   ]
 );
 
+/**
+ * conversation_read_states — per-(relationship, user) read watermark (BAL-271).
+ * One LIVE row per viewer per thread; `lastReadAt` only ever moves FORWARD
+ * (repo upsert uses GREATEST). Unread is DERIVED at read time — newest live
+ * inbound message/file `created_at` vs this watermark — never stored per
+ * message. Both FKs CASCADE (a read state is meaningless without the thread
+ * or the viewer).
+ */
+export const conversationReadStates = pgTable(
+  'conversation_read_states',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    relationshipId: uuid('relationship_id')
+      .notNull()
+      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    lastReadAt: timestamp('last_read_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    // One LIVE read-state per (relationship, user). PARTIAL on `deleted_at IS
+    // NULL` — hard-learned convention (mirrors the relationship/EOI unique
+    // indexes above): soft-delete + a NON-partial unique index makes any
+    // re-create silently fail, and the repo upsert's `targetWhere` arbiter
+    // must match THIS predicate exactly.
+    uniqueIndex('conversation_read_state_unique_idx')
+      .on(t.relationshipId, t.userId)
+      .where(sql`${t.deletedAt} IS NULL`),
+    index('conversation_read_state_user_idx').on(t.userId),
+    index('conversation_read_state_relationship_idx').on(t.relationshipId),
+  ]
+);
+
 // ── Relations ──────────────────────────────────────────────────────────
 
 export const requestExpertRelationshipsRelations = relations(
@@ -266,6 +302,7 @@ export const requestExpertRelationshipsRelations = relations(
     proposals: many(proposals),
     conversationMessages: many(conversationMessages),
     conversationFiles: many(conversationFiles),
+    conversationReadStates: many(conversationReadStates),
   })
 );
 
@@ -321,6 +358,17 @@ export const conversationFilesRelations = relations(conversationFiles, ({ one })
   }),
 }));
 
+export const conversationReadStatesRelations = relations(conversationReadStates, ({ one }) => ({
+  relationship: one(requestExpertRelationships, {
+    fields: [conversationReadStates.relationshipId],
+    references: [requestExpertRelationships.id],
+  }),
+  user: one(users, {
+    fields: [conversationReadStates.userId],
+    references: [users.id],
+  }),
+}));
+
 // ── Type exports ───────────────────────────────────────────────────────
 
 export type RequestExpertRelationship = typeof requestExpertRelationships.$inferSelect;
@@ -333,3 +381,5 @@ export type ConversationMessage = typeof conversationMessages.$inferSelect;
 export type NewConversationMessage = typeof conversationMessages.$inferInsert;
 export type ConversationFile = typeof conversationFiles.$inferSelect;
 export type NewConversationFile = typeof conversationFiles.$inferInsert;
+export type ConversationReadState = typeof conversationReadStates.$inferSelect;
+export type NewConversationReadState = typeof conversationReadStates.$inferInsert;

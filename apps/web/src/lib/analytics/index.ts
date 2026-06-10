@@ -16,6 +16,7 @@ export {
   SEARCH_EVENTS,
   EXPERT_PROFILE_EVENTS,
   PROJECT_EVENTS,
+  CONVERSATION_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -27,4 +28,9 @@ export type {
   ProjectEventMap,
   ProjectEntryMethod,
   ProjectStep,
+  ConversationEventMap,
+  ConversationLens,
+  ConversationThreadSelectMethod,
+  ConversationFilesSurface,
+  ConversationCallSurface,
 } from '@balo/analytics/client';

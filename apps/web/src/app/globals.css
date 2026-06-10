@@ -355,6 +355,16 @@
   }
 }
 
+/* Hide scrollbars while keeping the element scrollable (conversation tab
+   strip). Tailwind 4 @utility — webkit + Firefox/IE variants. */
+@utility scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* White inputs on tinted wizard background */
 [data-wizard-inputs] {
   --input-bg: white;

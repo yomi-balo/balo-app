@@ -103,6 +103,48 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-message-posted', () => {
+    it('renders sender + preview with the request action url', () => {
+      const result = getInAppTemplate('project-message-posted', {
+        senderName: 'Priya Nair',
+        preview: 'Quick question about the CPQ scope',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'New message',
+        body: 'Priya Nair: Quick question about the CPQ scope',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when fields are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-message-posted', {});
+      expect(result.body).toBe('Someone: sent you a message');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-file-shared', () => {
+    it('renders sender + file name with the request action url', () => {
+      const result = getInAppTemplate('project-file-shared', {
+        senderName: 'Dana Whitfield',
+        fileName: 'price-book-export.xlsx',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'New file shared',
+        body: 'Dana Whitfield shared price-book-export.xlsx',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when fields are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-file-shared', {});
+      expect(result.body).toBe('Someone shared a file');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

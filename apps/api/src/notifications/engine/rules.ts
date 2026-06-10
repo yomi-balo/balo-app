@@ -133,4 +133,39 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-271 conversation events: IN-APP ONLY (per-message email = spam; a
+  // digest is a future engine feature). One event, two conditioned rules —
+  // the payload's recipientRole routes to exactly one of them.
+  'project.message_posted': [
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-message-posted',
+      timing: 'immediate',
+      condition: (ctx) => ctx.payload.recipientRole === 'client',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-message-posted',
+      timing: 'immediate',
+      condition: (ctx) => ctx.payload.recipientRole === 'expert',
+    },
+  ],
+  'project.file_shared': [
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-file-shared',
+      timing: 'immediate',
+      condition: (ctx) => ctx.payload.recipientRole === 'client',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-file-shared',
+      timing: 'immediate',
+      condition: (ctx) => ctx.payload.recipientRole === 'expert',
+    },
+  ],
 };

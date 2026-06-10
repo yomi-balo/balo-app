@@ -37,3 +37,11 @@ export {
   type ProjectEntryMethod,
   type ProjectStep,
 } from './project';
+export {
+  CONVERSATION_EVENTS,
+  type ConversationEventMap,
+  type ConversationLens,
+  type ConversationThreadSelectMethod,
+  type ConversationFilesSurface,
+  type ConversationCallSurface,
+} from './conversation';

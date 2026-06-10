@@ -146,6 +146,41 @@ describe('notificationRules', () => {
     expect(rules![0].template).toBe('new-message');
   });
 
+  describe.each([
+    ['project.message_posted', 'project-message-posted'],
+    ['project.file_shared', 'project-file-shared'],
+  ] as const)('%s rules', (event, template) => {
+    it('is in-app only — one conditioned rule per recipient role', () => {
+      const rules = notificationRules[event];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.channel).toBe('in-app');
+        expect(rule.template).toBe(template);
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeDefined();
+      }
+      expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
+        'client',
+        'expert',
+      ]);
+    });
+
+    it('routes by payload.recipientRole — exactly one rule fires per event', () => {
+      const rules = notificationRules[event]!;
+      const clientRule = rules.find((r) => r.recipient === 'client')!;
+      const expertRule = rules.find((r) => r.recipient === 'expert')!;
+
+      const toClient = { event, payload: { recipientRole: 'client' }, data: {} };
+      expect(clientRule.condition!(toClient)).toBe(true);
+      expect(expertRule.condition!(toClient)).toBe(false);
+
+      const toExpert = { event, payload: { recipientRole: 'expert' }, data: {} };
+      expect(clientRule.condition!(toExpert)).toBe(false);
+      expect(expertRule.condition!(toExpert)).toBe(true);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

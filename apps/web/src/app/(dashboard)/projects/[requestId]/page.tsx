@@ -4,8 +4,10 @@ import { notFound, redirect } from 'next/navigation';
 import { projectRequestsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
-import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
+import { requestPhase, resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import { mapRequestToDetailView } from '@/lib/project-request/request-detail-view';
+import { loadConversationView } from '@/lib/project-request/conversation-view';
+import type { ConversationView } from '@/lib/project-request/conversation-view-types';
 import { RequestDetailShell } from '@/components/balo/project-request/request-detail-shell';
 
 interface RequestDetailPageProps {
@@ -102,5 +104,12 @@ export default async function RequestDetailPage({
 
   const view = mapRequestToDetailView(request, ctx);
 
-  return <RequestDetailShell view={view} ctx={ctx} />;
+  // Phase-2 participants get the live conversation payload (thread summaries +
+  // the default thread's first page). Observers/Phase-1 never pay for it.
+  let conversation: ConversationView | null = null;
+  if (ctx.archetype === 'participant' && requestPhase(view.status) === 'phase2') {
+    conversation = await loadConversationView(request, ctx, user);
+  }
+
+  return <RequestDetailShell view={view} ctx={ctx} conversation={conversation} />;
 }
