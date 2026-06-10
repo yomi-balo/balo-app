@@ -1,0 +1,1 @@
+ALTER TABLE "request_expert_relationships" ADD COLUMN "proposal_requested_at" timestamp with time zone;

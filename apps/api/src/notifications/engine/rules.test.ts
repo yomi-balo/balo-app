@@ -137,6 +137,25 @@ describe('notificationRules', () => {
     });
   });
 
+  it('project.proposal_requested has expert email + in-app rules (BAL-272 commit moment)', () => {
+    const rules = notificationRules['project.proposal_requested'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(2);
+    const email = rules!.find((r) => r.channel === 'email');
+    expect(email).toMatchObject({
+      recipient: 'expert',
+      template: 'project-proposal-requested',
+      timing: 'immediate',
+      priority: 'normal',
+    });
+    const inApp = rules!.find((r) => r.channel === 'in-app');
+    expect(inApp).toMatchObject({
+      recipient: 'expert',
+      template: 'project-proposal-requested',
+      timing: 'immediate',
+    });
+  });
+
   it('has rules for message.received event', () => {
     const rules = notificationRules['message.received'];
     expect(rules).toBeDefined();

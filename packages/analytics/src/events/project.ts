@@ -98,6 +98,31 @@ export interface ProjectEventMap {
     relationship_id: string;
     expert_id: string;
     actor: 'client' | 'admin';
+    /** Which surface committed the request (A5: desktop thread header vs mobile rail). */
+    surface: 'header' | 'rail';
+    /**
+     * Relationships at/after `proposal_requested` on this request, INCLUDING this
+     * one. Its distribution per request_id feeds the proposal-cap decision.
+     * Known approximation: computed from a pre-transition snapshot, so two
+     * concurrent requests on different threads can each report the same count.
+     */
+    proposal_request_count: number;
+    /**
+     * ms from the request's earliest LIVE EOI → this proposal request. Computed
+     * server-side in the action and attached client-side (the `time_to_eoi_ms`
+     * pattern). Known approximation: a withdrawn-and-resubmitted EOI reports the
+     * resubmit time. Absent when no live EOI timestamp resolves.
+     */
+    time_from_first_eoi_ms?: number;
+    /**
+     * Interaction depth of THIS thread at commit time (live rows only). Meetings
+     * are deferred — add `meeting_count` when the Booking project replaces the
+     * mock call seam (`conversation_call_cta_clicked` captures intent meanwhile).
+     */
+    message_count: number;
+    file_count: number;
+    /** Open threads visible to the client's island at commit time. */
+    thread_count: number;
   };
   [PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED]: {
     request_id: string;

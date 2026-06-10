@@ -7,7 +7,8 @@ import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
-import { getEmailTemplate } from './index.js';
+import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
+import { getEmailTemplate, sanitizeSubjectTitle } from './index.js';
 import {
   EmailShell,
   LogoRow,
@@ -160,6 +161,19 @@ describe('ProjectEoiSubmittedEmail', () => {
   });
 });
 
+describe('ProjectProposalRequestedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectProposalRequestedEmail({
+      firstName: 'Priya',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
 describe('getEmailTemplate — A2 templates', () => {
   it('resolves project-exploratory-requested with a scoping subject', () => {
     const { component, subject } = getEmailTemplate('project-exploratory-requested', {
@@ -192,8 +206,58 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(subject).toBe('An expert is interested in CPQ implementation');
   });
 
+  it('resolves project-proposal-requested with a proposal subject', () => {
+    const { component, subject } = getEmailTemplate('project-proposal-requested', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Priya',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('Proposal requested: CPQ implementation');
+  });
+
   it('throws on an unknown template name', () => {
     expect(() => getEmailTemplate('does-not-exist', {})).toThrow(/Unknown email template/);
+  });
+});
+
+describe('sanitizeSubjectTitle', () => {
+  it('replaces CR/LF and other control characters with spaces', () => {
+    expect(sanitizeSubjectTitle('CPQ\r\nBcc: attacker@evil.com')).toBe(
+      'CPQ  Bcc: attacker@evil.com'
+    );
+    expect(sanitizeSubjectTitle('tab\there\u0000null')).toBe('tab here null');
+  });
+
+  it('trims and caps at 160 characters', () => {
+    expect(sanitizeSubjectTitle('  padded  ')).toBe('padded');
+    expect(sanitizeSubjectTitle('a'.repeat(500))).toHaveLength(160);
+  });
+
+  it('leaves a normal title untouched', () => {
+    expect(sanitizeSubjectTitle('CPQ implementation')).toBe('CPQ implementation');
+  });
+
+  it('is applied to every user-authored title subject (header-injection guard)', () => {
+    const hostile = 'CPQ\r\nBcc: attacker@evil.com';
+    const templateNames = [
+      'project-request-submitted',
+      'project-match-requested',
+      'project-exploratory-requested',
+      'project-expert-invited',
+      'project-eoi-submitted',
+      'project-proposal-requested',
+    ];
+    for (const name of templateNames) {
+      const { subject } = getEmailTemplate(name, {
+        title: hostile,
+        projectRequestId: 'req-1',
+        recipientName: 'Dana',
+        expertName: 'Priya Nair',
+        company: { name: 'Acme Inc' },
+      });
+      expect(subject).not.toMatch(/[\r\n]/);
+    }
   });
 });
 

@@ -113,6 +113,48 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('project.proposal_requested', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440002',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
+      title: 'CPQ implementation',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_requested',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing relationshipId', () => {
+      const { relationshipId: _relationshipId, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_requested',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty title and a title over 200 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.proposal_requested',
+          payload: { ...validPayload, title: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.proposal_requested',
+          payload: { ...validPayload, title: 'a'.repeat(201) },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

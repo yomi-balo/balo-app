@@ -130,7 +130,11 @@ export function RequestDetailShell({
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
   const isExpertGated = ctx.lens === 'expert' && STATUS_LABEL_BEFORE_INVITE.has(view.status);
-  const nudge = isExpertGated ? EXPERT_GATED_NUDGE : nudgeFor(ctx.lens, view.status);
+  // Expert lens: the proposal-phase nudge cells key on the VIEWER'S relationship
+  // status (BAL-272 divergence fix) — request status is the max-progress aggregate.
+  const nudge = isExpertGated
+    ? EXPERT_GATED_NUDGE
+    : nudgeFor(ctx.lens, view.status, view.viewerRelationshipStatus);
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 
@@ -210,7 +214,7 @@ export function RequestDetailShell({
                     {ctx.lens === 'expert' && (
                       <>
                         <div className="flex justify-end">
-                          <ProposalSlot requestStatus={view.status} />
+                          <ProposalSlot viewerRelationshipStatus={view.viewerRelationshipStatus} />
                         </div>
                         {view.viewerEoi && (
                           <EoiEntry
@@ -245,7 +249,7 @@ export function RequestDetailShell({
               {ctx.lens === 'expert' && (
                 <>
                   <div className="flex justify-end">
-                    <ProposalSlot requestStatus={view.status} />
+                    <ProposalSlot viewerRelationshipStatus={view.viewerRelationshipStatus} />
                   </div>
                   {view.viewerEoi && (
                     <EoiEntry

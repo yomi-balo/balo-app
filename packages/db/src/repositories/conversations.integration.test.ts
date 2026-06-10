@@ -640,3 +640,99 @@ describe('conversationsRepository.markThreadRead', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('conversationsRepository.countThreadActivity', () => {
+  it('counts live messages and files for the thread, any sender/uploader, scoped to the relationship', async () => {
+    const a = await requestExpertRelationshipFactory();
+    const b = await requestExpertRelationshipFactory();
+    const client = await userFactory();
+    const expert = await userFactory();
+    const base = Date.parse('2026-06-09T00:00:00Z');
+
+    // Thread A: two messages from DIFFERENT senders + one file.
+    await seedMessage({
+      relationshipId: a.relationship.id,
+      senderUserId: client.id,
+      body: '<p>from client</p>',
+      createdAt: new Date(base),
+    });
+    await seedMessage({
+      relationshipId: a.relationship.id,
+      senderUserId: expert.id,
+      body: '<p>from expert</p>',
+      createdAt: new Date(base + 1000),
+    });
+    await seedFile({
+      relationshipId: a.relationship.id,
+      uploadedByUserId: expert.id,
+      createdAt: new Date(base + 2000),
+    });
+
+    // Thread B: noise that must NOT leak into A's counts.
+    await seedMessage({
+      relationshipId: b.relationship.id,
+      senderUserId: client.id,
+      body: '<p>other thread</p>',
+      createdAt: new Date(base),
+    });
+    await seedFile({
+      relationshipId: b.relationship.id,
+      uploadedByUserId: client.id,
+      createdAt: new Date(base + 1000),
+    });
+
+    expect(await conversationsRepository.countThreadActivity(a.relationship.id)).toEqual({
+      messageCount: 2,
+      fileCount: 1,
+    });
+    expect(await conversationsRepository.countThreadActivity(b.relationship.id)).toEqual({
+      messageCount: 1,
+      fileCount: 1,
+    });
+  });
+
+  it('excludes soft-deleted messages and files', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    const sender = await userFactory();
+    const base = Date.parse('2026-06-09T01:00:00Z');
+
+    await seedMessage({
+      relationshipId: relationship.id,
+      senderUserId: sender.id,
+      body: '<p>live</p>',
+      createdAt: new Date(base),
+    });
+    await seedMessage({
+      relationshipId: relationship.id,
+      senderUserId: sender.id,
+      body: '<p>deleted</p>',
+      createdAt: new Date(base + 1000),
+      deletedAt: new Date(),
+    });
+    await seedFile({
+      relationshipId: relationship.id,
+      uploadedByUserId: sender.id,
+      createdAt: new Date(base + 2000),
+      deletedAt: new Date(),
+    });
+
+    expect(await conversationsRepository.countThreadActivity(relationship.id)).toEqual({
+      messageCount: 1,
+      fileCount: 0,
+    });
+  });
+
+  it('returns zeros for an empty thread and for an unknown relationship id', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    expect(await conversationsRepository.countThreadActivity(relationship.id)).toEqual({
+      messageCount: 0,
+      fileCount: 0,
+    });
+    // COUNT over no rows — a bad id is zeros, never a throw.
+    expect(await conversationsRepository.countThreadActivity(randomUUID())).toEqual({
+      messageCount: 0,
+      fileCount: 0,
+    });
+  });
+});

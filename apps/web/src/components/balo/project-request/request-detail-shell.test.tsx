@@ -57,6 +57,9 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-d
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call', () => ({
   requestConversationCallAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () => ({
+  requestProposalAction: vi.fn(),
+}));
 vi.mock(
   '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token',
   () => ({ createConversationRealtimeTokenAction: vi.fn() })
@@ -121,6 +124,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     timeline: null,
     relationships: [],
     viewerEoi: null,
+    viewerRelationshipStatus: null,
     ...overrides,
   };
 }
@@ -255,6 +259,7 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
         view={view({
           status: 'eoi_submitted',
           viewerEoi: { hasLiveEoi: true, messageHtml: '<p>My pitch</p>' },
+          viewerRelationshipStatus: 'eoi_submitted',
         })}
         ctx={ctx({
           lens: 'expert',
@@ -266,6 +271,49 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
     );
     expect(screen.getByText('Awaiting proposal request')).toBeInTheDocument();
     expect(screen.getByText('Interest sent')).toBeInTheDocument();
+  });
+
+  it('BAL-272 divergence: expert B at request proposal_requested still sees the AWAITING pill + meet nudge', () => {
+    // Another expert's proposal advanced the REQUEST status; this viewer's own
+    // relationship is still eoi_submitted — no false "Build proposal" prompt.
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'proposal_requested',
+          viewerEoi: { hasLiveEoi: true, messageHtml: '<p>My pitch</p>' },
+          viewerRelationshipStatus: 'eoi_submitted',
+        })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+      />
+    );
+    expect(screen.getByText('Awaiting proposal request')).toBeInTheDocument();
+    expect(screen.getByText('Offer the client a time to talk')).toBeInTheDocument();
+    expect(screen.queryByText(/Your proposal was requested/)).not.toBeInTheDocument();
+  });
+
+  it('BAL-272: the REQUESTED expert at proposal_requested gets the build nudge, no awaiting pill', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'proposal_requested',
+          viewerEoi: { hasLiveEoi: true, messageHtml: '<p>My pitch</p>' },
+          viewerRelationshipStatus: 'proposal_requested',
+        })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+      />
+    );
+    expect(screen.queryByText('Awaiting proposal request')).not.toBeInTheDocument();
+    expect(screen.getByText('Your proposal was requested — build it')).toBeInTheDocument();
   });
 
   it('client Phase-1 does NOT render the EoiEntry card (no viewerEoi)', () => {

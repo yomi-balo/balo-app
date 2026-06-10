@@ -217,6 +217,42 @@ describe('POST /notifications/publish', () => {
     expect(mockPublish).toHaveBeenCalledWith('project.file_shared', payload);
   });
 
+  it('returns 200 and publishes project.proposal_requested (BAL-272 round-trip)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440002',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
+      title: 'CPQ implementation',
+    };
+
+    const res = await inject(
+      { event: 'project.proposal_requested', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ published: true });
+    expect(mockPublish).toHaveBeenCalledWith('project.proposal_requested', payload);
+  });
+
+  it('returns 400 when project.proposal_requested is missing its expertProfileId', async () => {
+    const res = await inject(
+      {
+        event: 'project.proposal_requested',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440002',
+          projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
+          relationshipId: '550e8400-e29b-41d4-a716-446655440002',
+          title: 'CPQ implementation',
+        },
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when project.message_posted is missing its recipientRole', async () => {
     const res = await inject(
       {

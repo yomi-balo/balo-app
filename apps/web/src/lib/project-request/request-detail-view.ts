@@ -1,6 +1,7 @@
 import type { ProjectRequestWithRelations } from '@balo/db';
 import { formatBudgetRange } from '@/lib/utils/currency';
 import type { RequestViewerContext, ProjectRequestStatus } from './resolve-request-lens';
+import type { RelationshipStatus } from './conversation-view-types';
 
 export interface RequestProductView {
   name: string;
@@ -68,6 +69,13 @@ export interface RequestDetailView {
    * expert's EOI crosses the boundary (gated on the viewer's relationship).
    */
   viewerEoi: { hasLiveEoi: boolean; messageHtml: string | null } | null;
+  /**
+   * The viewer-expert's OWN relationship status — populated ONLY for the expert
+   * lens (`null` for client/admin). BAL-272 makes relationship statuses diverge
+   * across threads, so the expert-facing derivers (page nudge, `ProposalSlot`)
+   * must key on THIS, not the max-progress request status.
+   */
+  viewerRelationshipStatus: RelationshipStatus | null;
 }
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -188,6 +196,20 @@ function deriveViewerEoi(
 }
 
 /**
+ * The viewer-expert's own relationship status (expert lens only — `null` for
+ * client/admin, so a non-expert payload never carries another expert's state).
+ * Pure + deterministic; mirrors {@link deriveViewerEoi}.
+ */
+function deriveViewerRelationshipStatus(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): RelationshipStatus | null {
+  if (ctx.lens !== 'expert' || ctx.relationshipId === null) return null;
+  const relationship = request.relationships.find((r) => r.id === ctx.relationshipId);
+  return relationship?.status ?? null;
+}
+
+/**
  * Pure mapper: hydrated DB graph → fully serializable view-model the leaf
  * components consume. Mirrors `mapProfileToView`.
  *
@@ -228,5 +250,6 @@ export function mapRequestToDetailView(
         ? request.relationships.map((r) => deriveRelationshipView(r, now))
         : [],
     viewerEoi: deriveViewerEoi(request, ctx),
+    viewerRelationshipStatus: deriveViewerRelationshipStatus(request, ctx),
   };
 }

@@ -13,7 +13,12 @@ function renderHeader(input: {
   threadOverrides?: Partial<ConversationThreadView>;
   fileCount?: number;
   filesOpen?: boolean;
-}): { onToggleFiles: ReturnType<typeof vi.fn>; onCall: ReturnType<typeof vi.fn> } {
+  /** Non-null → the proposal slot renders enabled (client lens, A5). */
+  onRequestProposal?: (() => void) | null;
+}): {
+  onToggleFiles: ReturnType<typeof vi.fn>;
+  onCall: ReturnType<typeof vi.fn>;
+} {
   const lens = input.lens ?? 'client';
   const requestStatus = input.requestStatus ?? 'eoi_submitted';
   const t = thread(input.threadOverrides);
@@ -30,6 +35,7 @@ function renderHeader(input: {
       callPending={false}
       onToggleFiles={onToggleFiles}
       onCall={onCall}
+      onRequestProposal={input.onRequestProposal ?? null}
     />
   );
   return { onToggleFiles, onCall };
@@ -51,12 +57,35 @@ describe('ThreadHeader', () => {
     expect(onToggleFiles).toHaveBeenCalled();
   });
 
-  it('client lens: Book a call + disabled Request proposal stub', async () => {
+  it('client lens without a handler: Book a call + disabled Request proposal stub', async () => {
     const user = userEvent.setup();
     const { onCall } = renderHeader({});
     await user.click(screen.getByRole('button', { name: 'Book a call' }));
     expect(onCall).toHaveBeenCalled();
     const proposal = screen.getByRole('button', { name: 'Request proposal' });
+    expect(proposal).toBeDisabled();
+    expect(proposal).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('client lens with a handler: Request proposal is ENABLED and fires it (A5)', async () => {
+    const user = userEvent.setup();
+    const onRequestProposal = vi.fn();
+    renderHeader({ onRequestProposal });
+    const proposal = screen.getByRole('button', { name: 'Request proposal' });
+    expect(proposal).toBeEnabled();
+    expect(proposal).not.toHaveAttribute('aria-disabled');
+    await user.click(proposal);
+    expect(onRequestProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it('expert lens: Build proposal stays a disabled stub (the stage passes null — A6 wires it)', () => {
+    renderHeader({
+      lens: 'expert',
+      requestStatus: 'proposal_requested',
+      threadOverrides: { relationshipStatus: 'proposal_requested' },
+      onRequestProposal: null,
+    });
+    const proposal = screen.getByRole('button', { name: 'Build proposal' });
     expect(proposal).toBeDisabled();
     expect(proposal).toHaveAttribute('aria-disabled', 'true');
   });

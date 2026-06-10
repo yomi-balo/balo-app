@@ -33,4 +33,5 @@ export type {
   ConversationThreadSelectMethod,
   ConversationFilesSurface,
   ConversationCallSurface,
+  ConversationProposalSurface,
 } from '@balo/analytics/client';

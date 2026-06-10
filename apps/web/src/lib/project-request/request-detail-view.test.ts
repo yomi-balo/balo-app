@@ -223,6 +223,59 @@ describe('mapRequestToDetailView — viewerEoi (expert lens)', () => {
   });
 });
 
+describe('mapRequestToDetailView — viewerRelationshipStatus (BAL-272)', () => {
+  it("returns the viewer-expert's OWN relationship status for the expert lens", () => {
+    const view = mapRequestToDetailView(
+      request({ relationships: [rel({ status: 'proposal_requested' })] }),
+      ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(view.viewerRelationshipStatus).toBe('proposal_requested');
+  });
+
+  it("returns the VIEWER'S status even when another relationship has progressed further", () => {
+    const view = mapRequestToDetailView(
+      request({
+        status: 'proposal_requested',
+        relationships: [
+          rel({ status: 'eoi_submitted' }),
+          rel({ id: 'rel-2', expertProfileId: 'expert-2', status: 'proposal_requested' }),
+        ],
+      }),
+      ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(view.viewerRelationshipStatus).toBe('eoi_submitted');
+  });
+
+  it('is null for the client lens', () => {
+    const view = mapRequestToDetailView(
+      request(),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.viewerRelationshipStatus).toBeNull();
+  });
+
+  it('is null for the admin (observer) lens', () => {
+    const view = mapRequestToDetailView(
+      request(),
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null }),
+      NOW
+    );
+    expect(view.viewerRelationshipStatus).toBeNull();
+  });
+
+  it('is null when the expert lens has no resolved relationshipId', () => {
+    const view = mapRequestToDetailView(
+      request(),
+      ctx({ lens: 'expert', relationshipId: null }),
+      NOW
+    );
+    expect(view.viewerRelationshipStatus).toBeNull();
+  });
+});
+
 describe('mapRequestToDetailView — per-expert derived state (observer lens)', () => {
   const observerCtx = ctx({ lens: 'admin', archetype: 'observer' });
 

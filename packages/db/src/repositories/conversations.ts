@@ -366,6 +366,41 @@ export const conversationsRepository = {
   },
 
   /**
+   * Live-row activity counts for ONE thread — interaction-depth analytics for
+   * the proposal-request commit moment (BAL-272). Two indexed live-row counts
+   * (`deleted_at IS NULL`, any sender/uploader) in parallel; zeros for an
+   * empty or unknown thread (COUNT over no rows — never throws on a bad id).
+   */
+  async countThreadActivity(
+    relationshipId: string
+  ): Promise<{ messageCount: number; fileCount: number }> {
+    const [messageRows, fileRows] = await Promise.all([
+      db
+        .select({ value: count() })
+        .from(conversationMessages)
+        .where(
+          and(
+            eq(conversationMessages.relationshipId, relationshipId),
+            isNull(conversationMessages.deletedAt)
+          )
+        ),
+      db
+        .select({ value: count() })
+        .from(conversationFiles)
+        .where(
+          and(
+            eq(conversationFiles.relationshipId, relationshipId),
+            isNull(conversationFiles.deletedAt)
+          )
+        ),
+    ]);
+    return {
+      messageCount: messageRows[0]?.value ?? 0,
+      fileCount: fileRows[0]?.value ?? 0,
+    };
+  },
+
+  /**
    * Upsert the viewer's read watermark for a thread. NEVER moves backwards:
    * the conflict arm sets `GREATEST(existing, EXCLUDED.last_read_at)`, so
    * concurrent or out-of-order marks (multi-tab, retries) keep the newest
