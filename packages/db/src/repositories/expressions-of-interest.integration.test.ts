@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { expressionsOfInterest } from '../schema';
 import { requestExpertRelationshipFactory } from '../test/factories';
 import { expressionsOfInterestRepository } from './expressions-of-interest';
-import { requestExpertRelationshipsRepository } from './request-expert-relationships';
+import {
+  InvalidRelationshipTransitionError,
+  requestExpertRelationshipsRepository,
+} from './request-expert-relationships';
 
 describe('expressionsOfInterestRepository.submit', () => {
   it('inserts the EOI and advances the relationship invited→eoi_submitted atomically', async () => {
@@ -47,7 +50,8 @@ describe('expressionsOfInterestRepository.submit', () => {
   });
 
   it('rejects a second EOI for the same relationship — unique index, and does not re-advance', async () => {
-    const { relationship } = await requestExpertRelationshipFactory();
+    const { relationship, projectRequestId, expertProfileId } =
+      await requestExpertRelationshipFactory();
 
     await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
@@ -60,6 +64,22 @@ describe('expressionsOfInterestRepository.submit', () => {
       expressionsOfInterestRepository.submit({
         relationshipId: relationship.id,
         message: '<p>Second pitch.</p>',
+      })
+    ).rejects.toThrow();
+
+    // The (now PARTIAL) unique index `expression_of_interest_relationship_idx`
+    // still rejects a second LIVE EOI at the DB level — a raw insert of a second
+    // live row hits the unique constraint. Wrapped in db.transaction() so the
+    // violation aborts a SAVEPOINT, not the per-test wrapping transaction —
+    // the row-count assertion below still needs a usable transaction.
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.insert(expressionsOfInterest).values({
+          relationshipId: relationship.id,
+          projectRequestId,
+          expertProfileId,
+          message: '<p>Second live — must be rejected by the partial unique index.</p>',
+        });
       })
     ).rejects.toThrow();
 
@@ -105,6 +125,160 @@ describe('expressionsOfInterestRepository.findByRelationship', () => {
 
     const found = await expressionsOfInterestRepository.findByRelationship(relationship.id);
     expect(found).toBeUndefined();
+  });
+});
+
+describe('expressionsOfInterestRepository.withdraw', () => {
+  it('soft-deletes the live EOI → findByRelationship returns undefined', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    const eoi = await expressionsOfInterestRepository.submit({
+      relationshipId: relationship.id,
+      message: '<p>Pitch to withdraw.</p>',
+    });
+
+    const removed = await expressionsOfInterestRepository.withdraw({
+      relationshipId: relationship.id,
+    });
+
+    expect(removed?.id).toBe(eoi.id);
+    expect(removed?.deletedAt).toBeInstanceOf(Date);
+
+    // No live EOI remains.
+    const found = await expressionsOfInterestRepository.findByRelationship(relationship.id);
+    expect(found).toBeUndefined();
+
+    // The row still exists (soft-delete, not hard-delete).
+    const [persisted] = await db
+      .select()
+      .from(expressionsOfInterest)
+      .where(eq(expressionsOfInterest.id, eoi.id));
+    expect(persisted?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('is idempotent — a second withdraw returns undefined (no live EOI left)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    await expressionsOfInterestRepository.submit({
+      relationshipId: relationship.id,
+      message: '<p>Pitch.</p>',
+    });
+
+    const first = await expressionsOfInterestRepository.withdraw({
+      relationshipId: relationship.id,
+    });
+    expect(first).toBeDefined();
+
+    const second = await expressionsOfInterestRepository.withdraw({
+      relationshipId: relationship.id,
+    });
+    expect(second).toBeUndefined();
+  });
+
+  it('returns undefined when the relationship has no live EOI', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    const removed = await expressionsOfInterestRepository.withdraw({
+      relationshipId: relationship.id,
+    });
+    expect(removed).toBeUndefined();
+  });
+});
+
+describe('expressionsOfInterestRepository.resubmit', () => {
+  it('inserts a fresh live EOI after a withdraw (the partial index frees the slot)', async () => {
+    const { relationship, projectRequestId, expertProfileId } =
+      await requestExpertRelationshipFactory();
+
+    // Submit, then withdraw — the relationship stays `eoi_submitted`.
+    const first = await expressionsOfInterestRepository.submit({
+      relationshipId: relationship.id,
+      message: '<p>Original pitch.</p>',
+    });
+    await expressionsOfInterestRepository.withdraw({ relationshipId: relationship.id });
+
+    // Resubmit succeeds (the soft-deleted row is outside the partial unique index).
+    const resubmitted = await expressionsOfInterestRepository.resubmit({
+      relationshipId: relationship.id,
+      message: '<p>Revised, sharper pitch.</p>',
+    });
+
+    expect(resubmitted.id).not.toBe(first.id);
+    expect(resubmitted.relationshipId).toBe(relationship.id);
+    // Denormalised ids are derived from the locked relationship, not the caller.
+    expect(resubmitted.projectRequestId).toBe(projectRequestId);
+    expect(resubmitted.expertProfileId).toBe(expertProfileId);
+    expect(resubmitted.message).toBe('<p>Revised, sharper pitch.</p>');
+
+    // Exactly one LIVE EOI now exists for the relationship (the fresh one).
+    const live = await db
+      .select()
+      .from(expressionsOfInterest)
+      .where(
+        and(
+          eq(expressionsOfInterest.relationshipId, relationship.id),
+          isNull(expressionsOfInterest.deletedAt)
+        )
+      );
+    expect(live).toHaveLength(1);
+    expect(live[0]?.id).toBe(resubmitted.id);
+
+    // The relationship status is UNCHANGED — resubmit never re-advances it.
+    const reloaded = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(reloaded?.status).toBe('eoi_submitted');
+
+    // findByRelationship surfaces the fresh live EOI.
+    const found = await expressionsOfInterestRepository.findByRelationship(relationship.id);
+    expect(found?.id).toBe(resubmitted.id);
+  });
+
+  it('rejects when the relationship is not eoi_submitted (still invited)', async () => {
+    // A fresh `invited` relationship — resubmit is only valid post-submit.
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    await expect(
+      expressionsOfInterestRepository.resubmit({
+        relationshipId: relationship.id,
+        message: '<p>Cannot resubmit before a first submit.</p>',
+      })
+    ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
+
+    // No EOI was inserted.
+    const rows = await db
+      .select()
+      .from(expressionsOfInterest)
+      .where(eq(expressionsOfInterest.relationshipId, relationship.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rejects when a live EOI already exists (no double-submit) and inserts nothing', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    await expressionsOfInterestRepository.submit({
+      relationshipId: relationship.id,
+      message: '<p>First (still live).</p>',
+    });
+
+    // Relationship is `eoi_submitted` AND a live EOI exists → resubmit must reject.
+    await expect(
+      expressionsOfInterestRepository.resubmit({
+        relationshipId: relationship.id,
+        message: '<p>Should be rejected — a live EOI already exists.</p>',
+      })
+    ).rejects.toThrow();
+
+    // Still exactly one (the original) EOI.
+    const rows = await db
+      .select()
+      .from(expressionsOfInterest)
+      .where(eq(expressionsOfInterest.relationshipId, relationship.id));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('throws for an unknown relationship id', async () => {
+    await expect(
+      expressionsOfInterestRepository.resubmit({
+        relationshipId: randomUUID(),
+        message: '<p>No such relationship.</p>',
+      })
+    ).rejects.toThrow();
   });
 });
 

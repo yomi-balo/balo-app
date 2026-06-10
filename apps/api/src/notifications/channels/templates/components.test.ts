@@ -6,6 +6,7 @@ import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
+import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { getEmailTemplate } from './index.js';
 import {
   EmailShell,
@@ -145,6 +146,20 @@ describe('ProjectExpertInvitedEmail', () => {
   });
 });
 
+describe('ProjectEoiSubmittedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectEoiSubmittedEmail({
+      firstName: 'Dana',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      expertName: 'Priya Nair',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+});
+
 describe('getEmailTemplate — A2 templates', () => {
   it('resolves project-exploratory-requested with a scoping subject', () => {
     const { component, subject } = getEmailTemplate('project-exploratory-requested', {
@@ -164,6 +179,17 @@ describe('getEmailTemplate — A2 templates', () => {
     });
     expect(component).toBeDefined();
     expect(subject).toBe("You're invited: CPQ implementation");
+  });
+
+  it('resolves project-eoi-submitted with an interest subject + carries the expert name', () => {
+    const { component, subject } = getEmailTemplate('project-eoi-submitted', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Dana',
+      expertName: 'Priya Nair',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('An expert is interested in CPQ implementation');
   });
 
   it('throws on an unknown template name', () => {

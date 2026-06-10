@@ -62,6 +62,27 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-eoi-submitted', () => {
+    it('returns the title, body (with expert name), and action url', () => {
+      const result = getInAppTemplate('project-eoi-submitted', {
+        title: 'CPQ implementation',
+        expertName: 'Priya Nair',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'An expert is interested',
+        body: 'Priya Nair expressed interest in "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when expertName/title are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-eoi-submitted', {});
+      expect(result.body).toBe('An expert expressed interest in "your project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('project-expert-invited', () => {
     it('returns the title, body, and action url', () => {
       const result = getInAppTemplate('project-expert-invited', {

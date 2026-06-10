@@ -19,6 +19,7 @@ export const PROJECT_EVENTS = {
   PROJECT_REQUEST_STATUS_TRANSITIONED: 'project_request_status_transitioned',
   PROJECT_EXPERT_INVITED: 'project_expert_invited',
   PROJECT_EOI_SUBMITTED: 'project_eoi_submitted',
+  PROJECT_EOI_WITHDRAWN: 'project_eoi_withdrawn',
   PROJECT_PROPOSAL_REQUESTED: 'project_proposal_requested',
   PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
   PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
@@ -77,6 +78,17 @@ export interface ProjectEventMap {
     actor: 'admin';
   };
   [PROJECT_EVENTS.PROJECT_EOI_SUBMITTED]: {
+    request_id: string;
+    relationship_id: string;
+    expert_id: string;
+    /**
+     * ms from the relationship invite (`invitedAt`) → the EOI submit/resubmit.
+     * Computed server-side in the action and attached client-side. Powers the
+     * "invite → EOI" timing metric. Optional (absent if `invitedAt` is unavailable).
+     */
+    time_to_eoi_ms?: number;
+  };
+  [PROJECT_EVENTS.PROJECT_EOI_WITHDRAWN]: {
     request_id: string;
     relationship_id: string;
     expert_id: string;

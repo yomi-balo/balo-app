@@ -91,6 +91,21 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  'project.eoi_submitted': [
+    {
+      channel: 'email',
+      recipient: 'client',
+      template: 'project-eoi-submitted',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-eoi-submitted',
+      timing: 'immediate',
+    },
+  ],
   'booking.confirmed': [
     {
       channel: 'sms',

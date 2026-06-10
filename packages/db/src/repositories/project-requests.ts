@@ -182,7 +182,11 @@ export const projectRequestsRepository = {
             // "last activity" signals. `limit: 1` newest-first, soft-delete-aware.
             expressionsOfInterest: {
               where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
-              columns: { id: true, submittedAt: true },
+              // `message` is the viewer-expert's own sanitised-HTML pitch, surfaced
+              // so the expert lens can re-read their submitted EOI (view-model
+              // `viewerEoi`); never another expert's — the mapper gates on the
+              // viewer's relationship.
+              columns: { id: true, submittedAt: true, message: true },
               orderBy: (t, { desc: childDesc }) => [childDesc(t.submittedAt)],
               limit: 1,
             },

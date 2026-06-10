@@ -61,6 +61,13 @@ export interface RequestDetailView {
   timeline: string | null;
   /** Live relationships — populated ONLY for the observer (admin) lens. */
   relationships: RequestRelationshipView[];
+  /**
+   * The viewer-expert's OWN EOI state — populated ONLY for the expert lens (`null`
+   * for client/admin). `messageHtml` is the viewer's own sanitised-HTML pitch (so
+   * the EOI-entry island can re-render the submitted state); never another
+   * expert's EOI crosses the boundary (gated on the viewer's relationship).
+   */
+  viewerEoi: { hasLiveEoi: boolean; messageHtml: string | null } | null;
 }
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -164,6 +171,23 @@ function deriveRelationshipView(
 }
 
 /**
+ * The viewer-expert's own EOI projection (expert lens only). Finds the viewer's
+ * relationship by `ctx.relationshipId` and reads its newest live EOI (hydrated
+ * `limit:1` newest-first). Returns `null` for any non-expert lens or when the
+ * resolver produced no relationship id — so a client/admin payload never carries
+ * EOI HTML. Pure + deterministic.
+ */
+function deriveViewerEoi(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): { hasLiveEoi: boolean; messageHtml: string | null } | null {
+  if (ctx.lens !== 'expert' || ctx.relationshipId === null) return null;
+  const relationship = request.relationships.find((r) => r.id === ctx.relationshipId);
+  const [eoi] = relationship?.expressionsOfInterest ?? [];
+  return { hasLiveEoi: eoi !== undefined, messageHtml: eoi?.message ?? null };
+}
+
+/**
  * Pure mapper: hydrated DB graph → fully serializable view-model the leaf
  * components consume. Mirrors `mapProfileToView`.
  *
@@ -203,5 +227,6 @@ export function mapRequestToDetailView(
       ctx.archetype === 'observer'
         ? request.relationships.map((r) => deriveRelationshipView(r, now))
         : [],
+    viewerEoi: deriveViewerEoi(request, ctx),
   };
 }

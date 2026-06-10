@@ -110,7 +110,13 @@ export const expressionsOfInterest = pgTable(
     ...softDelete,
   },
   (t) => [
-    uniqueIndex('expression_of_interest_relationship_idx').on(t.relationshipId),
+    // One LIVE EOI per relationship. PARTIAL on `deleted_at IS NULL` (mirrors
+    // `request_expert_relationship_unique_idx` above) so a withdrawn
+    // (soft-deleted) EOI frees the unique slot — `resubmit()` then inserts a
+    // fresh live EOI cleanly, while a second LIVE EOI is still rejected.
+    uniqueIndex('expression_of_interest_relationship_idx')
+      .on(t.relationshipId)
+      .where(sql`${t.deletedAt} IS NULL`),
     index('expression_of_interest_request_idx').on(t.projectRequestId),
     index('expression_of_interest_expert_idx').on(t.expertProfileId),
     // DB backstop (see proposals): the denormalised request/expert ids MUST equal
