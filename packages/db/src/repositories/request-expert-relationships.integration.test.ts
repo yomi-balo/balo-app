@@ -37,6 +37,7 @@ describe('requestExpertRelationshipsRepository.invite', () => {
     expect(row.status).toBe('invited'); // default
     expect(row.invitedAt).toBeInstanceOf(Date);
     expect(row.declinedAt).toBeNull();
+    expect(row.proposalRequestedAt).toBeNull();
     expect(row.deletedAt).toBeNull();
   });
 
@@ -243,6 +244,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
 
     expect(updated.status).toBe('eoi_submitted');
     expect(updated.declinedAt).toBeNull();
+    expect(updated.proposalRequestedAt).toBeNull();
   });
 
   it('sets declinedAt when transitioning to declined', async () => {
@@ -255,6 +257,85 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
 
     expect(updated.status).toBe('declined');
     expect(updated.declinedAt).toBeInstanceOf(Date);
+    // The decline stamp must not touch the proposal-request stamp.
+    expect(updated.proposalRequestedAt).toBeNull();
+  });
+
+  it('sets proposalRequestedAt when transitioning to proposal_requested', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'eoi_submitted' },
+    });
+
+    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'proposal_requested',
+      expectedFrom: 'eoi_submitted',
+    });
+
+    expect(updated.status).toBe('proposal_requested');
+    expect(updated.proposalRequestedAt).toBeInstanceOf(Date);
+    expect(updated.declinedAt).toBeNull();
+
+    // Persisted on disk (not just returned).
+    const [raw] = await db
+      .select()
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect(raw?.proposalRequestedAt).toBeInstanceOf(Date);
+  });
+
+  it('rejects a double proposal request (expectedFrom race) without re-stamping', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'eoi_submitted' },
+    });
+
+    const first = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'proposal_requested',
+      expectedFrom: 'eoi_submitted',
+    });
+
+    // Second request (stale tab / double-click): the expectedFrom guard throws
+    // and the original stamp survives untouched.
+    await expect(
+      requestExpertRelationshipsRepository.transitionStatus({
+        id: relationship.id,
+        to: 'proposal_requested',
+        expectedFrom: 'eoi_submitted',
+      })
+    ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
+
+    const [raw] = await db
+      .select()
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect(raw?.status).toBe('proposal_requested');
+    expect(raw?.proposalRequestedAt?.getTime()).toBe(first.proposalRequestedAt?.getTime());
+  });
+
+  it('preserves proposalRequestedAt across a later transition (the point of the column)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'eoi_submitted' },
+    });
+
+    const requested = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'proposal_requested',
+      expectedFrom: 'eoi_submitted',
+    });
+    if (requested.proposalRequestedAt === null) {
+      throw new Error('expected proposal_requested transition to stamp proposalRequestedAt');
+    }
+
+    // A later transition overwrites `updatedAt` — the stamp must survive.
+    const declined = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'declined',
+    });
+
+    expect(declined.status).toBe('declined');
+    expect(declined.declinedAt).toBeInstanceOf(Date);
+    expect(declined.proposalRequestedAt?.getTime()).toBe(requested.proposalRequestedAt.getTime());
   });
 
   it('throws InvalidRelationshipTransitionError on an illegal transition, row unchanged', async () => {

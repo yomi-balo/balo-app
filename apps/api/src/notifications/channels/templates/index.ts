@@ -7,6 +7,7 @@ import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
+import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -23,6 +24,23 @@ function arrayLength(value: unknown): number {
 /** Coerce a payload field to a non-negative integer count; 0 when absent. */
 function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+const SUBJECT_TITLE_MAX_LENGTH = 160;
+
+/**
+ * Sanitise user-authored text for an email SUBJECT: strip control characters
+ * (CR/LF could otherwise smuggle extra headers into the MIME envelope) and cap
+ * the length so a hostile or runaway title can't bloat the subject line.
+ */
+export function sanitizeSubjectTitle(title: string): string {
+  return (
+    title
+      // eslint-disable-next-line no-control-regex -- stripping control chars is the point
+      .replaceAll(/[\r\n\u0000-\u001f]/g, ' ')
+      .trim()
+      .slice(0, SUBJECT_TITLE_MAX_LENGTH)
+  );
 }
 
 const templates: Record<string, (data: Record<string, unknown>) => TemplateOutput> = {
@@ -60,7 +78,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       productCount: arrayLength(data.productIds),
       documentCount: numberCount(data.documentCount),
     }),
-    subject: `New project request: ${(data.title as string) ?? 'a new project'}`,
+    subject: `New project request: ${sanitizeSubjectTitle((data.title as string) ?? 'a new project')}`,
   }),
 
   'project-match-requested': (data) => {
@@ -75,7 +93,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         productCount: arrayLength(data.productIds),
         documentCount: numberCount(data.documentCount),
       }),
-      subject: `New unrouted brief: ${(data.title as string) ?? 'a new project'}`,
+      subject: `New unrouted brief: ${sanitizeSubjectTitle((data.title as string) ?? 'a new project')}`,
     };
   },
 
@@ -88,7 +106,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         projectRequestId: (data.projectRequestId as string) ?? '',
         baseUrl: BASE_URL,
       }),
-      subject: `Let's scope your project: ${title}`,
+      subject: `Let's scope your project: ${sanitizeSubjectTitle(title)}`,
     };
   },
 
@@ -101,7 +119,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         projectRequestId: (data.projectRequestId as string) ?? '',
         baseUrl: BASE_URL,
       }),
-      subject: `You're invited: ${title}`,
+      subject: `You're invited: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-proposal-requested': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    return {
+      component: React.createElement(ProjectProposalRequestedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Proposal requested: ${sanitizeSubjectTitle(title)}`,
     };
   },
 
@@ -116,7 +147,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         expertName,
         baseUrl: BASE_URL,
       }),
-      subject: `An expert is interested in ${title}`,
+      subject: `An expert is interested in ${sanitizeSubjectTitle(title)}`,
     };
   },
 };

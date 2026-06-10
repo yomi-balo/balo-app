@@ -64,6 +64,14 @@ export interface ProjectEoiSubmittedPayload {
   expertName: string; // invited expert's display name — email/in-app body
 }
 
+export interface ProjectProposalRequestedPayload {
+  correlationId: string; // relationshipId — the transition is one-way ⇒ natural one-shot dedup
+  projectRequestId: string;
+  relationshipId: string;
+  expertProfileId: string; // → resolver hydrates data.expert; recipient:'expert'
+  title: string; // request title — email/in-app body
+}
+
 export interface ProjectMessagePostedPayload {
   correlationId: string; // message id — dedup per message (dispatcher jobId)
   projectRequestId: string;
@@ -97,6 +105,7 @@ export type NotificationEvent =
   | 'project.exploratory_requested'
   | 'project.expert_invited'
   | 'project.eoi_submitted'
+  | 'project.proposal_requested'
   | 'project.message_posted'
   | 'project.file_shared';
 
@@ -109,6 +118,7 @@ export interface EventPayloadMap {
   'project.exploratory_requested': ProjectExploratoryRequestedPayload;
   'project.expert_invited': ProjectExpertInvitedPayload;
   'project.eoi_submitted': ProjectEoiSubmittedPayload;
+  'project.proposal_requested': ProjectProposalRequestedPayload;
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
 }

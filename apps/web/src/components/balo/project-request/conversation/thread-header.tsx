@@ -15,13 +15,20 @@ interface ThreadHeaderProps {
   callPending: boolean;
   onToggleFiles: () => void;
   onCall: () => void;
+  /**
+   * The `kind:'request'` proposal CTA handler. Non-null (client lens, A5) →
+   * the slot renders ENABLED; null (expert lens — A6 wires "Build proposal")
+   * → the original disabled stub.
+   */
+  onRequestProposal: (() => void) | null;
 }
 
 /**
  * Desktop-only thread header (`hidden lg:flex` applied by the stage): avatar,
  * expert name, Files pill (count), lens-aware call CTA (mock seam) and the
- * A5 proposal slot per the gating matrix. Proposal CTAs render DISABLED stubs
- * in A4 (the owning slice wires them).
+ * A5 proposal slot per the gating matrix. The client's "Request proposal" CTA
+ * is LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's
+ * "Build proposal" stub stays disabled (A6 wires it).
  * Deliberate cut (recorded): no rating/role subline — that data isn't hydrated.
  */
 export function ThreadHeader({
@@ -33,6 +40,7 @@ export function ThreadHeader({
   callPending,
   onToggleFiles,
   onCall,
+  onRequestProposal,
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
   const { headerProposal } = actions;
   return (
@@ -88,7 +96,7 @@ export function ThreadHeader({
       )}
 
       {headerProposal?.kind === 'pill-requested' && (
-        <span className="border-warning/30 bg-warning/10 text-warning inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 text-xs font-semibold">
+        <span className="border-warning/30 bg-warning/10 text-warning animate-in fade-in zoom-in-95 inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 text-xs font-semibold motion-reduce:animate-none">
           <Clock className="h-3.5 w-3.5" aria-hidden="true" />
           Proposal requested
         </span>
@@ -116,10 +124,12 @@ export function ThreadHeader({
       {headerProposal?.kind === 'request' && (
         <button
           type="button"
-          disabled
-          aria-disabled="true"
+          onClick={onRequestProposal ?? undefined}
+          disabled={onRequestProposal === null}
+          aria-disabled={onRequestProposal === null ? true : undefined}
           className={cn(
-            'inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold opacity-60',
+            'focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
+            onRequestProposal === null ? 'opacity-60' : 'hover:opacity-90',
             headerProposal.quiet
               ? 'border-primary/30 bg-primary/5 text-primary border'
               : 'from-primary bg-gradient-to-r to-violet-600 text-white dark:to-violet-500'

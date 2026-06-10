@@ -179,3 +179,64 @@ describe('nudgeFor', () => {
     expect(nudgeFor('admin', 'experts_invited')).not.toBeNull();
   });
 });
+
+describe('nudgeFor — expert relationship keying (BAL-272 divergence fix)', () => {
+  it('keys the expert proposal-phase cell by the VIEWER relationship, not the request aggregate', () => {
+    // Request advanced via another expert; this viewer is still eoi_submitted.
+    const nudge = nudgeFor('expert', 'proposal_requested', 'eoi_submitted');
+    expect(nudge?.headline).toBe('Offer the client a time to talk');
+  });
+
+  it('the requested expert still gets the build cell (with the interim builder copy)', () => {
+    const nudge = nudgeFor('expert', 'proposal_requested', 'proposal_requested');
+    expect(nudge?.headline).toBe('Your proposal was requested — build it');
+    // Interim sub-copy until A6 ships the builder (the CTA is a disabled stub).
+    expect(nudge?.sub).toBe(
+      'The proposal builder is on its way — keep scoping in the thread meanwhile.'
+    );
+  });
+
+  it('an expert whose proposal is in stays on the waiting cell at request proposal_submitted+', () => {
+    expect(nudgeFor('expert', 'proposal_submitted', 'proposal_submitted')?.headline).toBe(
+      'Your proposal is with the client'
+    );
+    expect(nudgeFor('expert', 'proposal_submitted', 'eoi_submitted')?.headline).toBe(
+      'Offer the client a time to talk'
+    );
+  });
+
+  it("an invited-but-quiet expert gets the EOI cell, never another expert's aggregate", () => {
+    // The REQUEST advanced via other experts; this viewer hasn't submitted an
+    // EOI yet — their true next step is the EOI, not the aggregate cell.
+    expect(nudgeFor('expert', 'eoi_submitted', 'invited')?.headline).toBe(
+      "You're invited — submit your expression of interest"
+    );
+  });
+
+  it("('proposal_requested','invited') never shows the false build-it prompt", () => {
+    const nudge = nudgeFor('expert', 'proposal_requested', 'invited');
+    expect(nudge?.headline).toBe("You're invited — submit your expression of interest");
+    expect(nudge?.headline).not.toMatch(/build/i);
+  });
+
+  it('a declined expert gets no nudge (suppressed, no aggregate fallback)', () => {
+    expect(nudgeFor('expert', 'proposal_requested', 'declined')).toBeNull();
+    expect(nudgeFor('expert', 'eoi_submitted', 'declined')).toBeNull();
+  });
+
+  it('accepted/kickoff cells stay request-keyed (decision is request-level)', () => {
+    expect(nudgeFor('expert', 'accepted', 'accepted')?.headline).toBe(
+      'Confirm payment terms for kickoff'
+    );
+    expect(nudgeFor('expert', 'kickoff_approved', 'accepted')?.headline).toBe(
+      'Kicked off — time to deliver'
+    );
+  });
+
+  it('never changes the client/admin maps', () => {
+    expect(nudgeFor('client', 'proposal_requested', 'eoi_submitted')).toBeNull();
+    expect(nudgeFor('admin', 'proposal_requested', 'eoi_submitted')?.headline).toBe(
+      'Proposals requested'
+    );
+  });
+});

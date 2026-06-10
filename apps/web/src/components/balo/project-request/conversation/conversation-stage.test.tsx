@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@/test/utils';
+import { render, screen, waitFor, within, act } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
-import { track, CONVERSATION_EVENTS } from '@/lib/analytics';
+import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const VIEWER_ID = 'user-viewer';
 
 vi.mock('server-only', () => ({}));
-vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
+}));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 // Tiptap-free viewer stand-in (EOI intro card only — bubbles never use it).
@@ -24,6 +26,7 @@ const {
   mockConfirmUpload,
   mockGetDownload,
   mockRequestCall,
+  mockRequestProposal,
 } = vi.hoisted(() => ({
   mockPostMessage: vi.fn(),
   mockMarkRead: vi.fn(),
@@ -32,6 +35,7 @@ const {
   mockConfirmUpload: vi.fn(),
   mockGetDownload: vi.fn(),
   mockRequestCall: vi.fn(),
+  mockRequestProposal: vi.fn(),
 }));
 
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/post-conversation-message', () => ({
@@ -54,6 +58,9 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-d
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call', () => ({
   requestConversationCallAction: (...args: unknown[]) => mockRequestCall(...args),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () => ({
+  requestProposalAction: (...args: unknown[]) => mockRequestProposal(...args),
 }));
 
 // XHR PUT seam — no sockets in jsdom.
@@ -158,6 +165,17 @@ beforeEach(() => {
     confirmation: {
       message: 'Your call request is in — Balo will email you the details.',
       scheduledAtIso: null,
+    },
+  });
+  mockRequestProposal.mockResolvedValue({
+    success: true,
+    transitioned: true,
+    expertProfileId: 'exp-1',
+    analytics: {
+      proposalRequestCount: 1,
+      timeFromFirstEoiMs: 5000,
+      messageCount: 4,
+      fileCount: 1,
     },
   });
 });
@@ -704,6 +722,170 @@ describe('ConversationStage — per-thread composer drafts', () => {
     await user.type(screen.getByRole('textbox', { name: 'Message Priya' }), 'Keep me{Enter}');
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('nope'));
     expect(screen.getByRole('textbox', { name: 'Message Priya' })).toHaveValue('Keep me');
+  });
+});
+
+describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
+  /** Click the desktop-header CTA, then confirm inside the AlertDialog. */
+  async function openAndConfirm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    const [headerCta] = screen.getAllByRole('button', { name: 'Request proposal' });
+    expect(headerCta).toBeDefined();
+    await user.click(headerCta as HTMLElement);
+    const dialog = await screen.findByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Request proposal' }));
+  }
+
+  it('CTA click fires the funnel event and opens the confirm beat (no action yet)', async () => {
+    const user = userEvent.setup();
+    renderStage(view());
+    const [headerCta] = screen.getAllByRole('button', { name: 'Request proposal' });
+    await user.click(headerCta as HTMLElement);
+
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      surface: 'header',
+    });
+    expect(await screen.findByText('Request a proposal from Priya?')).toBeInTheDocument();
+    expect(mockRequestProposal).not.toHaveBeenCalled();
+  });
+
+  it('confirm runs the action, flips the thread to the requested pill, toasts, and fires both events', async () => {
+    const user = userEvent.setup();
+    renderStage(view());
+    await openAndConfirm(user);
+
+    await waitFor(() =>
+      expect(mockRequestProposal).toHaveBeenCalledWith({
+        requestId: REQUEST_ID,
+        relationshipId: 'rel-1',
+      })
+    );
+    // Local flip: warning pill in, gradient CTA out — no refetch needed.
+    expect(await screen.findByText('Proposal requested')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request proposal' })).not.toBeInTheDocument();
+    // The re-keyed thread nudge flips to the waiting cell.
+    expect(screen.getByText('Priya is preparing the proposal')).toBeInTheDocument();
+
+    expect(mockToast.success).toHaveBeenCalledWith('Proposal requested — Priya has been notified.');
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_PROPOSAL_REQUESTED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      expert_id: 'exp-1',
+      actor: 'client',
+      surface: 'header',
+      proposal_request_count: 1,
+      time_from_first_eoi_ms: 5000,
+      message_count: 4,
+      file_count: 1,
+      thread_count: 1,
+    });
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {
+      request_id: REQUEST_ID,
+      from: 'eoi_submitted',
+      to: 'proposal_requested',
+      actor: 'client',
+    });
+  });
+
+  it('omits the transition event (and the eoi timing when null) for a non-first request', async () => {
+    const user = userEvent.setup();
+    mockRequestProposal.mockResolvedValue({
+      success: true,
+      transitioned: false,
+      expertProfileId: 'exp-1',
+      analytics: {
+        proposalRequestCount: 2,
+        timeFromFirstEoiMs: null,
+        messageCount: 0,
+        fileCount: 0,
+      },
+    });
+    renderStage(view());
+    await openAndConfirm(user);
+
+    await waitFor(() =>
+      expect(mockTrack).toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_PROPOSAL_REQUESTED,
+        expect.not.objectContaining({ time_from_first_eoi_ms: expect.anything() })
+      )
+    );
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED,
+      expect.anything()
+    );
+  });
+
+  it('already_requested (stale tab): reconciles the pill, toast.info, no commit events', async () => {
+    const user = userEvent.setup();
+    mockRequestProposal.mockResolvedValue({
+      success: false,
+      error: "You've already requested a proposal from this expert.",
+      code: 'already_requested',
+    });
+    renderStage(view());
+    await openAndConfirm(user);
+
+    expect(await screen.findByText('Proposal requested')).toBeInTheDocument();
+    expect(mockToast.info).toHaveBeenCalledWith(
+      "You've already requested a proposal from this expert."
+    );
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROJECT_PROPOSAL_REQUESTED,
+      expect.anything()
+    );
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
+  it('rail surface is tracked as rail', async () => {
+    const user = userEvent.setup();
+    renderStage(view());
+    const [, railCta] = screen.getAllByRole('button', { name: 'Request proposal' });
+    await user.click(railCta as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
+      expect.objectContaining({ surface: 'rail' })
+    );
+  });
+
+  it('expert lens: the proposal CTA stays a disabled stub (A6 owns it)', async () => {
+    const user = userEvent.setup();
+    renderStage(
+      view({ threads: [thread({ relationshipStatus: 'proposal_requested' })] }),
+      'expert'
+    );
+    const ctas = screen.getAllByRole('button', { name: 'Build proposal' });
+    for (const cta of ctas) expect(cta).toBeDisabled();
+    await user.click(ctas[0] as HTMLElement);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockRequestProposal).not.toHaveBeenCalled();
+  });
+
+  it("client + proposal_submitted: 'View proposal' is a DISABLED stub on every surface (A6 owns it)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ConversationStage
+        requestId={REQUEST_ID}
+        lens="client"
+        requestStatus="proposal_submitted"
+        view={view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] })}
+      />
+    );
+    // Desktop header stub + mobile rail stub — both disabled.
+    const ctas = screen.getAllByRole('button', { name: 'View proposal' });
+    expect(ctas.length).toBeGreaterThanOrEqual(2);
+    for (const cta of ctas) {
+      expect(cta).toBeDisabled();
+      expect(cta).toHaveAttribute('aria-disabled', 'true');
+    }
+    // Tapping does nothing: no confirm beat, no action, no funnel event.
+    for (const cta of ctas) await user.click(cta);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockRequestProposal).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
+      expect.anything()
+    );
   });
 });
 

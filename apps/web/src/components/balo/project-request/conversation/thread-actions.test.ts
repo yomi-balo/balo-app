@@ -139,7 +139,7 @@ describe('deriveThreadActions — mobile rail', () => {
     expect(actions.railProposal).toBeNull();
   });
 
-  it('client not-yet-requested → Request proposal; submitted → View proposal', () => {
+  it('client not-yet-requested → live Request proposal; submitted → View proposal STUB', () => {
     expect(
       deriveThreadActions({
         lens: 'client',
@@ -147,7 +147,9 @@ describe('deriveThreadActions — mobile rail', () => {
         thread: thread(),
         nudgeIsProposal: false,
       }).railProposal
-    ).toEqual({ label: 'Request proposal', quiet: false });
+    ).toEqual({ kind: 'request', label: 'Request proposal', quiet: false });
+    // kind:'view' — A6's CTA; the rail must render it disabled, never wire it
+    // to the A5 request flow.
     expect(
       deriveThreadActions({
         lens: 'client',
@@ -155,7 +157,7 @@ describe('deriveThreadActions — mobile rail', () => {
         thread: thread({ relationshipStatus: 'proposal_submitted' }),
         nudgeIsProposal: false,
       }).railProposal
-    ).toEqual({ label: 'View proposal', quiet: false });
+    ).toEqual({ kind: 'view', label: 'View proposal', quiet: false });
   });
 
   it('expert requested-not-submitted → Build proposal', () => {
@@ -166,6 +168,6 @@ describe('deriveThreadActions — mobile rail', () => {
         thread: thread({ relationshipStatus: 'proposal_requested' }),
         nudgeIsProposal: false,
       }).railProposal
-    ).toEqual({ label: 'Build proposal', quiet: false });
+    ).toEqual({ kind: 'request', label: 'Build proposal', quiet: false });
   });
 });

@@ -66,7 +66,7 @@ export function MobileOverflowSheet({
             </Link>
           )}
           {showProposalPill && (
-            <div className="border-warning/30 bg-warning/10 flex items-center gap-2.5 rounded-xl border px-3.5 py-3">
+            <div className="border-warning/30 bg-warning/10 animate-in fade-in zoom-in-95 flex items-center gap-2.5 rounded-xl border px-3.5 py-3 motion-reduce:animate-none">
               <Clock className="text-warning h-4 w-4 shrink-0" aria-hidden="true" />
               <span className="text-warning text-[13px] font-semibold">
                 Proposal requested — awaiting submission

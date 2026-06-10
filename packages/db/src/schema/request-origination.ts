@@ -57,6 +57,12 @@ export const requestExpertRelationships = pgTable(
       .references(() => users.id, { onDelete: 'restrict' }),
     invitedAt: timestamp('invited_at', { withTimezone: true }).defaultNow().notNull(),
     declinedAt: timestamp('declined_at', { withTimezone: true }),
+    // When the client requested a proposal (BAL-272). Stamped by the shared
+    // transition on `eoi_submitted → proposal_requested`; survives later
+    // transitions (unlike `updatedAt`) for the cap/swap mechanic, A6 "awaiting
+    // since" surfaces, and reminder nudges. Read via the relationship row,
+    // never filtered on → no index.
+    proposalRequestedAt: timestamp('proposal_requested_at', { withTimezone: true }),
     ...timestamps,
     ...softDelete,
   },

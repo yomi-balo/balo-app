@@ -45,4 +45,5 @@ export type {
   ConversationThreadSelectMethod,
   ConversationFilesSurface,
   ConversationCallSurface,
+  ConversationProposalSurface,
 } from '../events';

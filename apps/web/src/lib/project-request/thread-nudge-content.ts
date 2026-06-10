@@ -20,6 +20,14 @@ import { requestStatusRank, type ConversationThreadView } from './conversation-v
  *
  * Pure + client-safe. Only `reply` (focus composer) and `call` (mock action)
  * are wired in A4 — `stub` renders disabled (A5/A6/billing CTAs).
+ *
+ * KEYING (BAL-272): the pre-decision proposal cells (`eoi_submitted` /
+ * `proposal_requested` / `proposal_submitted`) key off THIS THREAD's
+ * `relationshipStatus` — A5 makes relationship statuses diverge across threads,
+ * and the request status is the max-progress aggregate (another thread's
+ * progress must never change this thread's copy). The `accepted` /
+ * `kickoff_approved` cells stay REQUEST-keyed (the decision is request-level;
+ * `stage` carries the per-thread outcome).
  */
 
 export type ThreadNudgeAction = 'reply' | 'call' | 'stub';
@@ -50,13 +58,35 @@ function clientNudge(
 ): ThreadNudgeContent | null {
   const name = thread.expertFirstName;
   const preview = thread.latestMessagePreview ?? undefined;
+
+  // accepted / kickoff_approved — the REQUEST is decided; outcome cells come
+  // first so a thread frozen mid-flight (e.g. still `eoi_submitted`) shows the
+  // records copy, not a stale pre-decision prompt.
+  if (requestStatusRank(status) >= requestStatusRank('accepted')) {
+    if (thread.stage === 'not_selected') {
+      return {
+        variant: 'done',
+        icon: MessageSquare,
+        headline: `You didn't select ${name}`,
+        sub: "They've been notified graciously. The conversation stays here for your records.",
+      };
+    }
+    return {
+      variant: 'done',
+      icon: Zap,
+      headline: `${name} is your expert`,
+      sub: preview,
+      primary: { label: 'Open project workspace', icon: Briefcase, action: 'stub' },
+    };
+  }
+
   // "Reply to keep momentum" while the LATEST message is the expert's — not
   // just while the unread dot shows (activating the tab clears the dot but
   // the inbound message still wants an answer).
   const needsReply =
     thread.unread || (!thread.latestMessageFromViewer && thread.latestMessagePreview !== null);
 
-  if (status === 'eoi_submitted') {
+  if (thread.relationshipStatus === 'eoi_submitted') {
     if (needsReply) {
       return {
         variant: 'action',
@@ -76,7 +106,7 @@ function clientNudge(
     };
   }
 
-  if (status === 'proposal_requested') {
+  if (thread.relationshipStatus === 'proposal_requested') {
     return {
       variant: 'waiting',
       icon: Clock,
@@ -86,7 +116,7 @@ function clientNudge(
     };
   }
 
-  if (status === 'proposal_submitted') {
+  if (thread.relationshipStatus === 'proposal_submitted') {
     return {
       variant: 'commit',
       icon: Check,
@@ -94,25 +124,6 @@ function clientNudge(
       sub: preview,
       primary: { label: `Accept ${name}'s proposal`, icon: Check, action: 'stub' },
       secondary: { label: 'View full proposal', icon: FileText, action: 'stub' },
-    };
-  }
-
-  // accepted / kickoff_approved
-  if (requestStatusRank(status) >= requestStatusRank('accepted')) {
-    if (thread.stage === 'not_selected') {
-      return {
-        variant: 'done',
-        icon: MessageSquare,
-        headline: `You didn't select ${name}`,
-        sub: "They've been notified graciously. The conversation stays here for your records.",
-      };
-    }
-    return {
-      variant: 'done',
-      icon: Zap,
-      headline: `${name} is your expert`,
-      sub: preview,
-      primary: { label: 'Open project workspace', icon: Briefcase, action: 'stub' },
     };
   }
 
@@ -134,37 +145,8 @@ function expertNudge(
     };
   }
 
-  if (status === 'eoi_submitted') {
-    return {
-      variant: 'action',
-      icon: Calendar,
-      headline: 'Offer the client a time to talk',
-      sub: "Clients don't share calendars — propose a couple of times to get ahead.",
-      primary: { label: 'Propose meeting times', icon: Calendar, action: 'call' },
-      secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
-    };
-  }
-
-  if (status === 'proposal_requested') {
-    return {
-      variant: 'action',
-      icon: FileText,
-      headline: 'The client requested your proposal — build it',
-      sub: 'Deliverables, exclusions, terms, payment schedule.',
-      primary: { label: 'Build proposal', icon: FileText, action: 'stub' },
-    };
-  }
-
-  if (status === 'proposal_submitted') {
-    return {
-      variant: 'waiting',
-      icon: Clock,
-      headline: 'Your proposal is with the client',
-      sub: "They're reviewing it alongside others. Keep the conversation warm.",
-      secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
-    };
-  }
-
+  // Request decided — the surviving (won) thread shows the REQUEST-keyed
+  // kickoff cells regardless of its frozen relationship status.
   if (status === 'accepted') {
     return {
       variant: 'action',
@@ -182,6 +164,38 @@ function expertNudge(
       headline: 'Kicked off — time to deliver',
       sub: 'Milestones are in the workspace. Mark them done as you go.',
       primary: { label: 'Open workspace', icon: Briefcase, action: 'stub' },
+    };
+  }
+
+  if (thread.relationshipStatus === 'eoi_submitted') {
+    return {
+      variant: 'action',
+      icon: Calendar,
+      headline: 'Offer the client a time to talk',
+      sub: "Clients don't share calendars — propose a couple of times to get ahead.",
+      primary: { label: 'Propose meeting times', icon: Calendar, action: 'call' },
+      secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
+    };
+  }
+
+  if (thread.relationshipStatus === 'proposal_requested') {
+    return {
+      variant: 'action',
+      icon: FileText,
+      headline: 'The client requested your proposal — build it',
+      // Interim copy until A6 ships the builder — the CTA renders disabled.
+      sub: 'The proposal builder is on its way — keep scoping in the thread meanwhile.',
+      primary: { label: 'Build proposal', icon: FileText, action: 'stub' },
+    };
+  }
+
+  if (thread.relationshipStatus === 'proposal_submitted') {
+    return {
+      variant: 'waiting',
+      icon: Clock,
+      headline: 'Your proposal is with the client',
+      sub: "They're reviewing it alongside others. Keep the conversation warm.",
+      secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
     };
   }
 

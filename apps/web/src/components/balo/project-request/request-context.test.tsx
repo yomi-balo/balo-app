@@ -24,6 +24,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     timeline: 'Target go-live: end of Q3',
     relationships: [],
     viewerEoi: null,
+    viewerRelationshipStatus: null,
     ...overrides,
   };
 }

@@ -41,7 +41,8 @@ export class InvalidRelationshipTransitionError extends Error {
 /**
  * Shared transition implementation. Locks the live relationship row FOR UPDATE,
  * validates against `RELATIONSHIP_STATUS_TRANSITIONS`, sets `declinedAt` when
- * advancing to `declined`, then persists. Exported so cross-table writers (EOI /
+ * advancing to `declined` and `proposalRequestedAt` when advancing to
+ * `proposal_requested`, then persists. Exported so cross-table writers (EOI /
  * proposal submit, proposal accept) can advance the relationship inside their own
  * transaction atomically with their content insert.
  *
@@ -82,6 +83,7 @@ export async function advanceRelationshipStatus(
     .set({
       status: input.to,
       ...(input.to === 'declined' ? { declinedAt: new Date() } : {}),
+      ...(input.to === 'proposal_requested' ? { proposalRequestedAt: new Date() } : {}),
     })
     .where(eq(requestExpertRelationships.id, input.id))
     .returning();
@@ -175,8 +177,9 @@ export const requestExpertRelationshipsRepository = {
 
   /**
    * Advance a single relationship's per-expert status with validation against
-   * `RELATIONSHIP_STATUS_TRANSITIONS`. Sets `declinedAt` when `to='declined'`.
-   * Optional `expectedFrom` optimistic guard. Throws
+   * `RELATIONSHIP_STATUS_TRANSITIONS`. Sets `declinedAt` when `to='declined'`
+   * and `proposalRequestedAt` when `to='proposal_requested'`. Optional
+   * `expectedFrom` optimistic guard. Throws
    * `InvalidRelationshipTransitionError`.
    */
   async transitionStatus(input: {

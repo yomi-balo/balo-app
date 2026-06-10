@@ -52,19 +52,38 @@ describe('threadNudgeFor — client lens', () => {
     expect(nudge?.headline).toBe("Meet Priya — they're keen to help");
   });
 
-  it('proposal_requested → waiting with reply secondary', () => {
-    const nudge = threadNudgeFor('client', 'proposal_requested', thread());
+  it('relationship proposal_requested → waiting with reply secondary', () => {
+    const nudge = threadNudgeFor(
+      'client',
+      'proposal_requested',
+      thread({ relationshipStatus: 'proposal_requested' })
+    );
     expect(nudge?.variant).toBe('waiting');
     expect(nudge?.headline).toBe('Priya is preparing the proposal');
     expect(nudge?.secondary?.action).toBe('reply');
   });
 
-  it('proposal_submitted → commit with stubbed accept/view CTAs', () => {
-    const nudge = threadNudgeFor('client', 'proposal_submitted', thread());
+  it('relationship proposal_submitted → commit with stubbed accept/view CTAs', () => {
+    const nudge = threadNudgeFor(
+      'client',
+      'proposal_submitted',
+      thread({ relationshipStatus: 'proposal_submitted' })
+    );
     expect(nudge?.variant).toBe('commit');
     expect(nudge?.headline).toBe("Priya's proposal is ready");
     expect(nudge?.primary).toMatchObject({ label: "Accept Priya's proposal", action: 'stub' });
     expect(nudge?.secondary).toMatchObject({ label: 'View full proposal', action: 'stub' });
+  });
+
+  it('BAL-272 divergence: thread B stays on the meet/reply cell while thread A is requested', () => {
+    // The REQUEST advanced to proposal_requested via expert A; expert B's thread
+    // is still eoi_submitted — B must NOT read "B is preparing the proposal".
+    const nudge = threadNudgeFor(
+      'client',
+      'proposal_requested',
+      thread({ relationshipStatus: 'eoi_submitted', latestMessageFromViewer: true })
+    );
+    expect(nudge?.headline).toBe("Meet Priya — they're keen to help");
   });
 
   it('accepted + not_selected → gracious records copy, no CTAs', () => {
@@ -90,16 +109,39 @@ describe('threadNudgeFor — expert lens', () => {
     expect(nudge?.secondary).toMatchObject({ label: 'Send a message', action: 'reply' });
   });
 
-  it('proposal_requested → build proposal stub', () => {
-    const nudge = threadNudgeFor('expert', 'proposal_requested', thread());
+  it('relationship proposal_requested → build proposal stub', () => {
+    const nudge = threadNudgeFor(
+      'expert',
+      'proposal_requested',
+      thread({ relationshipStatus: 'proposal_requested' })
+    );
     expect(nudge?.headline).toBe('The client requested your proposal — build it');
     expect(nudge?.primary).toMatchObject({ label: 'Build proposal', action: 'stub' });
+    // Interim sub-copy until A6 ships the builder (the CTA is a disabled stub).
+    expect(nudge?.sub).toBe(
+      'The proposal builder is on its way — keep scoping in the thread meanwhile.'
+    );
   });
 
-  it('proposal_submitted → waiting with reply secondary', () => {
-    const nudge = threadNudgeFor('expert', 'proposal_submitted', thread());
+  it('relationship proposal_submitted → waiting with reply secondary', () => {
+    const nudge = threadNudgeFor(
+      'expert',
+      'proposal_submitted',
+      thread({ relationshipStatus: 'proposal_submitted' })
+    );
     expect(nudge?.variant).toBe('waiting');
     expect(nudge?.secondary?.action).toBe('reply');
+  });
+
+  it('BAL-272 divergence: a non-requested expert NEVER sees the build prompt', () => {
+    // Request status advanced via another expert's thread; this expert's own
+    // relationship is still eoi_submitted → keep the propose-times cell.
+    const nudge = threadNudgeFor(
+      'expert',
+      'proposal_requested',
+      thread({ relationshipStatus: 'eoi_submitted' })
+    );
+    expect(nudge?.headline).toBe('Offer the client a time to talk');
   });
 
   it('accepted (won) → confirm payment terms stub', () => {

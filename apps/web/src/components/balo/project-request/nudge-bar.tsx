@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RequestLens, ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
+import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import { RequestCard } from './request-card';
 import { NudgeActions } from './nudge-actions';
 
@@ -193,7 +194,8 @@ const EXPERT_NUDGES: NudgeMap = {
     variant: 'action',
     icon: FileText,
     headline: 'Your proposal was requested — build it',
-    sub: 'Deliverables, exclusions, terms, payment schedule.',
+    // Interim copy until A6 ships the builder — the CTA renders disabled.
+    sub: 'The proposal builder is on its way — keep scoping in the thread meanwhile.',
     primary: { label: 'Build proposal', icon: FileText },
   },
   proposal_submitted: {
@@ -293,9 +295,65 @@ const NUDGES_BY_LENS: Record<RequestLens, NudgeMap> = {
 };
 
 /**
+ * Proposal-phase request statuses whose EXPERT cell must be keyed by the
+ * viewer's RELATIONSHIP status, not the request aggregate (BAL-272): the
+ * request status is max-progress, so once one expert's proposal is requested
+ * every other expert's page would otherwise show a false "Build proposal"
+ * commit prompt. `accepted`/`kickoff_approved` cells stay request-keyed.
+ */
+const RELATIONSHIP_KEYED_EXPERT_STATUSES = new Set<ProjectRequestStatus>([
+  'eoi_submitted',
+  'proposal_requested',
+  'proposal_submitted',
+]);
+
+/**
+ * The expert cell for the viewer's RELATIONSHIP status inside the proposal
+ * phase. EVERY relationship status maps explicitly — never fall back to the
+ * request-keyed aggregate (it reflects ANOTHER expert's progress and would
+ * show this viewer a false prompt):
+ *  - `invited` → the experts_invited cell (their true next step is the EOI);
+ *  - `declined` → null (nothing to nudge);
+ *  - the three proposal-phase statuses → their own cells.
+ */
+function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeContent | null {
+  if (viewerRelationshipStatus === 'invited') {
+    return EXPERT_NUDGES['experts_invited'] ?? null;
+  }
+  if (
+    viewerRelationshipStatus === 'eoi_submitted' ||
+    viewerRelationshipStatus === 'proposal_requested' ||
+    viewerRelationshipStatus === 'proposal_submitted'
+  ) {
+    return EXPERT_NUDGES[viewerRelationshipStatus] ?? null;
+  }
+  // declined / accepted — nothing to nudge inside the proposal phase
+  // (accepted flips the REQUEST status out of this band anyway).
+  return null;
+}
+
+/**
  * The single privileged next step for a (lens, status) cell, or `null` when
  * there's nothing to nudge. Data-driven (no copy-pasted branches).
+ *
+ * For the EXPERT lens inside the proposal phase, pass the viewer's own
+ * `viewerRelationshipStatus` to key the cell per-thread (divergence fix —
+ * BAL-272). When provided, the relationship status is AUTHORITATIVE — there
+ * is no fallback to the request-keyed aggregate (it carries another expert's
+ * progress). Without it (or outside the proposal-phase request statuses) the
+ * request status keys the map as before.
  */
-export function nudgeFor(lens: RequestLens, status: ProjectRequestStatus): NudgeContent | null {
+export function nudgeFor(
+  lens: RequestLens,
+  status: ProjectRequestStatus,
+  viewerRelationshipStatus: RelationshipStatus | null = null
+): NudgeContent | null {
+  if (
+    lens === 'expert' &&
+    viewerRelationshipStatus !== null &&
+    RELATIONSHIP_KEYED_EXPERT_STATUSES.has(status)
+  ) {
+    return expertCellFor(viewerRelationshipStatus);
+  }
   return NUDGES_BY_LENS[lens][status] ?? null;
 }

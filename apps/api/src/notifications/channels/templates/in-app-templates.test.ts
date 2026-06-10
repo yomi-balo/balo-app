@@ -103,6 +103,26 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-proposal-requested', () => {
+    it('returns the title, body, and action url', () => {
+      const result = getInAppTemplate('project-proposal-requested', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Proposal requested',
+        body: 'The client requested your proposal for "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-proposal-requested', {});
+      expect(result.body).toBe('The client requested your proposal for "a project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('project-message-posted', () => {
     it('renders sender + preview with the request action url', () => {
       const result = getInAppTemplate('project-message-posted', {

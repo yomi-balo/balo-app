@@ -44,4 +44,5 @@ export {
   type ConversationThreadSelectMethod,
   type ConversationFilesSurface,
   type ConversationCallSurface,
+  type ConversationProposalSurface,
 } from './conversation';

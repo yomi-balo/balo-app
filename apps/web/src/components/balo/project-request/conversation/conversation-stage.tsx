@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ellipsis, MessageSquare, Paperclip, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { track, CONVERSATION_EVENTS } from '@/lib/analytics';
+import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
 import { formatBytes, putWithProgress } from '@/components/balo/document-uploader/upload-file';
 import {
   CONVERSATION_ALLOWED_CONTENT_TYPES,
@@ -27,6 +27,10 @@ import { requestConversationFileUploadAction } from '@/app/(dashboard)/projects/
 import { confirmConversationFileUploadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-file-upload';
 import { getConversationFileDownloadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download';
 import { requestConversationCallAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call';
+import {
+  requestProposalAction,
+  type RequestProposalResult,
+} from '@/app/(dashboard)/projects/[requestId]/_actions/request-proposal';
 import { useConversationRealtime } from './use-conversation-realtime';
 import { deriveThreadActions } from './thread-actions';
 import { ThreadTabs } from './thread-tabs';
@@ -37,6 +41,7 @@ import { MessageComposer } from './message-composer';
 import { ThreadFilesPanel } from './thread-files-panel';
 import { MobileActionRail } from './mobile-action-rail';
 import { MobileOverflowSheet, hasOverflowContent } from './mobile-overflow-sheet';
+import { ProposalRequestDialog } from './proposal-request-dialog';
 
 interface ConversationStageProps {
   requestId: string;
@@ -182,6 +187,7 @@ export function ConversationStage({
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState<{ fileName: string; progress: number } | null>(null);
   const [callPending, setCallPending] = useState(false);
+  const [proposalDialogOpen, setProposalDialogOpen] = useState(false);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
   // Per-thread composer drafts (Slack behaviour): a reply typed for expert A
   // survives a tab switch and can never be Enter-sent to expert B.
@@ -600,6 +606,102 @@ export function ConversationStage({
   const handleRailCall = useCallback((): void => handleCall('rail'), [handleCall]);
   const handleNudgeCall = useCallback((): void => handleCall('nudge'), [handleCall]);
 
+  // ── Request proposal (BAL-272 / A5 — client lens only) ─────────────────
+  // Surface + thread captured at CTA-click time; the modal blocks tab switches
+  // while the confirm beat is up, but the ref keeps the commit race-proof.
+  const proposalContextRef = useRef<{ threadId: string; surface: 'header' | 'rail' } | null>(null);
+
+  /**
+   * Local flip → `deriveThreadActions`/nudge/pills re-derive instantly.
+   * FORWARD only (`eoi_submitted → proposal_requested`): an `already_requested`
+   * reconcile must never regress a thread already at `proposal_submitted`/`accepted`.
+   */
+  const flipThreadToProposalRequested = useCallback((threadId: string): void => {
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.relationshipId === threadId && t.relationshipStatus === 'eoi_submitted'
+          ? { ...t, relationshipStatus: 'proposal_requested' }
+          : t
+      )
+    );
+  }, []);
+
+  const handleRequestProposal = useCallback(
+    (surface: 'header' | 'rail'): void => {
+      if (activeThreadId === null) return;
+      // Belt-and-braces: the CTA only renders at `eoi_submitted` (kind:'request'),
+      // but never let a stale surface open the commit beat past that state.
+      if (activeThread?.relationshipStatus !== 'eoi_submitted') return;
+      track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+        request_id: requestId,
+        relationship_id: activeThreadId,
+        surface,
+      });
+      proposalContextRef.current = { threadId: activeThreadId, surface };
+      setProposalDialogOpen(true);
+    },
+    [activeThreadId, activeThread?.relationshipStatus, requestId]
+  );
+  const handleHeaderProposal = useCallback(
+    (): void => handleRequestProposal('header'),
+    [handleRequestProposal]
+  );
+  const handleRailProposal = useCallback(
+    (): void => handleRequestProposal('rail'),
+    [handleRequestProposal]
+  );
+
+  const handleProposalConfirm = useCallback(async (): Promise<RequestProposalResult> => {
+    const context = proposalContextRef.current;
+    if (context === null) {
+      return { success: false, error: 'Could not request the proposal. Please try again.' };
+    }
+    const result = await requestProposalAction({ requestId, relationshipId: context.threadId });
+    if (!result.success && result.code === 'already_requested') {
+      // Stale local state (another tab/session won the race) — reconcile so the
+      // "Proposal requested" pill shows; the dialog closes without an error toast.
+      flipThreadToProposalRequested(context.threadId);
+      toast.info(result.error);
+    }
+    return result;
+  }, [requestId, flipThreadToProposalRequested]);
+
+  const handleProposalConfirmed = useCallback(
+    (result: Extract<RequestProposalResult, { success: true }>): void => {
+      const context = proposalContextRef.current;
+      if (context === null) return;
+      const confirmedThread = threads.find((t) => t.relationshipId === context.threadId);
+      flipThreadToProposalRequested(context.threadId);
+      track(PROJECT_EVENTS.PROJECT_PROPOSAL_REQUESTED, {
+        request_id: requestId,
+        relationship_id: context.threadId,
+        expert_id: result.expertProfileId,
+        actor: 'client',
+        surface: context.surface,
+        proposal_request_count: result.analytics.proposalRequestCount,
+        ...(result.analytics.timeFromFirstEoiMs === null
+          ? {}
+          : { time_from_first_eoi_ms: result.analytics.timeFromFirstEoiMs }),
+        message_count: result.analytics.messageCount,
+        file_count: result.analytics.fileCount,
+        thread_count: threads.length,
+      });
+      if (result.transitioned) {
+        // Keeps the canonical transition stream complete (expert-invite precedent).
+        track(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {
+          request_id: requestId,
+          from: 'eoi_submitted',
+          to: 'proposal_requested',
+          actor: 'client',
+        });
+      }
+      toast.success(
+        `Proposal requested — ${confirmedThread?.expertFirstName ?? 'the expert'} has been notified.`
+      );
+    },
+    [threads, requestId, flipThreadToProposalRequested]
+  );
+
   // ── Files panel + downloads ────────────────────────────────────────────
   const openFiles = useCallback(
     (surface: 'header' | 'tabstrip'): void => {
@@ -763,6 +865,7 @@ export function ConversationStage({
           callPending={callPending}
           onToggleFiles={handleHeaderFilesToggle}
           onCall={handleHeaderCall}
+          onRequestProposal={lens === 'client' ? handleHeaderProposal : null}
         />
       </div>
 
@@ -822,6 +925,9 @@ export function ConversationStage({
         callPending={callPending}
         proposalCta={actions.railProposal}
         onCall={handleRailCall}
+        onProposal={
+          lens === 'client' && actions.railProposal?.kind === 'request' ? handleRailProposal : null
+        }
       />
 
       <ThreadFilesPanel
@@ -840,6 +946,15 @@ export function ConversationStage({
         thread={activeThread}
         showProposalPill={showProposalPill}
         profileHref={profileHref}
+      />
+
+      {/* A5 confirm beat — committing action gets friction proportional to consequence. */}
+      <ProposalRequestDialog
+        open={proposalDialogOpen}
+        onOpenChange={setProposalDialogOpen}
+        expertFirstName={activeThread.expertFirstName}
+        onConfirm={handleProposalConfirm}
+        onConfirmed={handleProposalConfirmed}
       />
     </RequestCard>
   );

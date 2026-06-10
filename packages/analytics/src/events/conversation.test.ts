@@ -2,13 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { CONVERSATION_EVENTS } from './conversation';
 
 describe('CONVERSATION_EVENTS', () => {
-  it('has exactly the five A4 events', () => {
+  it('has exactly the five A4 events plus the A5 proposal CTA', () => {
     expect(Object.keys(CONVERSATION_EVENTS)).toEqual([
       'CONVERSATION_MESSAGE_SENT',
       'CONVERSATION_FILE_SHARED',
       'CONVERSATION_THREAD_SELECTED',
       'CONVERSATION_FILES_OPENED',
       'CONVERSATION_CALL_CTA_CLICKED',
+      'CONVERSATION_PROPOSAL_CTA_CLICKED',
     ]);
   });
 
@@ -24,5 +25,8 @@ describe('CONVERSATION_EVENTS', () => {
     expect(CONVERSATION_EVENTS.CONVERSATION_THREAD_SELECTED).toBe('conversation_thread_selected');
     expect(CONVERSATION_EVENTS.CONVERSATION_FILES_OPENED).toBe('conversation_files_opened');
     expect(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED).toBe('conversation_call_cta_clicked');
+    expect(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED).toBe(
+      'conversation_proposal_cta_clicked'
+    );
   });
 });

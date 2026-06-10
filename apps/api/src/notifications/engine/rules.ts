@@ -106,6 +106,23 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-272: the client asked this expert for a formal proposal — a commit
+  // moment, so it is email-worthy (unlike per-message chatter, in-app only).
+  'project.proposal_requested': [
+    {
+      channel: 'email',
+      recipient: 'expert',
+      template: 'project-proposal-requested',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-proposal-requested',
+      timing: 'immediate',
+    },
+  ],
   'booking.confirmed': [
     {
       channel: 'sms',

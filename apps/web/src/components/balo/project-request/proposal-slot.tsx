@@ -1,36 +1,41 @@
 import { FileText } from 'lucide-react';
-import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
+import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 
 interface ProposalSlotProps {
-  requestStatus: ProjectRequestStatus;
+  /**
+   * The VIEWER-expert's own relationship status (`view.viewerRelationshipStatus`)
+   * — `null` for the client/admin lenses, which never render this slot.
+   */
+  viewerRelationshipStatus: RelationshipStatus | null;
 }
 
 /**
- * Statuses at/after which the client has requested a proposal — the expert's
- * "Build proposal" CTA becomes actionable. Before any of these, the expert sees
- * the gated "Awaiting proposal request" pill (A3 renders ONLY this gated state).
+ * Relationship statuses BEFORE the client has requested this expert's proposal —
+ * the slot shows the gated "Awaiting proposal request" pill. At/after
+ * `proposal_requested` the slot yields the space to A6's live "Build proposal"
+ * CTA (renders `null`).
  */
-const PROPOSAL_REQUESTED_STATUSES = new Set<ProjectRequestStatus>([
-  'proposal_requested',
-  'proposal_submitted',
-  'accepted',
-  'kickoff_approved',
-]);
+const AWAITING_PROPOSAL_REQUEST = new Set<RelationshipStatus>(['invited', 'eoi_submitted']);
 
 /**
- * The expert-lens "Build proposal" header slot, GATED (BAL-270 / A3). Until the
- * client requests a proposal (request status `< proposal_requested`), this renders
- * a disabled "Awaiting proposal request" pill — no button, no handler. A6 replaces
- * the gated pill with the live "Build proposal" CTA once the client has requested
- * one. Render-only server component; reads only `view.status`.
+ * The expert-lens "Build proposal" header slot, GATED (BAL-270 / A3). Keyed on
+ * the VIEWER'S OWN relationship status, not the request aggregate (BAL-272
+ * divergence fix): once any expert's proposal is requested the request status
+ * advances for everyone, but this expert's pill must persist until THEIR
+ * proposal is requested. Render-only server component.
  *
- * Returns `null` once a proposal has been requested (A3 does not own the live CTA
- * yet — the slot simply yields the space to A6).
+ * Returns `null` once the viewer's proposal has been requested (A6 owns the
+ * live CTA — the slot simply yields the space).
  */
 export function ProposalSlot({
-  requestStatus,
+  viewerRelationshipStatus,
 }: Readonly<ProposalSlotProps>): React.JSX.Element | null {
-  if (PROPOSAL_REQUESTED_STATUSES.has(requestStatus)) return null;
+  if (
+    viewerRelationshipStatus === null ||
+    !AWAITING_PROPOSAL_REQUEST.has(viewerRelationshipStatus)
+  ) {
+    return null;
+  }
 
   return (
     <span

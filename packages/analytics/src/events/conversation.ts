@@ -4,6 +4,7 @@ export const CONVERSATION_EVENTS = {
   CONVERSATION_THREAD_SELECTED: 'conversation_thread_selected',
   CONVERSATION_FILES_OPENED: 'conversation_files_opened',
   CONVERSATION_CALL_CTA_CLICKED: 'conversation_call_cta_clicked',
+  CONVERSATION_PROPOSAL_CTA_CLICKED: 'conversation_proposal_cta_clicked',
 } as const;
 
 /** Viewer lens inside the conversation stage (admin observes, never chats). */
@@ -14,6 +15,8 @@ export type ConversationThreadSelectMethod = 'auto' | 'manual';
 export type ConversationFilesSurface = 'header' | 'tabstrip';
 /** Where the call CTA was clicked. */
 export type ConversationCallSurface = 'header' | 'rail' | 'nudge';
+/** Where the client's Request-proposal CTA was clicked (A5: no nudge surface). */
+export type ConversationProposalSurface = 'header' | 'rail';
 
 /**
  * Multi-expert conversation events (BAL-271 / A4). All client-side, keyed off
@@ -21,7 +24,10 @@ export type ConversationCallSurface = 'header' | 'rail' | 'nudge';
  * request_id; parallel engagement = distinct relationship_id per request_id
  * (+ thread_count); meeting-CTA click rate = CALL_CTA_CLICKED ÷
  * project_request_detail_viewed{phase:'phase2'}; depth ↔ proposal = join
- * MESSAGE_SENT counts with PROJECT_PROPOSAL_REQUESTED on request_id.
+ * MESSAGE_SENT counts with PROJECT_PROPOSAL_REQUESTED on request_id;
+ * confirm-beat abandonment (BAL-272) = PROPOSAL_CTA_CLICKED −
+ * project_proposal_requested per request_id (the measurable friction cost of
+ * the "committing action gets a confirm" rule).
  */
 export interface ConversationEventMap {
   [CONVERSATION_EVENTS.CONVERSATION_MESSAGE_SENT]: {
@@ -59,5 +65,10 @@ export interface ConversationEventMap {
     relationship_id: string;
     lens: ConversationLens;
     surface: ConversationCallSurface;
+  };
+  [CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED]: {
+    request_id: string;
+    relationship_id: string;
+    surface: ConversationProposalSurface;
   };
 }
