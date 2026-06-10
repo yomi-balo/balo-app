@@ -2,6 +2,7 @@
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
   "globalEnv": [
+    "ABLY_API_KEY",
     "AXIOM_DATASET",
     "AXIOM_TOKEN",
     "CI",

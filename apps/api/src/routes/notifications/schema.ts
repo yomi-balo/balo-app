@@ -40,6 +40,36 @@ const projectMatchRequestedPayload = z.object({
   documentCount: z.number().int().nonnegative(),
 });
 
+// BAL-271 conversation events. `recipientId` is set when recipientRole==='client'
+// (dispatcher 'client' path); `expertProfileId` when recipientRole==='expert'
+// (resolver hydrates data.expert). Mirrors apps/web/src/lib/notifications/types.ts.
+const projectMessagePostedPayload = z.object({
+  correlationId: z.uuid(), // message id — dedup per message
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  title: z.string().min(1),
+  senderName: z.string().min(1),
+  recipientRole: z.enum(['client', 'expert']),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid().optional(),
+  preview: z.string().max(200),
+});
+
+const projectFileSharedPayload = z.object({
+  correlationId: z.uuid(), // file id — dedup per share
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  title: z.string().min(1),
+  senderName: z.string().min(1),
+  recipientRole: z.enum(['client', 'expert']),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid().optional(),
+  fileName: z.string().min(1).max(255),
+});
+
+// TODO(BAL-XXX): known gap — three pre-existing web-published events are missing
+// from this union ('project.exploratory_requested', 'project.expert_invited',
+// 'project.eoi_submitted'); they currently 400 at the publish route. Separate ticket.
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -54,6 +84,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.match_requested'),
     payload: projectMatchRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('project.message_posted'),
+    payload: projectMessagePostedPayload,
+  }),
+  z.object({
+    event: z.literal('project.file_shared'),
+    payload: projectFileSharedPayload,
   }),
 ]);
 

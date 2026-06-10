@@ -35,6 +35,16 @@ vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('next/navigation', () => ({ notFound: mockNotFound, redirect: mockRedirect }));
 vi.mock('@/lib/logging', () => ({ log: { warn: mockLogWarn, error: mockLogError } }));
 
+// Phase-2 conversation loader (BAL-271) — its own unit tests cover the real
+// implementation; here we only assert WHEN the page calls it.
+const mockLoadConversationView = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/project-request/conversation-view', () => ({
+  loadConversationView: (...args: unknown[]) => mockLoadConversationView(...args),
+}));
+
+// useIsMobile (inside the conversation island) reads window.matchMedia.
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
 import RequestDetailPage, { generateMetadata } from './page';
 
 const REQUEST_ID = 'req-1';
@@ -115,6 +125,15 @@ async function renderPage(requestId = REQUEST_ID) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLoadConversationView.mockResolvedValue({
+    viewerUserId: 'user-x',
+    threads: [],
+    defaultThreadId: null,
+    initialMessages: [],
+    initialHasEarlier: false,
+    initialFiles: [],
+    realtimeEnabled: false,
+  });
 });
 
 describe('RequestDetailPage (RSC) — auth + lens gating', () => {
@@ -201,6 +220,36 @@ describe('RequestDetailPage (RSC) — authorised lenses render the shell', () =>
 
     await renderPage();
     expect(screen.getByText('Admin')).toBeInTheDocument();
+  });
+});
+
+describe('RequestDetailPage (RSC) — Phase-2 conversation payload (BAL-271)', () => {
+  it('loads the conversation for a Phase-2 participant', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(request({ status: 'eoi_submitted' }));
+
+    await renderPage();
+    expect(mockLoadConversationView).toHaveBeenCalledTimes(1);
+    // Zero-thread payload → invitation empty state, never a blank panel.
+    expect(screen.getByText(/Your conversation lives here/i)).toBeInTheDocument();
+  });
+
+  it('never loads the conversation in Phase 1', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(request({ status: 'requested' }));
+
+    await renderPage();
+    expect(mockLoadConversationView).not.toHaveBeenCalled();
+  });
+
+  it('never loads the conversation for the admin observer (even at Phase 2)', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request({ status: 'eoi_submitted' }));
+
+    await renderPage();
+    expect(mockLoadConversationView).not.toHaveBeenCalled();
   });
 });
 

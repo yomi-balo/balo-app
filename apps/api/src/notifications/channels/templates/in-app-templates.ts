@@ -54,6 +54,28 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
+
+  'project-message-posted': (data) => {
+    const senderName = (data.senderName as string) ?? 'Someone';
+    const preview = (data.preview as string) ?? 'sent you a message';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'New message',
+      body: `${senderName}: ${preview}`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  'project-file-shared': (data) => {
+    const senderName = (data.senderName as string) ?? 'Someone';
+    const fileName = (data.fileName as string) ?? 'a file';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'New file shared',
+      body: `${senderName} shared ${fileName}`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {
