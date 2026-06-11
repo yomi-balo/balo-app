@@ -50,6 +50,12 @@ async function seedPersonalCompanyId(): Promise<string> {
  *  - `withSourceProposal: true` (the A6.5 path): also seeds a proposal and wires
  *    `sourceProposalId`/`relationshipId`/`projectRequestId` from it.
  *
+ * NB: in `withSourceProposal` mode the engagement's parties (`companyId` /
+ * `expertProfileId`) are FRESH and are NOT reconciled with the source proposal's
+ * relationship — a fixture shortcut. A6.5's real accept→engagement writer MUST
+ * derive `company_id` / `expert_profile_id` from the LOCKED relationship row (not
+ * trust the caller), the same denormalised-id discipline as `submit`/`accept`.
+ *
  * Overrides flow through `.values(...)`.
  */
 export async function engagementFactory(

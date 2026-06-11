@@ -36,7 +36,10 @@ import { timestamps, softDelete } from './helpers';
  * `billing_model` / `approval_model` are `text` (not enums) deliberately — they are
  * the genuinely forward-looking axes; making them enums now would force an enum
  * migration the moment a retainer needs `'retainer'`/`'auto'`. A6.5 writes
- * `'proposal'`/`'admin_invoice'`; repo-side validation guards the values.
+ * `'proposal'`/`'admin_invoice'`. The value space is validated at the WRITE
+ * BOUNDARY (the server action that creates engagements), not here — `@balo/db`
+ * repos don't validate caller input, the same contract as rich-text sanitisation
+ * ("sanitisation happens in the web caller, never in @balo/db").
  */
 export const engagements = pgTable(
   'engagements',

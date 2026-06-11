@@ -89,7 +89,7 @@ CREATE TABLE "engagements" (
 ALTER TABLE "proposals" ADD COLUMN "pricing_method" "pricing_method" DEFAULT 'fixed' NOT NULL;--> statement-breakpoint
 ALTER TABLE "proposals" ADD COLUMN "version" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
 ALTER TABLE "proposals" ADD COLUMN "is_current" boolean DEFAULT true NOT NULL;--> statement-breakpoint
-ALTER TABLE "proposals" ADD COLUMN "overview" text NOT NULL;--> statement-breakpoint
+ALTER TABLE "proposals" RENAME COLUMN "scope" TO "overview";--> statement-breakpoint
 ALTER TABLE "proposals" ADD COLUMN "exclusions" text;--> statement-breakpoint
 ALTER TABLE "proposals" ADD COLUMN "timeframe_weeks" integer;--> statement-breakpoint
 ALTER TABLE "proposals" ADD COLUMN "deposit_cents" integer;--> statement-breakpoint
@@ -121,8 +121,8 @@ CREATE INDEX "engagement_expert_idx" ON "engagements" USING btree ("expert_profi
 CREATE INDEX "engagement_source_proposal_idx" ON "engagements" USING btree ("source_proposal_id");--> statement-breakpoint
 CREATE INDEX "engagement_relationship_idx" ON "engagements" USING btree ("relationship_id");--> statement-breakpoint
 CREATE INDEX "engagement_request_idx" ON "engagements" USING btree ("project_request_id");--> statement-breakpoint
+UPDATE "proposals" AS p SET "is_current" = false WHERE p."deleted_at" IS NULL AND EXISTS (SELECT 1 FROM "proposals" AS q WHERE q."relationship_id" = p."relationship_id" AND q."deleted_at" IS NULL AND (q."submitted_at", q."id") > (p."submitted_at", p."id"));--> statement-breakpoint
 CREATE UNIQUE INDEX "proposal_current_per_relationship_idx" ON "proposals" USING btree ("relationship_id") WHERE "proposals"."deleted_at" IS NULL AND "proposals"."is_current";--> statement-breakpoint
-ALTER TABLE "proposals" DROP COLUMN "scope";--> statement-breakpoint
 ALTER TABLE "proposals" ADD CONSTRAINT "proposal_version_positive" CHECK ("proposals"."version" >= 1);--> statement-breakpoint
 ALTER TABLE "proposals" ADD CONSTRAINT "proposal_deposit_cents_nonneg" CHECK ("proposals"."deposit_cents" IS NULL OR "proposals"."deposit_cents" >= 0);--> statement-breakpoint
 ALTER TABLE "proposals" ADD CONSTRAINT "proposal_rate_cents_nonneg" CHECK ("proposals"."rate_cents" IS NULL OR "proposals"."rate_cents" >= 0);--> statement-breakpoint
