@@ -158,6 +158,24 @@ const noopDraftChange = (): void => {
   // Disabled composer — no draft to keep.
 };
 
+/**
+ * Fire the proposal-CTA-click funnel event for a header/rail surface. The nudge
+ * surface passes `undefined` and navigates without re-firing the event. Extracted
+ * to module scope so the build/view navigation callbacks stay branch-light.
+ */
+function trackProposalCtaClick(
+  surface: 'header' | 'rail' | undefined,
+  requestId: string,
+  relationshipId: string
+): void {
+  if (surface === undefined) return;
+  track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+    request_id: requestId,
+    relationship_id: relationshipId,
+    surface,
+  });
+}
+
 /** Zero-open-threads stage — invitation framing, never a blank panel. */
 function EmptyConversationStage({
   lens,
@@ -715,13 +733,7 @@ export function ConversationStage({
     (surface?: 'header' | 'rail'): void => {
       if (activeThreadId === null) return;
       if (activeThread?.relationshipStatus !== 'proposal_requested') return;
-      if (surface !== undefined) {
-        track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
-          request_id: requestId,
-          relationship_id: activeThreadId,
-          surface,
-        });
-      }
+      trackProposalCtaClick(surface, requestId, activeThreadId);
       router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
     },
     [activeThreadId, activeThread?.relationshipStatus, requestId, router]
@@ -748,13 +760,7 @@ export function ConversationStage({
       if (!PROPOSAL_VIEW_STATUSES.has(activeThread?.relationshipStatus ?? '')) {
         return;
       }
-      if (surface !== undefined) {
-        track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
-          request_id: requestId,
-          relationship_id: activeThreadId,
-          surface,
-        });
-      }
+      trackProposalCtaClick(surface, requestId, activeThreadId);
       router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
     },
     [activeThreadId, activeThread?.relationshipStatus, requestId, router]

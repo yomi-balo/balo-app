@@ -51,9 +51,11 @@ function displayName(user: { firstName: string | null; lastName: string | null }
 
 /**
  * Advance the REQUEST aggregate `proposal_submitted → accepted` exactly once.
- * Race-tolerant: a concurrent accept that already advanced the aggregate trips
- * `InvalidStatusTransitionError`, which is benign. Returns whether THIS call
- * performed the transition.
+ * Best-effort and NEVER throws: the accept is already committed in its own tx and
+ * is the source of truth, so neither the benign already-advanced race
+ * (`InvalidStatusTransitionError`) nor a transient failure may fail the action —
+ * both are logged and reported as `transitioned = false`. Returns whether THIS
+ * call performed the transition.
  */
 async function advanceRequestAggregate(requestId: string, currentStatus: string): Promise<boolean> {
   if (currentStatus !== 'proposal_submitted') {
@@ -69,9 +71,14 @@ async function advanceRequestAggregate(requestId: string, currentStatus: string)
   } catch (error) {
     if (error instanceof InvalidStatusTransitionError) {
       log.warn('Proposal accept request transition skipped (already advanced)', { requestId });
-      return false;
+    } else {
+      log.error('Request aggregate advance failed after accept commit', {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
-    throw error;
+    return false;
   }
 }
 
@@ -169,22 +176,11 @@ export async function acceptProposalAction(
       return { success: false, error: STALE_PROPOSAL };
     }
 
-    // Advance the REQUEST aggregate (first-accept-only, race-tolerant). The accept
-    // above is ALREADY committed in its own tx and is the source of truth — so this
-    // separate-tx advance is best-effort: any failure (other than the benign
-    // already-advanced race that `advanceRequestAggregate` swallows) must NOT fail
-    // the action and re-toast a misleading retry. Mirror the fire-and-forget notify:
-    // log and fall through to the success path with `transitioned = false`.
-    let transitioned = false;
-    try {
-      transitioned = await advanceRequestAggregate(requestId, access.request.status);
-    } catch (error) {
-      log.error('Request aggregate advance failed after accept commit', {
-        requestId,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-    }
+    // Advance the REQUEST aggregate (first-accept-only). Best-effort + never
+    // throws — the accept above is already committed and is the source of truth
+    // (see `advanceRequestAggregate`); a lagging request status is tolerable and
+    // must never re-toast a misleading retry for a state change that succeeded.
+    const transitioned = await advanceRequestAggregate(requestId, access.request.status);
 
     // Key business event (after the commit).
     log.info('Proposal accepted', {

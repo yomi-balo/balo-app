@@ -32,7 +32,7 @@ interface ProposalSectionNavProps {
 /** True when the OS asks for reduced motion (jump instantly, no smooth scroll). */
 function prefersReducedMotion(): boolean {
   return (
-    typeof globalThis.window !== 'undefined' &&
+    globalThis.window !== undefined &&
     typeof globalThis.matchMedia === 'function' &&
     globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
   );

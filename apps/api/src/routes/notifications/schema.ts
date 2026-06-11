@@ -105,7 +105,7 @@ const projectProposalAcceptedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
-// TODO(BAL-284): known gap — three pre-existing web-published events are missing
+// Known gap (BAL-284): three pre-existing web-published events are missing
 // from this union ('project.exploratory_requested', 'project.expert_invited',
 // 'project.eoi_submitted'); they currently 400 at the publish route. BAL-284
 // adds them (out of scope for BAL-272).
