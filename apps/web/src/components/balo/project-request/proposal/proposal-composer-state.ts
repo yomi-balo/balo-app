@@ -99,8 +99,10 @@ export function emptyDraftState(): ProposalDraftState {
 
 /** Plain-text length of HTML (cheap tag-strip) — mirrors the server's gate. */
 export function plainTextLength(html: string): number {
+  // `[^<>]` (not `[^>]`) excludes the opening delimiter so a run can't consume a
+  // `<`; that keeps the match linear (no overlapping-start backtracking / ReDoS).
   return html
-    .replaceAll(/<[^>]*>/g, '')
+    .replaceAll(/<[^<>]*>/g, '')
     .replaceAll(/&nbsp;/g, ' ')
     .trim().length;
 }

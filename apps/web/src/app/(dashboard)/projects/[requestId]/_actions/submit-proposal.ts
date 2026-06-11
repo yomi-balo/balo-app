@@ -54,8 +54,10 @@ const GENERIC_FAILURE = 'Could not submit your proposal. Please try again.';
 
 /** Plain-text length of HTML (cheap tag-strip) — gates a non-empty overview. */
 function plainTextLength(html: string): number {
+  // `[^<>]` (not `[^>]`) excludes the opening delimiter so a run can't consume a
+  // `<`; that keeps the match linear (no overlapping-start backtracking / ReDoS).
   return html
-    .replaceAll(/<[^>]*>/g, '')
+    .replaceAll(/<[^<>]*>/g, '')
     .replaceAll(/&nbsp;/g, ' ')
     .trim().length;
 }
