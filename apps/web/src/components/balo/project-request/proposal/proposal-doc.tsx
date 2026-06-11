@@ -347,12 +347,12 @@ function FixedTerms({
 
 function TmTerms({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Element {
   const deposit =
-    doc.depositCents !== null
-      ? `${formatWholeCurrency(doc.depositCents, doc.currency)} deposit on acceptance`
-      : null;
+    doc.depositCents === null
+      ? null
+      : `${formatWholeCurrency(doc.depositCents, doc.currency)} deposit on acceptance`;
   const rate =
-    doc.rateCents !== null ? `${formatWholeCurrency(doc.rateCents, doc.currency)}/hr` : null;
-  const invoiced = doc.cadence !== null ? `Invoiced ${doc.cadence}` : null;
+    doc.rateCents === null ? null : `${formatWholeCurrency(doc.rateCents, doc.currency)}/hr`;
+  const invoiced = doc.cadence === null ? null : `Invoiced ${doc.cadence}`;
   const parts = [deposit, rate, invoiced].filter((p): p is string => p !== null);
 
   return (

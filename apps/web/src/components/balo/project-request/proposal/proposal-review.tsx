@@ -89,11 +89,8 @@ export function ProposalReview({
   const isChangesRequested = active.status === 'changes_requested';
 
   const switcher = isMulti ? (
-    <div
-      role="group"
-      aria-label="Choose a proposal to review"
-      className="flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-    >
+    <fieldset className="m-0 flex min-w-0 gap-2 overflow-x-auto border-0 p-0 pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <legend className="sr-only">Choose a proposal to review</legend>
       {proposals.map((proposal) => {
         const on = proposal.id === active.id;
         return (
@@ -135,7 +132,7 @@ export function ProposalReview({
           </button>
         );
       })}
-    </div>
+    </fieldset>
   ) : null;
 
   return (

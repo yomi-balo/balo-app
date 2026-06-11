@@ -72,6 +72,9 @@ const EMPTY_THREAD_DATA: ThreadData = {
 const MARK_READ_MIN_INTERVAL_MS = 3000;
 const STAGE_CARD_CLASS = 'flex h-[min(78dvh,760px)] min-h-[520px] flex-col overflow-hidden p-0';
 
+/** Relationship statuses at which the read-only "View proposal" surface opens. */
+const PROPOSAL_VIEW_STATUSES = new Set<string>(['proposal_submitted', 'accepted']);
+
 /** Pure list transform: bump one thread's file badge (confirm path). */
 function withBumpedFileCount(
   threads: ConversationThreadView[],
@@ -742,10 +745,7 @@ export function ConversationStage({
   const handleViewProposal = useCallback(
     (surface?: 'header' | 'rail'): void => {
       if (activeThreadId === null) return;
-      if (
-        activeThread?.relationshipStatus !== 'proposal_submitted' &&
-        activeThread?.relationshipStatus !== 'accepted'
-      ) {
+      if (!PROPOSAL_VIEW_STATUSES.has(activeThread?.relationshipStatus ?? '')) {
         return;
       }
       if (surface !== undefined) {

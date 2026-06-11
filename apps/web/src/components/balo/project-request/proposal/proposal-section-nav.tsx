@@ -32,9 +32,9 @@ interface ProposalSectionNavProps {
 /** True when the OS asks for reduced motion (jump instantly, no smooth scroll). */
 function prefersReducedMotion(): boolean {
   return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    typeof globalThis.window !== 'undefined' &&
+    typeof globalThis.matchMedia === 'function' &&
+    globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 }
 
@@ -65,7 +65,7 @@ export function ProposalSectionNav({
         behavior: prefersReducedMotion() ? 'auto' : 'smooth',
         block: 'start',
       });
-      window.setTimeout(() => {
+      globalThis.setTimeout(() => {
         clickLockRef.current = false;
       }, 600);
     },

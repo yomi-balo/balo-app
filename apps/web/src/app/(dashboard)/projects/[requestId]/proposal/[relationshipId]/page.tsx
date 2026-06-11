@@ -16,7 +16,10 @@ import {
 } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
-import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
+import {
+  resolveRequestLens,
+  type RequestViewerContext,
+} from '@/lib/project-request/resolve-request-lens';
 import { ProposalComposer } from '@/components/balo/project-request/proposal/proposal-composer';
 import {
   emptyDraftState,
@@ -313,6 +316,115 @@ function otherSubmittedCount(request: ProjectRequestWithRelations, selfId: strin
 }
 
 /**
+ * EXPERT lens surface (own relationship only). Returns the composer at
+ * `proposal_requested`, the read-only SubmittedView once a proposal exists, or
+ * `null` (no match — the dispatcher falls through to the next lens).
+ */
+async function renderExpertSurface(
+  ctx: RequestViewerContext,
+  relationship: Relationship,
+  request: ProjectRequestWithRelations,
+  requestId: string,
+  relationshipId: string,
+  clientFirstName: string
+): Promise<React.JSX.Element | null> {
+  if (ctx.lens !== 'expert' || ctx.relationshipId !== relationshipId) {
+    return null;
+  }
+  // Composer: the draft surface while the client is awaiting a proposal.
+  if (relationship.status === 'proposal_requested') {
+    return renderComposer(requestId, relationshipId, request);
+  }
+  // Submitted view: read-only "awaiting the client" once a proposal exists.
+  if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
+    const doc = await loadReviewDoc(relationship);
+    if (doc !== null) {
+      return (
+        <ReviewShell requestId={requestId} title={request.title}>
+          <SubmittedView
+            lens="expert"
+            doc={doc}
+            clientName={clientFirstName}
+            otherProposalCount={otherSubmittedCount(request, relationshipId)}
+          />
+        </ReviewShell>
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * CLIENT lens surface (owns the request). Returns the ProposalReview switcher
+ * across every reviewable proposal on the request, or `null` (no match).
+ *
+ * NOTE: `changes_requested` is a *proposal* status, not a *relationship* status —
+ * the relationship stays at `proposal_submitted` while the expert revises.
+ * `loadReviewDoc` admits a `changes_requested` proposal, and `ProposalReview`
+ * renders its "awaiting revision" empty state.
+ */
+async function renderClientReview(
+  ctx: RequestViewerContext,
+  relationship: Relationship,
+  request: ProjectRequestWithRelations,
+  requestId: string,
+  relationshipId: string,
+  clientFirstName: string
+): Promise<React.JSX.Element | null> {
+  if (ctx.lens !== 'client' || !SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
+    return null;
+  }
+  // Every reviewable proposal on the request powers the switcher.
+  const docs = await Promise.all(request.relationships.map((r) => loadReviewDoc(r)));
+  const reviewableDocs = docs.filter((d): d is ProposalReviewDoc => d !== null);
+  if (reviewableDocs.length > 0) {
+    return (
+      <ReviewShell requestId={requestId} title={request.title}>
+        <ProposalReview
+          requestId={requestId}
+          proposals={reviewableDocs}
+          activeRelationshipId={relationshipId}
+          clientCompanyName={request.company?.name ?? 'your company'}
+          clientFirstName={clientFirstName}
+        />
+      </ReviewShell>
+    );
+  }
+  return null;
+}
+
+/**
+ * ADMIN lens surface (observer). Returns the read-only SubmittedView (admin
+ * framing) once a proposal exists, or `null` (no match).
+ */
+async function renderAdminSurface(
+  ctx: RequestViewerContext,
+  relationship: Relationship,
+  request: ProjectRequestWithRelations,
+  requestId: string,
+  relationshipId: string,
+  clientFirstName: string
+): Promise<React.JSX.Element | null> {
+  if (ctx.lens !== 'admin' || !SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
+    return null;
+  }
+  const doc = await loadReviewDoc(relationship);
+  if (doc !== null) {
+    return (
+      <ReviewShell requestId={requestId} title={request.title}>
+        <SubmittedView
+          lens="admin"
+          doc={doc}
+          clientName={clientFirstName}
+          otherProposalCount={otherSubmittedCount(request, relationshipId)}
+        />
+      </ReviewShell>
+    );
+  }
+  return null;
+}
+
+/**
  * The proposal surface (A6.2 / BAL-288 composer + A6.4 / BAL-289 review/submitted).
  * After loading `request` + `resolveRequestLens` + the URL relationship, dispatches
  * by lens × status:
@@ -364,71 +476,37 @@ export default async function ProposalComposerPage({
 
   const clientFirstName = firstNameOf(request.createdByUser.firstName, 'the client');
 
-  // ── Expert lens — only their OWN relationship ─────────────────────────────
-  if (ctx.lens === 'expert' && ctx.relationshipId === relationshipId) {
-    // Composer: the draft surface while the client is awaiting a proposal.
-    if (relationship.status === 'proposal_requested') {
-      return renderComposer(requestId, relationshipId, request);
-    }
-    // Submitted view: read-only "awaiting the client" once a proposal exists.
-    if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
-      const doc = await loadReviewDoc(relationship);
-      if (doc !== null) {
-        return (
-          <ReviewShell requestId={requestId} title={request.title}>
-            <SubmittedView
-              lens="expert"
-              doc={doc}
-              clientName={clientFirstName}
-              otherProposalCount={otherSubmittedCount(request, relationshipId)}
-            />
-          </ReviewShell>
-        );
-      }
-    }
-    // No matching expert surface — fall through to the shared deny + redirect.
-  }
+  // Dispatch by lens — each helper returns its surface, or `null` to fall through
+  // to the next lens (and ultimately the shared deny + redirect below).
+  const expert = await renderExpertSurface(
+    ctx,
+    relationship,
+    request,
+    requestId,
+    relationshipId,
+    clientFirstName
+  );
+  if (expert !== null) return expert;
 
-  // ── Client lens — owns the request ────────────────────────────────────────
-  // NOTE: `changes_requested` is a *proposal* status, not a *relationship*
-  // status — the relationship stays at `proposal_submitted` while the expert
-  // revises. `loadReviewDoc` admits a `changes_requested` proposal, and
-  // `ProposalReview` renders its "awaiting revision" empty state.
-  if (ctx.lens === 'client' && SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
-    // Every reviewable proposal on the request powers the switcher.
-    const docs = await Promise.all(request.relationships.map((r) => loadReviewDoc(r)));
-    const reviewableDocs = docs.filter((d): d is ProposalReviewDoc => d !== null);
-    if (reviewableDocs.length > 0) {
-      return (
-        <ReviewShell requestId={requestId} title={request.title}>
-          <ProposalReview
-            requestId={requestId}
-            proposals={reviewableDocs}
-            activeRelationshipId={relationshipId}
-            clientCompanyName={request.company?.name ?? 'your company'}
-            clientFirstName={clientFirstName}
-          />
-        </ReviewShell>
-      );
-    }
-  }
+  const client = await renderClientReview(
+    ctx,
+    relationship,
+    request,
+    requestId,
+    relationshipId,
+    clientFirstName
+  );
+  if (client !== null) return client;
 
-  // ── Admin lens — observer ─────────────────────────────────────────────────
-  if (ctx.lens === 'admin' && SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
-    const doc = await loadReviewDoc(relationship);
-    if (doc !== null) {
-      return (
-        <ReviewShell requestId={requestId} title={request.title}>
-          <SubmittedView
-            lens="admin"
-            doc={doc}
-            clientName={clientFirstName}
-            otherProposalCount={otherSubmittedCount(request, relationshipId)}
-          />
-        </ReviewShell>
-      );
-    }
-  }
+  const admin = await renderAdminSurface(
+    ctx,
+    relationship,
+    request,
+    requestId,
+    relationshipId,
+    clientFirstName
+  );
+  if (admin !== null) return admin;
 
   // Anything else — wrong lens/status, or no reviewable proposal.
   log.warn('Proposal surface access denied', {

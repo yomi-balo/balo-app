@@ -125,13 +125,17 @@ function resolveRecipientIds(
   recipient: NotificationRule['recipient'],
   context: RuleContext
 ): string[] {
-  const source =
-    recipient === 'admins'
-      ? context.data.adminUserIds
-      : recipient === 'non_selected_experts'
-        ? context.data.nonSelectedExpertUserIds
-        : undefined;
-
+  let source: unknown;
+  switch (recipient) {
+    case 'admins':
+      source = context.data.adminUserIds;
+      break;
+    case 'non_selected_experts':
+      source = context.data.nonSelectedExpertUserIds;
+      break;
+    default:
+      return [];
+  }
   if (!Array.isArray(source)) return [];
   return source.filter((id): id is string => typeof id === 'string');
 }

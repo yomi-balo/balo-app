@@ -26,10 +26,9 @@ interface WaitingCopy {
 function waitingCopy(props: Readonly<SubmittedViewProps>): WaitingCopy {
   const { lens, clientName, otherProposalCount } = props;
   if (lens === 'expert') {
+    const plural = otherProposalCount > 1 ? 's' : '';
     const alongside =
-      otherProposalCount > 0
-        ? ` alongside ${otherProposalCount} other${otherProposalCount > 1 ? 's' : ''}`
-        : '';
+      otherProposalCount > 0 ? ` alongside ${otherProposalCount} other${plural}` : '';
     return {
       icon: Hourglass,
       headline: `Proposal sent to ${clientName}`,

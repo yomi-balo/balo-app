@@ -10,6 +10,7 @@ import {
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  type Proposal,
 } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
@@ -75,6 +76,47 @@ async function advanceRequestAggregate(requestId: string, currentStatus: string)
 }
 
 /**
+ * Re-load + verify the claimed proposal — never trust the client's claim. Returns
+ * the proposal ONLY when it is live, `submitted`, current, and belongs to the
+ * claimed relationship; otherwise `undefined` (the action maps that to stale copy).
+ */
+async function loadCurrentSubmittedProposal(
+  proposalId: string,
+  relationshipId: string
+): Promise<Proposal | undefined> {
+  const proposal = await proposalsRepository.findById(proposalId);
+  if (
+    proposal === undefined ||
+    proposal.status !== 'submitted' ||
+    proposal.relationshipId !== relationshipId ||
+    !proposal.isCurrent
+  ) {
+    return undefined;
+  }
+  return proposal;
+}
+
+/**
+ * Commit the accept via the EXISTING repo method (proposal + relationship in ONE
+ * tx). A stale double-accept trips the typed transition errors → `'stale'` (friendly
+ * copy); any other error rethrows to the action's generic-failure boundary.
+ */
+async function commitAccept(proposalId: string): Promise<'ok' | 'stale'> {
+  try {
+    await proposalsRepository.accept({ id: proposalId });
+    return 'ok';
+  } catch (error) {
+    if (
+      error instanceof InvalidProposalTransitionError ||
+      error instanceof InvalidRelationshipTransitionError
+    ) {
+      return 'stale';
+    }
+    throw error;
+  }
+}
+
+/**
  * Client accepts a submitted proposal (A6.4 / BAL-289) — the CLIENT mirror of the
  * expert's submit action. Commits the status flip through the EXISTING
  * `proposalsRepository.accept` (proposal `submitted → accepted` + relationship
@@ -115,29 +157,16 @@ export async function acceptProposalAction(
 
     // Re-load + verify the proposal (live, submitted, belongs to this
     // relationship, current) — never trust the client's claim.
-    const proposal = await proposalsRepository.findById(proposalId);
-    if (
-      proposal === undefined ||
-      proposal.status !== 'submitted' ||
-      proposal.relationshipId !== relationshipId ||
-      !proposal.isCurrent
-    ) {
+    const proposal = await loadCurrentSubmittedProposal(proposalId, relationshipId);
+    if (proposal === undefined) {
       return { success: false, error: STALE_PROPOSAL };
     }
 
-    // Commit the accept via the EXISTING repo method (proposal + relationship in
-    // ONE tx). A stale double-accept trips the typed transition errors → friendly
-    // stale copy.
-    try {
-      await proposalsRepository.accept({ id: proposalId });
-    } catch (error) {
-      if (
-        error instanceof InvalidProposalTransitionError ||
-        error instanceof InvalidRelationshipTransitionError
-      ) {
-        return { success: false, error: STALE_PROPOSAL };
-      }
-      throw error;
+    // Commit the accept (proposal + relationship in ONE tx). A stale double-accept
+    // trips the typed transition errors → friendly stale copy.
+    const committed = await commitAccept(proposalId);
+    if (committed === 'stale') {
+      return { success: false, error: STALE_PROPOSAL };
     }
 
     // Advance the REQUEST aggregate (first-accept-only, race-tolerant). The accept

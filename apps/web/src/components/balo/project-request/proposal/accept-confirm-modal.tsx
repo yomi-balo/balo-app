@@ -52,9 +52,9 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
   if (doc.pricingMethod === 'tm') {
     const dueNowCents = doc.depositCents ?? 0;
     const thenSub =
-      doc.rateCents !== null
-        ? `billed against time at ${formatWholeCurrency(doc.rateCents, doc.currency)}/hr`
-        : 'billed against time';
+      doc.rateCents === null
+        ? 'billed against time'
+        : `billed against time at ${formatWholeCurrency(doc.rateCents, doc.currency)}/hr`;
     return [
       { label: 'Total', value: total, sub: 'Time & Materials' },
       { label: 'Due now', value: formatWholeCurrency(dueNowCents, doc.currency), sub: 'deposit' },
