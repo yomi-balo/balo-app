@@ -58,7 +58,7 @@ export const proposalDocumentsRepository = {
         and(
           eq(proposalDocuments.proposalId, proposalId),
           isNull(proposalDocuments.deletedAt),
-          kind !== undefined ? eq(proposalDocuments.kind, kind) : undefined
+          kind === undefined ? undefined : eq(proposalDocuments.kind, kind)
         )
       )
       .orderBy(asc(proposalDocuments.createdAt));

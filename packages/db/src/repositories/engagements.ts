@@ -47,19 +47,15 @@ export const engagementsRepository = {
         pricingMethod: input.pricingMethod,
         priceCents: input.priceCents,
         activatedAt: input.activatedAt ?? new Date(),
-        ...(input.sourceProposalId !== undefined
-          ? { sourceProposalId: input.sourceProposalId }
-          : {}),
-        ...(input.relationshipId !== undefined ? { relationshipId: input.relationshipId } : {}),
-        ...(input.projectRequestId !== undefined
-          ? { projectRequestId: input.projectRequestId }
-          : {}),
-        ...(input.currency !== undefined ? { currency: input.currency } : {}),
-        ...(input.depositCents !== undefined ? { depositCents: input.depositCents } : {}),
-        ...(input.rateCents !== undefined ? { rateCents: input.rateCents } : {}),
-        ...(input.cadence !== undefined ? { cadence: input.cadence } : {}),
-        ...(input.billingModel !== undefined ? { billingModel: input.billingModel } : {}),
-        ...(input.approvalModel !== undefined ? { approvalModel: input.approvalModel } : {}),
+        sourceProposalId: input.sourceProposalId,
+        relationshipId: input.relationshipId,
+        projectRequestId: input.projectRequestId,
+        currency: input.currency,
+        depositCents: input.depositCents,
+        rateCents: input.rateCents,
+        cadence: input.cadence,
+        billingModel: input.billingModel,
+        approvalModel: input.approvalModel,
       })
       .returning();
     if (row === undefined) {

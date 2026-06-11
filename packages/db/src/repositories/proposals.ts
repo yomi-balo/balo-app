@@ -152,12 +152,12 @@ export const proposalsRepository = {
           overview: input.overview,
           pricingMethod: input.pricingMethod,
           priceCents: input.priceCents,
-          ...(input.currency !== undefined ? { currency: input.currency } : {}),
-          ...(input.timeframeWeeks !== undefined ? { timeframeWeeks: input.timeframeWeeks } : {}),
-          ...(input.exclusions !== undefined ? { exclusions: input.exclusions } : {}),
-          ...(input.depositCents !== undefined ? { depositCents: input.depositCents } : {}),
-          ...(input.rateCents !== undefined ? { rateCents: input.rateCents } : {}),
-          ...(input.cadence !== undefined ? { cadence: input.cadence } : {}),
+          currency: input.currency,
+          timeframeWeeks: input.timeframeWeeks,
+          exclusions: input.exclusions,
+          depositCents: input.depositCents,
+          rateCents: input.rateCents,
+          cadence: input.cadence,
         })
         .returning();
       if (row === undefined) {
@@ -293,7 +293,7 @@ export const proposalsRepository = {
           requestedByUserId: input.requestedByUserId,
           note: input.note,
           proposalVersion: advanced.version,
-          ...(input.section !== undefined ? { section: input.section } : {}),
+          section: input.section,
         })
         .returning();
       if (row === undefined) {
@@ -377,12 +377,12 @@ export const proposalsRepository = {
           overview: input.overview,
           pricingMethod: input.pricingMethod,
           priceCents: input.priceCents,
-          ...(input.currency !== undefined ? { currency: input.currency } : {}),
-          ...(input.timeframeWeeks !== undefined ? { timeframeWeeks: input.timeframeWeeks } : {}),
-          ...(input.exclusions !== undefined ? { exclusions: input.exclusions } : {}),
-          ...(input.depositCents !== undefined ? { depositCents: input.depositCents } : {}),
-          ...(input.rateCents !== undefined ? { rateCents: input.rateCents } : {}),
-          ...(input.cadence !== undefined ? { cadence: input.cadence } : {}),
+          currency: input.currency,
+          timeframeWeeks: input.timeframeWeeks,
+          exclusions: input.exclusions,
+          depositCents: input.depositCents,
+          rateCents: input.rateCents,
+          cadence: input.cadence,
         })
         .returning();
       if (row === undefined) {

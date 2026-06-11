@@ -29,7 +29,7 @@ export const proposalChangeRequestsRepository = {
         requestedByUserId: input.requestedByUserId,
         note: input.note,
         proposalVersion: input.proposalVersion,
-        ...(input.section !== undefined ? { section: input.section } : {}),
+        section: input.section,
       })
       .returning();
     if (row === undefined) {
