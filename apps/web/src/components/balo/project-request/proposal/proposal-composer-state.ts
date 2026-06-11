@@ -13,6 +13,7 @@
 
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { SaveProposalDraftInput } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
+import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 
 export type ProposalPricingMethod = 'fixed' | 'tm';
 export type ProposalCadenceValue = 'monthly' | 'fortnightly';
@@ -95,16 +96,6 @@ export function emptyDraftState(): ProposalDraftState {
     installments: seedInstallments(),
     documents: [],
   };
-}
-
-/** Plain-text length of HTML (cheap tag-strip) — mirrors the server's gate. */
-export function plainTextLength(html: string): number {
-  // `[^<>]` (not `[^>]`) excludes the opening delimiter so a run can't consume a
-  // `<`; that keeps the match linear (no overlapping-start backtracking / ReDoS).
-  return html
-    .replaceAll(/<[^<>]*>/g, '')
-    .replaceAll(/&nbsp;/g, ' ')
-    .trim().length;
 }
 
 /** Derived total (minor units) for Fixed pricing — sum of milestone values. T&M

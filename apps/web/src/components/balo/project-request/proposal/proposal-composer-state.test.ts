@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   emptyDraftState,
   seedInstallments,
-  plainTextLength,
   computeTotalCents,
   installmentsSum,
   summaryReadiness,
@@ -89,17 +88,6 @@ describe('seedInstallments', () => {
     const seed = seedInstallments();
     expect(seed.map((i) => i.pct)).toEqual([30, 70]);
     expect(seed.reduce((a, i) => a + i.pct, 0)).toBe(100);
-  });
-});
-
-describe('plainTextLength', () => {
-  it('strips tags and nbsp', () => {
-    expect(plainTextLength('<p>Hello&nbsp;world</p>')).toBe(11);
-  });
-  it('is 0 for tag-only / whitespace HTML', () => {
-    expect(plainTextLength('<p></p>')).toBe(0);
-    expect(plainTextLength('<p>   </p>')).toBe(0);
-    expect(plainTextLength('')).toBe(0);
   });
 });
 

@@ -20,6 +20,7 @@ import {
 } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
+import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -51,16 +52,6 @@ const INVALID_REQUEST = 'Invalid request.';
 const ONLY_EXPERT = 'Only the expert can submit a proposal.';
 const STALE_PROPOSAL = 'This proposal can no longer be submitted.';
 const GENERIC_FAILURE = 'Could not submit your proposal. Please try again.';
-
-/** Plain-text length of HTML (cheap tag-strip) — gates a non-empty overview. */
-function plainTextLength(html: string): number {
-  // `[^<>]` (not `[^>]`) excludes the opening delimiter so a run can't consume a
-  // `<`; that keeps the match linear (no overlapping-start backtracking / ReDoS).
-  return html
-    .replaceAll(/<[^<>]*>/g, '')
-    .replaceAll(/&nbsp;/g, ' ')
-    .trim().length;
-}
 
 type ReadinessResult = { ready: true } | { ready: false; error: string };
 
