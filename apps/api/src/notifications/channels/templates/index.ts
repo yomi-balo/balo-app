@@ -8,6 +8,7 @@ import { ProjectExploratoryRequestedEmail } from './project-exploratory-requeste
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
+import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -133,6 +134,21 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `Proposal requested: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-proposal-submitted': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const expertName = (data.expertName as string) ?? 'Your expert';
+    return {
+      component: React.createElement(ProjectProposalSubmittedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expertName,
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(expertName)} sent your proposal: ${sanitizeSubjectTitle(title)}`,
     };
   },
 

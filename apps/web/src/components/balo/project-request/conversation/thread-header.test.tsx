@@ -15,6 +15,8 @@ function renderHeader(input: {
   filesOpen?: boolean;
   /** Non-null → the proposal slot renders enabled (client lens, A5). */
   onRequestProposal?: (() => void) | null;
+  /** Non-null → the expert "Build proposal" CTA renders enabled (A6.2). */
+  onBuildProposal?: (() => void) | null;
 }): {
   onToggleFiles: ReturnType<typeof vi.fn>;
   onCall: ReturnType<typeof vi.fn>;
@@ -36,6 +38,7 @@ function renderHeader(input: {
       onToggleFiles={onToggleFiles}
       onCall={onCall}
       onRequestProposal={input.onRequestProposal ?? null}
+      onBuildProposal={input.onBuildProposal ?? null}
     />
   );
   return { onToggleFiles, onCall };
@@ -78,16 +81,32 @@ describe('ThreadHeader', () => {
     expect(onRequestProposal).toHaveBeenCalledTimes(1);
   });
 
-  it('expert lens: Build proposal stays a disabled stub (the stage passes null — A6 wires it)', () => {
+  it('expert lens without a handler: Build proposal renders as a disabled stub', () => {
     renderHeader({
       lens: 'expert',
       requestStatus: 'proposal_requested',
       threadOverrides: { relationshipStatus: 'proposal_requested' },
-      onRequestProposal: null,
+      onBuildProposal: null,
     });
     const proposal = screen.getByRole('button', { name: 'Build proposal' });
     expect(proposal).toBeDisabled();
     expect(proposal).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('expert lens with a handler: Build proposal is ENABLED and fires it (A6.2)', async () => {
+    const user = userEvent.setup();
+    const onBuildProposal = vi.fn();
+    renderHeader({
+      lens: 'expert',
+      requestStatus: 'proposal_requested',
+      threadOverrides: { relationshipStatus: 'proposal_requested' },
+      onBuildProposal,
+    });
+    const proposal = screen.getByRole('button', { name: 'Build proposal' });
+    expect(proposal).toBeEnabled();
+    expect(proposal).not.toHaveAttribute('aria-disabled');
+    await user.click(proposal);
+    expect(onBuildProposal).toHaveBeenCalledTimes(1);
   });
 
   it('expert lens: Propose times + Awaiting proposal request pill + (you)', () => {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Ellipsis, MessageSquare, Paperclip, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -166,6 +167,7 @@ export function ConversationStage({
   view,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
+  const router = useRouter();
   const [threads, setThreads] = useState<ConversationThreadView[]>(view.threads);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(view.defaultThreadId);
   const [threadData, setThreadData] = useState<Record<string, ThreadData>>(() =>
@@ -651,6 +653,37 @@ export function ConversationStage({
     [handleRequestProposal]
   );
 
+  // ── Build proposal (BAL-288 / A6.2 — expert lens only) ─────────────────
+  // Opens the proposal composer for the active thread. Gated to the expert
+  // lens AND a `proposal_requested` relationship (defence-in-depth: the Build
+  // CTA only renders at that state). `surface` (`header`/`rail`) feeds the
+  // existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel; the nudge surface (no
+  // matching surface value on that event) navigates without re-firing it.
+  const handleBuildProposal = useCallback(
+    (surface?: 'header' | 'rail'): void => {
+      if (activeThreadId === null) return;
+      if (activeThread?.relationshipStatus !== 'proposal_requested') return;
+      if (surface !== undefined) {
+        track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+          request_id: requestId,
+          relationship_id: activeThreadId,
+          surface,
+        });
+      }
+      router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
+    },
+    [activeThreadId, activeThread?.relationshipStatus, requestId, router]
+  );
+  const handleHeaderBuild = useCallback(
+    (): void => handleBuildProposal('header'),
+    [handleBuildProposal]
+  );
+  const handleRailBuild = useCallback(
+    (): void => handleBuildProposal('rail'),
+    [handleBuildProposal]
+  );
+  const handleNudgeBuild = useCallback((): void => handleBuildProposal(), [handleBuildProposal]);
+
   const handleProposalConfirm = useCallback(async (): Promise<RequestProposalResult> => {
     const context = proposalContextRef.current;
     if (context === null) {
@@ -866,6 +899,7 @@ export function ConversationStage({
           onToggleFiles={handleHeaderFilesToggle}
           onCall={handleHeaderCall}
           onRequestProposal={lens === 'client' ? handleHeaderProposal : null}
+          onBuildProposal={lens === 'expert' ? handleHeaderBuild : null}
         />
       </div>
 
@@ -885,6 +919,7 @@ export function ConversationStage({
             callPending={callPending}
             onReply={focusComposer}
             onCall={handleNudgeCall}
+            onBuild={lens === 'expert' ? handleNudgeBuild : undefined}
           />
         </div>
       )}
@@ -928,6 +963,7 @@ export function ConversationStage({
         onProposal={
           lens === 'client' && actions.railProposal?.kind === 'request' ? handleRailProposal : null
         }
+        onBuildProposal={lens === 'expert' ? handleRailBuild : null}
       />
 
       <ThreadFilesPanel

@@ -25,6 +25,11 @@ vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
+const mockPush = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
+
 import { toast } from 'sonner';
 import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE } from './nudge-bar';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -160,6 +165,42 @@ describe('NudgeBar — A2 wired admin CTAs', () => {
   });
 });
 
+describe('NudgeBar — A6.2 expert build-proposal CTA (page-level activation gate)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const RELATIONSHIP_ID = 'rel-build-1';
+
+  it('navigates the expert to the composer when the relationship id is provided', () => {
+    const nudge = nudgeFor('expert', 'proposal_requested', 'proposal_requested')!;
+    render(
+      <NudgeBar
+        nudge={nudge}
+        lens="expert"
+        status="proposal_requested"
+        requestId={REQUEST_ID}
+        viewerRelationshipId={RELATIONSHIP_ID}
+      />
+    );
+    const cta = screen.getByRole('button', { name: /Build proposal/i });
+    expect(cta).toBeEnabled();
+    fireEvent.click(cta);
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${RELATIONSHIP_ID}`);
+  });
+
+  it('stays disabled (copy alone does not enable) when no relationship id is threaded', () => {
+    const nudge = nudgeFor('expert', 'proposal_requested', 'proposal_requested')!;
+    render(
+      <NudgeBar nudge={nudge} lens="expert" status="proposal_requested" requestId={REQUEST_ID} />
+    );
+    const cta = screen.getByRole('button', { name: /Build proposal/i });
+    expect(cta).toBeDisabled();
+    fireEvent.click(cta);
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+});
+
 describe('nudgeFor', () => {
   it('returns a client nudge for a known client status', () => {
     expect(nudgeFor('client', 'requested')?.variant).toBe('waiting');
@@ -187,12 +228,11 @@ describe('nudgeFor — expert relationship keying (BAL-272 divergence fix)', () 
     expect(nudge?.headline).toBe('Offer the client a time to talk');
   });
 
-  it('the requested expert still gets the build cell (with the interim builder copy)', () => {
+  it('the requested expert gets the live build cell (A6.2 — composer wired)', () => {
     const nudge = nudgeFor('expert', 'proposal_requested', 'proposal_requested');
     expect(nudge?.headline).toBe('Your proposal was requested — build it');
-    // Interim sub-copy until A6 ships the builder (the CTA is a disabled stub).
     expect(nudge?.sub).toBe(
-      'The proposal builder is on its way — keep scoping in the thread meanwhile.'
+      'Lay out scope, milestones and pricing. You can save a draft and submit when ready.'
     );
   });
 

@@ -16,6 +16,24 @@ export function formatCurrency(cents: number): string {
   return `${PLATFORM_PRICING.CURRENCY_SYMBOL}${dollars.toFixed(2)}`;
 }
 
+/**
+ * Format integer minor units as a grouped WHOLE-dollar string, e.g.
+ * `A$78,000` (thousands separators, no cents). Use for displayed proposal
+ * prices (summary total/estimate, payment-terms total + derived installment
+ * amounts, the mobile summary bar) — the prices are large, so the cents-bearing
+ * {@link formatCurrency} (`A$78000.00`) reads poorly. Mirrors
+ * {@link formatBudgetRange}'s `Intl.NumberFormat` config (`en-US` so AUD renders
+ * as `A$`, `maximumFractionDigits: 0`).
+ */
+export function formatWholeCurrency(cents: number, currency: string): string {
+  const formatter = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+    maximumFractionDigits: 0,
+  });
+  return formatter.format(centsToDollars(cents));
+}
+
 /** Calculate client rate from expert rate (both in cents). */
 export function calculateClientRate(expertRateCents: number): number {
   return Math.round(expertRateCents * PLATFORM_PRICING.MARKUP_MULTIPLIER);

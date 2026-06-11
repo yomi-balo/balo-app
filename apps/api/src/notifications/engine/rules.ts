@@ -123,6 +123,24 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-288: the expert submitted a formal proposal — a commit moment the client
+  // is waiting on, so email-worthy (plus in-app). recipient:'client' resolves via
+  // payload.recipientId (the request owner's user id).
+  'project.proposal_submitted': [
+    {
+      channel: 'email',
+      recipient: 'client',
+      template: 'project-proposal-submitted',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-proposal-submitted',
+      timing: 'immediate',
+    },
+  ],
   'booking.confirmed': [
     {
       channel: 'sms',

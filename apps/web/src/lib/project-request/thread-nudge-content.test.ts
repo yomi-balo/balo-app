@@ -109,17 +109,16 @@ describe('threadNudgeFor — expert lens', () => {
     expect(nudge?.secondary).toMatchObject({ label: 'Send a message', action: 'reply' });
   });
 
-  it('relationship proposal_requested → build proposal stub', () => {
+  it('relationship proposal_requested → live build proposal CTA (A6.2)', () => {
     const nudge = threadNudgeFor(
       'expert',
       'proposal_requested',
       thread({ relationshipStatus: 'proposal_requested' })
     );
     expect(nudge?.headline).toBe('The client requested your proposal — build it');
-    expect(nudge?.primary).toMatchObject({ label: 'Build proposal', action: 'stub' });
-    // Interim sub-copy until A6 ships the builder (the CTA is a disabled stub).
+    expect(nudge?.primary).toMatchObject({ label: 'Build proposal', action: 'build' });
     expect(nudge?.sub).toBe(
-      'The proposal builder is on its way — keep scoping in the thread meanwhile.'
+      'Lay out scope, milestones and pricing. You can save a draft and submit when ready.'
     );
   });
 

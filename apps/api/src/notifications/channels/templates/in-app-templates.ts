@@ -65,6 +65,17 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  'project-proposal-submitted': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const expertName = (data.expertName as string) ?? 'Your expert';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Proposal received',
+      body: `${expertName} sent a proposal for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
   'project-message-posted': (data) => {
     const senderName = (data.senderName as string) ?? 'Someone';
     const preview = (data.preview as string) ?? 'sent you a message';

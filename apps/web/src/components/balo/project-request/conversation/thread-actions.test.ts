@@ -88,14 +88,28 @@ describe('deriveThreadActions — header proposal slot', () => {
     expect(actions.headerProposal).toEqual({ kind: 'pill-awaiting' });
   });
 
-  it('expert + relationship proposal_requested → Build proposal stub', () => {
+  it('expert + relationship proposal_requested → live Build proposal CTA (kind:build)', () => {
     const actions = deriveThreadActions({
       lens: 'expert',
       requestStatus: 'proposal_requested',
       thread: thread({ relationshipStatus: 'proposal_requested' }),
       nudgeIsProposal: false,
     });
-    expect(actions.headerProposal).toMatchObject({ kind: 'request', label: 'Build proposal' });
+    expect(actions.headerProposal).toEqual({
+      kind: 'build',
+      label: 'Build proposal',
+      quiet: false,
+    });
+  });
+
+  it('expert Build proposal goes quiet when the nudge already pushes the proposal', () => {
+    const actions = deriveThreadActions({
+      lens: 'expert',
+      requestStatus: 'proposal_requested',
+      thread: thread({ relationshipStatus: 'proposal_requested' }),
+      nudgeIsProposal: true,
+    });
+    expect(actions.headerProposal).toMatchObject({ kind: 'build', quiet: true });
   });
 
   it('relationship ≥ proposal_submitted → lens-aware View stub', () => {
@@ -160,7 +174,7 @@ describe('deriveThreadActions — mobile rail', () => {
     ).toEqual({ kind: 'view', label: 'View proposal', quiet: false });
   });
 
-  it('expert requested-not-submitted → Build proposal', () => {
+  it('expert requested-not-submitted → live Build proposal (kind:build)', () => {
     expect(
       deriveThreadActions({
         lens: 'expert',
@@ -168,6 +182,6 @@ describe('deriveThreadActions — mobile rail', () => {
         thread: thread({ relationshipStatus: 'proposal_requested' }),
         nudgeIsProposal: false,
       }).railProposal
-    ).toEqual({ kind: 'request', label: 'Build proposal', quiet: false });
+    ).toEqual({ kind: 'build', label: 'Build proposal', quiet: false });
   });
 });

@@ -42,6 +42,12 @@ interface NudgeBarProps {
   lens: RequestLens;
   status: ProjectRequestStatus;
   requestId: string;
+  /**
+   * The viewer-expert's own relationship id (`ctx.relationshipId`) — threaded to
+   * `NudgeActions` so the `build-proposal` CTA can deep-link to the composer.
+   * `null` for client/admin lenses.
+   */
+  viewerRelationshipId?: string | null;
 }
 
 const EYEBROW: Record<NudgeVariant, string> = {
@@ -94,6 +100,7 @@ export function NudgeBar({
   lens,
   status,
   requestId,
+  viewerRelationshipId = null,
 }: Readonly<NudgeBarProps>): React.JSX.Element {
   const { variant, icon: Icon, headline, sub, primary, secondary } = nudge;
   const a = accentClasses(variant);
@@ -126,6 +133,7 @@ export function NudgeBar({
               lens={lens}
               status={status}
               requestId={requestId}
+              viewerRelationshipId={viewerRelationshipId}
               primary={primary}
               secondary={secondary}
             />
@@ -194,8 +202,7 @@ const EXPERT_NUDGES: NudgeMap = {
     variant: 'action',
     icon: FileText,
     headline: 'Your proposal was requested — build it',
-    // Interim copy until A6 ships the builder — the CTA renders disabled.
-    sub: 'The proposal builder is on its way — keep scoping in the thread meanwhile.',
+    sub: 'Lay out scope, milestones and pricing. You can save a draft and submit when ready.',
     primary: { label: 'Build proposal', icon: FileText },
   },
   proposal_submitted: {

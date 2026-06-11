@@ -186,11 +186,12 @@ export const proposals = pgTable(
     expertProfileId: uuid('expert_profile_id')
       .notNull()
       .references(() => expertProfiles.id, { onDelete: 'cascade' }),
-    // Default kept at 'submitted' (A6.1): `submit()` writes it explicitly, and
-    // setting the default to the freshly-appended 'draft' value in the same
-    // migration that ADDs it is rejected by Postgres. The default→'draft' change
-    // is A6.2's, in a later migration once these values are committed.
-    status: proposalStatusEnum('status').notNull().default('submitted'),
+    // Default 'draft' (A6.2): the composer autosaves a draft proposal before
+    // submit, so a freshly-inserted proposal starts as a `draft`. `createDraft()`
+    // sets it explicitly; the default is belt-and-braces. (A6.1 had to keep this
+    // at 'submitted' because the same migration that APPENDED the 'draft' enum
+    // value couldn't also set it as the default — that constraint is now gone.)
+    status: proposalStatusEnum('status').notNull().default('draft'),
     // First input — Fixed vs T&M. Default 'fixed' is backfill-safe; the repo
     // always sets it explicitly.
     pricingMethod: pricingMethodEnum('pricing_method').notNull().default('fixed'),

@@ -211,6 +211,13 @@
       "when": 1781153160054,
       "tag": "0029_lonely_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1781170740319,
+      "tag": "0030_heavy_kang",
+      "breakpoints": true
     }
   ]
 }
