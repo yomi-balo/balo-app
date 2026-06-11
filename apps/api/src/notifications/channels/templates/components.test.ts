@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { render } from '@react-email/render';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
@@ -8,6 +9,7 @@ import { ProjectExploratoryRequestedEmail } from './project-exploratory-requeste
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
+import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
 import { getEmailTemplate, sanitizeSubjectTitle } from './index.js';
 import {
   EmailShell,
@@ -174,6 +176,35 @@ describe('ProjectProposalRequestedEmail', () => {
   });
 });
 
+describe('ProjectProposalSubmittedEmail', () => {
+  it('returns a React element carrying the expert name', () => {
+    const element = ProjectProposalSubmittedEmail({
+      firstName: 'Dana',
+      expertName: 'Priya Nair',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders the expert name, review CTA, and a link to the request', async () => {
+    const html = await render(
+      ProjectProposalSubmittedEmail({
+        firstName: 'Dana',
+        expertName: 'Priya Nair',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Priya Nair');
+    expect(html).toContain('Review the proposal');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+});
+
 describe('getEmailTemplate — A2 templates', () => {
   it('resolves project-exploratory-requested with a scoping subject', () => {
     const { component, subject } = getEmailTemplate('project-exploratory-requested', {
@@ -216,6 +247,22 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(subject).toBe('Proposal requested: CPQ implementation');
   });
 
+  it('resolves project-proposal-submitted with an expert-named subject', () => {
+    const { component, subject } = getEmailTemplate('project-proposal-submitted', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Dana',
+      expertName: 'Priya Nair',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('Priya Nair sent your proposal: CPQ implementation');
+  });
+
+  it('falls back to default names when project-proposal-submitted payload is sparse', () => {
+    const { subject } = getEmailTemplate('project-proposal-submitted', {});
+    expect(subject).toBe('Your expert sent your proposal: a project');
+  });
+
   it('throws on an unknown template name', () => {
     expect(() => getEmailTemplate('does-not-exist', {})).toThrow(/Unknown email template/);
   });
@@ -247,6 +294,7 @@ describe('sanitizeSubjectTitle', () => {
       'project-expert-invited',
       'project-eoi-submitted',
       'project-proposal-requested',
+      'project-proposal-submitted',
     ];
     for (const name of templateNames) {
       const { subject } = getEmailTemplate(name, {

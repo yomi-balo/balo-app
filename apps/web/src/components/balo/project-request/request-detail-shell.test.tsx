@@ -8,6 +8,11 @@ import type {
 
 vi.mock('server-only', () => ({}));
 
+const mockPush = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
+
 // AdminHealthPanel + NudgeActions are client islands that import server actions —
 // mock them so the shell renders in JSDOM without hitting the network.
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/remove-invited-expert', () => ({

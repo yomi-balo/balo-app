@@ -17,13 +17,24 @@ function nudge(overrides: Partial<ThreadNudgeContent> = {}): ThreadNudgeContent 
   };
 }
 
-function renderNudge(content: ThreadNudgeContent): {
+function renderNudge(
+  content: ThreadNudgeContent,
+  onBuild?: () => void
+): {
   onReply: ReturnType<typeof vi.fn>;
   onCall: ReturnType<typeof vi.fn>;
 } {
   const onReply = vi.fn();
   const onCall = vi.fn();
-  render(<ThreadNudge nudge={content} callPending={false} onReply={onReply} onCall={onCall} />);
+  render(
+    <ThreadNudge
+      nudge={content}
+      callPending={false}
+      onReply={onReply}
+      onCall={onCall}
+      onBuild={onBuild}
+    />
+  );
   return { onReply, onCall };
 }
 
@@ -44,7 +55,7 @@ describe('ThreadNudge', () => {
     expect(onReply).toHaveBeenCalled();
   });
 
-  it('renders stub CTAs disabled (A5/A6 own them)', () => {
+  it('renders stub CTAs disabled (A5/A6.3 own them)', () => {
     renderNudge(
       nudge({
         variant: 'commit',
@@ -54,6 +65,33 @@ describe('ThreadNudge', () => {
     );
     expect(screen.getByText('Your next step')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: "Accept Priya's proposal" })).toBeDisabled();
+  });
+
+  it('wires the build primary to onBuild when provided (A6.2)', async () => {
+    const user = userEvent.setup();
+    const onBuild = vi.fn();
+    renderNudge(
+      nudge({
+        headline: 'The client requested your proposal — build it',
+        primary: { label: 'Build proposal', icon: Calendar, action: 'build' },
+        secondary: undefined,
+      }),
+      onBuild
+    );
+    const cta = screen.getByRole('button', { name: 'Build proposal' });
+    expect(cta).toBeEnabled();
+    await user.click(cta);
+    expect(onBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the build primary disabled when no onBuild handler is provided', () => {
+    renderNudge(
+      nudge({
+        primary: { label: 'Build proposal', icon: Calendar, action: 'build' },
+        secondary: undefined,
+      })
+    );
+    expect(screen.getByRole('button', { name: 'Build proposal' })).toBeDisabled();
   });
 
   it('uses the waiting/done eyebrows for those variants', () => {

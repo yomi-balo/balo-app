@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Ellipsis, MessageSquare, Paperclip, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -97,6 +98,55 @@ function withEarlierMessages(
   };
 }
 
+/** The post-guard derived render model for the active thread (pure). */
+interface StageRenderModel {
+  nudge: ReturnType<typeof threadNudgeFor>;
+  actions: ReturnType<typeof deriveThreadActions>;
+  single: boolean;
+  showYouSuffix: boolean;
+  profileHref: string | null;
+  showProposalPill: boolean;
+  showOverflow: boolean;
+}
+
+/**
+ * Pure deriver for the active thread's render model — the chrome flags the JSX
+ * reads (nudge, action matrix, single-thread strip, profile link, proposal pill,
+ * overflow). Extracted so the component body stays branch-light; identical to the
+ * prior inline computation.
+ */
+function deriveStageRender(input: {
+  lens: 'client' | 'expert';
+  requestStatus: ProjectRequestStatus;
+  activeThread: ConversationThreadView;
+  threadCount: number;
+}): StageRenderModel {
+  const { lens, requestStatus, activeThread, threadCount } = input;
+  const nudge = threadNudgeFor(lens, requestStatus, activeThread);
+  const nudgeIsProposal = Boolean(nudge?.primary && /proposal/i.test(nudge.primary.label));
+  const actions = deriveThreadActions({
+    lens,
+    requestStatus,
+    thread: activeThread,
+    nudgeIsProposal,
+  });
+  const profileHref =
+    lens === 'client' && activeThread.expertUsername !== null
+      ? `/experts/${activeThread.expertUsername}`
+      : null;
+  const showProposalPill =
+    lens === 'client' && activeThread.relationshipStatus === 'proposal_requested';
+  return {
+    nudge,
+    actions,
+    single: threadCount === 1,
+    showYouSuffix: lens === 'expert',
+    profileHref,
+    showProposalPill,
+    showOverflow: hasOverflowContent({ profileHref, showProposalPill }),
+  };
+}
+
 const noopSend = (): Promise<boolean> => Promise.resolve(false);
 const noopAttach = (): void => {
   // Disabled composer — nothing to attach to.
@@ -166,6 +216,7 @@ export function ConversationStage({
   view,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
+  const router = useRouter();
   const [threads, setThreads] = useState<ConversationThreadView[]>(view.threads);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(view.defaultThreadId);
   const [threadData, setThreadData] = useState<Record<string, ThreadData>>(() =>
@@ -651,6 +702,37 @@ export function ConversationStage({
     [handleRequestProposal]
   );
 
+  // ── Build proposal (BAL-288 / A6.2 — expert lens only) ─────────────────
+  // Opens the proposal composer for the active thread. Gated to the expert
+  // lens AND a `proposal_requested` relationship (defence-in-depth: the Build
+  // CTA only renders at that state). `surface` (`header`/`rail`) feeds the
+  // existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel; the nudge surface (no
+  // matching surface value on that event) navigates without re-firing it.
+  const handleBuildProposal = useCallback(
+    (surface?: 'header' | 'rail'): void => {
+      if (activeThreadId === null) return;
+      if (activeThread?.relationshipStatus !== 'proposal_requested') return;
+      if (surface !== undefined) {
+        track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+          request_id: requestId,
+          relationship_id: activeThreadId,
+          surface,
+        });
+      }
+      router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
+    },
+    [activeThreadId, activeThread?.relationshipStatus, requestId, router]
+  );
+  const handleHeaderBuild = useCallback(
+    (): void => handleBuildProposal('header'),
+    [handleBuildProposal]
+  );
+  const handleRailBuild = useCallback(
+    (): void => handleBuildProposal('rail'),
+    [handleBuildProposal]
+  );
+  const handleNudgeBuild = useCallback((): void => handleBuildProposal(), [handleBuildProposal]);
+
   const handleProposalConfirm = useCallback(async (): Promise<RequestProposalResult> => {
     const context = proposalContextRef.current;
     if (context === null) {
@@ -794,23 +876,19 @@ export function ConversationStage({
     return <EmptyConversationStage lens={lens} />;
   }
 
-  const nudge = threadNudgeFor(lens, requestStatus, activeThread);
-  const nudgeIsProposal = Boolean(nudge?.primary && /proposal/i.test(nudge.primary.label));
-  const actions = deriveThreadActions({
-    lens,
-    requestStatus,
-    thread: activeThread,
-    nudgeIsProposal,
-  });
-  const single = threads.length === 1;
-  const showYouSuffix = lens === 'expert';
-  const profileHref =
-    lens === 'client' && activeThread.expertUsername !== null
-      ? `/experts/${activeThread.expertUsername}`
-      : null;
-  const showProposalPill =
-    lens === 'client' && activeThread.relationshipStatus === 'proposal_requested';
-  const showOverflow = hasOverflowContent({ profileHref, showProposalPill });
+  const { nudge, actions, single, showYouSuffix, profileHref, showProposalPill, showOverflow } =
+    deriveStageRender({ lens, requestStatus, activeThread, threadCount: threads.length });
+
+  // Lens-gated handler wiring precomputed so the JSX stays branch-light.
+  const isClient = lens === 'client';
+  const isExpert = lens === 'expert';
+  const onHeaderRequestProposal = isClient ? handleHeaderProposal : null;
+  const onHeaderBuildProposal = isExpert ? handleHeaderBuild : null;
+  const onNudgeBuild = isExpert ? handleNudgeBuild : undefined;
+  const onRailProposal =
+    isClient && actions.railProposal?.kind === 'request' ? handleRailProposal : null;
+  const onRailBuildProposal = isExpert ? handleRailBuild : null;
+  const composerExpertName = isExpert ? 'the client' : activeThread.expertFirstName;
 
   return (
     <RequestCard className={STAGE_CARD_CLASS}>
@@ -865,7 +943,8 @@ export function ConversationStage({
           callPending={callPending}
           onToggleFiles={handleHeaderFilesToggle}
           onCall={handleHeaderCall}
-          onRequestProposal={lens === 'client' ? handleHeaderProposal : null}
+          onRequestProposal={onHeaderRequestProposal}
+          onBuildProposal={onHeaderBuildProposal}
         />
       </div>
 
@@ -885,6 +964,7 @@ export function ConversationStage({
             callPending={callPending}
             onReply={focusComposer}
             onCall={handleNudgeCall}
+            onBuild={onNudgeBuild}
           />
         </div>
       )}
@@ -906,7 +986,7 @@ export function ConversationStage({
 
       <div ref={composerContainerRef}>
         <MessageComposer
-          expertFirstName={lens === 'expert' ? 'the client' : activeThread.expertFirstName}
+          expertFirstName={composerExpertName}
           placeholder={nudge?.composerPlaceholder}
           sending={sending}
           uploading={uploading}
@@ -925,9 +1005,8 @@ export function ConversationStage({
         callPending={callPending}
         proposalCta={actions.railProposal}
         onCall={handleRailCall}
-        onProposal={
-          lens === 'client' && actions.railProposal?.kind === 'request' ? handleRailProposal : null
-        }
+        onProposal={onRailProposal}
+        onBuildProposal={onRailBuildProposal}
       />
 
       <ThreadFilesPanel

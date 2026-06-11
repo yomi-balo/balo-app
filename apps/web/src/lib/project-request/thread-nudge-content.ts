@@ -18,8 +18,9 @@ import { requestStatusRank, type ConversationThreadView } from './conversation-v
  * real data: names interpolate `thread.expertFirstName`; the design's demo
  * "last message" sub is carried by `thread.latestMessagePreview`.
  *
- * Pure + client-safe. Only `reply` (focus composer) and `call` (mock action)
- * are wired in A4 — `stub` renders disabled (A5/A6/billing CTAs).
+ * Pure + client-safe. `reply` (focus composer), `call` (mock action) and
+ * `build` (open the proposal composer — BAL-288 / A6.2) are wired; `stub`
+ * renders disabled (A5/A6.3/billing CTAs).
  *
  * KEYING (BAL-272): the pre-decision proposal cells (`eoi_submitted` /
  * `proposal_requested` / `proposal_submitted`) key off THIS THREAD's
@@ -30,7 +31,7 @@ import { requestStatusRank, type ConversationThreadView } from './conversation-v
  * `stage` carries the per-thread outcome).
  */
 
-export type ThreadNudgeAction = 'reply' | 'call' | 'stub';
+export type ThreadNudgeAction = 'reply' | 'call' | 'build' | 'stub';
 
 export interface ThreadNudgeButton {
   label: string;
@@ -183,9 +184,8 @@ function expertNudge(
       variant: 'action',
       icon: FileText,
       headline: 'The client requested your proposal — build it',
-      // Interim copy until A6 ships the builder — the CTA renders disabled.
-      sub: 'The proposal builder is on its way — keep scoping in the thread meanwhile.',
-      primary: { label: 'Build proposal', icon: FileText, action: 'stub' },
+      sub: 'Lay out scope, milestones and pricing. You can save a draft and submit when ready.',
+      primary: { label: 'Build proposal', icon: FileText, action: 'build' },
     };
   }
 

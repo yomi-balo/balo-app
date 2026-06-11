@@ -16,19 +16,23 @@ interface ThreadHeaderProps {
   onToggleFiles: () => void;
   onCall: () => void;
   /**
-   * The `kind:'request'` proposal CTA handler. Non-null (client lens, A5) →
-   * the slot renders ENABLED; null (expert lens — A6 wires "Build proposal")
-   * → the original disabled stub.
+   * The `kind:'request'` proposal CTA handler (client lens, A5). Non-null →
+   * the slot renders ENABLED; null → disabled stub.
    */
   onRequestProposal: (() => void) | null;
+  /**
+   * The `kind:'build'` proposal CTA handler (expert lens, A6.2 — opens the
+   * composer). Non-null → the slot renders ENABLED; null → disabled stub.
+   */
+  onBuildProposal: (() => void) | null;
 }
 
 /**
  * Desktop-only thread header (`hidden lg:flex` applied by the stage): avatar,
  * expert name, Files pill (count), lens-aware call CTA (mock seam) and the
- * A5 proposal slot per the gating matrix. The client's "Request proposal" CTA
- * is LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's
- * "Build proposal" stub stays disabled (A6 wires it).
+ * proposal slot per the gating matrix. The client's "Request proposal" CTA is
+ * LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's "Build
+ * proposal" CTA is LIVE (BAL-288 / A6.2) when `onBuildProposal` is provided.
  * Deliberate cut (recorded): no rating/role subline — that data isn't hydrated.
  */
 export function ThreadHeader({
@@ -41,6 +45,7 @@ export function ThreadHeader({
   onToggleFiles,
   onCall,
   onRequestProposal,
+  onBuildProposal,
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
   const { headerProposal } = actions;
   return (
@@ -130,6 +135,24 @@ export function ThreadHeader({
           className={cn(
             'focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
             onRequestProposal === null ? 'opacity-60' : 'hover:opacity-90',
+            headerProposal.quiet
+              ? 'border-primary/30 bg-primary/5 text-primary border'
+              : 'from-primary bg-gradient-to-r to-violet-600 text-white dark:to-violet-500'
+          )}
+        >
+          <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+          {headerProposal.label}
+        </button>
+      )}
+      {headerProposal?.kind === 'build' && (
+        <button
+          type="button"
+          onClick={onBuildProposal ?? undefined}
+          disabled={onBuildProposal === null}
+          aria-disabled={onBuildProposal === null ? true : undefined}
+          className={cn(
+            'focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
+            onBuildProposal === null ? 'opacity-60' : 'hover:opacity-90',
             headerProposal.quiet
               ? 'border-primary/30 bg-primary/5 text-primary border'
               : 'from-primary bg-gradient-to-r to-violet-600 text-white dark:to-violet-500'

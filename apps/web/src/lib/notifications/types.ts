@@ -72,6 +72,15 @@ export interface ProjectProposalRequestedPayload {
   title: string; // request title — email/in-app body
 }
 
+export interface ProjectProposalSubmittedPayload {
+  correlationId: string; // proposalId — dedup per submitted proposal
+  projectRequestId: string;
+  relationshipId: string;
+  recipientId: string; // = client user id → resolves recipient:'client'
+  expertName: string; // submitting expert's display name — email/in-app body
+  title: string; // request title — email/in-app body
+}
+
 export interface ProjectMessagePostedPayload {
   correlationId: string; // message id — dedup per message (dispatcher jobId)
   projectRequestId: string;
@@ -106,6 +115,7 @@ export type NotificationEvent =
   | 'project.expert_invited'
   | 'project.eoi_submitted'
   | 'project.proposal_requested'
+  | 'project.proposal_submitted'
   | 'project.message_posted'
   | 'project.file_shared';
 
@@ -119,6 +129,7 @@ export interface EventPayloadMap {
   'project.expert_invited': ProjectExpertInvitedPayload;
   'project.eoi_submitted': ProjectEoiSubmittedPayload;
   'project.proposal_requested': ProjectProposalRequestedPayload;
+  'project.proposal_submitted': ProjectProposalSubmittedPayload;
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
 }

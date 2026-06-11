@@ -32,7 +32,11 @@ vi.mock('@balo/db', () => ({
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
-vi.mock('next/navigation', () => ({ notFound: mockNotFound, redirect: mockRedirect }));
+vi.mock('next/navigation', () => ({
+  notFound: mockNotFound,
+  redirect: mockRedirect,
+  useRouter: () => ({ push: vi.fn() }),
+}));
 vi.mock('@/lib/logging', () => ({ log: { warn: mockLogWarn, error: mockLogError } }));
 
 // Phase-2 conversation loader (BAL-271) — its own unit tests cover the real

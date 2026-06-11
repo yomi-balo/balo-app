@@ -44,6 +44,7 @@ export {
   PROPOSAL_STATUS_TRANSITIONS,
   isAllowedProposalTransition,
   InvalidProposalTransitionError,
+  ProposalNotDraftError,
   type ProposalStatus,
 } from './proposals';
 export { proposalMilestonesRepository } from './proposal-milestones';

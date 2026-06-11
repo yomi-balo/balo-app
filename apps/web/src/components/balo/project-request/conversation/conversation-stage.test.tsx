@@ -13,6 +13,11 @@ vi.mock('sonner', () => ({
 }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
+const mockPush = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
+
 // Tiptap-free viewer stand-in (EOI intro card only — bubbles never use it).
 vi.mock('@/components/balo/rich-text-editor', () => ({
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
@@ -848,17 +853,63 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
     );
   });
 
-  it('expert lens: the proposal CTA stays a disabled stub (A6 owns it)', async () => {
+  it('expert lens: the "Build proposal" CTA navigates to the composer + fires the funnel event (A6.2)', async () => {
     const user = userEvent.setup();
     renderStage(
       view({ threads: [thread({ relationshipStatus: 'proposal_requested' })] }),
       'expert'
     );
-    const ctas = screen.getAllByRole('button', { name: 'Build proposal' });
-    for (const cta of ctas) expect(cta).toBeDisabled();
-    await user.click(ctas[0] as HTMLElement);
+    const [headerCta] = screen.getAllByRole('button', { name: 'Build proposal' });
+    expect(headerCta).toBeDefined();
+    expect(headerCta).toBeEnabled();
+    await user.click(headerCta as HTMLElement);
+
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      surface: 'header',
+    });
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+    // It opens the composer, never the client's request-proposal confirm beat.
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(mockRequestProposal).not.toHaveBeenCalled();
+  });
+
+  it('expert lens: the rail "Build proposal" CTA tracks the rail surface', async () => {
+    const user = userEvent.setup();
+    renderStage(
+      view({ threads: [thread({ relationshipStatus: 'proposal_requested' })] }),
+      'expert'
+    );
+    // DOM order is header → thread-nudge → mobile rail; the rail CTA is last.
+    const ctas = screen.getAllByRole('button', { name: 'Build proposal' });
+    const railCta = ctas.at(-1);
+    expect(railCta).toBeDefined();
+    await user.click(railCta as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
+      expect.objectContaining({ surface: 'rail' })
+    );
+  });
+
+  it('expert lens: every "Build proposal" CTA (header, rail, thread-nudge) is live and opens the composer', async () => {
+    const user = userEvent.setup();
+    renderStage(
+      view({ threads: [thread({ relationshipStatus: 'proposal_requested' })] }),
+      'expert'
+    );
+    // The thread nudge also surfaces its own live "Build proposal" primary.
+    expect(screen.getByText('The client requested your proposal — build it')).toBeInTheDocument();
+
+    const ctas = screen.getAllByRole('button', { name: 'Build proposal' });
+    // Header + rail + thread-nudge primary = at least three live entry points.
+    expect(ctas.length).toBeGreaterThanOrEqual(3);
+    for (const cta of ctas) {
+      mockPush.mockClear();
+      expect(cta).toBeEnabled();
+      await user.click(cta);
+      expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+    }
   });
 
   it("client + proposal_submitted: 'View proposal' is a DISABLED stub on every surface (A6 owns it)", async () => {

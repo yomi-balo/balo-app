@@ -164,7 +164,13 @@ export function RequestDetailShell({
           className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
           style={{ animationDelay: '120ms' }}
         >
-          <NudgeBar nudge={nudge} lens={ctx.lens} status={view.status} requestId={view.id} />
+          <NudgeBar
+            nudge={nudge}
+            lens={ctx.lens}
+            status={view.status}
+            requestId={view.id}
+            viewerRelationshipId={ctx.relationshipId}
+          />
         </div>
       )}
 
@@ -214,7 +220,11 @@ export function RequestDetailShell({
                     {ctx.lens === 'expert' && (
                       <>
                         <div className="flex justify-end">
-                          <ProposalSlot viewerRelationshipStatus={view.viewerRelationshipStatus} />
+                          <ProposalSlot
+                            requestId={view.id}
+                            viewerRelationshipStatus={view.viewerRelationshipStatus}
+                            viewerRelationshipId={ctx.relationshipId}
+                          />
                         </div>
                         {view.viewerEoi && (
                           <EoiEntry
@@ -249,7 +259,11 @@ export function RequestDetailShell({
               {ctx.lens === 'expert' && (
                 <>
                   <div className="flex justify-end">
-                    <ProposalSlot viewerRelationshipStatus={view.viewerRelationshipStatus} />
+                    <ProposalSlot
+                      requestId={view.id}
+                      viewerRelationshipStatus={view.viewerRelationshipStatus}
+                      viewerRelationshipId={ctx.relationshipId}
+                    />
                   </div>
                   {view.viewerEoi && (
                     <EoiEntry

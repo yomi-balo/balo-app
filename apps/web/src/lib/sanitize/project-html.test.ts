@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // `project-html.ts` imports `server-only`, which throws outside an RSC. Stub it.
 vi.mock('server-only', () => ({}));
 
-import { sanitizeProjectHtml } from './project-html';
+import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from './project-html';
 
 describe('sanitizeProjectHtml', () => {
   describe('allow-list — kept tags', () => {
@@ -98,6 +98,86 @@ describe('sanitizeProjectHtml', () => {
     it('returns whitespace-only / no-content for markup with no text', () => {
       const out = sanitizeProjectHtml('<script>bad()</script>');
       expect(out.trim()).toBe('');
+    });
+  });
+});
+
+describe('sanitizeProposalOverviewHtml', () => {
+  describe('widened allow-list — kept tags', () => {
+    it('keeps the brief tags plus blockquote and hr (decided Q3)', () => {
+      const input =
+        '<p>Intro <strong>bold</strong></p>' +
+        '<h2>Heading two</h2><h3>Heading three</h3>' +
+        '<ul><li>one</li></ul><ol><li>two</li></ol>' +
+        '<blockquote>quoted</blockquote><hr />';
+      const out = sanitizeProposalOverviewHtml(input);
+      expect(out).toContain('<p>');
+      expect(out).toContain('<strong>bold</strong>');
+      expect(out).toContain('<h2>Heading two</h2>');
+      expect(out).toContain('<h3>Heading three</h3>');
+      expect(out).toContain('<ul><li>one</li></ul>');
+      expect(out).toContain('<ol><li>two</li></ol>');
+      expect(out).toContain('<blockquote>quoted</blockquote>');
+      expect(out).toContain('<hr />');
+    });
+
+    it('strips a tag that is NOT on the widened allow-list but keeps its text', () => {
+      const out = sanitizeProposalOverviewHtml('<table><tr><td>cell</td></tr></table>');
+      expect(out).not.toContain('<table');
+      expect(out).not.toContain('<td');
+      expect(out).toContain('cell');
+    });
+  });
+
+  describe('XSS — dangerous content stripped', () => {
+    it('strips <script> tags entirely', () => {
+      const out = sanitizeProposalOverviewHtml(
+        '<blockquote>hi</blockquote><script>alert(1)</script>'
+      );
+      expect(out).not.toContain('<script');
+      expect(out).not.toContain('alert(1)');
+      expect(out).toContain('<blockquote>hi</blockquote>');
+    });
+
+    it('strips <style> blocks entirely', () => {
+      const out = sanitizeProposalOverviewHtml('<style>.x{color:red}</style><p>safe</p>');
+      expect(out).not.toContain('<style');
+      expect(out).not.toContain('color:red');
+      expect(out).toContain('<p>safe</p>');
+    });
+
+    it('strips inline onclick handlers', () => {
+      const out = sanitizeProposalOverviewHtml('<p onclick="alert(1)">safe</p>');
+      expect(out).not.toContain('onclick');
+      expect(out).toContain('safe');
+    });
+
+    it('strips javascript: and data: scheme hrefs', () => {
+      expect(sanitizeProposalOverviewHtml('<a href="javascript:alert(1)">x</a>')).not.toContain(
+        'javascript:'
+      );
+      expect(
+        sanitizeProposalOverviewHtml('<a href="data:text/html,<script>1</script>">x</a>')
+      ).not.toContain('data:');
+    });
+  });
+
+  describe('link hardening', () => {
+    it('keeps http/https links and forces hardened rel + target', () => {
+      const out = sanitizeProposalOverviewHtml('<a href="https://balo.expert">Balo</a>');
+      expect(out).toContain('href="https://balo.expert"');
+      expect(out).toContain('rel="noopener noreferrer nofollow"');
+      expect(out).toContain('target="_blank"');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('returns an empty string for an empty input', () => {
+      expect(sanitizeProposalOverviewHtml('')).toBe('');
+    });
+
+    it('returns no content for a script-only paste', () => {
+      expect(sanitizeProposalOverviewHtml('<script>bad()</script>').trim()).toBe('');
     });
   });
 });

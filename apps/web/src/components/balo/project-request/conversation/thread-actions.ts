@@ -8,20 +8,24 @@ import {
  * Pure deriver for the per-thread action chrome (desktop header + mobile rail)
  * — the design's `callAllowed` / `showProposalAction` matrix over
  * `lens × requestStatus × relationshipStatus`. The client's `kind:'request'`
- * proposal CTA is LIVE (BAL-272 / A5); the `kind:'view'` CTAs and the expert's
- * "Build proposal" remain disabled stubs owned by A6. The call CTA is wired
- * (mock seam).
+ * proposal CTA is LIVE (BAL-272 / A5) and the expert's `kind:'build'` CTA is
+ * LIVE (BAL-288 / A6.2 — navigates to the proposal composer); the `kind:'view'`
+ * CTAs remain disabled stubs owned by A6.3. The call CTA is wired (mock seam).
  */
 
 export type HeaderProposalSlot =
   | { kind: 'pill-requested' } // client, rel proposal_requested — warning pill
   | { kind: 'pill-awaiting' } // expert, rel eoi_submitted — muted pill
   | { kind: 'view'; label: string } // rel ≥ proposal_submitted — outlined disabled stub
-  | { kind: 'request'; label: string; quiet: boolean }; // gradient disabled stub
+  | { kind: 'request'; label: string; quiet: boolean } // client A5 live CTA — gradient
+  | { kind: 'build'; label: string; quiet: boolean }; // expert A6 live CTA — gradient
 
 export type RailProposalSlot = {
-  /** `request` = the live A5 commit CTA; `view` = A6's disabled stub. */
-  kind: 'request' | 'view';
+  /**
+   * `request` = the live A5 client commit CTA; `build` = the live A6 expert
+   * composer CTA; `view` = A6.3's disabled stub.
+   */
+  kind: 'request' | 'view' | 'build';
   label: string;
   quiet: boolean;
 };
@@ -55,7 +59,7 @@ function deriveHeaderProposal(
     return { kind: 'request', label: 'Request proposal', quiet: nudgeIsProposal };
   }
   if (lens === 'expert' && relationshipStatus === 'proposal_requested') {
-    return { kind: 'request', label: 'Build proposal', quiet: nudgeIsProposal };
+    return { kind: 'build', label: 'Build proposal', quiet: nudgeIsProposal };
   }
   return null;
 }
@@ -71,7 +75,7 @@ function deriveRailProposal(
     return { kind: 'request', label: 'Request proposal', quiet: nudgeIsProposal };
   }
   if (lens === 'expert' && relationshipStatus === 'proposal_requested') {
-    return { kind: 'request', label: 'Build proposal', quiet: nudgeIsProposal };
+    return { kind: 'build', label: 'Build proposal', quiet: nudgeIsProposal };
   }
   if (lens === 'client' && relationshipStatus === 'proposal_submitted') {
     // A6's CTA — the rail must render it as a disabled stub, never wire it

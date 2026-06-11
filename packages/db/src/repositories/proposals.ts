@@ -3,6 +3,7 @@ import { db } from '../client';
 import {
   proposals,
   proposalChangeRequests,
+  requestExpertRelationships,
   type Proposal,
   type ProposalChangeRequest,
 } from '../schema';
@@ -46,6 +47,25 @@ export class InvalidProposalTransitionError extends Error {
   ) {
     super(`Invalid proposal status transition: ${from} → ${to}`);
     this.name = 'InvalidProposalTransitionError';
+  }
+}
+
+/**
+ * Thrown by `updateDraft` when the targeted proposal is not a live `draft`
+ * (missing, soft-deleted, or already `submitted`/beyond). Guards a stale autosave
+ * from silently overwriting a submitted proposal — the action surfaces it as
+ * "This proposal can no longer be edited." Modelled on the repo's existing
+ * `InvalidProposalTransitionError` (a typed, named domain error the action
+ * `instanceof`-checks), not a bare `Error`.
+ */
+export class ProposalNotDraftError extends Error {
+  constructor(public readonly status: ProposalStatus | null) {
+    super(
+      status === null
+        ? 'Proposal not found or soft-deleted: cannot update a draft.'
+        : `Proposal is not a draft (status: ${status}): cannot update.`
+    );
+    this.name = 'ProposalNotDraftError';
   }
 }
 
@@ -164,6 +184,195 @@ export const proposalsRepository = {
         throw new Error('Failed to create proposal');
       }
       return row;
+    });
+  },
+
+  /**
+   * Create the relationship's FIRST `draft` proposal (status `draft`, `version` 1,
+   * `is_current` true) — the draft-persistence counterpart `submit()` deferred in
+   * A6.1. Mirrors `submit()`'s id derivation: denormalised request/expert ids are
+   * read FROM the (locked) relationship row, never trusted from the caller. Unlike
+   * `submit()`, this does NOT advance the relationship — drafts are private and the
+   * spine only moves on actual submit (`promoteToSubmit`).
+   *
+   * The partial unique `proposal_current_per_relationship_idx` permits exactly one
+   * live `is_current` row per relationship, so this throws a 23505 if a current
+   * proposal already exists — the action MUST call `findCurrentByRelationship`
+   * first and route to `updateDraft` instead. `priceCents` is integer minor units
+   * and may be 0 for a partial draft; `overview` may be near-empty HTML.
+   *
+   * Locks the relationship FOR UPDATE (`advanceRelationshipStatus` is not used —
+   * we don't transition — so the lock is taken directly) to read a consistent id
+   * triple, matching the spirit of `submit()` reading from a locked row.
+   */
+  async createDraft(input: {
+    relationshipId: string;
+    overview: string;
+    pricingMethod: PricingMethod;
+    priceCents: number;
+    currency?: string;
+    timeframeWeeks?: number;
+    exclusions?: string;
+    depositCents?: number;
+    rateCents?: number;
+    cadence?: ProposalCadence;
+  }): Promise<Proposal> {
+    return db.transaction(async (tx) => {
+      const [relationship] = await tx
+        .select()
+        .from(requestExpertRelationships)
+        .where(
+          and(
+            eq(requestExpertRelationships.id, input.relationshipId),
+            isNull(requestExpertRelationships.deletedAt)
+          )
+        )
+        .for('update');
+
+      if (relationship === undefined) {
+        throw new Error(`Request expert relationship not found: ${input.relationshipId}`);
+      }
+
+      const [row] = await tx
+        .insert(proposals)
+        .values({
+          relationshipId: relationship.id,
+          projectRequestId: relationship.projectRequestId,
+          expertProfileId: relationship.expertProfileId,
+          status: 'draft',
+          version: 1,
+          isCurrent: true,
+          overview: input.overview,
+          pricingMethod: input.pricingMethod,
+          priceCents: input.priceCents,
+          currency: input.currency,
+          timeframeWeeks: input.timeframeWeeks,
+          exclusions: input.exclusions,
+          depositCents: input.depositCents,
+          rateCents: input.rateCents,
+          cadence: input.cadence,
+        })
+        .returning();
+      if (row === undefined) {
+        throw new Error('Failed to create draft proposal');
+      }
+      return row;
+    });
+  },
+
+  /**
+   * Update the header fields of an EXISTING current draft (the composer's debounced
+   * autosave). Locks the row FOR UPDATE and guards `status === 'draft'` so a stale
+   * autosave landing AFTER a submit can never silently overwrite the submitted
+   * proposal — throws `ProposalNotDraftError` (missing/soft-deleted/non-draft). On
+   * success touches `updatedAt`.
+   *
+   * BOUNDARY: writes ONLY the proposal header. Milestones / installments /
+   * documents are persisted via their own `setForProposal` / document repos by the
+   * action, NOT here — keeping autosave a single-row write.
+   */
+  async updateDraft(input: {
+    proposalId: string;
+    overview: string;
+    pricingMethod: PricingMethod;
+    priceCents: number;
+    currency?: string;
+    timeframeWeeks?: number;
+    exclusions?: string;
+    depositCents?: number;
+    rateCents?: number;
+    cadence?: ProposalCadence;
+  }): Promise<Proposal> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(proposals)
+        .where(and(eq(proposals.id, input.proposalId), isNull(proposals.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new ProposalNotDraftError(null);
+      }
+      if (current.status !== 'draft') {
+        throw new ProposalNotDraftError(current.status);
+      }
+
+      const [updated] = await tx
+        .update(proposals)
+        .set({
+          overview: input.overview,
+          pricingMethod: input.pricingMethod,
+          priceCents: input.priceCents,
+          currency: input.currency,
+          timeframeWeeks: input.timeframeWeeks,
+          exclusions: input.exclusions,
+          depositCents: input.depositCents,
+          rateCents: input.rateCents,
+          cadence: input.cadence,
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId))
+        .returning();
+      if (updated === undefined) {
+        throw new Error(`Failed to update draft proposal: ${input.proposalId}`);
+      }
+      return updated;
+    });
+  },
+
+  /**
+   * Promote an existing `draft` proposal to `submitted` AND advance the
+   * relationship `proposal_requested → proposal_submitted`, in ONE transaction —
+   * the draft-first counterpart to `submit()`'s insert-as-submitted. The header /
+   * milestones / installments are already persisted by the action's preceding
+   * sanitise → `updateDraft` / `setForProposal` steps; promotion ONLY flips status
+   * and advances the spine. Takes only ids.
+   *
+   * STRICT order inside the tx (matches `submit()`: relationship spine first):
+   *   1. `advanceRelationshipStatus(tx, { id: relationshipId, to:'proposal_submitted',
+   *      expectedFrom:'proposal_requested' })` — locks + validates the spine.
+   *   2. update the proposal: status `draft → submitted` guarded via the shared
+   *      `advanceProposalStatus(tx, { id, to:'submitted', expectedFrom:'draft' })`,
+   *      then re-stamp `submittedAt = now()` in a LOCAL update.
+   *
+   * The proposal is already `is_current = true` (created as a draft), so NO
+   * `is_current` flip is needed and the one-current slot never collides. Throws
+   * `InvalidRelationshipTransitionError` / `InvalidProposalTransitionError` (and
+   * the whole tx rolls back) if either is not in its expected state — so a
+   * double-submit / stale tab is rejected, not double-applied.
+   *
+   * `submittedAt` re-stamp: `proposals.submittedAt` defaults to `now()` at INSERT
+   * (draft creation), so a draft carries a creation-time `submittedAt`. We re-stamp
+   * it LOCALLY here (the actual submit instant) rather than changing the shared
+   * `advanceProposalStatus`, which `accept`/`resubmit` also route through.
+   */
+  async promoteToSubmit(input: { proposalId: string; relationshipId: string }): Promise<Proposal> {
+    return db.transaction(async (tx) => {
+      // 1. Advance the relationship spine first (locks + validates).
+      await advanceRelationshipStatus(tx, {
+        id: input.relationshipId,
+        to: 'proposal_submitted',
+        expectedFrom: 'proposal_requested',
+      });
+
+      // 2. Flip the proposal status through the guarded writer (draft → submitted).
+      const advanced = await advanceProposalStatus(tx, {
+        id: input.proposalId,
+        to: 'submitted',
+        expectedFrom: 'draft',
+      });
+
+      // Re-stamp submittedAt to the actual submit instant (local update — never
+      // mutate the shared advanceProposalStatus, which accept/resubmit reuse).
+      const [stamped] = await tx
+        .update(proposals)
+        .set({ submittedAt: new Date() })
+        .where(eq(proposals.id, advanced.id))
+        .returning();
+      if (stamped === undefined) {
+        throw new Error(`Failed to stamp submittedAt on proposal: ${input.proposalId}`);
+      }
+      return stamped;
     });
   },
 

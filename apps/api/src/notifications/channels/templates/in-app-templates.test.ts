@@ -123,6 +123,27 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-proposal-submitted', () => {
+    it('returns the title, body (with expert name), and action url', () => {
+      const result = getInAppTemplate('project-proposal-submitted', {
+        title: 'CPQ implementation',
+        expertName: 'Priya Nair',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Proposal received',
+        body: 'Priya Nair sent a proposal for "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when expertName/title are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-proposal-submitted', {});
+      expect(result.body).toBe('Your expert sent a proposal for "a project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('project-message-posted', () => {
     it('renders sender + preview with the request action url', () => {
       const result = getInAppTemplate('project-message-posted', {

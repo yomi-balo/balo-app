@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -19,6 +20,12 @@ interface NudgeActionsProps {
   lens: RequestLens;
   status: string;
   requestId: string;
+  /**
+   * The viewer-expert's own relationship id (`ctx.relationshipId`) — required to
+   * deep-link the `build-proposal` CTA to the composer. `null`/absent for the
+   * client/admin lenses, which never reach that wired action.
+   */
+  viewerRelationshipId?: string | null;
   primary?: NudgeButtonDescriptor;
   secondary?: NudgeButtonDescriptor;
 }
@@ -30,13 +37,16 @@ interface NudgeActionsProps {
  * it later). This keeps `nudgeFor` copy presentational while A2 only lights up the
  * triage/invite/book CTAs it owns.
  */
-type WiredAction = 'invite' | 'request-exploratory' | 'book-exploratory';
+type WiredAction = 'invite' | 'request-exploratory' | 'book-exploratory' | 'build-proposal';
 
 const WIRED: Record<string, { primary?: WiredAction; secondary?: WiredAction }> = {
   'admin:requested': { primary: 'invite', secondary: 'request-exploratory' },
   'admin:exploratory_meeting_requested': { primary: 'invite' },
   'admin:experts_invited': { secondary: 'invite' },
   'client:exploratory_meeting_requested': { primary: 'book-exploratory' },
+  // A6.2 activation gate: copy alone won't enable the CTA — this WIRED entry +
+  // the `build-proposal` handler navigate the expert to the proposal composer.
+  'expert:proposal_requested': { primary: 'build-proposal' },
 };
 
 const PRIMARY_CLASS =
@@ -54,9 +64,11 @@ export function NudgeActions({
   lens,
   status,
   requestId,
+  viewerRelationshipId = null,
   primary,
   secondary,
 }: Readonly<NudgeActionsProps>): React.JSX.Element {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [inviteOpen, setInviteOpen] = useState(false);
   const wired = WIRED[`${lens}:${status}`] ?? {};
@@ -90,10 +102,21 @@ export function NudgeActions({
     });
   }, [requestId]);
 
+  // A6.2: navigate the expert to the proposal composer. Pure navigation (no
+  // status transition), so — matching the local pattern where only state-
+  // changing CTAs fire analytics — this fires no event here.
+  const runBuildProposal = useCallback((): void => {
+    if (viewerRelationshipId === null) return;
+    router.push(`/projects/${requestId}/proposal/${viewerRelationshipId}`);
+  }, [router, requestId, viewerRelationshipId]);
+
   const handlerFor = (action: WiredAction | undefined): (() => void) | undefined => {
     if (action === 'invite') return () => setInviteOpen(true);
     if (action === 'request-exploratory') return runRequestExploratory;
     if (action === 'book-exploratory') return runBookExploratory;
+    if (action === 'build-proposal') {
+      return viewerRelationshipId === null ? undefined : runBuildProposal;
+    }
     return undefined;
   };
 

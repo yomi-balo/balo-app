@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { centsToDollars, dollarsToCents, formatCurrency, formatBudgetRange } from './currency';
+import {
+  centsToDollars,
+  dollarsToCents,
+  formatCurrency,
+  formatWholeCurrency,
+  formatBudgetRange,
+} from './currency';
 
 describe('centsToDollars / dollarsToCents', () => {
   it('round-trips cents to dollars and back', () => {
@@ -15,6 +21,28 @@ describe('centsToDollars / dollarsToCents', () => {
 describe('formatCurrency', () => {
   it('formats cents with the platform symbol and two decimals', () => {
     expect(formatCurrency(200)).toBe('A$2.00');
+  });
+});
+
+describe('formatWholeCurrency', () => {
+  it('formats minor units as grouped whole dollars with the AUD symbol', () => {
+    expect(formatWholeCurrency(7_800_000, 'aud')).toBe('A$78,000');
+  });
+
+  it('drops cents (rounds toward the whole dollar)', () => {
+    expect(formatWholeCurrency(7_800_099, 'aud')).toBe('A$78,001');
+  });
+
+  it('renders zero as a grouped whole amount', () => {
+    expect(formatWholeCurrency(0, 'aud')).toBe('A$0');
+  });
+
+  it('honours a non-AUD currency code', () => {
+    expect(formatWholeCurrency(1_000_000, 'usd')).toBe('$10,000');
+  });
+
+  it('accepts an upper-cased currency code', () => {
+    expect(formatWholeCurrency(4_500_000, 'AUD')).toBe('A$45,000');
   });
 });
 

@@ -1,0 +1,21 @@
+-- 0030 — proposals.status: flip the column DEFAULT 'submitted' → 'draft' (A6.2 / BAL-288).
+-- The composer autosaves a `draft` proposal before submit, so a freshly-inserted proposal
+-- starts as a `draft`. A6.1 deferred this flip because the SAME migration that APPENDED the
+-- 'draft' enum value (0029) could not also use it as a default — Postgres forbids USING a
+-- newly-added enum value in the same transaction that adds it (check_safe_enum_use).
+--
+-- Hand-edited (mirrors 0022's documented enum hand-edit): drizzle-kit emits the plain
+--   ALTER TABLE proposals ALTER COLUMN status SET DEFAULT 'draft';
+-- which is SAFE IN PRODUCTION (0029 committed in an earlier deploy, so 'draft' is already
+-- committed when this runs in its own batch) but FAILS in a fresh database where Drizzle runs
+-- ALL pending migrations (0029 + 0030) in ONE transaction (the postgres-js migrator wraps the
+-- whole batch) — the integration testcontainer and any from-scratch `migrate`. There, 'draft'
+-- is not yet committed when 0030 references it → "unsafe use of new value 'draft'".
+--
+-- Fix: cast the literal through text (`'draft'::text::proposal_status`). The text→enum cast
+-- defers value-binding past check_safe_enum_use, so it is valid in the same transaction as the
+-- ADD VALUE, while resolving to the identical 'draft' enum default. Verified against Postgres 16:
+-- the plain literal and the `::proposal_status` direct cast both fail in one tx; the text cast
+-- passes. Metadata-only change — touches no existing `proposals` rows (their stored status is
+-- unchanged); safe on the non-empty production table.
+ALTER TABLE "proposals" ALTER COLUMN "status" SET DEFAULT 'draft'::text::"public"."proposal_status";
