@@ -40,6 +40,29 @@ export {
 } from './request-expert-relationships';
 export { expressionsOfInterestRepository } from './expressions-of-interest';
 export { proposalsRepository } from './proposals';
+export {
+  PROPOSAL_STATUS_TRANSITIONS,
+  isAllowedProposalTransition,
+  InvalidProposalTransitionError,
+  type ProposalStatus,
+} from './proposals';
+export { proposalMilestonesRepository } from './proposal-milestones';
+export type { ProposalMilestoneInput } from './proposal-milestones';
+export {
+  proposalPaymentInstallmentsRepository,
+  installmentsSumTo100,
+} from './proposal-payment-installments';
+export type { ProposalPaymentInstallmentInput } from './proposal-payment-installments';
+export { proposalDocumentsRepository } from './proposal-documents';
+export { proposalChangeRequestsRepository } from './proposal-change-requests';
+export { engagementsRepository } from './engagements';
+export type {
+  PricingMethod,
+  ProposalCadence,
+  ProposalChangeSection,
+  ProposalDocumentKind,
+  EngagementStatus,
+} from './proposal-types';
 export { conversationsRepository } from './conversations';
 export type {
   RequestExpertRelationship,
@@ -48,6 +71,16 @@ export type {
   NewExpressionOfInterest,
   Proposal,
   NewProposal,
+  ProposalMilestone,
+  NewProposalMilestone,
+  ProposalPaymentInstallment,
+  NewProposalPaymentInstallment,
+  ProposalDocument,
+  NewProposalDocument,
+  ProposalChangeRequest,
+  NewProposalChangeRequest,
+  Engagement,
+  NewEngagement,
   ConversationMessage,
   NewConversationMessage,
   ConversationFile,
