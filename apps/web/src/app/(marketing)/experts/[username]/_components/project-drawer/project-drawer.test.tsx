@@ -44,7 +44,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
   }) => {
     // Show the plain text (strip the <p> wrapper) so char-by-char typing doesn't
     // re-wrap cumulatively; emit a single <p>…</p> HTML on change.
-    const plain = value.replace(/<[^>]*>/g, '');
+    const plain = value.replace(/<[^<>]*>/g, '');
     return (
       <textarea
         aria-label="Project description"
@@ -56,7 +56,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
   },
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
   validateDescription: (html: string) => {
-    const text = html.replace(/<[^>]*>/g, '').trim();
+    const text = html.replace(/<[^<>]*>/g, '').trim();
     if (text.length < 10) return 'Add a few words about what you need.';
     return null;
   },
