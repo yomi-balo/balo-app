@@ -65,7 +65,7 @@ export function SubmitProposalDialog({
       if (pending) return;
       setPending(true);
 
-      void (async () => {
+      const run = async (): Promise<void> => {
         try {
           // Q2: flush a final autosave so the server submits what's stored.
           const flushedProposalId = await onBeforeSubmit();
@@ -118,7 +118,8 @@ export function SubmitProposalDialog({
         } finally {
           setPending(false);
         }
-      })();
+      };
+      run();
     },
     [
       pending,

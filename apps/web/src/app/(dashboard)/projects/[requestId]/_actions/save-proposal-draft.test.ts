@@ -138,6 +138,40 @@ describe('saveProposalDraftAction', () => {
     expect(mockCreateDraft).not.toHaveBeenCalled();
   });
 
+  it('recovers from a create race (23505) by adopting the concurrent draft via updateDraft', async () => {
+    // First findCurrent (initial) → none; createDraft loses the race (23505);
+    // second findCurrent (recovery) → the winner's draft; route to updateDraft.
+    mockFindCurrent.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ id: PROPOSAL_ID });
+    const uniqueViolation = Object.assign(new Error('duplicate key'), { code: '23505' });
+    mockCreateDraft.mockRejectedValue(uniqueViolation);
+
+    const result = await saveProposalDraftAction(VALID_INPUT);
+
+    expect(result).toEqual({ success: true, proposalId: PROPOSAL_ID });
+    expect(mockCreateDraft).toHaveBeenCalledTimes(1);
+    expect(mockFindCurrent).toHaveBeenCalledTimes(2);
+    expect(mockUpdateDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: PROPOSAL_ID, overview: '<p>scope</p>' })
+    );
+    // The race recovery is a normal success — no error surfaced.
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('surfaces generic copy when a 23505 recovery still finds no current draft', async () => {
+    // Pathological: createDraft 23505 but the row is gone on re-fetch → rethrow.
+    mockFindCurrent.mockResolvedValue(undefined);
+    const uniqueViolation = Object.assign(new Error('duplicate key'), { code: '23505' });
+    mockCreateDraft.mockRejectedValue(uniqueViolation);
+
+    const result = await saveProposalDraftAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error: "Couldn't save your draft. Please try again.",
+    });
+    expect(log.error).toHaveBeenCalledWith('Failed to save proposal draft', expect.any(Object));
+  });
+
   it('warns and returns stale copy when updateDraft hits a non-draft', async () => {
     mockFindCurrent.mockResolvedValue({ id: PROPOSAL_ID });
     mockUpdateDraft.mockRejectedValue(new ProposalNotDraftError('submitted'));

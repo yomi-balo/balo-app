@@ -146,7 +146,7 @@ export function ProposalDocumentUploader({
       // Reset the input so re-picking the same file fires `change` again.
       event.target.value = '';
       if (file === undefined) return;
-      void uploadFile(file);
+      uploadFile(file);
     },
     [uploadFile]
   );
@@ -214,7 +214,9 @@ export function ProposalDocumentUploader({
                 </span>
                 <button
                   type="button"
-                  onClick={() => void handleRemove(doc.id)}
+                  onClick={() => {
+                    handleRemove(doc.id);
+                  }}
                   disabled={isRemoving || disabled}
                   aria-label={`Remove ${doc.fileName}`}
                   className="text-muted-foreground hover:text-destructive focus-visible:ring-ring flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
@@ -264,7 +266,9 @@ export function ProposalDocumentUploader({
       {atCapacity && firstDocument !== undefined && (
         <button
           type="button"
-          onClick={() => void handleRemove(firstDocument.id)}
+          onClick={() => {
+            handleRemove(firstDocument.id);
+          }}
           disabled={disabled || removingId !== null}
           className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
         >

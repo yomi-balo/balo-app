@@ -13,6 +13,8 @@ import {
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  ProposalNotDraftError,
+  type Proposal,
   type ProposalMilestone,
   type ProposalPaymentInstallment,
   type ProposalMilestoneInput,
@@ -103,6 +105,100 @@ function displayName(user: { firstName: string | null; lastName: string | null }
   return [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'Your expert';
 }
 
+type PersistResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Step 8 — re-sanitise every rich-text field and re-persist the draft so
+ * "what's submitted equals what's stored". A concurrent submit can flip the row
+ * out of `draft` between the initial `findById` and these writes; the repository
+ * surfaces that as `ProposalNotDraftError` (TOCTOU), which maps to the friendly
+ * stale-UI copy rather than the generic failure.
+ */
+async function sanitiseAndPersistDraft(
+  draft: Proposal,
+  milestones: ProposalMilestone[],
+  installments: ProposalPaymentInstallment[]
+): Promise<PersistResult> {
+  const sanitisedOverview = sanitizeProposalOverviewHtml(draft.overview);
+  // The overview can be emptied by the sanitiser (e.g. pasted-only-scripts) —
+  // re-check after sanitising.
+  if (plainTextLength(sanitisedOverview) === 0) {
+    return { ok: false, error: 'Add an overview before submitting.' };
+  }
+
+  const sanitisedExclusions =
+    draft.exclusions === null ? undefined : sanitizeProjectHtml(draft.exclusions);
+
+  const sanitisedMilestones: ProposalMilestoneInput[] = milestones.map((m) => ({
+    title: m.title,
+    descriptionHtml: m.descriptionHtml === null ? null : sanitizeProjectHtml(m.descriptionHtml),
+    acceptanceCriteria: m.acceptanceCriteria,
+    valueCents: m.valueCents,
+  }));
+
+  const persistedInstallments: ProposalPaymentInstallmentInput[] = installments.map((i) => ({
+    label: i.label,
+    pct: i.pct,
+  }));
+
+  try {
+    await proposalsRepository.updateDraft({
+      proposalId: draft.id,
+      overview: sanitisedOverview,
+      pricingMethod: draft.pricingMethod,
+      priceCents: draft.priceCents,
+      currency: draft.currency,
+      timeframeWeeks: draft.timeframeWeeks ?? undefined,
+      exclusions: sanitisedExclusions,
+      depositCents: draft.depositCents ?? undefined,
+      rateCents: draft.rateCents ?? undefined,
+      cadence: draft.cadence ?? undefined,
+    });
+  } catch (error) {
+    if (error instanceof ProposalNotDraftError) {
+      return { ok: false, error: STALE_PROPOSAL };
+    }
+    throw error;
+  }
+
+  await proposalMilestonesRepository.setForProposal({
+    proposalId: draft.id,
+    milestones: sanitisedMilestones,
+  });
+  await proposalPaymentInstallmentsRepository.setForProposal({
+    proposalId: draft.id,
+    installments: persistedInstallments,
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Step 10 — advance the REQUEST aggregate `proposal_requested → proposal_submitted`
+ * exactly once. Race-tolerant: a concurrent first-submit that already advanced the
+ * aggregate trips `InvalidStatusTransitionError`, which is benign. Returns whether
+ * THIS call performed the transition.
+ */
+async function advanceRequestAggregate(requestId: string, currentStatus: string): Promise<boolean> {
+  if (currentStatus !== 'proposal_requested') {
+    return false;
+  }
+  try {
+    await projectRequestsRepository.transitionStatus({
+      id: requestId,
+      to: 'proposal_submitted',
+      expectedFrom: 'proposal_requested',
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof InvalidStatusTransitionError) {
+      log.warn('Proposal submit request transition skipped (already advanced)', { requestId });
+      return false;
+    }
+    throw error;
+  }
+}
+
 /**
  * Expert submits their built proposal (A6.2 / BAL-288) — the draft→submitted
  * commit. Trusts the SERVER-PERSISTED draft as the submit content (the client
@@ -175,48 +271,12 @@ export async function submitProposalAction(
     }
 
     // 8. Sanitise → persist (canonical "what's submitted equals what's stored").
-    const sanitisedOverview = sanitizeProposalOverviewHtml(draft.overview);
-    // The overview can be emptied by the sanitiser (e.g. pasted-only-scripts) —
-    // re-check after sanitising.
-    if (plainTextLength(sanitisedOverview) === 0) {
-      return { success: false, error: 'Add an overview before submitting.' };
+    //    A concurrent submit can flip the row out of `draft` here (TOCTOU) →
+    //    friendly stale copy via `ProposalNotDraftError`.
+    const persisted = await sanitiseAndPersistDraft(draft, milestones, installments);
+    if (!persisted.ok) {
+      return { success: false, error: persisted.error };
     }
-
-    const sanitisedExclusions =
-      draft.exclusions === null ? undefined : sanitizeProjectHtml(draft.exclusions);
-
-    await proposalsRepository.updateDraft({
-      proposalId,
-      overview: sanitisedOverview,
-      pricingMethod: draft.pricingMethod,
-      priceCents: draft.priceCents,
-      currency: draft.currency,
-      timeframeWeeks: draft.timeframeWeeks ?? undefined,
-      exclusions: sanitisedExclusions,
-      depositCents: draft.depositCents ?? undefined,
-      rateCents: draft.rateCents ?? undefined,
-      cadence: draft.cadence ?? undefined,
-    });
-
-    const sanitisedMilestones: ProposalMilestoneInput[] = milestones.map((m) => ({
-      title: m.title,
-      descriptionHtml: m.descriptionHtml === null ? null : sanitizeProjectHtml(m.descriptionHtml),
-      acceptanceCriteria: m.acceptanceCriteria,
-      valueCents: m.valueCents,
-    }));
-    await proposalMilestonesRepository.setForProposal({
-      proposalId,
-      milestones: sanitisedMilestones,
-    });
-
-    const persistedInstallments: ProposalPaymentInstallmentInput[] = installments.map((i) => ({
-      label: i.label,
-      pct: i.pct,
-    }));
-    await proposalPaymentInstallmentsRepository.setForProposal({
-      proposalId,
-      installments: persistedInstallments,
-    });
 
     // 9. Promote + advance the relationship spine (ONE tx). A stale double-submit
     //    trips the typed transition errors → friendly stale copy.
@@ -233,23 +293,7 @@ export async function submitProposalAction(
     }
 
     // 10. Advance the REQUEST aggregate (first-submit-only, race-tolerant).
-    let transitioned = false;
-    if (access.request.status === 'proposal_requested') {
-      try {
-        await projectRequestsRepository.transitionStatus({
-          id: requestId,
-          to: 'proposal_submitted',
-          expectedFrom: 'proposal_requested',
-        });
-        transitioned = true;
-      } catch (error) {
-        if (error instanceof InvalidStatusTransitionError) {
-          log.warn('Proposal submit request transition skipped (already advanced)', { requestId });
-        } else {
-          throw error;
-        }
-      }
-    }
+    const transitioned = await advanceRequestAggregate(requestId, access.request.status);
 
     // 12. Key business event (after promotion).
     log.info('Proposal submitted', {

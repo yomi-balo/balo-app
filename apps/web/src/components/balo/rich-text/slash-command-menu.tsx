@@ -81,7 +81,7 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, Readonly<Slas
 
     return (
       <div
-        role="listbox"
+        role="menu"
         aria-label="Slash commands"
         className="border-border bg-popover w-56 overflow-hidden rounded-lg border p-1 shadow-md"
       >
@@ -92,8 +92,8 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, Readonly<Slas
             <button
               key={item.id}
               type="button"
-              role="option"
-              aria-selected={active}
+              role="menuitem"
+              data-active={active}
               // Keep the editor selection while interacting with the menu.
               onMouseDown={(e) => e.preventDefault()}
               onMouseEnter={() => setActiveIndex(index)}

@@ -134,7 +134,7 @@ export function ProposalComposer({
     }
     if (debounceRef.current !== null) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      void runSave();
+      runSave();
     }, AUTOSAVE_DEBOUNCE_MS);
     return () => {
       if (debounceRef.current !== null) clearTimeout(debounceRef.current);

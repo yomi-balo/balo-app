@@ -178,7 +178,7 @@ export function toSavePayload(
     exclusions: state.exclusions.trim().length > 0 ? state.exclusions : undefined,
     depositCents: !isFixed && state.depositCents !== null ? state.depositCents : undefined,
     rateCents: !isFixed && state.rateCents !== null ? state.rateCents : undefined,
-    cadence: !isFixed ? state.cadence : undefined,
+    cadence: isFixed ? undefined : state.cadence,
     milestones: state.milestones.map((m) => ({
       title: m.title,
       descriptionHtml: m.descriptionHtml.trim().length > 0 ? m.descriptionHtml : null,

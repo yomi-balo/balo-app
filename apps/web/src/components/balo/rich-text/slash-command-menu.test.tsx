@@ -15,20 +15,20 @@ describe('SlashCommandMenu', () => {
     vi.clearAllMocks();
   });
 
-  it('renders a listbox with one option per command and accessible labels', () => {
+  it('renders a menu with one menuitem per command and accessible labels', () => {
     render(<SlashCommandMenu items={SLASH_COMMANDS} onSelect={vi.fn()} />);
-    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
-    expect(screen.getAllByRole('option')).toHaveLength(SLASH_COMMANDS.length);
+    expect(screen.getByRole('menu', { name: 'Slash commands' })).toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem')).toHaveLength(SLASH_COMMANDS.length);
     for (const cmd of SLASH_COMMANDS) {
       expect(screen.getByText(cmd.title)).toBeInTheDocument();
     }
   });
 
-  it('highlights the first item on mount (aria-selected)', () => {
+  it('highlights the first item on mount (data-active)', () => {
     render(<SlashCommandMenu items={SLASH_COMMANDS} onSelect={vi.fn()} />);
-    const options = screen.getAllByRole('option');
-    expect(options[0]).toHaveAttribute('aria-selected', 'true');
-    expect(options[1]).toHaveAttribute('aria-selected', 'false');
+    const items = screen.getAllByRole('menuitem');
+    expect(items[0]).toHaveAttribute('data-active', 'true');
+    expect(items[1]).toHaveAttribute('data-active', 'false');
   });
 
   it('clicking an item selects it', async () => {
@@ -46,12 +46,12 @@ describe('SlashCommandMenu', () => {
     act(() => {
       expect(ref.current?.onKeyDown(key('ArrowDown'))).toBe(true);
     });
-    expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('menuitem')[1]).toHaveAttribute('data-active', 'true');
 
     act(() => {
       ref.current?.onKeyDown(key('ArrowUp'));
     });
-    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('menuitem')[0]).toHaveAttribute('data-active', 'true');
   });
 
   it('ArrowUp from the first item wraps to the last', () => {
@@ -60,8 +60,8 @@ describe('SlashCommandMenu', () => {
     act(() => {
       ref.current?.onKeyDown(key('ArrowUp'));
     });
-    const options = screen.getAllByRole('option');
-    expect(options[options.length - 1]).toHaveAttribute('aria-selected', 'true');
+    const items = screen.getAllByRole('menuitem');
+    expect(items[items.length - 1]).toHaveAttribute('data-active', 'true');
   });
 
   it('Enter selects the highlighted item; Tab also selects', () => {

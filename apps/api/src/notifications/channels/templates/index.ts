@@ -38,7 +38,7 @@ export function sanitizeSubjectTitle(title: string): string {
   return (
     title
       // eslint-disable-next-line no-control-regex -- stripping control chars is the point
-      .replaceAll(/[\r\n\u0000-\u001f]/g, ' ')
+      .replaceAll(/[\u0000-\u001f]/g, ' ')
       .trim()
       .slice(0, SUBJECT_TITLE_MAX_LENGTH)
   );

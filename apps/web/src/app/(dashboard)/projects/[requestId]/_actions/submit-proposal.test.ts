@@ -44,10 +44,12 @@ const {
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  ProposalNotDraftError,
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
   class InvalidStatusTransitionError extends Error {}
+  class ProposalNotDraftError extends Error {}
   return {
     mockFindById: vi.fn(),
     mockListMilestones: vi.fn(),
@@ -61,6 +63,7 @@ const {
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
     InvalidStatusTransitionError,
+    ProposalNotDraftError,
   };
 });
 
@@ -85,6 +88,7 @@ vi.mock('@balo/db', () => ({
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  ProposalNotDraftError,
 }));
 
 import { submitProposalAction } from './submit-proposal';
@@ -296,6 +300,18 @@ describe('submitProposalAction', () => {
     expect(order.indexOf('promote')).toBeGreaterThan(order.indexOf('updateDraft'));
     expect(order.indexOf('promote')).toBeGreaterThan(order.indexOf('setMilestones'));
     expect(order.indexOf('promote')).toBeGreaterThan(order.indexOf('setInstallments'));
+  });
+
+  it('maps a TOCTOU updateDraft (ProposalNotDraftError) to stale copy', async () => {
+    // A concurrent submit flips the row out of `draft` between findById and the
+    // sanitise→persist updateDraft → the repo throws ProposalNotDraftError.
+    mockUpdateDraft.mockRejectedValue(new ProposalNotDraftError('submitted'));
+    expect(await submitProposalAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: 'This proposal can no longer be submitted.',
+    });
+    // Never reached promotion.
+    expect(mockPromote).not.toHaveBeenCalled();
   });
 
   it('maps a stale promote (proposal transition) to stale copy', async () => {

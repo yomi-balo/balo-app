@@ -118,6 +118,46 @@ async function verifyUploadedObject(
 }
 
 /**
+ * Loads the proposal and verifies it belongs to this relationship and is still an
+ * editable `draft`. Returns `true` when editable; `false` (→ stale copy) otherwise.
+ */
+async function isEditableDraft(proposalId: string, relationshipId: string): Promise<boolean> {
+  const proposal = await proposalsRepository.findById(proposalId);
+  return (
+    proposal !== undefined &&
+    proposal.relationshipId === relationshipId &&
+    proposal.status === 'draft'
+  );
+}
+
+/**
+ * Replace-semantics for the single `terms` supplement: soft-delete every prior
+ * live `terms` doc and best-effort R2-delete its object (one supplement max). A
+ * no-op for `ref` docs. Extracted to keep the action's cognitive complexity low.
+ */
+async function replacePriorTermsSupplement(context: {
+  proposalId: string;
+  requestId: string;
+  relationshipId: string;
+  userId: string;
+}): Promise<void> {
+  const { proposalId, requestId, relationshipId, userId } = context;
+  const priorTerms = await proposalDocumentsRepository.listByProposal(proposalId, 'terms');
+  for (const prior of priorTerms) {
+    const removed = await proposalDocumentsRepository.softDelete(prior.id);
+    if (removed === undefined) continue;
+    deleteProposalDocumentFromR2(prior.r2Key).catch(() => {});
+    log.warn('Replaced prior terms supplement on a proposal', {
+      requestId,
+      relationshipId,
+      proposalId,
+      userId,
+      replacedDocumentId: prior.id,
+    });
+  }
+}
+
+/**
  * Confirm an uploaded proposal document (A6.2 / BAL-288, step 3): validates key
  * shape + provenance (proposal from VALIDATED ownership, user from session),
  * HEAD-checks the real size/type in R2, then inserts the `proposal_documents`
@@ -154,12 +194,7 @@ export async function confirmProposalDocumentUploadAction(
     }
 
     // The proposal must belong to this relationship and still be an editable draft.
-    const proposal = await proposalsRepository.findById(proposalId);
-    if (
-      proposal === undefined ||
-      proposal.relationshipId !== relationshipId ||
-      proposal.status !== 'draft'
-    ) {
+    if (!(await isEditableDraft(proposalId, relationshipId))) {
       return { success: false, error: STALE_PROPOSAL };
     }
 
@@ -177,20 +212,12 @@ export async function confirmProposalDocumentUploadAction(
 
     // 3. Terms supplement is single — replace any prior live `terms` doc first.
     if (kind === 'terms') {
-      const priorTerms = await proposalDocumentsRepository.listByProposal(proposalId, 'terms');
-      for (const prior of priorTerms) {
-        const removed = await proposalDocumentsRepository.softDelete(prior.id);
-        if (removed !== undefined) {
-          deleteProposalDocumentFromR2(prior.r2Key).catch(() => {});
-          log.warn('Replaced prior terms supplement on a proposal', {
-            requestId,
-            relationshipId,
-            proposalId,
-            userId: user.id,
-            replacedDocumentId: prior.id,
-          });
-        }
-      }
+      await replacePriorTermsSupplement({
+        proposalId,
+        requestId,
+        relationshipId,
+        userId: user.id,
+      });
     }
 
     // 4. Insert the row (standalone — isolate dup r2Key 23505 below).

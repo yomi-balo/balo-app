@@ -63,6 +63,57 @@ const ONLY_EXPERT = 'Only the expert can build a proposal.';
 const STALE_DRAFT = 'This proposal can no longer be edited.';
 const GENERIC_FAILURE = "Couldn't save your draft. Please try again.";
 
+/** The header columns shared by `createDraft` / `updateDraft`. */
+type DraftHeader = {
+  overview: string;
+  pricingMethod: 'fixed' | 'tm';
+  priceCents: number;
+  currency?: string;
+  timeframeWeeks?: number;
+  exclusions?: string;
+  depositCents?: number;
+  rateCents?: number;
+  cadence?: 'monthly' | 'fortnightly';
+};
+
+/**
+ * True when `error` is a Postgres unique-violation (SQLSTATE 23505). Structural
+ * narrowing (no `any`, no assertion) — the `in` guard narrows `object` to carry
+ * `code`. Mirrors the confirm-upload actions' helper.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  return 'code' in error && error.code === '23505';
+}
+
+/**
+ * Create-or-update the single current `draft` for a relationship, idempotent under
+ * a concurrent first-save. `createDraft` is gated by the partial unique
+ * `proposal_current_per_relationship_idx`: if two first-saves race, the loser hits
+ * a 23505. We recover by re-fetching the now-existing current draft and routing to
+ * `updateDraft` — the concurrent first-save degrades to a no-op update, never a
+ * GENERIC_FAILURE. Returns the draft's id.
+ */
+async function createOrUpdateDraft(relationshipId: string, header: DraftHeader): Promise<string> {
+  const existing = await proposalsRepository.findCurrentByRelationship(relationshipId);
+  if (existing !== undefined) {
+    const updated = await proposalsRepository.updateDraft({ proposalId: existing.id, ...header });
+    return updated.id;
+  }
+
+  try {
+    const created = await proposalsRepository.createDraft({ relationshipId, ...header });
+    return created.id;
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    // A concurrent first-save won the create race — adopt its draft.
+    const current = await proposalsRepository.findCurrentByRelationship(relationshipId);
+    if (current === undefined) throw error;
+    const updated = await proposalsRepository.updateDraft({ proposalId: current.id, ...header });
+    return updated.id;
+  }
+}
+
 /**
  * Autosave the expert's current `draft` proposal for a relationship (A6.2 /
  * BAL-288). Create-or-update: if no current proposal exists yet → `createDraft`,
@@ -103,7 +154,7 @@ export async function saveProposalDraftAction(
       return { success: false, error: ONLY_EXPERT };
     }
 
-    const header = {
+    const header: DraftHeader = {
       overview: data.overview,
       pricingMethod: data.pricingMethod,
       priceCents: data.priceCents,
@@ -115,19 +166,8 @@ export async function saveProposalDraftAction(
       cadence: data.cadence,
     };
 
-    // Create-or-update the single current draft for this relationship.
-    const existing = await proposalsRepository.findCurrentByRelationship(relationshipId);
-    let proposalId: string;
-    if (existing === undefined) {
-      const created = await proposalsRepository.createDraft({ relationshipId, ...header });
-      proposalId = created.id;
-    } else {
-      const updated = await proposalsRepository.updateDraft({
-        proposalId: existing.id,
-        ...header,
-      });
-      proposalId = updated.id;
-    }
+    // Create-or-update the single current draft (idempotent under a create race).
+    const proposalId = await createOrUpdateDraft(relationshipId, header);
 
     // Replace-all the child sets (the composer always sends the complete lists).
     const milestones: ProposalMilestoneInput[] = data.milestones.map((m) => ({
