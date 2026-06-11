@@ -44,6 +44,7 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 7. **Data leakage** — do API responses expose fields they shouldn't?
 8. **Missing RLS** — is there a table without row-level security?
 9. **Webhook spoofing** — can fake webhooks trigger actions?
+10. **ReDoS** — can user-controlled input feed a super-linear regex and stall the event loop?
 
 ## Audit Dimensions
 
@@ -70,6 +71,7 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 - File uploads: type checking, size limits, filename sanitisation
 - No raw user input in SQL queries (Drizzle prevents this, but verify)
 - No raw user input in HTML rendering (XSS)
+- **ReDoS:** any regex applied to user-controlled input (form fields, rich-text/HTML, query strings, headers, filenames) must be linear-time. Reject super-linear patterns — nested quantifiers (`(x+)+`, `(x*)*`), quantified overlapping alternation, and greedy negated classes that don't exclude their opening delimiter (e.g. `/<[^>]*>/g` over user HTML → fix `/<[^<>]*>/g`). A crafted input can pin the Node event loop (denial of service); SonarCloud also flags these as S5852. Remediate by rewriting to linear form, anchoring, or bounding input length — not by suppressing the finding.
 
 ### 4. Secrets & Exposure
 
