@@ -28,7 +28,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
     placeholder?: string;
     ariaLabel?: string;
   }) => {
-    const plain = value.replace(/<[^>]*>/g, '');
+    const plain = value.replace(/<[^<>]*>/g, '');
     return (
       <textarea
         aria-label={ariaLabel ?? 'editor'}
@@ -40,11 +40,11 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
   },
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
   validateDescription: (html: string) => {
-    const text = html.replace(/<[^>]*>/g, '').trim();
+    const text = html.replace(/<[^<>]*>/g, '').trim();
     if (text.length < 10) return 'Add a few words about why you’re a strong fit.';
     return null;
   },
-  plainTextLength: (html: string) => html.replace(/<[^>]*>/g, '').trim().length,
+  plainTextLength: (html: string) => html.replace(/<[^<>]*>/g, '').trim().length,
   DESCRIPTION_MAX_TEXT: 4000,
 }));
 

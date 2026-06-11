@@ -90,6 +90,7 @@ SonarCloud enforces ≥80% coverage on new code. Failing this blocks merge. Chec
 - **Coverage config** — New packages must have `coverage` configured in their `vitest.config.ts` (with `provider: 'v8'` and `reporter` including `'lcov'`) so the root `pnpm test:coverage` command generates an lcov report that SonarCloud can read.
 - **Coverage threshold** — New source files (not just test files) should have corresponding tests. If a new `.ts` file has exported functions but no corresponding `.test.ts` file and is not covered by tests elsewhere, flag it. Pure type/constant-only files (interfaces, `as const` objects, re-export barrels) are exempt.
 - **Coverage exclusions** — Infrastructure files that are hard to unit test (e.g. DB client singletons, config bootstrapping) should be added to `sonar.coverage.exclusions` rather than left uncovered.
+- **Super-linear / ReDoS regex (SonarCloud S5852)** — inspect every new or changed regular expression for catastrophic or polynomial backtracking. Tell-tale shapes: nested quantifiers (`(x+)+`, `(x*)*`, `(x+)*`), quantified overlapping alternation (`(a|ab)*`), and **greedy negated classes that don't exclude their opening delimiter** (the classic is the tag-strip `/<[^>]*>/g` — `[^>]` matches `<`, so it backtracks O(n²); the fix is `/<[^<>]*>/g`). These pass `tsc` and ESLint but fail the SonarCloud gate as new-code Security Hotspots. Flag each with the linear rewrite (exclude both delimiters, drop the nested quantifier, anchor, or bound the input).
 
 ### 8. Observability
 
