@@ -24,6 +24,7 @@ import {
 } from '../test/factories';
 import { expertsRepository } from './experts';
 import { referenceDataRepository } from './reference-data';
+import { usersRepository } from './users';
 
 // Unique-suffix helper so inline taxonomy rows never collide across tests
 // (slugs / language codes have unique indexes; transaction rollback resets
@@ -625,5 +626,18 @@ describe('expertsRepository.findUserIdsByProfileIds', () => {
     const ids = await expertsRepository.findUserIdsByProfileIds([draft.id, randomUUID()]);
 
     expect(ids).toEqual([user.id]);
+  });
+
+  it('excludes a profile whose underlying user is soft-deleted', async () => {
+    const liveUser = await userFactory();
+    const deletedUser = await userFactory();
+    const liveDraft = await expertDraftFactory({ userId: liveUser.id });
+    const deletedDraft = await expertDraftFactory({ userId: deletedUser.id });
+    await usersRepository.softDelete(deletedUser.id);
+
+    const ids = await expertsRepository.findUserIdsByProfileIds([liveDraft.id, deletedDraft.id]);
+
+    expect(ids).toEqual([liveUser.id]);
+    expect(ids).not.toContain(deletedUser.id);
   });
 });

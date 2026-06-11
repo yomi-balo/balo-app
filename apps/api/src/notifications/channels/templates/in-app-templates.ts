@@ -113,11 +113,12 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
 
   'project-proposal-accepted-admin': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
+    const company = (data.clientCompanyName as string) ?? '';
     const title = (data.title as string) ?? 'a project';
     const projectRequestId = data.projectRequestId as string | undefined;
     return {
       title: 'Proposal accepted — raise invoice',
-      body: `${clientName} accepted a proposal for "${title}" (${formatPriceCents(
+      body: `${clientName}${company ? ` @ ${company}` : ''} accepted a proposal for "${title}" (${formatPriceCents(
         data.priceCents,
         data.currency
       )})`,

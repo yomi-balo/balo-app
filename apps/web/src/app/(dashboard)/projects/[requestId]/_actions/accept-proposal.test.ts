@@ -58,6 +58,7 @@ vi.mock('@balo/db', () => ({
 }));
 
 import { acceptProposalAction } from './accept-proposal';
+import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
 const USER = { id: 'user-client', firstName: 'Grace', lastName: 'Hopper' };
@@ -216,6 +217,12 @@ describe('acceptProposalAction', () => {
     });
 
     expect(log.info).toHaveBeenCalledWith('Proposal accepted', expect.any(Object));
+
+    // Revalidates BOTH the request-detail page and the proposal surface the
+    // client accepted from (defensive — avoids a stale "still acceptable" state
+    // on back-navigation).
+    expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+    expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${REL_ID}`);
   });
 
   it('falls back to "their company" when the request has no company', async () => {

@@ -18,7 +18,7 @@ const CHANNEL_QUEUES: Record<NotificationChannel, string> = {
  */
 const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
   'non_selected_experts',
-  'admins',
+  'admin_users',
 ]);
 
 /**
@@ -127,7 +127,7 @@ function resolveRecipientIds(
 ): string[] {
   let source: unknown;
   switch (recipient) {
-    case 'admins':
+    case 'admin_users':
       source = context.data.adminUserIds;
       break;
     case 'non_selected_experts':

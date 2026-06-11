@@ -234,6 +234,20 @@ describe('ProjectProposalAcceptedEmail', () => {
     expect(html).toContain('Dana Whitfield');
     expect(html).toContain('https://app.balo.expert/projects/req-42');
   });
+
+  it('appends the company on first mention as "Name @ Company" when clientCompany is passed', async () => {
+    const html = await render(
+      ProjectProposalAcceptedEmail({
+        firstName: 'Priya',
+        clientName: 'Dana Whitfield',
+        clientCompany: 'Acme Corp',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Dana Whitfield @ Acme Corp');
+  });
 });
 
 describe('ProjectProposalNotSelectedEmail', () => {

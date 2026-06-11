@@ -120,4 +120,13 @@ describe('usersRepository.findIdsByPlatformRoles', () => {
 
     expect(ids).toEqual([]);
   });
+
+  it('returns [] for an empty roles array (empty-input guard)', async () => {
+    // An admin exists, but an empty roles filter must short-circuit to [].
+    await userFactory({ platformRole: 'admin' });
+
+    const ids = await usersRepository.findIdsByPlatformRoles([]);
+
+    expect(ids).toEqual([]);
+  });
 });

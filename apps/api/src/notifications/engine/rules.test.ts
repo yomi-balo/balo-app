@@ -185,7 +185,7 @@ describe('notificationRules', () => {
     ]);
 
     // Admins: in-app only (net-new in-app fan-out).
-    const adminRules = rules!.filter((r) => r.recipient === 'admins');
+    const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
     expect(adminRules).toHaveLength(1);
     expect(adminRules[0]).toMatchObject({
       channel: 'in-app',

@@ -210,8 +210,11 @@ export async function acceptProposalAction(
       // publishNotificationEvent logs internally.
     });
 
-    // Revalidate the request-detail page.
+    // Revalidate the request-detail page AND the proposal surface the client
+    // accepted from, so back-navigation there doesn't serve a stale
+    // "still acceptable" state.
     revalidatePath(`/projects/${requestId}`);
+    revalidatePath(`/projects/${requestId}/proposal/${relationshipId}`);
 
     return {
       success: true,

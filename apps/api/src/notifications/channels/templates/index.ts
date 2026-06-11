@@ -161,6 +161,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       component: React.createElement(ProjectProposalAcceptedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
         clientName,
+        clientCompany: (data.clientCompanyName as string) ?? '',
         projectTitle: title,
         projectRequestId: (data.projectRequestId as string) ?? '',
         baseUrl: BASE_URL,

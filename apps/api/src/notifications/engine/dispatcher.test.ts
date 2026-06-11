@@ -212,7 +212,7 @@ describe('dispatch', () => {
   describe('fan-out recipients', () => {
     const adminRule: NotificationRule = {
       channel: 'in-app',
-      recipient: 'admins',
+      recipient: 'admin_users',
       template: 'project-proposal-accepted-admin',
       timing: 'immediate',
     };
@@ -300,6 +300,45 @@ describe('dispatch', () => {
       await dispatch(notSelectedRule, context);
 
       expect(mockAdd).not.toHaveBeenCalled();
+    });
+
+    it('fans the non_selected_experts EMAIL rule out to one email job per id, recipientId set + recipientEmail undefined (worker resolves the address)', async () => {
+      const notSelectedEmailRule: NotificationRule = {
+        channel: 'email',
+        recipient: 'non_selected_experts',
+        template: 'project-proposal-not-selected',
+        timing: 'immediate',
+        priority: 'normal',
+      };
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-9' },
+        data: { nonSelectedExpertUserIds: ['expert-a', 'expert-b', 'expert-c'] },
+      };
+
+      await dispatch(notSelectedEmailRule, context);
+
+      // One email job per id, all on the email queue.
+      expect(getQueue).toHaveBeenCalledWith('notification-email');
+      expect(mockAdd).toHaveBeenCalledTimes(3);
+
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['expert-a', 'expert-b', 'expert-c']);
+
+      // The fan-out path never sets recipientEmail — the email worker resolves
+      // the address from recipientId (usersRepository.findById).
+      for (const call of mockAdd.mock.calls) {
+        expect(call[1].recipientEmail).toBeUndefined();
+      }
+
+      // Distinct, deterministic dedup job ids.
+      const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+      expect(jobIds).toEqual([
+        'project-proposal-not-selected--expert-a--prop-9',
+        'project-proposal-not-selected--expert-b--prop-9',
+        'project-proposal-not-selected--expert-c--prop-9',
+      ]);
+      expect(new Set(jobIds).size).toBe(3);
     });
 
     it('filters non-string entries out of a fan-out list', async () => {

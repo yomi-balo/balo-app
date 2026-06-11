@@ -108,6 +108,7 @@ export const usersRepository = {
    * ids in no particular order; an empty `roles` array yields an empty result.
    */
   findIdsByPlatformRoles: async (roles: PlatformRole[]): Promise<string[]> => {
+    if (roles.length === 0) return [];
     const rows = await db
       .select({ id: users.id })
       .from(users)

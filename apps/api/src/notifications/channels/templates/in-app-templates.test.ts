@@ -185,9 +185,10 @@ describe('getInAppTemplate', () => {
   });
 
   describe('project-proposal-accepted-admin', () => {
-    it('returns the ops title, body (with client name + formatted price), and action url', () => {
+    it('returns the ops title, body (with "client @ company" + formatted price), and action url', () => {
       const result = getInAppTemplate('project-proposal-accepted-admin', {
         clientName: 'Dana Whitfield',
+        clientCompanyName: 'Acme Corp',
         title: 'CPQ implementation',
         priceCents: 120000,
         currency: 'aud',
@@ -195,12 +196,25 @@ describe('getInAppTemplate', () => {
       });
       expect(result).toEqual({
         title: 'Proposal accepted — raise invoice',
-        body: 'Dana Whitfield accepted a proposal for "CPQ implementation" (AUD 1,200)',
+        body: 'Dana Whitfield @ Acme Corp accepted a proposal for "CPQ implementation" (AUD 1,200)',
         actionUrl: '/projects/req-1',
       });
     });
 
-    it('falls back gracefully when client name, price, and currency are missing', () => {
+    it('degrades to the bare client name when clientCompanyName is absent', () => {
+      const result = getInAppTemplate('project-proposal-accepted-admin', {
+        clientName: 'Dana Whitfield',
+        title: 'CPQ implementation',
+        priceCents: 120000,
+        currency: 'aud',
+        projectRequestId: 'req-1',
+      });
+      expect(result.body).toBe(
+        'Dana Whitfield accepted a proposal for "CPQ implementation" (AUD 1,200)'
+      );
+    });
+
+    it('falls back gracefully when client name, company, price, and currency are missing', () => {
       const result = getInAppTemplate('project-proposal-accepted-admin', {
         title: 'CPQ implementation',
       });

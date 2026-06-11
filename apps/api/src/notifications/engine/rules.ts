@@ -2,7 +2,7 @@ export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
 export interface NotificationRule {
   channel: NotificationChannel;
-  recipient: 'self' | 'expert' | 'client' | 'admin' | 'non_selected_experts' | 'admins';
+  recipient: 'self' | 'expert' | 'client' | 'admin' | 'non_selected_experts' | 'admin_users';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -146,7 +146,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // resolved from the hydrated data.expert) gets a congratulatory in-app + email;
   // the NON-SELECTED experts (recipient:'non_selected_experts', fan-out over
   // data.nonSelectedExpertUserIds) get a gracious in-app + email; and the ADMINS
-  // (recipient:'admins', fan-out over data.adminUserIds) get an in-app "raise
+  // (recipient:'admin_users', fan-out over data.adminUserIds) get an in-app "raise
   // invoice" ops nudge. The two fan-out recipients are resolved to id[] by the
   // dispatcher's additive fan-out branch (one delivery row per recipient).
   'project.proposal_accepted': [
@@ -178,7 +178,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     },
     {
       channel: 'in-app',
-      recipient: 'admins',
+      recipient: 'admin_users',
       template: 'project-proposal-accepted-admin',
       timing: 'immediate',
     },
