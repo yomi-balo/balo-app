@@ -25,6 +25,12 @@ interface ThreadHeaderProps {
    * composer). Non-null → the slot renders ENABLED; null → disabled stub.
    */
   onBuildProposal: (() => void) | null;
+  /**
+   * The `kind:'view'` proposal CTA handler (BAL-289 / A6.3 — opens the read-only
+   * review/submitted surface). Non-null → the slot renders ENABLED; null →
+   * disabled stub (defensive).
+   */
+  onViewProposal: (() => void) | null;
 }
 
 /**
@@ -32,8 +38,10 @@ interface ThreadHeaderProps {
  * expert name, Files pill (count), lens-aware call CTA (mock seam) and the
  * proposal slot per the gating matrix. The client's "Request proposal" CTA is
  * LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's "Build
- * proposal" CTA is LIVE (BAL-288 / A6.2) when `onBuildProposal` is provided.
- * Deliberate cut (recorded): no rating/role subline — that data isn't hydrated.
+ * proposal" CTA is LIVE (BAL-288 / A6.2) when `onBuildProposal` is provided; the
+ * "View proposal"/"View submitted" CTA is LIVE (BAL-289 / A6.3) when
+ * `onViewProposal` is provided. Deliberate cut (recorded): no rating/role
+ * subline — that data isn't hydrated.
  */
 export function ThreadHeader({
   thread,
@@ -46,6 +54,7 @@ export function ThreadHeader({
   onCall,
   onRequestProposal,
   onBuildProposal,
+  onViewProposal,
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
   const { headerProposal } = actions;
   return (
@@ -118,9 +127,13 @@ export function ThreadHeader({
       {headerProposal?.kind === 'view' && (
         <button
           type="button"
-          disabled
-          aria-disabled="true"
-          className="border-primary/30 bg-primary/5 text-primary inline-flex min-h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold opacity-60"
+          onClick={onViewProposal ?? undefined}
+          disabled={onViewProposal === null}
+          aria-disabled={onViewProposal === null ? true : undefined}
+          className={cn(
+            'border-primary/30 bg-primary/5 text-primary focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
+            onViewProposal === null ? 'opacity-60' : 'hover:opacity-90'
+          )}
         >
           <FileText className="h-3.5 w-3.5" aria-hidden="true" />
           {headerProposal.label}

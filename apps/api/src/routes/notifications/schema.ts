@@ -90,6 +90,21 @@ const projectProposalSubmittedPayload = z.object({
   title: z.string().min(1).max(200),
 });
 
+// BAL-289 proposal accept (client → expert + ops). `correlationId` is the proposal
+// id — dedup per accepted proposal. `expertProfileId` is the winning expert (resolver
+// hydrates data.expert). Mirrors apps/web/src/lib/notifications/types.ts.
+const projectProposalAcceptedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  expertProfileId: z.uuid(),
+  clientName: z.string().min(1).max(120),
+  clientCompanyName: z.string().min(1).max(160),
+  title: z.string().min(1).max(200),
+  priceCents: z.number().int().nonnegative(),
+  currency: z.string().min(2).max(10),
+});
+
 // TODO(BAL-284): known gap — three pre-existing web-published events are missing
 // from this union ('project.exploratory_requested', 'project.expert_invited',
 // 'project.eoi_submitted'); they currently 400 at the publish route. BAL-284
@@ -116,6 +131,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.proposal_submitted'),
     payload: projectProposalSubmittedPayload,
+  }),
+  z.object({
+    event: z.literal('project.proposal_accepted'),
+    payload: projectProposalAcceptedPayload,
   }),
   z.object({
     event: z.literal('project.message_posted'),

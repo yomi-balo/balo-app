@@ -144,6 +144,82 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-proposal-accepted', () => {
+    it('returns the winning-expert title, body, and action url', () => {
+      const result = getInAppTemplate('project-proposal-accepted', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Proposal accepted',
+        body: 'Your proposal for "CPQ implementation" was accepted',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-proposal-accepted', {});
+      expect(result.body).toBe('Your proposal for "a project" was accepted');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-proposal-not-selected', () => {
+    it('returns the not-selected title, body, and action url', () => {
+      const result = getInAppTemplate('project-proposal-not-selected', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Proposal not selected',
+        body: 'The client chose another proposal for "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-proposal-not-selected', {});
+      expect(result.body).toBe('The client chose another proposal for "a project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-proposal-accepted-admin', () => {
+    it('returns the ops title, body (with client name + formatted price), and action url', () => {
+      const result = getInAppTemplate('project-proposal-accepted-admin', {
+        clientName: 'Dana Whitfield',
+        title: 'CPQ implementation',
+        priceCents: 120000,
+        currency: 'aud',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Proposal accepted — raise invoice',
+        body: 'Dana Whitfield accepted a proposal for "CPQ implementation" (AUD 1,200)',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back gracefully when client name, price, and currency are missing', () => {
+      const result = getInAppTemplate('project-proposal-accepted-admin', {
+        title: 'CPQ implementation',
+      });
+      expect(result.body).toBe('A client accepted a proposal for "CPQ implementation" (an amount)');
+      expect(result.actionUrl).toBeUndefined();
+    });
+
+    it('renders the currency code alone when the price is non-numeric', () => {
+      const result = getInAppTemplate('project-proposal-accepted-admin', {
+        clientName: 'Dana',
+        title: 'CPQ',
+        priceCents: 'oops',
+        currency: 'usd',
+        projectRequestId: 'req-1',
+      });
+      expect(result.body).toBe('Dana accepted a proposal for "CPQ" (USD)');
+    });
+  });
+
   describe('project-message-posted', () => {
     it('renders sender + preview with the request action url', () => {
       const result = getInAppTemplate('project-message-posted', {

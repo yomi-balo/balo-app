@@ -2,7 +2,7 @@ export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
 export interface NotificationRule {
   channel: NotificationChannel;
-  recipient: 'self' | 'expert' | 'client' | 'admin';
+  recipient: 'self' | 'expert' | 'client' | 'admin' | 'non_selected_experts' | 'admins';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -138,6 +138,48 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       channel: 'in-app',
       recipient: 'client',
       template: 'project-proposal-submitted',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-289: the client accepted an expert's proposal — a decision that fans out
+  // to THREE audiences in one event. The WINNING expert (recipient:'expert',
+  // resolved from the hydrated data.expert) gets a congratulatory in-app + email;
+  // the NON-SELECTED experts (recipient:'non_selected_experts', fan-out over
+  // data.nonSelectedExpertUserIds) get a gracious in-app + email; and the ADMINS
+  // (recipient:'admins', fan-out over data.adminUserIds) get an in-app "raise
+  // invoice" ops nudge. The two fan-out recipients are resolved to id[] by the
+  // dispatcher's additive fan-out branch (one delivery row per recipient).
+  'project.proposal_accepted': [
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-proposal-accepted',
+      timing: 'immediate',
+    },
+    {
+      channel: 'email',
+      recipient: 'expert',
+      template: 'project-proposal-accepted',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'non_selected_experts',
+      template: 'project-proposal-not-selected',
+      timing: 'immediate',
+    },
+    {
+      channel: 'email',
+      recipient: 'non_selected_experts',
+      template: 'project-proposal-not-selected',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'admins',
+      template: 'project-proposal-accepted-admin',
       timing: 'immediate',
     },
   ],

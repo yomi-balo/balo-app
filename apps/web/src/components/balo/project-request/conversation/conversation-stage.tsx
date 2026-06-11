@@ -733,6 +733,38 @@ export function ConversationStage({
   );
   const handleNudgeBuild = useCallback((): void => handleBuildProposal(), [handleBuildProposal]);
 
+  // ── View proposal (BAL-289 / A6.3 — BOTH lenses) ───────────────────────────
+  // Opens the read-only proposal surface for the active thread. The route
+  // dispatches by lens (client → review, expert/admin → submitted view), so the
+  // same push serves both. Gated to a submitted/accepted relationship (defence-
+  // in-depth: the View CTA only renders at those states). `surface`
+  // (`header`/`rail`) feeds the existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel.
+  const handleViewProposal = useCallback(
+    (surface?: 'header' | 'rail'): void => {
+      if (activeThreadId === null) return;
+      if (
+        activeThread?.relationshipStatus !== 'proposal_submitted' &&
+        activeThread?.relationshipStatus !== 'accepted'
+      ) {
+        return;
+      }
+      if (surface !== undefined) {
+        track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+          request_id: requestId,
+          relationship_id: activeThreadId,
+          surface,
+        });
+      }
+      router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
+    },
+    [activeThreadId, activeThread?.relationshipStatus, requestId, router]
+  );
+  const handleHeaderView = useCallback(
+    (): void => handleViewProposal('header'),
+    [handleViewProposal]
+  );
+  const handleRailView = useCallback((): void => handleViewProposal('rail'), [handleViewProposal]);
+
   const handleProposalConfirm = useCallback(async (): Promise<RequestProposalResult> => {
     const context = proposalContextRef.current;
     if (context === null) {
@@ -888,6 +920,8 @@ export function ConversationStage({
   const onRailProposal =
     isClient && actions.railProposal?.kind === 'request' ? handleRailProposal : null;
   const onRailBuildProposal = isExpert ? handleRailBuild : null;
+  // The `kind:'view'` review/submitted link is live for BOTH lenses (the route
+  // dispatches by lens). Always wired; the slot only renders at submitted/accepted.
   const composerExpertName = isExpert ? 'the client' : activeThread.expertFirstName;
 
   return (
@@ -945,6 +979,7 @@ export function ConversationStage({
           onCall={handleHeaderCall}
           onRequestProposal={onHeaderRequestProposal}
           onBuildProposal={onHeaderBuildProposal}
+          onViewProposal={handleHeaderView}
         />
       </div>
 
@@ -1007,6 +1042,7 @@ export function ConversationStage({
         onCall={handleRailCall}
         onProposal={onRailProposal}
         onBuildProposal={onRailBuildProposal}
+        onViewProposal={handleRailView}
       />
 
       <ThreadFilesPanel

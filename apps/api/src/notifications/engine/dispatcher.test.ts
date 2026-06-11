@@ -207,4 +207,113 @@ describe('dispatch', () => {
     const deliveryPayload = mockAdd.mock.calls[0][1];
     expect(deliveryPayload.recipientId).toBe('client-002');
   });
+
+  // ── BAL-289 fan-out: list-valued recipients enqueue one job per id ──
+  describe('fan-out recipients', () => {
+    const adminRule: NotificationRule = {
+      channel: 'in-app',
+      recipient: 'admins',
+      template: 'project-proposal-accepted-admin',
+      timing: 'immediate',
+    };
+
+    const notSelectedRule: NotificationRule = {
+      channel: 'in-app',
+      recipient: 'non_selected_experts',
+      template: 'project-proposal-not-selected',
+      timing: 'immediate',
+    };
+
+    it('enqueues one in-app job per id in data.adminUserIds with distinct jobIds', async () => {
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-1' },
+        data: { adminUserIds: ['admin-1', 'admin-2', 'admin-3'] },
+      };
+
+      await dispatch(adminRule, context);
+
+      expect(getQueue).toHaveBeenCalledWith('notification-in-app');
+      expect(mockAdd).toHaveBeenCalledTimes(3);
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['admin-1', 'admin-2', 'admin-3']);
+      const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+      expect(jobIds).toEqual([
+        'project-proposal-accepted-admin--admin-1--prop-1',
+        'project-proposal-accepted-admin--admin-2--prop-1',
+        'project-proposal-accepted-admin--admin-3--prop-1',
+      ]);
+      expect(new Set(jobIds).size).toBe(3);
+    });
+
+    it('does not enqueue when data.adminUserIds is empty', async () => {
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-1' },
+        data: { adminUserIds: [] },
+      };
+
+      await dispatch(adminRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
+    it('does not enqueue when data.adminUserIds is absent', async () => {
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-1' },
+        data: {},
+      };
+
+      await dispatch(adminRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
+    it('enqueues one job per id in data.nonSelectedExpertUserIds with distinct jobIds', async () => {
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-9' },
+        data: { nonSelectedExpertUserIds: ['expert-a', 'expert-b'] },
+      };
+
+      await dispatch(notSelectedRule, context);
+
+      expect(mockAdd).toHaveBeenCalledTimes(2);
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['expert-a', 'expert-b']);
+      const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+      expect(jobIds).toEqual([
+        'project-proposal-not-selected--expert-a--prop-9',
+        'project-proposal-not-selected--expert-b--prop-9',
+      ]);
+      expect(new Set(jobIds).size).toBe(2);
+    });
+
+    it('does not enqueue when data.nonSelectedExpertUserIds is empty', async () => {
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-9' },
+        data: { nonSelectedExpertUserIds: [] },
+      };
+
+      await dispatch(notSelectedRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
+    it('filters non-string entries out of a fan-out list', async () => {
+      const context: RuleContext = {
+        event: 'project.proposal_accepted',
+        payload: { correlationId: 'prop-1' },
+        data: { adminUserIds: ['admin-1', undefined, null, 42, 'admin-2'] },
+      };
+
+      await dispatch(adminRule, context);
+
+      expect(mockAdd).toHaveBeenCalledTimes(2);
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['admin-1', 'admin-2']);
+    });
+  });
 });

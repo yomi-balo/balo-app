@@ -9,6 +9,8 @@ import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
+import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
+import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -149,6 +151,34 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(expertName)} sent your proposal: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-proposal-accepted': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const clientName = (data.clientName as string) ?? 'The client';
+    return {
+      component: React.createElement(ProjectProposalAcceptedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientName,
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Your proposal was accepted: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-proposal-not-selected': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    return {
+      component: React.createElement(ProjectProposalNotSelectedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `An update on your proposal: ${sanitizeSubjectTitle(title)}`,
     };
   },
 

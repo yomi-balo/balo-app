@@ -912,7 +912,7 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
     }
   });
 
-  it("client + proposal_submitted: 'View proposal' is a DISABLED stub on every surface (A6 owns it)", async () => {
+  it("client + proposal_submitted: 'View proposal' is LIVE — pushes the review route + fires the funnel (A6.3)", async () => {
     const user = userEvent.setup();
     render(
       <ConversationStage
@@ -922,21 +922,46 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
         view={view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] })}
       />
     );
-    // Desktop header stub + mobile rail stub — both disabled.
+    // Desktop header + mobile rail — both enabled now.
     const ctas = screen.getAllByRole('button', { name: 'View proposal' });
     expect(ctas.length).toBeGreaterThanOrEqual(2);
     for (const cta of ctas) {
-      expect(cta).toBeDisabled();
-      expect(cta).toHaveAttribute('aria-disabled', 'true');
+      expect(cta).toBeEnabled();
+      expect(cta).not.toHaveAttribute('aria-disabled');
     }
-    // Tapping does nothing: no confirm beat, no action, no funnel event.
-    for (const cta of ctas) await user.click(cta);
+
+    const [headerCta] = ctas;
+    await user.click(headerCta as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      surface: 'header',
+    });
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+    // It opens the review surface, never the client's request-proposal confirm beat.
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(mockRequestProposal).not.toHaveBeenCalled();
-    expect(mockTrack).not.toHaveBeenCalledWith(
+
+    // The rail surface is tracked as 'rail'.
+    const railCta = ctas.at(-1);
+    await user.click(railCta as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(
       CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
-      expect.anything()
+      expect.objectContaining({ surface: 'rail' })
     );
+  });
+
+  it("expert + proposal_submitted: 'View submitted' is LIVE — pushes the submitted route (A6.3)", async () => {
+    const user = userEvent.setup();
+    renderStage(
+      view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] }),
+      'expert'
+    );
+    const [headerCta] = screen.getAllByRole('button', { name: 'View submitted' });
+    expect(headerCta).toBeDefined();
+    expect(headerCta).toBeEnabled();
+    await user.click(headerCta as HTMLElement);
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
   });
 });
 

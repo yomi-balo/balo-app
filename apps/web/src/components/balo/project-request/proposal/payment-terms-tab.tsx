@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { centsToDollars, dollarsToCents, formatWholeCurrency } from '@/lib/utils/currency';
+import { STANDARD_TERMS } from './proposal-standard-terms';
 import { ProposalDocumentUploader } from './proposal-document-uploader';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type {
@@ -58,13 +59,6 @@ function parseDollarsToCents(raw: string): number | null {
 const CADENCE_OPTIONS: { value: ProposalCadenceValue; label: string }[] = [
   { value: 'monthly', label: 'Monthly' },
   { value: 'fortnightly', label: 'Fortnightly' },
-];
-
-const STANDARD_TERMS = [
-  'Work is delivered against the milestones and scope set out in this proposal.',
-  'Invoices are issued via Balo; payment is held and released through the platform.',
-  'Either party may raise a dispute through Balo support before final acceptance.',
-  'Confidential information shared during the engagement stays confidential.',
 ];
 
 /**

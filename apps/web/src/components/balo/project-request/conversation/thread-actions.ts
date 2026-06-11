@@ -8,22 +8,23 @@ import {
  * Pure deriver for the per-thread action chrome (desktop header + mobile rail)
  * — the design's `callAllowed` / `showProposalAction` matrix over
  * `lens × requestStatus × relationshipStatus`. The client's `kind:'request'`
- * proposal CTA is LIVE (BAL-272 / A5) and the expert's `kind:'build'` CTA is
- * LIVE (BAL-288 / A6.2 — navigates to the proposal composer); the `kind:'view'`
- * CTAs remain disabled stubs owned by A6.3. The call CTA is wired (mock seam).
+ * proposal CTA is LIVE (BAL-272 / A5), the expert's `kind:'build'` CTA is LIVE
+ * (BAL-288 / A6.2 — navigates to the proposal composer), and the `kind:'view'`
+ * CTA is LIVE (BAL-289 / A6.3 — navigates to the read-only review/submitted
+ * surface). The call CTA is wired (mock seam).
  */
 
 export type HeaderProposalSlot =
   | { kind: 'pill-requested' } // client, rel proposal_requested — warning pill
   | { kind: 'pill-awaiting' } // expert, rel eoi_submitted — muted pill
-  | { kind: 'view'; label: string } // rel ≥ proposal_submitted — outlined disabled stub
+  | { kind: 'view'; label: string } // rel ≥ proposal_submitted — live (BAL-289) review/submitted link
   | { kind: 'request'; label: string; quiet: boolean } // client A5 live CTA — gradient
   | { kind: 'build'; label: string; quiet: boolean }; // expert A6 live CTA — gradient
 
 export type RailProposalSlot = {
   /**
    * `request` = the live A5 client commit CTA; `build` = the live A6 expert
-   * composer CTA; `view` = A6.3's disabled stub.
+   * composer CTA; `view` = the live A6.3 (BAL-289) review/submitted link.
    */
   kind: 'request' | 'view' | 'build';
   label: string;
@@ -78,7 +79,7 @@ function deriveRailProposal(
     return { kind: 'build', label: 'Build proposal', quiet: nudgeIsProposal };
   }
   if (lens === 'client' && relationshipStatus === 'proposal_submitted') {
-    // A6's CTA — the rail must render it as a disabled stub, never wire it
+    // The live A6.3 (BAL-289) review link — wired via `onViewProposal`, never
     // to the A5 request-proposal flow (the header's `kind:'view'` twin).
     return { kind: 'view', label: 'View proposal', quiet: nudgeIsProposal };
   }

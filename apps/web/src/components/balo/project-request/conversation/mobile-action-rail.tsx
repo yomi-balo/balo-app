@@ -21,30 +21,36 @@ interface MobileActionRailProps {
   /**
    * `kind:'build'` proposal CTA handler (expert lens, A6.2 — opens the
    * composer). Non-null → the CTA renders ENABLED; null → disabled stub.
-   * `kind:'view'` CTAs ALWAYS render as the disabled stub (A6.3 owns them)
-   * regardless of either handler.
    */
   onBuildProposal: (() => void) | null;
+  /**
+   * `kind:'view'` proposal CTA handler (BAL-289 / A6.3 — opens the read-only
+   * review/submitted surface). Non-null → the CTA renders ENABLED; null →
+   * disabled stub (defensive).
+   */
+  onViewProposal: (() => void) | null;
 }
 
-/** Picks the live handler for the proposal CTA kind (`view` is never live). */
+/** Picks the live handler for the proposal CTA kind. */
 function proposalHandlerFor(
   proposalCta: RailProposalSlot | null,
   onProposal: (() => void) | null,
-  onBuildProposal: (() => void) | null
+  onBuildProposal: (() => void) | null,
+  onViewProposal: (() => void) | null
 ): (() => void) | null {
   if (proposalCta?.kind === 'request') return onProposal;
   if (proposalCta?.kind === 'build') return onBuildProposal;
+  if (proposalCta?.kind === 'view') return onViewProposal;
   return null;
 }
 
 /**
  * Mobile action rail (`lg:hidden`) — BELOW the composer, anchored at the true
  * bottom (thumb zone). Surfaces the call CTA (mock seam) + the primary
- * proposal commit action (LIVE for the client per BAL-272 / A5 and for the
- * expert per BAL-288 / A6.2; the `kind:'view'` stub stays disabled until A6.3).
- * Returns null when nothing is actionable; hides while the composer is focused
- * (keyboard up).
+ * proposal action (LIVE for the client per BAL-272 / A5, for the expert per
+ * BAL-288 / A6.2, and the `kind:'view'` review/submitted link per BAL-289 /
+ * A6.3). Returns null when nothing is actionable; hides while the composer is
+ * focused (keyboard up).
  */
 export function MobileActionRail({
   visible,
@@ -55,13 +61,18 @@ export function MobileActionRail({
   onCall,
   onProposal,
   onBuildProposal,
+  onViewProposal,
 }: Readonly<MobileActionRailProps>): React.JSX.Element | null {
   if (!visible || (!showCall && proposalCta === null)) return null;
 
-  // Map the handler by kind: `request` → client A5, `build` → expert A6.2;
-  // `kind:'view'` is A6.3's stub (no handler), mirroring the desktop header's
-  // disabled "View proposal" treatment.
-  const proposalHandler = proposalHandlerFor(proposalCta, onProposal, onBuildProposal);
+  // Map the handler by kind: `request` → client A5, `build` → expert A6.2,
+  // `view` → the A6.3 review/submitted link (mirrors the desktop header).
+  const proposalHandler = proposalHandlerFor(
+    proposalCta,
+    onProposal,
+    onBuildProposal,
+    onViewProposal
+  );
 
   return (
     <div className="border-border bg-muted/40 flex items-center gap-2 border-t px-3.5 py-2.5 lg:hidden">

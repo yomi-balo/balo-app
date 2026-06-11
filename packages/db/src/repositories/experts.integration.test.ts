@@ -597,3 +597,33 @@ describe('expertsRepository.findUserIdByProfileId', () => {
     expect(result).toBeUndefined();
   });
 });
+
+// ── findUserIdsByProfileIds ──────────────────────────────────────────
+
+describe('expertsRepository.findUserIdsByProfileIds', () => {
+  it('maps multiple profile ids to their underlying user ids', async () => {
+    const userA = await userFactory();
+    const userB = await userFactory();
+    const draftA = await expertDraftFactory({ userId: userA.id });
+    const draftB = await expertDraftFactory({ userId: userB.id });
+
+    const ids = await expertsRepository.findUserIdsByProfileIds([draftA.id, draftB.id]);
+
+    expect(ids.sort()).toEqual([userA.id, userB.id].sort());
+  });
+
+  it('returns [] for an empty input array', async () => {
+    const ids = await expertsRepository.findUserIdsByProfileIds([]);
+
+    expect(ids).toEqual([]);
+  });
+
+  it('ignores unknown profile ids and returns only the resolved user ids', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+
+    const ids = await expertsRepository.findUserIdsByProfileIds([draft.id, randomUUID()]);
+
+    expect(ids).toEqual([user.id]);
+  });
+});

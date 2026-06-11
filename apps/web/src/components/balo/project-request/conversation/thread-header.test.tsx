@@ -17,6 +17,8 @@ function renderHeader(input: {
   onRequestProposal?: (() => void) | null;
   /** Non-null → the expert "Build proposal" CTA renders enabled (A6.2). */
   onBuildProposal?: (() => void) | null;
+  /** Non-null → the "View proposal"/"View submitted" CTA renders enabled (A6.3). */
+  onViewProposal?: (() => void) | null;
 }): {
   onToggleFiles: ReturnType<typeof vi.fn>;
   onCall: ReturnType<typeof vi.fn>;
@@ -39,6 +41,7 @@ function renderHeader(input: {
       onCall={onCall}
       onRequestProposal={input.onRequestProposal ?? null}
       onBuildProposal={input.onBuildProposal ?? null}
+      onViewProposal={input.onViewProposal ?? null}
     />
   );
   return { onToggleFiles, onCall };
@@ -125,12 +128,45 @@ describe('ThreadHeader', () => {
     expect(screen.queryByRole('button', { name: 'Request proposal' })).not.toBeInTheDocument();
   });
 
-  it('proposal submitted: disabled View proposal stub', () => {
+  it('proposal submitted without a handler: disabled View proposal stub (defensive)', () => {
     renderHeader({
       requestStatus: 'proposal_submitted',
       threadOverrides: { relationshipStatus: 'proposal_submitted' },
+      onViewProposal: null,
     });
-    expect(screen.getByRole('button', { name: 'View proposal' })).toBeDisabled();
+    const stub = screen.getByRole('button', { name: 'View proposal' });
+    expect(stub).toBeDisabled();
+    expect(stub).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('proposal submitted with a handler: View proposal is ENABLED and fires it (A6.3)', async () => {
+    const user = userEvent.setup();
+    const onViewProposal = vi.fn();
+    renderHeader({
+      requestStatus: 'proposal_submitted',
+      threadOverrides: { relationshipStatus: 'proposal_submitted' },
+      onViewProposal,
+    });
+    const cta = screen.getByRole('button', { name: 'View proposal' });
+    expect(cta).toBeEnabled();
+    expect(cta).not.toHaveAttribute('aria-disabled');
+    await user.click(cta);
+    expect(onViewProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it('expert lens + proposal submitted: View submitted is ENABLED and fires it (A6.3)', async () => {
+    const user = userEvent.setup();
+    const onViewProposal = vi.fn();
+    renderHeader({
+      lens: 'expert',
+      requestStatus: 'proposal_submitted',
+      threadOverrides: { relationshipStatus: 'proposal_submitted' },
+      onViewProposal,
+    });
+    const cta = screen.getByRole('button', { name: 'View submitted' });
+    expect(cta).toBeEnabled();
+    await user.click(cta);
+    expect(onViewProposal).toHaveBeenCalledTimes(1);
   });
 
   it('hides the call CTA once the request reaches kickoff', () => {

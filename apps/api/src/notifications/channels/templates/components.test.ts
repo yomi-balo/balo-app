@@ -10,6 +10,8 @@ import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
+import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
+import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
 import { getEmailTemplate, sanitizeSubjectTitle } from './index.js';
 import {
   EmailShell,
@@ -205,6 +207,61 @@ describe('ProjectProposalSubmittedEmail', () => {
   });
 });
 
+describe('ProjectProposalAcceptedEmail', () => {
+  it('returns a React element carrying the client name', () => {
+    const element = ProjectProposalAcceptedEmail({
+      firstName: 'Priya',
+      clientName: 'Dana Whitfield',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders a congratulatory message and a link to the project', async () => {
+    const html = await render(
+      ProjectProposalAcceptedEmail({
+        firstName: 'Priya',
+        clientName: 'Dana Whitfield',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Your proposal was accepted');
+    expect(html).toContain('Dana Whitfield');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+});
+
+describe('ProjectProposalNotSelectedEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectProposalNotSelectedEmail({
+      firstName: 'Priya',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders a gracious message and a link to the project', async () => {
+    const html = await render(
+      ProjectProposalNotSelectedEmail({
+        firstName: 'Priya',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('The client chose another proposal');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+});
+
 describe('getEmailTemplate — A2 templates', () => {
   it('resolves project-exploratory-requested with a scoping subject', () => {
     const { component, subject } = getEmailTemplate('project-exploratory-requested', {
@@ -263,6 +320,27 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(subject).toBe('Your expert sent your proposal: a project');
   });
 
+  it('resolves project-proposal-accepted with a congratulatory subject (BAL-289)', () => {
+    const { component, subject } = getEmailTemplate('project-proposal-accepted', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Priya',
+      clientName: 'Dana Whitfield',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('Your proposal was accepted: CPQ implementation');
+  });
+
+  it('resolves project-proposal-not-selected with an update subject (BAL-289)', () => {
+    const { component, subject } = getEmailTemplate('project-proposal-not-selected', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Priya',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('An update on your proposal: CPQ implementation');
+  });
+
   it('throws on an unknown template name', () => {
     expect(() => getEmailTemplate('does-not-exist', {})).toThrow(/Unknown email template/);
   });
@@ -295,6 +373,8 @@ describe('sanitizeSubjectTitle', () => {
       'project-eoi-submitted',
       'project-proposal-requested',
       'project-proposal-submitted',
+      'project-proposal-accepted',
+      'project-proposal-not-selected',
     ];
     for (const name of templateNames) {
       const { subject } = getEmailTemplate(name, {
@@ -302,6 +382,7 @@ describe('sanitizeSubjectTitle', () => {
         projectRequestId: 'req-1',
         recipientName: 'Dana',
         expertName: 'Priya Nair',
+        clientName: 'Dana Whitfield',
         company: { name: 'Acme Inc' },
       });
       expect(subject).not.toMatch(/[\r\n]/);
