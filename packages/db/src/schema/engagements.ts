@@ -1,4 +1,13 @@
-import { pgTable, uuid, integer, text, timestamp, index, check } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  integer,
+  text,
+  timestamp,
+  index,
+  uniqueIndex,
+  check,
+} from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { pricingMethodEnum, proposalCadenceEnum, engagementStatusEnum } from './enums';
 import { companies } from './companies';
@@ -90,6 +99,19 @@ export const engagements = pgTable(
     index('engagement_source_proposal_idx').on(t.sourceProposalId),
     index('engagement_relationship_idx').on(t.relationshipId),
     index('engagement_request_idx').on(t.projectRequestId),
+    // At most ONE live engagement per project_request — defence-in-depth behind
+    // `materializeFromKickoff`'s status-guard-under-lock (BAL-291 review follow-up):
+    // any FUTURE writer that inserts an engagement outside that method still can't
+    // duplicate a request's engagement. PARTIAL on both predicates deliberately:
+    //   - `project_request_id IS NOT NULL` keeps the seam open — a retainer/embedded
+    //     product writes engagements with NO origination row (all-NULL provenance),
+    //     and multiple NULL `project_request_id` rows must coexist.
+    //   - `deleted_at IS NULL` so a soft-deleted engagement never blocks re-creating
+    //     one for the same request (non-partial unique + soft-delete = silent
+    //     re-create failure).
+    uniqueIndex('engagement_request_unique_idx')
+      .on(t.projectRequestId)
+      .where(sql`${t.projectRequestId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
     check('engagement_price_cents_nonneg', sql`${t.priceCents} >= 0`),
     check(
       'engagement_deposit_cents_nonneg',

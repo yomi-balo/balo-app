@@ -178,6 +178,74 @@ describe('engagementsRepository.create — FK / CHECK constraints', () => {
   });
 });
 
+describe('engagement_request_unique_idx — at most one live engagement per request', () => {
+  it('rejects a SECOND live engagement for the same project_request_id (partial unique 23505)', async () => {
+    const { engagement, companyId, expertProfileId } = await engagementFactory({
+      withSourceProposal: true,
+    });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    await expect(
+      engagementsRepository.create({
+        companyId,
+        expertProfileId,
+        projectRequestId: requestId,
+        pricingMethod: 'fixed',
+        priceCents: 1000,
+      })
+    ).rejects.toThrow();
+  });
+
+  it('a SOFT-DELETED engagement does NOT block re-creating one for the same request (index is partial on deleted_at)', async () => {
+    const { engagement, companyId, expertProfileId } = await engagementFactory({
+      withSourceProposal: true,
+    });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+
+    // The unique index ignores the soft-deleted row → re-creation succeeds.
+    const replacement = await engagementsRepository.create({
+      companyId,
+      expertProfileId,
+      projectRequestId: requestId,
+      pricingMethod: 'fixed',
+      priceCents: 2000,
+    });
+    expect(replacement.projectRequestId).toBe(requestId);
+    expect(replacement.id).not.toBe(engagement.id);
+  });
+
+  it('allows MANY engagements with a NULL project_request_id (the retainer seam — index is partial on NOT NULL)', async () => {
+    const companyId = await seedCompanyId();
+    const expertA = await expertDraftFactory();
+    const expertB = await expertDraftFactory();
+
+    const r1 = await engagementsRepository.create({
+      companyId,
+      expertProfileId: expertA.id,
+      pricingMethod: 'tm',
+      priceCents: 1000,
+    });
+    const r2 = await engagementsRepository.create({
+      companyId,
+      expertProfileId: expertB.id,
+      pricingMethod: 'tm',
+      priceCents: 2000,
+    });
+
+    // NULL project_request_id rows are outside the partial index → no collision.
+    expect(r1.projectRequestId).toBeNull();
+    expect(r2.projectRequestId).toBeNull();
+    expect(r1.id).not.toBe(r2.id);
+  });
+});
+
 describe('engagementsRepository.findById / listByCompany', () => {
   it('findById returns a live engagement and excludes soft-deleted', async () => {
     const { engagement } = await engagementFactory();

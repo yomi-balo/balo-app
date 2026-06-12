@@ -225,6 +225,13 @@
       "when": 1781254521271,
       "tag": "0031_mixed_justice",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1781270140190,
+      "tag": "0032_bent_mandrill",
+      "breakpoints": true
     }
   ]
 }
