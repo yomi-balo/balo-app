@@ -133,6 +133,14 @@ export function KickoffBoard({
           toast.error(result.error);
           return;
         }
+        // The confirmed gate determines the actor (client billing → client,
+        // expert terms → expert) — feeds the kickoff-stage dwell funnel.
+        track(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
+          request_id: requestId,
+          relationship_id: acceptedRelationshipId,
+          gate: result.gate,
+          actor: result.gate === 'client_billing' ? 'client' : 'expert',
+        });
         toast.success('Marked as done');
         router.refresh();
       })();

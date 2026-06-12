@@ -147,7 +147,28 @@ describe('KickoffBoard — completing a participant task', () => {
     });
     expect(mockToast.success).toHaveBeenCalledWith('Marked as done');
     expect(mockRefresh).toHaveBeenCalled();
-    expect(track).not.toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
+      request_id: REQUEST_ID,
+      relationship_id: RELATIONSHIP_ID,
+      gate: 'client_billing',
+      actor: 'client',
+    });
+  });
+
+  it('fires the gate-confirmed event with the expert actor when the expert completes', async () => {
+    mockCompleteKickoff.mockResolvedValue({ success: true, gate: 'expert_terms' });
+    renderBoard({ lens: 'expert' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Complete Confirm payment terms/i }));
+
+    await waitFor(() => {
+      expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
+        request_id: REQUEST_ID,
+        relationship_id: RELATIONSHIP_ID,
+        gate: 'expert_terms',
+        actor: 'expert',
+      });
+    });
   });
 
   it('toasts the error and does not refresh when completing fails', async () => {
