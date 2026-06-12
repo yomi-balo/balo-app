@@ -15,6 +15,8 @@ import {
   InvalidRelationshipTransitionError,
   requestExpertRelationshipsRepository,
 } from './request-expert-relationships';
+import { proposalMilestonesRepository } from './proposal-milestones';
+import { proposalPaymentInstallmentsRepository } from './proposal-payment-installments';
 
 describe('proposalsRepository.submit', () => {
   it('inserts the proposal (v1, current, submitted) and advances the relationship proposal_requested→proposal_submitted', async () => {
@@ -423,6 +425,8 @@ describe('proposalsRepository.resubmit', () => {
       overview: '<p>v2.</p>',
       pricingMethod: 'fixed',
       priceCents: 2000,
+      milestones: [],
+      installments: [],
     });
 
     expect(v2.version).toBe(2);
@@ -476,8 +480,63 @@ describe('proposalsRepository.resubmit', () => {
         overview: '<p>v2.</p>',
         pricingMethod: 'fixed',
         priceCents: 2000,
+        milestones: [],
+        installments: [],
       })
     ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
+  });
+
+  it('writes the supplied milestones + installments onto v2 atomically with the header', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const v1 = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 1000,
+    });
+    const client = await userFactory();
+    await proposalsRepository.requestChanges({
+      proposalId: v1.id,
+      requestedByUserId: client.id,
+      note: 'Revise milestones + payment schedule.',
+    });
+
+    const v2 = await proposalsRepository.resubmit({
+      relationshipId: relationship.id,
+      overview: '<p>v2.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 3000,
+      milestones: [
+        { title: 'Discovery', valueCents: 1000 },
+        { title: 'Build', descriptionHtml: '<p>impl</p>', valueCents: 2000 },
+      ],
+      installments: [
+        { label: 'Upfront', pct: 50 },
+        { label: 'On completion', pct: 50 },
+      ],
+    });
+
+    expect(v2.version).toBe(2);
+    expect(v2.status).toBe('submitted');
+    expect(v2.isCurrent).toBe(true);
+
+    // The children were written onto v2 in the SAME transaction as the header — a
+    // current/submitted v2 never exists with zero milestones/installments.
+    const milestones = await proposalMilestonesRepository.listByProposal(v2.id);
+    expect(milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
+    expect(milestones.map((m) => m.sortOrder)).toEqual([0, 1]);
+    expect(milestones.map((m) => m.valueCents)).toEqual([1000, 2000]);
+
+    const installments = await proposalPaymentInstallmentsRepository.listByProposal(v2.id);
+    expect(installments.map((i) => i.label)).toEqual(['Upfront', 'On completion']);
+    expect(installments.map((i) => i.sortOrder)).toEqual([0, 1]);
+    expect(installments.map((i) => i.pct)).toEqual([50, 50]);
+
+    // v1 keeps no children (they were re-authored on v2, not copied from v1).
+    expect(await proposalMilestonesRepository.listByProposal(v1.id)).toHaveLength(0);
+    expect(await proposalPaymentInstallmentsRepository.listByProposal(v1.id)).toHaveLength(0);
   });
 });
 

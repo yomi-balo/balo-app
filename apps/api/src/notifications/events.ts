@@ -1,6 +1,12 @@
 // Canonical event type definitions — web-side mirror at apps/web/src/lib/notifications/types.ts
 // When adding/changing events here, update the web-side types to match
 
+// BAL-290 payloads live in @balo/shared/notifications (shared with apps/web).
+import type {
+  ProjectChangesRequestedPayload,
+  ProjectProposalResubmittedPayload,
+} from '@balo/shared/notifications';
+
 export interface UserWelcomePayload {
   correlationId: string; // userId
   userId: string;
@@ -135,6 +141,8 @@ export type NotificationEvent =
   | 'project.proposal_requested'
   | 'project.proposal_submitted'
   | 'project.proposal_accepted'
+  | 'project.changes_requested'
+  | 'project.proposal_resubmitted'
   | 'project.message_posted'
   | 'project.file_shared';
 
@@ -151,6 +159,8 @@ export interface EventPayloadMap {
   'project.proposal_requested': ProjectProposalRequestedPayload;
   'project.proposal_submitted': ProjectProposalSubmittedPayload;
   'project.proposal_accepted': ProjectProposalAcceptedPayload;
+  'project.changes_requested': ProjectChangesRequestedPayload;
+  'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
 }

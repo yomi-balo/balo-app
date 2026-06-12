@@ -21,6 +21,7 @@ const {
   mockListMilestones,
   mockListInstallments,
   mockListDocuments,
+  mockListChangeRequests,
   mockGetCurrentUser,
   mockNotFound,
   mockRedirect,
@@ -33,6 +34,7 @@ const {
   mockListMilestones: vi.fn(),
   mockListInstallments: vi.fn(),
   mockListDocuments: vi.fn(),
+  mockListChangeRequests: vi.fn(),
   mockGetCurrentUser: vi.fn(),
   // notFound()/redirect() must THROW so control flow stops, exactly like Next.
   mockNotFound: vi.fn(() => {
@@ -52,6 +54,7 @@ vi.mock('@balo/db', () => ({
   proposalMilestonesRepository: { listByProposal: mockListMilestones },
   proposalPaymentInstallmentsRepository: { listByProposal: mockListInstallments },
   proposalDocumentsRepository: { listByProposal: mockListDocuments },
+  proposalChangeRequestsRepository: { listByProposal: mockListChangeRequests },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('next/navigation', () => ({
@@ -283,6 +286,7 @@ function seedChildren(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockListChangeRequests.mockResolvedValue([]);
   mockNotFound.mockImplementation(() => {
     throw new Error('NEXT_NOT_FOUND');
   });
@@ -520,6 +524,65 @@ describe('ProposalSurfacePage (RSC) — expert submitted view branch', () => {
 
     await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
     expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+});
+
+describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', () => {
+  it('renders the composer in REVISE mode when the relationship is submitted but the current proposal is changes_requested', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(
+      draft({ status: 'changes_requested', version: 1 })
+    );
+    mockListMilestones.mockResolvedValue([milestone()]);
+    mockListInstallments.mockResolvedValue([installment()]);
+    mockListDocuments.mockResolvedValue([]);
+    mockListChangeRequests.mockResolvedValue([
+      { id: 'cr-1', note: 'Lower the price, please.', section: 'pricing' },
+    ]);
+
+    await renderPage();
+
+    // Loads the latest change-request note against the CURRENT proposal.
+    expect(mockListChangeRequests).toHaveBeenCalledWith(PROPOSAL_ID);
+    expect(screen.getByTestId('composer-stub')).toBeInTheDocument();
+    // The revise framing (heading copy) — not the draft "Build your proposal".
+    expect(screen.getByText(/Revise your proposal/i)).toBeInTheDocument();
+
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props).toMatchObject({
+      requestId: REQUEST_ID,
+      relationshipId: RELATIONSHIP_ID,
+      clientFirstName: 'Dana',
+      fromProposalId: PROPOSAL_ID,
+      currentVersion: 1,
+    });
+    expect(props.changeRequest).toEqual({ note: 'Lower the price, please.', section: 'pricing' });
+    // Hydrated from the CURRENT (changes_requested) proposal + its children.
+    const initialState = props.initialState as Record<string, unknown>;
+    expect(initialState).toMatchObject({ proposalId: PROPOSAL_ID, pricingMethod: 'fixed' });
+    expect((initialState.milestones as unknown[]).length).toBe(1);
+  });
+
+  it('passes no changeRequest (undefined) when the proposal has no change-request rows', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'changes_requested' }));
+    mockListMilestones.mockResolvedValue([]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+    mockListChangeRequests.mockResolvedValue([]);
+
+    await renderPage();
+
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.changeRequest).toBeUndefined();
   });
 });
 

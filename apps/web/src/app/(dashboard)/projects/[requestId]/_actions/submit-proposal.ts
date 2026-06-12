@@ -9,7 +9,6 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   projectRequestsRepository,
-  installmentsSumTo100,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
@@ -26,6 +25,7 @@ import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { validateProposalReadiness } from './proposal-readiness';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -55,54 +55,32 @@ const ONLY_EXPERT = 'Only the expert can submit a proposal.';
 const STALE_PROPOSAL = 'This proposal can no longer be submitted.';
 const GENERIC_FAILURE = 'Could not submit your proposal. Please try again.';
 
-type ReadinessResult = { ready: true } | { ready: false; error: string };
-
-/**
- * Server-side readiness re-validation — never trust the client. Mirrors the
- * composer's `summaryReadiness` so a bypassed Submit is rejected here:
- *  - overview non-empty (post-sanitise);
- *  - ≥1 milestone, every milestone titled;
- *  - Fixed → installments sum to 100 (≥1) AND every milestone has a value;
- *  - T&M → deposit + rate present (installments not required).
- */
-function validateReadiness(input: {
-  overview: string;
-  pricingMethod: 'fixed' | 'tm';
-  milestones: ProposalMilestone[];
-  installments: ProposalPaymentInstallment[];
-  depositCents: number | null;
-  rateCents: number | null;
-}): ReadinessResult {
-  if (plainTextLength(input.overview) === 0) {
-    return { ready: false, error: 'Add an overview before submitting.' };
-  }
-  if (input.milestones.length === 0) {
-    return { ready: false, error: 'Add at least one milestone before submitting.' };
-  }
-  if (input.milestones.some((m) => m.title.trim().length === 0)) {
-    return { ready: false, error: 'Every milestone needs a title.' };
-  }
-
-  if (input.pricingMethod === 'fixed') {
-    if (input.installments.length === 0 || !installmentsSumTo100(input.installments)) {
-      return { ready: false, error: 'Payment installments must total 100%.' };
-    }
-    if (input.milestones.some((m) => m.valueCents === null)) {
-      return { ready: false, error: 'Every milestone needs a value.' };
-    }
-    return { ready: true };
-  }
-
-  // T&M
-  if (input.depositCents === null || input.rateCents === null) {
-    return { ready: false, error: 'Add a deposit and an hourly rate before submitting.' };
-  }
-  return { ready: true };
-}
-
 /** Display name for the submitting expert (notification body). */
 function displayName(user: { firstName: string | null; lastName: string | null }): string {
   return [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'Your expert';
+}
+
+/**
+ * Promote the draft → submitted + advance the relationship spine (one tx). Maps the
+ * typed stale-transition errors (a concurrent / double-submit) to `'stale'` so the
+ * caller surfaces friendly copy; rethrows anything unexpected.
+ */
+async function promoteToSubmitWithStaleGuard(params: {
+  proposalId: string;
+  relationshipId: string;
+}): Promise<'ok' | 'stale'> {
+  try {
+    await proposalsRepository.promoteToSubmit(params);
+    return 'ok';
+  } catch (error) {
+    if (
+      error instanceof InvalidProposalTransitionError ||
+      error instanceof InvalidRelationshipTransitionError
+    ) {
+      return 'stale';
+    }
+    throw error;
+  }
 }
 
 type PersistResult = { ok: true } | { ok: false; error: string };
@@ -258,7 +236,7 @@ export async function submitProposalAction(
     ]);
 
     // 7. Server-side readiness re-validation (never trust the client).
-    const readiness = validateReadiness({
+    const readiness = validateProposalReadiness({
       overview: draft.overview,
       pricingMethod: draft.pricingMethod,
       milestones,
@@ -280,16 +258,9 @@ export async function submitProposalAction(
 
     // 9. Promote + advance the relationship spine (ONE tx). A stale double-submit
     //    trips the typed transition errors → friendly stale copy.
-    try {
-      await proposalsRepository.promoteToSubmit({ proposalId, relationshipId });
-    } catch (error) {
-      if (
-        error instanceof InvalidProposalTransitionError ||
-        error instanceof InvalidRelationshipTransitionError
-      ) {
-        return { success: false, error: STALE_PROPOSAL };
-      }
-      throw error;
+    const promotion = await promoteToSubmitWithStaleGuard({ proposalId, relationshipId });
+    if (promotion === 'stale') {
+      return { success: false, error: STALE_PROPOSAL };
     }
 
     // 10. Advance the REQUEST aggregate (first-submit-only, race-tolerant).

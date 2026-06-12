@@ -8,6 +8,11 @@ import {
   type ProposalChangeRequest,
 } from '../schema';
 import { advanceRelationshipStatus } from './request-expert-relationships';
+import { insertMilestonesTx, type ProposalMilestoneInput } from './proposal-milestones';
+import {
+  insertInstallmentsTx,
+  type ProposalPaymentInstallmentInput,
+} from './proposal-payment-installments';
 import type { PricingMethod, ProposalCadence, ProposalChangeSection } from './proposal-types';
 
 export type ProposalStatus = Proposal['status'];
@@ -530,10 +535,13 @@ export const proposalsRepository = {
    *      relationship/request/expert ids from the locked row.
    *
    * Flip-then-insert, NEVER insert-then-flip (which would momentarily have two
-   * `is_current=true` rows and trip the index). Child rows
-   * (milestones/installments/documents) are NOT copied — the composer (A6.2)
-   * carries the revised content; `resubmit` copies only the proposal header.
-   * Returns the new current proposal.
+   * `is_current=true` rows and trip the index). The v2 milestones + installments are
+   * written in the SAME transaction from the caller-supplied set (via
+   * `insertMilestonesTx`/`insertInstallmentsTx`), so a `submitted`/`is_current` v2
+   * NEVER exists with zero children — header + children commit atomically (a child
+   * write failure rolls back the whole resubmit). The composer (A6.2) carries the
+   * revised content; documents are still carried over best-effort by the action AFTER
+   * the commit. Returns the new current proposal.
    */
   async resubmit(input: {
     relationshipId: string;
@@ -546,6 +554,8 @@ export const proposalsRepository = {
     depositCents?: number;
     rateCents?: number;
     cadence?: ProposalCadence;
+    milestones: ProposalMilestoneInput[];
+    installments: ProposalPaymentInstallmentInput[];
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       const [current] = await tx
@@ -597,6 +607,12 @@ export const proposalsRepository = {
       if (row === undefined) {
         throw new Error('Failed to create resubmitted proposal');
       }
+
+      // Write v2's children INSIDE this transaction so a current/submitted v2 can
+      // never exist without its milestones + installments (atomic with the header).
+      await insertMilestonesTx(tx, row.id, input.milestones);
+      await insertInstallmentsTx(tx, row.id, input.installments);
+
       return row;
     });
   },

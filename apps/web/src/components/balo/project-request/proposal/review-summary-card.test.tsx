@@ -44,7 +44,7 @@ describe('ReviewSummaryCard', () => {
   });
 
   it('renders the at-a-glance summary rows', () => {
-    render(<ReviewSummaryCard doc={doc()} onAccept={vi.fn()} />);
+    render(<ReviewSummaryCard doc={doc()} onAccept={vi.fn()} onRequestChanges={vi.fn()} />);
     expect(screen.getByText("Priya's proposal")).toBeInTheDocument();
     expect(screen.getByText('Fixed price')).toBeInTheDocument();
     expect(screen.getByText('A$58,000')).toBeInTheDocument();
@@ -55,22 +55,37 @@ describe('ReviewSummaryCard', () => {
   it('fires onAccept when the accept CTA is clicked', async () => {
     const user = userEvent.setup();
     const onAccept = vi.fn();
-    render(<ReviewSummaryCard doc={doc()} onAccept={onAccept} />);
+    render(<ReviewSummaryCard doc={doc()} onAccept={onAccept} onRequestChanges={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Accept this proposal' }));
     expect(onAccept).toHaveBeenCalledOnce();
   });
 
-  it('renders Request changes as a disabled stub', () => {
-    render(<ReviewSummaryCard doc={doc()} onAccept={vi.fn()} />);
+  it('renders Request changes as an enabled action (no longer a disabled stub) and fires onRequestChanges', async () => {
+    const user = userEvent.setup();
+    const onRequestChanges = vi.fn();
+    render(
+      <ReviewSummaryCard doc={doc()} onAccept={vi.fn()} onRequestChanges={onRequestChanges} />
+    );
     const requestChanges = screen.getByRole('button', { name: /Request changes/ });
-    expect(requestChanges).toBeDisabled();
-    expect(requestChanges).toHaveAttribute('aria-disabled', 'true');
+    expect(requestChanges).toBeEnabled();
+    expect(requestChanges).not.toHaveAttribute('aria-disabled');
+    expect(requestChanges).not.toHaveAttribute('title', 'Available soon');
+
+    await user.click(requestChanges);
+    expect(onRequestChanges).toHaveBeenCalledOnce();
   });
 
   it('shows an Accepted state (no decision buttons) for an accepted doc', () => {
-    render(<ReviewSummaryCard doc={doc({ status: 'accepted' })} onAccept={vi.fn()} />);
+    render(
+      <ReviewSummaryCard
+        doc={doc({ status: 'accepted' })}
+        onAccept={vi.fn()}
+        onRequestChanges={vi.fn()}
+      />
+    );
     expect(screen.getByText('Accepted')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Accept this proposal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Request changes/ })).not.toBeInTheDocument();
   });
 
   it('labels the row Estimate and appends " est." for T&M', () => {
@@ -78,6 +93,7 @@ describe('ReviewSummaryCard', () => {
       <ReviewSummaryCard
         doc={doc({ pricingMethod: 'tm', installments: [], cadence: 'monthly' })}
         onAccept={vi.fn()}
+        onRequestChanges={vi.fn()}
       />
     );
     expect(screen.getByText('Estimate')).toBeInTheDocument();
@@ -86,7 +102,13 @@ describe('ReviewSummaryCard', () => {
   });
 
   it('shows a "—" Payment row for a Fixed doc with no installments', () => {
-    render(<ReviewSummaryCard doc={doc({ installments: [] })} onAccept={vi.fn()} />);
+    render(
+      <ReviewSummaryCard
+        doc={doc({ installments: [] })}
+        onAccept={vi.fn()}
+        onRequestChanges={vi.fn()}
+      />
+    );
     expect(screen.getByText('Payment')).toBeInTheDocument();
     expect(screen.getByText('—')).toBeInTheDocument();
   });
@@ -96,6 +118,7 @@ describe('ReviewSummaryCard', () => {
       <ReviewSummaryCard
         doc={doc({ pricingMethod: 'tm', installments: [], cadence: null })}
         onAccept={vi.fn()}
+        onRequestChanges={vi.fn()}
       />
     );
     expect(screen.getByText('Deposit')).toBeInTheDocument();
@@ -103,7 +126,9 @@ describe('ReviewSummaryCard', () => {
   });
 
   it('appends a "· v2" pill to the heading for a revised (version 2) doc', () => {
-    render(<ReviewSummaryCard doc={doc({ version: 2 })} onAccept={vi.fn()} />);
+    render(
+      <ReviewSummaryCard doc={doc({ version: 2 })} onAccept={vi.fn()} onRequestChanges={vi.fn()} />
+    );
     expect(screen.getByText(/Priya's proposal · v2/)).toBeInTheDocument();
   });
 
@@ -120,6 +145,7 @@ describe('ReviewSummaryCard', () => {
           },
         })}
         onAccept={vi.fn()}
+        onRequestChanges={vi.fn()}
       />
     );
     expect(screen.getByText("Priya's proposal")).toBeInTheDocument();

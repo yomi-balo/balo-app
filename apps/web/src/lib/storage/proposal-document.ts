@@ -1,6 +1,11 @@
 import 'server-only';
 
-import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  CopyObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
 import { log } from '@/lib/logging';
@@ -83,6 +88,47 @@ export async function createPresignedProposalDocumentDownload(
     ResponseContentDisposition: `attachment; filename="${safeName}"`,
   });
   return getSignedUrl(r2Client, command, { expiresIn: DOWNLOAD_TTL_SECONDS });
+}
+
+// ── R2 server-side copy (server-only) ──
+/**
+ * Server-side copy of an existing proposal document object to a fresh key
+ * (A6.4 / BAL-290 document carryover). `proposal_documents.r2Key` is globally
+ * unique, so when a proposal is resubmitted as a new version each v1 document's
+ * R2 object must be copied to a fresh key and re-registered onto v2 — reusing the
+ * source key would violate the unique index. The copy is bytes-identical to the
+ * already-scanned source, so no re-upload / re-scan is needed.
+ *
+ * Both keys are prefix-guarded to the proposal-documents space. Unlike the
+ * fire-and-forget delete, this RETHROWS on failure so the resubmit caller can
+ * catch per-doc and continue (a missing attachment must not fail the resubmit).
+ */
+export async function copyProposalDocumentObject(srcKey: string, destKey: string): Promise<void> {
+  // Prefix guard both ends — refuse to copy from/to anything outside the space.
+  if (!srcKey.startsWith(PROPOSAL_DOCUMENT_PREFIX)) {
+    throw new Error(`Refusing to copy from key outside proposal-documents space: ${srcKey}`);
+  }
+  if (!destKey.startsWith(PROPOSAL_DOCUMENT_PREFIX)) {
+    throw new Error(`Refusing to copy to key outside proposal-documents space: ${destKey}`);
+  }
+
+  try {
+    await r2Client.send(
+      new CopyObjectCommand({
+        Bucket: R2_BUCKET,
+        // S3/R2 expects CopySource URL-encoded; encodeURI preserves the `/` key separators.
+        CopySource: encodeURI(`${R2_BUCKET}/${srcKey}`),
+        Key: destKey,
+      })
+    );
+  } catch (error) {
+    log.warn('Failed to copy proposal document in R2', {
+      srcKey,
+      destKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 // ── R2 deletion (server-only, fire-and-forget) ──

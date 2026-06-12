@@ -8,6 +8,7 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   proposalDocumentsRepository,
+  proposalChangeRequestsRepository,
   type Proposal,
   type ProposalMilestone,
   type ProposalPaymentInstallment,
@@ -228,6 +229,56 @@ async function loadReviewDoc(relationship: Relationship): Promise<ProposalReview
 }
 
 /**
+ * Load a proposal's children (milestones, installments, documents) in parallel and
+ * hydrate the composer's initial {@link ProposalDraftState}. Shared by the draft
+ * composer (A6.2) and the revise composer (A6.4) — same hydration either way. When
+ * `proposal` is `undefined` (no draft yet) the composer starts from an empty draft.
+ */
+async function hydrateComposerState(proposal: Proposal | undefined): Promise<ProposalDraftState> {
+  const [milestones, installments, documents] =
+    proposal === undefined
+      ? [[], [], []]
+      : await Promise.all([
+          proposalMilestonesRepository.listByProposal(proposal.id),
+          proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
+          proposalDocumentsRepository.listByProposal(proposal.id),
+        ]);
+  return hydrateDraftState(proposal, milestones, installments, documents);
+}
+
+/** Shared composer page chrome (back link + heading) — title/subtitle vary by mode. */
+function ComposerShell({
+  requestId,
+  backTitle,
+  heading,
+  subtitle,
+  children,
+}: Readonly<{
+  requestId: string;
+  backTitle: string;
+  heading: string;
+  subtitle: string;
+  children: React.ReactNode;
+}>): React.JSX.Element {
+  return (
+    <div className="mx-auto max-w-6xl">
+      <div className="mb-5">
+        <Link
+          href={`/projects/${requestId}`}
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          Back to {backTitle}
+        </Link>
+        <h1 className="text-foreground mt-3 text-2xl font-semibold">{heading}</h1>
+        <p className="text-muted-foreground mt-1 text-sm">{subtitle}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
  * The EXPERT proposal composer surface (A6.2 / BAL-288), unchanged. Deep-linkable
  * from the A5 "Build your proposal →" email; only the expert on THIS relationship,
  * at `proposal_requested`, reaches here (the dispatcher gates).
@@ -237,44 +288,67 @@ async function renderComposer(
   relationshipId: string,
   request: ProjectRequestWithRelations
 ): Promise<React.JSX.Element> {
-  // Load the current draft, then its children + documents in parallel.
   const draft = await proposalsRepository.findCurrentByRelationship(relationshipId);
-  const [milestones, installments, documents] =
-    draft === undefined
-      ? [[], [], []]
-      : await Promise.all([
-          proposalMilestonesRepository.listByProposal(draft.id),
-          proposalPaymentInstallmentsRepository.listByProposal(draft.id),
-          proposalDocumentsRepository.listByProposal(draft.id),
-        ]);
-
-  const initialState = hydrateDraftState(draft, milestones, installments, documents);
+  const initialState = await hydrateComposerState(draft);
   const clientFirstName = firstNameOf(request.createdByUser.firstName, 'the client');
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <div className="mb-5">
-        <Link
-          href={`/projects/${requestId}`}
-          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-        >
-          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          Back to {request.title}
-        </Link>
-        <h1 className="text-foreground mt-3 text-2xl font-semibold">Build your proposal</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Draft your scope, milestones, and pricing for {clientFirstName}. Everything saves as you
-          go.
-        </p>
-      </div>
-
+    <ComposerShell
+      requestId={requestId}
+      backTitle={request.title}
+      heading="Build your proposal"
+      subtitle={`Draft your scope, milestones, and pricing for ${clientFirstName}. Everything saves as you go.`}
+    >
       <ProposalComposer
         requestId={requestId}
         relationshipId={relationshipId}
         clientFirstName={clientFirstName}
         initialState={initialState}
       />
-    </div>
+    </ComposerShell>
+  );
+}
+
+/**
+ * The EXPERT revise composer (A6.4 / BAL-290). Re-entry after the client requested
+ * changes: the relationship stays `proposal_submitted` while the CURRENT proposal is
+ * `changes_requested`. Hydrates from that current proposal (same hydration as the
+ * draft composer), loads the latest change-request note, and renders the composer in
+ * revise mode — autosave off, "Resubmit as v{n}", the client's note pinned.
+ */
+async function renderReviseComposer(
+  requestId: string,
+  relationshipId: string,
+  request: ProjectRequestWithRelations,
+  current: Proposal
+): Promise<React.JSX.Element> {
+  const [initialState, changeRequests] = await Promise.all([
+    hydrateComposerState(current),
+    proposalChangeRequestsRepository.listByProposal(current.id),
+  ]);
+  // `listByProposal` returns newest-first — the most recent note frames the revise.
+  const [latest] = changeRequests;
+  const clientFirstName = firstNameOf(request.createdByUser.firstName, 'the client');
+  const changeRequest =
+    latest === undefined ? undefined : { note: latest.note, section: latest.section };
+
+  return (
+    <ComposerShell
+      requestId={requestId}
+      backTitle={request.title}
+      heading="Revise your proposal"
+      subtitle={`Address ${clientFirstName}'s feedback, then resubmit as version ${current.version + 1}.`}
+    >
+      <ProposalComposer
+        requestId={requestId}
+        relationshipId={relationshipId}
+        clientFirstName={clientFirstName}
+        initialState={initialState}
+        changeRequest={changeRequest}
+        fromProposalId={current.id}
+        currentVersion={current.version}
+      />
+    </ComposerShell>
   );
 }
 
@@ -334,6 +408,15 @@ async function renderExpertSurface(
   // Composer: the draft surface while the client is awaiting a proposal.
   if (relationship.status === 'proposal_requested') {
     return renderComposer(requestId, relationshipId, request);
+  }
+  // Revise composer (A6.4 / BAL-290): the relationship stays `proposal_submitted`
+  // while the CURRENT proposal is `changes_requested` — re-enter the composer to
+  // revise and resubmit as v{n+1}.
+  if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
+    const current = await proposalsRepository.findCurrentByRelationship(relationshipId);
+    if (current !== undefined && current.status === 'changes_requested') {
+      return renderReviseComposer(requestId, relationshipId, request, current);
+    }
   }
   // Submitted view: read-only "awaiting the client" once a proposal exists.
   if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {

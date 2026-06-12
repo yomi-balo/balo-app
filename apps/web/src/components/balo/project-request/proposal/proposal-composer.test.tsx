@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
+import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { ProposalComposer } from './proposal-composer';
 import { emptyDraftState, nextDraftKey, type ProposalDraftState } from './proposal-composer-state';
 
@@ -32,6 +34,13 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft', (
 // no-ops so the composer mounts cleanly.
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/submit-proposal', () => ({
   submitProposalAction: vi.fn().mockResolvedValue({ success: false, error: 'noop' }),
+}));
+const resubmitProposalAction = vi.fn();
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/resubmit-proposal', () => ({
+  resubmitProposalAction: (...args: unknown[]) => resubmitProposalAction(...args),
+}));
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-document-upload', () => ({
   requestProposalDocumentUploadAction: vi.fn(),
@@ -67,6 +76,8 @@ vi.mock('./proposal-document-uploader', () => ({
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';
 const RELATIONSHIP_ID = '22222222-2222-2222-2222-222222222222';
 
+const FROM_PROPOSAL_ID = '33333333-3333-3333-3333-333333333333';
+
 function renderComposer(initial: ProposalDraftState): void {
   render(
     <ProposalComposer
@@ -74,6 +85,27 @@ function renderComposer(initial: ProposalDraftState): void {
       relationshipId={RELATIONSHIP_ID}
       clientFirstName="Priya"
       initialState={initial}
+    />
+  );
+}
+
+/** Render the composer in REVISE mode (A6.4) — a change request is present. */
+function renderReviseComposer(
+  initial: ProposalDraftState,
+  overrides: { section?: string; note?: string; currentVersion?: number } = {}
+): void {
+  render(
+    <ProposalComposer
+      requestId={REQUEST_ID}
+      relationshipId={RELATIONSHIP_ID}
+      clientFirstName="Priya"
+      initialState={initial}
+      changeRequest={{
+        section: overrides.section ?? 'pricing',
+        note: overrides.note ?? 'The price is a little high — can you trim scope?',
+      }}
+      fromProposalId={FROM_PROPOSAL_ID}
+      currentVersion={overrides.currentVersion ?? 1}
     />
   );
 }
@@ -352,5 +384,108 @@ describe('ProposalComposer', () => {
 
     // The confirm dialog mounts (its own copy "Submit your proposal to Priya?").
     expect(await screen.findByText(/submit your proposal to priya/i)).toBeInTheDocument();
+  });
+});
+
+describe('ProposalComposer — revise mode (A6.4 / BAL-290)', () => {
+  const mockTrack = vi.mocked(track);
+  const mockToast = vi.mocked(toast);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    saveProposalDraftAction.mockReset();
+    saveProposalDraftAction.mockResolvedValue({ success: true, proposalId: 'p1' });
+    resubmitProposalAction.mockReset();
+  });
+
+  it('renders the nudge banner + the pinned client note (with a section pill)', () => {
+    renderReviseComposer(readyDraft(), {
+      section: 'milestones',
+      note: 'Please trim the discovery scope.',
+    });
+    expect(screen.getByText('Revise your proposal')).toBeInTheDocument();
+    // "They'll see this as version 2" (currentVersion 1 → next 2).
+    expect(screen.getByText(/they'll see this as version 2/i)).toBeInTheDocument();
+    expect(screen.getByText('Please trim the discovery scope.')).toBeInTheDocument();
+    // The section pill renders the friendly label for non-general sections (a label
+    // distinct from the summary card's "Milestones" count row).
+    expect(screen.getByText('Milestones / deliverables')).toBeInTheDocument();
+  });
+
+  it('does NOT render a section pill for the general section', () => {
+    renderReviseComposer(readyDraft(), { section: 'general', note: 'A few small tweaks.' });
+    expect(screen.getByText('A few small tweaks.')).toBeInTheDocument();
+    // None of the specific-section pill labels appear (the summary card has no such
+    // labels — only "Pricing"/"Total"/"Milestones" rows, which are distinct copy).
+    expect(screen.queryByText('Milestones / deliverables')).not.toBeInTheDocument();
+    expect(screen.queryByText('Timeline')).not.toBeInTheDocument();
+    expect(screen.queryByText('Payment terms')).not.toBeInTheDocument();
+  });
+
+  it('relabels the submit CTA to "Resubmit as v2"', () => {
+    renderReviseComposer(readyDraft(), { currentVersion: 1 });
+    const resubmitButtons = screen.getAllByRole('button', { name: /resubmit as v2/i });
+    expect(resubmitButtons.length).toBeGreaterThan(0);
+    // The first-submit label is gone in revise mode.
+    expect(screen.queryByRole('button', { name: /submit to priya/i })).not.toBeInTheDocument();
+  });
+
+  it('uses the actual next version in the CTA (v{n+1})', () => {
+    renderReviseComposer(readyDraft(), { currentVersion: 2 });
+    expect(screen.getAllByRole('button', { name: /resubmit as v3/i }).length).toBeGreaterThan(0);
+  });
+
+  it('does NOT autosave on edit in revise mode (local-only until resubmit)', async () => {
+    const user = userEvent.setup();
+    renderReviseComposer(readyDraft());
+
+    await user.type(screen.getByLabelText('Proposal overview'), ' more scope');
+
+    // Give the debounce window a chance to (not) fire.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(saveProposalDraftAction).not.toHaveBeenCalled();
+  });
+
+  it('confirming resubmit calls resubmitProposalAction with the full payload incl. fromProposalId, fires PROPOSAL_RESUBMITTED', async () => {
+    const user = userEvent.setup();
+    resubmitProposalAction.mockResolvedValue({
+      success: true,
+      proposalId: 'v2-id',
+      version: 2,
+      expertProfileId: 'exp-42',
+      analytics: { priceCents: 500_000, currency: 'aud' },
+    });
+    renderReviseComposer(readyDraft(), { currentVersion: 1 });
+
+    // Open the confirm dialog from the desktop summary card CTA.
+    const [resubmitCta] = screen.getAllByRole('button', { name: /resubmit as v2/i });
+    if (resubmitCta === undefined) throw new Error('expected a resubmit CTA');
+    await user.click(resubmitCta);
+
+    // The confirm dialog shows the resubmit copy; confirm it.
+    expect(await screen.findByText(/resubmit your revised proposal to priya/i)).toBeInTheDocument();
+    const confirm = await screen.findByRole('button', { name: 'Resubmit as v2' });
+    await user.click(confirm);
+
+    await waitFor(() => expect(resubmitProposalAction).toHaveBeenCalled());
+    // Full composer payload, extended with the routing + from-proposal ids.
+    const payload = resubmitProposalAction.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      requestId: REQUEST_ID,
+      relationshipId: RELATIONSHIP_ID,
+      fromProposalId: FROM_PROPOSAL_ID,
+      pricingMethod: 'fixed',
+    });
+    expect(Array.isArray(payload.milestones)).toBe(true);
+
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_RESUBMITTED, {
+      request_id: REQUEST_ID,
+      relationship_id: RELATIONSHIP_ID,
+      expert_id: 'exp-42',
+      version: 2,
+      price_cents: 500_000,
+      currency: 'aud',
+    });
+    expect(mockToast.success).toHaveBeenCalledWith('Resubmitted as v2');
   });
 });

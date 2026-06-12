@@ -33,6 +33,12 @@ vi.mock('@aws-sdk/client-s3', () => ({
       this.input = input;
     }
   },
+  CopyObjectCommand: class {
+    input: Record<string, unknown>;
+    constructor(input: Record<string, unknown>) {
+      this.input = input;
+    }
+  },
 }));
 
 vi.mock('@aws-sdk/s3-request-presigner', () => ({
@@ -48,6 +54,7 @@ import {
   createPresignedProposalDocumentUpload,
   createPresignedProposalDocumentDownload,
   deleteProposalDocumentFromR2,
+  copyProposalDocumentObject,
   PROPOSAL_DOCUMENT_PREFIX,
   PROPOSAL_DOCUMENT_ALLOWED_CONTENT_TYPES,
   MAX_PROPOSAL_DOCUMENT_BYTES,
@@ -150,6 +157,41 @@ describe('proposal-document storage', () => {
       await expect(
         deleteProposalDocumentFromR2(`${PROPOSAL_DOCUMENT_PREFIX}${PROPOSAL}/${USER}/abc`)
       ).resolves.toBeUndefined();
+      expect(mockWarn).toHaveBeenCalled();
+    });
+  });
+
+  describe('copyProposalDocumentObject', () => {
+    const SRC = `${PROPOSAL_DOCUMENT_PREFIX}v1/${USER}/src`;
+    const DEST = `${PROPOSAL_DOCUMENT_PREFIX}v2/${USER}/dest`;
+
+    it('issues a CopyObjectCommand with the correct src/dest', async () => {
+      mockSend.mockResolvedValue({});
+      await copyProposalDocumentObject(SRC, DEST);
+      expect(mockSend).toHaveBeenCalledOnce();
+      const command = mockSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
+      expect(command.input.Bucket).toBe('test-bucket');
+      expect(command.input.CopySource).toBe(`test-bucket/${SRC}`);
+      expect(command.input.Key).toBe(DEST);
+    });
+
+    it('rejects a source key outside the proposal-documents prefix', async () => {
+      await expect(copyProposalDocumentObject('conversation-files/x/y/z', DEST)).rejects.toThrow(
+        /outside proposal-documents/
+      );
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('rejects a destination key outside the proposal-documents prefix', async () => {
+      await expect(copyProposalDocumentObject(SRC, 'conversation-files/x/y/z')).rejects.toThrow(
+        /outside proposal-documents/
+      );
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('warns and rethrows when the copy fails', async () => {
+      mockSend.mockRejectedValue(new Error('boom'));
+      await expect(copyProposalDocumentObject(SRC, DEST)).rejects.toThrow('boom');
       expect(mockWarn).toHaveBeenCalled();
     });
   });

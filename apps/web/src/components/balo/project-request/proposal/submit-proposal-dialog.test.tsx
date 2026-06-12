@@ -4,6 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { SubmitProposalResult } from '@/app/(dashboard)/projects/[requestId]/_actions/submit-proposal';
+import type {
+  ResubmitProposalInput,
+  ResubmitProposalResult,
+} from '@/app/(dashboard)/projects/[requestId]/_actions/resubmit-proposal';
 
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
@@ -13,6 +17,11 @@ vi.mock('sonner', () => ({
 const submitProposalAction = vi.fn<(input: unknown) => Promise<SubmitProposalResult>>();
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/submit-proposal', () => ({
   submitProposalAction: (input: unknown) => submitProposalAction(input),
+}));
+
+const resubmitProposalAction = vi.fn<(input: unknown) => Promise<ResubmitProposalResult>>();
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/resubmit-proposal', () => ({
+  resubmitProposalAction: (input: unknown) => resubmitProposalAction(input),
 }));
 
 const push = vi.fn();
@@ -186,5 +195,118 @@ describe('SubmitProposalDialog', () => {
         expect.objectContaining({ proposalId: PROPOSAL_ID })
       )
     );
+  });
+});
+
+const RESUBMIT_PAYLOAD: ResubmitProposalInput = {
+  requestId: REQUEST_ID,
+  relationshipId: RELATIONSHIP_ID,
+  fromProposalId: PROPOSAL_ID,
+  overview: '<p>revised scope</p>',
+  pricingMethod: 'fixed',
+  priceCents: 6_000_000,
+  milestones: [],
+  installments: [],
+};
+
+const RESUBMIT_SUCCESS: ResubmitProposalResult = {
+  success: true,
+  proposalId: 'f0000000-0000-4000-8000-000000000006',
+  version: 2,
+  expertProfileId: 'exp-9',
+  analytics: { priceCents: 6_000_000, currency: 'aud' },
+};
+
+function renderResubmitDialog(): {
+  onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
+  getPayload: ReturnType<typeof vi.fn<() => ResubmitProposalInput>>;
+} {
+  const onOpenChange = vi.fn<(open: boolean) => void>();
+  const getPayload = vi.fn<() => ResubmitProposalInput>(() => RESUBMIT_PAYLOAD);
+  render(
+    <SubmitProposalDialog
+      open
+      onOpenChange={onOpenChange}
+      requestId={REQUEST_ID}
+      relationshipId={RELATIONSHIP_ID}
+      proposalId={PROPOSAL_ID}
+      clientFirstName="Dana"
+      onBeforeSubmit={() => Promise.resolve(PROPOSAL_ID)}
+      resubmit={{ nextVersion: 2, getPayload }}
+    />
+  );
+  return { onOpenChange, getPayload };
+}
+
+describe('SubmitProposalDialog — resubmit mode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the resubmit copy + "Resubmit as v2" button', () => {
+    renderResubmitDialog();
+    expect(screen.getByText('Resubmit your revised proposal to Dana?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resubmit as v2' })).toBeInTheDocument();
+    // It is NOT the first-submit copy / button.
+    expect(screen.queryByText('Submit your proposal to Dana?')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit proposal' })).not.toBeInTheDocument();
+  });
+
+  it('confirm calls resubmitProposalAction (not submit) with the composer payload, fires PROPOSAL_RESUBMITTED, toasts, routes', async () => {
+    const user = userEvent.setup();
+    resubmitProposalAction.mockResolvedValue(RESUBMIT_SUCCESS);
+    const { onOpenChange } = renderResubmitDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Resubmit as v2' }));
+
+    await waitFor(() => expect(resubmitProposalAction).toHaveBeenCalledWith(RESUBMIT_PAYLOAD));
+    // The first-submit action is never touched in resubmit mode.
+    expect(submitProposalAction).not.toHaveBeenCalled();
+
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_RESUBMITTED, {
+      request_id: REQUEST_ID,
+      relationship_id: RELATIONSHIP_ID,
+      expert_id: 'exp-9',
+      version: 2,
+      price_cents: 6_000_000,
+      currency: 'aud',
+    });
+    expect(mockToast.success).toHaveBeenCalledWith('Resubmitted as v2');
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(push).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  it('stale-UI error closes and refreshes (nothing to retry)', async () => {
+    const user = userEvent.setup();
+    resubmitProposalAction.mockResolvedValue({
+      success: false,
+      error: 'This proposal has already been resubmitted. Refresh to continue.',
+    });
+    const { onOpenChange } = renderResubmitDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Resubmit as v2' }));
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(refresh).toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('generic error toasts and stays open to retry', async () => {
+    const user = userEvent.setup();
+    resubmitProposalAction.mockResolvedValue({
+      success: false,
+      error: 'Could not resubmit your proposal. Please try again.',
+    });
+    const { onOpenChange } = renderResubmitDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Resubmit as v2' }));
+
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith(
+        'Could not resubmit your proposal. Please try again.'
+      )
+    );
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(push).not.toHaveBeenCalled();
   });
 });

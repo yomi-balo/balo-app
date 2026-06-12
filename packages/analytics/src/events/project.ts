@@ -23,6 +23,11 @@ export const PROJECT_EVENTS = {
   PROJECT_PROPOSAL_REQUESTED: 'project_proposal_requested',
   PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
   PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
+  // BAL-290 (A6.4) changes-requested loop + proposal versioning. CHANGES_REQUESTED
+  // fires when the client requests changes on a submitted proposal (actor:'client');
+  // PROPOSAL_RESUBMITTED fires when the expert resubmits as v(n+1).
+  CHANGES_REQUESTED: 'project_changes_requested',
+  PROPOSAL_RESUBMITTED: 'project_proposal_resubmitted',
   PROJECT_KICKOFF_APPROVED: 'project_kickoff_approved',
   // Request-detail page (A1 / BAL-268) viewer-occurrence signals, fired from the
   // client analytics island. DETAIL_VIEWED on mount; PHASE_FLIPPED the first time
@@ -136,6 +141,21 @@ export interface ProjectEventMap {
     relationship_id: string;
     expert_id: string;
     proposal_id: string;
+  };
+  [PROJECT_EVENTS.CHANGES_REQUESTED]: {
+    request_id: string;
+    relationship_id: string;
+    expert_id: string;
+    section: string;
+    actor: string;
+  };
+  [PROJECT_EVENTS.PROPOSAL_RESUBMITTED]: {
+    request_id: string;
+    relationship_id: string;
+    expert_id: string;
+    version: number;
+    price_cents: number;
+    currency: string;
   };
   [PROJECT_EVENTS.PROJECT_KICKOFF_APPROVED]: {
     request_id: string;
