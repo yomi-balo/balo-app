@@ -111,6 +111,30 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  'project-changes-requested': (data) => {
+    const title = (data.projectTitle as string) ?? 'a project';
+    const clientName = (data.clientName as string) ?? 'The client';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Changes requested',
+      body: `${clientName} requested changes to your proposal for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  'project-proposal-resubmitted': (data) => {
+    const title = (data.projectTitle as string) ?? 'a project';
+    const expertName = (data.expertName as string) ?? 'Your expert';
+    const version = typeof data.version === 'number' ? data.version : undefined;
+    const projectRequestId = data.projectRequestId as string | undefined;
+    const versionLabel = version ? ` (v${version})` : '';
+    return {
+      title: 'Updated proposal',
+      body: `${expertName} sent an updated proposal${versionLabel} for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
   'project-proposal-accepted-admin': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
     const company = (data.clientCompanyName as string) ?? '';

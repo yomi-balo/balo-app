@@ -12,6 +12,8 @@ interface ReviewSummaryCardProps {
   doc: ProposalReviewDoc;
   /** Opens the accept-confirm modal (owned by the parent). */
   onAccept: () => void;
+  /** Opens the request-changes modal (owned by the parent). */
+  onRequestChanges: () => void;
 }
 
 interface SummaryRow {
@@ -32,12 +34,13 @@ function paymentSummary(doc: ProposalReviewDoc): string {
  * The sticky decision card on the desktop client-review surface (A6.4 / BAL-289).
  * At-a-glance summary rows + the two decision actions + a demoted back-channel.
  * Decision actions render only while `status === 'submitted'`; an already-accepted
- * doc shows an "Accepted" confirmation instead. "Request changes" is a disabled
- * stub — the changes-requested loop ships in A6.4/BAL-290.
+ * doc shows an "Accepted" confirmation instead. "Request changes" opens the
+ * {@link ChangesModal} (A6.4/BAL-290) via the parent-owned `onRequestChanges`.
  */
 export function ReviewSummaryCard({
   doc,
   onAccept,
+  onRequestChanges,
 }: Readonly<ReviewSummaryCardProps>): React.JSX.Element {
   const isTM = doc.pricingMethod === 'tm';
   const expertFirst = firstName(doc.expert.name);
@@ -111,14 +114,11 @@ export function ReviewSummaryCard({
           </button>
           <button
             type="button"
-            disabled
-            aria-disabled="true"
-            title="Available soon"
-            className="border-warning/30 bg-warning/10 text-warning mb-3 inline-flex min-h-11 w-full cursor-not-allowed items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-semibold opacity-60"
+            onClick={onRequestChanges}
+            className="border-warning/30 bg-warning/10 text-warning focus-visible:ring-ring hover:bg-warning/15 mb-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <RotateCcw className="h-4 w-4" aria-hidden="true" />
             Request changes
-            <span className="sr-only">(available soon)</span>
           </button>
         </>
       )}

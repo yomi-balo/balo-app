@@ -12,6 +12,8 @@ import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
 import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
 import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
+import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
+import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
 import { getEmailTemplate, sanitizeSubjectTitle } from './index.js';
 import {
   EmailShell,
@@ -247,6 +249,73 @@ describe('ProjectProposalAcceptedEmail', () => {
       })
     );
     expect(html).toContain('Dana Whitfield @ Acme Corp');
+  });
+});
+
+describe('ProjectChangesRequestedEmail', () => {
+  it('returns a React element carrying the client name', () => {
+    const element = ProjectChangesRequestedEmail({
+      firstName: 'Priya',
+      clientName: 'Dana Whitfield',
+      section: 'pricing',
+      note: 'Could we split milestone 2 into two passes?',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders the client name, the requested section, the revise CTA, and a link to the request', async () => {
+    const html = await render(
+      ProjectChangesRequestedEmail({
+        firstName: 'Priya',
+        clientName: 'Dana Whitfield',
+        section: 'pricing',
+        note: 'Could we split milestone 2 into two passes?',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Dana Whitfield');
+    expect(html).toContain('requested changes');
+    expect(html).toContain('pricing');
+    expect(html).toContain('Revise your proposal');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+});
+
+describe('ProjectProposalResubmittedEmail', () => {
+  it('returns a React element carrying the expert name', () => {
+    const element = ProjectProposalResubmittedEmail({
+      firstName: 'Dana',
+      expertName: 'Priya Nair',
+      version: 2,
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders the expert name, the new version, the review CTA, and a link to the request', async () => {
+    const html = await render(
+      ProjectProposalResubmittedEmail({
+        firstName: 'Dana',
+        expertName: 'Priya Nair',
+        version: 2,
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Priya Nair');
+    expect(html).toContain('v2');
+    expect(html).toContain('Review the proposal');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
   });
 });
 

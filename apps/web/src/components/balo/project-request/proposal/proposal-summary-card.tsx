@@ -19,6 +19,10 @@ interface ProposalSummaryCardProps {
   /** Disabled while a submit is in flight. */
   submitting: boolean;
   onSubmit: () => void;
+  /** Revise mode (A6.4 / BAL-290) — relabel Submit to "Resubmit as v{n}". */
+  reviseMode?: boolean;
+  /** The version this resubmit will write (revise mode only) — defaults to 2. */
+  nextVersion?: number;
 }
 
 interface SummaryRow {
@@ -47,8 +51,11 @@ export function ProposalSummaryCard({
   saveStatus,
   submitting,
   onSubmit,
+  reviseMode = false,
+  nextVersion = 2,
 }: Readonly<ProposalSummaryCardProps>): React.JSX.Element {
   const isFixed = state.pricingMethod === 'fixed';
+  const submitLabel = reviseMode ? `Resubmit as v${nextVersion}` : `Submit to ${clientFirstName}`;
 
   const rows: SummaryRow[] = [
     { label: 'Pricing', value: isFixed ? 'Fixed price' : 'Time & materials' },
@@ -121,7 +128,7 @@ export function ProposalSummaryCard({
         )}
       >
         {submitting && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-        Submit to {clientFirstName}
+        {submitLabel}
       </button>
 
       {saveLabel !== null && (

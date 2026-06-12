@@ -105,6 +105,35 @@ const projectProposalAcceptedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
+// BAL-290 changes requested (client → expert). `correlationId` is the proposal id
+// — distinct row per round, naturally unique. `expertProfileId` is the proposal
+// owner (resolver hydrates data.expert). Mirrors apps/web/src/lib/notifications/types.ts.
+const projectChangesRequestedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  expertProfileId: z.uuid(),
+  clientName: z.string().min(1).max(120),
+  projectTitle: z.string().min(1).max(200),
+  section: z.enum(['general', 'milestones', 'pricing', 'payment_terms', 'timeline']),
+  note: z.string().min(1).max(4000),
+});
+
+// BAL-290 proposal resubmitted (expert → client). `recipientId` is the client user
+// id (drives recipient:'client' resolution). Mirrors apps/web/src/lib/notifications/types.ts.
+const projectProposalResubmittedPayload = z.object({
+  // format "<v2ProposalId>--v<version>" — uuid + version suffix; z.string not z.uuid so the suffix validates
+  correlationId: z.string().min(1).max(80),
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  recipientId: z.uuid(),
+  expertName: z.string().min(1).max(120),
+  projectTitle: z.string().min(1).max(200),
+  version: z.number().int().positive(),
+  priceCents: z.number().int().nonnegative(),
+  currency: z.string().min(2).max(10),
+});
+
 // Known gap (BAL-284): three pre-existing web-published events are missing
 // from this union ('project.exploratory_requested', 'project.expert_invited',
 // 'project.eoi_submitted'); they currently 400 at the publish route. BAL-284
@@ -135,6 +164,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.proposal_accepted'),
     payload: projectProposalAcceptedPayload,
+  }),
+  z.object({
+    event: z.literal('project.changes_requested'),
+    payload: projectChangesRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('project.proposal_resubmitted'),
+    payload: projectProposalResubmittedPayload,
   }),
   z.object({
     event: z.literal('project.message_posted'),

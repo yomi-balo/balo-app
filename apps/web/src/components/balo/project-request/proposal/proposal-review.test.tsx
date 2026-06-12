@@ -15,10 +15,16 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
   isDescriptionEmpty: (html: string) => html.replace(/<[^<>]*>/g, '').trim() === '',
 }));
 
-// The accept modal imports the server action (and next/navigation) — stub both so
-// the review surface mounts in isolation.
+// The decision modals import server actions (and next/navigation, sonner) — stub
+// all so the review surface mounts in isolation.
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/accept-proposal', () => ({
   acceptProposalAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-changes', () => ({
+  requestProposalChangesAction: vi.fn(),
+}));
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -145,5 +151,33 @@ describe('ProposalReview', () => {
     // Desktop summary card + mobile rail both carry the Accept CTA.
     const accepts = screen.getAllByRole('button', { name: 'Accept this proposal' });
     expect(accepts.length).toBeGreaterThan(0);
+  });
+
+  it('renders enabled "Request changes" actions (no longer "Available soon") for a submitted proposal', () => {
+    renderReview([doc()]);
+    // Desktop "Request changes" + mobile "Changes" — both enabled now.
+    const changeButtons = screen.getAllByRole('button', { name: /Changes/ });
+    expect(changeButtons.length).toBeGreaterThan(0);
+    for (const button of changeButtons) {
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute('aria-disabled');
+      expect(button).not.toHaveAttribute('title', 'Available soon');
+    }
+  });
+
+  it('opens the ChangesModal when "Request changes" is clicked', async () => {
+    const user = userEvent.setup();
+    renderReview([doc()]);
+    // The modal is mounted but closed (dialog hidden) until the action fires.
+    expect(screen.queryByText('Request changes from Priya')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Request changes' }));
+    expect(screen.getByText('Request changes from Priya')).toBeInTheDocument();
+  });
+
+  it('does not render the changes actions when the proposal is not submitted (accepted)', () => {
+    renderReview([doc({ status: 'accepted' })]);
+    expect(screen.queryByRole('button', { name: /Request changes/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept this proposal' })).not.toBeInTheDocument();
   });
 });

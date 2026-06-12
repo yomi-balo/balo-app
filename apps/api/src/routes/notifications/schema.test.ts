@@ -206,6 +206,101 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('project.changes_requested', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440020',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440021',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440022',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440023',
+      clientName: 'Grace Hopper',
+      projectTitle: 'CPQ implementation',
+      section: 'pricing',
+      note: 'Please reduce the deposit to 30%.',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.changes_requested',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an invalid section', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.changes_requested',
+        payload: { ...validPayload, section: 'overview' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty note', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.changes_requested',
+        payload: { ...validPayload, note: '' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-UUID correlationId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.changes_requested',
+        payload: { ...validPayload, correlationId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('project.proposal_resubmitted', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440030--v2',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440031',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440032',
+      recipientId: '550e8400-e29b-41d4-a716-446655440033',
+      expertName: 'Ada Lovelace',
+      projectTitle: 'CPQ implementation',
+      version: 2,
+      priceCents: 120000,
+      currency: 'aud',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_resubmitted',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a "<uuid>--v2" suffixed correlationId (z.string, not z.uuid)', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_resubmitted',
+        payload: {
+          ...validPayload,
+          correlationId: '550e8400-e29b-41d4-a716-446655440099--v3',
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a non-positive version', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_resubmitted',
+        payload: { ...validPayload, version: 0 },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a missing recipientId', () => {
+      const { recipientId: _recipientId, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_resubmitted',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

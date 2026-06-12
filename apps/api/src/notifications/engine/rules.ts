@@ -183,6 +183,43 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-290 (A6.4): the client requested changes on a submitted proposal — a commit
+  // moment the expert must act on, so email-worthy (plus in-app). recipient:'expert'
+  // resolves from the hydrated data.expert (resolver maps payload.expertProfileId →
+  // user id), exactly like project.proposal_accepted's winning-expert path.
+  'project.changes_requested': [
+    {
+      channel: 'email',
+      recipient: 'expert',
+      template: 'project-changes-requested',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-changes-requested',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-290 (A6.4): the expert resubmitted an updated proposal (v(n+1)) — the client
+  // is waiting on it, so email-worthy (plus in-app). recipient:'client' resolves via
+  // payload.recipientId (the request owner's user id), like project.proposal_submitted.
+  'project.proposal_resubmitted': [
+    {
+      channel: 'email',
+      recipient: 'client',
+      template: 'project-proposal-resubmitted',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-proposal-resubmitted',
+      timing: 'immediate',
+    },
+  ],
   'booking.confirmed': [
     {
       channel: 'sms',

@@ -9,6 +9,7 @@ import { ProposalDoc } from './proposal-doc';
 import { ProposalSectionNav, REVIEW_SECTIONS, type ReviewSection } from './proposal-section-nav';
 import { ReviewSummaryCard } from './review-summary-card';
 import { AcceptConfirmModal } from './accept-confirm-modal';
+import { ChangesModal } from './changes-modal';
 import { BackChannel } from './back-channel';
 import { firstName } from './proposal-name';
 import type { ProposalReviewDoc } from './proposal-review-types';
@@ -65,6 +66,7 @@ export function ProposalReview({
 
   const [activeId, setActiveId] = useState(initialId);
   const [modalOpen, setModalOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
 
   const active = proposals.find((proposal) => proposal.id === activeId) ?? proposals[0];
 
@@ -79,7 +81,8 @@ export function ProposalReview({
   const selectProposal = (id: string): void => {
     if (id === activeId) return;
     setActiveId(id);
-    setModalOpen(false); // reset the decision modal when switching proposals
+    setModalOpen(false); // reset the decision modals when switching proposals
+    setChangesOpen(false);
   };
 
   const isMulti = proposals.length > 1;
@@ -179,7 +182,11 @@ export function ProposalReview({
                 <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} />
               </div>
             </div>
-            <ReviewSummaryCard doc={active} onAccept={() => setModalOpen(true)} />
+            <ReviewSummaryCard
+              doc={active}
+              onAccept={() => setModalOpen(true)}
+              onRequestChanges={() => setChangesOpen(true)}
+            />
           </div>
 
           {/* Mobile: nav + doc + bottom decision rail */}
@@ -198,14 +205,11 @@ export function ProposalReview({
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
-                  disabled
-                  aria-disabled="true"
-                  title="Available soon"
-                  className="border-warning/30 bg-warning/10 text-warning inline-flex min-h-11 shrink-0 cursor-not-allowed items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-semibold opacity-60"
+                  onClick={() => setChangesOpen(true)}
+                  className="border-warning/30 bg-warning/10 text-warning focus-visible:ring-ring hover:bg-warning/15 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
                 >
                   <RotateCcw className="h-4 w-4" aria-hidden="true" />
                   Changes
-                  <span className="sr-only">(available soon)</span>
                 </button>
                 <button
                   type="button"
@@ -230,6 +234,15 @@ export function ProposalReview({
         requestId={requestId}
         doc={active}
         clientCompanyName={clientCompanyName}
+      />
+
+      <ChangesModal
+        open={changesOpen}
+        onOpenChange={setChangesOpen}
+        requestId={requestId}
+        relationshipId={active.relationshipId}
+        proposalId={active.id}
+        expertFirstName={expertFirst}
       />
     </div>
   );

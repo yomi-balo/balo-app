@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { saveProposalDraftAction } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
+import type { ResubmitProposalInput } from '@/app/(dashboard)/projects/[requestId]/_actions/resubmit-proposal';
 import { ComposerTabStrip, type ComposerTabId } from './composer-tab-strip';
 import { OverviewTab } from './overview-tab';
 import { MilestonesTab } from './milestones-tab';
@@ -28,15 +29,41 @@ import {
   type ProposalPricingMethod,
 } from './proposal-composer-state';
 
+/**
+ * The client's change request (A6.4 / BAL-290) — present ONLY in revise mode. Its
+ * presence switches the composer to resubmit: autosave is disabled (local-only
+ * edits until the atomic resubmit), the nudge + pinned warning card render, and
+ * the submit CTA becomes "Resubmit as v{n}".
+ */
+interface ComposerChangeRequest {
+  note: string;
+  /** The DB `proposalChangeSectionEnum` value (`general` → no pill). */
+  section: string;
+}
+
 interface ProposalComposerProps {
   requestId: string;
   relationshipId: string;
   clientFirstName: string;
   /** Fully-hydrated initial snapshot from the server loader (never fetches here). */
   initialState: ProposalDraftState;
+  /** Revise mode (A6.4 / BAL-290): the client's change request to address. */
+  changeRequest?: ComposerChangeRequest;
+  /** The current `changes_requested` proposal id (revise mode) — for the resubmit. */
+  fromProposalId?: string;
+  /** The current proposal version (revise mode) — the resubmit writes v{n+1}. */
+  currentVersion?: number;
 }
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
+
+/** Friendly section labels for the pinned changes-card pill (mirrors ChangesModal). */
+const SECTION_LABELS: Record<string, string> = {
+  milestones: 'Milestones / deliverables',
+  pricing: 'Pricing',
+  payment_terms: 'Payment terms',
+  timeline: 'Timeline',
+};
 
 /**
  * The expert proposal composer (A6.2 / BAL-288). Owns the single
@@ -51,12 +78,21 @@ export function ProposalComposer({
   relationshipId,
   clientFirstName,
   initialState,
+  changeRequest,
+  fromProposalId,
+  currentVersion,
 }: Readonly<ProposalComposerProps>): React.JSX.Element {
   const [state, setState] = useState<ProposalDraftState>(initialState);
   const [activeTab, setActiveTab] = useState<ComposerTabId>('overview');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [sheetOpen, setSheetOpen] = useState(false);
   const [submitOpen, setSubmitOpen] = useState(false);
+
+  // Revise mode (A6.4 / BAL-290): a change request switches the composer to a
+  // local-only resubmit — autosave is disabled, the submit CTA becomes "Resubmit
+  // as v{n}", and the confirm dialog calls `resubmitProposalAction`.
+  const reviseMode = changeRequest !== undefined;
+  const nextVersion = (currentVersion ?? 1) + 1;
 
   // Autosave coordination refs (no re-render churn).
   const stateRef = useRef(state);
@@ -127,7 +163,11 @@ export function ProposalComposer({
   }, [requestId, relationshipId]);
 
   // Debounced autosave on every state change (skips the initial hydration render).
+  // DISABLED entirely in revise mode (A6.4): revise edits are local-only until the
+  // atomic resubmit — the partial-unique `is_current` index forbids a parallel v2
+  // draft, so we never write a draft here while a `changes_requested` proposal exists.
   useEffect(() => {
+    if (reviseMode) return;
     if (!hydratedRef.current) {
       hydratedRef.current = true;
       return;
@@ -141,6 +181,7 @@ export function ProposalComposer({
     };
     // Re-run whenever any persisted slice changes (documents persist out-of-band).
   }, [
+    reviseMode,
     state.overview,
     state.pricingMethod,
     state.currency,
@@ -252,6 +293,15 @@ export function ProposalComposer({
     setSubmitOpen(true);
   }, []);
 
+  // Revise mode: build the FULL resubmit payload from the latest state at confirm
+  // time (same body as the autosave/submit, extended with `fromProposalId`).
+  const buildResubmitPayload = useCallback((): ResubmitProposalInput => {
+    return {
+      ...toSavePayload(stateRef.current, requestId, relationshipId),
+      fromProposalId: fromProposalId ?? '',
+    };
+  }, [requestId, relationshipId, fromProposalId]);
+
   // If a fresh draft ever loses its seed (shouldn't happen), keep one installment.
   const ensuredInstallments =
     state.installments.length === 0 ? seedInstallments() : state.installments;
@@ -282,12 +332,50 @@ export function ProposalComposer({
       saveStatus={saveStatus}
       submitting={submitOpen}
       onSubmit={openSubmit}
+      reviseMode={reviseMode}
+      nextVersion={nextVersion}
     />
   );
+
+  // The pinned section pill text — omitted for `general` (no specific area).
+  const sectionLabel =
+    changeRequest !== undefined ? SECTION_LABELS[changeRequest.section] : undefined;
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both grid grid-cols-1 items-start gap-5 duration-500 motion-reduce:animate-none lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
       <div className="space-y-4">
+        {changeRequest !== undefined && (
+          <div className="space-y-3">
+            {/* Nudge banner — frames the revise + new-version expectation. */}
+            <div className="border-info/30 bg-info/10 rounded-2xl border p-4">
+              <p className="text-foreground flex items-center gap-2 text-sm font-semibold">
+                <RotateCcw className="text-info h-4 w-4" aria-hidden="true" />
+                Revise your proposal
+              </p>
+              <p className="text-muted-foreground mt-1 text-[13px] leading-relaxed">
+                {clientFirstName} requested changes. They&apos;ll see this as version {nextVersion}.
+              </p>
+            </div>
+
+            {/* Pinned warning changes-card — the client's note (+ section pill). */}
+            <div className="border-warning/30 bg-warning/10 rounded-2xl border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-warning text-xs font-semibold tracking-wide uppercase">
+                  {clientFirstName}&apos;s request
+                </p>
+                {sectionLabel !== undefined && (
+                  <span className="border-warning/40 text-warning rounded-full border px-2 py-0.5 text-[11px] font-medium">
+                    {sectionLabel}
+                  </span>
+                )}
+              </div>
+              <p className="text-foreground/90 mt-2 text-[13.5px] leading-relaxed whitespace-pre-wrap">
+                {changeRequest.note}
+              </p>
+            </div>
+          </div>
+        )}
+
         <ComposerTabStrip active={activeTab} onChange={setActiveTab} issues={tabIssues} />
 
         <div
@@ -408,6 +496,7 @@ export function ProposalComposer({
         proposalId={state.proposalId}
         clientFirstName={clientFirstName}
         onBeforeSubmit={flushBeforeSubmit}
+        resubmit={reviseMode ? { nextVersion, getPayload: buildResubmitPayload } : undefined}
       />
     </div>
   );

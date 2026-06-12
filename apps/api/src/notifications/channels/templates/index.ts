@@ -11,6 +11,8 @@ import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
 import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
 import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
+import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
+import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -167,6 +169,40 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `Your proposal was accepted: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-changes-requested': (data) => {
+    const title = (data.projectTitle as string) ?? 'a project';
+    const clientName = (data.clientName as string) ?? 'The client';
+    return {
+      component: React.createElement(ProjectChangesRequestedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientName,
+        section: (data.section as string) ?? 'general',
+        note: (data.note as string) ?? '',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(clientName)} requested changes: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-proposal-resubmitted': (data) => {
+    const title = (data.projectTitle as string) ?? 'a project';
+    const expertName = (data.expertName as string) ?? 'Your expert';
+    const version = numberCount(data.version) || 2;
+    return {
+      component: React.createElement(ProjectProposalResubmittedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expertName,
+        version,
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(expertName)} sent an updated proposal (v${version}): ${sanitizeSubjectTitle(title)}`,
     };
   },
 
