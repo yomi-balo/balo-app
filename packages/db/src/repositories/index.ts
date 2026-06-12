@@ -27,8 +27,10 @@ export {
   STATUS_TRANSITIONS,
   isAllowedTransition,
   InvalidStatusTransitionError,
+  InvalidKickoffStateError,
   type ProjectRequestStatus,
   type ProjectRequestWithRelations,
+  type KickoffGate,
 } from './project-requests';
 export type { ProjectRequest, NewProjectRequest } from '../schema';
 export { requestExpertRelationshipsRepository } from './request-expert-relationships';
@@ -56,7 +58,7 @@ export {
 export type { ProposalPaymentInstallmentInput } from './proposal-payment-installments';
 export { proposalDocumentsRepository } from './proposal-documents';
 export { proposalChangeRequestsRepository } from './proposal-change-requests';
-export { engagementsRepository } from './engagements';
+export { engagementsRepository, KickoffGatesIncompleteError } from './engagements';
 export type {
   PricingMethod,
   ProposalCadence,

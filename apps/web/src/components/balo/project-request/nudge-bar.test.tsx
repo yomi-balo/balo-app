@@ -30,8 +30,9 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
+import { Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE } from './nudge-bar';
+import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE, type NudgeContent } from './nudge-bar';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 
 const mockToast = vi.mocked(toast);
@@ -76,9 +77,15 @@ describe('NudgeBar', () => {
   });
 
   it('renders the Done eyebrow for done variants', () => {
-    const nudge = nudgeFor('expert', 'kickoff_approved')!;
+    // The accepted/kickoff_approved cells now defer to the KickoffBoard (no map
+    // entry), so construct a done nudge directly to exercise the eyebrow.
+    const doneNudge: NudgeContent = {
+      variant: 'done',
+      icon: Zap,
+      headline: 'All wrapped up',
+    };
     render(
-      <NudgeBar nudge={nudge} lens="expert" status="kickoff_approved" requestId={REQUEST_ID} />
+      <NudgeBar nudge={doneNudge} lens="expert" status="kickoff_approved" requestId={REQUEST_ID} />
     );
     expect(screen.getByText('Done')).toBeInTheDocument();
   });
@@ -264,13 +271,15 @@ describe('nudgeFor — expert relationship keying (BAL-272 divergence fix)', () 
     expect(nudgeFor('expert', 'eoi_submitted', 'declined')).toBeNull();
   });
 
-  it('accepted/kickoff cells stay request-keyed (decision is request-level)', () => {
-    expect(nudgeFor('expert', 'accepted', 'accepted')?.headline).toBe(
-      'Confirm payment terms for kickoff'
-    );
-    expect(nudgeFor('expert', 'kickoff_approved', 'accepted')?.headline).toBe(
-      'Kicked off — time to deliver'
-    );
+  it('accepted/kickoff cells defer to the KickoffBoard (BAL-291) — no global nudge', () => {
+    // The KickoffBoard owns all kickoff messaging + actions at these statuses, so
+    // the global nudge must NOT show a conflicting CTA for any lens.
+    expect(nudgeFor('expert', 'accepted', 'accepted')).toBeNull();
+    expect(nudgeFor('expert', 'kickoff_approved', 'accepted')).toBeNull();
+    expect(nudgeFor('client', 'accepted')).toBeNull();
+    expect(nudgeFor('client', 'kickoff_approved')).toBeNull();
+    expect(nudgeFor('admin', 'accepted')).toBeNull();
+    expect(nudgeFor('admin', 'kickoff_approved')).toBeNull();
   });
 
   it('never changes the client/admin maps', () => {

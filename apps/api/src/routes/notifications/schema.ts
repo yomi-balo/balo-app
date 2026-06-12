@@ -105,6 +105,23 @@ const projectProposalAcceptedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
+// BAL-291 kickoff approved (client → expert + client). `correlationId` is the
+// kickoff/engagement correlation — dedup per kickoff approval. `expertProfileId`
+// is the delivering expert (resolver hydrates data.expert ⇒ recipient:'expert');
+// `recipientId` is the client user id (drives recipient:'client' resolution).
+// Mirrors apps/web/src/lib/notifications/types.ts.
+const projectKickoffApprovedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  expertProfileId: z.uuid(),
+  recipientId: z.uuid(),
+  title: z.string().min(1).max(200),
+  expertName: z.string().min(1).max(120),
+  clientName: z.string().min(1).max(120),
+  clientCompanyName: z.string().min(1).max(160),
+});
+
 // BAL-290 changes requested (client → expert). `correlationId` is the proposal id
 // — distinct row per round, naturally unique. `expertProfileId` is the proposal
 // owner (resolver hydrates data.expert). Mirrors apps/web/src/lib/notifications/types.ts.
@@ -164,6 +181,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.proposal_accepted'),
     payload: projectProposalAcceptedPayload,
+  }),
+  z.object({
+    event: z.literal('project.kickoff_approved'),
+    payload: projectKickoffApprovedPayload,
   }),
   z.object({
     event: z.literal('project.changes_requested'),

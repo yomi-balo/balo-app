@@ -206,6 +206,60 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('project.kickoff_approved', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440040',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440041',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440042',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440043',
+      recipientId: '550e8400-e29b-41d4-a716-446655440044',
+      title: 'CPQ implementation',
+      expertName: 'Priya Nair',
+      clientName: 'Dana Whitfield',
+      clientCompanyName: 'Acme Corp',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.kickoff_approved',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing recipientId', () => {
+      const { recipientId: _recipientId, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.kickoff_approved',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-UUID expertProfileId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.kickoff_approved',
+        payload: { ...validPayload, expertProfileId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty clientName and a title over 200 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.kickoff_approved',
+          payload: { ...validPayload, clientName: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.kickoff_approved',
+          payload: { ...validPayload, title: 'a'.repeat(201) },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   describe('project.changes_requested', () => {
     const validPayload = {
       correlationId: '550e8400-e29b-41d4-a716-446655440020',

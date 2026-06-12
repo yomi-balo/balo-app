@@ -1,9 +1,7 @@
 import {
-  ArrowRight,
   Calendar,
   Check,
   Clock,
-  DollarSign,
   FileText,
   Lock,
   type LucideIcon,
@@ -12,7 +10,6 @@ import {
   Send,
   Sparkles,
   Users,
-  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RequestLens, ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
@@ -172,13 +169,8 @@ const CLIENT_NUDGES: NudgeMap = {
     sub: "We've invited specialists. You'll be notified the moment one expresses interest.",
     secondary: { label: 'Message Balo', icon: MessageSquare },
   },
-  accepted: {
-    variant: 'action',
-    icon: FileText,
-    headline: 'Add your billing details to start kickoff',
-    sub: 'Almost there. We need company billing details to raise the first invoice.',
-    primary: { label: 'Add billing details', icon: ArrowRight },
-  },
+  // accepted / kickoff_approved: the KickoffBoard (BAL-291) owns ALL kickoff
+  // messaging + actions for the client, so no global nudge here would conflict.
 };
 
 const EXPERT_NUDGES: NudgeMap = {
@@ -212,20 +204,8 @@ const EXPERT_NUDGES: NudgeMap = {
     sub: "They're reviewing it alongside others. Keep the conversation warm.",
     secondary: { label: 'Send a message', icon: MessageSquare },
   },
-  accepted: {
-    variant: 'action',
-    icon: DollarSign,
-    headline: 'Confirm payment terms for kickoff',
-    sub: 'The client accepted your proposal. Confirm terms so Balo can invoice and kick off.',
-    primary: { label: 'Confirm payment terms', icon: Check },
-  },
-  kickoff_approved: {
-    variant: 'done',
-    icon: Zap,
-    headline: 'Kicked off — time to deliver',
-    sub: 'Milestones are in the workspace. Mark them done as you go.',
-    primary: { label: 'Open workspace', icon: Zap },
-  },
+  // accepted / kickoff_approved: the KickoffBoard (BAL-291) owns ALL kickoff
+  // messaging + actions for the winning expert, so no global nudge here.
 };
 
 /** Gated-expert nudge (before invite) — shown alongside the lock card. */
@@ -279,20 +259,8 @@ const ADMIN_NUDGES: NudgeMap = {
     headline: 'Client is reviewing proposals',
     sub: 'The acceptance + kickoff chase lands with you next.',
   },
-  accepted: {
-    variant: 'action',
-    icon: DollarSign,
-    headline: 'Chase upfront invoice, then approve kickoff',
-    sub: 'Confirm payment settled, then approve.',
-    primary: { label: 'Approve for kickoff', icon: Check },
-    secondary: { label: 'View invoice status', icon: DollarSign },
-  },
-  kickoff_approved: {
-    variant: 'done',
-    icon: Zap,
-    headline: 'Project kicked off',
-    sub: "It's now a live project and has left the request pipeline.",
-  },
+  // accepted / kickoff_approved: the KickoffBoard (BAL-291) is the admin's first
+  // CTA (settle + approve) and owns the kicked-off banner, so no global nudge here.
 };
 
 const NUDGES_BY_LENS: Record<RequestLens, NudgeMap> = {

@@ -45,6 +45,20 @@ export class InvalidStatusTransitionError extends Error {
   }
 }
 
+/**
+ * The two persisted kickoff gates (BAL-291 / A6.5). The third — the admin
+ * "settle invoice + approve" gate — is collapsed into the status transition
+ * (`done ⟺ status === 'kickoff_approved'`), so it has no gate value here.
+ */
+export type KickoffGate = 'client_billing' | 'expert_terms';
+
+export class InvalidKickoffStateError extends Error {
+  constructor(public readonly status: ProjectRequestStatus) {
+    super(`Kickoff gate cannot be set while request is ${status}`);
+    this.name = 'InvalidKickoffStateError';
+  }
+}
+
 export interface ProjectRequestDocumentInput {
   r2Key: string;
   fileName: string;
@@ -142,6 +156,8 @@ export const projectRequestsRepository = {
         budgetMaxCents: true,
         budgetCurrency: true,
         timeline: true,
+        clientBillingConfirmedAt: true,
+        expertTermsConfirmedAt: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -243,6 +259,51 @@ export const projectRequestsRepository = {
       const [updated] = await tx
         .update(projectRequests)
         .set({ status: input.to })
+        .where(eq(projectRequests.id, input.id))
+        .returning();
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update project request: ${input.id}`);
+      }
+
+      return updated;
+    });
+  },
+
+  /**
+   * Confirm a kickoff gate (`client_billing` or `expert_terms`) on a request.
+   * Idempotent — the first confirmation's timestamp is PRESERVED on re-confirm
+   * (the audit records when the gate was FIRST cleared, not the latest click).
+   * Status-guarded to `accepted` (the only state the kickoff board renders in):
+   * a gate cannot be set before acceptance or after approval —
+   * `InvalidKickoffStateError` otherwise. Locks the row FOR UPDATE for the
+   * duration of the txn, exactly like `transitionStatus`, serialising concurrent
+   * confirmations. Returns the updated row.
+   */
+  async confirmKickoffGate(input: { id: string; gate: KickoffGate }): Promise<ProjectRequest> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, input.id), isNull(projectRequests.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Project request not found: ${input.id}`);
+      }
+
+      if (current.status !== 'accepted') {
+        throw new InvalidKickoffStateError(current.status);
+      }
+
+      const set =
+        input.gate === 'client_billing'
+          ? { clientBillingConfirmedAt: current.clientBillingConfirmedAt ?? new Date() }
+          : { expertTermsConfirmedAt: current.expertTermsConfirmedAt ?? new Date() };
+
+      const [updated] = await tx
+        .update(projectRequests)
+        .set(set)
         .where(eq(projectRequests.id, input.id))
         .returning();
 

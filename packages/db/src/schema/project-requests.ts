@@ -1,4 +1,13 @@
-import { pgTable, uuid, text, integer, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  text,
+  integer,
+  timestamp,
+  index,
+  uniqueIndex,
+  check,
+} from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import {
   projectRequestStatusEnum,
@@ -79,6 +88,16 @@ export const projectRequests = pgTable(
     // packages table does not exist; add the FK in the package work to avoid a
     // forward dependency. Typed uuid so the future FK is a no-op type change.
     packageId: uuid('package_id'),
+
+    // ── Kickoff gate state (BAL-291 / A6.5) ──────────────────────────────────
+    // Two of the three kickoff gates are persisted here; the third (admin "settle
+    // invoice + approve") is COLLAPSED into the status transition itself — the admin
+    // gate is `done ⟺ status === 'kickoff_approved'`, so it needs no column. These
+    // live on the request (not `engagements`) because the board renders during
+    // `accepted`, BEFORE the engagement is materialised at approval. Nullable,
+    // no default — NULL = outstanding; a timestamp is the "confirmed at" audit.
+    clientBillingConfirmedAt: timestamp('client_billing_confirmed_at', { withTimezone: true }),
+    expertTermsConfirmedAt: timestamp('expert_terms_confirmed_at', { withTimezone: true }),
 
     ...timestamps,
     ...softDelete,

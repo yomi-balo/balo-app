@@ -99,6 +99,18 @@ export interface ProjectProposalAcceptedPayload {
   currency: string; // e.g. 'aud' — admin ops notification body
 }
 
+export interface ProjectKickoffApprovedPayload {
+  correlationId: string; // engagement/kickoff correlation — dedup per kickoff approval
+  projectRequestId: string;
+  relationshipId: string; // the kicked-off relationship
+  expertProfileId: string; // delivering expert's profile id → resolver hydrates data.expert
+  recipientId: string; // = client user id → resolves recipient:'client'
+  title: string; // request title — email/in-app body
+  expertName: string; // delivering expert's display name — email/in-app body
+  clientName: string; // approving client's display name — email/in-app body
+  clientCompanyName: string; // client's company name — email/in-app body
+}
+
 export interface ProjectMessagePostedPayload {
   correlationId: string; // message id — dedup per message (dispatcher jobId)
   projectRequestId: string;
@@ -135,6 +147,7 @@ export type NotificationEvent =
   | 'project.proposal_requested'
   | 'project.proposal_submitted'
   | 'project.proposal_accepted'
+  | 'project.kickoff_approved'
   | 'project.changes_requested'
   | 'project.proposal_resubmitted'
   | 'project.message_posted'
@@ -152,6 +165,7 @@ export interface EventPayloadMap {
   'project.proposal_requested': ProjectProposalRequestedPayload;
   'project.proposal_submitted': ProjectProposalSubmittedPayload;
   'project.proposal_accepted': ProjectProposalAcceptedPayload;
+  'project.kickoff_approved': ProjectKickoffApprovedPayload;
   'project.changes_requested': ProjectChangesRequestedPayload;
   'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
   'project.message_posted': ProjectMessagePostedPayload;

@@ -2,9 +2,38 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { companies, engagements, proposals } from '../schema';
-import { engagementFactory, expertDraftFactory } from '../test/factories';
-import { engagementsRepository } from './engagements';
+import { companies, engagements, projectRequests, proposals } from '../schema';
+import { engagementFactory, expertDraftFactory, proposalFactory } from '../test/factories';
+import type { ProposalFactoryResult } from '../test/factories';
+import { engagementsRepository, KickoffGatesIncompleteError } from './engagements';
+import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
+
+/**
+ * Seed the A6.5 kickoff fixture: a proposal whose request is advanced to
+ * `accepted`, the proposal itself to `accepted`, and (optionally) both persisted
+ * kickoff gates confirmed. Returns the proposal-factory result plus the request's
+ * resolved `companyId` — the FK ids `materializeFromKickoff` needs.
+ */
+async function seedAcceptedKickoff(
+  options: { bothGates?: boolean } = {}
+): Promise<{ source: ProposalFactoryResult; companyId: string }> {
+  const source = await proposalFactory({ values: { status: 'accepted' } });
+
+  const gates = options.bothGates === true ? new Date() : null;
+  await db
+    .update(projectRequests)
+    .set({
+      status: 'accepted',
+      clientBillingConfirmedAt: gates,
+      expertTermsConfirmedAt: gates,
+    })
+    .where(eq(projectRequests.id, source.projectRequestId));
+
+  const request = await projectRequestsRepository.findById(source.projectRequestId);
+  if (request === undefined) throw new Error('seeded request vanished');
+
+  return { source, companyId: request.companyId };
+}
 
 /** Seed a personal company and return its id (engagements need a company party). */
 async function seedCompanyId(): Promise<string> {
@@ -199,5 +228,146 @@ describe('engagementsRepository.findById / listByCompany', () => {
     const afterDelete = await engagementsRepository.listByCompany(companyId);
     expect(afterDelete.map((e) => e.id)).not.toContain(e1.id);
     expect(afterDelete.map((e) => e.id)).toContain(e2.id);
+  });
+});
+
+describe('engagementsRepository.materializeFromKickoff — accept→approve writer', () => {
+  it('happy path: advances the request to kickoff_approved AND materialises the engagement with snapshotted terms', async () => {
+    const { source, companyId } = await seedAcceptedKickoff({ bothGates: true });
+
+    const { engagement, request } = await engagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      pricingMethod: 'tm',
+      priceCents: 250_000,
+      currency: 'usd',
+      depositCents: 50_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+
+    // The request is advanced.
+    expect(request.status).toBe('kickoff_approved');
+    const reloadedRequest = await projectRequestsRepository.findById(source.projectRequestId);
+    expect(reloadedRequest?.status).toBe('kickoff_approved');
+
+    // The engagement row exists with the passed provenance + snapshotted terms.
+    expect(engagement.companyId).toBe(companyId);
+    expect(engagement.expertProfileId).toBe(source.expertProfileId);
+    expect(engagement.sourceProposalId).toBe(source.proposal.id);
+    expect(engagement.relationshipId).toBe(source.relationshipId);
+    expect(engagement.projectRequestId).toBe(source.projectRequestId);
+    expect(engagement.pricingMethod).toBe('tm');
+    expect(engagement.priceCents).toBe(250_000);
+    expect(engagement.currency).toBe('usd');
+    expect(engagement.depositCents).toBe(50_000);
+    expect(engagement.rateCents).toBe(18_000);
+    expect(engagement.cadence).toBe('monthly');
+    // Defaults from the table.
+    expect(engagement.billingModel).toBe('proposal');
+    expect(engagement.approvalModel).toBe('admin_invoice');
+    expect(engagement.status).toBe('active');
+    expect(engagement.activatedAt).toBeInstanceOf(Date);
+
+    // Persisted (not just returned).
+    const persisted = await engagementsRepository.findById(engagement.id);
+    expect(persisted?.id).toBe(engagement.id);
+  });
+
+  it('double-call: the second call throws InvalidStatusTransitionError and only ONE engagement exists', async () => {
+    const { source, companyId } = await seedAcceptedKickoff({ bothGates: true });
+
+    const args = {
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      pricingMethod: 'fixed' as const,
+      priceCents: 500_000,
+    };
+
+    await engagementsRepository.materializeFromKickoff(args);
+
+    // Second call — the request is now `kickoff_approved`, not `accepted`.
+    await expect(engagementsRepository.materializeFromKickoff(args)).rejects.toBeInstanceOf(
+      InvalidStatusTransitionError
+    );
+
+    // Exactly one engagement was created for this request.
+    const rows = await db
+      .select()
+      .from(engagements)
+      .where(eq(engagements.projectRequestId, source.projectRequestId));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('throws KickoffGatesIncompleteError when a gate is still null, leaving the request accepted and no engagement', async () => {
+    // Only the client_billing gate set; expert_terms left null.
+    const source = await proposalFactory({ values: { status: 'accepted' } });
+    await db
+      .update(projectRequests)
+      .set({ status: 'accepted', clientBillingConfirmedAt: new Date() })
+      .where(eq(projectRequests.id, source.projectRequestId));
+    const request = await projectRequestsRepository.findById(source.projectRequestId);
+    if (request === undefined) throw new Error('seeded request vanished');
+
+    await expect(
+      engagementsRepository.materializeFromKickoff({
+        requestId: source.projectRequestId,
+        companyId: request.companyId,
+        expertProfileId: source.expertProfileId,
+        sourceProposalId: source.proposal.id,
+        relationshipId: source.relationshipId,
+        pricingMethod: 'fixed',
+        priceCents: 500_000,
+      })
+    ).rejects.toBeInstanceOf(KickoffGatesIncompleteError);
+
+    // Request untouched, no engagement.
+    const reloaded = await projectRequestsRepository.findById(source.projectRequestId);
+    expect(reloaded?.status).toBe('accepted');
+    const rows = await db
+      .select()
+      .from(engagements)
+      .where(eq(engagements.projectRequestId, source.projectRequestId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('throws InvalidStatusTransitionError when the request is not accepted (e.g. proposal_submitted)', async () => {
+    // Both gates set, but the request status is proposal_submitted (not accepted).
+    const source = await proposalFactory();
+    await db
+      .update(projectRequests)
+      .set({
+        status: 'proposal_submitted',
+        clientBillingConfirmedAt: new Date(),
+        expertTermsConfirmedAt: new Date(),
+      })
+      .where(eq(projectRequests.id, source.projectRequestId));
+    const request = await projectRequestsRepository.findById(source.projectRequestId);
+    if (request === undefined) throw new Error('seeded request vanished');
+    expect(request.status).toBe('proposal_submitted');
+
+    await expect(
+      engagementsRepository.materializeFromKickoff({
+        requestId: source.projectRequestId,
+        companyId: request.companyId,
+        expertProfileId: source.expertProfileId,
+        sourceProposalId: source.proposal.id,
+        relationshipId: source.relationshipId,
+        pricingMethod: 'fixed',
+        priceCents: 500_000,
+      })
+    ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
+
+    const rows = await db
+      .select()
+      .from(engagements)
+      .where(eq(engagements.projectRequestId, source.projectRequestId));
+    expect(rows).toHaveLength(0);
   });
 });
