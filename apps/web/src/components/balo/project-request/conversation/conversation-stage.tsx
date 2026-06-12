@@ -212,6 +212,40 @@ function openProposalSurface(args: {
   push(`/projects/${requestId}/proposal/${threadId}`);
 }
 
+interface LensProposalHandlers {
+  onHeaderRequestProposal: (() => void) | null;
+  onHeaderBuildProposal: (() => void) | null;
+  onNudgeBuild: (() => void) | undefined;
+  onRailProposal: (() => void) | null;
+  onRailBuildProposal: (() => void) | null;
+}
+
+/**
+ * Resolve the lens-gated proposal-CTA handlers for the active thread: a handler is
+ * wired only for the lens that owns that CTA (the wrong lens gets `null`/`undefined`
+ * → a disabled stub). Pure + module-scope so the component body stays branch-light
+ * (keeps `ConversationStage` under the cognitive-complexity limit).
+ */
+function resolveLensProposalHandlers(args: {
+  lens: 'client' | 'expert';
+  railProposalKind: string | undefined;
+  headerRequestProposal: () => void;
+  headerBuild: () => void;
+  nudgeBuild: () => void;
+  railProposal: () => void;
+  railBuild: () => void;
+}): LensProposalHandlers {
+  const isClient = args.lens === 'client';
+  const isExpert = args.lens === 'expert';
+  return {
+    onHeaderRequestProposal: isClient ? args.headerRequestProposal : null,
+    onHeaderBuildProposal: isExpert ? args.headerBuild : null,
+    onNudgeBuild: isExpert ? args.nudgeBuild : undefined,
+    onRailProposal: isClient && args.railProposalKind === 'request' ? args.railProposal : null,
+    onRailBuildProposal: isExpert ? args.railBuild : null,
+  };
+}
+
 /** Zero-open-threads stage — invitation framing, never a blank panel. */
 function EmptyConversationStage({
   lens,
@@ -957,18 +991,25 @@ export function ConversationStage({
   const { nudge, actions, single, showYouSuffix, profileHref, showProposalPill, showOverflow } =
     deriveStageRender({ lens, requestStatus, activeThread, threadCount: threads.length });
 
-  // Lens-gated handler wiring precomputed so the JSX stays branch-light.
-  const isClient = lens === 'client';
-  const isExpert = lens === 'expert';
-  const onHeaderRequestProposal = isClient ? handleHeaderProposal : null;
-  const onHeaderBuildProposal = isExpert ? handleHeaderBuild : null;
-  const onNudgeBuild = isExpert ? handleNudgeBuild : undefined;
-  const onRailProposal =
-    isClient && actions.railProposal?.kind === 'request' ? handleRailProposal : null;
-  const onRailBuildProposal = isExpert ? handleRailBuild : null;
+  // Lens-gated handler wiring (pure helper — keeps the component body branch-light).
+  const {
+    onHeaderRequestProposal,
+    onHeaderBuildProposal,
+    onNudgeBuild,
+    onRailProposal,
+    onRailBuildProposal,
+  } = resolveLensProposalHandlers({
+    lens,
+    railProposalKind: actions.railProposal?.kind,
+    headerRequestProposal: handleHeaderProposal,
+    headerBuild: handleHeaderBuild,
+    nudgeBuild: handleNudgeBuild,
+    railProposal: handleRailProposal,
+    railBuild: handleRailBuild,
+  });
   // The `kind:'view'` review/submitted link is live for BOTH lenses (the route
   // dispatches by lens). Always wired; the slot only renders at submitted/accepted.
-  const composerExpertName = isExpert ? 'the client' : activeThread.expertFirstName;
+  const composerExpertName = lens === 'expert' ? 'the client' : activeThread.expertFirstName;
 
   return (
     <RequestCard className={STAGE_CARD_CLASS}>
