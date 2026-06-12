@@ -21,7 +21,11 @@ import {
   requestExpertRelationshipFactory,
 } from '../test/factories';
 import { referenceDataRepository } from './reference-data';
-import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
+import {
+  projectRequestsRepository,
+  InvalidStatusTransitionError,
+  InvalidKickoffStateError,
+} from './project-requests';
 
 /**
  * Seeds a creator user + their personal company (owner membership) + a target
@@ -792,5 +796,84 @@ describe('project_requests budget CHECK constraints', () => {
 
   it('rejects a negative budget_max_cents (project_requests_budget_max_nonneg)', async () => {
     await expect(projectRequestFactory({ budgetMaxCents: -1 })).rejects.toThrow();
+  });
+});
+
+// ── confirmKickoffGate ───────────────────────────────────────────────
+
+describe('projectRequestsRepository.confirmKickoffGate', () => {
+  it('sets client_billing_confirmed_at when status is accepted, leaving the other gate null', async () => {
+    const created = await projectRequestFactory({ status: 'accepted' });
+
+    const updated = await projectRequestsRepository.confirmKickoffGate({
+      id: created.id,
+      gate: 'client_billing',
+    });
+
+    expect(updated.clientBillingConfirmedAt).toBeInstanceOf(Date);
+    expect(updated.expertTermsConfirmedAt).toBeNull();
+
+    // Persisted (not just returned).
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.clientBillingConfirmedAt).toBeInstanceOf(Date);
+    expect(reloaded?.expertTermsConfirmedAt).toBeNull();
+  });
+
+  it('sets expert_terms_confirmed_at when status is accepted, leaving the other gate null', async () => {
+    const created = await projectRequestFactory({ status: 'accepted' });
+
+    const updated = await projectRequestsRepository.confirmKickoffGate({
+      id: created.id,
+      gate: 'expert_terms',
+    });
+
+    expect(updated.expertTermsConfirmedAt).toBeInstanceOf(Date);
+    expect(updated.clientBillingConfirmedAt).toBeNull();
+  });
+
+  it('is idempotent — a second confirmation preserves the original timestamp', async () => {
+    const created = await projectRequestFactory({ status: 'accepted' });
+
+    const first = await projectRequestsRepository.confirmKickoffGate({
+      id: created.id,
+      gate: 'client_billing',
+    });
+    const firstAt = first.clientBillingConfirmedAt;
+    expect(firstAt).toBeInstanceOf(Date);
+
+    const second = await projectRequestsRepository.confirmKickoffGate({
+      id: created.id,
+      gate: 'client_billing',
+    });
+
+    // The first confirmation's timestamp is preserved (records when the gate was
+    // FIRST cleared, not the latest click).
+    expect(second.clientBillingConfirmedAt?.getTime()).toBe(firstAt?.getTime());
+  });
+
+  it('throws InvalidKickoffStateError when status is not accepted, leaving the row unchanged', async () => {
+    const created = await projectRequestFactory({ status: 'proposal_submitted' });
+
+    await expect(
+      projectRequestsRepository.confirmKickoffGate({ id: created.id, gate: 'client_billing' })
+    ).rejects.toBeInstanceOf(InvalidKickoffStateError);
+
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.clientBillingConfirmedAt).toBeNull();
+    expect(reloaded?.status).toBe('proposal_submitted');
+  });
+
+  it('throws for an unknown id', async () => {
+    await expect(
+      projectRequestsRepository.confirmKickoffGate({ id: randomUUID(), gate: 'client_billing' })
+    ).rejects.toThrow();
+  });
+
+  it('throws for a soft-deleted request', async () => {
+    const created = await projectRequestFactory({ status: 'accepted', deletedAt: new Date() });
+
+    await expect(
+      projectRequestsRepository.confirmKickoffGate({ id: created.id, gate: 'client_billing' })
+    ).rejects.toThrow();
   });
 });

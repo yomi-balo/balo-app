@@ -11,6 +11,10 @@ import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
 import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
+import {
+  ProjectKickoffApprovedExpertEmail,
+  ProjectKickoffApprovedClientEmail,
+} from './project-kickoff-approved.js';
 import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
 import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
 import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
@@ -252,6 +256,64 @@ describe('ProjectProposalAcceptedEmail', () => {
   });
 });
 
+describe('ProjectKickoffApprovedExpertEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectKickoffApprovedExpertEmail({
+      firstName: 'Priya',
+      counterpartName: 'Dana Whitfield',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders the deliver message, the client (with company on first mention), and a link', async () => {
+    const html = await render(
+      ProjectKickoffApprovedExpertEmail({
+        firstName: 'Priya',
+        counterpartName: 'Dana Whitfield',
+        counterpartCompany: 'Acme Corp',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Kickoff approved — time to deliver');
+    expect(html).toContain('Dana Whitfield @ Acme Corp');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+});
+
+describe('ProjectKickoffApprovedClientEmail', () => {
+  it('returns a React element', () => {
+    const element = ProjectKickoffApprovedClientEmail({
+      firstName: 'Dana',
+      counterpartName: 'Priya Nair',
+      projectTitle: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      baseUrl: 'https://app.balo.expert',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders the expert-ready message and a link to the project', async () => {
+    const html = await render(
+      ProjectKickoffApprovedClientEmail({
+        firstName: 'Dana',
+        counterpartName: 'Priya Nair',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('Kickoff approved — Priya Nair is ready');
+    expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+});
+
 describe('ProjectChangesRequestedEmail', () => {
   it('returns a React element carrying the client name', () => {
     const element = ProjectChangesRequestedEmail({
@@ -414,6 +476,29 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(subject).toBe('Your proposal was accepted: CPQ implementation');
   });
 
+  it('resolves project-kickoff-approved-expert with a deliver subject (BAL-291)', () => {
+    const { component, subject } = getEmailTemplate('project-kickoff-approved-expert', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Priya',
+      clientName: 'Dana Whitfield',
+      clientCompanyName: 'Acme Corp',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('Kickoff approved — time to deliver: CPQ implementation');
+  });
+
+  it('resolves project-kickoff-approved-client with an expert-ready subject (BAL-291)', () => {
+    const { component, subject } = getEmailTemplate('project-kickoff-approved-client', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      recipientName: 'Dana',
+      expertName: 'Priya Nair',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('Kickoff approved — Priya Nair is ready: CPQ implementation');
+  });
+
   it('resolves project-proposal-not-selected with an update subject (BAL-289)', () => {
     const { component, subject } = getEmailTemplate('project-proposal-not-selected', {
       title: 'CPQ implementation',
@@ -457,6 +542,8 @@ describe('sanitizeSubjectTitle', () => {
       'project-proposal-requested',
       'project-proposal-submitted',
       'project-proposal-accepted',
+      'project-kickoff-approved-expert',
+      'project-kickoff-approved-client',
       'project-proposal-not-selected',
     ];
     for (const name of templateNames) {

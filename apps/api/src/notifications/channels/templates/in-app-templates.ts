@@ -101,6 +101,27 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  'project-kickoff-approved-expert': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Kickoff approved',
+      body: `Kickoff approved for "${title}" — time to deliver`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  'project-kickoff-approved-client': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const expertName = (data.expertName as string) ?? 'Your expert';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Kickoff approved',
+      body: `${expertName} is ready — kickoff approved for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
   'project-proposal-not-selected': (data) => {
     const title = (data.title as string) ?? 'a project';
     const projectRequestId = data.projectRequestId as string | undefined;

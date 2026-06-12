@@ -10,6 +10,10 @@ import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
 import { ProjectProposalRequestedEmail } from './project-proposal-requested.js';
 import { ProjectProposalSubmittedEmail } from './project-proposal-submitted.js';
 import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
+import {
+  ProjectKickoffApprovedExpertEmail,
+  ProjectKickoffApprovedClientEmail,
+} from './project-kickoff-approved.js';
 import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
 import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
 import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
@@ -169,6 +173,39 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `Your proposal was accepted: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-kickoff-approved-expert': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    // Counterpart on the EXPERT email is the approving client (carries a company).
+    const clientName = (data.clientName as string) ?? 'The client';
+    return {
+      component: React.createElement(ProjectKickoffApprovedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartName: clientName,
+        counterpartCompany: (data.clientCompanyName as string) ?? '',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Kickoff approved — time to deliver: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-kickoff-approved-client': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    // Counterpart on the CLIENT email is the delivering expert (no company).
+    const expertName = (data.expertName as string) ?? 'Your expert';
+    return {
+      component: React.createElement(ProjectKickoffApprovedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartName: expertName,
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Kickoff approved — ${sanitizeSubjectTitle(expertName)} is ready: ${sanitizeSubjectTitle(title)}`,
     };
   },
 

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "engagement_request_unique_idx" ON "engagements" USING btree ("project_request_id") WHERE "engagements"."project_request_id" IS NOT NULL AND "engagements"."deleted_at" IS NULL;

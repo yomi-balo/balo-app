@@ -25,6 +25,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     relationships: [],
     viewerEoi: null,
     viewerRelationshipStatus: null,
+    kickoff: null,
     ...overrides,
   };
 }

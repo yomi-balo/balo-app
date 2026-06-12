@@ -194,6 +194,15 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-291: the client approved kickoff — the engagement is live. Notifies BOTH
+  // sides (email + in-app each): the delivering expert (recipient:'expert', resolved
+  // from the hydrated data.expert via payload.expertProfileId) gets a "time to deliver"
+  // nudge; the approving client (recipient:'client', resolved via payload.recipientId)
+  // gets a "your expert is ready" confirmation.
+  'project.kickoff_approved': [
+    ...emailAndInApp('expert', 'project-kickoff-approved-expert'),
+    ...emailAndInApp('client', 'project-kickoff-approved-client'),
+  ],
   // BAL-290 (A6.4): the client requested changes on a submitted proposal — a commit
   // moment the expert must act on, so email-worthy (plus in-app). recipient:'expert'
   // resolves from the hydrated data.expert (resolver maps payload.expertProfileId →

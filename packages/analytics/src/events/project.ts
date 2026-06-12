@@ -29,6 +29,11 @@ export const PROJECT_EVENTS = {
   CHANGES_REQUESTED: 'project_changes_requested',
   PROPOSAL_RESUBMITTED: 'project_proposal_resubmitted',
   PROJECT_KICKOFF_APPROVED: 'project_kickoff_approved',
+  // BAL-291 (A6.5): a participant confirmed their kickoff gate (client billing /
+  // expert payment-terms) on the KickoffBoard "Complete" action. Fired client-side
+  // so the kickoff funnel can measure per-gate dwell (accept → each gate confirmed →
+  // admin approval). Admin approval is PROJECT_KICKOFF_APPROVED, not a gate event.
+  PROJECT_KICKOFF_GATE_CONFIRMED: 'project_kickoff_gate_confirmed',
   // Request-detail page (A1 / BAL-268) viewer-occurrence signals, fired from the
   // client analytics island. DETAIL_VIEWED on mount; PHASE_FLIPPED the first time
   // a viewer sees this request in Phase 2 (per request+lens, sessionStorage-guarded
@@ -160,6 +165,12 @@ export interface ProjectEventMap {
   [PROJECT_EVENTS.PROJECT_KICKOFF_APPROVED]: {
     request_id: string;
     actor: 'admin';
+  };
+  [PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED]: {
+    request_id: string;
+    relationship_id: string;
+    gate: 'client_billing' | 'expert_terms';
+    actor: 'client' | 'expert';
   };
   [PROJECT_EVENTS.PROJECT_REQUEST_DETAIL_VIEWED]: {
     request_id: string;

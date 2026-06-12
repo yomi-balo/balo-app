@@ -164,6 +164,47 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-kickoff-approved-expert', () => {
+    it('returns the expert title, body, and action url', () => {
+      const result = getInAppTemplate('project-kickoff-approved-expert', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Kickoff approved',
+        body: 'Kickoff approved for "CPQ implementation" — time to deliver',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-kickoff-approved-expert', {});
+      expect(result.body).toBe('Kickoff approved for "a project" — time to deliver');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-kickoff-approved-client', () => {
+    it('returns the client title, body (with expert name), and action url', () => {
+      const result = getInAppTemplate('project-kickoff-approved-client', {
+        title: 'CPQ implementation',
+        expertName: 'Priya Nair',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Kickoff approved',
+        body: 'Priya Nair is ready — kickoff approved for "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when expertName/title are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-kickoff-approved-client', {});
+      expect(result.body).toBe('Your expert is ready — kickoff approved for "a project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('project-proposal-not-selected', () => {
     it('returns the not-selected title, body, and action url', () => {
       const result = getInAppTemplate('project-proposal-not-selected', {

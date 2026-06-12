@@ -27,6 +27,19 @@ export type RelationshipState =
   | 'accepted'
   | 'declined';
 
+/**
+ * Kickoff-board projection — the dual-confirmation gate state once a request has
+ * an accepted expert. `approved` is the terminal flag (both sides confirmed +
+ * status advanced to `kickoff_approved`).
+ */
+export interface KickoffView {
+  acceptedRelationshipId: string;
+  clientBillingConfirmed: boolean;
+  expertTermsConfirmed: boolean;
+  approved: boolean;
+  expertName: string;
+}
+
 /** Observer-only relationship projection (admin health panel). */
 export interface RequestRelationshipView {
   id: string;
@@ -76,6 +89,13 @@ export interface RequestDetailView {
    * must key on THIS, not the max-progress request status.
    */
   viewerRelationshipStatus: RelationshipStatus | null;
+  /**
+   * Kickoff-board gate state — populated for the client + admin lenses when the
+   * request is at `accepted`/`kickoff_approved` and an accepted relationship
+   * exists; for the expert lens ONLY when the viewer IS the accepted/winning
+   * expert (a losing expert never sees the board). `null` otherwise.
+   */
+  kickoff: KickoffView | null;
 }
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -210,6 +230,32 @@ function deriveViewerRelationshipStatus(
 }
 
 /**
+ * Kickoff-board projection — the dual-confirmation gate state. Returns `null`
+ * unless the request is at `accepted`/`kickoff_approved` AND has an accepted
+ * relationship (it stays `accepted` even after `kickoff_approved` — there is no
+ * `kickoff_approved` relationship status). The expert lens is gated to the
+ * accepted/winning expert only (a losing expert never sees the board); client +
+ * admin are never gated here. Pure + deterministic.
+ */
+function deriveKickoffView(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): KickoffView | null {
+  if (request.status !== 'accepted' && request.status !== 'kickoff_approved') return null;
+  const accepted = request.relationships.find((r) => r.status === 'accepted');
+  if (accepted === undefined) return null;
+  // Only the winning expert sees the board; client + admin are never gated here.
+  if (ctx.lens === 'expert' && ctx.relationshipId !== accepted.id) return null;
+  return {
+    acceptedRelationshipId: accepted.id,
+    clientBillingConfirmed: request.clientBillingConfirmedAt !== null,
+    expertTermsConfirmed: request.expertTermsConfirmedAt !== null,
+    approved: request.status === 'kickoff_approved',
+    expertName: relationshipName(accepted),
+  };
+}
+
+/**
  * Pure mapper: hydrated DB graph → fully serializable view-model the leaf
  * components consume. Mirrors `mapProfileToView`.
  *
@@ -251,5 +297,6 @@ export function mapRequestToDetailView(
         : [],
     viewerEoi: deriveViewerEoi(request, ctx),
     viewerRelationshipStatus: deriveViewerRelationshipStatus(request, ctx),
+    kickoff: deriveKickoffView(request, ctx),
   };
 }

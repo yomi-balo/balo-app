@@ -5,6 +5,7 @@ import {
   formatPostedRelative,
   QUIET_THRESHOLD_DAYS,
 } from './request-detail-view';
+import type { KickoffView } from './request-detail-view';
 import type { RequestViewerContext } from './resolve-request-lens';
 
 const NOW = new Date('2025-01-10T00:00:00Z');
@@ -49,6 +50,8 @@ function request(
     budgetMaxCents: 7000000,
     budgetCurrency: 'aud',
     timeline: 'Target go-live: end of Q3',
+    clientBillingConfirmedAt: null,
+    expertTermsConfirmedAt: null,
     createdAt: new Date('2025-01-07T00:00:00Z'),
     updatedAt: new Date('2025-01-07T00:00:00Z'),
     company: { id: 'company-1', name: 'Northwind Industrial' },
@@ -352,6 +355,134 @@ describe('mapRequestToDetailView — per-expert derived state (observer lens)', 
     });
     expect(result.quietDays).toBe(0);
     expect(result.isQuiet).toBe(false);
+  });
+});
+
+describe('mapRequestToDetailView — kickoff (BAL-291)', () => {
+  /** An accepted relationship for the winning expert (`rel-1`). */
+  const acceptedRel = rel({ status: 'accepted' });
+
+  it('is null before the request is accepted (e.g. proposal_submitted)', () => {
+    const view = mapRequestToDetailView(
+      request({
+        status: 'proposal_submitted',
+        relationships: [rel({ status: 'proposal_submitted' })],
+      }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff).toBeNull();
+  });
+
+  it('is null when accepted but no relationship has reached accepted status', () => {
+    const view = mapRequestToDetailView(
+      request({ status: 'accepted', relationships: [rel({ status: 'proposal_submitted' })] }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff).toBeNull();
+  });
+
+  it('populates at accepted with both gates false when timestamps are null', () => {
+    const view = mapRequestToDetailView(
+      request({ status: 'accepted', relationships: [acceptedRel] }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff).toEqual<KickoffView>({
+      acceptedRelationshipId: 'rel-1',
+      clientBillingConfirmed: false,
+      expertTermsConfirmed: false,
+      approved: false,
+      expertName: 'Priya Nair',
+    });
+  });
+
+  it('reflects each gate when its timestamp is set', () => {
+    const view = mapRequestToDetailView(
+      request({
+        status: 'accepted',
+        relationships: [acceptedRel],
+        clientBillingConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+        expertTermsConfirmedAt: null,
+      }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff?.clientBillingConfirmed).toBe(true);
+    expect(view.kickoff?.expertTermsConfirmed).toBe(false);
+
+    const both = mapRequestToDetailView(
+      request({
+        status: 'accepted',
+        relationships: [acceptedRel],
+        clientBillingConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+        expertTermsConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+      }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(both.kickoff?.clientBillingConfirmed).toBe(true);
+    expect(both.kickoff?.expertTermsConfirmed).toBe(true);
+  });
+
+  it('marks approved true at kickoff_approved (relationship stays accepted)', () => {
+    const view = mapRequestToDetailView(
+      request({
+        status: 'kickoff_approved',
+        relationships: [acceptedRel],
+        clientBillingConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+        expertTermsConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+      }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff?.approved).toBe(true);
+    expect(view.kickoff?.acceptedRelationshipId).toBe('rel-1');
+  });
+
+  it('gates the expert lens to the winning expert only', () => {
+    const req = request({
+      status: 'accepted',
+      relationships: [
+        acceptedRel,
+        rel({ id: 'rel-2', expertProfileId: 'expert-2', status: 'declined' }),
+      ],
+    });
+
+    // Non-winning expert (relationshipId ≠ accepted) → null.
+    const losing = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'expert', relationshipId: 'rel-2' }),
+      NOW
+    );
+    expect(losing.kickoff).toBeNull();
+
+    // Winning expert (relationshipId === accepted) → populated.
+    const winning = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(winning.kickoff?.acceptedRelationshipId).toBe('rel-1');
+  });
+
+  it('populates for client + admin lenses regardless of relationshipId', () => {
+    const req = request({ status: 'accepted', relationships: [acceptedRel] });
+
+    const clientView = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(clientView.kickoff?.acceptedRelationshipId).toBe('rel-1');
+
+    const adminView = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null }),
+      NOW
+    );
+    expect(adminView.kickoff?.acceptedRelationshipId).toBe('rel-1');
   });
 });
 

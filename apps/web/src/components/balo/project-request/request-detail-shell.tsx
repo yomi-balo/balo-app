@@ -15,6 +15,7 @@ import { RequestDetailAnalytics } from './request-detail-analytics';
 import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
 import { ProposalSlot } from './proposal-slot';
+import { KickoffBoard } from './proposal/kickoff-board';
 import { ConversationStage } from './conversation/conversation-stage';
 import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 
@@ -181,13 +182,27 @@ export function RequestDetailShell({
         {ctx.archetype === 'observer' && (
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <RequestContext view={view} variant="full" />
-            {showHealthPanel && (
-              <AdminHealthPanel
-                requestId={view.id}
-                status={view.status}
-                relationships={view.relationships}
-              />
-            )}
+            <div className="space-y-5">
+              {/* Kickoff board is the admin's first CTA — above the health panel. */}
+              {view.kickoff && (
+                <KickoffBoard
+                  requestId={view.id}
+                  acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                  lens={ctx.lens}
+                  clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                  expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                  approved={view.kickoff.approved}
+                  expertName={view.kickoff.expertName}
+                />
+              )}
+              {showHealthPanel && (
+                <AdminHealthPanel
+                  requestId={view.id}
+                  status={view.status}
+                  relationships={view.relationships}
+                />
+              )}
+            </div>
           </div>
         )}
 
@@ -236,6 +251,19 @@ export function RequestDetailShell({
                         )}
                       </>
                     )}
+                    {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
+                    {view.kickoff && (
+                      <KickoffBoard
+                        requestId={view.id}
+                        acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                        lens={ctx.lens}
+                        clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                        expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                        approved={view.kickoff.approved}
+                        expertName={view.kickoff.expertName}
+                        mobile
+                      />
+                    )}
                     <RequestContext view={view} variant="compact" />
                   </div>
                 </MobileRequestSheet>
@@ -274,6 +302,18 @@ export function RequestDetailShell({
                     />
                   )}
                 </>
+              )}
+              {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
+              {view.kickoff && (
+                <KickoffBoard
+                  requestId={view.id}
+                  acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                  lens={ctx.lens}
+                  clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                  expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                  approved={view.kickoff.approved}
+                  expertName={view.kickoff.expertName}
+                />
               )}
               <RequestContext view={view} variant="compact" />
             </div>

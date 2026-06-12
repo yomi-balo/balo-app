@@ -9,8 +9,9 @@ import type {
 vi.mock('server-only', () => ({}));
 
 const mockPush = vi.hoisted(() => vi.fn());
+const mockRefresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, refresh: mockRefresh }),
 }));
 
 // AdminHealthPanel + NudgeActions are client islands that import server actions —
@@ -64,6 +65,14 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-ca
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () => ({
   requestProposalAction: vi.fn(),
+}));
+// KickoffBoard (BAL-291) client island — mock its two actions so the shell
+// renders the board in JSDOM without touching @balo/db / auth at runtime.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/complete-kickoff-task', () => ({
+  completeKickoffTaskAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff', () => ({
+  approveKickoffAction: vi.fn(),
 }));
 vi.mock(
   '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token',
@@ -130,6 +139,20 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     relationships: [],
     viewerEoi: null,
     viewerRelationshipStatus: null,
+    kickoff: null,
+    ...overrides,
+  };
+}
+
+function kickoff(
+  overrides: Partial<NonNullable<RequestDetailView['kickoff']>> = {}
+): NonNullable<RequestDetailView['kickoff']> {
+  return {
+    acceptedRelationshipId: 'rel-1',
+    clientBillingConfirmed: false,
+    expertTermsConfirmed: false,
+    approved: false,
+    expertName: 'Priya Nair',
     ...overrides,
   };
 }
@@ -403,6 +426,59 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
     );
     expect(screen.getByRole('list', { name: /Request progress/i })).toBeInTheDocument();
     expect(screen.getByText('Requested').closest('[aria-current="step"]')).not.toBeNull();
+  });
+});
+
+describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
+  it('renders the KickoffBoard in the admin observer right column when kickoff is populated', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'accepted',
+          relationships: [relationship({ status: 'accepted', state: 'accepted' })],
+          kickoff: kickoff(),
+        })}
+        ctx={ctx({ lens: 'admin', archetype: 'observer', isOwner: false, canSeeContact: true })}
+      />
+    );
+    expect(screen.getByText("What's blocking kickoff")).toBeInTheDocument();
+  });
+
+  it('renders the KickoffBoard for the client participant (Phase-2 right column)', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'accepted', kickoff: kickoff() })}
+        ctx={ctx({ lens: 'client' })}
+        conversation={conversation()}
+      />
+    );
+    // Desktop + mobile-sheet both mount the board → at least one heading is present.
+    expect(screen.getAllByText("What's blocking kickoff").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders the KickoffBoard for the winning expert participant (Phase-2 right column)', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'accepted',
+          viewerRelationshipStatus: 'accepted',
+          kickoff: kickoff(),
+        })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+        conversation={conversation()}
+      />
+    );
+    expect(screen.getAllByText("What's blocking kickoff").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does NOT render the KickoffBoard when kickoff is null (default fixtures)', () => {
+    render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
+    expect(screen.queryByText("What's blocking kickoff")).not.toBeInTheDocument();
   });
 });
 

@@ -1,0 +1,2 @@
+ALTER TABLE "project_requests" ADD COLUMN "client_billing_confirmed_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "project_requests" ADD COLUMN "expert_terms_confirmed_at" timestamp with time zone;
