@@ -123,6 +123,7 @@ SonarCloud runs on every PR. Write code that passes its quality gate from the st
 - **Associate labels with controls** — every `<label>` needs `htmlFor` matching the control's `id`. Every interactive element in a form needs an accessible name.
 - **Wrap event handlers in `useCallback`** — don't define plain functions inside components for handlers passed as props.
 - **Keep duplication under 3%** — if you're writing 2+ files with similar structure (templates, adapters, route handlers), extract shared logic into a helper. SonarCloud flags 10+ identical lines across files.
+- **No super-linear (ReDoS) regex** — SonarCloud rule **S5852** fails the gate as a new-code Security Hotspot (and a crafted input can pin the event loop). Avoid nested quantifiers (`(x+)+`, `(x*)*`, `(x+)*`) and quantified overlapping alternation (`(a|ab)*`). The most common trap here is a greedy negated class that doesn't exclude its own _opening_ delimiter — e.g. the HTML tag-strip `/<[^>]*>/g`: `[^>]` still matches `<`, so overlapping start positions re-scan the same region (O(n²)). Write `/<[^<>]*>/g` (exclude both delimiters). When unsure, anchor the pattern, bound the input length, or use a linear non-regex scan.
 
 ## Performance Rules
 
