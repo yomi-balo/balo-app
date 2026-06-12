@@ -2,6 +2,9 @@ import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { proposalMilestones, type ProposalMilestone } from '../schema';
 
+/** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /** One milestone in a `setForProposal` replace-all set. `sortOrder` is assigned by
  *  the repo (= array index), so callers supply ordering by array position only. */
 export interface ProposalMilestoneInput {
@@ -10,6 +13,37 @@ export interface ProposalMilestoneInput {
   acceptanceCriteria?: string | null;
   /** Fixed-only deliverable value (integer minor units); null/undefined for T&M. */
   valueCents?: number | null;
+}
+
+/**
+ * Insert an ordered milestone set (`sortOrder = index`) for a proposal within an
+ * EXISTING transaction. Empty input is a no-op (returns `[]`). Returns the inserted
+ * rows. Exported so a caller (e.g. `proposalsRepository.resubmit`) can write a
+ * proposal's children INSIDE the same transaction that creates the header row —
+ * keeping header + children atomic. `setForProposal` reuses this so the INSERT
+ * logic lives in exactly one place.
+ */
+export async function insertMilestonesTx(
+  tx: DbTx,
+  proposalId: string,
+  milestones: ProposalMilestoneInput[]
+): Promise<ProposalMilestone[]> {
+  if (milestones.length === 0) {
+    return [];
+  }
+  return tx
+    .insert(proposalMilestones)
+    .values(
+      milestones.map((m, index) => ({
+        proposalId,
+        sortOrder: index,
+        title: m.title,
+        descriptionHtml: m.descriptionHtml ?? null,
+        acceptanceCriteria: m.acceptanceCriteria ?? null,
+        valueCents: m.valueCents ?? null,
+      }))
+    )
+    .returning();
 }
 
 export const proposalMilestonesRepository = {
@@ -39,24 +73,7 @@ export const proposalMilestonesRepository = {
           )
         );
 
-      if (input.milestones.length === 0) {
-        return [];
-      }
-
-      const rows = await tx
-        .insert(proposalMilestones)
-        .values(
-          input.milestones.map((m, index) => ({
-            proposalId: input.proposalId,
-            sortOrder: index,
-            title: m.title,
-            descriptionHtml: m.descriptionHtml ?? null,
-            acceptanceCriteria: m.acceptanceCriteria ?? null,
-            valueCents: m.valueCents ?? null,
-          }))
-        )
-        .returning();
-      return rows;
+      return insertMilestonesTx(tx, input.proposalId, input.milestones);
     });
   },
 

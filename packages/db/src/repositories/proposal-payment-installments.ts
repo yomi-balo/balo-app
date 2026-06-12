@@ -2,11 +2,43 @@ import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { proposalPaymentInstallments, type ProposalPaymentInstallment } from '../schema';
 
+/** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /** One installment in a `setForProposal` replace-all set. `sortOrder` is assigned
  *  by the repo (= array index). `pct` is a whole percent (0–100). */
 export interface ProposalPaymentInstallmentInput {
   label: string;
   pct: number;
+}
+
+/**
+ * Insert an ordered installment set (`sortOrder = index`) for a proposal within an
+ * EXISTING transaction. Empty input is a no-op (returns `[]`). Returns the inserted
+ * rows. Exported so a caller (e.g. `proposalsRepository.resubmit`) can write a
+ * proposal's children INSIDE the same transaction that creates the header row —
+ * keeping header + children atomic. `setForProposal` reuses this so the INSERT
+ * logic lives in exactly one place.
+ */
+export async function insertInstallmentsTx(
+  tx: DbTx,
+  proposalId: string,
+  installments: ProposalPaymentInstallmentInput[]
+): Promise<ProposalPaymentInstallment[]> {
+  if (installments.length === 0) {
+    return [];
+  }
+  return tx
+    .insert(proposalPaymentInstallments)
+    .values(
+      installments.map((i, index) => ({
+        proposalId,
+        sortOrder: index,
+        label: i.label,
+        pct: i.pct,
+      }))
+    )
+    .returning();
 }
 
 /**
@@ -46,22 +78,7 @@ export const proposalPaymentInstallmentsRepository = {
           )
         );
 
-      if (input.installments.length === 0) {
-        return [];
-      }
-
-      const rows = await tx
-        .insert(proposalPaymentInstallments)
-        .values(
-          input.installments.map((i, index) => ({
-            proposalId: input.proposalId,
-            sortOrder: index,
-            label: i.label,
-            pct: i.pct,
-          }))
-        )
-        .returning();
-      return rows;
+      return insertInstallmentsTx(tx, input.proposalId, input.installments);
     });
   },
 

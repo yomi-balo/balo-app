@@ -87,7 +87,8 @@ export function ChangesModal({
   const canSubmit = note.trim().length > 0;
 
   const handleSectionChange = useCallback((value: string): void => {
-    setSection(value as ChangeSection);
+    const match = SECTION_OPTIONS.find((option) => option.value === value);
+    if (match) setSection(match.value);
   }, []);
 
   const handleSubmit = useCallback((): void => {

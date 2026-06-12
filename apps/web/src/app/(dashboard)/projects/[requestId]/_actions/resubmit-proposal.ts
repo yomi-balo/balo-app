@@ -6,8 +6,6 @@ import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import {
   proposalsRepository,
-  proposalMilestonesRepository,
-  proposalPaymentInstallmentsRepository,
   proposalDocumentsRepository,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
@@ -271,8 +269,10 @@ export async function resubmitProposalAction(
     }
 
     // (a) Atomic version bump — flips v1 → `resubmitted`, inserts v2 (fresh UUID,
-    //     version+1, is_current). A stale double-resubmit trips the typed transition
-    //     errors → friendly stale copy.
+    //     version+1, is_current) AND writes v2's milestones + installments in the
+    //     SAME transaction, so a current/submitted v2 never exists without its
+    //     children. A stale double-resubmit trips the typed transition errors →
+    //     friendly stale copy.
     const v2 = await resubmitWithStaleGuard({
       relationshipId,
       overview: sanitised.overview,
@@ -284,22 +284,15 @@ export async function resubmitProposalAction(
       depositCents: data.depositCents,
       rateCents: data.rateCents,
       cadence: data.cadence,
+      milestones: sanitised.milestones,
+      installments: sanitised.installments,
     });
     if (v2 === null) {
       return { success: false, error: STALE_PROPOSAL };
     }
 
-    // (b) + (c) Re-parent the child sets onto v2 (replace-all).
-    await proposalMilestonesRepository.setForProposal({
-      proposalId: v2.id,
-      milestones: sanitised.milestones,
-    });
-    await proposalPaymentInstallmentsRepository.setForProposal({
-      proposalId: v2.id,
-      installments: sanitised.installments,
-    });
-
-    // (d) Document carryover (best-effort, after the header + children commit).
+    // (b) Document carryover (best-effort, AFTER the header + children commit — a
+    //     missing attachment must never fail the resubmit).
     await carryOverDocuments(fromProposalId, v2.id);
 
     // Key business event (after the version bump).

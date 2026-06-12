@@ -58,6 +58,9 @@ const {
   return {
     mockFindCurrent: vi.fn(),
     mockResubmit: vi.fn(),
+    // The action no longer calls the child `setForProposal` repos (children are now
+    // written inside `resubmit`'s transaction). These mocks exist only to assert
+    // they are NEVER called.
     mockSetMilestones: vi.fn(),
     mockSetInstallments: vi.fn(),
     mockListDocuments: vi.fn(),
@@ -275,22 +278,26 @@ describe('resubmitProposalAction', () => {
     expect(mockSanitizeOverview).toHaveBeenCalledWith('<p>scope</p>');
     expect(mockSanitizeProject).toHaveBeenCalledWith('<p>d</p>');
 
-    // The cleaned overview is what the version bump persists.
+    // The cleaned overview AND the cleaned milestone/installment sets are passed to
+    // `resubmit` (which writes the children atomically with the header). The action
+    // no longer calls the child `setForProposal` repos.
     expect(mockResubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ relationshipId: REL_ID, overview: '<p>clean</p>' })
+      expect.objectContaining({
+        relationshipId: REL_ID,
+        overview: '<p>clean</p>',
+        milestones: [
+          {
+            title: 'M1',
+            descriptionHtml: '<p>cleanm</p>',
+            acceptanceCriteria: 'done',
+            valueCents: 500000,
+          },
+        ],
+        installments: [{ label: 'Upfront', pct: 100 }],
+      })
     );
-    // The cleaned milestone description is re-parented onto v2.
-    expect(mockSetMilestones).toHaveBeenCalledWith({
-      proposalId: V2_ID,
-      milestones: [
-        {
-          title: 'M1',
-          descriptionHtml: '<p>cleanm</p>',
-          acceptanceCriteria: 'done',
-          valueCents: 500000,
-        },
-      ],
-    });
+    expect(mockSetMilestones).not.toHaveBeenCalled();
+    expect(mockSetInstallments).not.toHaveBeenCalled();
   });
 
   it('returns the relationship expert profile id (analytics expert_id) on success', async () => {
@@ -301,7 +308,7 @@ describe('resubmitProposalAction', () => {
     }
   });
 
-  it('executes the repo calls in order: resubmit → milestones → installments → doc carryover', async () => {
+  it('executes the repo calls in order: resubmit (children atomic) → doc carryover', async () => {
     mockListDocuments.mockResolvedValue([
       {
         id: 'doc-1',
@@ -319,14 +326,6 @@ describe('resubmitProposalAction', () => {
       order.push('resubmit');
       return { ...V2_ROW };
     });
-    mockSetMilestones.mockImplementation(async () => {
-      order.push('setMilestones');
-      return [];
-    });
-    mockSetInstallments.mockImplementation(async () => {
-      order.push('setInstallments');
-      return [];
-    });
     mockCopyObject.mockImplementation(async () => {
       order.push('copyObject');
     });
@@ -337,13 +336,10 @@ describe('resubmitProposalAction', () => {
 
     await resubmitProposalAction(VALID_INPUT);
 
-    expect(order).toEqual([
-      'resubmit',
-      'setMilestones',
-      'setInstallments',
-      'copyObject',
-      'addDocument',
-    ]);
+    // Children are written inside resubmit's transaction; doc carryover runs after.
+    expect(order).toEqual(['resubmit', 'copyObject', 'addDocument']);
+    expect(mockSetMilestones).not.toHaveBeenCalled();
+    expect(mockSetInstallments).not.toHaveBeenCalled();
 
     // Carryover copies the source object to a FRESH key, then registers it on v2.
     expect(mockGenerateKey).toHaveBeenCalledWith(V2_ID, UPLOADER_ID);
@@ -380,10 +376,11 @@ describe('resubmitProposalAction', () => {
 
     // The action still succeeds — a missing attachment must not fail the resubmit.
     expect(result.success).toBe(true);
-    // Header + children were already committed.
+    // Header + children were already committed atomically by resubmit (the action
+    // does not call the child setForProposal repos).
     expect(mockResubmit).toHaveBeenCalledTimes(1);
-    expect(mockSetMilestones).toHaveBeenCalledTimes(1);
-    expect(mockSetInstallments).toHaveBeenCalledTimes(1);
+    expect(mockSetMilestones).not.toHaveBeenCalled();
+    expect(mockSetInstallments).not.toHaveBeenCalled();
     // The failed copy was warn-logged and skipped (no addDocument).
     expect(mockAddDocument).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(

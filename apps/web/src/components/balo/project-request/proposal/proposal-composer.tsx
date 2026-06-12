@@ -338,8 +338,7 @@ export function ProposalComposer({
   );
 
   // The pinned section pill text — omitted for `general` (no specific area).
-  const sectionLabel =
-    changeRequest !== undefined ? SECTION_LABELS[changeRequest.section] : undefined;
+  const sectionLabel = changeRequest ? SECTION_LABELS[changeRequest.section] : undefined;
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both grid grid-cols-1 items-start gap-5 duration-500 motion-reduce:animate-none lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">

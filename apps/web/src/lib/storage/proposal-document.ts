@@ -116,7 +116,8 @@ export async function copyProposalDocumentObject(srcKey: string, destKey: string
     await r2Client.send(
       new CopyObjectCommand({
         Bucket: R2_BUCKET,
-        CopySource: `${R2_BUCKET}/${srcKey}`,
+        // S3/R2 expects CopySource URL-encoded; encodeURI preserves the `/` key separators.
+        CopySource: encodeURI(`${R2_BUCKET}/${srcKey}`),
         Key: destKey,
       })
     );

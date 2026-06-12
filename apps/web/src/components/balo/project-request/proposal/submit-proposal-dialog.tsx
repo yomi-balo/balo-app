@@ -188,10 +188,10 @@ export function SubmitProposalDialog({
 
       const run = async (): Promise<void> => {
         try {
-          if (resubmit !== undefined) {
-            await runResubmit(resubmit);
-          } else {
+          if (resubmit === undefined) {
             await runSubmit();
+          } else {
+            await runResubmit(resubmit);
           }
         } catch {
           toast.error(

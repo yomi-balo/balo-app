@@ -1,6 +1,12 @@
 // Must stay in sync with apps/api/src/notifications/events.ts
 // Kept separate to avoid cross-app import dependency (web → api)
 
+// BAL-290 payloads live in @balo/shared/notifications (shared with apps/api).
+import type {
+  ProjectChangesRequestedPayload,
+  ProjectProposalResubmittedPayload,
+} from '@balo/shared/notifications';
+
 export interface UserWelcomePayload {
   correlationId: string;
   userId: string;
@@ -91,31 +97,6 @@ export interface ProjectProposalAcceptedPayload {
   title: string; // request title — email/in-app body
   priceCents: number; // proposal price — admin ops notification body
   currency: string; // e.g. 'aud' — admin ops notification body
-}
-
-// BAL-290 (A6.4) changes-requested loop — targets the EXPERT (via expertProfileId).
-export interface ProjectChangesRequestedPayload {
-  correlationId: string; // proposalId — distinct row per round, naturally unique
-  projectRequestId: string;
-  relationshipId: string;
-  expertProfileId: string; // → resolver hydrates data.expert; recipient:'expert'
-  clientName: string; // requesting client's display name — email/in-app body
-  projectTitle: string; // request title — email/in-app body
-  section: string; // which part of the proposal needs work
-  note: string; // the client's change note — email/in-app body
-}
-
-// BAL-290 (A6.4) proposal versioning — targets the CLIENT (via recipientId).
-export interface ProjectProposalResubmittedPayload {
-  correlationId: string; // "<v2ProposalId>--v<version>" — uuid + version suffix
-  projectRequestId: string;
-  relationshipId: string;
-  recipientId: string; // = client user id → resolves recipient:'client'
-  expertName: string; // resubmitting expert's display name — email/in-app body
-  projectTitle: string; // request title — email/in-app body
-  version: number; // the new proposal version (≥2)
-  priceCents: number; // updated proposal price — email/in-app body
-  currency: string; // e.g. 'aud' — email/in-app body
 }
 
 export interface ProjectMessagePostedPayload {
