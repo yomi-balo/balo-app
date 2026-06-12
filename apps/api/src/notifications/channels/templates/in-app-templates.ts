@@ -4,6 +4,21 @@ interface InAppOutput {
   actionUrl?: string;
 }
 
+/**
+ * Format a minor-unit price (cents) + currency code for an in-app body, e.g.
+ * `formatPriceCents(120000, 'aud') === 'AUD 1,200'`. Guards both fields: a
+ * non-number price or absent currency degrades gracefully rather than rendering
+ * `NaN`/`undefined`. No external money library — inline by design.
+ */
+function formatPriceCents(priceCents: unknown, currency: unknown): string {
+  const code = typeof currency === 'string' && currency.length > 0 ? currency.toUpperCase() : '';
+  if (typeof priceCents !== 'number' || !Number.isFinite(priceCents)) {
+    return code || 'an amount';
+  }
+  const amount = (priceCents / 100).toLocaleString();
+  return code ? `${code} ${amount}` : amount;
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
   'booking-confirmed': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
@@ -72,6 +87,41 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return {
       title: 'Proposal received',
       body: `${expertName} sent a proposal for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  'project-proposal-accepted': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Proposal accepted',
+      body: `Your proposal for "${title}" was accepted`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  'project-proposal-not-selected': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Proposal not selected',
+      body: `The client chose another proposal for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  'project-proposal-accepted-admin': (data) => {
+    const clientName = (data.clientName as string) ?? 'A client';
+    const company = (data.clientCompanyName as string) ?? '';
+    // First-mention "Name @ Company" rule; degrade to the bare name when absent.
+    const who = company ? `${clientName} @ ${company}` : clientName;
+    const title = (data.title as string) ?? 'a project';
+    const amount = formatPriceCents(data.priceCents, data.currency);
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Proposal accepted — raise invoice',
+      body: `${who} accepted a proposal for "${title}" (${amount})`,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },

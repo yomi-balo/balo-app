@@ -1,4 +1,4 @@
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, inArray } from 'drizzle-orm';
 import { db } from '../client';
 import {
   users,
@@ -8,6 +8,13 @@ import {
   type User,
   type NewUser,
 } from '../schema';
+
+/**
+ * Platform-role enum values, derived from the inferred `users.platformRole`
+ * column type so it stays in lock-step with the `platformRoleEnum` definition
+ * (single source of truth) — same house style as the A6 proposal enum types.
+ */
+export type PlatformRole = User['platformRole'];
 
 export const usersRepository = {
   /**
@@ -93,6 +100,20 @@ export const usersRepository = {
       .limit(1);
 
     return rows[0] ?? null;
+  },
+
+  /**
+   * Batch lookup for notification fan-out (BAL-289): every non-deleted user id
+   * whose platformRole is in `roles` (e.g. admins + super_admins). Returns the
+   * ids in no particular order; an empty `roles` array yields an empty result.
+   */
+  findIdsByPlatformRoles: async (roles: PlatformRole[]): Promise<string[]> => {
+    if (roles.length === 0) return [];
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(inArray(users.platformRole, roles), isNull(users.deletedAt)));
+    return rows.map((r) => r.id);
   },
 
   /**

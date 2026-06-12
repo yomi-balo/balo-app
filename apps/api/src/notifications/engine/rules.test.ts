@@ -156,6 +156,44 @@ describe('notificationRules', () => {
     });
   });
 
+  it('project.proposal_accepted fans out to expert, non-selected experts, and admins (BAL-289)', () => {
+    const rules = notificationRules['project.proposal_accepted'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(5);
+
+    // Winning expert: in-app + email.
+    const expertRules = rules!.filter((r) => r.recipient === 'expert');
+    expect(expertRules).toHaveLength(2);
+    for (const rule of expertRules) {
+      expect(rule.template).toBe('project-proposal-accepted');
+      expect(rule.timing).toBe('immediate');
+    }
+    expect(expertRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+      'email',
+      'in-app',
+    ]);
+
+    // Non-selected experts: in-app + email.
+    const notSelectedRules = rules!.filter((r) => r.recipient === 'non_selected_experts');
+    expect(notSelectedRules).toHaveLength(2);
+    for (const rule of notSelectedRules) {
+      expect(rule.template).toBe('project-proposal-not-selected');
+    }
+    expect(notSelectedRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+      'email',
+      'in-app',
+    ]);
+
+    // Admins: in-app only (net-new in-app fan-out).
+    const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
+    expect(adminRules).toHaveLength(1);
+    expect(adminRules[0]).toMatchObject({
+      channel: 'in-app',
+      template: 'project-proposal-accepted-admin',
+      timing: 'immediate',
+    });
+  });
+
   it('has rules for message.received event', () => {
     const rules = notificationRules['message.received'];
     expect(rules).toBeDefined();

@@ -118,9 +118,21 @@ git diff origin/main...HEAD --name-only | grep -E "\.(ts|tsx)$" | grep -v "\.tes
 
 For each new source file: verify a corresponding `.test.ts` or `.spec.ts` exists, or that the file is in `sonar.coverage.exclusions` (appropriate for pure re-export barrels, type-only files, and config singletons).
 
-**6d. Check for common SonarCloud code smells in new files:**
+**6d. Run the SonarJS maintainability check on changed files (automated):**
 
-SonarCloud flags specific code patterns that won't show up in ESLint or TypeScript checks. Scan all new/modified files for these:
+```bash
+pnpm lint:sonar:diff
+```
+
+This runs `eslint-plugin-sonarjs` (cognitive complexity > 15, nested ternaries, nested template literals) against ONLY the files changed vs `origin/main` — a local proxy for SonarCloud's new-code maintainability gate, so these findings stop only surfacing server-side after a push. It must exit clean.
+
+- If it flags a function's **Cognitive Complexity**, reduce it by extracting helpers / early returns. Note the rule scores each `useCallback`/nested function **separately**, so lowering a React component's score means simplifying the **component body's own** conditionals (e.g. extract lens/branch wiring into a pure module helper) — extracting handler bodies does nothing for the component's score.
+- Nested ternaries → `if`/early returns or a hoisted local; nested template literals → hoist the inner template into a `const`.
+- Requires `origin/main` fetched. Override the base ref with `SONAR_BASE=<ref> pnpm lint:sonar:diff`. Run `pnpm lint:sonar` for the whole-repo (informational) view.
+
+**6e. Check for additional smell patterns NOT covered by the SonarJS rules above:**
+
+The SonarJS rules in 6d don't catch everything SonarCloud flags. Scan all new/modified files for these too:
 
 | Pattern                                                                                                                                                                                 | Fix                                                                                                                                                                                                                                                                                                          |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -184,6 +196,7 @@ Checks run:
   [PASS] Typecheck (pnpm typecheck)
   [PASS] Build (pnpm build)
   [PASS] Unit tests + coverage (pnpm test:coverage)
+  [PASS] SonarJS smells on changed files (pnpm lint:sonar:diff)
   [PASS] SonarCloud readiness (sonar-project.properties verified)
   [PASS] Integration tests (pnpm test:integration)   ← only if run
   [SKIP] E2E tests (run in CI only)

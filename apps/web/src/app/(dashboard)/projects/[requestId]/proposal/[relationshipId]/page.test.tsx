@@ -10,8 +10,8 @@ import type {
 import type { SessionUser } from '@/lib/auth/session';
 
 // `proposal-composer-state` (reached through the real module graph) is pure; the
-// composer itself is stubbed below so we assert the props the page hands it, not
-// the composer internals.
+// composer + review + submitted views are stubbed below so we assert the props
+// the page hands them, not their (separately-tested) internals.
 vi.mock('server-only', () => ({}));
 
 // ── Seams the page composes (mirrors the BAL-247/251 RSC page-test precedent) ──
@@ -64,13 +64,27 @@ vi.mock('@/lib/project-request/resolve-request-lens', () => ({
   resolveRequestLens: (...args: unknown[]) => mockResolveRequestLens(...args),
 }));
 
-// Stub the composer so we assert the *props* the loader serialises, never the
-// composer's own (separately-tested) internals.
+// Stub the three leaf surfaces so we assert the *props* the loader serialises,
+// never their own (separately-tested) internals.
 const mockComposer = vi.hoisted(() => vi.fn());
+const mockReview = vi.hoisted(() => vi.fn());
+const mockSubmitted = vi.hoisted(() => vi.fn());
 vi.mock('@/components/balo/project-request/proposal/proposal-composer', () => ({
   ProposalComposer: (props: unknown) => {
     mockComposer(props);
     return <div data-testid="composer-stub" />;
+  },
+}));
+vi.mock('@/components/balo/project-request/proposal/proposal-review', () => ({
+  ProposalReview: (props: unknown) => {
+    mockReview(props);
+    return <div data-testid="review-stub" />;
+  },
+}));
+vi.mock('@/components/balo/project-request/proposal/submitted-view', () => ({
+  SubmittedView: (props: unknown) => {
+    mockSubmitted(props);
+    return <div data-testid="submitted-stub" />;
   },
 }));
 
@@ -83,6 +97,22 @@ const COMPANY_ID = 'company-1';
 const EXPERT_PROFILE_ID = 'expert-1';
 const PROPOSAL_ID = 'prop-1';
 const REQUEST_TITLE = 'CPQ implementation';
+
+/** A hydrated relationship row as `findByIdWithRelations` shapes it. */
+function relationship(
+  overrides: Partial<ProjectRequestWithRelations['relationships'][number]> = {}
+): ProjectRequestWithRelations['relationships'][number] {
+  return {
+    id: RELATIONSHIP_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+    status: 'proposal_requested',
+    expertProfile: {
+      id: EXPERT_PROFILE_ID,
+      user: { id: 'user-expert', firstName: 'Priya', lastName: 'Nair' },
+    },
+    ...overrides,
+  } as ProjectRequestWithRelations['relationships'][number];
+}
 
 function request(
   overrides: Partial<ProjectRequestWithRelations> = {}
@@ -113,13 +143,7 @@ function request(
     tags: [],
     products: [],
     documents: [],
-    relationships: [
-      {
-        id: RELATIONSHIP_ID,
-        expertProfileId: EXPERT_PROFILE_ID,
-        status: 'proposal_requested',
-      },
-    ],
+    relationships: [relationship()],
     ...overrides,
   } as ProjectRequestWithRelations;
 }
@@ -142,7 +166,7 @@ function user(overrides: Partial<SessionUser> = {}): SessionUser {
   } as SessionUser;
 }
 
-/** The expert lens that opens the composer. */
+/** The expert lens that opens the composer / submitted view. */
 function expertCtx(relationshipId: string | null = RELATIONSHIP_ID): unknown {
   return {
     lens: 'expert',
@@ -154,14 +178,42 @@ function expertCtx(relationshipId: string | null = RELATIONSHIP_ID): unknown {
   };
 }
 
+/** The client lens (owns the request). */
+function clientCtx(): unknown {
+  return {
+    lens: 'client',
+    archetype: 'participant',
+    isOwner: true,
+    isInvitedExpert: false,
+    relationshipId: null,
+    canSeeContact: false,
+  };
+}
+
+/** The admin observer lens. */
+function adminCtx(): unknown {
+  return {
+    lens: 'admin',
+    archetype: 'observer',
+    isOwner: false,
+    isInvitedExpert: false,
+    relationshipId: null,
+    canSeeContact: true,
+  };
+}
+
 function draft(overrides: Partial<Proposal> = {}): Proposal {
   return {
     id: PROPOSAL_ID,
+    relationshipId: RELATIONSHIP_ID,
+    version: 1,
+    status: 'submitted',
     pricingMethod: 'fixed',
     overview: '<p>Overview</p>',
+    exclusions: null,
+    priceCents: 1_200_000,
     currency: 'aud',
     timeframeWeeks: 6,
-    exclusions: null,
     depositCents: null,
     rateCents: null,
     cadence: null,
@@ -171,6 +223,8 @@ function draft(overrides: Partial<Proposal> = {}): Proposal {
 
 function milestone(overrides: Partial<ProposalMilestone> = {}): ProposalMilestone {
   return {
+    id: 'ms-1',
+    proposalId: PROPOSAL_ID,
     title: 'Discovery',
     descriptionHtml: '<p>Map current state</p>',
     acceptanceCriteria: 'Signed off',
@@ -182,7 +236,13 @@ function milestone(overrides: Partial<ProposalMilestone> = {}): ProposalMileston
 function installment(
   overrides: Partial<ProposalPaymentInstallment> = {}
 ): ProposalPaymentInstallment {
-  return { label: 'Upfront', pct: 30, ...overrides } as ProposalPaymentInstallment;
+  return {
+    id: 'in-1',
+    proposalId: PROPOSAL_ID,
+    label: 'Upfront',
+    pct: 30,
+    ...overrides,
+  } as ProposalPaymentInstallment;
 }
 
 function document(overrides: Partial<ProposalDocument> = {}): ProposalDocument {
@@ -211,6 +271,16 @@ async function renderPage(
   render(ui);
 }
 
+/** Seed the child-load mocks (used by every review/submitted branch). */
+function seedChildren(): void {
+  mockListMilestones.mockResolvedValue([milestone()]);
+  mockListInstallments.mockResolvedValue([
+    installment({ id: 'in-1', label: 'Upfront', pct: 30 }),
+    installment({ id: 'in-2', label: 'On delivery', pct: 70 }),
+  ]);
+  mockListDocuments.mockResolvedValue([document()]);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockNotFound.mockImplementation(() => {
@@ -221,7 +291,7 @@ beforeEach(() => {
   });
 });
 
-describe('ProposalComposerPage (RSC) — auth + lens gating', () => {
+describe('ProposalSurfacePage (RSC) — auth + dispatch gating', () => {
   it('redirects to /login when there is no current user', async () => {
     mockGetCurrentUser.mockResolvedValue(null);
     await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
@@ -235,7 +305,7 @@ describe('ProposalComposerPage (RSC) — auth + lens gating', () => {
 
     await expect(renderPage()).rejects.toThrow('db down');
     expect(mockLogError).toHaveBeenCalledWith(
-      'Failed to load request for proposal composer',
+      'Failed to load request for proposal surface',
       expect.objectContaining({ requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID })
     );
     expect(mockNotFound).not.toHaveBeenCalled();
@@ -248,39 +318,18 @@ describe('ProposalComposerPage (RSC) — auth + lens gating', () => {
     expect(mockNotFound).toHaveBeenCalledTimes(1);
   });
 
-  it('redirects to the request detail for a non-expert lens (client/admin/stranger)', async () => {
+  it('redirects when the viewer is unauthorised (resolveRequestLens → null)', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindByIdWithRelations.mockResolvedValue(request());
-    // Client lens (or null) is not allowed here.
-    mockResolveRequestLens.mockReturnValue({ lens: 'client', relationshipId: null });
+    mockResolveRequestLens.mockReturnValue(null);
 
     await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
     expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
-    expect(mockLogWarn).toHaveBeenCalledWith(
-      'Proposal composer access denied',
-      expect.objectContaining({ requestId: REQUEST_ID, lens: 'client' })
-    );
-    // Never loads a draft for a denied viewer.
     expect(mockFindCurrentByRelationship).not.toHaveBeenCalled();
-  });
-
-  it('redirects when the expert is on a DIFFERENT relationship than the URL', async () => {
-    mockGetCurrentUser.mockResolvedValue(user());
-    mockFindByIdWithRelations.mockResolvedValue(request());
-    // Expert lens, but their relationshipId mismatches the URL relationshipId.
-    mockResolveRequestLens.mockReturnValue(expertCtx(OTHER_RELATIONSHIP_ID));
-
-    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
-    expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
-    expect(mockLogWarn).toHaveBeenCalledWith(
-      'Proposal composer access denied',
-      expect.objectContaining({ lens: 'expert' })
-    );
   });
 
   it('redirects when the relationship is missing from the request', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
-    // Lens resolves to the URL relationship id, but the request carries no such row.
     mockFindByIdWithRelations.mockResolvedValue(request({ relationships: [] }));
     mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
 
@@ -288,49 +337,50 @@ describe('ProposalComposerPage (RSC) — auth + lens gating', () => {
     expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
     expect(mockFindCurrentByRelationship).not.toHaveBeenCalled();
   });
+});
 
-  it('redirects when the relationship is not at proposal_requested', async () => {
+describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
+  it('redirects when the expert is on a DIFFERENT relationship than the URL', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(OTHER_RELATIONSHIP_ID));
+
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+    expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+    // Never loads a proposal for a mismatched relationship.
+    expect(mockFindCurrentByRelationship).not.toHaveBeenCalled();
+  });
+
+  it('redirects when the expert opens a non-(requested/submitted/accepted) relationship', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindByIdWithRelations.mockResolvedValue(
-      request({
-        relationships: [
-          {
-            id: RELATIONSHIP_ID,
-            expertProfileId: EXPERT_PROFILE_ID,
-            status: 'eoi_submitted',
-          },
-        ] as ProjectRequestWithRelations['relationships'],
-      })
+      request({ relationships: [relationship({ status: 'eoi_submitted' })] })
     );
     mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
 
     await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
     expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
   });
-});
 
-describe('ProposalComposerPage (RSC) — happy path', () => {
   it('hydrates an existing draft (+ children via Promise.all) and renders the composer', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindByIdWithRelations.mockResolvedValue(request());
     mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
-    mockFindCurrentByRelationship.mockResolvedValue(draft());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
     mockListMilestones.mockResolvedValue([milestone()]);
     mockListInstallments.mockResolvedValue([
       installment({ label: 'Upfront', pct: 30 }),
-      installment({ label: 'On delivery', pct: 70 }),
+      installment({ id: 'in-2', label: 'On delivery', pct: 70 }),
     ]);
     mockListDocuments.mockResolvedValue([document()]);
 
     await renderPage();
 
-    // The child loads ran for the existing draft.
     expect(mockListMilestones).toHaveBeenCalledWith(PROPOSAL_ID);
     expect(mockListInstallments).toHaveBeenCalledWith(PROPOSAL_ID);
     expect(mockListDocuments).toHaveBeenCalledWith(PROPOSAL_ID);
 
     expect(screen.getByTestId('composer-stub')).toBeInTheDocument();
-    // Header surfaces the client first name + the request title (back link).
     expect(screen.getByText(/Back to CPQ implementation/i)).toBeInTheDocument();
     expect(
       screen.getByText(/Draft your scope, milestones, and pricing for Dana\./i)
@@ -369,7 +419,7 @@ describe('ProposalComposerPage (RSC) — happy path', () => {
       })
     );
     mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
-    mockFindCurrentByRelationship.mockResolvedValue(draft());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
     mockListMilestones.mockResolvedValue([]);
     mockListInstallments.mockResolvedValue([]);
     mockListDocuments.mockResolvedValue([]);
@@ -394,9 +444,210 @@ describe('ProposalComposerPage (RSC) — happy path', () => {
 
     const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
     const initialState = props.initialState as Record<string, unknown>;
-    // emptyDraftState(): no proposalId, fixed default, blank overview.
     expect(initialState.proposalId).toBeNull();
     expect(initialState.pricingMethod).toBe('fixed');
     expect(initialState.overview).toBe('');
+  });
+});
+
+describe('ProposalSurfacePage (RSC) — expert submitted view branch', () => {
+  it('renders the SubmittedView (expert lens) once a proposal is submitted', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+
+    await renderPage();
+
+    expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+    const props = mockSubmitted.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props).toMatchObject({ lens: 'expert', clientName: 'Dana', otherProposalCount: 0 });
+    const doc = props.doc as Record<string, unknown>;
+    expect(doc).toMatchObject({
+      id: PROPOSAL_ID,
+      relationshipId: RELATIONSHIP_ID,
+      status: 'submitted',
+      pricingMethod: 'fixed',
+      overviewHtml: '<p>Overview</p>',
+      priceCents: 1_200_000,
+      currency: 'aud',
+    });
+    // Expert identity derived from the hydrated user; ungiven fields → null.
+    expect(doc.expert).toEqual({
+      name: 'Priya Nair',
+      initials: 'PN',
+      company: null,
+      headline: null,
+      rating: null,
+    });
+    expect((doc.milestones as unknown[]).length).toBe(1);
+    expect((doc.installments as unknown[]).length).toBe(2);
+    expect((doc.attachments as Array<{ fileName: string }>)[0]?.fileName).toBe('case-study.pdf');
+  });
+
+  it('counts OTHER submitted/accepted relationships for the "alongside N" framing', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        relationships: [
+          relationship({ status: 'proposal_submitted' }),
+          relationship({ id: OTHER_RELATIONSHIP_ID, status: 'accepted' }),
+          relationship({ id: 'rel-3', status: 'eoi_submitted' }),
+        ],
+      })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+
+    await renderPage();
+
+    const props = mockSubmitted.mock.calls[0]?.[0] as Record<string, unknown>;
+    // rel-2 (accepted) counts; rel-3 (eoi_submitted) does not; self excluded.
+    expect(props.otherProposalCount).toBe(1);
+  });
+
+  it('redirects when the expert relationship is submitted but no current proposal exists', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(undefined);
+
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+    expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+});
+
+describe('ProposalSurfacePage (RSC) — client review branch', () => {
+  it('renders ProposalReview across every reviewable proposal on the request', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ platformRole: 'user', expertProfileId: undefined })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        relationships: [
+          relationship({ status: 'proposal_submitted' }),
+          relationship({
+            id: OTHER_RELATIONSHIP_ID,
+            status: 'proposal_submitted',
+            expertProfile: {
+              id: 'expert-2',
+              user: { id: 'user-expert-2', firstName: 'Sam', lastName: 'Lee' },
+            },
+          }),
+        ] as ProjectRequestWithRelations['relationships'],
+      })
+    );
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+    // Both relationships carry a current, reviewable proposal.
+    mockFindCurrentByRelationship
+      .mockResolvedValueOnce(draft({ status: 'submitted', relationshipId: RELATIONSHIP_ID }))
+      .mockResolvedValueOnce(
+        draft({ id: 'prop-2', status: 'submitted', relationshipId: OTHER_RELATIONSHIP_ID })
+      );
+    mockListMilestones.mockResolvedValue([]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+
+    await renderPage();
+
+    expect(screen.getByTestId('review-stub')).toBeInTheDocument();
+    const props = mockReview.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props).toMatchObject({
+      requestId: REQUEST_ID,
+      activeRelationshipId: RELATIONSHIP_ID,
+      clientCompanyName: 'Northwind Industrial',
+      clientFirstName: 'Dana',
+    });
+    expect((props.proposals as unknown[]).length).toBe(2);
+  });
+
+  it('filters out relationships with no reviewable current proposal', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ expertProfileId: undefined }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        relationships: [
+          relationship({ status: 'proposal_submitted' }),
+          relationship({ id: OTHER_RELATIONSHIP_ID, status: 'eoi_submitted' }),
+        ] as ProjectRequestWithRelations['relationships'],
+      })
+    );
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+    // First relationship: a withdrawn proposal (not reviewable). Second: none.
+    mockFindCurrentByRelationship
+      .mockResolvedValueOnce(draft({ status: 'withdrawn' }))
+      .mockResolvedValueOnce(undefined);
+    mockListMilestones.mockResolvedValue([]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+
+    // No reviewable docs → redirect (no empty review surface).
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+    expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  it('falls back to "your company" when the request has no company name', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ expertProfileId: undefined }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        company: undefined,
+        relationships: [relationship({ status: 'proposal_submitted' })],
+      })
+    );
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    mockListMilestones.mockResolvedValue([]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+
+    await renderPage();
+
+    const props = mockReview.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.clientCompanyName).toBe('your company');
+  });
+
+  it('redirects a client viewing a relationship not yet at proposal_submitted', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ expertProfileId: undefined }));
+    mockFindByIdWithRelations.mockResolvedValue(request()); // default rel: proposal_requested
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+    expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Proposal surface access denied',
+      expect.objectContaining({ lens: 'client' })
+    );
+  });
+});
+
+describe('ProposalSurfacePage (RSC) — admin observer branch', () => {
+  it('renders the SubmittedView (admin lens) for a submitted relationship', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ platformRole: 'admin' }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(adminCtx());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+
+    await renderPage();
+
+    expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+    const props = mockSubmitted.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props).toMatchObject({ lens: 'admin', clientName: 'Dana' });
+  });
+
+  it('redirects an admin viewing a relationship not yet at proposal_submitted', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ platformRole: 'admin' }));
+    mockFindByIdWithRelations.mockResolvedValue(request()); // default rel: proposal_requested
+    mockResolveRequestLens.mockReturnValue(adminCtx());
+
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+    expect(mockRedirect).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
   });
 });

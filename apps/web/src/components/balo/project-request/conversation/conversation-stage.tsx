@@ -72,6 +72,9 @@ const EMPTY_THREAD_DATA: ThreadData = {
 const MARK_READ_MIN_INTERVAL_MS = 3000;
 const STAGE_CARD_CLASS = 'flex h-[min(78dvh,760px)] min-h-[520px] flex-col overflow-hidden p-0';
 
+/** Relationship statuses at which the read-only "View proposal" surface opens. */
+const PROPOSAL_VIEW_STATUSES = new Set<string>(['proposal_submitted', 'accepted']);
+
 /** Pure list transform: bump one thread's file badge (confirm path). */
 function withBumpedFileCount(
   threads: ConversationThreadView[],
@@ -154,6 +157,94 @@ const noopAttach = (): void => {
 const noopDraftChange = (): void => {
   // Disabled composer — no draft to keep.
 };
+
+/**
+ * Fire the proposal-CTA-click funnel event for a header/rail surface. The nudge
+ * surface passes `undefined` and navigates without re-firing the event. Extracted
+ * to module scope so the build/view navigation callbacks stay branch-light.
+ */
+function trackProposalCtaClick(
+  surface: 'header' | 'rail' | undefined,
+  requestId: string,
+  relationshipId: string
+): void {
+  if (surface === undefined) return;
+  track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+    request_id: requestId,
+    relationship_id: relationshipId,
+    surface,
+  });
+}
+
+/**
+ * Open the expert proposal composer for `threadId`. No-op unless the thread is at
+ * `proposal_requested` (defence-in-depth — the Build CTA only renders then). At
+ * module scope so the `handleBuildProposal` callback stays branch-free.
+ */
+function openProposalComposer(args: {
+  push: (href: string) => void;
+  requestId: string;
+  threadId: string | null;
+  status: string | undefined;
+  surface?: 'header' | 'rail';
+}): void {
+  const { push, requestId, threadId, status, surface } = args;
+  if (threadId === null || status !== 'proposal_requested') return;
+  trackProposalCtaClick(surface, requestId, threadId);
+  push(`/projects/${requestId}/proposal/${threadId}`);
+}
+
+/**
+ * Open the read-only proposal surface for `threadId` (client review / expert &
+ * admin submitted view — the route dispatches by lens). No-op unless the thread is
+ * submitted/accepted. Module scope keeps the `handleViewProposal` callback branch-free.
+ */
+function openProposalSurface(args: {
+  push: (href: string) => void;
+  requestId: string;
+  threadId: string | null;
+  status: string | undefined;
+  surface?: 'header' | 'rail';
+}): void {
+  const { push, requestId, threadId, status, surface } = args;
+  if (threadId === null || !PROPOSAL_VIEW_STATUSES.has(status ?? '')) return;
+  trackProposalCtaClick(surface, requestId, threadId);
+  push(`/projects/${requestId}/proposal/${threadId}`);
+}
+
+interface LensProposalHandlers {
+  onHeaderRequestProposal: (() => void) | null;
+  onHeaderBuildProposal: (() => void) | null;
+  onNudgeBuild: (() => void) | undefined;
+  onRailProposal: (() => void) | null;
+  onRailBuildProposal: (() => void) | null;
+}
+
+/**
+ * Resolve the lens-gated proposal-CTA handlers for the active thread: a handler is
+ * wired only for the lens that owns that CTA (the wrong lens gets `null`/`undefined`
+ * → a disabled stub). Pure + module-scope so the component body stays branch-light
+ * (keeps `ConversationStage` under the cognitive-complexity limit).
+ */
+function resolveLensProposalHandlers(args: {
+  lens: 'client' | 'expert';
+  railProposalKind: string | undefined;
+  headerRequestProposal: () => void;
+  headerBuild: () => void;
+  nudgeBuild: () => void;
+  railProposal: () => void;
+  railBuild: () => void;
+}): LensProposalHandlers {
+  const isClient = args.lens === 'client';
+  const isExpert = args.lens === 'expert';
+  return {
+    onHeaderRequestProposal: isClient ? args.headerRequestProposal : null,
+    onHeaderBuildProposal: isExpert ? args.headerBuild : null,
+    onNudgeBuild: isExpert ? args.nudgeBuild : undefined,
+    onRailProposal: isClient && args.railProposalKind === 'request' ? args.railProposal : null,
+    onRailBuildProposal: isExpert ? args.railBuild : null,
+  };
+}
 
 /** Zero-open-threads stage — invitation framing, never a blank panel. */
 function EmptyConversationStage({
@@ -710,16 +801,13 @@ export function ConversationStage({
   // matching surface value on that event) navigates without re-firing it.
   const handleBuildProposal = useCallback(
     (surface?: 'header' | 'rail'): void => {
-      if (activeThreadId === null) return;
-      if (activeThread?.relationshipStatus !== 'proposal_requested') return;
-      if (surface !== undefined) {
-        track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
-          request_id: requestId,
-          relationship_id: activeThreadId,
-          surface,
-        });
-      }
-      router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
+      openProposalComposer({
+        push: (href) => router.push(href),
+        requestId,
+        threadId: activeThreadId,
+        status: activeThread?.relationshipStatus,
+        surface,
+      });
     },
     [activeThreadId, activeThread?.relationshipStatus, requestId, router]
   );
@@ -732,6 +820,30 @@ export function ConversationStage({
     [handleBuildProposal]
   );
   const handleNudgeBuild = useCallback((): void => handleBuildProposal(), [handleBuildProposal]);
+
+  // ── View proposal (BAL-289 / A6.3 — BOTH lenses) ───────────────────────────
+  // Opens the read-only proposal surface for the active thread. The route
+  // dispatches by lens (client → review, expert/admin → submitted view), so the
+  // same push serves both. Gated to a submitted/accepted relationship (defence-
+  // in-depth: the View CTA only renders at those states). `surface`
+  // (`header`/`rail`) feeds the existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel.
+  const handleViewProposal = useCallback(
+    (surface?: 'header' | 'rail'): void => {
+      openProposalSurface({
+        push: (href) => router.push(href),
+        requestId,
+        threadId: activeThreadId,
+        status: activeThread?.relationshipStatus,
+        surface,
+      });
+    },
+    [activeThreadId, activeThread?.relationshipStatus, requestId, router]
+  );
+  const handleHeaderView = useCallback(
+    (): void => handleViewProposal('header'),
+    [handleViewProposal]
+  );
+  const handleRailView = useCallback((): void => handleViewProposal('rail'), [handleViewProposal]);
 
   const handleProposalConfirm = useCallback(async (): Promise<RequestProposalResult> => {
     const context = proposalContextRef.current;
@@ -879,16 +991,25 @@ export function ConversationStage({
   const { nudge, actions, single, showYouSuffix, profileHref, showProposalPill, showOverflow } =
     deriveStageRender({ lens, requestStatus, activeThread, threadCount: threads.length });
 
-  // Lens-gated handler wiring precomputed so the JSX stays branch-light.
-  const isClient = lens === 'client';
-  const isExpert = lens === 'expert';
-  const onHeaderRequestProposal = isClient ? handleHeaderProposal : null;
-  const onHeaderBuildProposal = isExpert ? handleHeaderBuild : null;
-  const onNudgeBuild = isExpert ? handleNudgeBuild : undefined;
-  const onRailProposal =
-    isClient && actions.railProposal?.kind === 'request' ? handleRailProposal : null;
-  const onRailBuildProposal = isExpert ? handleRailBuild : null;
-  const composerExpertName = isExpert ? 'the client' : activeThread.expertFirstName;
+  // Lens-gated handler wiring (pure helper — keeps the component body branch-light).
+  const {
+    onHeaderRequestProposal,
+    onHeaderBuildProposal,
+    onNudgeBuild,
+    onRailProposal,
+    onRailBuildProposal,
+  } = resolveLensProposalHandlers({
+    lens,
+    railProposalKind: actions.railProposal?.kind,
+    headerRequestProposal: handleHeaderProposal,
+    headerBuild: handleHeaderBuild,
+    nudgeBuild: handleNudgeBuild,
+    railProposal: handleRailProposal,
+    railBuild: handleRailBuild,
+  });
+  // The `kind:'view'` review/submitted link is live for BOTH lenses (the route
+  // dispatches by lens). Always wired; the slot only renders at submitted/accepted.
+  const composerExpertName = lens === 'expert' ? 'the client' : activeThread.expertFirstName;
 
   return (
     <RequestCard className={STAGE_CARD_CLASS}>
@@ -945,6 +1066,7 @@ export function ConversationStage({
           onCall={handleHeaderCall}
           onRequestProposal={onHeaderRequestProposal}
           onBuildProposal={onHeaderBuildProposal}
+          onViewProposal={handleHeaderView}
         />
       </div>
 
@@ -1007,6 +1129,7 @@ export function ConversationStage({
         onCall={handleRailCall}
         onProposal={onRailProposal}
         onBuildProposal={onRailBuildProposal}
+        onViewProposal={handleRailView}
       />
 
       <ThreadFilesPanel

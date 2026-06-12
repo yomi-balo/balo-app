@@ -11,10 +11,74 @@ const CHANNEL_QUEUES: Record<NotificationChannel, string> = {
   'in-app': 'notification-in-app',
 };
 
+/**
+ * Recipient kinds that resolve to a LIST of user ids (BAL-289). The dispatcher
+ * fans these out into one delivery row per id, rather than the single-recipient
+ * path used by everything else.
+ */
+const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
+  'non_selected_experts',
+  'admin_users',
+]);
+
+/**
+ * Build the delivery payload + job options and enqueue one channel job for a
+ * single resolved recipient. Shared by both the single-recipient path and the
+ * fan-out branch so dedup keys, retry policy, and logging stay identical.
+ */
+async function enqueueDelivery(
+  rule: NotificationRule,
+  context: RuleContext,
+  recipientId: string,
+  recipientEmail?: string
+): Promise<void> {
+  const deliveryPayload = {
+    recipientId,
+    recipientEmail,
+    template: rule.template,
+    event: context.event,
+    data: context.data,
+    payload: context.payload,
+  };
+
+  const queueName = CHANNEL_QUEUES[rule.channel];
+  const channelQueue = getQueue(queueName);
+  const jobId = `${rule.template}--${recipientId}--${context.payload.correlationId}`;
+
+  await channelQueue.add(rule.template, deliveryPayload, {
+    jobId,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 2000 },
+  });
+
+  log.info(
+    { channel: rule.channel, template: rule.template, recipientId },
+    'Notification dispatched'
+  );
+}
+
 export async function dispatch(rule: NotificationRule, context: RuleContext): Promise<void> {
   // 1. Evaluate condition
   if (rule.condition && !rule.condition(context)) {
     log.debug({ template: rule.template }, 'Rule condition not met, skipping');
+    return;
+  }
+
+  // 1b. Fan-out recipients (BAL-289): resolve a list of user ids and enqueue one
+  //     delivery per id, then return. This is additive — the single-recipient
+  //     path below is unchanged for every other recipient kind.
+  if (FANOUT_RECIPIENTS.has(rule.recipient)) {
+    const recipientIds = resolveRecipientIds(rule.recipient, context);
+    if (recipientIds.length === 0) {
+      log.debug(
+        { template: rule.template, recipient: rule.recipient, event: context.event },
+        'No fan-out recipients resolved — skipping dispatch'
+      );
+      return;
+    }
+    for (const recipientId of recipientIds) {
+      await enqueueDelivery(rule, context, recipientId);
+    }
     return;
   }
 
@@ -47,31 +111,33 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
     return;
   }
 
-  // 3. Build delivery payload
-  const deliveryPayload = {
-    recipientId,
-    recipientEmail,
-    template: rule.template,
-    event: context.event,
-    data: context.data,
-    payload: context.payload,
-  };
+  // 3. Build the delivery payload + enqueue (deterministic job ID for dedup).
+  await enqueueDelivery(rule, context, recipientId, recipientEmail);
+}
 
-  // 4. Route to the correct channel queue with deterministic job ID for dedup
-  const queueName = CHANNEL_QUEUES[rule.channel];
-  const channelQueue = getQueue(queueName);
-  const jobId = `${rule.template}--${recipientId}--${context.payload.correlationId}`;
-
-  await channelQueue.add(rule.template, deliveryPayload, {
-    jobId,
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 2000 },
-  });
-
-  log.info(
-    { channel: rule.channel, template: rule.template, recipientId },
-    'Notification dispatched'
-  );
+/**
+ * Resolve a fan-out recipient kind (BAL-289) to its list of user ids from the
+ * hydrated context. Non-fan-out kinds return `[]` so the dispatcher never reaches
+ * this from the single-recipient path. Non-string entries are filtered out
+ * defensively.
+ */
+function resolveRecipientIds(
+  recipient: NotificationRule['recipient'],
+  context: RuleContext
+): string[] {
+  let source: unknown;
+  switch (recipient) {
+    case 'admin_users':
+      source = context.data.adminUserIds;
+      break;
+    case 'non_selected_experts':
+      source = context.data.nonSelectedExpertUserIds;
+      break;
+    default:
+      return [];
+  }
+  if (!Array.isArray(source)) return [];
+  return source.filter((id): id is string => typeof id === 'string');
 }
 
 function resolveRecipient(

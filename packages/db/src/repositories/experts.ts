@@ -142,6 +142,30 @@ export const expertsRepository = {
     return row ? { user: { id: row.user.id } } : undefined;
   },
 
+  /**
+   * Batch counterpart of `findUserIdByProfileId` for notification fan-out
+   * (BAL-289): maps a set of `expertProfileId`s to their underlying user ids in
+   * one query. Mirrors the single read's join shape (expert_profiles → user).
+   * Unknown ids are silently skipped and the result is de-duplicated, so the
+   * returned array may be shorter than `profileIds`. Returns `[]` without
+   * touching the DB for empty input.
+   *
+   * Soft-deleted users are excluded: a deleted expert's user must never be
+   * notified. `expert_profiles` has no `deletedAt`, so the filter is on the
+   * joined USER row (`user.deletedAt IS NULL`).
+   */
+  async findUserIdsByProfileIds(profileIds: string[]): Promise<string[]> {
+    if (profileIds.length === 0) return [];
+    const rows = await db.query.expertProfiles.findMany({
+      where: inArray(expertProfiles.id, profileIds),
+      columns: {},
+      with: { user: { columns: { id: true, deletedAt: true } } },
+    });
+    return [
+      ...new Set(rows.filter((row) => row.user.deletedAt === null).map((row) => row.user.id)),
+    ];
+  },
+
   /** Find expert profile by username (for public profile page) */
   async findByUsername(username: string) {
     return db.query.expertProfiles.findFirst({

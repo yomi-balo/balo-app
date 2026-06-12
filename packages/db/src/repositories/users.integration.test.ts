@@ -89,3 +89,44 @@ describe('usersRepository.update', () => {
     expect(result).toBeUndefined();
   });
 });
+
+describe('usersRepository.findIdsByPlatformRoles', () => {
+  it('returns ids for users whose platformRole matches', async () => {
+    const admin = await userFactory({ platformRole: 'admin' });
+    const superAdmin = await userFactory({ platformRole: 'super_admin' });
+    // Plain user (default role) must be excluded.
+    await userFactory({ platformRole: 'user' });
+
+    const ids = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
+
+    expect(ids.sort()).toEqual([admin.id, superAdmin.id].sort());
+  });
+
+  it('excludes soft-deleted users', async () => {
+    const liveAdmin = await userFactory({ platformRole: 'admin' });
+    const deletedAdmin = await userFactory({ platformRole: 'admin' });
+    await usersRepository.softDelete(deletedAdmin.id);
+
+    const ids = await usersRepository.findIdsByPlatformRoles(['admin']);
+
+    expect(ids).toEqual([liveAdmin.id]);
+    expect(ids).not.toContain(deletedAdmin.id);
+  });
+
+  it('returns [] when no user matches the requested roles', async () => {
+    await userFactory({ platformRole: 'user' });
+
+    const ids = await usersRepository.findIdsByPlatformRoles(['super_admin']);
+
+    expect(ids).toEqual([]);
+  });
+
+  it('returns [] for an empty roles array (empty-input guard)', async () => {
+    // An admin exists, but an empty roles filter must short-circuit to [].
+    await userFactory({ platformRole: 'admin' });
+
+    const ids = await usersRepository.findIdsByPlatformRoles([]);
+
+    expect(ids).toEqual([]);
+  });
+});

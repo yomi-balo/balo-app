@@ -15,6 +15,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={null}
         onBuildProposal={null}
+        onViewProposal={null}
       />
     );
     expect(container).toBeEmptyDOMElement();
@@ -31,6 +32,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={vi.fn()}
         onBuildProposal={null}
+        onViewProposal={null}
       />
     );
     expect(container).toBeEmptyDOMElement();
@@ -49,6 +51,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={onProposal}
         onBuildProposal={null}
+        onViewProposal={null}
       />
     );
     const cta = screen.getByRole('button', { name: 'Request proposal' });
@@ -71,6 +74,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={null}
         onBuildProposal={onBuildProposal}
+        onViewProposal={null}
       />
     );
     const cta = screen.getByRole('button', { name: 'Build proposal' });
@@ -93,6 +97,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={null}
         onBuildProposal={null}
+        onViewProposal={null}
       />
     );
     const stub = screen.getByRole('button', { name: 'Build proposal' });
@@ -111,6 +116,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={vi.fn()}
         onBuildProposal={null}
+        onViewProposal={null}
       />
     );
     const cta = screen.getByRole('button', { name: 'Request proposal' });
@@ -118,7 +124,33 @@ describe('MobileActionRail', () => {
     expect(cta.className).not.toContain('bg-gradient-to-r');
   });
 
-  it("kind:'view' renders the disabled stub even when live handlers are passed (A6.3 owns it)", async () => {
+  it("kind:'view' renders ENABLED and fires onViewProposal when provided (BAL-289 / A6.3)", async () => {
+    const user = userEvent.setup();
+    const onViewProposal = vi.fn();
+    render(
+      <MobileActionRail
+        visible
+        showCall={false}
+        callLabel="Book a call"
+        callPending={false}
+        proposalCta={{ kind: 'view', label: 'View proposal', quiet: false }}
+        onCall={vi.fn()}
+        onProposal={null}
+        onBuildProposal={null}
+        onViewProposal={onViewProposal}
+      />
+    );
+    const cta = screen.getByRole('button', { name: 'View proposal' });
+    expect(cta).toBeEnabled();
+    expect(cta).not.toHaveAttribute('aria-disabled');
+    // The "view" link keeps the outlined treatment, never the commit gradient.
+    expect(cta.className).toContain('bg-primary/5');
+    expect(cta.className).not.toContain('bg-gradient-to-r');
+    await user.click(cta);
+    expect(onViewProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it("kind:'view' renders the disabled stub when no view handler is provided (defensive)", async () => {
     const user = userEvent.setup();
     const onProposal = vi.fn();
     const onBuildProposal = vi.fn();
@@ -132,14 +164,13 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={onProposal}
         onBuildProposal={onBuildProposal}
+        onViewProposal={null}
       />
     );
     const stub = screen.getByRole('button', { name: 'View proposal' });
     expect(stub).toBeDisabled();
     expect(stub).toHaveAttribute('aria-disabled', 'true');
-    // Desktop-header stub treatment: outlined, never the commit gradient.
-    expect(stub.className).toContain('bg-primary/5');
-    expect(stub.className).not.toContain('bg-gradient-to-r');
+    // The unrelated request/build handlers are never invoked by the view slot.
     await user.click(stub);
     expect(onProposal).not.toHaveBeenCalled();
     expect(onBuildProposal).not.toHaveBeenCalled();
@@ -156,6 +187,7 @@ describe('MobileActionRail', () => {
         onCall={vi.fn()}
         onProposal={null}
         onBuildProposal={null}
+        onViewProposal={null}
       />
     );
     expect(screen.getByRole('button', { name: 'Book a call' })).toBeDisabled();
