@@ -176,6 +176,42 @@ function trackProposalCtaClick(
   });
 }
 
+/**
+ * Open the expert proposal composer for `threadId`. No-op unless the thread is at
+ * `proposal_requested` (defence-in-depth — the Build CTA only renders then). At
+ * module scope so the `handleBuildProposal` callback stays branch-free.
+ */
+function openProposalComposer(args: {
+  push: (href: string) => void;
+  requestId: string;
+  threadId: string | null;
+  status: string | undefined;
+  surface?: 'header' | 'rail';
+}): void {
+  const { push, requestId, threadId, status, surface } = args;
+  if (threadId === null || status !== 'proposal_requested') return;
+  trackProposalCtaClick(surface, requestId, threadId);
+  push(`/projects/${requestId}/proposal/${threadId}`);
+}
+
+/**
+ * Open the read-only proposal surface for `threadId` (client review / expert &
+ * admin submitted view — the route dispatches by lens). No-op unless the thread is
+ * submitted/accepted. Module scope keeps the `handleViewProposal` callback branch-free.
+ */
+function openProposalSurface(args: {
+  push: (href: string) => void;
+  requestId: string;
+  threadId: string | null;
+  status: string | undefined;
+  surface?: 'header' | 'rail';
+}): void {
+  const { push, requestId, threadId, status, surface } = args;
+  if (threadId === null || !PROPOSAL_VIEW_STATUSES.has(status ?? '')) return;
+  trackProposalCtaClick(surface, requestId, threadId);
+  push(`/projects/${requestId}/proposal/${threadId}`);
+}
+
 /** Zero-open-threads stage — invitation framing, never a blank panel. */
 function EmptyConversationStage({
   lens,
@@ -731,10 +767,13 @@ export function ConversationStage({
   // matching surface value on that event) navigates without re-firing it.
   const handleBuildProposal = useCallback(
     (surface?: 'header' | 'rail'): void => {
-      if (activeThreadId === null) return;
-      if (activeThread?.relationshipStatus !== 'proposal_requested') return;
-      trackProposalCtaClick(surface, requestId, activeThreadId);
-      router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
+      openProposalComposer({
+        push: (href) => router.push(href),
+        requestId,
+        threadId: activeThreadId,
+        status: activeThread?.relationshipStatus,
+        surface,
+      });
     },
     [activeThreadId, activeThread?.relationshipStatus, requestId, router]
   );
@@ -756,12 +795,13 @@ export function ConversationStage({
   // (`header`/`rail`) feeds the existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel.
   const handleViewProposal = useCallback(
     (surface?: 'header' | 'rail'): void => {
-      if (activeThreadId === null) return;
-      if (!PROPOSAL_VIEW_STATUSES.has(activeThread?.relationshipStatus ?? '')) {
-        return;
-      }
-      trackProposalCtaClick(surface, requestId, activeThreadId);
-      router.push(`/projects/${requestId}/proposal/${activeThreadId}`);
+      openProposalSurface({
+        push: (href) => router.push(href),
+        requestId,
+        threadId: activeThreadId,
+        status: activeThread?.relationshipStatus,
+        surface,
+      });
     },
     [activeThreadId, activeThread?.relationshipStatus, requestId, router]
   );

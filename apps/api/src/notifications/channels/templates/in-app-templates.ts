@@ -114,14 +114,14 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'project-proposal-accepted-admin': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
     const company = (data.clientCompanyName as string) ?? '';
+    // First-mention "Name @ Company" rule; degrade to the bare name when absent.
+    const who = company ? `${clientName} @ ${company}` : clientName;
     const title = (data.title as string) ?? 'a project';
+    const amount = formatPriceCents(data.priceCents, data.currency);
     const projectRequestId = data.projectRequestId as string | undefined;
     return {
       title: 'Proposal accepted — raise invoice',
-      body: `${clientName}${company ? ` @ ${company}` : ''} accepted a proposal for "${title}" (${formatPriceCents(
-        data.priceCents,
-        data.currency
-      )})`,
+      body: `${who} accepted a proposal for "${title}" (${amount})`,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
