@@ -10,6 +10,8 @@ import {
   engagementsRepository,
   InvalidStatusTransitionError,
   KickoffGatesIncompleteError,
+  type Proposal,
+  type ProjectRequestWithRelations,
 } from '@balo/db';
 import { requireAdmin } from '@/lib/auth/require-admin';
 import { log } from '@/lib/logging';
@@ -38,19 +40,101 @@ function displayName(firstName: string | null, lastName: string | null, fallback
   return [firstName, lastName].filter(Boolean).join(' ').trim() || fallback;
 }
 
+/** The graph + accepted proposal an approval needs, resolved and verified. */
+interface ApprovableKickoff {
+  request: ProjectRequestWithRelations;
+  rel: ProjectRequestWithRelations['relationships'][number];
+  proposal: Proposal;
+}
+
+/**
+ * Load + verify everything the approval needs — never trust the admin's claim.
+ * The request must be `accepted`, the claimed relationship must BE the accepted
+ * one (the winning expert), both persisted gates must be confirmed, and the
+ * accepted current proposal (whose commercial terms are snapshotted) must be
+ * live. Returns the resolved graph, or a friendly error string for any failure.
+ */
+async function loadApprovableKickoff(
+  requestId: string,
+  relationshipId: string
+): Promise<ApprovableKickoff | { error: string }> {
+  const request = await projectRequestsRepository.findByIdWithRelations(requestId);
+  if (request === undefined) {
+    return { error: INVALID_REQUEST };
+  }
+
+  // Must be an accepted request, and the claimed relationship must BE the
+  // accepted one (the winning expert).
+  const rel = request.relationships.find((r) => r.status === 'accepted');
+  if (request.status !== 'accepted' || rel === undefined || rel.id !== relationshipId) {
+    return { error: STALE };
+  }
+
+  // Both persisted kickoff gates must be confirmed before approval.
+  if (request.clientBillingConfirmedAt === null || request.expertTermsConfirmedAt === null) {
+    return { error: GATES_INCOMPLETE };
+  }
+
+  // Re-load + verify the accepted current proposal — its commercial terms are
+  // snapshotted into the engagement. Never trust a stale read.
+  const proposal = await proposalsRepository.findCurrentByRelationship(rel.id);
+  if (proposal === undefined || !proposal.isCurrent || proposal.status !== 'accepted') {
+    return { error: STALE };
+  }
+
+  return { request, rel, proposal };
+}
+
+/**
+ * Advance the request AND materialise the engagement in ONE transaction
+ * (`materializeFromKickoff`), snapshotting the proposal's terms. A benign
+ * double-approve race (another admin already advanced) trips
+ * `InvalidStatusTransitionError`; a gate unconfirmed between the load and the
+ * locked write trips `KickoffGatesIncompleteError` — both map to friendly copy.
+ * Any other error rethrows to the action's generic boundary.
+ */
+async function commitKickoff(
+  loaded: ApprovableKickoff
+): Promise<{ engagementId: string } | { error: string }> {
+  const { request, rel, proposal } = loaded;
+  try {
+    const { engagement } = await engagementsRepository.materializeFromKickoff({
+      requestId: request.id,
+      companyId: request.companyId,
+      expertProfileId: rel.expertProfileId,
+      sourceProposalId: proposal.id,
+      relationshipId: rel.id,
+      pricingMethod: proposal.pricingMethod,
+      priceCents: proposal.priceCents,
+      currency: proposal.currency,
+      depositCents: proposal.depositCents ?? undefined,
+      rateCents: proposal.rateCents ?? undefined,
+      cadence: proposal.cadence ?? undefined,
+    });
+    return { engagementId: engagement.id };
+  } catch (error) {
+    if (error instanceof InvalidStatusTransitionError) {
+      return { error: STALE };
+    }
+    if (error instanceof KickoffGatesIncompleteError) {
+      return { error: GATES_INCOMPLETE };
+    }
+    throw error;
+  }
+}
+
 /**
  * Admin approves a kickoff (BAL-291 / A6.5) — the third (settle-invoice +
  * approve) gate, collapsed into the request's `accepted → kickoff_approved`
- * transition. In ONE transaction (via `engagementsRepository.materializeFromKickoff`)
- * the request advances AND the engagement is materialised, snapshotting the
- * accepted proposal's commercial terms. Then notifies the client (and, via the
- * resolver, the delivering expert) — fire-and-forget, AFTER the commit.
+ * transition. `commitKickoff` runs the transition AND engagement materialisation
+ * in one tx (snapshotting the accepted proposal's terms); then the client (and,
+ * via the resolver, the delivering expert) is notified — fire-and-forget, AFTER
+ * the commit.
  *
- * Control flow: requireAdmin → validate input → load the request graph →
- * verify the request is `accepted` and the claimed relationship is the accepted
- * one → verify both persisted gates are confirmed → re-load + verify the accepted
- * current proposal (its terms are snapshotted) → `materializeFromKickoff` (typed
- * transition errors → friendly copy) → log → notify → revalidate → return.
+ * Control flow: requireAdmin → validate input → `loadApprovableKickoff` (request
+ * `accepted`, claimed relationship is the accepted one, both gates confirmed,
+ * accepted current proposal live) → `commitKickoff` (typed transition errors →
+ * friendly copy) → log → notify → revalidate → return.
  *
  * Analytics are fired CLIENT-side by the component (PROJECT_KICKOFF_APPROVED);
  * this action does not track server-side.
@@ -72,66 +156,24 @@ export async function approveKickoffAction(
   const { requestId, relationshipId } = parsed.data;
 
   try {
-    const request = await projectRequestsRepository.findByIdWithRelations(requestId);
-    if (request === undefined) {
-      return { success: false, error: INVALID_REQUEST };
+    const loaded = await loadApprovableKickoff(requestId, relationshipId);
+    if ('error' in loaded) {
+      return { success: false, error: loaded.error };
     }
 
-    // Must be an accepted request, and the claimed relationship must BE the
-    // accepted one (the winning expert).
-    const rel = request.relationships.find((r) => r.status === 'accepted');
-    if (request.status !== 'accepted' || rel === undefined || rel.id !== relationshipId) {
-      return { success: false, error: STALE };
+    const committed = await commitKickoff(loaded);
+    if ('error' in committed) {
+      return { success: false, error: committed.error };
     }
 
-    // Both persisted kickoff gates must be confirmed before approval.
-    if (request.clientBillingConfirmedAt === null || request.expertTermsConfirmedAt === null) {
-      return { success: false, error: GATES_INCOMPLETE };
-    }
-
-    // Re-load + verify the accepted current proposal — its commercial terms are
-    // snapshotted into the engagement. Never trust a stale read.
-    const proposal = await proposalsRepository.findCurrentByRelationship(rel.id);
-    if (proposal === undefined || !proposal.isCurrent || proposal.status !== 'accepted') {
-      return { success: false, error: STALE };
-    }
-
-    // Advance the request AND materialise the engagement in ONE transaction,
-    // snapshotting the proposal's terms. A benign double-approve race (another
-    // admin already advanced) trips `InvalidStatusTransitionError`; an unconfirmed
-    // gate (lost between the read above and the locked write) trips
-    // `KickoffGatesIncompleteError`.
-    let engagement;
-    try {
-      const result = await engagementsRepository.materializeFromKickoff({
-        requestId,
-        companyId: request.companyId,
-        expertProfileId: rel.expertProfileId,
-        sourceProposalId: proposal.id,
-        relationshipId: rel.id,
-        pricingMethod: proposal.pricingMethod,
-        priceCents: proposal.priceCents,
-        currency: proposal.currency,
-        depositCents: proposal.depositCents ?? undefined,
-        rateCents: proposal.rateCents ?? undefined,
-        cadence: proposal.cadence ?? undefined,
-      });
-      engagement = result.engagement;
-    } catch (error) {
-      if (error instanceof InvalidStatusTransitionError) {
-        return { success: false, error: STALE };
-      }
-      if (error instanceof KickoffGatesIncompleteError) {
-        return { success: false, error: GATES_INCOMPLETE };
-      }
-      throw error;
-    }
+    const { request, rel } = loaded;
+    const { engagementId } = committed;
 
     // Key business event (after the commit).
     log.info('Kickoff approved', {
       requestId,
       relationshipId: rel.id,
-      engagementId: engagement.id,
+      engagementId,
       expertProfileId: rel.expertProfileId,
       userId: admin.id,
     });
@@ -167,7 +209,7 @@ export async function approveKickoffAction(
     revalidatePath(`/projects/${requestId}`);
     revalidatePath(`/projects/${requestId}/proposal/${rel.id}`);
 
-    return { success: true, engagementId: engagement.id };
+    return { success: true, engagementId };
   } catch (error) {
     log.error('Failed to approve kickoff', {
       requestId,
