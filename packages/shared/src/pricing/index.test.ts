@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { deriveTmTotalCents, sumEstimatedMinutes } from './proposal-pricing';
+import { deriveTmTotalCents, sumEstimatedMinutes } from './index';
 
 /**
  * Unit tests for the pure T&M pricing helpers (BAL-294). Mocks nothing —
- * `proposal-pricing.ts` has no `db` import and no I/O. Price/effort calculation is
+ * `@balo/shared/pricing` has no `db` import and no I/O. Price/effort calculation is
  * the "ALWAYS test" category (rounding edges, zero/empty, large sums). This module
  * is the single source of truth for the T&M total, shared by the coherence guard
  * and the web composer, so the math is locked here.

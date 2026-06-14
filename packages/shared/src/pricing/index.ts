@@ -2,13 +2,14 @@
  * Proposal pricing derivation (BAL-294) — the SINGLE SOURCE OF TRUTH for the
  * Time & Materials total formula.
  *
- * A PURE, transport-agnostic module — NO `db` import, NO I/O, NO analytics. Same
- * "tiny standalone module" spirit as `installmentsSumTo100` in
- * `proposal-payment-installments.ts`. Defined ONCE here and imported by BOTH the
- * coherence guard (`proposal-coherence.ts`, the `tm_total_mismatch` clause) AND the
- * web composer state (`computeTotalCents` under `pricingMethod === 'tm'`), so the
- * read-only display the expert sees and the integrity check at submit/accept can
- * never drift.
+ * A PURE, transport-agnostic module — NO `db` import, NO I/O, NO analytics. It lives
+ * in `@balo/shared` (behind the `@balo/shared/pricing` subpath export, NOT the
+ * package root which pulls in pino) precisely so it can be imported by BOTH the
+ * server-side coherence guard (`@balo/db` `proposal-coherence.ts`, the
+ * `tm_total_mismatch` clause) AND the browser-side web composer
+ * (`computeTotalCents` under `pricingMethod === 'tm'`) without dragging the
+ * postgres driver into the client bundle. The read-only display the expert sees and
+ * the integrity check at submit/accept can never drift.
  *
  * T&M total: `round(sum(estimated_minutes) / 60 × rate_cents)`. Minutes and cents
  * are integers (integer minor-unit convention); a `null`/absent effort counts as 0.

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, RotateCcw } from 'lucide-react';
-import { sumEstimatedMinutes } from '@balo/db';
+import { sumEstimatedMinutes } from '@balo/shared/pricing';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import {

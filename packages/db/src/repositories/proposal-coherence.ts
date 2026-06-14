@@ -3,8 +3,8 @@
  *
  * A PURE, transport-agnostic validator — NO `db` import, NO I/O, NO analytics.
  * Same "tiny standalone module" spirit as `proposal-types.ts`. Its only dependency
- * is the equally-pure `proposal-pricing.ts` (the single source of truth for the
- * T&M total formula, shared with the web composer — BAL-294). It is the
+ * is the equally-pure `@balo/shared/pricing` module (the single source of truth for
+ * the T&M total formula, shared with the web composer — BAL-294). It is the
  * application-level transition invariant that sits ABOVE the DB CHECK constraints
  * (`proposal_price_cents_nonneg`, `proposal_installment_pct_range`, …) and BELOW
  * the web inline `validateProposalReadiness` UX layer — defence-in-depth.
@@ -22,7 +22,7 @@
  * and re-exported from `repositories/index.ts`.
  */
 
-import { deriveTmTotalCents, sumEstimatedMinutes } from './proposal-pricing';
+import { deriveTmTotalCents, sumEstimatedMinutes } from '@balo/shared/pricing';
 
 /**
  * The `rule` discriminant for a failed proposal-coherence clause. The string union

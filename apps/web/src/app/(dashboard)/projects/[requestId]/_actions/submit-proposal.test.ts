@@ -95,9 +95,6 @@ vi.mock('@balo/db', () => ({
     transitionStatus: (...a: unknown[]) => mockTransitionRequest(...a),
   },
   installmentsSumTo100: (...a: unknown[]) => mockInstallmentsSumTo100(...a),
-  // Real pure helper (BAL-294) — sum of milestone estimated_minutes; null counts as 0.
-  sumEstimatedMinutes: (milestones: Array<{ estimatedMinutes: number | null }>) =>
-    milestones.reduce((s, m) => s + (m.estimatedMinutes ?? 0), 0),
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,

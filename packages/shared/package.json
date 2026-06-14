@@ -10,7 +10,8 @@
     "./logging": "./src/logging/index.ts",
     "./errors": "./src/errors/index.ts",
     "./timezone": "./src/timezone/index.ts",
-    "./notifications": "./src/notifications/index.ts"
+    "./notifications": "./src/notifications/index.ts",
+    "./pricing": "./src/pricing/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

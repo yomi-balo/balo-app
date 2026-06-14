@@ -11,7 +11,7 @@
  * the source of truth.
  */
 
-import { deriveTmTotalCents, sumEstimatedMinutes } from '@balo/db';
+import { deriveTmTotalCents, sumEstimatedMinutes } from '@balo/shared/pricing';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { SaveProposalDraftInput } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
@@ -117,7 +117,7 @@ export function emptyDraftState(): ProposalDraftState {
  * The SINGLE write path for `price_cents` (BAL-294) — ASYMMETRIC by method:
  *  - T&M  → server-derived `round(sum(estimatedMinutes)/60 × rateCents)`. The
  *           expert never types it; it falls out of effort × rate. Uses the SOLE
- *           formula site `deriveTmTotalCents` from `@balo/db` (shared with the
+ *           formula site `deriveTmTotalCents` from `@balo/shared/pricing` (shared with the
  *           coherence guard so the displayed total and the validated total never
  *           drift). Null rate → 0.
  *  - Fixed → the expert-TYPED `fixedPriceCents` (NOT the milestone `valueCents`

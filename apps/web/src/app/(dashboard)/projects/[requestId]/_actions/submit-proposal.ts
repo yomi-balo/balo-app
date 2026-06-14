@@ -9,7 +9,6 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   projectRequestsRepository,
-  sumEstimatedMinutes,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
@@ -21,6 +20,7 @@ import {
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
+import { sumEstimatedMinutes } from '@balo/shared/pricing';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
