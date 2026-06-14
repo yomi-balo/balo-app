@@ -52,6 +52,31 @@ export function installmentsSumTo100(installments: Array<{ pct: number }>): bool
   return total === 100;
 }
 
+/**
+ * Live installments for a proposal within an EXISTING transaction, ordered by
+ * `sortOrder` asc (ties by `id`) — the `Tx` variant of
+ * `proposalPaymentInstallmentsRepository.listByProposal`. Exported so a caller
+ * (e.g. `proposalsRepository.promoteToSubmit`/`accept`) can RE-READ a proposal's
+ * live installments INSIDE the same transaction that holds the proposal's `FOR
+ * UPDATE` lock, for transition-time coherence assembly. Mirrors the
+ * `insertInstallmentsTx` `Tx` primitive + `db`-convenience-method split.
+ */
+export async function listByProposalTx(
+  tx: DbTx,
+  proposalId: string
+): Promise<ProposalPaymentInstallment[]> {
+  return tx
+    .select()
+    .from(proposalPaymentInstallments)
+    .where(
+      and(
+        eq(proposalPaymentInstallments.proposalId, proposalId),
+        isNull(proposalPaymentInstallments.deletedAt)
+      )
+    )
+    .orderBy(asc(proposalPaymentInstallments.sortOrder), asc(proposalPaymentInstallments.id));
+}
+
 export const proposalPaymentInstallmentsRepository = {
   /**
    * Replace-all the payment-installment set for a proposal in ONE transaction:

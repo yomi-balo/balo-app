@@ -42,6 +42,11 @@ export const PROJECT_EVENTS = {
   PROJECT_REQUEST_DETAIL_VIEWED: 'project_request_detail_viewed',
   PROJECT_REQUEST_PHASE_FLIPPED: 'project_request_phase_flipped',
   PROJECT_REQUEST_DETAIL_DWELL: 'project_request_detail_dwell',
+  // BAL-293: the @balo/db coherence guard rejected a committing proposal/engagement
+  // transition (defence-in-depth behind the web readiness check). Fired CLIENT-side
+  // by the submit/resubmit/accept islands when the action returns a `coherence`
+  // payload — the raw `rule` discriminant is analytics-only and is NEVER rendered.
+  PROPOSAL_COHERENCE_REJECTED: 'proposal_coherence_rejected',
 } as const;
 
 export type ProjectEntryMethod = 'manual' | 'ai';
@@ -190,5 +195,14 @@ export interface ProjectEventMap {
     lens: ProjectRequestLens;
     status: string;
     dwell_ms: number;
+  };
+  [PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED]: {
+    /** The `@balo/db` coherence-rule discriminant (e.g. `installments_not_100`). */
+    rule: string;
+    pricing_method: 'fixed' | 'tm';
+    /** Hardcoded `'web'` today; the union lets future non-web callers reuse the event. */
+    entry_point: 'web' | 'api' | 'slack' | 'worker';
+    proposal_id: string;
+    relationship_id: string;
   };
 }

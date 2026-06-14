@@ -6,6 +6,7 @@ import { companies, engagements, projectRequests, proposals } from '../schema';
 import { engagementFactory, expertDraftFactory, proposalFactory } from '../test/factories';
 import type { ProposalFactoryResult } from '../test/factories';
 import { engagementsRepository, KickoffGatesIncompleteError } from './engagements';
+import { EngagementTermsCoherenceError } from './proposal-coherence';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
 
 /**
@@ -231,12 +232,16 @@ describe('engagement_request_unique_idx — at most one live engagement per requ
       expertProfileId: expertA.id,
       pricingMethod: 'tm',
       priceCents: 1000,
+      rateCents: 18_000,
+      cadence: 'monthly',
     });
     const r2 = await engagementsRepository.create({
       companyId,
       expertProfileId: expertB.id,
       pricingMethod: 'tm',
       priceCents: 2000,
+      rateCents: 18_000,
+      cadence: 'monthly',
     });
 
     // NULL project_request_id rows are outside the partial index → no collision.
@@ -432,6 +437,93 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
       })
     ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
 
+    const rows = await db
+      .select()
+      .from(engagements)
+      .where(eq(engagements.projectRequestId, source.projectRequestId));
+    expect(rows).toHaveLength(0);
+  });
+});
+
+// ── BAL-293: engagement-terms coherence guard (rollback proofs) ──────────────
+
+describe('engagementsRepository.create — coherence guard (BAL-293)', () => {
+  it('rejects tm terms missing a rate (tm_missing_rate) and persists nothing', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const err = await engagementsRepository
+      .create({
+        companyId,
+        expertProfileId: expert.id,
+        pricingMethod: 'tm',
+        priceCents: 250_000,
+        // rateCents / cadence intentionally omitted → incoherent tm.
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
+    expect((err as EngagementTermsCoherenceError).rule).toBe('tm_missing_rate');
+
+    // No engagement row inserted for the company.
+    expect(await engagementsRepository.listByCompany(companyId)).toHaveLength(0);
+  });
+
+  it('rejects a negative deposit (deposit_negative) and persists nothing', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const err = await engagementsRepository
+      .create({
+        companyId,
+        expertProfileId: expert.id,
+        pricingMethod: 'fixed',
+        priceCents: 100_000,
+        depositCents: -1,
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
+    expect((err as EngagementTermsCoherenceError).rule).toBe('deposit_negative');
+
+    expect(await engagementsRepository.listByCompany(companyId)).toHaveLength(0);
+  });
+
+  it('accepts coherent fixed terms (no installment requirement at the engagement seam)', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await engagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 500_000,
+    });
+    expect(engagement.pricingMethod).toBe('fixed');
+    expect(engagement.priceCents).toBe(500_000);
+  });
+});
+
+describe('engagementsRepository.materializeFromKickoff — coherence guard (BAL-293)', () => {
+  it('rejects incoherent tm terms (missing rate), leaving the request accepted and no engagement', async () => {
+    const { source, companyId } = await seedAcceptedKickoff({ bothGates: true });
+
+    const err = await engagementsRepository
+      .materializeFromKickoff({
+        requestId: source.projectRequestId,
+        companyId,
+        expertProfileId: source.expertProfileId,
+        sourceProposalId: source.proposal.id,
+        relationshipId: source.relationshipId,
+        pricingMethod: 'tm',
+        priceCents: 250_000,
+        // rateCents / cadence intentionally omitted → incoherent tm.
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
+    expect((err as EngagementTermsCoherenceError).rule).toBe('tm_missing_rate');
+
+    // Request stays accepted (NOT kickoff_approved); no engagement materialised.
+    const reloaded = await projectRequestsRepository.findById(source.projectRequestId);
+    expect(reloaded?.status).toBe('accepted');
     const rows = await db
       .select()
       .from(engagements)

@@ -163,6 +163,45 @@ describe('SubmitProposalDialog', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it('fires PROPOSAL_COHERENCE_REJECTED on a coherence failure, toasts generic copy, stays open', async () => {
+    const user = userEvent.setup();
+    submitProposalAction.mockResolvedValue({
+      success: false,
+      error:
+        "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before submitting.",
+      coherence: {
+        rule: 'installments_not_100',
+        pricingMethod: 'fixed',
+        proposalId: PROPOSAL_ID,
+        relationshipId: RELATIONSHIP_ID,
+      },
+    });
+    const { onOpenChange } = renderDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Submit proposal' }));
+
+    await waitFor(() =>
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED, {
+        rule: 'installments_not_100',
+        pricing_method: 'fixed',
+        entry_point: 'web',
+        proposal_id: PROPOSAL_ID,
+        relationship_id: RELATIONSHIP_ID,
+      })
+    );
+    // Generic copy toasted; raw rule never rendered; not a success/transition event.
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before submitting."
+    );
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED,
+      expect.anything()
+    );
+    // Stays open to retry (generic failure copy, not the stale string).
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it('blocks Escape (close) while a submit is in flight', async () => {
     const user = userEvent.setup();
     let resolve: (result: SubmitProposalResult) => void = () => {};
@@ -305,6 +344,40 @@ describe('SubmitProposalDialog — resubmit mode', () => {
       expect(mockToast.error).toHaveBeenCalledWith(
         'Could not resubmit your proposal. Please try again.'
       )
+    );
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('fires PROPOSAL_COHERENCE_REJECTED on a coherence failure, toasts generic copy, stays open', async () => {
+    const user = userEvent.setup();
+    resubmitProposalAction.mockResolvedValue({
+      success: false,
+      error:
+        "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before resubmitting.",
+      coherence: {
+        rule: 'tm_has_installments',
+        pricingMethod: 'tm',
+        proposalId: PROPOSAL_ID,
+        relationshipId: RELATIONSHIP_ID,
+      },
+    });
+    const { onOpenChange } = renderResubmitDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Resubmit as v2' }));
+
+    await waitFor(() =>
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED, {
+        rule: 'tm_has_installments',
+        pricing_method: 'tm',
+        entry_point: 'web',
+        proposal_id: PROPOSAL_ID,
+        relationship_id: RELATIONSHIP_ID,
+      })
+    );
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROPOSAL_RESUBMITTED,
+      expect.anything()
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(push).not.toHaveBeenCalled();

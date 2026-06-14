@@ -30,10 +30,19 @@ const {
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  ProposalCoherenceError,
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
   class InvalidStatusTransitionError extends Error {}
+  class ProposalCoherenceError extends Error {
+    public readonly rule: string;
+    constructor(rule: string, message?: string) {
+      super(message ?? rule);
+      this.name = 'ProposalCoherenceError';
+      this.rule = rule;
+    }
+  }
   return {
     mockFindById: vi.fn(),
     mockAccept: vi.fn(),
@@ -41,6 +50,7 @@ const {
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
     InvalidStatusTransitionError,
+    ProposalCoherenceError,
   };
 });
 
@@ -55,6 +65,7 @@ vi.mock('@balo/db', () => ({
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  ProposalCoherenceError,
 }));
 
 import { acceptProposalAction } from './accept-proposal';
@@ -70,6 +81,7 @@ const PROPOSAL = {
   status: 'submitted',
   relationshipId: REL_ID,
   isCurrent: true,
+  pricingMethod: 'fixed',
   priceCents: 500000,
   currency: 'aud',
 };
@@ -251,6 +263,30 @@ describe('acceptProposalAction', () => {
     expect(await acceptProposalAction(VALID_INPUT)).toEqual({
       success: false,
       error: 'This proposal can no longer be accepted.',
+    });
+  });
+
+  it('maps a repo coherence rejection to generic copy + an analytics coherence payload', async () => {
+    mockAccept.mockRejectedValue(new ProposalCoherenceError('tm_missing_rate'));
+    const result = await acceptProposalAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        "This proposal's pricing is incomplete or inconsistent. Refresh and ask the expert to re-check the pricing before accepting.",
+      coherence: {
+        rule: 'tm_missing_rate',
+        pricingMethod: 'fixed',
+        proposalId: PROPOSAL_ID,
+        relationshipId: REL_ID,
+      },
+    });
+    if (!result.success) expect(result.error).not.toContain('tm_missing_rate');
+    expect(log.warn).toHaveBeenCalledWith('Proposal coherence rejected', {
+      rule: 'tm_missing_rate',
+      pricingMethod: 'fixed',
+      proposalId: PROPOSAL_ID,
+      relationshipId: REL_ID,
     });
   });
 

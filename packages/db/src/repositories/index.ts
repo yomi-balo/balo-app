@@ -49,6 +49,18 @@ export {
   ProposalNotDraftError,
   type ProposalStatus,
 } from './proposals';
+export {
+  assertProposalCoherent,
+  assertEngagementTermsCoherent,
+  ProposalCoherenceError,
+  EngagementTermsCoherenceError,
+} from './proposal-coherence';
+export type {
+  ProposalCoherenceRule,
+  EngagementTermsCoherenceRule,
+  ProposalCoherenceSnapshot,
+  EngagementTermsSnapshot,
+} from './proposal-coherence';
 export { proposalMilestonesRepository } from './proposal-milestones';
 export type { ProposalMilestoneInput } from './proposal-milestones';
 export {

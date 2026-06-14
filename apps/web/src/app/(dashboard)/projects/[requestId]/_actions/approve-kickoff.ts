@@ -10,6 +10,7 @@ import {
   engagementsRepository,
   InvalidStatusTransitionError,
   KickoffGatesIncompleteError,
+  EngagementTermsCoherenceError,
   type Proposal,
   type ProjectRequestWithRelations,
 } from '@balo/db';
@@ -34,6 +35,11 @@ const INVALID_REQUEST = 'Invalid request.';
 const STALE = 'This request is no longer awaiting kickoff approval.';
 const GATES_INCOMPLETE = 'Client and expert must complete their steps first.';
 const GENERIC_FAILURE = 'Could not approve this kickoff. Please try again.';
+// Defensive: a coherent accepted proposal's snapshotted terms always pass the
+// `@balo/db` engagement coherence guard, so this should never fire on this path —
+// but if it does, surface clean copy instead of an unhandled 500.
+const TERMS_INCONSISTENT =
+  "This proposal's commercial terms are inconsistent and can't be turned into an engagement. Please review the proposal pricing.";
 
 /** Display name for a person on the request graph (notification body). */
 function displayName(firstName: string | null, lastName: string | null, fallback: string): string {
@@ -90,8 +96,10 @@ async function loadApprovableKickoff(
  * (`materializeFromKickoff`), snapshotting the proposal's terms. A benign
  * double-approve race (another admin already advanced) trips
  * `InvalidStatusTransitionError`; a gate unconfirmed between the load and the
- * locked write trips `KickoffGatesIncompleteError` — both map to friendly copy.
- * Any other error rethrows to the action's generic boundary.
+ * locked write trips `KickoffGatesIncompleteError`; an incoherent terms snapshot
+ * trips `EngagementTermsCoherenceError` (defensive — a coherent accepted proposal
+ * always passes) — all three map to friendly copy. Any other error rethrows to the
+ * action's generic boundary.
  */
 async function commitKickoff(
   loaded: ApprovableKickoff
@@ -118,6 +126,17 @@ async function commitKickoff(
     }
     if (error instanceof KickoffGatesIncompleteError) {
       return { error: GATES_INCOMPLETE };
+    }
+    if (error instanceof EngagementTermsCoherenceError) {
+      // Should not happen on this path (accept() guarantees coherence). Log it as a
+      // recoverable anomaly and surface clean copy rather than a 500. No analytics.
+      log.warn('Engagement terms coherence rejected at kickoff', {
+        rule: error.rule,
+        requestId: request.id,
+        relationshipId: rel.id,
+        proposalId: proposal.id,
+      });
+      return { error: TERMS_INCONSISTENT };
     }
     throw error;
   }

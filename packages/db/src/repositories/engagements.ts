@@ -3,6 +3,30 @@ import { db } from '../client';
 import { engagements, projectRequests, type Engagement, type ProjectRequest } from '../schema';
 import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
+import { assertEngagementTermsCoherent } from './proposal-coherence';
+
+/**
+ * COHERENCE (BAL-293): assert an engagement's snapshotted commercial terms are
+ * coherent (header-only: `price_negative` / `deposit_negative` / `tm_missing_rate`)
+ * BEFORE the row is inserted. Shared by BOTH write paths (`create` and
+ * `materializeFromKickoff`, which BYPASSES `create` and inserts directly) so
+ * neither can drift — both MUST call it. Throws `EngagementTermsCoherenceError`.
+ */
+function assertTermsBeforeInsert(input: {
+  pricingMethod: PricingMethod;
+  priceCents: number;
+  depositCents?: number;
+  rateCents?: number;
+  cadence?: ProposalCadence;
+}): void {
+  assertEngagementTermsCoherent({
+    pricingMethod: input.pricingMethod,
+    priceCents: input.priceCents,
+    depositCents: input.depositCents ?? null,
+    rateCents: input.rateCents ?? null,
+    cadence: input.cadence ?? null,
+  });
+}
 
 /**
  * Both persisted kickoff gates (`client_billing` + `expert_terms`) must be
@@ -53,6 +77,8 @@ export const engagementsRepository = {
     approvalModel?: string;
     activatedAt?: Date;
   }): Promise<Engagement> {
+    assertTermsBeforeInsert(input);
+
     const [row] = await db
       .insert(engagements)
       .values({
@@ -129,6 +155,11 @@ export const engagementsRepository = {
       if (current.clientBillingConfirmedAt === null || current.expertTermsConfirmedAt === null) {
         throw new KickoffGatesIncompleteError();
       }
+
+      // COHERENCE (BAL-293): guard the snapshotted terms BEFORE the direct insert.
+      // This path BYPASSES `create`, so the shared guard MUST be invoked here too.
+      // Throw → whole tx rolls back: request stays `accepted`, no engagement row.
+      assertTermsBeforeInsert(input);
 
       const [request] = await tx
         .update(projectRequests)

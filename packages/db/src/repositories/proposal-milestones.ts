@@ -46,6 +46,23 @@ export async function insertMilestonesTx(
     .returning();
 }
 
+/**
+ * Live milestones for a proposal within an EXISTING transaction, ordered by
+ * `sortOrder` asc (ties by `id`) — the `Tx` variant of
+ * `proposalMilestonesRepository.listByProposal`. Exported so a caller (e.g.
+ * `proposalsRepository.promoteToSubmit`/`accept`) can RE-READ a proposal's live
+ * children INSIDE the same transaction that holds the proposal's `FOR UPDATE` lock,
+ * for transition-time coherence assembly. Mirrors the `insertMilestonesTx` `Tx`
+ * primitive + `db`-convenience-method split.
+ */
+export async function listByProposalTx(tx: DbTx, proposalId: string): Promise<ProposalMilestone[]> {
+  return tx
+    .select()
+    .from(proposalMilestones)
+    .where(and(eq(proposalMilestones.proposalId, proposalId), isNull(proposalMilestones.deletedAt)))
+    .orderBy(asc(proposalMilestones.sortOrder), asc(proposalMilestones.id));
+}
+
 export const proposalMilestonesRepository = {
   /**
    * Replace-all the milestone set for a proposal in ONE transaction: soft-delete
