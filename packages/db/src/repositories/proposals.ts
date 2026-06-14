@@ -421,14 +421,20 @@ export const proposalsRepository = {
         expectedFrom: 'proposal_requested',
       });
 
-      // 1b. COHERENCE (BAL-293): re-read the live header + children INSIDE the tx
-      // (the header/milestones/installments were written by the action's preceding
-      // updateDraft/setForProposal steps) and assert coherence BEFORE the flip.
-      // Throw → whole tx rolls back: proposal stays `draft`, relationship reverts.
+      // 1b. COHERENCE (BAL-293): lock + re-read the live header + children INSIDE
+      // the tx (the header/milestones/installments were written by the action's
+      // preceding updateDraft/setForProposal steps) and assert coherence BEFORE the
+      // flip. Throw → whole tx rolls back: proposal stays `draft`, relationship
+      // reverts. The header is taken `FOR UPDATE` (mirroring accept()) so the
+      // coherence snapshot is provably the row that advanceProposalStatus then flips
+      // — no plain-read TOCTOU window before the lock. (Lock order is unchanged: the
+      // relationship is already locked above, and advanceProposalStatus re-locks this
+      // same row, so no new deadlock hazard.)
       const [header] = await tx
         .select()
         .from(proposals)
-        .where(and(eq(proposals.id, input.proposalId), isNull(proposals.deletedAt)));
+        .where(and(eq(proposals.id, input.proposalId), isNull(proposals.deletedAt)))
+        .for('update');
       if (header === undefined) {
         throw new Error(`Proposal not found: ${input.proposalId}`);
       }
