@@ -95,6 +95,9 @@ vi.mock('@balo/db', () => ({
     transitionStatus: (...a: unknown[]) => mockTransitionRequest(...a),
   },
   installmentsSumTo100: (...a: unknown[]) => mockInstallmentsSumTo100(...a),
+  // Real pure helper (BAL-294) — sum of milestone estimated_minutes; null counts as 0.
+  sumEstimatedMinutes: (milestones: Array<{ estimatedMinutes: number | null }>) =>
+    milestones.reduce((s, m) => s + (m.estimatedMinutes ?? 0), 0),
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
@@ -126,7 +129,13 @@ const DRAFT = {
 };
 
 const MILESTONES = [
-  { title: 'M1', descriptionHtml: '<p>d</p>', acceptanceCriteria: 'done', valueCents: 500000 },
+  {
+    title: 'M1',
+    descriptionHtml: '<p>d</p>',
+    acceptanceCriteria: 'done',
+    valueCents: 500000,
+    estimatedMinutes: null,
+  },
 ];
 const INSTALLMENTS = [{ label: 'Upfront', pct: 100 }];
 
@@ -229,17 +238,35 @@ describe('submitProposalAction', () => {
       expect(result).toEqual({ success: false, error: 'Every milestone needs a value.' });
     });
 
-    it('accepts T&M with deposit + rate and no installments', async () => {
+    it('accepts T&M with deposit + rate, effort on every milestone, and no installments', async () => {
       mockFindById.mockResolvedValue({
         ...DRAFT,
         pricingMethod: 'tm',
         depositCents: 100000,
         rateCents: 20000,
       });
+      mockListMilestones.mockResolvedValue([{ ...MILESTONES[0], estimatedMinutes: 120 }]);
       mockListInstallments.mockResolvedValue([]);
       const result = await submitProposalAction(VALID_INPUT);
       expect(result.success).toBe(true);
       expect(mockPromote).toHaveBeenCalledWith({ proposalId: PROPOSAL_ID, relationshipId: REL_ID });
+    });
+
+    it('rejects T&M when a milestone is missing an effort estimate (BAL-294)', async () => {
+      mockFindById.mockResolvedValue({
+        ...DRAFT,
+        pricingMethod: 'tm',
+        depositCents: 100000,
+        rateCents: 20000,
+      });
+      mockListMilestones.mockResolvedValue([{ ...MILESTONES[0], estimatedMinutes: null }]);
+      mockListInstallments.mockResolvedValue([]);
+      const result = await submitProposalAction(VALID_INPUT);
+      expect(result).toEqual({
+        success: false,
+        error: 'Every milestone needs an effort estimate.',
+      });
+      expect(mockPromote).not.toHaveBeenCalled();
     });
 
     it('rejects T&M missing deposit/rate', async () => {
@@ -263,7 +290,13 @@ describe('submitProposalAction', () => {
       proposalId: PROPOSAL_ID,
       expertProfileId: EXPERT_PROFILE_ID,
       transitioned: true,
-      analytics: { priceCents: 500000, currency: 'aud' },
+      analytics: {
+        priceCents: 500000,
+        currency: 'aud',
+        totalEstimatedMinutes: 0, // Fixed → effort nulled
+        pricingMethod: 'fixed',
+        milestoneCount: 1,
+      },
     });
 
     // sanitise the overview with the WIDENED sanitiser
@@ -282,6 +315,7 @@ describe('submitProposalAction', () => {
           descriptionHtml: '<p>cleanm</p>',
           acceptanceCriteria: 'done',
           valueCents: 500000,
+          estimatedMinutes: null,
         },
       ],
     });

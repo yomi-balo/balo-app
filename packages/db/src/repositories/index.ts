@@ -63,6 +63,7 @@ export type {
 } from './proposal-coherence';
 export { proposalMilestonesRepository } from './proposal-milestones';
 export type { ProposalMilestoneInput } from './proposal-milestones';
+export { deriveTmTotalCents, sumEstimatedMinutes } from './proposal-pricing';
 export {
   proposalPaymentInstallmentsRepository,
   installmentsSumTo100,

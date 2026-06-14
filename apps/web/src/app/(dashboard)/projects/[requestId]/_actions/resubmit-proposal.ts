@@ -25,13 +25,34 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { validateProposalReadiness } from './proposal-readiness';
 
+/**
+ * Sane upper bounds for the non-negative integer money/minutes fields — these only
+ * fail closed at the DB int4 write today, so we bound them here too (defence in
+ * depth; BAL-294 review). Both sit comfortably above any legitimate value yet far
+ * below int4 max (2_147_483_647):
+ *   - MAX_MINUTES: ten years of round-the-clock effort — no deliverable estimate exceeds this.
+ *   - MAX_CENTS:   A$10,000,000.00 — generous for a single consulting proposal.
+ */
+const MAX_MINUTES = 60 * 24 * 366 * 10;
+const MAX_CENTS = 1_000_000_000;
+const MINUTES_MSG = 'Estimated effort is too large.';
+const CENTS_MSG = 'Amount is too large.';
+
 // The composer payload — same field names / shape as `save-proposal-draft.ts`
 // (reused intentionally so revise mode sends the EXACT same body), PLUS routing ids.
 const milestoneSchema = z.object({
   title: z.string().max(200),
   descriptionHtml: z.string().max(20_000).nullable().optional(),
   acceptanceCriteria: z.string().max(2000).nullable().optional(),
-  valueCents: z.number().int().nonnegative().nullable().optional(),
+  valueCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).nullable().optional(),
+  // T&M-only estimated effort in minutes (integer; BAL-294).
+  estimatedMinutes: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(MAX_MINUTES, MINUTES_MSG)
+    .nullable()
+    .optional(),
 });
 
 const installmentSchema = z.object({
@@ -48,12 +69,12 @@ const inputSchema = z.object({
   fromProposalId: z.uuid(),
   overview: z.string().max(50_000),
   pricingMethod: z.enum(['fixed', 'tm']),
-  priceCents: z.number().int().nonnegative(),
+  priceCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG),
   currency: z.string().min(1).max(8).optional(),
   timeframeWeeks: z.number().int().positive().optional(),
   exclusions: z.string().max(20_000).optional(),
-  depositCents: z.number().int().nonnegative().optional(),
-  rateCents: z.number().int().nonnegative().optional(),
+  depositCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).optional(),
+  rateCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).optional(),
   cadence: z.enum(['monthly', 'fortnightly']).optional(),
   milestones: z.array(milestoneSchema).max(50),
   installments: z.array(installmentSchema).max(50),
@@ -189,6 +210,7 @@ function sanitiseContent(input: ResubmitProposalInput): SanitisedContent {
           : sanitizeProjectHtml(m.descriptionHtml),
       acceptanceCriteria: m.acceptanceCriteria ?? null,
       valueCents: m.valueCents ?? null,
+      estimatedMinutes: m.estimatedMinutes ?? null,
     })),
     installments: input.installments.map((i) => ({ label: i.label, pct: i.pct })),
   };
@@ -289,6 +311,7 @@ export async function resubmitProposalAction(
       milestones: sanitised.milestones.map((m) => ({
         title: m.title,
         valueCents: m.valueCents ?? null,
+        estimatedMinutes: m.estimatedMinutes ?? null,
       })),
       installments: sanitised.installments,
       depositCents: data.depositCents ?? null,

@@ -13,7 +13,7 @@ import {
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';
 const RELATIONSHIP_ID = '22222222-2222-2222-2222-222222222222';
 
-/** A fully-ready Fixed draft. */
+/** A fully-ready Fixed draft (typed total = A$10,000 = 1,000,000 cents). */
 function readyFixed(): ProposalDraftState {
   return {
     proposalId: 'p1',
@@ -24,6 +24,7 @@ function readyFixed(): ProposalDraftState {
     exclusions: '',
     depositCents: null,
     rateCents: null,
+    fixedPriceCents: 1_000_000,
     cadence: 'monthly',
     milestones: [
       {
@@ -32,6 +33,7 @@ function readyFixed(): ProposalDraftState {
         descriptionHtml: '<p>Workshops</p>',
         acceptanceCriteria: 'Signed-off plan',
         valueCents: 400_000,
+        estimatedMinutes: null,
       },
       {
         key: nextDraftKey(),
@@ -39,6 +41,7 @@ function readyFixed(): ProposalDraftState {
         descriptionHtml: '',
         acceptanceCriteria: '',
         valueCents: 600_000,
+        estimatedMinutes: null,
       },
     ],
     installments: [
@@ -49,14 +52,21 @@ function readyFixed(): ProposalDraftState {
   };
 }
 
-/** A fully-ready T&M draft. */
+/** A fully-ready T&M draft. Effort 120 + 180 = 300 min (5h) × A$250/hr = A$1,250. */
 function readyTm(): ProposalDraftState {
+  const base = readyFixed();
   return {
-    ...readyFixed(),
+    ...base,
     pricingMethod: 'tm',
     depositCents: 200_000,
     rateCents: 25_000,
+    fixedPriceCents: null,
     cadence: 'fortnightly',
+    milestones: base.milestones.map((m, i) => ({
+      ...m,
+      valueCents: null,
+      estimatedMinutes: i === 0 ? 120 : 180,
+    })),
     installments: [],
   };
 }
@@ -76,6 +86,8 @@ describe('emptyDraftState', () => {
     expect(s.installments).toHaveLength(2);
     expect(s.milestones).toHaveLength(1);
     expect(s.milestones[0]?.valueCents).toBe(0);
+    expect(s.milestones[0]?.estimatedMinutes).toBeNull();
+    expect(s.fixedPriceCents).toBeNull();
   });
 
   it('is not ready (empty overview + untitled milestone)', () => {
@@ -91,15 +103,41 @@ describe('seedInstallments', () => {
   });
 });
 
-describe('computeTotalCents', () => {
-  it('sums milestone values (null treated as 0)', () => {
+describe('computeTotalCents — asymmetric by method (BAL-294)', () => {
+  it('Fixed returns the typed fixedPriceCents (NOT the milestone valueCents sum)', () => {
     const s = readyFixed();
-    expect(computeTotalCents(s)).toBe(1_000_000);
+    // valueCents sum is also 1,000,000 here — diverge them to prove it uses the typed price.
+    s.fixedPriceCents = 7_777_700;
+    expect(computeTotalCents(s)).toBe(7_777_700);
   });
-  it('handles a null value as 0', () => {
+
+  it('Fixed with a null typed price is 0', () => {
     const s = readyFixed();
-    s.milestones[1]!.valueCents = null;
-    expect(computeTotalCents(s)).toBe(400_000);
+    s.fixedPriceCents = null;
+    expect(computeTotalCents(s)).toBe(0);
+  });
+
+  it('T&M derives round(sum(estimatedMinutes)/60 × rateCents)', () => {
+    const s = readyTm(); // 300 min = 5h × A$250/hr (25_000 cents) = A$1,250 = 125_000 cents
+    expect(computeTotalCents(s)).toBe(125_000);
+  });
+
+  it('T&M treats a null effort as 0 minutes', () => {
+    const s = readyTm();
+    s.milestones[1]!.estimatedMinutes = null; // only 120 min = 2h × 25_000 = 50_000
+    expect(computeTotalCents(s)).toBe(50_000);
+  });
+
+  it('T&M with a null rate derives 0', () => {
+    const s = readyTm();
+    s.rateCents = null;
+    expect(computeTotalCents(s)).toBe(0);
+  });
+
+  it('T&M ignores the retained fixedPriceCents (derives from effort instead)', () => {
+    const s = readyTm();
+    s.fixedPriceCents = 9_999_900; // retained for restore-on-switch-back; not used under T&M
+    expect(computeTotalCents(s)).toBe(125_000);
   });
 });
 
@@ -179,10 +217,26 @@ describe('summaryReadiness — T&M', () => {
     s.milestones[0]!.valueCents = null;
     expect(summaryReadiness(s).ready).toBe(true);
   });
+
+  it('flags a milestone missing an effort estimate (mirrors tm_missing_effort)', () => {
+    const s = readyTm();
+    s.milestones[1]!.estimatedMinutes = null;
+    const r = summaryReadiness(s);
+    expect(r.ready).toBe(false);
+    expect(r.issues).toContain('A milestone is missing an effort estimate');
+  });
+
+  it('blocks T&M submit when there are no milestones (total 0)', () => {
+    const s = readyTm();
+    s.milestones = [];
+    const r = summaryReadiness(s);
+    expect(r.ready).toBe(false);
+    expect(r.issues).toContain('Add at least one milestone');
+  });
 });
 
 describe('toSavePayload — Fixed', () => {
-  it('serialises header + replace-all lists, deriving priceCents from milestones', () => {
+  it('serialises header + replace-all lists, priceCents from the typed fixed price', () => {
     const payload = toSavePayload(readyFixed(), REQUEST_ID, RELATIONSHIP_ID);
     expect(payload.requestId).toBe(REQUEST_ID);
     expect(payload.relationshipId).toBe(RELATIONSHIP_ID);
@@ -195,6 +249,19 @@ describe('toSavePayload — Fixed', () => {
     expect(payload.depositCents).toBeUndefined();
     expect(payload.rateCents).toBeUndefined();
     expect(payload.cadence).toBeUndefined();
+  });
+
+  it('priceCents follows the typed price, decoupled from the milestone valueCents sum', () => {
+    const s = readyFixed();
+    s.fixedPriceCents = 2_500_000; // diverges from the 1,000,000 valueCents sum
+    expect(toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID).priceCents).toBe(2_500_000);
+  });
+
+  it('force-nulls estimatedMinutes under Fixed (effort is T&M-only)', () => {
+    const s = readyFixed();
+    s.milestones[0]!.estimatedMinutes = 120; // leftover from a prior T&M session
+    const payload = toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID);
+    expect(payload.milestones.every((m) => m.estimatedMinutes === null)).toBe(true);
   });
 
   it('nulls empty optional milestone strings', () => {
@@ -222,5 +289,12 @@ describe('toSavePayload — T&M', () => {
     expect(payload.depositCents).toBe(200_000);
     expect(payload.rateCents).toBe(25_000);
     expect(payload.cadence).toBe('fortnightly');
+  });
+
+  it('persists per-milestone estimatedMinutes and derives priceCents from effort × rate', () => {
+    const payload = toSavePayload(readyTm(), REQUEST_ID, RELATIONSHIP_ID);
+    expect(payload.milestones.map((m) => m.estimatedMinutes)).toEqual([120, 180]);
+    // 300 min = 5h × A$250/hr = A$1,250 = 125,000 cents (the SINGLE write path).
+    expect(payload.priceCents).toBe(125_000);
   });
 });

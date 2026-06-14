@@ -2,7 +2,9 @@
  * Proposal / engagement commercial-coherence guard (BAL-293).
  *
  * A PURE, transport-agnostic validator — NO `db` import, NO I/O, NO analytics.
- * Same "tiny standalone module" spirit as `proposal-types.ts`. It is the
+ * Same "tiny standalone module" spirit as `proposal-types.ts`. Its only dependency
+ * is the equally-pure `proposal-pricing.ts` (the single source of truth for the
+ * T&M total formula, shared with the web composer — BAL-294). It is the
  * application-level transition invariant that sits ABOVE the DB CHECK constraints
  * (`proposal_price_cents_nonneg`, `proposal_installment_pct_range`, …) and BELOW
  * the web inline `validateProposalReadiness` UX layer — defence-in-depth.
@@ -20,6 +22,8 @@
  * and re-exported from `repositories/index.ts`.
  */
 
+import { deriveTmTotalCents, sumEstimatedMinutes } from './proposal-pricing';
+
 /**
  * The `rule` discriminant for a failed proposal-coherence clause. The string union
  * is the analytics/error contract — web/analytics consumers `instanceof`-check
@@ -32,8 +36,9 @@ export type ProposalCoherenceRule =
   | 'fixed_requires_installments' // fixed ⇒ >= 1 installment row
   | 'installments_not_100' // fixed ⇒ live installments' pct sum EXACTLY 100 (integer)
   | 'tm_has_installments' // tm ⇒ NO installment rows (reject, don't silently drop)
-  | 'fixed_milestone_values_exceed_price'; // fixed ⇒ sum(present milestone valueCents) <= priceCents
-// BAL-294 (blocked) extension slot: 'tm_missing_effort' | 'tm_total_mismatch' — DO NOT ADD YET.
+  | 'fixed_milestone_values_exceed_price' // fixed ⇒ sum(present milestone valueCents) <= priceCents
+  | 'tm_missing_effort' // tm ⇒ every live milestone has estimatedMinutes present & >= 0
+  | 'tm_total_mismatch'; // tm ⇒ priceCents == round(sum(estimatedMinutes)/60 × rateCents) ± N
 
 /**
  * The header-only subset for the engagement seam. These three are exactly the
@@ -61,7 +66,9 @@ export interface ProposalCoherenceSnapshot {
   depositCents: number | null;
   rateCents: number | null;
   cadence: 'monthly' | 'fortnightly' | null;
-  milestones: { valueCents: number | null }[];
+  /** Live milestones (soft-deleted rows must never be included). `valueCents` is
+   *  Fixed-only; `estimatedMinutes` is T&M-only — mutually exclusive by method. */
+  milestones: { valueCents: number | null; estimatedMinutes: number | null }[];
   installments: { pct: number }[];
 }
 
@@ -129,6 +136,8 @@ const RULE_MESSAGES: Record<ProposalCoherenceRule, string> = {
   tm_has_installments: 'Time & materials proposals must not carry payment installments.',
   fixed_milestone_values_exceed_price:
     'The sum of milestone values must not exceed the proposal price.',
+  tm_missing_effort: 'Time & materials proposals require an estimated effort on every milestone.',
+  tm_total_mismatch: 'The total must equal the estimated effort multiplied by the hourly rate.',
 };
 
 /**
@@ -161,14 +170,15 @@ function checkHeaderTerms(t: HeaderTerms): EngagementTermsCoherenceRule | null {
  *   1. header: `price_negative` → `deposit_negative` → `tm_missing_rate`
  *   2. fixed-only: `fixed_requires_installments` → `installments_not_100`
  *      → `fixed_milestone_values_exceed_price`
- *   3. tm-only: `tm_has_installments`
- *   4. (BAL-294 extension slot — NOT implemented)
+ *   3. tm-only: `tm_has_installments` → `tm_missing_effort` → `tm_total_mismatch`
  *
  * NOTE (v1 scope): a `fixed` proposal whose milestones all have `null` valueCents
  * is COHERENT here (present-value sum 0 <= price). The "every fixed milestone needs
  * a value" rule lives ONLY in the web `validateProposalReadiness`, not in this
  * integrity guard. Likewise zero milestones is allowed by this guard (≥1 milestone
- * is a UX-layer rule). The guard enforces exactly the seven listed clauses.
+ * is a UX-layer rule): a `tm` proposal with NO milestones is vacuously coherent iff
+ * `priceCents === 0` — the legacy header-only `submit()` path (empty milestones,
+ * `priceCents` 0) MUST pass. The guard enforces exactly the nine listed clauses.
  */
 export function assertProposalCoherent(snapshot: ProposalCoherenceSnapshot): void {
   // 1. Shared header clauses.
@@ -210,7 +220,27 @@ export function assertProposalCoherent(snapshot: ProposalCoherenceSnapshot): voi
     throw new ProposalCoherenceError('tm_has_installments', RULE_MESSAGES.tm_has_installments);
   }
 
-  // 4. BAL-294 extension slot — `tm_missing_effort` / `tm_total_mismatch` go here.
+  // 4. tm-only effort + derived-total clauses (BAL-294). `rateCents` is provably
+  //    non-null/non-negative here (`tm_missing_rate` ran first in checkHeaderTerms);
+  //    narrow it defensively anyway so the formula inputs are statically `number`.
+  if (snapshot.rateCents === null || snapshot.rateCents < 0) {
+    throw new ProposalCoherenceError('tm_missing_rate', RULE_MESSAGES.tm_missing_rate);
+  }
+  // Every LIVE milestone must carry a present, non-negative effort. Zero milestones
+  // ⇒ `[].some(...)` is false ⇒ vacuously passes (legacy empty-milestone tm path).
+  if (snapshot.milestones.some((m) => m.estimatedMinutes === null || m.estimatedMinutes < 0)) {
+    throw new ProposalCoherenceError('tm_missing_effort', RULE_MESSAGES.tm_missing_effort);
+  }
+  // priceCents must equal the derived total within ±N, N = milestone count (1 cent
+  // per milestone — belt-and-braces against per-milestone rounding; the UI sums
+  // minutes then derives ONCE, which is exact). Zero milestones ⇒ derived 0,
+  // tolerance 0 ⇒ passes iff priceCents === 0.
+  const totalMinutes = sumEstimatedMinutes(snapshot.milestones);
+  const derived = deriveTmTotalCents(totalMinutes, snapshot.rateCents);
+  const tolerance = snapshot.milestones.length;
+  if (Math.abs(snapshot.priceCents - derived) > tolerance) {
+    throw new ProposalCoherenceError('tm_total_mismatch', RULE_MESSAGES.tm_total_mismatch);
+  }
 }
 
 /**

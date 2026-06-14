@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { centsToDollars, dollarsToCents, formatWholeCurrency } from '@/lib/utils/currency';
+import { minutesToHoursLabel } from './proposal-format';
 import { STANDARD_TERMS } from './proposal-standard-terms';
 import { ProposalDocumentUploader } from './proposal-document-uploader';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
@@ -29,6 +30,13 @@ interface PaymentTermsTabProps {
   totalCents: number;
   /** ISO currency code from draft state (drives grouped whole-dollar display). */
   currency: string;
+  /** Fixed-only EXPERT-TYPED total (integer minor units; BAL-294). Null until typed. */
+  fixedPriceCents: number | null;
+  /** Set the typed Fixed total (Fixed only). */
+  onFixedPriceChange: (cents: number | null) => void;
+  /** T&M-only — sum of milestone estimated_minutes (BAL-294), for the read-only
+   *  derived-total cross-check ("Nh at $rate/hr"). */
+  totalEstimatedMinutes: number;
   installments: ProposalInstallmentDraft[];
   installmentSum: number;
   onInstallmentsChange: (next: ProposalInstallmentDraft[]) => void;
@@ -71,6 +79,9 @@ export function PaymentTermsTab({
   pricingMethod,
   totalCents,
   currency,
+  fixedPriceCents,
+  onFixedPriceChange,
+  totalEstimatedMinutes,
   installments,
   installmentSum,
   onInstallmentsChange,
@@ -130,11 +141,29 @@ export function PaymentTermsTab({
 
       {isFixed ? (
         <div className="space-y-3">
-          <div className="border-border bg-muted/30 flex items-center justify-between rounded-[12px] border px-4 py-3">
-            <span className="text-foreground text-sm font-medium">Total from milestones</span>
-            <span className="text-foreground font-mono text-sm font-semibold tabular-nums">
-              {formatWholeCurrency(totalCents, currency)}
-            </span>
+          <div className="space-y-1.5">
+            <Label htmlFor="proposal-fixed-price" className="text-foreground text-sm font-medium">
+              Total fixed price
+            </Label>
+            <div className="relative w-full sm:w-56">
+              <span className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm">
+                A$
+              </span>
+              <Input
+                id="proposal-fixed-price"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                className="pl-9 font-mono tabular-nums"
+                value={fixedPriceCents === null ? '' : centsToDollars(fixedPriceCents)}
+                onChange={(e) => onFixedPriceChange(parseDollarsToCents(e.target.value))}
+                placeholder="0.00"
+              />
+            </div>
+            <p className="text-muted-foreground text-[12px]">
+              The agreed price, split across the installments below.
+            </p>
           </div>
 
           <div className="flex items-center justify-between">
@@ -270,10 +299,25 @@ export function PaymentTermsTab({
             </Select>
           </div>
 
-          <p className="text-muted-foreground border-border bg-muted/30 rounded-[10px] border px-3 py-2.5 text-[13px]">
-            The milestone estimate ({formatWholeCurrency(totalCents, currency)}) is shown as a
-            guide, not a cap.
-          </p>
+          {rateCents === null || totalEstimatedMinutes === 0 ? (
+            <p className="text-muted-foreground border-border bg-muted/30 rounded-[10px] border px-3 py-2.5 text-[13px]">
+              Set an hourly rate and per-milestone effort to see the total.
+            </p>
+          ) : (
+            <div className="border-border bg-muted/30 flex flex-wrap items-center justify-between gap-2 rounded-[12px] border px-4 py-3">
+              <div className="min-w-0">
+                <span className="text-foreground text-sm font-medium">Estimated total</span>
+                <p className="text-muted-foreground mt-0.5 text-[12px]">
+                  {minutesToHoursLabel(totalEstimatedMinutes)}h at{' '}
+                  {formatWholeCurrency(rateCents, currency)}
+                  /hr — billed against actuals, not a cap.
+                </p>
+              </div>
+              <span className="text-foreground font-mono text-sm font-semibold tabular-nums">
+                ≈ {formatWholeCurrency(totalCents, currency)}
+              </span>
+            </div>
+          )}
         </div>
       )}
 

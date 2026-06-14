@@ -13,6 +13,10 @@ export interface ProposalMilestoneInput {
   acceptanceCriteria?: string | null;
   /** Fixed-only deliverable value (integer minor units); null/undefined for T&M. */
   valueCents?: number | null;
+  /** T&M-only estimated effort in minutes (integer); null/undefined when not
+   *  estimated or for Fixed. Mirrors `valueCents` (the two are mutually exclusive by
+   *  pricing method — BAL-294). */
+  estimatedMinutes?: number | null;
 }
 
 /**
@@ -41,6 +45,7 @@ export async function insertMilestonesTx(
         descriptionHtml: m.descriptionHtml ?? null,
         acceptanceCriteria: m.acceptanceCriteria ?? null,
         valueCents: m.valueCents ?? null,
+        estimatedMinutes: m.estimatedMinutes ?? null,
       }))
     )
     .returning();

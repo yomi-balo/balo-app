@@ -137,6 +137,16 @@ export function SubmitProposalDialog({
       expert_id: result.expertProfileId,
       price_cents: result.analytics.priceCents,
       currency: result.analytics.currency,
+      total_estimated_minutes: result.analytics.totalEstimatedMinutes,
+      pricing_method: result.analytics.pricingMethod,
+    });
+    // BAL-294: effort is committed at submit (not per keystroke) — fire ONCE here
+    // with the server-computed totals (0 minutes for Fixed, where effort is nulled).
+    track(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {
+      proposal_id: effectiveProposalId,
+      milestone_count: result.analytics.milestoneCount,
+      total_estimated_minutes: result.analytics.totalEstimatedMinutes,
+      pricing_method: result.analytics.pricingMethod,
     });
     if (result.transitioned) {
       track(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {

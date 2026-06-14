@@ -275,6 +275,13 @@ export const proposalMilestones = pgTable(
     descriptionHtml: text('description_html'),
     acceptanceCriteria: text('acceptance_criteria'),
     valueCents: integer('value_cents'),
+    // T&M-only estimated effort in MINUTES (integer; integer minor-unit convention,
+    // NOT a float). NULLABLE, no default → existing rows backfill to NULL (additive,
+    // backfill-safe). DISTINCT from the Fixed-only `valueCents`: the two columns are
+    // mutually exclusive by `pricingMethod` (T&M force-nulls valueCents; Fixed
+    // force-nulls estimatedMinutes). The derived T&M total falls out of
+    // sum(estimatedMinutes)/60 × rateCents (BAL-294).
+    estimatedMinutes: integer('estimated_minutes'),
     ...timestamps,
     ...softDelete,
   },
@@ -284,6 +291,12 @@ export const proposalMilestones = pgTable(
       .on(t.proposalId, t.sortOrder)
       .where(sql`${t.deletedAt} IS NULL`),
     check('proposal_milestone_value_nonneg', sql`${t.valueCents} IS NULL OR ${t.valueCents} >= 0`),
+    // Mirrors `proposal_milestone_value_nonneg` exactly (same vacuous-on-NULL style)
+    // — BAL-294.
+    check(
+      'proposal_milestone_estimated_minutes_nonneg',
+      sql`${t.estimatedMinutes} IS NULL OR ${t.estimatedMinutes} >= 0`
+    ),
     check('proposal_milestone_sort_nonneg', sql`${t.sortOrder} >= 0`),
   ]
 );

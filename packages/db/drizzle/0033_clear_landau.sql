@@ -1,0 +1,2 @@
+ALTER TABLE "proposal_milestones" ADD COLUMN "estimated_minutes" integer;--> statement-breakpoint
+ALTER TABLE "proposal_milestones" ADD CONSTRAINT "proposal_milestone_estimated_minutes_nonneg" CHECK ("proposal_milestones"."estimated_minutes" IS NULL OR "proposal_milestones"."estimated_minutes" >= 0);

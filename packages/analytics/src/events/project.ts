@@ -47,6 +47,14 @@ export const PROJECT_EVENTS = {
   // by the submit/resubmit/accept islands when the action returns a `coherence`
   // payload — the raw `rule` discriminant is analytics-only and is NEVER rendered.
   PROPOSAL_COHERENCE_REJECTED: 'proposal_coherence_rejected',
+  // BAL-294: estimated effort per deliverable + asymmetric T&M/Fixed total. Both
+  // carry the `project_` feature prefix to match every constant in this file (the
+  // ticket's bare names `milestone_effort_estimated` / `proposal_pricing_method_switched`
+  // map to these prefixed values). MILESTONE_EFFORT_ESTIMATED fires CLIENT-side once
+  // per submit (not per keystroke); PROPOSAL_PRICING_METHOD_SWITCHED fires on a
+  // committed pricing-method change (after the Fixed→T&M confirm dialog).
+  MILESTONE_EFFORT_ESTIMATED: 'project_milestone_effort_estimated',
+  PROPOSAL_PRICING_METHOD_SWITCHED: 'project_proposal_pricing_method_switched',
 } as const;
 
 export type ProjectEntryMethod = 'manual' | 'ai';
@@ -145,6 +153,10 @@ export interface ProjectEventMap {
     expert_id: string;
     price_cents: number;
     currency: string;
+    /** Sum of milestone estimated_minutes (BAL-294). 0 for Fixed (effort is T&M-only). */
+    total_estimated_minutes: number;
+    /** The proposal's pricing method at submit (BAL-294). */
+    pricing_method: 'fixed' | 'tm';
   };
   [PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED]: {
     request_id: string;
@@ -204,5 +216,19 @@ export interface ProjectEventMap {
     entry_point: 'web' | 'api' | 'slack' | 'worker';
     proposal_id: string;
     relationship_id: string;
+  };
+  // BAL-294: estimated effort per deliverable + asymmetric total derivation.
+  [PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED]: {
+    proposal_id: string;
+    milestone_count: number;
+    total_estimated_minutes: number;
+    pricing_method: 'fixed' | 'tm';
+  };
+  [PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED]: {
+    proposal_id: string;
+    from_method: 'fixed' | 'tm';
+    to_method: 'fixed' | 'tm';
+    /** Whether a typed Fixed price existed at switch time (informs the confirm beat). */
+    had_typed_price: boolean;
   };
 }

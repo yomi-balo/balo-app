@@ -2,8 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, RotateCcw } from 'lucide-react';
+import { sumEstimatedMinutes } from '@balo/db';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { saveProposalDraftAction } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
@@ -87,6 +99,9 @@ export function ProposalComposer({
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [sheetOpen, setSheetOpen] = useState(false);
   const [submitOpen, setSubmitOpen] = useState(false);
+  // Fixed→T&M one-time confirm (BAL-294): switching to T&M makes the total derived,
+  // so a typed Fixed price stops binding — confirm before discarding it.
+  const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
 
   // Revise mode (A6.4 / BAL-290): a change request switches the composer to a
   // local-only resubmit — autosave is disabled, the submit CTA becomes "Resubmit
@@ -106,6 +121,7 @@ export function ProposalComposer({
   const hydratedRef = useRef(false);
 
   const totalCents = useMemo(() => computeTotalCents(state), [state]);
+  const totalEstimatedMinutes = useMemo(() => sumEstimatedMinutes(state.milestones), [state]);
   const installmentSum = useMemo(() => installmentsSum(state), [state]);
   const readiness = useMemo(() => summaryReadiness(state), [state]);
 
@@ -189,6 +205,7 @@ export function ProposalComposer({
     state.exclusions,
     state.depositCents,
     state.rateCents,
+    state.fixedPriceCents,
     state.cadence,
     state.milestones,
     state.installments,
@@ -215,8 +232,82 @@ export function ProposalComposer({
     setState((prev) => ({ ...prev, overview }));
   }, []);
 
-  const setPricingMethod = useCallback((pricingMethod: ProposalPricingMethod): void => {
-    setState((prev) => ({ ...prev, pricingMethod }));
+  /**
+   * Fire `PROPOSAL_PRICING_METHOD_SWITCHED` for a committed method change. Uses the
+   * proposalId ref (may be null on a never-saved draft → empty string for the typed
+   * property). `had_typed_price` reflects whether a typed Fixed price existed.
+   */
+  const trackMethodSwitch = useCallback(
+    (from: ProposalPricingMethod, to: ProposalPricingMethod, hadTypedPrice: boolean): void => {
+      track(PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED, {
+        proposal_id: proposalIdRef.current ?? '',
+        from_method: from,
+        to_method: to,
+        had_typed_price: hadTypedPrice,
+      });
+    },
+    []
+  );
+
+  /**
+   * Apply a committed switch INTO T&M (BAL-294). The typed `fixedPriceCents` is
+   * RETAINED in state (ignored under T&M by `computeTotalCents`, restored on a
+   * switch back) — mirrors the "keep valueCents, just hide" convention.
+   */
+  const applyTmSwitch = useCallback(
+    (hadTypedPrice: boolean): void => {
+      setState((prev) => ({ ...prev, pricingMethod: 'tm' }));
+      trackMethodSwitch('fixed', 'tm', hadTypedPrice);
+    },
+    [trackMethodSwitch]
+  );
+
+  /**
+   * Pricing-method change interceptor (the dumb OverviewTab calls this). Asymmetric
+   * (BAL-294):
+   *  - T&M → Fixed: no dialog. Pre-fill the now-unlocked `fixedPriceCents` with the
+   *    LAST derived T&M total when it hasn't been typed yet, so the expert sees a
+   *    sensible starting figure instead of a blank field.
+   *  - Fixed → T&M: if a non-zero typed price exists, open the ONE-TIME confirm
+   *    dialog (the typed total stops binding once T&M derives it); else switch
+   *    immediately. The confirmed path runs through `confirmTmSwitch`.
+   */
+  const setPricingMethod = useCallback(
+    (pricingMethod: ProposalPricingMethod): void => {
+      const prev = stateRef.current;
+      if (pricingMethod === prev.pricingMethod) return;
+
+      if (pricingMethod === 'fixed') {
+        // T&M → Fixed: pre-fill the typed price with the last derived total if blank.
+        setState((current) => ({
+          ...current,
+          pricingMethod: 'fixed',
+          fixedPriceCents:
+            current.fixedPriceCents === null ? computeTotalCents(prev) : current.fixedPriceCents,
+        }));
+        trackMethodSwitch('tm', 'fixed', false);
+        return;
+      }
+
+      // Fixed → T&M: confirm only when a non-zero typed price would be discarded.
+      if (prev.fixedPriceCents !== null && prev.fixedPriceCents !== 0) {
+        setSwitchConfirmOpen(true);
+        return;
+      }
+      applyTmSwitch(false);
+    },
+    [trackMethodSwitch, applyTmSwitch]
+  );
+
+  // Confirmed Fixed→T&M (the dialog's primary action). Switches + fires the event
+  // with `had_typed_price: true` (the dialog only opens when a typed price existed).
+  const confirmTmSwitch = useCallback((): void => {
+    setSwitchConfirmOpen(false);
+    applyTmSwitch(true);
+  }, [applyTmSwitch]);
+
+  const setFixedPrice = useCallback((fixedPriceCents: number | null): void => {
+    setState((prev) => ({ ...prev, fixedPriceCents }));
   }, []);
 
   const setTimeframe = useCallback((timeframeWeeks: number | null): void => {
@@ -242,6 +333,9 @@ export function ProposalComposer({
           descriptionHtml: '',
           acceptanceCriteria: '',
           valueCents: prev.pricingMethod === 'fixed' ? 0 : null,
+          // Seed effort to 0 under T&M (parallel to the Fixed value seed) so a fresh
+          // T&M milestone is coherent (has effort) rather than blocking readiness.
+          estimatedMinutes: prev.pricingMethod === 'tm' ? 0 : null,
         },
       ],
     }));
@@ -311,7 +405,8 @@ export function ProposalComposer({
     const milestoneIssue =
       readiness.issues.includes('Add at least one milestone') ||
       readiness.issues.includes('A milestone is missing a title') ||
-      readiness.issues.includes('A milestone is missing a value');
+      readiness.issues.includes('A milestone is missing a value') ||
+      readiness.issues.includes('A milestone is missing an effort estimate');
     const paymentIssue = readiness.issues.some(
       (i) => i.startsWith('Payment terms') || i === 'Add a deposit' || i === 'Add an hourly rate'
     );
@@ -409,6 +504,9 @@ export function ProposalComposer({
               pricingMethod={state.pricingMethod}
               totalCents={totalCents}
               currency={state.currency}
+              fixedPriceCents={state.fixedPriceCents}
+              onFixedPriceChange={setFixedPrice}
+              totalEstimatedMinutes={totalEstimatedMinutes}
               installments={ensuredInstallments}
               installmentSum={installmentSum}
               onInstallmentsChange={setInstallments}
@@ -486,6 +584,23 @@ export function ProposalComposer({
           <div className="p-4">{summaryCard}</div>
         </SheetContent>
       </Sheet>
+
+      {/* Fixed→T&M one-time confirm (BAL-294): the typed total stops binding. */}
+      <AlertDialog open={switchConfirmOpen} onOpenChange={setSwitchConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Switch to Time &amp; materials?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Switching to T&amp;M recalculates your total from estimated hours — your typed fixed
+              price won&apos;t apply. You can switch back to restore it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep fixed price</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmTmSwitch}>Switch to T&amp;M</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <SubmitProposalDialog
         open={submitOpen}

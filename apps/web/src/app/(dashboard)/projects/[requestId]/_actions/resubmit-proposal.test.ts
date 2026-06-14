@@ -271,6 +271,22 @@ describe('resubmitProposalAction', () => {
       });
       expect(mockResubmit).not.toHaveBeenCalled();
     });
+
+    it('rejects T&M when a milestone is missing an effort estimate (BAL-294)', async () => {
+      const result = await resubmitProposalAction({
+        ...VALID_INPUT,
+        pricingMethod: 'tm',
+        depositCents: 100000,
+        rateCents: 20000,
+        installments: [],
+        milestones: [{ title: 'M1', valueCents: null, estimatedMinutes: null }],
+      });
+      expect(result).toEqual({
+        success: false,
+        error: 'Every milestone needs an effort estimate.',
+      });
+      expect(mockResubmit).not.toHaveBeenCalled();
+    });
   });
 
   it('sanitises overview + each milestone description before the version bump', async () => {
@@ -302,6 +318,7 @@ describe('resubmitProposalAction', () => {
             descriptionHtml: '<p>cleanm</p>',
             acceptanceCriteria: 'done',
             valueCents: 500000,
+            estimatedMinutes: null,
           },
         ],
         installments: [{ label: 'Upfront', pct: 100 }],

@@ -110,7 +110,7 @@ function renderReviseComposer(
   );
 }
 
-/** A ready Fixed draft. */
+/** A ready Fixed draft (typed total A$5,000 = 500,000 cents). */
 function readyDraft(): ProposalDraftState {
   return {
     proposalId: 'p1',
@@ -121,6 +121,7 @@ function readyDraft(): ProposalDraftState {
     exclusions: '',
     depositCents: null,
     rateCents: null,
+    fixedPriceCents: 500_000,
     cadence: 'monthly',
     milestones: [
       {
@@ -129,10 +130,33 @@ function readyDraft(): ProposalDraftState {
         descriptionHtml: '',
         acceptanceCriteria: '',
         valueCents: 500_000,
+        estimatedMinutes: null,
       },
     ],
     installments: [{ key: nextDraftKey(), label: 'Full', pct: 100 }],
     documents: [],
+  };
+}
+
+/** A ready T&M draft: 120 min (2h) × A$200/hr (20_000 cents) = A$400. */
+function readyTmDraft(): ProposalDraftState {
+  return {
+    ...readyDraft(),
+    pricingMethod: 'tm',
+    depositCents: 100_000,
+    rateCents: 20_000,
+    fixedPriceCents: null,
+    milestones: [
+      {
+        key: nextDraftKey(),
+        title: 'Discovery',
+        descriptionHtml: '',
+        acceptanceCriteria: '',
+        valueCents: null,
+        estimatedMinutes: 120,
+      },
+    ],
+    installments: [],
   };
 }
 
@@ -164,12 +188,13 @@ describe('ProposalComposer', () => {
     expect(screen.getAllByText(/add an overview/i).length).toBeGreaterThan(0);
   });
 
-  it('switches the Payment tab shape when the pricing method changes to T&M', async () => {
+  it('switches the Payment tab shape when the pricing method changes to T&M (after confirm)', async () => {
     const user = userEvent.setup();
-    renderComposer(readyDraft());
+    renderComposer(readyDraft()); // has a typed fixed price → Fixed→T&M confirms first
 
-    // Overview tab: switch method to Time & materials.
+    // Overview tab: switch method to Time & materials → the one-time confirm opens.
     await user.click(screen.getByRole('radio', { name: /time & materials/i }));
+    await user.click(await screen.findByRole('button', { name: /switch to t&m/i }));
 
     // Payment tab now shows deposit/rate (T&M), not installments.
     await user.click(screen.getByRole('tab', { name: /payment & terms/i }));
@@ -178,12 +203,23 @@ describe('ProposalComposer', () => {
     expect(screen.queryByText(/payment installments/i)).not.toBeInTheDocument();
   });
 
-  it('shows installments on the Payment tab for Fixed pricing', async () => {
+  it('shows installments + the typed total input on the Payment tab for Fixed pricing', async () => {
     const user = userEvent.setup();
     renderComposer(readyDraft());
     await user.click(screen.getByRole('tab', { name: /payment & terms/i }));
     expect(screen.getByText(/payment installments/i)).toBeInTheDocument();
-    expect(screen.getByText(/total from milestones/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Total fixed price')).toBeInTheDocument();
+  });
+
+  it('edits the typed total fixed price (drives the fixed-price setter)', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyDraft());
+    await user.click(screen.getByRole('tab', { name: /payment & terms/i }));
+    const totalInput = screen.getByLabelText('Total fixed price');
+    await user.clear(totalInput);
+    await user.type(totalInput, '7500');
+    // centsToDollars(750_000) → the input reflects the new typed total.
+    expect(totalInput).toHaveValue(7500);
   });
 
   it('shows grouped whole-dollar total + timeframe in the mobile summary bar', () => {
@@ -384,6 +420,112 @@ describe('ProposalComposer', () => {
 
     // The confirm dialog mounts (its own copy "Submit your proposal to Priya?").
     expect(await screen.findByText(/submit your proposal to priya/i)).toBeInTheDocument();
+  });
+});
+
+describe('ProposalComposer — pricing-method switch (BAL-294)', () => {
+  const mockTrack = vi.mocked(track);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    saveProposalDraftAction.mockReset();
+    saveProposalDraftAction.mockResolvedValue({ success: true, proposalId: 'p1' });
+  });
+
+  it('Fixed→T&M with a typed price opens the confirm dialog (no immediate switch)', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyDraft()); // fixedPriceCents = 500_000
+
+    await user.click(screen.getByRole('radio', { name: /time & materials/i }));
+
+    // The confirm dialog is shown; the method has NOT switched yet (radio still
+    // Fixed). The open AlertDialog aria-hides the background, so include hidden roles.
+    expect(await screen.findByText(/switch to time & materials\?/i)).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /fixed price/i, hidden: true })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    // The switch event has not fired (the switch is not yet committed).
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED,
+      expect.anything()
+    );
+  });
+
+  it('confirming Fixed→T&M switches and fires PROPOSAL_PRICING_METHOD_SWITCHED (had_typed_price:true)', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyDraft());
+
+    await user.click(screen.getByRole('radio', { name: /time & materials/i }));
+    await user.click(await screen.findByRole('button', { name: /switch to t&m/i }));
+
+    expect(screen.getByRole('radio', { name: /time & materials/i })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED, {
+      proposal_id: 'p1',
+      from_method: 'fixed',
+      to_method: 'tm',
+      had_typed_price: true,
+    });
+  });
+
+  it('cancelling Fixed→T&M stays Fixed and fires nothing', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyDraft());
+
+    await user.click(screen.getByRole('radio', { name: /time & materials/i }));
+    await user.click(await screen.findByRole('button', { name: /keep fixed price/i }));
+
+    expect(screen.getByRole('radio', { name: /fixed price/i })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED,
+      expect.anything()
+    );
+  });
+
+  it('T&M→Fixed pre-fills the typed price with the last derived total (no dialog)', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyTmDraft()); // 120 min × A$200/hr = A$400 derived total
+
+    // Switch back to Fixed — no confirm dialog; pre-fills fixedPriceCents = 40_000.
+    await user.click(screen.getByRole('radio', { name: /fixed price/i }));
+    expect(screen.queryByText(/switch to time & materials\?/i)).not.toBeInTheDocument();
+
+    // The Payment tab's typed total input is seeded with the derived A$400 (= 400 dollars).
+    await user.click(screen.getByRole('tab', { name: /payment & terms/i }));
+    expect(screen.getByLabelText('Total fixed price')).toHaveValue(400);
+
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED, {
+      proposal_id: 'p1',
+      from_method: 'tm',
+      to_method: 'fixed',
+      had_typed_price: false,
+    });
+  });
+
+  it('Fixed→T&M with no typed price switches immediately (no dialog)', async () => {
+    const user = userEvent.setup();
+    const draft = { ...readyDraft(), fixedPriceCents: null };
+    renderComposer(draft);
+
+    await user.click(screen.getByRole('radio', { name: /time & materials/i }));
+    // No dialog — switched straight away.
+    expect(screen.queryByText(/switch to time & materials\?/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /time & materials/i })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_PRICING_METHOD_SWITCHED, {
+      proposal_id: 'p1',
+      from_method: 'fixed',
+      to_method: 'tm',
+      had_typed_price: false,
+    });
   });
 });
 

@@ -13,7 +13,8 @@ import { plainTextLength } from '@/components/balo/rich-text/plain-text';
  *  - overview non-empty (post-sanitise);
  *  - ≥1 milestone, every milestone titled;
  *  - Fixed → installments sum to 100 (≥1) AND every milestone has a value;
- *  - T&M → deposit + rate present (installments not required).
+ *  - T&M → deposit + rate present AND every milestone has an effort estimate
+ *    (mirrors the `tm_missing_effort` server guard; installments not required).
  *
  * Inputs are structural minimal shapes so both the DB-row (`ProposalMilestone`) and
  * the composer-payload milestone/installment shapes satisfy them without coupling.
@@ -25,6 +26,8 @@ export type ReadinessResult = { ready: true } | { ready: false; error: string };
 export interface ReadinessMilestone {
   title: string;
   valueCents: number | null;
+  /** T&M-only estimated effort in minutes (BAL-294); null when not estimated. */
+  estimatedMinutes: number | null;
 }
 
 /** Minimal installment shape the readiness gate needs. */
@@ -63,6 +66,9 @@ export function validateProposalReadiness(input: {
   // T&M
   if (input.depositCents === null || input.rateCents === null) {
     return { ready: false, error: 'Add a deposit and an hourly rate before submitting.' };
+  }
+  if (input.milestones.some((m) => m.estimatedMinutes === null)) {
+    return { ready: false, error: 'Every milestone needs an effort estimate.' };
   }
   return { ready: true };
 }
