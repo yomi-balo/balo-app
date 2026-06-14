@@ -109,6 +109,17 @@ export function SubmitProposalDialog({
     });
 
     if (!result.success) {
+      // Coherence rejection (defence-in-depth behind the inline readiness check) →
+      // fire analytics with the raw rule; the UI only ever shows the generic copy.
+      if (result.coherence) {
+        track(PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED, {
+          rule: result.coherence.rule,
+          pricing_method: result.coherence.pricingMethod,
+          entry_point: 'web',
+          proposal_id: result.coherence.proposalId,
+          relationship_id: result.coherence.relationshipId,
+        });
+      }
       // Stale-UI copy → close (nothing to retry); otherwise stay open.
       if (result.error === SUBMIT_STALE_COPY) {
         toast.error(result.error);
@@ -154,6 +165,17 @@ export function SubmitProposalDialog({
       const result = await resubmitProposalAction(config.getPayload());
 
       if (!result.success) {
+        // Coherence rejection (defence-in-depth behind the inline readiness check) →
+        // fire analytics with the raw rule; the UI only ever shows the generic copy.
+        if (result.coherence) {
+          track(PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED, {
+            rule: result.coherence.rule,
+            pricing_method: result.coherence.pricingMethod,
+            entry_point: 'web',
+            proposal_id: result.coherence.proposalId,
+            relationship_id: result.coherence.relationshipId,
+          });
+        }
         // Stale-UI copy → close (nothing to retry); otherwise stay open.
         if (result.error === RESUBMIT_STALE_COPY) {
           toast.error(result.error);

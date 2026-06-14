@@ -13,13 +13,14 @@ import {
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
   ProposalNotDraftError,
+  ProposalCoherenceError,
   type Proposal,
   type ProposalMilestone,
   type ProposalPaymentInstallment,
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
@@ -37,6 +38,19 @@ const inputSchema = z.object({
 
 export type SubmitProposalInput = z.infer<typeof inputSchema>;
 
+/**
+ * Structured payload attached to a FAILURE result when the `@balo/db` coherence
+ * guard (`ProposalCoherenceError`) rejected the commit. The island fires
+ * `PROPOSAL_COHERENCE_REJECTED` from it — the raw `rule` is analytics-only and is
+ * NEVER rendered in the UI (the generic `error` copy is shown instead).
+ */
+export interface ProposalCoherenceFailure {
+  rule: string;
+  pricingMethod: 'fixed' | 'tm';
+  proposalId: string;
+  relationshipId: string;
+}
+
 export type SubmitProposalResult =
   | {
       success: true;
@@ -47,13 +61,18 @@ export type SubmitProposalResult =
       /** Server-computed — the island attaches these to `PROJECT_PROPOSAL_SUBMITTED`. */
       analytics: { priceCents: number; currency: string };
     }
-  | { success: false; error: string };
+  | { success: false; error: string; coherence?: ProposalCoherenceFailure };
 
 const NOT_SIGNED_IN = 'You are not signed in.';
 const INVALID_REQUEST = 'Invalid request.';
 const ONLY_EXPERT = 'Only the expert can submit a proposal.';
 const STALE_PROPOSAL = 'This proposal can no longer be submitted.';
 const GENERIC_FAILURE = 'Could not submit your proposal. Please try again.';
+// The repo coherence guard firing means the inline readiness check and the
+// persisted state drifted — generic "refresh and re-check" copy; the raw rule is
+// analytics-only, never shown.
+const COHERENCE_COPY =
+  "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before submitting.";
 
 /** Display name for the submitting expert (notification body). */
 function displayName(user: { firstName: string | null; lastName: string | null }): string {
@@ -62,17 +81,22 @@ function displayName(user: { firstName: string | null; lastName: string | null }
 
 /**
  * Promote the draft → submitted + advance the relationship spine (one tx). Maps the
- * typed stale-transition errors (a concurrent / double-submit) to `'stale'` so the
- * caller surfaces friendly copy; rethrows anything unexpected.
+ * typed stale-transition errors (a concurrent / double-submit) to `'stale'` and the
+ * `@balo/db` coherence guard (`ProposalCoherenceError`, defence-in-depth behind the
+ * inline readiness check) to a `{ coherence }` outcome so the caller surfaces
+ * friendly copy + the analytics payload; rethrows anything unexpected.
  */
 async function promoteToSubmitWithStaleGuard(params: {
   proposalId: string;
   relationshipId: string;
-}): Promise<'ok' | 'stale'> {
+}): Promise<'ok' | 'stale' | { coherence: ProposalCoherenceError }> {
   try {
     await proposalsRepository.promoteToSubmit(params);
     return 'ok';
   } catch (error) {
+    if (error instanceof ProposalCoherenceError) {
+      return { coherence: error };
+    }
     if (
       error instanceof InvalidProposalTransitionError ||
       error instanceof InvalidRelationshipTransitionError
@@ -81,6 +105,43 @@ async function promoteToSubmitWithStaleGuard(params: {
     }
     throw error;
   }
+}
+
+/**
+ * Map a `@balo/db` coherence rejection (defence-in-depth behind the inline
+ * readiness check) to the FAILURE result: friendly generic copy plus the
+ * analytics-only `coherence` payload (the raw `rule` is never rendered). Also
+ * emits the `log.warn`. Kept out of the action body so its branch logic doesn't
+ * inflate the action's cognitive complexity.
+ */
+function coherenceFailure(
+  coherence: ProposalCoherenceError,
+  params: { pricingMethod: 'fixed' | 'tm'; proposalId: string; relationshipId: string }
+): SubmitProposalResult {
+  log.warn('Proposal coherence rejected', { rule: coherence.rule, ...params });
+  return {
+    success: false,
+    error: COHERENCE_COPY,
+    coherence: { rule: coherence.rule, ...params },
+  };
+}
+
+/**
+ * Step 5 — load + verify the draft is live, still a `draft`, the current version,
+ * and belongs to THIS relationship. Returns the row or `undefined` (stale) so the
+ * multi-clause guard doesn't inflate the action's cognitive complexity.
+ */
+async function loadSubmittableDraft(
+  proposalId: string,
+  relationshipId: string
+): Promise<Proposal | undefined> {
+  const draft = await proposalsRepository.findById(proposalId);
+  const submittable =
+    draft !== undefined &&
+    draft.status === 'draft' &&
+    draft.relationshipId === relationshipId &&
+    draft.isCurrent;
+  return submittable ? draft : undefined;
 }
 
 type PersistResult = { ok: true } | { ok: false; error: string };
@@ -210,98 +271,7 @@ export async function submitProposalAction(
   const { requestId, relationshipId, proposalId } = parsed.data;
 
   try {
-    const access = await resolveConversationAccess(user, requestId, relationshipId);
-    if (!access.ok) {
-      return { success: false, error: access.error };
-    }
-    if (access.ctx.lens !== 'expert') {
-      return { success: false, error: ONLY_EXPERT };
-    }
-
-    // 5. Load + verify the draft (live, draft, belongs to this relationship, current).
-    const draft = await proposalsRepository.findById(proposalId);
-    if (
-      draft === undefined ||
-      draft.status !== 'draft' ||
-      draft.relationshipId !== relationshipId ||
-      !draft.isCurrent
-    ) {
-      return { success: false, error: STALE_PROPOSAL };
-    }
-
-    // 6. Re-read the persisted children — the action trusts the stored draft.
-    const [milestones, installments] = await Promise.all([
-      proposalMilestonesRepository.listByProposal(proposalId),
-      proposalPaymentInstallmentsRepository.listByProposal(proposalId),
-    ]);
-
-    // 7. Server-side readiness re-validation (never trust the client).
-    const readiness = validateProposalReadiness({
-      overview: draft.overview,
-      pricingMethod: draft.pricingMethod,
-      milestones,
-      installments,
-      depositCents: draft.depositCents,
-      rateCents: draft.rateCents,
-    });
-    if (!readiness.ready) {
-      return { success: false, error: readiness.error };
-    }
-
-    // 8. Sanitise → persist (canonical "what's submitted equals what's stored").
-    //    A concurrent submit can flip the row out of `draft` here (TOCTOU) →
-    //    friendly stale copy via `ProposalNotDraftError`.
-    const persisted = await sanitiseAndPersistDraft(draft, milestones, installments);
-    if (!persisted.ok) {
-      return { success: false, error: persisted.error };
-    }
-
-    // 9. Promote + advance the relationship spine (ONE tx). A stale double-submit
-    //    trips the typed transition errors → friendly stale copy.
-    const promotion = await promoteToSubmitWithStaleGuard({ proposalId, relationshipId });
-    if (promotion === 'stale') {
-      return { success: false, error: STALE_PROPOSAL };
-    }
-
-    // 10. Advance the REQUEST aggregate (first-submit-only, race-tolerant).
-    const transitioned = await advanceRequestAggregate(requestId, access.request.status);
-
-    // 12. Key business event (after promotion).
-    log.info('Proposal submitted', {
-      requestId,
-      relationshipId,
-      proposalId,
-      userId: user.id,
-      transitioned,
-    });
-
-    // 11. Notify the CLIENT (fire-and-forget). `recipient` for the expert lens is
-    //     `{ role:'client', userId: request.createdByUserId }`.
-    const recipientId = access.recipient.role === 'client' ? access.recipient.userId : undefined;
-    if (recipientId !== undefined) {
-      publishNotificationEvent('project.proposal_submitted', {
-        correlationId: proposalId,
-        projectRequestId: requestId,
-        relationshipId,
-        recipientId,
-        expertName: displayName(user),
-        title: access.request.title,
-      }).catch(() => {
-        // publishNotificationEvent logs internally.
-      });
-    }
-
-    // 13. Revalidate the request-detail page.
-    revalidatePath(`/projects/${requestId}`);
-
-    // 14. Return success + analytics for the client island.
-    return {
-      success: true,
-      proposalId,
-      expertProfileId: access.relationship.expertProfileId,
-      transitioned,
-      analytics: { priceCents: draft.priceCents, currency: draft.currency },
-    };
+    return await runSubmit(user, parsed.data);
   } catch (error) {
     log.error('Failed to submit proposal', {
       requestId,
@@ -313,4 +283,112 @@ export async function submitProposalAction(
     });
     return { success: false, error: GENERIC_FAILURE };
   }
+}
+
+/**
+ * Steps 4-14 of the submit pipeline (access → load → readiness → sanitise →
+ * persist → promote → advance → notify → revalidate). Split out of
+ * {@link submitProposalAction} so the action stays a thin auth/parse/try-catch
+ * shell and each function's cognitive complexity stays under the gate. Throws on
+ * unexpected errors — the caller's catch maps them to the generic failure copy.
+ */
+async function runSubmit(
+  user: SessionUser,
+  { requestId, relationshipId, proposalId }: SubmitProposalInput
+): Promise<SubmitProposalResult> {
+  const access = await resolveConversationAccess(user, requestId, relationshipId);
+  if (!access.ok) {
+    return { success: false, error: access.error };
+  }
+  if (access.ctx.lens !== 'expert') {
+    return { success: false, error: ONLY_EXPERT };
+  }
+
+  // 5. Load + verify the draft (live, draft, belongs to this relationship, current).
+  const draft = await loadSubmittableDraft(proposalId, relationshipId);
+  if (draft === undefined) {
+    return { success: false, error: STALE_PROPOSAL };
+  }
+
+  // 6. Re-read the persisted children — the action trusts the stored draft.
+  const [milestones, installments] = await Promise.all([
+    proposalMilestonesRepository.listByProposal(proposalId),
+    proposalPaymentInstallmentsRepository.listByProposal(proposalId),
+  ]);
+
+  // 7. Server-side readiness re-validation (never trust the client).
+  const readiness = validateProposalReadiness({
+    overview: draft.overview,
+    pricingMethod: draft.pricingMethod,
+    milestones,
+    installments,
+    depositCents: draft.depositCents,
+    rateCents: draft.rateCents,
+  });
+  if (!readiness.ready) {
+    return { success: false, error: readiness.error };
+  }
+
+  // 8. Sanitise → persist (canonical "what's submitted equals what's stored").
+  //    A concurrent submit can flip the row out of `draft` here (TOCTOU) →
+  //    friendly stale copy via `ProposalNotDraftError`.
+  const persisted = await sanitiseAndPersistDraft(draft, milestones, installments);
+  if (!persisted.ok) {
+    return { success: false, error: persisted.error };
+  }
+
+  // 9. Promote + advance the relationship spine (ONE tx). A stale double-submit
+  //    trips the typed transition errors → friendly stale copy; the repo coherence
+  //    guard (defence-in-depth) → generic copy + an analytics `coherence` payload.
+  const promotion = await promoteToSubmitWithStaleGuard({ proposalId, relationshipId });
+  if (promotion === 'stale') {
+    return { success: false, error: STALE_PROPOSAL };
+  }
+  if (typeof promotion === 'object') {
+    return coherenceFailure(promotion.coherence, {
+      pricingMethod: draft.pricingMethod,
+      proposalId,
+      relationshipId,
+    });
+  }
+
+  // 10. Advance the REQUEST aggregate (first-submit-only, race-tolerant).
+  const transitioned = await advanceRequestAggregate(requestId, access.request.status);
+
+  // 12. Key business event (after promotion).
+  log.info('Proposal submitted', {
+    requestId,
+    relationshipId,
+    proposalId,
+    userId: user.id,
+    transitioned,
+  });
+
+  // 11. Notify the CLIENT (fire-and-forget). `recipient` for the expert lens is
+  //     `{ role:'client', userId: request.createdByUserId }`.
+  const recipientId = access.recipient.role === 'client' ? access.recipient.userId : undefined;
+  if (recipientId !== undefined) {
+    publishNotificationEvent('project.proposal_submitted', {
+      correlationId: proposalId,
+      projectRequestId: requestId,
+      relationshipId,
+      recipientId,
+      expertName: displayName(user),
+      title: access.request.title,
+    }).catch(() => {
+      // publishNotificationEvent logs internally.
+    });
+  }
+
+  // 13. Revalidate the request-detail page.
+  revalidatePath(`/projects/${requestId}`);
+
+  // 14. Return success + analytics for the client island.
+  return {
+    success: true,
+    proposalId,
+    expertProfileId: access.relationship.expertProfileId,
+    transitioned,
+    analytics: { priceCents: draft.priceCents, currency: draft.currency },
+  };
 }

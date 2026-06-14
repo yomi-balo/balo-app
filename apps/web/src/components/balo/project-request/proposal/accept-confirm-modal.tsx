@@ -128,6 +128,17 @@ export function AcceptConfirmModal({
         });
 
         if (!result.success) {
+          // Coherence rejection (defence-in-depth behind the readiness check) →
+          // fire analytics with the raw rule; the UI only ever shows generic copy.
+          if (result.coherence) {
+            track(PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED, {
+              rule: result.coherence.rule,
+              pricing_method: result.coherence.pricingMethod,
+              entry_point: 'web',
+              proposal_id: result.coherence.proposalId,
+              relationship_id: result.coherence.relationshipId,
+            });
+          }
           // Stale-UI copy → close (nothing to retry); otherwise stay open.
           if (result.error === STALE_PROPOSAL_COPY) {
             toast.error(result.error);

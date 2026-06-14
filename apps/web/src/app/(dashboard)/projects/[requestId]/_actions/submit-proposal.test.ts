@@ -45,11 +45,20 @@ const {
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
   ProposalNotDraftError,
+  ProposalCoherenceError,
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
   class InvalidStatusTransitionError extends Error {}
   class ProposalNotDraftError extends Error {}
+  class ProposalCoherenceError extends Error {
+    public readonly rule: string;
+    constructor(rule: string, message?: string) {
+      super(message ?? rule);
+      this.name = 'ProposalCoherenceError';
+      this.rule = rule;
+    }
+  }
   return {
     mockFindById: vi.fn(),
     mockListMilestones: vi.fn(),
@@ -64,6 +73,7 @@ const {
     InvalidRelationshipTransitionError,
     InvalidStatusTransitionError,
     ProposalNotDraftError,
+    ProposalCoherenceError,
   };
 });
 
@@ -89,6 +99,7 @@ vi.mock('@balo/db', () => ({
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
   ProposalNotDraftError,
+  ProposalCoherenceError,
 }));
 
 import { submitProposalAction } from './submit-proposal';
@@ -327,6 +338,33 @@ describe('submitProposalAction', () => {
     expect(await submitProposalAction(VALID_INPUT)).toEqual({
       success: false,
       error: 'This proposal can no longer be submitted.',
+    });
+  });
+
+  it('maps a repo coherence rejection to generic copy + an analytics coherence payload', async () => {
+    // The @balo/db guard (defence-in-depth) throws on incoherent committed terms.
+    mockPromote.mockRejectedValue(new ProposalCoherenceError('installments_not_100'));
+    const result = await submitProposalAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before submitting.",
+      coherence: {
+        rule: 'installments_not_100',
+        pricingMethod: 'fixed',
+        proposalId: PROPOSAL_ID,
+        relationshipId: REL_ID,
+      },
+    });
+    // The raw rule must NEVER leak into the user-facing `error` string.
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).not.toContain('installments_not_100');
+    expect(log.warn).toHaveBeenCalledWith('Proposal coherence rejected', {
+      rule: 'installments_not_100',
+      pricingMethod: 'fixed',
+      proposalId: PROPOSAL_ID,
+      relationshipId: REL_ID,
     });
   });
 

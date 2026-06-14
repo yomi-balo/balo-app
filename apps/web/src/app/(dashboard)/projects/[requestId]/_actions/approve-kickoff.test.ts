@@ -26,15 +26,25 @@ const {
   mockMaterializeFromKickoff,
   InvalidStatusTransitionError,
   KickoffGatesIncompleteError,
+  EngagementTermsCoherenceError,
 } = vi.hoisted(() => {
   class InvalidStatusTransitionError extends Error {}
   class KickoffGatesIncompleteError extends Error {}
+  class EngagementTermsCoherenceError extends Error {
+    public readonly rule: string;
+    constructor(rule: string, message?: string) {
+      super(message ?? rule);
+      this.name = 'EngagementTermsCoherenceError';
+      this.rule = rule;
+    }
+  }
   return {
     mockFindByIdWithRelations: vi.fn(),
     mockFindCurrentByRelationship: vi.fn(),
     mockMaterializeFromKickoff: vi.fn(),
     InvalidStatusTransitionError,
     KickoffGatesIncompleteError,
+    EngagementTermsCoherenceError,
   };
 });
 
@@ -50,6 +60,7 @@ vi.mock('@balo/db', () => ({
   },
   InvalidStatusTransitionError,
   KickoffGatesIncompleteError,
+  EngagementTermsCoherenceError,
 }));
 
 import { approveKickoffAction } from './approve-kickoff';
@@ -284,6 +295,27 @@ describe('approveKickoffAction', () => {
       success: false,
       error: 'Client and expert must complete their steps first.',
     });
+  });
+
+  it('maps an EngagementTermsCoherenceError to clean terms copy + a warn (defensive, no analytics)', async () => {
+    // Should never fire on this path (accept() guarantees coherence), but if it
+    // does, surface clean copy instead of an unhandled 500.
+    mockMaterializeFromKickoff.mockRejectedValue(
+      new EngagementTermsCoherenceError('tm_missing_rate')
+    );
+    const result = await approveKickoffAction(VALID_INPUT);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe(
+        "This proposal's commercial terms are inconsistent and can't be turned into an engagement. Please review the proposal pricing."
+      );
+      // The raw rule must NEVER leak into the user-facing copy.
+      expect(result.error).not.toContain('tm_missing_rate');
+    }
+    expect(log.warn).toHaveBeenCalledWith(
+      'Engagement terms coherence rejected at kickoff',
+      expect.objectContaining({ rule: 'tm_missing_rate' })
+    );
   });
 
   it('maps an unexpected materialise failure to the generic error and logs it (outer catch)', async () => {

@@ -300,4 +300,39 @@ describe('AcceptConfirmModal', () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(push).not.toHaveBeenCalled();
   });
+
+  it('fires PROPOSAL_COHERENCE_REJECTED on a coherence failure, toasts generic copy, stays open', async () => {
+    const user = userEvent.setup();
+    acceptProposalAction.mockResolvedValue({
+      success: false,
+      error:
+        "This proposal's pricing is incomplete or inconsistent. Refresh and ask the expert to re-check the pricing before accepting.",
+      coherence: {
+        rule: 'fixed_milestone_values_exceed_price',
+        pricingMethod: 'fixed',
+        proposalId: PROPOSAL_ID,
+        relationshipId: RELATIONSHIP_ID,
+      },
+    });
+    const { onOpenChange } = renderModal();
+
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /Confirm acceptance/ }));
+
+    await waitFor(() =>
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_COHERENCE_REJECTED, {
+        rule: 'fixed_milestone_values_exceed_price',
+        pricing_method: 'fixed',
+        entry_point: 'web',
+        proposal_id: PROPOSAL_ID,
+        relationship_id: RELATIONSHIP_ID,
+      })
+    );
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED,
+      expect.anything()
+    );
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(push).not.toHaveBeenCalled();
+  });
 });

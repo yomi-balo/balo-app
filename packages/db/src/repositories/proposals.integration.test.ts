@@ -11,6 +11,7 @@ import {
   PROPOSAL_STATUS_TRANSITIONS,
   isAllowedProposalTransition,
 } from './proposals';
+import { ProposalCoherenceError } from './proposal-coherence';
 import {
   InvalidRelationshipTransitionError,
   requestExpertRelationshipsRepository,
@@ -23,11 +24,17 @@ describe('proposalsRepository.submit', () => {
     const { relationship, projectRequestId, expertProfileId } =
       await requestExpertRelationshipFactory({ values: { status: 'proposal_requested' } });
 
+    // BAL-293: the legacy header-only submit() now requires coherent terms. The
+    // header-only coherent form is `tm` (rate + cadence). The active fixed path is
+    // draft→promoteToSubmit (which re-reads installments/milestones).
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Two-week discovery + build.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 500000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     expect(proposal.relationshipId).toBe(relationship.id);
@@ -36,7 +43,7 @@ describe('proposalsRepository.submit', () => {
     expect(proposal.status).toBe('submitted');
     expect(proposal.version).toBe(1);
     expect(proposal.isCurrent).toBe(true);
-    expect(proposal.pricingMethod).toBe('fixed');
+    expect(proposal.pricingMethod).toBe('tm');
     expect(proposal.overview).toBe('<p>Two-week discovery + build.</p>');
     expect(proposal.priceCents).toBe(500000);
     expect(proposal.currency).toBe('aud'); // default
@@ -80,8 +87,11 @@ describe('proposalsRepository.submit', () => {
       proposalsRepository.submit({
         relationshipId: relationship.id,
         overview: '<p>Should fail — relationship still invited.</p>',
-        pricingMethod: 'fixed',
+        pricingMethod: 'tm',
         priceCents: 1000,
+        depositCents: 25000,
+        rateCents: 18000,
+        cadence: 'monthly',
       })
     ).rejects.toThrow();
 
@@ -101,7 +111,7 @@ describe('proposalsRepository.submit', () => {
       proposalsRepository.submit({
         relationshipId: relationship.id,
         overview: '<p>Negative price.</p>',
-        pricingMethod: 'fixed',
+        pricingMethod: 'tm',
         priceCents: -1,
       })
     ).rejects.toThrow();
@@ -122,8 +132,11 @@ describe('proposalsRepository.submit', () => {
       proposalsRepository.submit({
         relationshipId: randomUUID(),
         overview: '<p>No relationship.</p>',
-        pricingMethod: 'fixed',
+        pricingMethod: 'tm',
         priceCents: 1000,
+        depositCents: 25000,
+        rateCents: 18000,
+        cadence: 'monthly',
       })
     ).rejects.toThrow();
   });
@@ -137,8 +150,11 @@ describe('proposalsRepository.accept', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 250000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     const accepted = await proposalsRepository.accept({ id: proposal.id });
@@ -169,8 +185,11 @@ describe('proposalsRepository.accept', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     // Move to changes_requested (a valid out-edge of submitted).
     await proposalsRepository.transitionStatus({
@@ -241,8 +260,11 @@ describe('proposalsRepository.transitionStatus', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     const moved = await proposalsRepository.transitionStatus({
@@ -281,8 +303,11 @@ describe('proposalsRepository.transitionStatus', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     await expect(
@@ -301,8 +326,11 @@ describe('proposalsRepository.transitionStatus', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     await proposalsRepository.accept({ id: proposal.id });
 
@@ -324,8 +352,11 @@ describe('proposalsRepository.transitionStatus', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     await db.update(proposals).set({ deletedAt: new Date() }).where(eq(proposals.id, proposal.id));
 
@@ -346,8 +377,11 @@ describe('proposalsRepository.requestChanges', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     const client = await userFactory();
 
@@ -380,8 +414,11 @@ describe('proposalsRepository.requestChanges', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     await proposalsRepository.accept({ id: proposal.id });
     const client = await userFactory();
@@ -410,8 +447,11 @@ describe('proposalsRepository.resubmit', () => {
     const v1 = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     const client = await userFactory();
     await proposalsRepository.requestChanges({
@@ -425,8 +465,8 @@ describe('proposalsRepository.resubmit', () => {
       overview: '<p>v2.</p>',
       pricingMethod: 'fixed',
       priceCents: 2000,
-      milestones: [],
-      installments: [],
+      milestones: [{ title: 'Build', valueCents: 2000 }],
+      installments: [{ label: 'Upfront', pct: 100 }],
     });
 
     expect(v2.version).toBe(2);
@@ -469,19 +509,23 @@ describe('proposalsRepository.resubmit', () => {
     await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
-    // Current is `submitted`, not `changes_requested`.
+    // Current is `submitted`, not `changes_requested`. The payload is COHERENT so
+    // it reaches (and is rejected by) the transition guard, not the coherence guard.
     await expect(
       proposalsRepository.resubmit({
         relationshipId: relationship.id,
         overview: '<p>v2.</p>',
         pricingMethod: 'fixed',
         priceCents: 2000,
-        milestones: [],
-        installments: [],
+        milestones: [{ title: 'Build', valueCents: 2000 }],
+        installments: [{ label: 'Upfront', pct: 100 }],
       })
     ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
   });
@@ -493,8 +537,11 @@ describe('proposalsRepository.resubmit', () => {
     const v1 = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     const client = await userFactory();
     await proposalsRepository.requestChanges({
@@ -548,8 +595,11 @@ describe('proposalsRepository list / find', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     expect((await proposalsRepository.findById(proposal.id))?.id).toBe(proposal.id);
@@ -565,8 +615,11 @@ describe('proposalsRepository list / find', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     const byRequest = await proposalsRepository.listByRequest(projectRequestId);
@@ -583,8 +636,11 @@ describe('proposalsRepository list / find', () => {
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 1000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
 
     const current = await proposalsRepository.findCurrentByRelationship(relationship.id);
@@ -815,11 +871,17 @@ describe('proposalsRepository.promoteToSubmit', () => {
     const { relationship } = await requestExpertRelationshipFactory({
       values: { status: 'proposal_requested' },
     });
+    // BAL-293: promoteToSubmit re-reads children + asserts coherence. A coherent
+    // header-only draft is `tm` (rate + cadence, no installments) — keeps this
+    // test focused on the status/submittedAt/relationship-advance behaviour.
     const draft = await proposalsRepository.createDraft({
       relationshipId: relationship.id,
       overview: '<p>Ready to submit.</p>',
-      pricingMethod: 'fixed',
+      pricingMethod: 'tm',
       priceCents: 500000,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
     });
     const draftSubmittedAt = draft.submittedAt; // creation-time stamp
 
@@ -873,6 +935,8 @@ describe('proposalsRepository.promoteToSubmit', () => {
     // flip is rejected because expectedFrom:'draft' mismatches → whole tx rolls back.
     const { relationship, projectRequestId, expertProfileId } =
       await requestExpertRelationshipFactory({ values: { status: 'proposal_requested' } });
+    // Coherent `tm` header (rate + cadence) so promoteToSubmit's coherence guard
+    // passes and the test reaches the transition guard it is exercising.
     const [proposal] = await db
       .insert(proposals)
       .values({
@@ -880,9 +944,11 @@ describe('proposalsRepository.promoteToSubmit', () => {
         projectRequestId,
         expertProfileId,
         status: 'submitted',
-        pricingMethod: 'fixed',
+        pricingMethod: 'tm',
         overview: '<p>Already submitted — cannot promote a non-draft.</p>',
         priceCents: 1000,
+        rateCents: 18000,
+        cadence: 'monthly',
       })
       .returning();
     if (proposal === undefined) throw new Error('proposal insert failed');
@@ -946,5 +1012,412 @@ describe('proposalsRepository.promoteToSubmit', () => {
     // The relationship advance rolled back with the failed proposal flip.
     const reloaded = await requestExpertRelationshipsRepository.findById(relationship.id);
     expect(reloaded?.status).toBe('proposal_requested');
+  });
+});
+
+// ── BAL-293: transition-time coherence guard (rollback proofs) ───────────────
+
+/**
+ * Seed a live `draft` proposal sitting under a relationship at `proposal_requested`
+ * — the state `promoteToSubmit` consumes. Inserts the proposal directly (bypassing
+ * createDraft) so the pricing fields can be set freely. Returns ids for child
+ * seeding + assertions.
+ */
+async function seedPromotableDraft(values: {
+  pricingMethod: 'fixed' | 'tm';
+  priceCents?: number;
+  depositCents?: number | null;
+  rateCents?: number | null;
+  cadence?: 'monthly' | 'fortnightly' | null;
+}): Promise<{ proposalId: string; relationshipId: string }> {
+  const { relationship, projectRequestId, expertProfileId } =
+    await requestExpertRelationshipFactory({ values: { status: 'proposal_requested' } });
+  const [draft] = await db
+    .insert(proposals)
+    .values({
+      relationshipId: relationship.id,
+      projectRequestId,
+      expertProfileId,
+      status: 'draft',
+      pricingMethod: values.pricingMethod,
+      overview: '<p>Draft to be promoted.</p>',
+      priceCents: values.priceCents ?? 100_000,
+      depositCents: values.depositCents ?? undefined,
+      rateCents: values.rateCents ?? undefined,
+      cadence: values.cadence ?? undefined,
+    })
+    .returning();
+  if (draft === undefined) throw new Error('draft insert failed');
+  return { proposalId: draft.id, relationshipId: relationship.id };
+}
+
+describe('proposalsRepository.promoteToSubmit — coherence guard (BAL-293)', () => {
+  it('rejects a fixed draft whose installments sum to 90 (installments_not_100), leaving it a draft', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({ pricingMethod: 'fixed' });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [{ title: 'Build', valueCents: 50_000 }],
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId,
+      installments: [
+        { label: 'Upfront', pct: 60 },
+        { label: 'End', pct: 30 },
+      ],
+    });
+
+    await expect(
+      proposalsRepository.promoteToSubmit({ proposalId, relationshipId })
+    ).rejects.toBeInstanceOf(ProposalCoherenceError);
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+    const rel = await requestExpertRelationshipsRepository.findById(relationshipId);
+    expect(rel?.status).toBe('proposal_requested');
+  });
+
+  it('rejects a fixed draft with no installments (fixed_requires_installments)', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({ pricingMethod: 'fixed' });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [{ title: 'Build', valueCents: 50_000 }],
+    });
+
+    const err = await proposalsRepository
+      .promoteToSubmit({ proposalId, relationshipId })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_requires_installments');
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+  });
+
+  it('rejects a tm draft that carries installments (tm_has_installments)', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'tm',
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId,
+      installments: [{ label: 'Upfront', pct: 100 }],
+    });
+
+    const err = await proposalsRepository
+      .promoteToSubmit({ proposalId, relationshipId })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('tm_has_installments');
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+  });
+
+  it('rejects a tm draft missing a rate (tm_missing_rate)', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'tm',
+      depositCents: 25_000,
+      rateCents: null,
+      cadence: 'monthly',
+    });
+
+    const err = await proposalsRepository
+      .promoteToSubmit({ proposalId, relationshipId })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('tm_missing_rate');
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+  });
+
+  it('rejects a fixed draft whose milestone values exceed the price (fixed_milestone_values_exceed_price)', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [{ title: 'Build', valueCents: 100_001 }],
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId,
+      installments: [{ label: 'Upfront', pct: 100 }],
+    });
+
+    const err = await proposalsRepository
+      .promoteToSubmit({ proposalId, relationshipId })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_milestone_values_exceed_price');
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+    const rel = await requestExpertRelationshipsRepository.findById(relationshipId);
+    expect(rel?.status).toBe('proposal_requested');
+  });
+
+  it('PROMOTES a coherent fixed draft (installments=100, milestone values ≤ price)', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [
+        { title: 'Discovery', valueCents: 60_000 },
+        { title: 'Build', valueCents: 40_000 },
+      ],
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId,
+      installments: [
+        { label: 'Upfront', pct: 50 },
+        { label: 'End', pct: 50 },
+      ],
+    });
+
+    const submitted = await proposalsRepository.promoteToSubmit({ proposalId, relationshipId });
+    expect(submitted.status).toBe('submitted');
+    const rel = await requestExpertRelationshipsRepository.findById(relationshipId);
+    expect(rel?.status).toBe('proposal_submitted');
+  });
+});
+
+describe('proposalsRepository.submit — coherence guard (BAL-293)', () => {
+  it('rejects a legacy header-only fixed submit (fixed_requires_installments) and rolls back', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+
+    const err = await proposalsRepository
+      .submit({
+        relationshipId: relationship.id,
+        overview: '<p>Header-only fixed — no installments.</p>',
+        pricingMethod: 'fixed',
+        priceCents: 100_000,
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_requires_installments');
+
+    // Nothing persisted; relationship un-advanced.
+    const rows = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.relationshipId, relationship.id));
+    expect(rows).toHaveLength(0);
+    const rel = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(rel?.status).toBe('proposal_requested');
+  });
+
+  it('ACCEPTS a coherent tm header submit (rate + cadence, no installments)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>T&M scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 100_000,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    expect(proposal.status).toBe('submitted');
+    expect(proposal.pricingMethod).toBe('tm');
+  });
+});
+
+describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
+  it('rejects accepting an incoherent submitted fixed proposal (installments sum 90), leaving it submitted', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    // A coherent tm submit gets us a submitted/current proposal with a clean spine,
+    // then we mutate it into an incoherent FIXED proposal on disk + seed bad children.
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 100_000,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await db.update(proposals).set({ pricingMethod: 'fixed' }).where(eq(proposals.id, proposal.id));
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId: proposal.id,
+      installments: [
+        { label: 'Upfront', pct: 60 },
+        { label: 'End', pct: 30 },
+      ],
+    });
+
+    const err = await proposalsRepository.accept({ id: proposal.id }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('installments_not_100');
+
+    // Proposal stays submitted, relationship stays proposal_submitted.
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(raw?.status).toBe('submitted');
+    expect(raw?.acceptedAt).toBeNull();
+    const rel = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(rel?.status).toBe('proposal_submitted');
+  });
+
+  it('ACCEPTS a coherent submitted fixed proposal (installments=100, milestone values ≤ price)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 100_000,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    // Turn it into a coherent FIXED proposal with valid children.
+    await db.update(proposals).set({ pricingMethod: 'fixed' }).where(eq(proposals.id, proposal.id));
+    await proposalMilestonesRepository.setForProposal({
+      proposalId: proposal.id,
+      milestones: [{ title: 'Build', valueCents: 100_000 }],
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId: proposal.id,
+      installments: [{ label: 'Upfront', pct: 100 }],
+    });
+
+    const accepted = await proposalsRepository.accept({ id: proposal.id });
+    expect(accepted.status).toBe('accepted');
+    expect(accepted.acceptedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('proposalsRepository.resubmit — coherence guard (BAL-293)', () => {
+  it('rejects an incoherent resubmit payload (installments sum 90): v1 stays current, no v2 row or children', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const v1 = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'tm',
+      priceCents: 100_000,
+      depositCents: 0,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    const client = await userFactory();
+    await proposalsRepository.requestChanges({
+      proposalId: v1.id,
+      requestedByUserId: client.id,
+      note: 'Revise pricing.',
+    });
+
+    const err = await proposalsRepository
+      .resubmit({
+        relationshipId: relationship.id,
+        overview: '<p>v2.</p>',
+        pricingMethod: 'fixed',
+        priceCents: 100_000,
+        milestones: [{ title: 'Build', valueCents: 50_000 }],
+        installments: [
+          { label: 'Upfront', pct: 60 },
+          { label: 'End', pct: 30 },
+        ],
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('installments_not_100');
+
+    // v1 still current + changes_requested; no v2 row.
+    const all = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.relationshipId, relationship.id));
+    expect(all).toHaveLength(1);
+    const [raw] = all;
+    expect(raw?.id).toBe(v1.id);
+    expect(raw?.isCurrent).toBe(true);
+    expect(raw?.status).toBe('changes_requested');
+  });
+
+  it('SUCCEEDS with a coherent resubmit payload (sum 100)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const v1 = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'tm',
+      priceCents: 100_000,
+      depositCents: 0,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    const client = await userFactory();
+    await proposalsRepository.requestChanges({
+      proposalId: v1.id,
+      requestedByUserId: client.id,
+      note: 'Revise.',
+    });
+
+    const v2 = await proposalsRepository.resubmit({
+      relationshipId: relationship.id,
+      overview: '<p>v2.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+      milestones: [{ title: 'Build', valueCents: 100_000 }],
+      installments: [
+        { label: 'Upfront', pct: 50 },
+        { label: 'End', pct: 50 },
+      ],
+    });
+    expect(v2.version).toBe(2);
+    expect(v2.status).toBe('submitted');
+    expect(v2.isCurrent).toBe(true);
+  });
+});
+
+describe('proposalsRepository drafts stay free of the coherence guard (BAL-293)', () => {
+  it('createDraft saves an incomplete fixed draft (price 0, no installments) without throwing', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>Incomplete draft.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+    expect(draft.status).toBe('draft');
+    expect(draft.priceCents).toBe(0);
+  });
+
+  it('updateDraft saves an incomplete fixed draft (no installments / no values) without throwing', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>v0.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+
+    const updated = await proposalsRepository.updateDraft({
+      proposalId: draft.id,
+      overview: '<p>Still incomplete.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+    expect(updated.status).toBe('draft');
   });
 });

@@ -8,11 +8,17 @@ import {
   type ProposalChangeRequest,
 } from '../schema';
 import { advanceRelationshipStatus } from './request-expert-relationships';
-import { insertMilestonesTx, type ProposalMilestoneInput } from './proposal-milestones';
+import {
+  insertMilestonesTx,
+  listByProposalTx as listMilestonesTx,
+  type ProposalMilestoneInput,
+} from './proposal-milestones';
 import {
   insertInstallmentsTx,
+  listByProposalTx as listInstallmentsTx,
   type ProposalPaymentInstallmentInput,
 } from './proposal-payment-installments';
+import { assertProposalCoherent, type ProposalCoherenceSnapshot } from './proposal-coherence';
 import type { PricingMethod, ProposalCadence, ProposalChangeSection } from './proposal-types';
 
 export type ProposalStatus = Proposal['status'];
@@ -128,6 +134,38 @@ export async function advanceProposalStatus(
   return updated;
 }
 
+/**
+ * Assemble a `ProposalCoherenceSnapshot` from a proposal header + its milestone /
+ * installment children for the transition-time coherence guard. Shared by every
+ * committing path (`submit`, `promoteToSubmit`, `accept`, `resubmit`) so the
+ * assembly lives in exactly one place (avoids Sonar duplication). The header param
+ * is a minimal structural shape both a DB-row `Proposal` and the caller-input
+ * headers satisfy.
+ */
+function toCoherenceSnapshot(
+  header: {
+    pricingMethod: PricingMethod;
+    priceCents: number;
+    currency: string | null;
+    depositCents: number | null;
+    rateCents: number | null;
+    cadence: ProposalCadence | null;
+  },
+  milestones: { valueCents?: number | null }[],
+  installments: { pct: number }[]
+): ProposalCoherenceSnapshot {
+  return {
+    pricingMethod: header.pricingMethod,
+    priceCents: header.priceCents,
+    currency: header.currency ?? 'aud',
+    depositCents: header.depositCents,
+    rateCents: header.rateCents,
+    cadence: header.cadence,
+    milestones: milestones.map((m) => ({ valueCents: m.valueCents ?? null })),
+    installments: installments.map((i) => ({ pct: i.pct })),
+  };
+}
+
 export const proposalsRepository = {
   /**
    * Expert submits a proposal for a relationship. In ONE transaction: insert the
@@ -145,6 +183,13 @@ export const proposalsRepository = {
    *
    * BOUNDARY: does NOT advance request-level status — caller-owned. Draft
    * persistence (insert as `draft`) is A6.2; this inserts directly as `submitted`.
+   *
+   * COHERENCE (BAL-293): asserts `assertProposalCoherent` at the TOP of the tx,
+   * built from the supplied header with EMPTY milestones/installments (this legacy
+   * path carries no children). CONSEQUENCE: a `fixed` `submit()` trips
+   * `fixed_requires_installments` — correct by design. The active fixed path is
+   * draft→`promoteToSubmit` (which re-reads the persisted children); this legacy
+   * insert-as-submitted has no production callers and is the `tm` / test path.
    */
   async submit(input: {
     relationshipId: string;
@@ -159,6 +204,22 @@ export const proposalsRepository = {
     cadence?: ProposalCadence;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // Coherence guard — supplied header, no children (legacy header-only insert).
+      assertProposalCoherent(
+        toCoherenceSnapshot(
+          {
+            pricingMethod: input.pricingMethod,
+            priceCents: input.priceCents,
+            currency: input.currency ?? null,
+            depositCents: input.depositCents ?? null,
+            rateCents: input.rateCents ?? null,
+            cadence: input.cadence ?? null,
+          },
+          [],
+          []
+        )
+      );
+
       const relationship = await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
         to: 'proposal_submitted',
@@ -360,6 +421,27 @@ export const proposalsRepository = {
         expectedFrom: 'proposal_requested',
       });
 
+      // 1b. COHERENCE (BAL-293): lock + re-read the live header + children INSIDE
+      // the tx (the header/milestones/installments were written by the action's
+      // preceding updateDraft/setForProposal steps) and assert coherence BEFORE the
+      // flip. Throw → whole tx rolls back: proposal stays `draft`, relationship
+      // reverts. The header is taken `FOR UPDATE` (mirroring accept()) so the
+      // coherence snapshot is provably the row that advanceProposalStatus then flips
+      // — no plain-read TOCTOU window before the lock. (Lock order is unchanged: the
+      // relationship is already locked above, and advanceProposalStatus re-locks this
+      // same row, so no new deadlock hazard.)
+      const [header] = await tx
+        .select()
+        .from(proposals)
+        .where(and(eq(proposals.id, input.proposalId), isNull(proposals.deletedAt)))
+        .for('update');
+      if (header === undefined) {
+        throw new Error(`Proposal not found: ${input.proposalId}`);
+      }
+      const milestones = await listMilestonesTx(tx, input.proposalId);
+      const installments = await listInstallmentsTx(tx, input.proposalId);
+      assertProposalCoherent(toCoherenceSnapshot(header, milestones, installments));
+
       // 2. Flip the proposal status through the guarded writer (draft → submitted).
       const advanced = await advanceProposalStatus(tx, {
         id: input.proposalId,
@@ -446,6 +528,13 @@ export const proposalsRepository = {
       if (!isAllowedProposalTransition(current.status, 'accepted')) {
         throw new InvalidProposalTransitionError(current.status, 'accepted');
       }
+
+      // COHERENCE (BAL-293): re-read the live children under the proposal's
+      // FOR UPDATE lock and assert coherence BEFORE advancing either spine. Throw →
+      // tx rolls back: proposal stays `submitted`, relationship `proposal_submitted`.
+      const milestones = await listMilestonesTx(tx, current.id);
+      const installments = await listInstallmentsTx(tx, current.id);
+      assertProposalCoherent(toCoherenceSnapshot(current, milestones, installments));
 
       // Advance the relationship (locks + validates the spine state).
       await advanceRelationshipStatus(tx, {
@@ -558,6 +647,24 @@ export const proposalsRepository = {
     installments: ProposalPaymentInstallmentInput[];
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // COHERENCE (BAL-293): the caller supplies the full v2 header + children, so
+      // assert at the TOP of the tx, BEFORE the flip-then-insert. Throw → tx rolls
+      // back: v1 keeps `is_current`/`changes_requested`, no v2 row, no child writes.
+      assertProposalCoherent(
+        toCoherenceSnapshot(
+          {
+            pricingMethod: input.pricingMethod,
+            priceCents: input.priceCents,
+            currency: input.currency ?? null,
+            depositCents: input.depositCents ?? null,
+            rateCents: input.rateCents ?? null,
+            cadence: input.cadence ?? null,
+          },
+          input.milestones,
+          input.installments
+        )
+      );
+
       const [current] = await tx
         .select()
         .from(proposals)

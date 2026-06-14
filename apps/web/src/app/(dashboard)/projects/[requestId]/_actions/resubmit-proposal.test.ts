@@ -52,9 +52,18 @@ const {
   mockInstallmentsSumTo100,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
+  ProposalCoherenceError,
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
+  class ProposalCoherenceError extends Error {
+    public readonly rule: string;
+    constructor(rule: string, message?: string) {
+      super(message ?? rule);
+      this.name = 'ProposalCoherenceError';
+      this.rule = rule;
+    }
+  }
   return {
     mockFindCurrent: vi.fn(),
     mockResubmit: vi.fn(),
@@ -70,6 +79,7 @@ const {
     mockInstallmentsSumTo100: vi.fn(),
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
+    ProposalCoherenceError,
   };
 });
 
@@ -96,6 +106,7 @@ vi.mock('@balo/db', () => ({
   advanceRelationshipStatus: (...a: unknown[]) => mockAdvanceRelationship(...a),
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
+  ProposalCoherenceError,
 }));
 
 import { resubmitProposalAction } from './resubmit-proposal';
@@ -423,6 +434,30 @@ describe('resubmitProposalAction', () => {
     expect(await resubmitProposalAction(VALID_INPUT)).toEqual({
       success: false,
       error: 'This proposal has already been resubmitted. Refresh to continue.',
+    });
+  });
+
+  it('maps a repo coherence rejection to generic copy + an analytics coherence payload', async () => {
+    mockResubmit.mockRejectedValue(new ProposalCoherenceError('installments_not_100'));
+    const result = await resubmitProposalAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before resubmitting.",
+      coherence: {
+        rule: 'installments_not_100',
+        pricingMethod: 'fixed',
+        proposalId: V1_ID,
+        relationshipId: REL_ID,
+      },
+    });
+    if (!result.success) expect(result.error).not.toContain('installments_not_100');
+    expect(log.warn).toHaveBeenCalledWith('Proposal coherence rejected', {
+      rule: 'installments_not_100',
+      pricingMethod: 'fixed',
+      proposalId: V1_ID,
+      relationshipId: REL_ID,
     });
   });
 

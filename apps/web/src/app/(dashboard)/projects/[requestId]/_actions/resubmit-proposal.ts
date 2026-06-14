@@ -9,6 +9,7 @@ import {
   proposalDocumentsRepository,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
+  ProposalCoherenceError,
   type Proposal,
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
@@ -60,6 +61,19 @@ const inputSchema = z.object({
 
 export type ResubmitProposalInput = z.infer<typeof inputSchema>;
 
+/**
+ * Structured payload attached to a FAILURE result when the `@balo/db` coherence
+ * guard (`ProposalCoherenceError`) rejected the resubmit. The island fires
+ * `PROPOSAL_COHERENCE_REJECTED` from it — the raw `rule` is analytics-only and is
+ * NEVER rendered in the UI (the generic `error` copy is shown instead).
+ */
+export interface ProposalCoherenceFailure {
+  rule: string;
+  pricingMethod: 'fixed' | 'tm';
+  proposalId: string;
+  relationshipId: string;
+}
+
 export type ResubmitProposalResult =
   | {
       success: true;
@@ -74,36 +88,52 @@ export type ResubmitProposalResult =
       /** Server-computed — the island attaches these to `PROJECT_PROPOSAL_RESUBMITTED`. */
       analytics: { priceCents: number; currency: string };
     }
-  | { success: false; error: string };
+  | { success: false; error: string; coherence?: ProposalCoherenceFailure };
 
 const NOT_SIGNED_IN = 'You are not signed in.';
 const INVALID_REQUEST = 'Invalid request.';
 const ONLY_EXPERT = 'Only the expert can resubmit a proposal.';
 const STALE_PROPOSAL = 'This proposal has already been resubmitted. Refresh to continue.';
 const GENERIC_FAILURE = 'Could not resubmit your proposal. Please try again.';
+// The repo coherence guard firing means the inline readiness check and the
+// submitted payload drifted — generic "re-check" copy; the raw rule is
+// analytics-only, never shown.
+const COHERENCE_COPY =
+  "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before resubmitting.";
 
 /** Display name for the resubmitting expert (notification body). */
 function displayName(user: { firstName: string | null; lastName: string | null }): string {
   return [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'Your expert';
 }
 
+/** The discriminated outcome of the atomic version bump. */
+type ResubmitOutcome =
+  | { kind: 'ok'; proposal: Proposal }
+  | { kind: 'stale' }
+  | { kind: 'coherence'; error: ProposalCoherenceError };
+
 /**
  * The atomic version bump — flips v1 → `resubmitted`, inserts v2 (fresh UUID,
  * version+1, is_current). Maps the typed stale-transition errors (a concurrent
- * accept / double-resubmit) to `null` so the caller surfaces friendly stale copy;
- * rethrows anything unexpected.
+ * accept / double-resubmit) to `'stale'` and the `@balo/db` coherence guard
+ * (`ProposalCoherenceError`, defence-in-depth behind the inline readiness check) to
+ * a `'coherence'` outcome so the caller surfaces friendly copy + the analytics
+ * payload; rethrows anything unexpected.
  */
 async function resubmitWithStaleGuard(
   params: Parameters<typeof proposalsRepository.resubmit>[0]
-): Promise<Proposal | null> {
+): Promise<ResubmitOutcome> {
   try {
-    return await proposalsRepository.resubmit(params);
+    return { kind: 'ok', proposal: await proposalsRepository.resubmit(params) };
   } catch (error) {
+    if (error instanceof ProposalCoherenceError) {
+      return { kind: 'coherence', error };
+    }
     if (
       error instanceof InvalidProposalTransitionError ||
       error instanceof InvalidRelationshipTransitionError
     ) {
-      return null;
+      return { kind: 'stale' };
     }
     throw error;
   }
@@ -273,7 +303,7 @@ export async function resubmitProposalAction(
     //     SAME transaction, so a current/submitted v2 never exists without its
     //     children. A stale double-resubmit trips the typed transition errors →
     //     friendly stale copy.
-    const v2 = await resubmitWithStaleGuard({
+    const outcome = await resubmitWithStaleGuard({
       relationshipId,
       overview: sanitised.overview,
       pricingMethod: data.pricingMethod,
@@ -287,9 +317,28 @@ export async function resubmitProposalAction(
       milestones: sanitised.milestones,
       installments: sanitised.installments,
     });
-    if (v2 === null) {
+    if (outcome.kind === 'stale') {
       return { success: false, error: STALE_PROPOSAL };
     }
+    if (outcome.kind === 'coherence') {
+      log.warn('Proposal coherence rejected', {
+        rule: outcome.error.rule,
+        pricingMethod: data.pricingMethod,
+        proposalId: fromProposalId,
+        relationshipId,
+      });
+      return {
+        success: false,
+        error: COHERENCE_COPY,
+        coherence: {
+          rule: outcome.error.rule,
+          pricingMethod: data.pricingMethod,
+          proposalId: fromProposalId,
+          relationshipId,
+        },
+      };
+    }
+    const v2 = outcome.proposal;
 
     // (b) Document carryover (best-effort, AFTER the header + children commit — a
     //     missing attachment must never fail the resubmit).

@@ -10,6 +10,7 @@ import {
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   InvalidStatusTransitionError,
+  ProposalCoherenceError,
   type Proposal,
 } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
@@ -28,6 +29,19 @@ const inputSchema = z.object({
 
 export type AcceptProposalInput = z.infer<typeof inputSchema>;
 
+/**
+ * Structured payload attached to a FAILURE result when the `@balo/db` coherence
+ * guard (`ProposalCoherenceError`) rejected the accept. The island fires
+ * `PROPOSAL_COHERENCE_REJECTED` from it — the raw `rule` is analytics-only and is
+ * NEVER rendered in the UI (the generic `error` copy is shown instead).
+ */
+export interface ProposalCoherenceFailure {
+  rule: string;
+  pricingMethod: 'fixed' | 'tm';
+  proposalId: string;
+  relationshipId: string;
+}
+
 export type AcceptProposalResult =
   | {
       success: true;
@@ -36,13 +50,18 @@ export type AcceptProposalResult =
       /** Whether the REQUEST aggregate advanced `proposal_submitted → accepted`. */
       transitioned: boolean;
     }
-  | { success: false; error: string };
+  | { success: false; error: string; coherence?: ProposalCoherenceFailure };
 
 const NOT_SIGNED_IN = 'You are not signed in.';
 const INVALID_REQUEST = 'Invalid request.';
 const ONLY_CLIENT = 'Only the client can accept a proposal.';
 const STALE_PROPOSAL = 'This proposal can no longer be accepted.';
 const GENERIC_FAILURE = 'Could not accept this proposal. Please try again.';
+// The repo coherence guard firing on accept means the submitted proposal's
+// snapshotted terms are inconsistent — generic copy; the raw rule is
+// analytics-only, never shown.
+const COHERENCE_COPY =
+  "This proposal's pricing is incomplete or inconsistent. Refresh and ask the expert to re-check the pricing before accepting.";
 
 /** Display name for the accepting client (notification body). */
 function displayName(user: { firstName: string | null; lastName: string | null }): string {
@@ -106,13 +125,20 @@ async function loadCurrentSubmittedProposal(
 /**
  * Commit the accept via the EXISTING repo method (proposal + relationship in ONE
  * tx). A stale double-accept trips the typed transition errors → `'stale'` (friendly
- * copy); any other error rethrows to the action's generic-failure boundary.
+ * copy); the `@balo/db` coherence guard (`ProposalCoherenceError`, defence-in-depth)
+ * → a `{ coherence }` outcome so the caller surfaces friendly copy + the analytics
+ * payload; any other error rethrows to the action's generic-failure boundary.
  */
-async function commitAccept(proposalId: string): Promise<'ok' | 'stale'> {
+async function commitAccept(
+  proposalId: string
+): Promise<'ok' | 'stale' | { coherence: ProposalCoherenceError }> {
   try {
     await proposalsRepository.accept({ id: proposalId });
     return 'ok';
   } catch (error) {
+    if (error instanceof ProposalCoherenceError) {
+      return { coherence: error };
+    }
     if (
       error instanceof InvalidProposalTransitionError ||
       error instanceof InvalidRelationshipTransitionError
@@ -170,10 +196,29 @@ export async function acceptProposalAction(
     }
 
     // Commit the accept (proposal + relationship in ONE tx). A stale double-accept
-    // trips the typed transition errors → friendly stale copy.
+    // trips the typed transition errors → friendly stale copy; the repo coherence
+    // guard (defence-in-depth) → generic copy + an analytics `coherence` payload.
     const committed = await commitAccept(proposalId);
     if (committed === 'stale') {
       return { success: false, error: STALE_PROPOSAL };
+    }
+    if (typeof committed === 'object') {
+      log.warn('Proposal coherence rejected', {
+        rule: committed.coherence.rule,
+        pricingMethod: proposal.pricingMethod,
+        proposalId,
+        relationshipId,
+      });
+      return {
+        success: false,
+        error: COHERENCE_COPY,
+        coherence: {
+          rule: committed.coherence.rule,
+          pricingMethod: proposal.pricingMethod,
+          proposalId,
+          relationshipId,
+        },
+      };
     }
 
     // Advance the REQUEST aggregate (first-accept-only). Best-effort + never
