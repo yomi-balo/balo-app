@@ -22,7 +22,14 @@ function laterOf(a: Date | null, b: Date | null): Date | null {
 export interface ConversationThreadSummary {
   relationshipId: string;
   /** Newest LIVE message in the thread, any sender. Null for an empty thread. */
-  latestMessage: { id: string; body: string; createdAt: Date; senderUserId: string } | null;
+  latestMessage: {
+    id: string;
+    body: string;
+    createdAt: Date;
+    senderUserId: string;
+    /** The sender's first name (joined from `users`); null if unset. */
+    senderFirstName: string | null;
+  } | null;
   /**
    * Newest LIVE activity NOT authored by the viewer:
    * max(newest live message not from viewer, newest live file not from viewer).
@@ -265,6 +272,7 @@ export const conversationsRepository = {
         latestMessageBody: latestMessageSq.body,
         latestMessageCreatedAt: latestMessageSq.createdAt,
         latestMessageSenderUserId: latestMessageSq.senderUserId,
+        latestMessageSenderFirstName: users.firstName,
         latestInboundMessageAt: inboundMessageSq.latestAt,
         latestInboundFileAt: inboundFileSq.latestAt,
         fileCount: fileCountSq.fileCount,
@@ -272,6 +280,7 @@ export const conversationsRepository = {
       })
       .from(requestExpertRelationships)
       .leftJoin(latestMessageSq, eq(latestMessageSq.relationshipId, requestExpertRelationships.id))
+      .leftJoin(users, eq(users.id, latestMessageSq.senderUserId))
       .leftJoin(
         inboundMessageSq,
         eq(inboundMessageSq.relationshipId, requestExpertRelationships.id)
@@ -297,6 +306,7 @@ export const conversationsRepository = {
               body: row.latestMessageBody,
               createdAt: row.latestMessageCreatedAt,
               senderUserId: row.latestMessageSenderUserId,
+              senderFirstName: row.latestMessageSenderFirstName,
             }
           : null;
       return {

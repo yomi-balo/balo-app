@@ -381,7 +381,7 @@ describe('conversationsRepository.listThreadSummaries', () => {
   });
 
   it('batches N threads in input order: latest any-sender message, inbound excludes viewer, files count toward inbound', async () => {
-    const viewer = await userFactory();
+    const viewer = await userFactory({ firstName: 'Priya' });
     const other = await userFactory();
     const a = await requestExpertRelationshipFactory();
     const b = await requestExpertRelationshipFactory();
@@ -440,6 +440,8 @@ describe('conversationsRepository.listThreadSummaries', () => {
     // the other party's newer FILE (max across message/file legs).
     expect(summaryA.latestMessage?.id).toBe(aViewerMsg.id);
     expect(summaryA.latestMessage?.senderUserId).toBe(viewer.id);
+    // The sender's first name is joined into the summary (drives the inbox signal).
+    expect(summaryA.latestMessage?.senderFirstName).toBe('Priya');
     expect(summaryA.latestInboundActivityAt?.getTime()).toBe(aInboundFile.createdAt.getTime());
     expect(summaryA.fileCount).toBe(1);
     expect(summaryA.lastReadAt?.getTime()).toBe(aReadAt.getTime());
@@ -455,7 +457,7 @@ describe('conversationsRepository.listThreadSummaries', () => {
   it('excludes soft-deleted messages, files, and read states from every leg', async () => {
     const { relationship } = await requestExpertRelationshipFactory();
     const viewer = await userFactory();
-    const other = await userFactory();
+    const other = await userFactory({ firstName: 'Dana' });
     const base = Date.parse('2026-06-05T00:00:00Z');
 
     const liveMsg = await seedMessage({
@@ -500,6 +502,7 @@ describe('conversationsRepository.listThreadSummaries', () => {
     if (summary === undefined) throw new Error('expected one summary');
 
     expect(summary.latestMessage?.id).toBe(liveMsg.id);
+    expect(summary.latestMessage?.senderFirstName).toBe('Dana');
     expect(summary.latestInboundActivityAt?.getTime()).toBe(liveMsg.createdAt.getTime());
     expect(summary.fileCount).toBe(0);
     expect(summary.lastReadAt).toBeNull();

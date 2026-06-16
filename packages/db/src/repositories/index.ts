@@ -79,6 +79,12 @@ export type {
   EngagementStatus,
 } from './proposal-types';
 export { conversationsRepository } from './conversations';
+export { projectsInboxRepository } from './projects-inbox';
+export type {
+  PortfolioRequestRow,
+  PortfolioInvitationRow,
+  PortfolioEngagementRow,
+} from './projects-inbox';
 export type {
   RequestExpertRelationship,
   NewRequestExpertRelationship,

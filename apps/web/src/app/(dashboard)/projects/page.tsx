@@ -1,24 +1,78 @@
-import { FolderKanban } from 'lucide-react';
-import { IconBadge } from '@/components/balo/icon-badge';
+import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
+import { log } from '@/lib/logging';
+import { getCurrentUser } from '@/lib/auth/session';
+import { resolvePortfolioLens } from '@/lib/projects-inbox/resolve-portfolio-lens';
+import {
+  loadAdminPortfolio,
+  loadClientPortfolio,
+  loadExpertPortfolio,
+} from '@/lib/projects-inbox/portfolio-view';
+import type { AdminPortfolioDTO, PortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
+import { ProjectsInboxShell } from './_components/projects-inbox-shell';
+import { ProjectsInboxAnalytics } from './_components/projects-inbox-analytics';
 
-export default function ProjectsPage(): React.JSX.Element {
+/**
+ * A7 tri-lens portfolio dashboard (BAL-274). Server Component:
+ *  1. `getCurrentUser()` — null → `/login` (the (dashboard) layout already gates
+ *     onboarding/drift; we guard only the unauthenticated edge).
+ *  2. resolve the lens from `?lens=` (a VIEW chooser — out-of-bounds falls back).
+ *  3. load ONLY the chosen lens's data inside a try/catch that `log.error`s then
+ *     re-throws to `error.tsx`.
+ *  4. render the analytics island + the lens shell.
+ */
+
+export const metadata: Metadata = {
+  title: 'Projects — Balo',
+  robots: { index: false, follow: false },
+};
+
+interface ProjectsPageProps {
+  searchParams: Promise<{ lens?: string }>;
+}
+
+export default async function ProjectsPage({
+  searchParams,
+}: Readonly<ProjectsPageProps>): Promise<React.JSX.Element> {
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect('/login');
+  }
+
+  const { lens } = await searchParams;
+  const { lens: resolvedLens, allowedLenses } = resolvePortfolioLens(user, lens);
+
+  let dto: PortfolioDTO | AdminPortfolioDTO;
+  try {
+    if (resolvedLens === 'admin') {
+      dto = await loadAdminPortfolio(allowedLenses);
+    } else if (resolvedLens === 'expert' && user.expertProfileId !== undefined) {
+      dto = await loadExpertPortfolio(
+        { ...user, expertProfileId: user.expertProfileId },
+        allowedLenses
+      );
+    } else {
+      dto = await loadClientPortfolio(user, allowedLenses);
+    }
+  } catch (error) {
+    log.error('Failed to load projects inbox', {
+      userId: user.id,
+      lens: resolvedLens,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error; // let error.tsx render the boundary
+  }
+
   return (
-    <div>
-      <div className="mb-8">
-        <h2 className="text-foreground text-2xl font-semibold">Projects</h2>
-        <p className="text-muted-foreground mt-1 text-sm">Manage your projects and deliverables.</p>
-      </div>
-      <div className="border-border bg-card rounded-xl border p-16 text-center">
-        <IconBadge
-          icon={FolderKanban}
-          color="#7C3AED"
-          size={56}
-          iconSize={26}
-          className="mx-auto mb-4"
-        />
-        <p className="text-foreground text-base font-semibold">Coming soon</p>
-        <p className="text-muted-foreground mt-1 text-sm">This feature is being built</p>
-      </div>
-    </div>
+    <>
+      <ProjectsInboxAnalytics
+        lens={dto.lens}
+        needsCount={dto.lens === 'admin' ? dto.tiles.untriaged : dto.tiles.needs}
+        inProgressCount={dto.lens === 'admin' ? dto.tiles.pipeline : dto.tiles.inProgress}
+        totalCount={dto.lens === 'admin' ? dto.triage.length + dto.tiles.pipeline : dto.tiles.total}
+      />
+      <ProjectsInboxShell dto={dto} />
+    </>
   );
 }
