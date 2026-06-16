@@ -14,7 +14,7 @@ const {
   mockRedirect,
   mockLogWarn,
   mockLogError,
-  mockTrackServer,
+  mockTrackServerAndFlush,
 } = vi.hoisted(() => ({
   mockFindByIdWithRelations: vi.fn(),
   mockGetCurrentUser: vi.fn(),
@@ -27,7 +27,7 @@ const {
   }),
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
-  mockTrackServer: vi.fn(),
+  mockTrackServerAndFlush: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -41,9 +41,10 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/lib/logging', () => ({ log: { warn: mockLogWarn, error: mockLogError } }));
 // Server analytics seam (BAL-276): the denial boundary emits the
-// project_request_access_denied event ONLY for a declined expert.
+// project_request_access_denied event ONLY for a declined expert. The seam wraps
+// trackServer + a next/server after() flush — the page only knows trackServerAndFlush.
 vi.mock('@/lib/analytics/server', () => ({
-  trackServer: mockTrackServer,
+  trackServerAndFlush: mockTrackServerAndFlush,
   PROJECT_SERVER_EVENTS: { REQUEST_ACCESS_DENIED: 'project_request_access_denied' },
 }));
 
@@ -182,7 +183,7 @@ describe('RequestDetailPage (RSC) — auth + lens gating', () => {
       expect.objectContaining({ requestId: REQUEST_ID, reason: 'not_a_participant' })
     );
     // A plain stranger is not a declined expert → no analytics event.
-    expect(mockTrackServer).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     // The contact name must never reach the rendered tree for a stranger.
     expect(screen.queryByText(CONTACT_NAME)).not.toBeInTheDocument();
   });
@@ -202,8 +203,8 @@ describe('RequestDetailPage (RSC) — auth + lens gating', () => {
 
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mockNotFound).toHaveBeenCalledTimes(1);
-    expect(mockTrackServer).toHaveBeenCalledTimes(1);
-    expect(mockTrackServer).toHaveBeenCalledWith('project_request_access_denied', {
+    expect(mockTrackServerAndFlush).toHaveBeenCalledTimes(1);
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith('project_request_access_denied', {
       request_id: REQUEST_ID,
       reason: 'declined_relationship',
       lens_attempted: 'expert',
@@ -220,7 +221,7 @@ describe('RequestDetailPage (RSC) — auth + lens gating', () => {
     mockFindByIdWithRelations.mockResolvedValue(request());
 
     await renderPage();
-    expect(mockTrackServer).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
   });
 
   it('logs an error and rethrows (to error.tsx) when the load throws', async () => {
