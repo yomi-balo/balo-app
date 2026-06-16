@@ -159,6 +159,19 @@ export type NotificationEvent =
   | 'project.message_posted'
   | 'project.file_shared';
 
+/**
+ * Events published only from WITHIN the API (the calendar webhook and the Cronofy
+ * token-refresh path) — never through the internal `/notifications/publish` route,
+ * so they have no arm in `publishBodySchema` by design. Keep this list tight:
+ * everything NOT listed here is treated as publishable from apps/web and MUST have
+ * a schema arm — enforced at compile time in
+ * apps/api/src/routes/notifications/schema.ts.
+ */
+export type ServerOnlyNotificationEvent = 'calendar.auth_error';
+
+/** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
+export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
+
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;

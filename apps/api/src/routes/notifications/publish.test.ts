@@ -253,6 +253,94 @@ describe('POST /notifications/publish', () => {
     expect(mockPublish).not.toHaveBeenCalled();
   });
 
+  it('returns 200 and publishes project.exploratory_requested (BAL-284 round-trip)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440050',
+      recipientId: '550e8400-e29b-41d4-a716-446655440051',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440050',
+      title: 'CPQ implementation',
+    };
+
+    const res = await inject(
+      { event: 'project.exploratory_requested', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ published: true });
+    expect(mockPublish).toHaveBeenCalledWith('project.exploratory_requested', payload);
+  });
+
+  it('returns 200 and publishes project.expert_invited (BAL-284 round-trip)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440060',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440061',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440062',
+      title: 'CPQ implementation',
+    };
+
+    const res = await inject(
+      { event: 'project.expert_invited', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ published: true });
+    expect(mockPublish).toHaveBeenCalledWith('project.expert_invited', payload);
+  });
+
+  it('returns 200 and publishes project.eoi_submitted (BAL-284 round-trip)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440070',
+      recipientId: '550e8400-e29b-41d4-a716-446655440071',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440072',
+      title: 'CPQ implementation',
+      expertName: 'Ada Lovelace',
+    };
+
+    const res = await inject(
+      { event: 'project.eoi_submitted', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ published: true });
+    expect(mockPublish).toHaveBeenCalledWith('project.eoi_submitted', payload);
+  });
+
+  it('returns 400 (and does not publish) when project.exploratory_requested is missing recipientId', async () => {
+    const res = await inject(
+      {
+        event: 'project.exploratory_requested',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440050',
+          projectRequestId: '550e8400-e29b-41d4-a716-446655440050',
+          title: 'CPQ implementation',
+        },
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 (and does not publish) when project.eoi_submitted is missing expertName', async () => {
+    const res = await inject(
+      {
+        event: 'project.eoi_submitted',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440070',
+          recipientId: '550e8400-e29b-41d4-a716-446655440071',
+          projectRequestId: '550e8400-e29b-41d4-a716-446655440072',
+          title: 'CPQ implementation',
+        },
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when project.message_posted is missing its recipientRole', async () => {
     const res = await inject(
       {

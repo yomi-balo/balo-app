@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PublishableNotificationEvent } from '../../notifications/events.js';
 
 const userWelcomePayload = z.object({
   correlationId: z.uuid(),
@@ -38,6 +39,39 @@ const projectMatchRequestedPayload = z.object({
   tagIds: z.array(z.uuid()),
   productIds: z.array(z.uuid()),
   documentCount: z.number().int().nonnegative(),
+});
+
+// BAL-284 exploratory requested (admin → client). `correlationId` is the project
+// request id — the transition is one-way ⇒ natural one-shot dedup. `recipientId`
+// is the request owner's user id (drives recipient:'client' resolution). Mirrors
+// apps/web/src/lib/notifications/types.ts.
+const projectExploratoryRequestedPayload = z.object({
+  correlationId: z.uuid(),
+  recipientId: z.uuid(),
+  projectRequestId: z.uuid(),
+  title: z.string().min(1).max(200),
+});
+
+// BAL-284 expert invited (admin → expert). `correlationId` is the relationship id
+// — dedup per (expert, request). `expertProfileId` is the invited expert (resolver
+// hydrates data.expert ⇒ recipient:'expert'). Mirrors
+// apps/web/src/lib/notifications/types.ts.
+const projectExpertInvitedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  expertProfileId: z.uuid(),
+  title: z.string().min(1).max(200),
+});
+
+// BAL-284 EOI submitted (expert → client). `correlationId` is the EOI id — dedup
+// per submission. `recipientId` is the request owner's user id (drives
+// recipient:'client' resolution). Mirrors apps/web/src/lib/notifications/types.ts.
+const projectEoiSubmittedPayload = z.object({
+  correlationId: z.uuid(),
+  recipientId: z.uuid(),
+  projectRequestId: z.uuid(),
+  title: z.string().min(1).max(200),
+  expertName: z.string().min(1).max(120),
 });
 
 // BAL-271 conversation events. `recipientId` is set when recipientRole==='client'
@@ -151,10 +185,6 @@ const projectProposalResubmittedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
-// Known gap (BAL-284): three pre-existing web-published events are missing
-// from this union ('project.exploratory_requested', 'project.expert_invited',
-// 'project.eoi_submitted'); they currently 400 at the publish route. BAL-284
-// adds them (out of scope for BAL-272).
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -169,6 +199,18 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.match_requested'),
     payload: projectMatchRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('project.exploratory_requested'),
+    payload: projectExploratoryRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('project.expert_invited'),
+    payload: projectExpertInvitedPayload,
+  }),
+  z.object({
+    event: z.literal('project.eoi_submitted'),
+    payload: projectEoiSubmittedPayload,
   }),
   z.object({
     event: z.literal('project.proposal_requested'),
@@ -205,3 +247,29 @@ export const publishBodySchema = z.discriminatedUnion('event', [
 ]);
 
 export type PublishBody = z.infer<typeof publishBodySchema>;
+
+/**
+ * Compile-time completeness guard (BAL-284).
+ *
+ * `publishBodySchema` and the event catalog (`apps/api/src/notifications/events.ts`)
+ * are two hand-maintained registries. They must stay in lockstep: before this guard,
+ * adding a publishable event to the catalog without a matching arm here compiled
+ * cleanly but **400'd every publish at runtime** — and the web-side
+ * `publishNotificationEvent` swallows that 400, so the notification vanished
+ * silently (no email, no in-app row, no `notification_log`). That is the exact bug
+ * this ticket fixes for `project.{exploratory_requested,expert_invited,eoi_submitted}`.
+ *
+ * `PublishCoverageGap` is the symmetric difference between the events covered by
+ * `publishBodySchema` and the publishable catalog. When they match it is `never`;
+ * otherwise it is the offending event name(s). `AssertNever`'s `extends never`
+ * constraint then fails `tsc` and prints the missing/stray event right here — so a
+ * new event without a schema arm (or an arm for a server-only event like
+ * `calendar.auth_error`) can never ship silently again.
+ */
+type PublishCoverageGap =
+  | Exclude<PublishableNotificationEvent, PublishBody['event']>
+  | Exclude<PublishBody['event'], PublishableNotificationEvent>;
+
+type AssertNever<T extends never> = T;
+
+export type AssertPublishCoverageComplete = AssertNever<PublishCoverageGap>;
