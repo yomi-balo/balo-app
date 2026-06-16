@@ -26,15 +26,13 @@ vi.mock('@/lib/notifications/publish', () => ({
 const {
   mockFindById,
   mockAccept,
-  mockTransitionRequest,
+  mockFindRequestById,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
-  InvalidStatusTransitionError,
   ProposalCoherenceError,
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
-  class InvalidStatusTransitionError extends Error {}
   class ProposalCoherenceError extends Error {
     public readonly rule: string;
     constructor(rule: string, message?: string) {
@@ -46,10 +44,9 @@ const {
   return {
     mockFindById: vi.fn(),
     mockAccept: vi.fn(),
-    mockTransitionRequest: vi.fn(),
+    mockFindRequestById: vi.fn(),
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
-    InvalidStatusTransitionError,
     ProposalCoherenceError,
   };
 });
@@ -60,11 +57,12 @@ vi.mock('@balo/db', () => ({
     accept: (...a: unknown[]) => mockAccept(...a),
   },
   projectRequestsRepository: {
-    transitionStatus: (...a: unknown[]) => mockTransitionRequest(...a),
+    // BAL-295: the request rollup is derived inside accept(); the action re-reads
+    // the stored status via findById to source `transitioned` (best-effort).
+    findById: (...a: unknown[]) => mockFindRequestById(...a),
   },
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
-  InvalidStatusTransitionError,
   ProposalCoherenceError,
 }));
 
@@ -108,7 +106,9 @@ describe('acceptProposalAction', () => {
     mockResolveAccess.mockResolvedValue(accessOk());
     mockFindById.mockResolvedValue({ ...PROPOSAL });
     mockAccept.mockResolvedValue({ id: PROPOSAL_ID });
-    mockTransitionRequest.mockResolvedValue({ id: REQUEST_ID });
+    // Default re-read: the rollup advanced proposal_submitted → accepted (the access
+    // pre-op floor is `proposal_submitted`), so `transitioned` is true.
+    mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'accepted' });
     mockPublish.mockResolvedValue(undefined);
   });
 
@@ -208,12 +208,9 @@ describe('acceptProposalAction', () => {
     // Commits the accept via the EXISTING repo method.
     expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID });
 
-    // Advances the request aggregate from proposal_submitted → accepted.
-    expect(mockTransitionRequest).toHaveBeenCalledWith({
-      id: REQUEST_ID,
-      to: 'accepted',
-      expectedFrom: 'proposal_submitted',
-    });
+    // BAL-295: the action no longer issues a request transition — accept() derives
+    // the request rollup. It re-reads the stored status to source `transitioned`.
+    expect(mockFindRequestById).toHaveBeenCalledWith(REQUEST_ID);
 
     // Publishes the acceptance notification with the winning expertProfileId.
     expect(mockPublish).toHaveBeenCalledWith('project.proposal_accepted', {
@@ -290,18 +287,9 @@ describe('acceptProposalAction', () => {
     });
   });
 
-  it('tolerates a benign request-aggregate race (InvalidStatusTransitionError)', async () => {
-    mockTransitionRequest.mockRejectedValue(new InvalidStatusTransitionError());
-    const result = await acceptProposalAction(VALID_INPUT);
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.transitioned).toBe(false);
-    expect(log.warn).toHaveBeenCalledWith(
-      'Proposal accept request transition skipped (already advanced)',
-      expect.any(Object)
-    );
-  });
-
-  it('does not advance the request aggregate when it is already past proposal_submitted', async () => {
+  it('reports transitioned:false when the stored request status did not advance', async () => {
+    // The request was already past proposal_submitted (pre-op floor accepted) → the
+    // re-read shows no advance.
     mockResolveAccess.mockResolvedValue(
       accessOk({
         request: {
@@ -311,10 +299,10 @@ describe('acceptProposalAction', () => {
         },
       })
     );
+    mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'accepted' });
     const result = await acceptProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     if (result.success) expect(result.transitioned).toBe(false);
-    expect(mockTransitionRequest).not.toHaveBeenCalled();
   });
 
   it('maps an unexpected accept failure to the generic error and logs it (outer catch)', async () => {
@@ -327,17 +315,17 @@ describe('acceptProposalAction', () => {
     expect(log.error).toHaveBeenCalledWith('Failed to accept proposal', expect.any(Object));
   });
 
-  it('keeps the accept committed (success, transitioned:false) when the best-effort aggregate advance throws a non-race error', async () => {
-    // A PLAIN error from transitionStatus (not InvalidStatusTransitionError) is
-    // logged and swallowed — the already-committed accept must still succeed.
-    mockTransitionRequest.mockRejectedValue(new Error('conn reset'));
+  it('keeps the accept committed (success, transitioned:false) when the best-effort status re-read throws', async () => {
+    // A failure on the analytics-only re-read is logged and swallowed — the
+    // already-committed accept must still succeed (BAL-295).
+    mockFindRequestById.mockRejectedValue(new Error('conn reset'));
     const result = await acceptProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     if (result.success) expect(result.transitioned).toBe(false);
-    // The accept committed before the best-effort advance ran.
+    // The accept committed before the best-effort re-read ran.
     expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID });
     expect(log.error).toHaveBeenCalledWith(
-      'Request aggregate advance failed after accept commit',
+      'Request status re-read failed after accept commit',
       expect.any(Object)
     );
   });

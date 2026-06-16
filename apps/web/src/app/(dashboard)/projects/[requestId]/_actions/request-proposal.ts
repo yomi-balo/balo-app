@@ -8,7 +8,6 @@ import {
   projectRequestsRepository,
   requestExpertRelationshipsRepository,
   conversationsRepository,
-  InvalidStatusTransitionError,
   InvalidRelationshipTransitionError,
   type ProjectRequestWithRelations,
   type RelationshipStatus,
@@ -56,6 +55,31 @@ export type RequestProposalResult =
   | { success: false; error: string; code?: 'already_requested' };
 
 /**
+ * Advance the relationship `eoi_submitted → proposal_requested` (which ALSO derives
+ * the request rollup atomically — ADR-1025 / BAL-295). Maps a concurrent
+ * double-click (`InvalidRelationshipTransitionError`) to `'already_requested'`;
+ * rethrows anything unexpected to the action's generic-failure boundary. Split out
+ * so the action's cognitive complexity stays under the gate.
+ */
+async function advanceRelationshipGuarded(
+  relationshipId: string
+): Promise<'ok' | 'already_requested'> {
+  try {
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationshipId,
+      to: 'proposal_requested',
+      expectedFrom: 'eoi_submitted',
+    });
+    return 'ok';
+  } catch (error) {
+    if (error instanceof InvalidRelationshipTransitionError) {
+      return 'already_requested';
+    }
+    throw error;
+  }
+}
+
+/**
  * Earliest live-EOI `submittedAt` across the request's relationships (each is
  * hydrated `limit:1` newest-first). Known approximation (recorded in the event
  * map): a withdrawn-and-resubmitted EOI reports the resubmit time.
@@ -78,11 +102,11 @@ function firstEoiSubmittedAt(request: ProjectRequestWithRelations): Date | null 
  * The confirmation beat lives in the UI; this action is the commit:
  *  - per-thread truth: the RELATIONSHIP transitions `eoi_submitted →
  *    proposal_requested` (stamping `proposal_requested_at`), guarded by
- *    `expectedFrom` against double-clicks and stale tabs;
- *  - request-level aggregate: advanced `eoi_submitted → proposal_requested` on
- *    the FIRST proposal request only, caller-owned, tolerating
- *    `InvalidStatusTransitionError` as a benign concurrent race — byte-for-byte
- *    the `submit-eoi.ts` pattern;
+ *    `expectedFrom` against double-clicks and stale tabs. This advance ALSO
+ *    derives the request-level status atomically (ADR-1025 / BAL-295), so the
+ *    action no longer issues a separate request transition;
+ *  - the `transitioned` analytics flag is re-sourced from the now-coherent stored
+ *    column (pre-op floor vs a fresh `findById` re-read);
  *  - notifies the expert (`project.proposal_requested`, email + in-app,
  *    fire-and-forget) and returns server-computed analytics for the island.
  *
@@ -131,46 +155,19 @@ export async function requestProposalAction(
       return { success: false, error: NO_LONGER_AVAILABLE };
     }
 
-    // Per-thread truth: advance THE RELATIONSHIP. `expectedFrom` turns a
-    // concurrent double-click into a typed error, not a corrupt state.
-    try {
-      await requestExpertRelationshipsRepository.transitionStatus({
-        id: relationshipId,
-        to: 'proposal_requested',
-        expectedFrom: 'eoi_submitted',
-      });
-    } catch (error) {
-      if (error instanceof InvalidRelationshipTransitionError) {
-        return { success: false, error: ALREADY_REQUESTED, code: 'already_requested' };
-      }
-      throw error;
+    // Per-thread truth: advance THE RELATIONSHIP (which also derives the request
+    // rollup atomically — ADR-1025 / BAL-295). `expectedFrom` turns a concurrent
+    // double-click into a friendly already-requested outcome.
+    const beforeStatus = access.request.status;
+    if ((await advanceRelationshipGuarded(relationshipId)) === 'already_requested') {
+      return { success: false, error: ALREADY_REQUESTED, code: 'already_requested' };
     }
 
-    // Caller-owned REQUEST-level transition, FIRST-REQUEST-ONLY: the request
-    // status is the max-progress aggregate. A second expert's proposal request
-    // arrives when the request is already `proposal_requested` → skip.
-    // `expectedFrom` also defends the two-first-requests race.
-    let transitioned = false;
-    if (access.request.status === 'eoi_submitted') {
-      try {
-        await projectRequestsRepository.transitionStatus({
-          id: requestId,
-          to: 'proposal_requested',
-          expectedFrom: 'eoi_submitted',
-        });
-        transitioned = true;
-      } catch (error) {
-        if (error instanceof InvalidStatusTransitionError) {
-          // Another thread's first request advanced it between our read and
-          // write — same end-state. The relationship transition stands.
-          log.warn('Proposal request transition skipped (already advanced via another thread)', {
-            requestId,
-          });
-        } else {
-          throw error;
-        }
-      }
-    }
+    // Re-source the `transitioned` flag from the now-coherent stored column: the
+    // request rollup advanced (or not) inside the relationship transition above.
+    // Compare the pre-op floor against a fresh re-read (race-tolerant snapshot).
+    const after = await projectRequestsRepository.findById(requestId);
+    const transitioned = after !== undefined && after.status !== beforeStatus;
 
     // Server-computed analytics — the graph was loaded PRE-transition, so this
     // relationship still counts as `eoi_submitted` there (hence the +1).

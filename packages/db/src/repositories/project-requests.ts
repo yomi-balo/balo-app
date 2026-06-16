@@ -16,8 +16,11 @@ export type ProjectRequestStatus = ProjectRequest['status'];
  * branch. `kickoff_approved` is terminal. `draft` is the pre-submit state and
  * only flows to `requested`. Note: `exploratory_meeting_requested` is OPTIONAL —
  * a request may go `requested → experts_invited` directly OR via the meeting
- * state. The request-level status is the max-progress aggregate across all
- * per-expert relationships, advanced explicitly by the caller — never derived.
+ * state. This map guards ONLY the admin-driven, non-relationship-derived moves
+ * (see `transitionStatus`). The relationship-derived portion of the request
+ * status — the max-progress aggregate across all per-expert relationships — is
+ * NOT validated here: it is centrally DERIVED by `deriveRequestStatus` inside
+ * `advanceRelationshipStatus` (ADR-1025 / BAL-295) and written directly.
  */
 export const STATUS_TRANSITIONS: Record<ProjectRequestStatus, readonly ProjectRequestStatus[]> = {
   draft: ['requested'],
@@ -226,6 +229,16 @@ export const projectRequestsRepository = {
    * transitions), rejects illegal transitions (`InvalidStatusTransitionError`)
    * and missing/soft-deleted rows (`Error`), then persists. Returns the updated
    * row.
+   *
+   * ADMIN-ONLY (ADR-1025 / BAL-295): use this ONLY for admin-driven,
+   * NON-relationship-derived moves — `requested → exploratory_meeting_requested`,
+   * `requested → experts_invited`, `exploratory_meeting_requested →
+   * experts_invited`, and `accepted → kickoff_approved`. Relationship-derived
+   * transitions (`experts_invited → eoi_submitted → proposal_requested →
+   * proposal_submitted → accepted`) flow ONLY through `deriveRequestStatus` inside
+   * `advanceRelationshipStatus`, which writes the request status directly; callers
+   * must NOT re-issue those moves here (they would be redundant and may trip the
+   * single-step map even though the rollup already advanced the request).
    *
    * `expectedFrom` is an optional optimistic-concurrency guard: if provided and
    * the live status differs, throws (prevents lost-update races between admins).

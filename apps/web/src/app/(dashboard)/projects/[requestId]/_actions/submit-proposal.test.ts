@@ -39,17 +39,15 @@ const {
   mockSetMilestones,
   mockSetInstallments,
   mockPromote,
-  mockTransitionRequest,
+  mockFindRequestById,
   mockInstallmentsSumTo100,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
-  InvalidStatusTransitionError,
   ProposalNotDraftError,
   ProposalCoherenceError,
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
-  class InvalidStatusTransitionError extends Error {}
   class ProposalNotDraftError extends Error {}
   class ProposalCoherenceError extends Error {
     public readonly rule: string;
@@ -67,11 +65,10 @@ const {
     mockSetMilestones: vi.fn(),
     mockSetInstallments: vi.fn(),
     mockPromote: vi.fn(),
-    mockTransitionRequest: vi.fn(),
+    mockFindRequestById: vi.fn(),
     mockInstallmentsSumTo100: vi.fn(),
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
-    InvalidStatusTransitionError,
     ProposalNotDraftError,
     ProposalCoherenceError,
   };
@@ -92,12 +89,13 @@ vi.mock('@balo/db', () => ({
     setForProposal: (...a: unknown[]) => mockSetInstallments(...a),
   },
   projectRequestsRepository: {
-    transitionStatus: (...a: unknown[]) => mockTransitionRequest(...a),
+    // BAL-295: the request rollup is derived inside promoteToSubmit; the action
+    // re-reads the stored status via findById to source `transitioned`.
+    findById: (...a: unknown[]) => mockFindRequestById(...a),
   },
   installmentsSumTo100: (...a: unknown[]) => mockInstallmentsSumTo100(...a),
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
-  InvalidStatusTransitionError,
   ProposalNotDraftError,
   ProposalCoherenceError,
 }));
@@ -162,7 +160,9 @@ describe('submitProposalAction', () => {
     mockSetMilestones.mockResolvedValue([]);
     mockSetInstallments.mockResolvedValue([]);
     mockPromote.mockResolvedValue({ id: PROPOSAL_ID });
-    mockTransitionRequest.mockResolvedValue({ id: REQUEST_ID });
+    // Default re-read: the rollup advanced proposal_requested → proposal_submitted
+    // (the access pre-op floor is `proposal_requested`), so `transitioned` is true.
+    mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_submitted' });
     mockPublish.mockResolvedValue(undefined);
   });
 
@@ -399,25 +399,24 @@ describe('submitProposalAction', () => {
     });
   });
 
-  it('tolerates a benign request-aggregate race (InvalidStatusTransitionError)', async () => {
-    mockTransitionRequest.mockRejectedValue(new InvalidStatusTransitionError());
+  it('re-reads the rollup-derived request status to source transitioned (BAL-295)', async () => {
     const result = await submitProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
-    if (result.success) expect(result.transitioned).toBe(false);
-    expect(log.warn).toHaveBeenCalledWith(
-      'Proposal submit request transition skipped (already advanced)',
-      expect.any(Object)
-    );
+    if (result.success) expect(result.transitioned).toBe(true);
+    // The action no longer issues a request transition — promoteToSubmit derives it.
+    expect(mockFindRequestById).toHaveBeenCalledWith(REQUEST_ID);
   });
 
-  it('does not advance the request aggregate when it is already past proposal_requested', async () => {
+  it('reports transitioned:false when the stored request status did not advance', async () => {
+    // The request was already past proposal_requested (pre-op floor proposal_submitted)
+    // → the re-read shows no advance.
     mockResolveAccess.mockResolvedValue(
       accessOk({ request: { status: 'proposal_submitted', title: 'CPQ implementation' } })
     );
+    mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_submitted' });
     const result = await submitProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     if (result.success) expect(result.transitioned).toBe(false);
-    expect(mockTransitionRequest).not.toHaveBeenCalled();
   });
 
   it('publishes the client notification with recipientId + expertName + title', async () => {

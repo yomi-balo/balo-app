@@ -40,6 +40,10 @@ export {
   InvalidRelationshipTransitionError,
   type RelationshipStatus,
 } from './request-expert-relationships';
+export {
+  deriveRequestStatus,
+  RELATIONSHIP_TO_REQUEST_STATUS,
+} from './_shared/derive-request-status';
 export { expressionsOfInterestRepository } from './expressions-of-interest';
 export { proposalsRepository } from './proposals';
 export {

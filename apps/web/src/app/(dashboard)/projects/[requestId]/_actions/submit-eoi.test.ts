@@ -8,35 +8,21 @@ const EOI_ID = 'd0000000-0000-4000-8000-000000000004';
 vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
-// Real InvalidStatusTransitionError (hoisted) so the action's `instanceof` check is
-// exercised even though `vi.mock` factories run before module-body consts.
-const { InvalidStatusTransitionError } = vi.hoisted(() => {
-  class InvalidStatusTransitionError extends Error {
-    constructor(
-      public readonly from: string,
-      public readonly to: string
-    ) {
-      super(`Invalid: ${from} → ${to}`);
-      this.name = 'InvalidStatusTransitionError';
-    }
-  }
-  return { InvalidStatusTransitionError };
-});
-
 const mockFindByIdWithRelations = vi.fn();
-const mockTransitionStatus = vi.fn();
+const mockFindById = vi.fn();
 const mockSubmit = vi.fn();
 const mockResubmit = vi.fn();
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
     findByIdWithRelations: (...args: unknown[]) => mockFindByIdWithRelations(...args),
-    transitionStatus: (...args: unknown[]) => mockTransitionStatus(...args),
+    // BAL-295: the request rollup is derived inside submit()/resubmit(); the action
+    // re-reads the stored status via findById to source the `transitioned` flag.
+    findById: (...args: unknown[]) => mockFindById(...args),
   },
   expressionsOfInterestRepository: {
     submit: (...args: unknown[]) => mockSubmit(...args),
     resubmit: (...args: unknown[]) => mockResubmit(...args),
   },
-  InvalidStatusTransitionError,
 }));
 
 const mockRequireUser = vi.fn();
@@ -119,7 +105,9 @@ describe('submitEoiAction', () => {
     mockFindByIdWithRelations.mockResolvedValue(requestGraph());
     mockSubmit.mockResolvedValue({ id: EOI_ID });
     mockResubmit.mockResolvedValue({ id: EOI_ID });
-    mockTransitionStatus.mockResolvedValue({ id: REQUEST_ID });
+    // Default re-read: the rollup advanced experts_invited → eoi_submitted (the
+    // hydrated graph's pre-op floor is `experts_invited`), so `transitioned` is true.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'eoi_submitted' });
   });
 
   it('rejects an unauthenticated caller', async () => {
@@ -182,17 +170,15 @@ describe('submitEoiAction', () => {
     });
   });
 
-  it('first EOI (relationship invited): calls submit() and transitions the request when experts_invited', async () => {
+  it('first EOI (relationship invited): calls submit(); the rollup-derived status re-read yields transitioned:true', async () => {
     const result = await submitEoiAction(VALID_INPUT);
     expect(mockSubmit).toHaveBeenCalledWith({
       relationshipId: RELATIONSHIP_ID,
       message: VALID_INPUT.message,
     });
-    expect(mockTransitionStatus).toHaveBeenCalledWith({
-      id: REQUEST_ID,
-      to: 'eoi_submitted',
-      expectedFrom: 'experts_invited',
-    });
+    // BAL-295: the action no longer issues a request transition — submit() derives
+    // it. It re-reads the stored status via findById to source `transitioned`.
+    expect(mockFindById).toHaveBeenCalledWith(REQUEST_ID);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.transitioned).toBe(true);
@@ -202,17 +188,18 @@ describe('submitEoiAction', () => {
     }
   });
 
-  it('second expert (request already eoi_submitted): submit() but NO request transition', async () => {
+  it('second expert (request already eoi_submitted): submit(), re-read shows no advance → transitioned:false', async () => {
     mockFindByIdWithRelations.mockResolvedValue(
       requestGraph({ requestStatus: 'eoi_submitted', relationshipStatus: 'invited' })
     );
+    // The request was already eoi_submitted (the pre-op floor) → re-read unchanged.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'eoi_submitted' });
     const result = await submitEoiAction(VALID_INPUT);
     expect(mockSubmit).toHaveBeenCalled();
-    expect(mockTransitionStatus).not.toHaveBeenCalled();
     expect(result.success && result.transitioned).toBe(false);
   });
 
-  it('resubmit path (relationship eoi_submitted, no live EOI): calls resubmit(), no transition', async () => {
+  it('resubmit path (relationship eoi_submitted, no live EOI): calls resubmit(), transitioned:false', async () => {
     mockFindByIdWithRelations.mockResolvedValue(
       requestGraph({
         requestStatus: 'eoi_submitted',
@@ -220,13 +207,14 @@ describe('submitEoiAction', () => {
         hasLiveEoi: false,
       })
     );
+    // Resubmit does not move the relationship, so the request rollup is unchanged.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'eoi_submitted' });
     const result = await submitEoiAction(VALID_INPUT);
     expect(mockResubmit).toHaveBeenCalledWith({
       relationshipId: RELATIONSHIP_ID,
       message: VALID_INPUT.message,
     });
     expect(mockSubmit).not.toHaveBeenCalled();
-    expect(mockTransitionStatus).not.toHaveBeenCalled();
     expect(result.success && result.transitioned).toBe(false);
   });
 
@@ -258,13 +246,14 @@ describe('submitEoiAction', () => {
     });
   });
 
-  it('transition race (InvalidStatusTransitionError) → success with transitioned:false, not an error', async () => {
-    mockTransitionStatus.mockRejectedValue(
-      new InvalidStatusTransitionError('eoi_submitted', 'eoi_submitted')
-    );
+  it('re-read snapshot race (request advanced further by another expert) → still success; transitioned reflects the stored column', async () => {
+    // The re-read can land AFTER a concurrent expert advanced the request further;
+    // the action reports the committed status truthfully (it still differs from the
+    // pre-op floor → transitioned:true) and never errors.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_requested' });
     const result = await submitEoiAction(VALID_INPUT);
     expect(result.success).toBe(true);
-    if (result.success) expect(result.transitioned).toBe(false);
+    if (result.success) expect(result.transitioned).toBe(true);
     // The EOI persisted, so we still notify + revalidate.
     expect(mockPublish).toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);

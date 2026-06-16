@@ -9,7 +9,6 @@ import {
   projectRequestsRepository,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
-  InvalidStatusTransitionError,
   ProposalCoherenceError,
   type Proposal,
 } from '@balo/db';
@@ -69,34 +68,26 @@ function displayName(user: { firstName: string | null; lastName: string | null }
 }
 
 /**
- * Advance the REQUEST aggregate `proposal_submitted → accepted` exactly once.
+ * Re-source the `transitioned` analytics flag from the now-coherent stored column
+ * (ADR-1025 / BAL-295). The request rollup `proposal_submitted → accepted` advances
+ * ATOMICALLY inside `proposalsRepository.accept`; this is a read-only, best-effort
+ * `findById` compare of the pre-op floor against a fresh re-read.
+ *
  * Best-effort and NEVER throws: the accept is already committed in its own tx and
- * is the source of truth, so neither the benign already-advanced race
- * (`InvalidStatusTransitionError`) nor a transient failure may fail the action —
- * both are logged and reported as `transitioned = false`. Returns whether THIS
- * call performed the transition.
+ * is the source of truth, so a read hiccup on this analytics-only re-read must
+ * never fail an already-committed accept — it is logged and reported as
+ * `transitioned = false`. Returns whether the stored request status advanced.
  */
-async function advanceRequestAggregate(requestId: string, currentStatus: string): Promise<boolean> {
-  if (currentStatus !== 'proposal_submitted') {
-    return false;
-  }
+async function didRequestAdvance(requestId: string, beforeStatus: string): Promise<boolean> {
   try {
-    await projectRequestsRepository.transitionStatus({
-      id: requestId,
-      to: 'accepted',
-      expectedFrom: 'proposal_submitted',
-    });
-    return true;
+    const after = await projectRequestsRepository.findById(requestId);
+    return after !== undefined && after.status !== beforeStatus;
   } catch (error) {
-    if (error instanceof InvalidStatusTransitionError) {
-      log.warn('Proposal accept request transition skipped (already advanced)', { requestId });
-    } else {
-      log.error('Request aggregate advance failed after accept commit', {
-        requestId,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-    }
+    log.error('Request status re-read failed after accept commit', {
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return false;
   }
 }
@@ -153,15 +144,16 @@ async function commitAccept(
  * Client accepts a submitted proposal (A6.4 / BAL-289) — the CLIENT mirror of the
  * expert's submit action. Commits the status flip through the EXISTING
  * `proposalsRepository.accept` (proposal `submitted → accepted` + relationship
- * `proposal_submitted → accepted`, one tx), advances the request aggregate
- * (race-tolerant), then publishes the client→expert acceptance notification
- * (fire-and-forget).
+ * `proposal_submitted → accepted` + the derived request rollup `proposal_submitted
+ * → accepted`, all one tx — ADR-1025 / BAL-295), re-sources the `transitioned`
+ * flag from the stored column, then publishes the client→expert acceptance
+ * notification (fire-and-forget).
  *
  * Control flow: requireUser → validate input → `resolveConversationAccess`
  * (denies non-participants and foreign relationship ids) → CLIENT-lens gate →
  * re-load + verify the proposal (live, `submitted`, current, belongs to this
  * relationship) → `accept` (typed transition errors → friendly stale copy) →
- * advance the request aggregate → log → notify → revalidate → return.
+ * re-source the `transitioned` flag → log → notify → revalidate → return.
  */
 export async function acceptProposalAction(
   input: AcceptProposalInput
@@ -221,11 +213,12 @@ export async function acceptProposalAction(
       };
     }
 
-    // Advance the REQUEST aggregate (first-accept-only). Best-effort + never
-    // throws — the accept above is already committed and is the source of truth
-    // (see `advanceRequestAggregate`); a lagging request status is tolerable and
-    // must never re-toast a misleading retry for a state change that succeeded.
-    const transitioned = await advanceRequestAggregate(requestId, access.request.status);
+    // Re-source `transitioned` from the stored column. Best-effort + never throws
+    // — the accept above is already committed and derived the request rollup
+    // atomically (ADR-1025 / BAL-295); a lagging/failed re-read of this
+    // analytics-only flag must never re-toast a misleading retry for a state change
+    // that succeeded.
+    const transitioned = await didRequestAdvance(requestId, access.request.status);
 
     // Key business event (after the commit).
     log.info('Proposal accepted', {

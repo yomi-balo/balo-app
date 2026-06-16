@@ -18,10 +18,12 @@ export const expressionsOfInterestRepository = {
    * denormalised `project_request_id`/`expert_profile_id` are read FROM the
    * (locked) relationship row, never trusted from the caller. Returns the EOI.
    *
-   * BOUNDARY: this does NOT advance the request-level status. The caller (web
-   * action) calls `projectRequestsRepository.transitionStatus` for the
-   * `experts_invited`→`eoi_submitted` request-level move only on the FIRST EOI —
-   * request-level aggregation stays explicit and caller-owned.
+   * BOUNDARY (ADR-1025 / BAL-295): advancing the relationship here ALSO advances
+   * the request-level status via `deriveRequestStatus` inside
+   * `advanceRelationshipStatus`, in the SAME transaction. The request rollup is no
+   * longer caller-owned — the web action must NOT separately
+   * `transitionStatus(experts_invited → eoi_submitted)`; it only re-reads the now
+   * coherent stored status to source its `transitioned` flag.
    */
   async submit(input: { relationshipId: string; message: string }): Promise<ExpressionOfInterest> {
     return db.transaction(async (tx) => {

@@ -7,7 +7,6 @@ import { revalidatePath } from 'next/cache';
 import {
   projectRequestsRepository,
   expressionsOfInterestRepository,
-  InvalidStatusTransitionError,
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
@@ -64,6 +63,36 @@ function expertDisplayName(relationship: Relationship): string {
 }
 
 /**
+ * Branch first-EOI vs resubmit off the relationship status + live-EOI presence and
+ * persist the EOI, returning its id (or a friendly stale-state error). Split out of
+ * the action so the action's cognitive complexity stays under the gate. `submit()`
+ * advances the relationship AND derives the request rollup atomically (ADR-1025 /
+ * BAL-295); `resubmit()` moves neither.
+ */
+async function persistEoi(
+  rel: Relationship,
+  relationshipId: string,
+  safeHtml: string
+): Promise<{ ok: true; eoiId: string } | { ok: false; error: string }> {
+  const hasLiveEoi = rel.expressionsOfInterest.length > 0;
+  if (rel.status === 'invited') {
+    const eoi = await expressionsOfInterestRepository.submit({ relationshipId, message: safeHtml });
+    return { ok: true, eoiId: eoi.id };
+  }
+  if (rel.status === 'eoi_submitted' && !hasLiveEoi) {
+    const eoi = await expressionsOfInterestRepository.resubmit({
+      relationshipId,
+      message: safeHtml,
+    });
+    return { ok: true, eoiId: eoi.id };
+  }
+  if (rel.status === 'eoi_submitted' && hasLiveEoi) {
+    return { ok: false, error: 'You already have an active EOI. Withdraw it first to resubmit.' };
+  }
+  return { ok: false, error: 'You can no longer submit an EOI for this request.' };
+}
+
+/**
  * Expert EOI submission (BAL-270 / A3).
  *
  * IDOR-safe by construction: the input is `{ requestId, message }` ONLY — the
@@ -73,12 +102,17 @@ function expertDisplayName(relationship: Relationship): string {
  * LIVE, non-declined relationship whose `expertProfileId === user.expertProfileId`.
  *
  * Branches off the hydrated relationship status + live-EOI presence:
- *  - first EOI (relationship `invited`) → `submit()` (atomically advances the
- *    relationship + inserts the EOI), then a caller-owned request-level transition
- *    `experts_invited → eoi_submitted` guarded to the FIRST EOI only;
- *  - resubmit (relationship `eoi_submitted`, no live EOI) → `resubmit()`, no
- *    request transition;
+ *  - first EOI (relationship `invited`) → `submit()` — atomically advances the
+ *    relationship AND derives the request-level status (ADR-1025 / BAL-295), so no
+ *    separate request transition is issued here;
+ *  - resubmit (relationship `eoi_submitted`, no live EOI) → `resubmit()`, which
+ *    does not move the relationship and so leaves the request status unchanged;
  *  - already has a live EOI → friendly pre-check error.
+ *
+ * The `transitioned` analytics flag is re-sourced by comparing the request status
+ * BEFORE vs a fresh `findById` re-read AFTER the relationship op — truthful (reads
+ * the committed post-derivation status) without re-issuing the now-redundant
+ * request transition.
  *
  * Fires a client-facing `project.eoi_submitted` notification (fire-and-forget) and
  * returns `timeToEoiMs` for the island to attach to analytics.
@@ -121,58 +155,24 @@ export async function submitEoiAction(
     if (rel === undefined) {
       return { success: false, error: 'You are not an invited expert on this request.' };
     }
-    const hasLiveEoi = rel.expressionsOfInterest.length > 0;
 
-    // Branch first-vs-resubmit off the relationship status + live-EOI presence.
-    let eoiId: string;
-    let transitioned = false;
-    if (rel.status === 'invited') {
-      // FIRST EOI — `submit()` advances `invited → eoi_submitted` + inserts the EOI.
-      const eoi = await expressionsOfInterestRepository.submit({
-        relationshipId,
-        message: safeHtml,
-      });
-      eoiId = eoi.id;
-
-      // Caller-owned REQUEST-level transition, FIRST-EOI-ONLY: only when the request
-      // is still `experts_invited`. A second expert's EOI arrives when the request is
-      // already `eoi_submitted` → skip (the move would be illegal). `expectedFrom`
-      // also defends a race where another expert advanced it between read and write.
-      if (request.status === 'experts_invited') {
-        try {
-          await projectRequestsRepository.transitionStatus({
-            id: requestId,
-            to: 'eoi_submitted',
-            expectedFrom: 'experts_invited',
-          });
-          transitioned = true;
-        } catch (error) {
-          if (error instanceof InvalidStatusTransitionError) {
-            // The request reached `eoi_submitted` via another expert between our read
-            // and write — same end-state. The EOI already persisted; not a user error.
-            log.warn('EOI request transition skipped (already advanced by another expert)', {
-              requestId,
-            });
-          } else {
-            throw error;
-          }
-        }
-      }
-    } else if (rel.status === 'eoi_submitted' && !hasLiveEoi) {
-      // RESUBMIT after a prior withdraw — insert a fresh EOI, NO request transition.
-      const eoi = await expressionsOfInterestRepository.resubmit({
-        relationshipId,
-        message: safeHtml,
-      });
-      eoiId = eoi.id;
-    } else if (rel.status === 'eoi_submitted' && hasLiveEoi) {
-      return {
-        success: false,
-        error: 'You already have an active EOI. Withdraw it first to resubmit.',
-      };
-    } else {
-      return { success: false, error: 'You can no longer submit an EOI for this request.' };
+    // Persist the EOI (first-submit or resubmit). `submit()` derives the
+    // request-level status atomically (ADR-1025 / BAL-295); `request.status`
+    // captured here is the pre-op floor.
+    const beforeStatus = request.status;
+    const persisted = await persistEoi(rel, relationshipId, safeHtml);
+    if (!persisted.ok) {
+      return { success: false, error: persisted.error };
     }
+    const eoiId = persisted.eoiId;
+
+    // Re-source the `transitioned` flag from the now-coherent stored column
+    // (ADR-1025 / BAL-295): compare the pre-op floor against a fresh re-read. The
+    // request rollup advanced atomically inside `submit()`; a re-read that races
+    // past it (another expert advancing concurrently) is the same race-tolerant
+    // snapshot semantics the old explicit transition had.
+    const after = await projectRequestsRepository.findById(requestId);
+    const transitioned = after !== undefined && after.status !== beforeStatus;
 
     const resubmit = rel.status === 'eoi_submitted';
     log.info('EOI submitted', {

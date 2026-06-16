@@ -187,8 +187,11 @@ export const proposalsRepository = {
    * written via their own repos (separate calls), NOT inside `submit()`.
    * `priceCents` is integer minor units; `currency` defaults to `aud`.
    *
-   * BOUNDARY: does NOT advance request-level status — caller-owned. Draft
-   * persistence (insert as `draft`) is A6.2; this inserts directly as `submitted`.
+   * BOUNDARY (ADR-1025 / BAL-295): advancing the relationship to
+   * `proposal_submitted` ALSO advances the request-level status via
+   * `deriveRequestStatus` inside `advanceRelationshipStatus`, in the SAME
+   * transaction — no longer caller-owned. Draft persistence (insert as `draft`) is
+   * A6.2; this inserts directly as `submitted`.
    *
    * COHERENCE (BAL-293): asserts `assertProposalCoherent` at the TOP of the tx,
    * built from the supplied header with EMPTY milestones/installments (this legacy
@@ -413,6 +416,11 @@ export const proposalsRepository = {
    * the whole tx rolls back) if either is not in its expected state — so a
    * double-submit / stale tab is rejected, not double-applied.
    *
+   * BOUNDARY (ADR-1025 / BAL-295): the step-1 relationship advance to
+   * `proposal_submitted` ALSO advances the request-level status via
+   * `deriveRequestStatus` inside `advanceRelationshipStatus`, in this SAME
+   * transaction — the request rollup is no longer caller-owned.
+   *
    * `submittedAt` re-stamp: `proposals.submittedAt` defaults to `now()` at INSERT
    * (draft creation), so a draft carries a creation-time `submittedAt`. We re-stamp
    * it LOCALLY here (the actual submit instant) rather than changing the shared
@@ -510,9 +518,11 @@ export const proposalsRepository = {
    * (routed through `advanceProposalStatus`, which validates submitted→accepted
    * and stamps `acceptedAt`) AND relationship `proposal_submitted`→`accepted`.
    *
-   * BOUNDARY: does NOT touch request-level status and creates NO
-   * delivery/engagement record (A6.5 owns that). The method's scope is exactly
-   * these two updates.
+   * BOUNDARY (ADR-1025 / BAL-295): advancing the relationship to `accepted` ALSO
+   * advances the request-level status via `deriveRequestStatus` inside
+   * `advanceRelationshipStatus`, in this SAME transaction — the request rollup is
+   * no longer caller-owned. Still creates NO delivery/engagement record (A6.5 owns
+   * that).
    *
    * LOCK ORDER: proposal row first (FOR UPDATE), then the relationship row (via
    * `advanceRelationshipStatus`). Any future writer that locks both must preserve
