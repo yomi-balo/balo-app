@@ -33,9 +33,9 @@ export function ProjectsInboxAnalytics({
     firedFor.current = lens;
 
     // Seed the first-action clock — best-effort (private mode may throw).
-    if (typeof window !== 'undefined') {
+    if (typeof globalThis.window !== 'undefined') {
       try {
-        window.sessionStorage.setItem(INBOX_VIEWED_AT_KEY, String(Date.now()));
+        globalThis.sessionStorage.setItem(INBOX_VIEWED_AT_KEY, String(Date.now()));
       } catch {
         // sessionStorage unavailable — time_to_first_action_ms simply stays null.
       }
@@ -54,11 +54,11 @@ export function ProjectsInboxAnalytics({
 
 /** Read + clear the seeded view timestamp → ms since view, or null. */
 export function readTimeToFirstAction(): number | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof globalThis.window === 'undefined') return null;
   try {
-    const seeded = window.sessionStorage.getItem(INBOX_VIEWED_AT_KEY);
+    const seeded = globalThis.sessionStorage.getItem(INBOX_VIEWED_AT_KEY);
     if (seeded === null) return null;
-    window.sessionStorage.removeItem(INBOX_VIEWED_AT_KEY);
+    globalThis.sessionStorage.removeItem(INBOX_VIEWED_AT_KEY);
     const parsed = Number.parseInt(seeded, 10);
     if (Number.isNaN(parsed)) return null;
     return Date.now() - parsed;

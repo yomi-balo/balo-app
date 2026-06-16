@@ -193,9 +193,9 @@ function toExpertRowView(
   // The expert's recency: newest of invite, row update, and newest EOI.
   const recencyAt = maxDate(
     invitation.invitedAt,
-    invitation.newestEoiAt !== null
-      ? [invitation.relationshipUpdatedAt, invitation.newestEoiAt]
-      : [invitation.relationshipUpdatedAt]
+    invitation.newestEoiAt === null
+      ? [invitation.relationshipUpdatedAt]
+      : [invitation.relationshipUpdatedAt, invitation.newestEoiAt]
   );
   return {
     id: invitation.projectRequestId,

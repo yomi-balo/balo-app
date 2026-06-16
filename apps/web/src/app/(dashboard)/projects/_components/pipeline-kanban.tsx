@@ -38,9 +38,9 @@ function KanbanCard({ card }: Readonly<{ card: AdminKanbanCard }>): React.JSX.El
       onClick={handleClick}
       className={cn(
         'bg-card focus-visible:ring-ring block rounded-xl border p-3 transition-colors focus-visible:ring-2 focus-visible:outline-none',
-        card.stalledLabel !== null
-          ? 'border-destructive/40'
-          : 'border-border hover:border-primary/40'
+        card.stalledLabel === null
+          ? 'border-border hover:border-primary/40'
+          : 'border-destructive/40'
       )}
     >
       <p className="text-foreground text-sm leading-snug font-semibold">{card.title}</p>

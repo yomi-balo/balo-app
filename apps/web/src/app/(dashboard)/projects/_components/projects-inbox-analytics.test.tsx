@@ -12,7 +12,7 @@ const trackMock = vi.mocked(track);
 describe('ProjectsInboxAnalytics', () => {
   beforeEach(() => {
     trackMock.mockClear();
-    window.sessionStorage.clear();
+    globalThis.sessionStorage.clear();
   });
 
   it('fires inbox_viewed on mount with the lens + counts', () => {
@@ -31,11 +31,11 @@ describe('ProjectsInboxAnalytics', () => {
     render(
       <ProjectsInboxAnalytics lens="expert" needsCount={1} inProgressCount={0} totalCount={1} />
     );
-    expect(window.sessionStorage.getItem(INBOX_VIEWED_AT_KEY)).not.toBeNull();
+    expect(globalThis.sessionStorage.getItem(INBOX_VIEWED_AT_KEY)).not.toBeNull();
   });
 
   it('readTimeToFirstAction returns a number then clears the seed', () => {
-    window.sessionStorage.setItem(INBOX_VIEWED_AT_KEY, String(Date.now() - 100));
+    globalThis.sessionStorage.setItem(INBOX_VIEWED_AT_KEY, String(Date.now() - 100));
     const ms = readTimeToFirstAction();
     expect(typeof ms).toBe('number');
     expect(ms).toBeGreaterThanOrEqual(0);

@@ -65,7 +65,7 @@ const DTO: AdminPortfolioDTO = {
 describe('AdminDash', () => {
   beforeEach(() => {
     trackMock.mockClear();
-    window.sessionStorage.clear();
+    globalThis.sessionStorage.clear();
   });
 
   it('renders the triage hero with the >24h overdue pill', () => {

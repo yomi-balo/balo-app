@@ -44,7 +44,7 @@ const ROW: PortfolioRowView = {
 describe('HeroCard', () => {
   beforeEach(() => {
     trackMock.mockClear();
-    window.sessionStorage.clear();
+    globalThis.sessionStorage.clear();
   });
 
   it('renders the title, nudge CTA, stage chip and signal', () => {
