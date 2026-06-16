@@ -30,6 +30,8 @@ interface Overrides {
   pricingMethod?: ProposalPricingMethod;
   totalCents?: number;
   currency?: string;
+  fixedPriceCents?: number | null;
+  totalEstimatedMinutes?: number;
   installments?: ProposalInstallmentDraft[];
   installmentSum?: number;
   depositCents?: number | null;
@@ -43,12 +45,14 @@ function renderTab(overrides: Overrides = {}): {
   onAddInstallment: ReturnType<typeof vi.fn>;
   onDepositChange: ReturnType<typeof vi.fn>;
   onRateChange: ReturnType<typeof vi.fn>;
+  onFixedPriceChange: ReturnType<typeof vi.fn>;
 } {
   const onInstallmentsChange = vi.fn();
   const onAddInstallment = vi.fn();
   const onDepositChange = vi.fn();
   const onRateChange = vi.fn();
   const onCadenceChange = vi.fn();
+  const onFixedPriceChange = vi.fn();
   const installments = overrides.installments ?? [
     installment('Upfront', 30),
     installment('Final', 70),
@@ -58,6 +62,13 @@ function renderTab(overrides: Overrides = {}): {
       pricingMethod={overrides.pricingMethod ?? 'fixed'}
       totalCents={overrides.totalCents ?? 1_000_000}
       currency={overrides.currency ?? 'aud'}
+      // `?? 1_000_000` would coerce an explicit `null` to the default — distinguish
+      // "not provided" (default) from an explicit null (an untyped Fixed price).
+      fixedPriceCents={
+        'fixedPriceCents' in overrides ? (overrides.fixedPriceCents ?? null) : 1_000_000
+      }
+      onFixedPriceChange={onFixedPriceChange}
+      totalEstimatedMinutes={overrides.totalEstimatedMinutes ?? 0}
       installments={installments}
       installmentSum={overrides.installmentSum ?? installments.reduce((s, i) => s + i.pct, 0)}
       onInstallmentsChange={onInstallmentsChange}
@@ -76,24 +87,51 @@ function renderTab(overrides: Overrides = {}): {
       onDocumentRemoved={vi.fn()}
     />
   );
-  return { onInstallmentsChange, onAddInstallment, onDepositChange, onRateChange };
+  return {
+    onInstallmentsChange,
+    onAddInstallment,
+    onDepositChange,
+    onRateChange,
+    onFixedPriceChange,
+  };
 }
 
 describe('PaymentTermsTab — Fixed', () => {
-  it('renders the method note, milestone total, and grouped per-installment amounts', () => {
+  it('renders the method note, typed total input, and grouped per-installment amounts', () => {
     renderTab({
       totalCents: 1_000_000,
+      fixedPriceCents: 1_000_000,
       installments: [installment('Upfront', 30), installment('Final', 70)],
     });
     // Read-only method note pointing back to Overview.
     expect(screen.getByText(/change it in the Overview tab/i)).toBeInTheDocument();
     expect(screen.getByText('Fixed price')).toBeInTheDocument();
-    // Total from milestones, grouped whole-dollar.
-    expect(screen.getByText('Total from milestones')).toBeInTheDocument();
-    expect(screen.getByText('A$10,000')).toBeInTheDocument();
-    // Derived per-installment amounts: 30% of A$10,000 = A$3,000; 70% = A$7,000.
+    // Typed total input (BAL-294) seeded from fixedPriceCents (A$10,000 = 10000 dollars).
+    const totalInput = screen.getByLabelText('Total fixed price');
+    expect(totalInput).toHaveValue(10_000);
+    // Derived per-installment amounts compute against the typed total:
+    // 30% of A$10,000 = A$3,000; 70% = A$7,000.
     expect(screen.getByText('A$3,000')).toBeInTheDocument();
     expect(screen.getByText('A$7,000')).toBeInTheDocument();
+  });
+
+  it('fires onFixedPriceChange (dollars→cents) when the typed total is edited', async () => {
+    const user = userEvent.setup();
+    const { onFixedPriceChange } = renderTab({ fixedPriceCents: null });
+    await user.type(screen.getByLabelText('Total fixed price'), '5');
+    // Empty (null) → "5" → A$5 → 500 cents.
+    expect(onFixedPriceChange).toHaveBeenLastCalledWith(500);
+  });
+
+  it('installment amounts follow the typed total, not the milestone valueCents sum', () => {
+    // totalCents reflects the typed total (the composer passes computeTotalCents).
+    renderTab({
+      totalCents: 2_000_000,
+      fixedPriceCents: 2_000_000,
+      installments: [installment('Upfront', 25), installment('Final', 75)],
+    });
+    expect(screen.getByText('A$5,000')).toBeInTheDocument(); // 25% of A$20,000
+    expect(screen.getByText('A$15,000')).toBeInTheDocument(); // 75% of A$20,000
   });
 
   it('shows the default (success) badge variant when installments sum to 100', () => {
@@ -158,17 +196,37 @@ describe('PaymentTermsTab — Fixed', () => {
 });
 
 describe('PaymentTermsTab — Time & materials', () => {
-  it('renders deposit / rate / cadence inputs and the estimate-not-a-cap note', () => {
-    renderTab({ pricingMethod: 'tm', totalCents: 800_000 });
+  it('renders deposit / rate / cadence inputs and a read-only derived total', () => {
+    // 300 min = 5h × A$160/hr (16_000 cents) = A$800 (totalCents 80_000).
+    renderTab({
+      pricingMethod: 'tm',
+      totalCents: 80_000,
+      rateCents: 16_000,
+      totalEstimatedMinutes: 300,
+    });
     expect(screen.getByText('Time & materials')).toBeInTheDocument();
     expect(screen.getByLabelText(/deposit/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/hourly rate/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/invoicing cadence/i)).toBeInTheDocument();
-    // The milestone estimate is shown as a guide, not a cap.
-    expect(screen.getByText(/is shown as a guide, not a cap/i)).toBeInTheDocument();
-    expect(screen.getByText(/A\$8,000/)).toBeInTheDocument();
+    // The read-only derived total + the "Nh at $rate/hr" cross-check.
+    expect(screen.getByText('Estimated total')).toBeInTheDocument();
+    expect(screen.getByText(/≈ A\$800/)).toBeInTheDocument();
+    expect(screen.getByText(/5h at A\$160\/hr/)).toBeInTheDocument();
+    // The typed total input is NOT shown under T&M.
+    expect(screen.queryByLabelText('Total fixed price')).not.toBeInTheDocument();
     // No installment editor in T&M.
     expect(screen.queryByText('Payment installments')).not.toBeInTheDocument();
+  });
+
+  it('shows the set-rate-and-effort prompt when the rate is null', () => {
+    renderTab({ pricingMethod: 'tm', rateCents: null, totalEstimatedMinutes: 300 });
+    expect(screen.getByText(/Set an hourly rate and per-milestone effort/i)).toBeInTheDocument();
+    expect(screen.queryByText('Estimated total')).not.toBeInTheDocument();
+  });
+
+  it('shows the set-rate-and-effort prompt when there is no effort yet', () => {
+    renderTab({ pricingMethod: 'tm', rateCents: 16_000, totalEstimatedMinutes: 0 });
+    expect(screen.getByText(/Set an hourly rate and per-milestone effort/i)).toBeInTheDocument();
   });
 
   it('emits dollar→cents on deposit + rate input', async () => {

@@ -99,6 +99,43 @@ describe('proposalMilestonesRepository.setForProposal', () => {
 
     expect(await proposalMilestonesRepository.listByProposal(proposal.id)).toHaveLength(0);
   });
+
+  it('round-trips estimatedMinutes (present + null) — BAL-294', async () => {
+    const { proposal } = await proposalFactory();
+
+    const rows = await proposalMilestonesRepository.setForProposal({
+      proposalId: proposal.id,
+      milestones: [
+        { title: 'Discovery', estimatedMinutes: 90 },
+        { title: 'Build', estimatedMinutes: 0 },
+        { title: 'Handover', estimatedMinutes: null },
+        { title: 'No effort field' }, // omitted → defaults to null
+      ],
+    });
+
+    const [discovery, build, handover, omitted] = rows;
+    expect(discovery?.estimatedMinutes).toBe(90);
+    expect(build?.estimatedMinutes).toBe(0);
+    expect(handover?.estimatedMinutes).toBeNull();
+    expect(omitted?.estimatedMinutes).toBeNull();
+
+    // Re-read through listByProposal to confirm the column persists.
+    const live = await proposalMilestonesRepository.listByProposal(proposal.id);
+    expect(live.map((m) => m.estimatedMinutes)).toEqual([90, 0, null, null]);
+  });
+
+  it('rejects a negative estimatedMinutes (CHECK proposal_milestone_estimated_minutes_nonneg) and rolls the set back — BAL-294', async () => {
+    const { proposal } = await proposalFactory();
+
+    await expect(
+      proposalMilestonesRepository.setForProposal({
+        proposalId: proposal.id,
+        milestones: [{ title: 'Bad effort', estimatedMinutes: -1 }],
+      })
+    ).rejects.toThrow();
+
+    expect(await proposalMilestonesRepository.listByProposal(proposal.id)).toHaveLength(0);
+  });
 });
 
 describe('proposalMilestonesRepository.listByProposal', () => {

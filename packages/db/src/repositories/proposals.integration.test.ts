@@ -25,13 +25,15 @@ describe('proposalsRepository.submit', () => {
       await requestExpertRelationshipFactory({ values: { status: 'proposal_requested' } });
 
     // BAL-293: the legacy header-only submit() now requires coherent terms. The
-    // header-only coherent form is `tm` (rate + cadence). The active fixed path is
-    // draft→promoteToSubmit (which re-reads installments/milestones).
+    // header-only coherent form is `tm` (rate + cadence). BAL-294: a tm header with
+    // NO milestones derives a total of 0, so the coherent priceCents is 0
+    // (tm_total_mismatch otherwise). The active fixed path is draft→promoteToSubmit
+    // (which re-reads installments/milestones).
     const proposal = await proposalsRepository.submit({
       relationshipId: relationship.id,
       overview: '<p>Two-week discovery + build.</p>',
       pricingMethod: 'tm',
-      priceCents: 500000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -45,7 +47,7 @@ describe('proposalsRepository.submit', () => {
     expect(proposal.isCurrent).toBe(true);
     expect(proposal.pricingMethod).toBe('tm');
     expect(proposal.overview).toBe('<p>Two-week discovery + build.</p>');
-    expect(proposal.priceCents).toBe(500000);
+    expect(proposal.priceCents).toBe(0);
     expect(proposal.currency).toBe('aud'); // default
     expect(proposal.acceptedAt).toBeNull();
 
@@ -62,7 +64,7 @@ describe('proposalsRepository.submit', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 100000,
+      priceCents: 0,
       currency: 'usd',
       timeframeWeeks: 10,
       exclusions: '<p>Not included.</p>',
@@ -88,7 +90,7 @@ describe('proposalsRepository.submit', () => {
         relationshipId: relationship.id,
         overview: '<p>Should fail — relationship still invited.</p>',
         pricingMethod: 'tm',
-        priceCents: 1000,
+        priceCents: 0,
         depositCents: 25000,
         rateCents: 18000,
         cadence: 'monthly',
@@ -133,7 +135,7 @@ describe('proposalsRepository.submit', () => {
         relationshipId: randomUUID(),
         overview: '<p>No relationship.</p>',
         pricingMethod: 'tm',
-        priceCents: 1000,
+        priceCents: 0,
         depositCents: 25000,
         rateCents: 18000,
         cadence: 'monthly',
@@ -151,7 +153,7 @@ describe('proposalsRepository.accept', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 250000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -186,7 +188,7 @@ describe('proposalsRepository.accept', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -261,7 +263,7 @@ describe('proposalsRepository.transitionStatus', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -304,7 +306,7 @@ describe('proposalsRepository.transitionStatus', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -327,7 +329,7 @@ describe('proposalsRepository.transitionStatus', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -353,7 +355,7 @@ describe('proposalsRepository.transitionStatus', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -378,7 +380,7 @@ describe('proposalsRepository.requestChanges', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -415,7 +417,7 @@ describe('proposalsRepository.requestChanges', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -448,7 +450,7 @@ describe('proposalsRepository.resubmit', () => {
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -510,7 +512,7 @@ describe('proposalsRepository.resubmit', () => {
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -538,7 +540,7 @@ describe('proposalsRepository.resubmit', () => {
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -596,7 +598,7 @@ describe('proposalsRepository list / find', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -616,7 +618,7 @@ describe('proposalsRepository list / find', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -637,7 +639,7 @@ describe('proposalsRepository list / find', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 1000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -878,7 +880,7 @@ describe('proposalsRepository.promoteToSubmit', () => {
       relationshipId: relationship.id,
       overview: '<p>Ready to submit.</p>',
       pricingMethod: 'tm',
-      priceCents: 500000,
+      priceCents: 0,
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -946,7 +948,9 @@ describe('proposalsRepository.promoteToSubmit', () => {
         status: 'submitted',
         pricingMethod: 'tm',
         overview: '<p>Already submitted — cannot promote a non-draft.</p>',
-        priceCents: 1000,
+        // BAL-294: tm + no milestones derives a total of 0, so priceCents must be 0
+        // for the coherence guard to pass and let the transition guard fire.
+        priceCents: 0,
         rateCents: 18000,
         cadence: 'monthly',
       })
@@ -1222,7 +1226,7 @@ describe('proposalsRepository.submit — coherence guard (BAL-293)', () => {
       relationshipId: relationship.id,
       overview: '<p>T&M scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 100_000,
+      priceCents: 0,
       depositCents: 25_000,
       rateCents: 18_000,
       cadence: 'monthly',
@@ -1243,7 +1247,7 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 100_000,
+      priceCents: 0,
       depositCents: 25_000,
       rateCents: 18_000,
       cadence: 'monthly',
@@ -1277,13 +1281,18 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
       relationshipId: relationship.id,
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
-      priceCents: 100_000,
+      priceCents: 0,
       depositCents: 25_000,
       rateCents: 18_000,
       cadence: 'monthly',
     });
-    // Turn it into a coherent FIXED proposal with valid children.
-    await db.update(proposals).set({ pricingMethod: 'fixed' }).where(eq(proposals.id, proposal.id));
+    // Turn it into a coherent FIXED proposal with valid children. The submit above
+    // was a tm header (price 0, no milestones — BAL-294); a Fixed total is an
+    // expert-typed figure, so set priceCents to the Fixed total on disk too.
+    await db
+      .update(proposals)
+      .set({ pricingMethod: 'fixed', priceCents: 100_000 })
+      .where(eq(proposals.id, proposal.id));
     await proposalMilestonesRepository.setForProposal({
       proposalId: proposal.id,
       milestones: [{ title: 'Build', valueCents: 100_000 }],
@@ -1308,7 +1317,7 @@ describe('proposalsRepository.resubmit — coherence guard (BAL-293)', () => {
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
       pricingMethod: 'tm',
-      priceCents: 100_000,
+      priceCents: 0,
       depositCents: 0,
       rateCents: 18_000,
       cadence: 'monthly',
@@ -1356,7 +1365,7 @@ describe('proposalsRepository.resubmit — coherence guard (BAL-293)', () => {
       relationshipId: relationship.id,
       overview: '<p>v1.</p>',
       pricingMethod: 'tm',
-      priceCents: 100_000,
+      priceCents: 0,
       depositCents: 0,
       rateCents: 18_000,
       cadence: 'monthly',
@@ -1419,5 +1428,237 @@ describe('proposalsRepository drafts stay free of the coherence guard (BAL-293)'
       priceCents: 0,
     });
     expect(updated.status).toBe('draft');
+  });
+});
+
+// ── BAL-294: T&M estimated-effort + derived-total coherence (rollback proofs) ──
+
+describe('proposalsRepository.promoteToSubmit — T&M effort/total coherence (BAL-294)', () => {
+  it('PROMOTES a coherent tm draft (effort on all milestones, price == derived total)', async () => {
+    // 90 + 210 = 300 min (5h) at 18_000c/hr → 90_000c.
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'tm',
+      priceCents: 90_000,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [
+        { title: 'Discovery', estimatedMinutes: 90 },
+        { title: 'Build', estimatedMinutes: 210 },
+      ],
+    });
+
+    const submitted = await proposalsRepository.promoteToSubmit({ proposalId, relationshipId });
+    expect(submitted.status).toBe('submitted');
+    const rel = await requestExpertRelationshipsRepository.findById(relationshipId);
+    expect(rel?.status).toBe('proposal_submitted');
+  });
+
+  it('rejects a tm draft with a milestone missing effort (tm_missing_effort) — whole tx rolls back', async () => {
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [
+        { title: 'Has effort', estimatedMinutes: 90 },
+        { title: 'Missing effort', estimatedMinutes: null },
+      ],
+    });
+
+    const err = await proposalsRepository
+      .promoteToSubmit({ proposalId, relationshipId })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');
+
+    // Proposal stays draft, relationship reverts.
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+    const rel = await requestExpertRelationshipsRepository.findById(relationshipId);
+    expect(rel?.status).toBe('proposal_requested');
+  });
+
+  it('rejects a tm draft whose price diverges from the derived total (tm_total_mismatch)', async () => {
+    // 300 min × 18_000 = 90_000c derived, but priceCents is 50_000 (off by >> N).
+    const { proposalId, relationshipId } = await seedPromotableDraft({
+      pricingMethod: 'tm',
+      priceCents: 50_000,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId,
+      milestones: [{ title: 'Build', estimatedMinutes: 300 }],
+    });
+
+    const err = await proposalsRepository
+      .promoteToSubmit({ proposalId, relationshipId })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('tm_total_mismatch');
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+    expect(raw?.status).toBe('draft');
+  });
+});
+
+describe('proposalsRepository.accept — T&M effort/total coherence (BAL-294)', () => {
+  it('ACCEPTS a coherent tm proposal (effort on all milestones, price == derived)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    // Submit a coherent header-only tm (price 0, no milestones), then attach
+    // coherent effort children + align priceCents to the derived total on disk.
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId: proposal.id,
+      milestones: [{ title: 'Build', estimatedMinutes: 300 }], // 5h × 18_000 = 90_000
+    });
+    await db.update(proposals).set({ priceCents: 90_000 }).where(eq(proposals.id, proposal.id));
+
+    const accepted = await proposalsRepository.accept({ id: proposal.id });
+    expect(accepted.status).toBe('accepted');
+    expect(accepted.acceptedAt).toBeInstanceOf(Date);
+  });
+
+  it('rejects accepting a tm proposal whose milestone is missing effort (tm_missing_effort), leaving it submitted', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    // Attach a milestone with NO effort → the accept coherence guard rejects it.
+    await proposalMilestonesRepository.setForProposal({
+      proposalId: proposal.id,
+      milestones: [{ title: 'No effort', estimatedMinutes: null }],
+    });
+
+    const err = await proposalsRepository.accept({ id: proposal.id }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(raw?.status).toBe('submitted');
+    expect(raw?.acceptedAt).toBeNull();
+    const rel = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(rel?.status).toBe('proposal_submitted');
+  });
+});
+
+describe('proposalsRepository.resubmit — T&M effort/total coherence (BAL-294)', () => {
+  it('SUCCEEDS with a coherent tm resubmit payload (effort on all milestones, price == derived)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const v1 = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 0,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    const client = await userFactory();
+    await proposalsRepository.requestChanges({
+      proposalId: v1.id,
+      requestedByUserId: client.id,
+      note: 'Add effort.',
+    });
+
+    // 120 + 180 = 300 min (5h) × 18_000 = 90_000c.
+    const v2 = await proposalsRepository.resubmit({
+      relationshipId: relationship.id,
+      overview: '<p>v2.</p>',
+      pricingMethod: 'tm',
+      priceCents: 90_000,
+      depositCents: 0,
+      rateCents: 18_000,
+      cadence: 'monthly',
+      milestones: [
+        { title: 'Discovery', estimatedMinutes: 120 },
+        { title: 'Build', estimatedMinutes: 180 },
+      ],
+      installments: [],
+    });
+    expect(v2.version).toBe(2);
+    expect(v2.status).toBe('submitted');
+    expect(v2.isCurrent).toBe(true);
+
+    // The effort round-tripped onto v2's children.
+    const milestones = await proposalMilestonesRepository.listByProposal(v2.id);
+    expect(milestones.map((m) => m.estimatedMinutes)).toEqual([120, 180]);
+  });
+
+  it('rejects a tm resubmit payload with a milestone missing effort (tm_missing_effort): v1 stays current', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const v1 = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 0,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    const client = await userFactory();
+    await proposalsRepository.requestChanges({
+      proposalId: v1.id,
+      requestedByUserId: client.id,
+      note: 'Add effort.',
+    });
+
+    const err = await proposalsRepository
+      .resubmit({
+        relationshipId: relationship.id,
+        overview: '<p>v2.</p>',
+        pricingMethod: 'tm',
+        priceCents: 0,
+        depositCents: 0,
+        rateCents: 18_000,
+        cadence: 'monthly',
+        milestones: [{ title: 'No effort', estimatedMinutes: null }],
+        installments: [],
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');
+
+    // v1 still current + changes_requested; no v2 row.
+    const all = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.relationshipId, relationship.id));
+    expect(all).toHaveLength(1);
+    const [raw] = all;
+    expect(raw?.id).toBe(v1.id);
+    expect(raw?.isCurrent).toBe(true);
+    expect(raw?.status).toBe('changes_requested');
   });
 });

@@ -151,7 +151,7 @@ function toCoherenceSnapshot(
     rateCents: number | null;
     cadence: ProposalCadence | null;
   },
-  milestones: { valueCents?: number | null }[],
+  milestones: { valueCents?: number | null; estimatedMinutes?: number | null }[],
   installments: { pct: number }[]
 ): ProposalCoherenceSnapshot {
   return {
@@ -161,7 +161,13 @@ function toCoherenceSnapshot(
     depositCents: header.depositCents,
     rateCents: header.rateCents,
     cadence: header.cadence,
-    milestones: milestones.map((m) => ({ valueCents: m.valueCents ?? null })),
+    // Live milestones only — both read paths (`listMilestonesTx`,
+    // `setForProposal`) already filter `deletedAt`; soft-deleted rows must never
+    // reach the snapshot (BAL-294 effort clauses run over the snapshot as-is).
+    milestones: milestones.map((m) => ({
+      valueCents: m.valueCents ?? null,
+      estimatedMinutes: m.estimatedMinutes ?? null,
+    })),
     installments: installments.map((i) => ({ pct: i.pct })),
   };
 }

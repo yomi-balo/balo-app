@@ -44,7 +44,13 @@ const SUCCESS: SubmitProposalResult = {
   proposalId: PROPOSAL_ID,
   expertProfileId: 'exp-1',
   transitioned: true,
-  analytics: { priceCents: 5_800_000, currency: 'aud' },
+  analytics: {
+    priceCents: 5_800_000,
+    currency: 'aud',
+    totalEstimatedMinutes: 0,
+    pricingMethod: 'fixed',
+    milestoneCount: 3,
+  },
 };
 
 function renderDialog(overrides: { onBeforeSubmit?: () => Promise<string | null> } = {}): {
@@ -100,6 +106,15 @@ describe('SubmitProposalDialog', () => {
       expert_id: 'exp-1',
       price_cents: 5_800_000,
       currency: 'aud',
+      total_estimated_minutes: 0,
+      pricing_method: 'fixed',
+    });
+    // BAL-294: the effort-estimated event fires once at submit with the server totals.
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {
+      proposal_id: PROPOSAL_ID,
+      milestone_count: 3,
+      total_estimated_minutes: 0,
+      pricing_method: 'fixed',
     });
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {
       request_id: REQUEST_ID,
@@ -110,6 +125,41 @@ describe('SubmitProposalDialog', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Proposal sent to Dana');
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(push).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  it('threads T&M total_estimated_minutes + pricing_method into both submit-time events', async () => {
+    const user = userEvent.setup();
+    submitProposalAction.mockResolvedValue({
+      ...SUCCESS,
+      analytics: {
+        priceCents: 125_000,
+        currency: 'aud',
+        totalEstimatedMinutes: 300,
+        pricingMethod: 'tm',
+        milestoneCount: 2,
+      },
+    });
+    renderDialog();
+
+    await user.click(screen.getByRole('button', { name: 'Submit proposal' }));
+
+    await waitFor(() =>
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED, {
+        request_id: REQUEST_ID,
+        relationship_id: RELATIONSHIP_ID,
+        expert_id: 'exp-1',
+        price_cents: 125_000,
+        currency: 'aud',
+        total_estimated_minutes: 300,
+        pricing_method: 'tm',
+      })
+    );
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {
+      proposal_id: PROPOSAL_ID,
+      milestone_count: 2,
+      total_estimated_minutes: 300,
+      pricing_method: 'tm',
+    });
   });
 
   it('does NOT fire the transition event when result.transitioned is false', async () => {

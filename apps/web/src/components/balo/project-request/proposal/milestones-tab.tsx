@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { RichTextEditor } from '@/components/balo/rich-text-editor';
 import { centsToDollars, dollarsToCents } from '@/lib/utils/currency';
+import { minutesToHoursLabel } from './proposal-format';
 import type { ProposalMilestoneDraft, ProposalPricingMethod } from './proposal-composer-state';
 
 interface MilestonesTabProps {
@@ -24,12 +25,25 @@ function parseDollarsToCents(raw: string): number | null {
   return dollarsToCents(parsed);
 }
 
+/** Parse an HOURS string (the effort input is hours-facing) to integer MINUTES, or
+ *  null when blank/invalid/negative. Mirrors {@link parseDollarsToCents}. E.g.
+ *  "1.5" → 90, "" → null, "-1" → null. */
+function parseHoursToMinutes(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const parsed = Number.parseFloat(trimmed);
+  if (Number.isNaN(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 60);
+}
+
 /**
  * Ordered milestone editor. Each row: number badge, title input, light-variant
- * TipTap description, acceptance "done when" input, and (Fixed only) a value
- * input with an `A$` prefix. Add / remove / reorder. Switching to T&M hides the
- * value column but KEEPS the entered values in state (the composer never clears
- * them) — they reappear on switching back.
+ * TipTap description, acceptance "done when" input, and ONE method-specific
+ * commercial field — under Fixed an `A$`-prefixed value input, under T&M an
+ * hours-facing estimated-effort input (0.25 step; stored as integer minutes,
+ * BAL-294). Add / remove / reorder. Switching method hides the off-method column
+ * but KEEPS its entered values in state (the composer never clears them) — they
+ * reappear on switching back.
  */
 export function MilestonesTab({
   milestones,
@@ -73,8 +87,8 @@ export function MilestonesTab({
       <p className="text-muted-foreground text-[13px]">
         Break the work into deliverables.{' '}
         {isFixed
-          ? 'Each carries a value — the total is your fixed price.'
-          : 'Values are a guide for T&M; the hourly rate applies.'}
+          ? 'Each carries a value — set the fixed price in Payment & terms.'
+          : 'Estimate the effort on each — the total derives from effort × your hourly rate.'}
       </p>
 
       <ol className="space-y-4">
@@ -82,6 +96,7 @@ export function MilestonesTab({
           const titleId = `milestone-title-${milestone.key}`;
           const acceptanceId = `milestone-acceptance-${milestone.key}`;
           const valueId = `milestone-value-${milestone.key}`;
+          const effortId = `milestone-effort-${milestone.key}`;
           const descLabelId = `milestone-desc-label-${milestone.key}`;
           return (
             <li
@@ -126,7 +141,7 @@ export function MilestonesTab({
                     />
                   </div>
 
-                  {isFixed && (
+                  {isFixed ? (
                     <div className="space-y-1.5">
                       <Label htmlFor={valueId}>Value</Label>
                       <div className="relative w-44">
@@ -150,6 +165,34 @@ export function MilestonesTab({
                           }
                           placeholder="0.00"
                         />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <Label htmlFor={effortId}>Estimated effort</Label>
+                      <div className="relative w-44">
+                        <Input
+                          id={effortId}
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          step="0.25"
+                          className="pr-12"
+                          value={
+                            milestone.estimatedMinutes === null
+                              ? ''
+                              : minutesToHoursLabel(milestone.estimatedMinutes)
+                          }
+                          onChange={(e) =>
+                            patch(index, {
+                              estimatedMinutes: parseHoursToMinutes(e.target.value),
+                            })
+                          }
+                          placeholder="0"
+                        />
+                        <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-sm">
+                          hrs
+                        </span>
                       </div>
                     </div>
                   )}

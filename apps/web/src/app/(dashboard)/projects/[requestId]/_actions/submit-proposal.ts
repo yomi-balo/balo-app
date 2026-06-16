@@ -20,6 +20,7 @@ import {
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
+import { sumEstimatedMinutes } from '@balo/shared/pricing';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
@@ -58,8 +59,16 @@ export type SubmitProposalResult =
       expertProfileId: string;
       /** Whether the REQUEST aggregate advanced `proposal_requested → proposal_submitted`. */
       transitioned: boolean;
-      /** Server-computed — the island attaches these to `PROJECT_PROPOSAL_SUBMITTED`. */
-      analytics: { priceCents: number; currency: string };
+      /** Server-computed — the island attaches these to `PROJECT_PROPOSAL_SUBMITTED`.
+       *  `totalEstimatedMinutes` sums the persisted milestones' effort (0 for Fixed,
+       *  where effort is force-nulled); `pricingMethod` is the submitted method. */
+      analytics: {
+        priceCents: number;
+        currency: string;
+        totalEstimatedMinutes: number;
+        pricingMethod: 'fixed' | 'tm';
+        milestoneCount: number;
+      };
     }
   | { success: false; error: string; coherence?: ProposalCoherenceFailure };
 
@@ -173,6 +182,7 @@ async function sanitiseAndPersistDraft(
     descriptionHtml: m.descriptionHtml === null ? null : sanitizeProjectHtml(m.descriptionHtml),
     acceptanceCriteria: m.acceptanceCriteria,
     valueCents: m.valueCents,
+    estimatedMinutes: m.estimatedMinutes,
   }));
 
   const persistedInstallments: ProposalPaymentInstallmentInput[] = installments.map((i) => ({
@@ -383,12 +393,19 @@ async function runSubmit(
   // 13. Revalidate the request-detail page.
   revalidatePath(`/projects/${requestId}`);
 
-  // 14. Return success + analytics for the client island.
+  // 14. Return success + analytics for the client island. `totalEstimatedMinutes`
+  //     sums the persisted milestones' effort (Fixed force-nulls effort, so it is 0).
   return {
     success: true,
     proposalId,
     expertProfileId: access.relationship.expertProfileId,
     transitioned,
-    analytics: { priceCents: draft.priceCents, currency: draft.currency },
+    analytics: {
+      priceCents: draft.priceCents,
+      currency: draft.currency,
+      totalEstimatedMinutes: sumEstimatedMinutes(milestones),
+      pricingMethod: draft.pricingMethod,
+      milestoneCount: milestones.length,
+    },
   };
 }

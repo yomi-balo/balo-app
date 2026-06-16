@@ -28,6 +28,7 @@ function milestone(partial: Partial<ProposalMilestoneDraft> = {}): ProposalMiles
     descriptionHtml: '',
     acceptanceCriteria: '',
     valueCents: 0,
+    estimatedMinutes: null,
     ...partial,
   };
 }
@@ -98,7 +99,7 @@ describe('MilestonesTab', () => {
     expect(onChange).toHaveBeenLastCalledWith([{ ...a, valueCents: 900 }]);
   });
 
-  it('shows the value column only for Fixed pricing', () => {
+  it('shows the value input for Fixed and the effort input for T&M (mutually exclusive)', () => {
     const { rerender } = render(
       <MilestonesTab
         milestones={[milestone({ title: 'A' })]}
@@ -108,6 +109,7 @@ describe('MilestonesTab', () => {
       />
     );
     expect(screen.getByLabelText('Value')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Estimated effort')).not.toBeInTheDocument();
 
     rerender(
       <MilestonesTab
@@ -118,6 +120,32 @@ describe('MilestonesTab', () => {
       />
     );
     expect(screen.queryByLabelText('Value')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Estimated effort')).toBeInTheDocument();
+  });
+
+  it('parses the effort input from hours to integer minutes (T&M)', async () => {
+    const user = userEvent.setup();
+    const a = milestone({ title: 'A', valueCents: null, estimatedMinutes: null });
+    const { onChange } = renderTab({ milestones: [a], method: 'tm' });
+    // Empty (null) → typing "2" → 2h → 120 minutes.
+    await user.type(screen.getByLabelText('Estimated effort'), '2');
+    expect(onChange).toHaveBeenLastCalledWith([{ ...a, estimatedMinutes: 120 }]);
+  });
+
+  it('renders a fractional-hour effort value back from stored minutes (90 → 1.5)', () => {
+    renderTab({
+      milestones: [milestone({ title: 'A', valueCents: null, estimatedMinutes: 90 })],
+      method: 'tm',
+    });
+    expect(screen.getByLabelText('Estimated effort')).toHaveValue(1.5);
+  });
+
+  it('clears the effort to null when the input is emptied (non-negative tolerant)', async () => {
+    const user = userEvent.setup();
+    const a = milestone({ title: 'A', valueCents: null, estimatedMinutes: 60 });
+    const { onChange } = renderTab({ milestones: [a], method: 'tm' });
+    await user.clear(screen.getByLabelText('Estimated effort'));
+    expect(onChange).toHaveBeenLastCalledWith([{ ...a, estimatedMinutes: null }]);
   });
 
   it('edits the title via the title input', async () => {

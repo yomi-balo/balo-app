@@ -11,6 +11,7 @@
  * the source of truth.
  */
 
+import { deriveTmTotalCents, sumEstimatedMinutes } from '@balo/shared/pricing';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { SaveProposalDraftInput } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
@@ -18,15 +19,22 @@ import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 export type ProposalPricingMethod = 'fixed' | 'tm';
 export type ProposalCadenceValue = 'monthly' | 'fortnightly';
 
-/** One milestone row in composer state. `valueCents` is Fixed-only; kept (not
- *  cleared) across a Fixed→T&M→Fixed switch — the value column is merely hidden. */
+/** One milestone row in composer state. `valueCents` is Fixed-only and
+ *  `estimatedMinutes` is T&M-only; each is kept (not cleared) across a method
+ *  switch — the off-method column is merely hidden, then reappears on switch back
+ *  (mirrors the "keep, just hide" convention). They are mutually exclusive at
+ *  persistence (BAL-294): `toSavePayload` force-nulls the off-method field. */
 export interface ProposalMilestoneDraft {
   /** Stable client-only key for React lists + reorder (NOT persisted). */
   key: string;
   title: string;
   descriptionHtml: string;
   acceptanceCriteria: string;
+  /** Fixed-only deliverable value (integer minor units); null when not set. */
   valueCents: number | null;
+  /** T&M-only estimated effort in MINUTES (integer); null when not estimated. The
+   *  milestones tab edits this in hours (0.25 step) and stores minutes. */
+  estimatedMinutes: number | null;
 }
 
 /** One installment %-row (Fixed-only). */
@@ -48,6 +56,11 @@ export interface ProposalDraftState {
   exclusions: string;
   depositCents: number | null;
   rateCents: number | null;
+  /** Fixed-only EXPERT-TYPED total (integer minor units). Null until typed. Fully
+   *  decoupled from milestone `valueCents` / hours: under Fixed it IS the proposal
+   *  total. Ignored under T&M (the total derives from effort × rate instead) but
+   *  retained in state so a Fixed→T&M→Fixed round-trip restores the typed price. */
+  fixedPriceCents: number | null;
   cadence: ProposalCadenceValue;
   milestones: ProposalMilestoneDraft[];
   installments: ProposalInstallmentDraft[];
@@ -83,6 +96,7 @@ export function emptyDraftState(): ProposalDraftState {
     exclusions: '',
     depositCents: null,
     rateCents: null,
+    fixedPriceCents: null,
     cadence: 'monthly',
     milestones: [
       {
@@ -91,6 +105,7 @@ export function emptyDraftState(): ProposalDraftState {
         descriptionHtml: '',
         acceptanceCriteria: '',
         valueCents: 0,
+        estimatedMinutes: null,
       },
     ],
     installments: seedInstallments(),
@@ -98,10 +113,25 @@ export function emptyDraftState(): ProposalDraftState {
   };
 }
 
-/** Derived total (minor units) for Fixed pricing — sum of milestone values. T&M
- *  has no binding total; the same sum is shown as a non-binding estimate. */
+/**
+ * The SINGLE write path for `price_cents` (BAL-294) — ASYMMETRIC by method:
+ *  - T&M  → server-derived `round(sum(estimatedMinutes)/60 × rateCents)`. The
+ *           expert never types it; it falls out of effort × rate. Uses the SOLE
+ *           formula site `deriveTmTotalCents` from `@balo/shared/pricing` (shared with the
+ *           coherence guard so the displayed total and the validated total never
+ *           drift). Null rate → 0.
+ *  - Fixed → the expert-TYPED `fixedPriceCents` (NOT the milestone `valueCents`
+ *           sum). Per-milestone `valueCents` remain a breakdown the
+ *           `fixed_milestone_values_exceed_price` guard caps against this total.
+ *
+ * Both the summary card and `toSavePayload` call this; no other site recomputes
+ * the total. Memoised in the composer via `useMemo([state])`.
+ */
 export function computeTotalCents(state: ProposalDraftState): number {
-  return state.milestones.reduce((sum, m) => sum + (m.valueCents ?? 0), 0);
+  if (state.pricingMethod === 'tm') {
+    return deriveTmTotalCents(sumEstimatedMinutes(state.milestones), state.rateCents ?? 0);
+  }
+  return state.fixedPriceCents ?? 0;
 }
 
 /** Sum of installment percentages (whole percent, integer — no float rounding). */
@@ -119,7 +149,9 @@ export interface ReadinessResult {
  *  - overview non-empty;
  *  - ≥1 milestone, every milestone titled;
  *  - Fixed → installments sum to 100 (≥1) AND every milestone has a value;
- *  - T&M → deposit + rate present (cadence defaulted; installments not required).
+ *  - T&M → deposit + rate present, AND every milestone has an effort estimate
+ *    (mirrors the `tm_missing_effort` server guard); cadence defaulted;
+ *    installments not required.
  * Each failing check yields a human-readable issue for the amber summary panel.
  */
 export function summaryReadiness(state: ProposalDraftState): ReadinessResult {
@@ -149,6 +181,9 @@ export function summaryReadiness(state: ProposalDraftState): ReadinessResult {
     }
     if (state.rateCents === null) {
       issues.push('Add an hourly rate');
+    }
+    if (state.milestones.some((m) => m.estimatedMinutes === null)) {
+      issues.push('A milestone is missing an effort estimate');
     }
   }
 
@@ -183,7 +218,12 @@ export function toSavePayload(
       title: m.title,
       descriptionHtml: m.descriptionHtml.trim().length > 0 ? m.descriptionHtml : null,
       acceptanceCriteria: m.acceptanceCriteria.trim().length > 0 ? m.acceptanceCriteria : null,
+      // The two pricing columns are mutually exclusive by method: Fixed persists
+      // `valueCents` and force-nulls effort; T&M persists `estimatedMinutes` and
+      // force-nulls `valueCents` (mirrors the schema's nullable columns + the
+      // coherence guard).
       valueCents: isFixed ? m.valueCents : null,
+      estimatedMinutes: isFixed ? null : (m.estimatedMinutes ?? null),
     })),
     // Installments are Fixed-only; T&M sends an empty set (the server replace-all
     // clears any previously-stored installments after a Fixed→T&M switch).

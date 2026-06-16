@@ -15,7 +15,8 @@ import {
  * case asserting both the error CLASS and the caught `.rule` discriminant.
  */
 
-/** A fully-coherent `fixed` snapshot — override per-case via the spread. */
+/** A fully-coherent `fixed` snapshot — override per-case via the spread. Fixed
+ *  milestones force-null `estimatedMinutes` (effort is T&M-only). */
 function fixedSnapshot(
   overrides: Partial<ProposalCoherenceSnapshot> = {}
 ): ProposalCoherenceSnapshot {
@@ -26,22 +27,32 @@ function fixedSnapshot(
     depositCents: null,
     rateCents: null,
     cadence: null,
-    milestones: [{ valueCents: 60_000 }, { valueCents: 40_000 }],
+    milestones: [
+      { valueCents: 60_000, estimatedMinutes: null },
+      { valueCents: 40_000, estimatedMinutes: null },
+    ],
     installments: [{ pct: 50 }, { pct: 50 }],
     ...overrides,
   };
 }
 
-/** A fully-coherent `tm` snapshot — override per-case via the spread. */
+/**
+ * A fully-coherent `tm` snapshot — override per-case via the spread. Two milestones
+ * of 90 + 210 = 300 min (5h) at 18_000c/hr → derived 90_000c; deposit excluded from
+ * the formula. T&M milestones force-null `valueCents`.
+ */
 function tmSnapshot(overrides: Partial<ProposalCoherenceSnapshot> = {}): ProposalCoherenceSnapshot {
   return {
     pricingMethod: 'tm',
-    priceCents: 100_000,
+    priceCents: 90_000,
     currency: 'aud',
     depositCents: 25_000,
     rateCents: 18_000,
     cadence: 'monthly',
-    milestones: [{ valueCents: null }, { valueCents: null }],
+    milestones: [
+      { valueCents: null, estimatedMinutes: 90 },
+      { valueCents: null, estimatedMinutes: 210 },
+    ],
     installments: [],
     ...overrides,
   };
@@ -71,7 +82,9 @@ describe('assertProposalCoherent — price_negative', () => {
 
   it('passes at price 0', () => {
     expect(() =>
-      assertProposalCoherent(fixedSnapshot({ priceCents: 0, milestones: [{ valueCents: 0 }] }))
+      assertProposalCoherent(
+        fixedSnapshot({ priceCents: 0, milestones: [{ valueCents: 0, estimatedMinutes: null }] })
+      )
     ).not.toThrow();
   });
 });
@@ -104,8 +117,10 @@ describe('assertProposalCoherent — tm_missing_rate', () => {
   });
 
   it('passes when tm has rate 0 and a cadence present', () => {
+    // rate 0 ⇒ derived total 0; set priceCents 0 so the new tm_total_mismatch clause
+    // is satisfied (effort still present on every milestone).
     expect(() =>
-      assertProposalCoherent(tmSnapshot({ rateCents: 0, cadence: 'fortnightly' }))
+      assertProposalCoherent(tmSnapshot({ rateCents: 0, cadence: 'fortnightly', priceCents: 0 }))
     ).not.toThrow();
   });
 });
@@ -120,7 +135,10 @@ describe('assertProposalCoherent — fixed_requires_installments', () => {
   it('passes with a single 100% installment', () => {
     expect(() =>
       assertProposalCoherent(
-        fixedSnapshot({ installments: [{ pct: 100 }], milestones: [{ valueCents: 100_000 }] })
+        fixedSnapshot({
+          installments: [{ pct: 100 }],
+          milestones: [{ valueCents: 100_000, estimatedMinutes: null }],
+        })
       )
     ).not.toThrow();
   });
@@ -164,13 +182,130 @@ describe('assertProposalCoherent — tm_has_installments', () => {
   });
 });
 
+describe('assertProposalCoherent — tm_missing_effort (BAL-294)', () => {
+  it('passes when every tm milestone has an effort estimate', () => {
+    expect(() =>
+      assertProposalCoherent(
+        tmSnapshot({
+          priceCents: 90_000,
+          milestones: [
+            { valueCents: null, estimatedMinutes: 90 },
+            { valueCents: null, estimatedMinutes: 210 },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('throws when one tm milestone is missing its effort (estimatedMinutes null)', () => {
+    const err = catchProposalError(
+      tmSnapshot({
+        milestones: [
+          { valueCents: null, estimatedMinutes: 90 },
+          { valueCents: null, estimatedMinutes: null },
+        ],
+      })
+    );
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect(err.rule).toBe('tm_missing_effort');
+  });
+
+  it('throws when a tm milestone has a negative effort', () => {
+    // CHECK constraint guards this at the DB, but the guard rejects it too.
+    expect(
+      catchProposalError(
+        tmSnapshot({ milestones: [{ valueCents: null, estimatedMinutes: -1 }], priceCents: 0 })
+      ).rule
+    ).toBe('tm_missing_effort');
+  });
+
+  it('vacuously passes for a zero-milestone tm proposal with price 0 (legacy submit path)', () => {
+    expect(() =>
+      assertProposalCoherent(tmSnapshot({ milestones: [], priceCents: 0 }))
+    ).not.toThrow();
+  });
+
+  it('trips tm_missing_rate BEFORE the effort clause when the rate is null', () => {
+    // Ordering: the header tm_missing_rate clause runs first; a tm snapshot missing
+    // BOTH a rate AND an effort surfaces tm_missing_rate, not tm_missing_effort.
+    expect(
+      catchProposalError(
+        tmSnapshot({
+          rateCents: null,
+          milestones: [{ valueCents: null, estimatedMinutes: null }],
+        })
+      ).rule
+    ).toBe('tm_missing_rate');
+  });
+});
+
+describe('assertProposalCoherent — tm_total_mismatch (BAL-294)', () => {
+  it('passes when priceCents equals the derived total exactly', () => {
+    // 300 min (5h) × 18_000c/hr = 90_000c.
+    expect(() =>
+      assertProposalCoherent(
+        tmSnapshot({
+          priceCents: 90_000,
+          milestones: [
+            { valueCents: null, estimatedMinutes: 120 },
+            { valueCents: null, estimatedMinutes: 180 },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('passes when priceCents is within ±N (3 milestones, off by 2)', () => {
+    // 3 milestones × 60 min = 180 min (3h) × 18_000 = 54_000c; tolerance = 3.
+    expect(() =>
+      assertProposalCoherent(
+        tmSnapshot({
+          priceCents: 54_002, // off by +2, within tolerance 3
+          milestones: [
+            { valueCents: null, estimatedMinutes: 60 },
+            { valueCents: null, estimatedMinutes: 60 },
+            { valueCents: null, estimatedMinutes: 60 },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('throws when priceCents is off by more than N (3 milestones, off by 4)', () => {
+    expect(
+      catchProposalError(
+        tmSnapshot({
+          priceCents: 54_004, // off by +4, tolerance 3
+          milestones: [
+            { valueCents: null, estimatedMinutes: 60 },
+            { valueCents: null, estimatedMinutes: 60 },
+            { valueCents: null, estimatedMinutes: 60 },
+          ],
+        })
+      ).rule
+    ).toBe('tm_total_mismatch');
+  });
+
+  it('throws for a zero-milestone tm proposal with a non-zero price', () => {
+    expect(catchProposalError(tmSnapshot({ milestones: [], priceCents: 1 })).rule).toBe(
+      'tm_total_mismatch'
+    );
+  });
+
+  it('passes for a zero-milestone tm proposal with price 0 (vacuous-true)', () => {
+    expect(() =>
+      assertProposalCoherent(tmSnapshot({ milestones: [], priceCents: 0 }))
+    ).not.toThrow();
+  });
+});
+
 describe('assertProposalCoherent — fixed_milestone_values_exceed_price', () => {
   it('throws when milestone values exceed the price', () => {
     expect(
       catchProposalError(
         fixedSnapshot({
           priceCents: 100_000,
-          milestones: [{ valueCents: 100_001 }],
+          milestones: [{ valueCents: 100_001, estimatedMinutes: null }],
           installments: [{ pct: 100 }],
         })
       ).rule
@@ -182,7 +317,10 @@ describe('assertProposalCoherent — fixed_milestone_values_exceed_price', () =>
       assertProposalCoherent(
         fixedSnapshot({
           priceCents: 100_000,
-          milestones: [{ valueCents: 60_000 }, { valueCents: 40_000 }],
+          milestones: [
+            { valueCents: 60_000, estimatedMinutes: null },
+            { valueCents: 40_000, estimatedMinutes: null },
+          ],
           installments: [{ pct: 100 }],
         })
       )
@@ -194,7 +332,7 @@ describe('assertProposalCoherent — fixed_milestone_values_exceed_price', () =>
       assertProposalCoherent(
         fixedSnapshot({
           priceCents: 100_000,
-          milestones: [{ valueCents: 50_000 }],
+          milestones: [{ valueCents: 50_000, estimatedMinutes: null }],
           installments: [{ pct: 100 }],
         })
       )
@@ -206,7 +344,10 @@ describe('assertProposalCoherent — fixed_milestone_values_exceed_price', () =>
       assertProposalCoherent(
         fixedSnapshot({
           priceCents: 100_000,
-          milestones: [{ valueCents: null }, { valueCents: null }],
+          milestones: [
+            { valueCents: null, estimatedMinutes: null },
+            { valueCents: null, estimatedMinutes: null },
+          ],
           installments: [{ pct: 100 }],
         })
       )

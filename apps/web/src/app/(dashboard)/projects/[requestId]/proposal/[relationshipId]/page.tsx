@@ -128,6 +128,7 @@ function hydrateDraftState(
           descriptionHtml: m.descriptionHtml ?? '',
           acceptanceCriteria: m.acceptanceCriteria ?? '',
           valueCents: m.valueCents,
+          estimatedMinutes: m.estimatedMinutes,
         }))
       : emptyDraftState().milestones;
 
@@ -145,6 +146,9 @@ function hydrateDraftState(
     exclusions: draft.exclusions ?? '',
     depositCents: draft.depositCents,
     rateCents: draft.rateCents,
+    // The persisted `priceCents` IS the typed Fixed total (BAL-294); seed it only
+    // under Fixed so a switch back restores it. Null under T&M (the total derives).
+    fixedPriceCents: isFixed ? draft.priceCents : null,
     cadence: draft.cadence ?? 'monthly',
     milestones: hydratedMilestones,
     installments: isFixed ? hydratedInstallments : [],

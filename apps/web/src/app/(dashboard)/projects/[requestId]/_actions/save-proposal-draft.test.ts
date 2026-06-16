@@ -119,7 +119,13 @@ describe('saveProposalDraftAction', () => {
     expect(mockSetMilestones).toHaveBeenCalledWith({
       proposalId: PROPOSAL_ID,
       milestones: [
-        { title: 'M1', descriptionHtml: '<p>d</p>', acceptanceCriteria: null, valueCents: 1000 },
+        {
+          title: 'M1',
+          descriptionHtml: '<p>d</p>',
+          acceptanceCriteria: null,
+          valueCents: 1000,
+          estimatedMinutes: null,
+        },
       ],
     });
     expect(mockSetInstallments).toHaveBeenCalledWith({

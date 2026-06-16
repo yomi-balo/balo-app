@@ -30,18 +30,22 @@ const COHERENT_FIXED: ProposalCoherenceSnapshot = {
   depositCents: null,
   rateCents: null,
   cadence: null,
-  milestones: [{ valueCents: 60_000 }, { valueCents: 40_000 }],
+  milestones: [
+    { valueCents: 60_000, estimatedMinutes: null },
+    { valueCents: 40_000, estimatedMinutes: null },
+  ],
   installments: [{ pct: 50 }, { pct: 50 }],
 };
 
+// 300 min (5h) at 18_000c/hr → derived 90_000c. priceCents matches exactly.
 const COHERENT_TM: ProposalCoherenceSnapshot = {
   pricingMethod: 'tm',
-  priceCents: 100_000,
+  priceCents: 90_000,
   currency: 'aud',
   depositCents: 25_000,
   rateCents: 18_000,
   cadence: 'monthly',
-  milestones: [{ valueCents: null }],
+  milestones: [{ valueCents: null, estimatedMinutes: 300 }],
   installments: [],
 };
 
@@ -63,6 +67,33 @@ describe('assertProposalCoherent (public contract)', () => {
     }
     expect(caught).toBeInstanceOf(ProposalCoherenceError);
     expect((caught as ProposalCoherenceError).rule).toBe('installments_not_100');
+  });
+
+  it('throws tm_missing_effort when a tm milestone has no effort estimate (BAL-294)', () => {
+    let caught: unknown;
+    try {
+      assertProposalCoherent({
+        ...COHERENT_TM,
+        priceCents: 0,
+        milestones: [{ valueCents: null, estimatedMinutes: null }],
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ProposalCoherenceError);
+    expect((caught as ProposalCoherenceError).rule).toBe('tm_missing_effort');
+  });
+
+  it('throws tm_total_mismatch when priceCents diverges from the derived total (BAL-294)', () => {
+    let caught: unknown;
+    try {
+      // 300 min × 18_000c/hr = 90_000c derived; priceCents 50_000 is well outside ±1.
+      assertProposalCoherent({ ...COHERENT_TM, priceCents: 50_000 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ProposalCoherenceError);
+    expect((caught as ProposalCoherenceError).rule).toBe('tm_total_mismatch');
   });
 });
 

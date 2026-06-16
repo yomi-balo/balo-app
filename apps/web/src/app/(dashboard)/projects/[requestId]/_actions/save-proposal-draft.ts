@@ -14,42 +14,16 @@ import {
 import { requireUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
+import { proposalDraftBaseFields } from './proposal-schema';
 
 /**
  * Autosave payload (A6.2 / BAL-288). The composer sends its FULL current draft
  * state — header + the complete milestone + installment lists (replace-all). All
  * fields are partial-draft tolerant: a brand-new draft may have a near-empty
  * overview, no milestones, etc. The submit action — NOT this one — enforces
- * readiness. Money is integer minor units.
+ * readiness. Shape shared with `resubmit-proposal.ts` via `proposal-schema.ts`.
  */
-const milestoneSchema = z.object({
-  title: z.string().max(200),
-  descriptionHtml: z.string().max(20_000).nullable().optional(),
-  acceptanceCriteria: z.string().max(2000).nullable().optional(),
-  valueCents: z.number().int().nonnegative().nullable().optional(),
-});
-
-const installmentSchema = z.object({
-  label: z.string().max(120),
-  pct: z.number().int().min(0).max(100),
-});
-
-const inputSchema = z.object({
-  requestId: z.uuid(),
-  // A CLAIM — validated server-side by `resolveConversationAccess`.
-  relationshipId: z.uuid(),
-  overview: z.string().max(50_000),
-  pricingMethod: z.enum(['fixed', 'tm']),
-  priceCents: z.number().int().nonnegative(),
-  currency: z.string().min(1).max(8).optional(),
-  timeframeWeeks: z.number().int().positive().optional(),
-  exclusions: z.string().max(20_000).optional(),
-  depositCents: z.number().int().nonnegative().optional(),
-  rateCents: z.number().int().nonnegative().optional(),
-  cadence: z.enum(['monthly', 'fortnightly']).optional(),
-  milestones: z.array(milestoneSchema).max(50),
-  installments: z.array(installmentSchema).max(50),
-});
+const inputSchema = z.object(proposalDraftBaseFields);
 
 export type SaveProposalDraftInput = z.infer<typeof inputSchema>;
 
@@ -175,6 +149,7 @@ export async function saveProposalDraftAction(
       descriptionHtml: m.descriptionHtml ?? null,
       acceptanceCriteria: m.acceptanceCriteria ?? null,
       valueCents: m.valueCents ?? null,
+      estimatedMinutes: m.estimatedMinutes ?? null,
     }));
     const installments: ProposalPaymentInstallmentInput[] = data.installments.map((i) => ({
       label: i.label,
