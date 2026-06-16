@@ -55,17 +55,22 @@ export type EngagementTermsCoherenceRule =
  * header (`Proposal`) and caller-input headers satisfy. Differs from the
  * caller-input types AND the DB-row types on purpose (mirrors the minimal-interface
  * style of `proposal-readiness.ts` `ReadinessMilestone`/`ReadinessInstallment`).
- * Money is integer minor units. Uses literal unions (not the `PricingMethod` /
- * `ProposalCadence` aliases) so the module stays decoupled.
+ * Money is integer minor units. The commercial-term unions are aliased LOCALLY
+ * below (deliberately NOT the schema-derived `PricingMethod` / `ProposalCadence`
+ * from `proposal-types.ts`) so the module stays decoupled from the schema, while
+ * still avoiding repeated inline unions (typescript:S4323).
  */
+type CoherencePricingMethod = 'fixed' | 'tm';
+type CoherenceCadence = 'monthly' | 'fortnightly' | null;
+
 export interface ProposalCoherenceSnapshot {
-  pricingMethod: 'fixed' | 'tm';
+  pricingMethod: CoherencePricingMethod;
   priceCents: number;
   /** Present for completeness; v1 has NO currency clause. */
   currency: string;
   depositCents: number | null;
   rateCents: number | null;
-  cadence: 'monthly' | 'fortnightly' | null;
+  cadence: CoherenceCadence;
   /** Live milestones (soft-deleted rows must never be included). `valueCents` is
    *  Fixed-only; `estimatedMinutes` is T&M-only — mutually exclusive by method. */
   milestones: { valueCents: number | null; estimatedMinutes: number | null }[];
@@ -74,11 +79,11 @@ export interface ProposalCoherenceSnapshot {
 
 /** Header-only commercial terms for the engagement seam (no milestones/installments). */
 export interface EngagementTermsSnapshot {
-  pricingMethod: 'fixed' | 'tm';
+  pricingMethod: CoherencePricingMethod;
   priceCents: number;
   depositCents: number | null;
   rateCents: number | null;
-  cadence: 'monthly' | 'fortnightly' | null;
+  cadence: CoherenceCadence;
 }
 
 /**
@@ -116,11 +121,11 @@ export class EngagementTermsCoherenceError extends Error {
  * engagement-terms snapshot. The two shared shapes structurally satisfy this.
  */
 interface HeaderTerms {
-  pricingMethod: 'fixed' | 'tm';
+  pricingMethod: CoherencePricingMethod;
   priceCents: number;
   depositCents: number | null;
   rateCents: number | null;
-  cadence: 'monthly' | 'fortnightly' | null;
+  cadence: CoherenceCadence;
 }
 
 /**
