@@ -124,7 +124,7 @@ For each new source file: verify a corresponding `.test.ts` or `.spec.ts` exists
 pnpm lint:sonar:diff
 ```
 
-This runs `eslint-plugin-sonarjs` (cognitive complexity > 15, nested ternaries, nested template literals) against ONLY the files changed vs `origin/main` — a local proxy for SonarCloud's new-code maintainability gate, so these findings stop only surfacing server-side after a push. It must exit clean.
+This runs a SonarCloud-mirroring ESLint config (`eslint-plugin-sonarjs` + `unicorn` + `react`) against ONLY the files changed vs `origin/main` — a local proxy for SonarCloud's new-code gate, so these findings stop only surfacing server-side after a push. It now enforces: cognitive complexity > 15, nested ternaries, nested template literals, **`reduce()` initial value (S6959), no array-index React keys (S6479), prefer `globalThis` over `window` (S7764), and no negated conditions (S7735)**. It mirrors SonarCloud's `sonar.sources` scope (ignores `.claude/**` design-reference scratch files). It must exit clean. When a NEW SonarCloud finding reaches CI despite this, add its delegate ESLint rule to `packages/eslint-config/sonar.js` so the next PR catches it locally.
 
 - If it flags a function's **Cognitive Complexity**, reduce it by extracting helpers / early returns. Note the rule scores each `useCallback`/nested function **separately**, so lowering a React component's score means simplifying the **component body's own** conditionals (e.g. extract lens/branch wiring into a pure module helper) — extracting handler bodies does nothing for the component's score.
 - Nested ternaries → `if`/early returns or a hoisted local; nested template literals → hoist the inner template into a `const`.

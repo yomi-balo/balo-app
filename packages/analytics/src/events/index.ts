@@ -46,3 +46,9 @@ export {
   type ConversationCallSurface,
   type ConversationProposalSurface,
 } from './conversation';
+export {
+  PROJECTS_INBOX_EVENTS,
+  type ProjectsInboxEventMap,
+  type ProjectsInboxLens,
+  type ProjectsInboxFilter,
+} from './projects-inbox';

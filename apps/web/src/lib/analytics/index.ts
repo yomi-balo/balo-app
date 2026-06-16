@@ -17,6 +17,7 @@ export {
   EXPERT_PROFILE_EVENTS,
   PROJECT_EVENTS,
   CONVERSATION_EVENTS,
+  PROJECTS_INBOX_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -34,4 +35,7 @@ export type {
   ConversationFilesSurface,
   ConversationCallSurface,
   ConversationProposalSurface,
+  ProjectsInboxEventMap,
+  ProjectsInboxLens,
+  ProjectsInboxFilter,
 } from '@balo/analytics/client';

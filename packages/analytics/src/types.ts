@@ -12,6 +12,7 @@ import type { SearchEventMap, SearchServerEventMap } from './events/search';
 import type { ExpertProfileEventMap } from './events/expert-profile';
 import type { ProjectEventMap } from './events/project';
 import type { ConversationEventMap } from './events/conversation';
+import type { ProjectsInboxEventMap } from './events/projects-inbox';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -26,7 +27,8 @@ export type AllEvents = AuthEventMap &
   SearchEventMap &
   ExpertProfileEventMap &
   ProjectEventMap &
-  ConversationEventMap;
+  ConversationEventMap &
+  ProjectsInboxEventMap;
 
 export type EventName = keyof AllEvents;
 
