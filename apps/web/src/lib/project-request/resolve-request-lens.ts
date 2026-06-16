@@ -142,3 +142,35 @@ export function resolveRequestLens(
   // 4. Not a participant, owner, or admin → unauthorised.
   return null;
 }
+
+/** Why a viewer who resolves to NO lens was denied — analytics only. Extend the
+ *  union as more terminal-negative relationship statuses gain signals. */
+export type RequestAccessDenialReason = 'declined_relationship';
+
+/**
+ * Classify WHY `resolveRequestLens` would deny this viewer, for analytics at the
+ * denial boundary. The resolver returns a bare `null` (same copy for a stranger
+ * and a declined expert, so existence never leaks) — the *reason* is derived here,
+ * server-side, and never surfaced to the client.
+ *
+ * Returns `'declined_relationship'` ONLY for a viewer who would otherwise be an
+ * expert participant but whose matching relationship(s) are all terminal-negative
+ * (`declined`) — a dropped/declined expert hitting the wall. Returns `null` for
+ * everyone else (admins, owners, live experts, plain strangers — no event for
+ * strangers). Pure + synchronous; mirrors `resolveRequestLens` precedence and
+ * reuses `INACTIVE_RELATIONSHIP_STATUSES` (single source of truth — no drift).
+ */
+export function resolveRequestDenialReason(
+  user: SessionUser,
+  request: ProjectRequestWithRelations
+): RequestAccessDenialReason | null {
+  if (ADMIN_ROLES.has(user.platformRole)) return null; // observer, never denied
+  if (user.companyId === request.companyId) return null; // owner → client lens
+  if (user.expertProfileId === undefined) return null; // not an expert → stranger
+
+  const matching = request.relationships.filter((r) => r.expertProfileId === user.expertProfileId);
+  // A live (non-declined) match → they DO resolve to the expert lens → not denied.
+  if (matching.some((r) => !INACTIVE_RELATIONSHIP_STATUSES.has(r.status))) return null;
+  // At least one matching relationship, all terminal-negative → the declined wall.
+  return matching.length > 0 ? 'declined_relationship' : null;
+}

@@ -14,6 +14,7 @@ const {
   mockRedirect,
   mockLogWarn,
   mockLogError,
+  mockTrackServer,
 } = vi.hoisted(() => ({
   mockFindByIdWithRelations: vi.fn(),
   mockGetCurrentUser: vi.fn(),
@@ -26,6 +27,7 @@ const {
   }),
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
+  mockTrackServer: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -38,6 +40,12 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock('@/lib/logging', () => ({ log: { warn: mockLogWarn, error: mockLogError } }));
+// Server analytics seam (BAL-276): the denial boundary emits the
+// project_request_access_denied event ONLY for a declined expert.
+vi.mock('@/lib/analytics/server', () => ({
+  trackServer: mockTrackServer,
+  PROJECT_SERVER_EVENTS: { REQUEST_ACCESS_DENIED: 'project_request_access_denied' },
+}));
 
 // Phase-2 conversation loader (BAL-271) — its own unit tests cover the real
 // implementation; here we only assert WHEN the page calls it.
@@ -122,6 +130,12 @@ function liveRelationship(): ProjectRequestWithRelations['relationships'][number
   } as ProjectRequestWithRelations['relationships'][number];
 }
 
+// A declined relationship stays live at the DB layer but grants no access — the
+// expert resolves to NO lens and the denial boundary fires the BAL-276 event.
+function declinedRelationship(): ProjectRequestWithRelations['relationships'][number] {
+  return { ...liveRelationship(), status: 'declined' };
+}
+
 async function renderPage(requestId = REQUEST_ID) {
   const ui = await RequestDetailPage({ params: Promise.resolve({ requestId }) });
   return render(ui);
@@ -165,10 +179,48 @@ describe('RequestDetailPage (RSC) — auth + lens gating', () => {
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mockLogWarn).toHaveBeenCalledWith(
       'Project request access denied',
-      expect.objectContaining({ requestId: REQUEST_ID })
+      expect.objectContaining({ requestId: REQUEST_ID, reason: 'not_a_participant' })
     );
+    // A plain stranger is not a declined expert → no analytics event.
+    expect(mockTrackServer).not.toHaveBeenCalled();
     // The contact name must never reach the rendered tree for a stranger.
     expect(screen.queryByText(CONTACT_NAME)).not.toBeInTheDocument();
+  });
+
+  it('emits project_request_access_denied for a DECLINED expert (BAL-276) and notFound()s', async () => {
+    // A dropped/declined expert hitting the wall — distinct from a plain stranger.
+    const expertUser = user({
+      id: 'user-declined-expert',
+      companyId: OTHER_COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      activeMode: 'expert',
+    });
+    mockGetCurrentUser.mockResolvedValue(expertUser);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'proposal_submitted', relationships: [declinedRelationship()] })
+    );
+
+    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mockNotFound).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('project_request_access_denied', {
+      request_id: REQUEST_ID,
+      reason: 'declined_relationship',
+      lens_attempted: 'expert',
+      distinct_id: 'user-declined-expert',
+    });
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Project request access denied',
+      expect.objectContaining({ requestId: REQUEST_ID, reason: 'declined_relationship' })
+    );
+  });
+
+  it('never emits the denial event for an authorised viewer (client owner)', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(request());
+
+    await renderPage();
+    expect(mockTrackServer).not.toHaveBeenCalled();
   });
 
   it('logs an error and rethrows (to error.tsx) when the load throws', async () => {

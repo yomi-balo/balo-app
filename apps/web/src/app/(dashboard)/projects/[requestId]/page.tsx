@@ -4,7 +4,12 @@ import { notFound, redirect } from 'next/navigation';
 import { projectRequestsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
-import { requestPhase, resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
+import {
+  requestPhase,
+  resolveRequestLens,
+  resolveRequestDenialReason,
+} from '@/lib/project-request/resolve-request-lens';
+import { trackServer, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { mapRequestToDetailView } from '@/lib/project-request/request-detail-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
@@ -94,11 +99,23 @@ export default async function RequestDetailPage({
   const ctx = resolveRequestLens(user, request);
   if (!ctx) {
     // Authenticated but not a participant/owner/admin → same not-found page.
+    // Distinguish a DECLINED expert (dropped out, still probing) from a plain
+    // stranger so we can measure declined experts hitting the wall (BAL-276).
+    const denialReason = resolveRequestDenialReason(user, request);
     log.warn('Project request access denied', {
       requestId,
       userId: user.id,
       companyId: user.companyId,
+      reason: denialReason ?? 'not_a_participant',
     });
+    if (denialReason === 'declined_relationship') {
+      trackServer(PROJECT_SERVER_EVENTS.REQUEST_ACCESS_DENIED, {
+        request_id: requestId,
+        reason: 'declined_relationship',
+        lens_attempted: 'expert',
+        distinct_id: user.id,
+      });
+    }
     notFound();
   }
 
