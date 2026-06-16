@@ -124,6 +124,12 @@ SonarCloud runs on every PR. Write code that passes its quality gate from the st
 - **Wrap event handlers in `useCallback`** — don't define plain functions inside components for handlers passed as props.
 - **Keep duplication under 3%** — if you're writing 2+ files with similar structure (templates, adapters, route handlers), extract shared logic into a helper. SonarCloud flags 10+ identical lines across files.
 - **No super-linear (ReDoS) regex** — SonarCloud rule **S5852** fails the gate as a new-code Security Hotspot (and a crafted input can pin the event loop). Avoid nested quantifiers (`(x+)+`, `(x*)*`, `(x+)*`) and quantified overlapping alternation (`(a|ab)*`). The most common trap here is a greedy negated class that doesn't exclude its own _opening_ delimiter — e.g. the HTML tag-strip `/<[^>]*>/g`: `[^>]` still matches `<`, so overlapping start positions re-scan the same region (O(n²)). Write `/<[^<>]*>/g` (exclude both delimiters). When unsure, anchor the pattern, bound the input length, or use a linear non-regex scan.
+- **Prefer `globalThis` over `window`** (S7764) — use `typeof globalThis.window !== 'undefined'` for the browser check and `globalThis.<api>` for shared globals (`globalThis.sessionStorage`, `globalThis.localStorage`, `globalThis.location`) instead of bare `window.*`. Applies in **test files** too.
+- **Never use an array index as a React `key`** (S6479) — map over stable ids, or a fixed array of literal keys (`['a','b','c'].map((k) => …)`); never `key={i}` or `key={\`row-${i}\`}` (even an interpolated index is flagged).
+- **`Array.reduce()` must pass an initial value** (S6959) — always give the seed (`arr.reduce(fn, seed)`); a seedless reduce is a reliability bug under `noUncheckedIndexedAccess`.
+- **No negated condition that has an `else`** (S7735, "Unexpected negated condition") — lead with the positive branch: `cond ? A : B` not `!cond ? B : A`, and `if (cond) … else …` not `if (!cond) … else …`.
+
+The four rules above — plus nested ternaries, nested template literals, and cognitive complexity > 15 — are now caught locally by `pnpm lint:sonar:diff` (the pre-PR gate). Write to them up front so they never reach CI.
 
 ## Performance Rules
 
