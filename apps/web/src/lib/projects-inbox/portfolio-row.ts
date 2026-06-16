@@ -184,8 +184,8 @@ export function stageDistribution(
 
 // ── Recency fold ───────────────────────────────────────────────────
 
-/** Newest of a non-empty list of dates. */
-function maxDate(seed: Date, more: ReadonlyArray<Date>): Date {
+/** Newest of a seed date and zero or more further dates. */
+export function maxDate(seed: Date, more: ReadonlyArray<Date>): Date {
   return more.reduce((max, d) => (d.getTime() > max.getTime() ? d : max), seed);
 }
 

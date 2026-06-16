@@ -13,6 +13,7 @@ import { isThreadOpenStatus, previewOfHtml } from '@/lib/project-request/convers
 import { formatPostedRelative } from '@/lib/project-request/request-detail-view';
 import type { PortfolioLens } from './resolve-portfolio-lens';
 import {
+  maxDate,
   needsYouFor,
   needsYouForExpert,
   nudgeForEngagement,
@@ -189,10 +190,13 @@ function toExpertRowView(
 ): PortfolioRowView {
   const { needsYou, nudgeLabel } = needsYouForExpert(invitation, signal);
   const chip = stageChipForRelationship(invitation.relationshipStatus);
-  // The expert's recency: newest of invite, row update, newest EOI, freshest msg.
-  const recencyCandidates = [invitation.invitedAt, invitation.relationshipUpdatedAt];
-  if (invitation.newestEoiAt !== null) recencyCandidates.push(invitation.newestEoiAt);
-  const recencyAt = recencyCandidates.reduce((max, d) => (d.getTime() > max.getTime() ? d : max));
+  // The expert's recency: newest of invite, row update, and newest EOI.
+  const recencyAt = maxDate(
+    invitation.invitedAt,
+    invitation.newestEoiAt !== null
+      ? [invitation.relationshipUpdatedAt, invitation.newestEoiAt]
+      : [invitation.relationshipUpdatedAt]
+  );
   return {
     id: invitation.projectRequestId,
     href: `/projects/${invitation.projectRequestId}`,
