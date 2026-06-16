@@ -355,6 +355,152 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('project.exploratory_requested', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440050',
+      recipientId: '550e8400-e29b-41d4-a716-446655440051',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440050',
+      title: 'CPQ implementation',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.exploratory_requested',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing recipientId', () => {
+      const { recipientId: _recipientId, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.exploratory_requested',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-UUID recipientId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.exploratory_requested',
+        payload: { ...validPayload, recipientId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty title and a title over 200 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.exploratory_requested',
+          payload: { ...validPayload, title: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.exploratory_requested',
+          payload: { ...validPayload, title: 'a'.repeat(201) },
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe('project.expert_invited', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440060',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440061',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440062',
+      title: 'CPQ implementation',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.expert_invited',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing expertProfileId', () => {
+      const { expertProfileId: _expertProfileId, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.expert_invited',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-UUID correlationId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.expert_invited',
+        payload: { ...validPayload, correlationId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('project.eoi_submitted', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440070',
+      recipientId: '550e8400-e29b-41d4-a716-446655440071',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440072',
+      title: 'CPQ implementation',
+      expertName: 'Ada Lovelace',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.eoi_submitted',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing expertName', () => {
+      const { expertName: _expertName, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.eoi_submitted',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty expertName and an expertName over 120 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.eoi_submitted',
+          payload: { ...validPayload, expertName: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'project.eoi_submitted',
+          payload: { ...validPayload, expertName: 'a'.repeat(121) },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a non-UUID recipientId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.eoi_submitted',
+        payload: { ...validPayload, recipientId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  it('rejects calendar.auth_error — a server-only event with no publish arm by design', () => {
+    // calendar.auth_error is published only from within the API (never via the
+    // /notifications/publish route), so it is intentionally absent from the union.
+    const result = publishBodySchema.safeParse({
+      event: 'calendar.auth_error',
+      payload: {
+        correlationId: '550e8400-e29b-41d4-a716-446655440080',
+        expertProfileId: '550e8400-e29b-41d4-a716-446655440081',
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {
