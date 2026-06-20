@@ -183,10 +183,12 @@ export async function confirmConversationFileUploadAction(
 
     await advanceReadWatermark(requestId, relationshipId, user.id, row.createdAt);
 
-    // Awaited but never throws — catches + logs internally.
-    await publishConversationEvent(relationshipId, CONVERSATION_EVENT_FILE, fileView);
+    // BAL-279: both publishes are deferred to Next's `after()` inside their
+    // publishers — they run after the response flushes but before the function can
+    // freeze, so neither the ephemeral realtime ping nor the durable notification
+    // is cut short, and neither adds latency to this action. Both never throw.
+    void publishConversationEvent(relationshipId, CONVERSATION_EVENT_FILE, fileView);
 
-    // Fire-and-forget — the publisher logs internally.
     publishNotificationEvent('project.file_shared', {
       correlationId: row.id,
       projectRequestId: requestId,

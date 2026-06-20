@@ -115,11 +115,12 @@ export async function postConversationMessageAction(
       });
     }
 
-    // Awaited (a dropped promise can be cut short on Vercel after the response
-    // returns) but NEVER throws — it catches + logs internally.
-    await publishConversationEvent(relationshipId, CONVERSATION_EVENT_MESSAGE, messageView);
+    // BAL-279: both publishes are deferred to Next's `after()` inside their
+    // publishers — they run after the response flushes but before the function can
+    // freeze, so neither the ephemeral realtime ping nor the durable notification
+    // is cut short, and neither adds latency to this action. Both never throw.
+    void publishConversationEvent(relationshipId, CONVERSATION_EVENT_MESSAGE, messageView);
 
-    // Fire-and-forget — the publisher logs internally.
     publishNotificationEvent('project.message_posted', {
       correlationId: row.id,
       projectRequestId: requestId,

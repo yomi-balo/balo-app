@@ -2,6 +2,7 @@ import 'server-only';
 
 import * as Ably from 'ably';
 import { log } from '@/lib/logging';
+import { runAfterResponse } from '@/lib/after-response';
 import { conversationChannelName } from './channels';
 
 /**
@@ -38,29 +39,40 @@ export function getAblyRest(): Ably.Rest | null {
  *
  * NEVER throws to the caller: a publish failure is logged and swallowed — the
  * mutation already succeeded and must not fail because the live transport
- * hiccuped. Callers still `await` this (a dropped fire-and-forget promise can
- * be cut short on serverless after the response returns).
+ * hiccuped.
+ *
+ * Durability (BAL-279): the publish is deferred to Next's `after()` (via
+ * {@link runAfterResponse}), the same freeze-safe hop the durable notification
+ * dispatch now rides. This replaces the old "callers must await this so a dropped
+ * promise isn't cut short on serverless" contract — the ephemeral realtime ping
+ * and the durable notification now share ONE durability story, and the action no
+ * longer pays the publish round-trip on its response path. The returned promise
+ * resolves eagerly (work deferred); it is kept only for signature stability.
  */
-export async function publishConversationEvent(
+export function publishConversationEvent(
   relationshipId: string,
   name: 'message' | 'file',
   data: unknown
 ): Promise<void> {
-  const client = getAblyRest();
-  const channel = conversationChannelName(relationshipId);
-  if (client === null) {
-    log.warn('Realtime disabled (no ABLY_API_KEY) — skipping publish', { channel, name });
-    return;
-  }
+  runAfterResponse('Ably publish', async () => {
+    const client = getAblyRest();
+    const channel = conversationChannelName(relationshipId);
+    if (client === null) {
+      log.warn('Realtime disabled (no ABLY_API_KEY) — skipping publish', { channel, name });
+      return;
+    }
 
-  try {
-    await client.channels.get(channel).publish(name, data);
-  } catch (error) {
-    log.error('Ably publish failed', {
-      channel,
-      name,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-  }
+    try {
+      await client.channels.get(channel).publish(name, data);
+    } catch (error) {
+      log.error('Ably publish failed', {
+        channel,
+        name,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
+  });
+
+  return Promise.resolve();
 }

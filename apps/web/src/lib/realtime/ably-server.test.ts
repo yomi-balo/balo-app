@@ -2,20 +2,35 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const { mockPublish, mockChannelsGet, MockRest } = vi.hoisted(() => {
-  const mockPublish = vi.fn();
-  const mockChannelsGet = vi.fn(() => ({ publish: mockPublish }));
-  class MockRest {
-    channels = { get: mockChannelsGet };
-    options: unknown;
-    constructor(options: unknown) {
-      this.options = options;
+const { mockPublish, mockChannelsGet, MockRest, runAfterResponseMock, getScheduled } = vi.hoisted(
+  () => {
+    const mockPublish = vi.fn();
+    const mockChannelsGet = vi.fn(() => ({ publish: mockPublish }));
+    class MockRest {
+      channels = { get: mockChannelsGet };
+      options: unknown;
+      constructor(options: unknown) {
+        this.options = options;
+      }
     }
+    // Capture the deferred work so each test can run it explicitly — the real
+    // runAfterResponse hands it to Next's after() (BAL-279).
+    let scheduled: (() => Promise<void>) | null = null;
+    const runAfterResponseMock = vi.fn((_label: string, work: () => Promise<void>) => {
+      scheduled = work;
+    });
+    return {
+      mockPublish,
+      mockChannelsGet,
+      MockRest,
+      runAfterResponseMock,
+      getScheduled: (): (() => Promise<void>) | null => scheduled,
+    };
   }
-  return { mockPublish, mockChannelsGet, MockRest };
-});
+);
 
 vi.mock('ably', () => ({ Rest: MockRest }));
+vi.mock('@/lib/after-response', () => ({ runAfterResponse: runAfterResponseMock }));
 
 import { log } from '@/lib/logging';
 
@@ -51,9 +66,20 @@ describe('ably-server', () => {
     expect(getAblyRest()).toBe(first);
   });
 
-  it('publishConversationEvent no-ops with a single warn when unconfigured', async () => {
+  it('defers the publish via runAfterResponse rather than publishing inline', async () => {
+    process.env.ABLY_API_KEY = 'app.key:secret';
     const { publishConversationEvent } = await import('./ably-server');
-    await publishConversationEvent('rel-1', 'message', { id: 'm-1' });
+    publishConversationEvent('rel-1', 'file', { id: 'f-1' });
+
+    expect(runAfterResponseMock).toHaveBeenCalledWith('Ably publish', expect.any(Function));
+    expect(mockChannelsGet).not.toHaveBeenCalled();
+  });
+
+  it('the deferred work no-ops with a single warn when unconfigured', async () => {
+    const { publishConversationEvent } = await import('./ably-server');
+    publishConversationEvent('rel-1', 'message', { id: 'm-1' });
+    await getScheduled()?.();
+
     expect(mockChannelsGet).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       'Realtime disabled (no ABLY_API_KEY) — skipping publish',
@@ -61,22 +87,24 @@ describe('ably-server', () => {
     );
   });
 
-  it('publishes to the conversation channel when configured', async () => {
+  it('the deferred work publishes to the conversation channel when configured', async () => {
     process.env.ABLY_API_KEY = 'app.key:secret';
     mockPublish.mockResolvedValue(undefined);
     const { publishConversationEvent } = await import('./ably-server');
-    await publishConversationEvent('rel-1', 'file', { id: 'f-1' });
+    publishConversationEvent('rel-1', 'file', { id: 'f-1' });
+    await getScheduled()?.();
+
     expect(mockChannelsGet).toHaveBeenCalledWith('conversation:rel-1');
     expect(mockPublish).toHaveBeenCalledWith('file', { id: 'f-1' });
   });
 
-  it('catches and logs publish failures without throwing', async () => {
+  it('the deferred work catches and logs publish failures without throwing', async () => {
     process.env.ABLY_API_KEY = 'app.key:secret';
     mockPublish.mockRejectedValue(new Error('socket down'));
     const { publishConversationEvent } = await import('./ably-server');
-    await expect(
-      publishConversationEvent('rel-1', 'message', { id: 'm-1' })
-    ).resolves.toBeUndefined();
+    publishConversationEvent('rel-1', 'message', { id: 'm-1' });
+
+    await expect(getScheduled()?.()).resolves.toBeUndefined();
     expect(log.error).toHaveBeenCalledWith(
       'Ably publish failed',
       expect.objectContaining({ channel: 'conversation:rel-1', error: 'socket down' })
