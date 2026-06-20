@@ -55,8 +55,28 @@ describe('SendToSelector', () => {
     expect(screen.getByText('PS')).toBeInTheDocument();
   });
 
+  it('renders a neutral Direct card with no expert (context-free)', () => {
+    render(<SendToSelector value="match" onChange={vi.fn()} />);
+    // Neutral label instead of an expert name; the Match card is the default.
+    expect(screen.getByRole('radio', { name: /send to an expert/i })).toBeInTheDocument();
+    expect(screen.queryByText('PS')).not.toBeInTheDocument();
+  });
+
+  it('still fires onChange to direct from the neutral context-free card', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<SendToSelector value="match" onChange={onChange} />);
+    await user.click(screen.getByRole('radio', { name: /send to an expert/i }));
+    expect(onChange).toHaveBeenCalledWith('direct');
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(<SendToSelector value="direct" onChange={vi.fn()} {...BASE} />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no accessibility violations in context-free mode', async () => {
+    const { container } = render(<SendToSelector value="match" onChange={vi.fn()} />);
     expect(await axe(container)).toHaveNoViolations();
   });
 });

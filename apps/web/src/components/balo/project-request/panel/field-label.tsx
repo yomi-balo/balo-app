@@ -10,7 +10,7 @@ interface FieldLabelProps {
 }
 
 /**
- * Label-above field heading used across the project-drawer form. Semibold
+ * Label-above field heading used across the project-request panel form. Semibold
  * foreground text with an optional muted "(optional)" suffix.
  */
 export function FieldLabel({

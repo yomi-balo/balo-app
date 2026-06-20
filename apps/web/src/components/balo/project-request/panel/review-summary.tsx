@@ -1,6 +1,6 @@
 'use client';
 
-import { Sparkles, Pencil, FileText, Image as ImageIcon } from 'lucide-react';
+import { Sparkles, Pencil, FileText, Image as ImageIcon, User } from 'lucide-react';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { RichTextViewer } from '@/components/balo/rich-text-editor';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
@@ -9,9 +9,13 @@ import type { ProjectDraft } from './use-project-draft';
 
 interface ReviewSummaryProps {
   draft: ProjectDraft;
-  expertName: string;
-  expertInitials: string;
-  expertAvatarKey: string | null;
+  /**
+   * Expert display data. Absent → context-free mode: the Direct routing block
+   * renders neutral "Going to an expert" copy + person glyph.
+   */
+  expertName?: string;
+  expertInitials?: string;
+  expertAvatarKey?: string | null;
   /** id→name maps for rendering tag/product chips read-only. */
   tagNameMap: Record<string, string>;
   productNameMap: Record<string, string>;
@@ -81,31 +85,53 @@ export function ReviewSummary({
   productNameMap,
   onEdit,
 }: Readonly<ReviewSummaryProps>): React.JSX.Element {
+  // Direct routing only resolves to a named expert when one is bound; a
+  // context-free Direct selection still renders neutral "an expert" copy.
   const isDirect = draft.routing === 'direct';
-  const avatarUrl = getAvatarUrl(expertAvatarKey, 'thumbnail');
+  const hasExpert = expertName !== undefined;
+  const directToNamedExpert = isDirect && hasExpert;
+  const avatarUrl = getAvatarUrl(expertAvatarKey ?? null, 'thumbnail');
+
+  let routingMedia: React.ReactNode;
+  if (directToNamedExpert && avatarUrl) {
+    routingMedia = (
+      <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
+        {}
+        <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+      </span>
+    );
+  } else if (directToNamedExpert) {
+    routingMedia = (
+      <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
+        <span className="text-foreground text-xs font-semibold">{expertInitials}</span>
+      </span>
+    );
+  } else if (isDirect) {
+    routingMedia = (
+      <span className="border-border bg-muted text-muted-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
+        <User className="h-4.5 w-4.5" aria-hidden="true" />
+      </span>
+    );
+  } else {
+    routingMedia = (
+      <span className="border-primary/25 bg-primary/10 text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
+        <Sparkles className="h-4.5 w-4.5" aria-hidden="true" />
+      </span>
+    );
+  }
+
+  let routingLabel: string;
+  if (directToNamedExpert) routingLabel = `Going to ${expertName}`;
+  else if (isDirect) routingLabel = 'Going to an expert';
+  else routingLabel = "We'll match you with an expert";
 
   return (
     <div className="space-y-3">
       {/* Routing block (emphasised) */}
       <div className="border-primary/30 bg-primary/[0.04] flex items-center gap-3 rounded-xl border p-4">
-        {isDirect ? (
-          <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
-            {avatarUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing
-              <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-foreground text-xs font-semibold">{expertInitials}</span>
-            )}
-          </span>
-        ) : (
-          <span className="border-primary/25 bg-primary/10 text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
-            <Sparkles className="h-4.5 w-4.5" aria-hidden="true" />
-          </span>
-        )}
+        {routingMedia}
         <div className="min-w-0 flex-1">
-          <p className="text-foreground text-sm font-semibold">
-            {isDirect ? `Going to ${expertName}` : "We'll match you with an expert"}
-          </p>
+          <p className="text-foreground text-sm font-semibold">{routingLabel}</p>
         </div>
         <button
           type="button"

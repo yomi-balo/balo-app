@@ -8,7 +8,7 @@ import {
   PROJECT_DOCUMENT_CONTENT_TYPES,
   MAX_DOCUMENT_BYTES,
   MAX_DOCUMENTS,
-} from '../../../app/(marketing)/experts/[username]/_actions/schemas';
+} from '@/lib/project-request/actions/schemas';
 
 export { MAX_DOCUMENT_BYTES, MAX_DOCUMENTS };
 

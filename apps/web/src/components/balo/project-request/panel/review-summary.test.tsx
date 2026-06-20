@@ -53,6 +53,20 @@ describe('ReviewSummary', () => {
     expect(screen.getByText(/we'll match you with an expert/i)).toBeInTheDocument();
   });
 
+  it('renders a neutral Direct routing block when no expert is supplied (context-free)', () => {
+    render(
+      <ReviewSummary
+        draft={DRAFT}
+        onEdit={vi.fn()}
+        tagNameMap={BASE.tagNameMap}
+        productNameMap={BASE.productNameMap}
+      />
+    );
+    // Neutral copy — no expert name available.
+    expect(screen.getByText('Going to an expert')).toBeInTheDocument();
+    expect(screen.queryByText('Going to Priya Sharma')).not.toBeInTheDocument();
+  });
+
   it('shows "None" for empty optional fields', () => {
     render(
       <ReviewSummary

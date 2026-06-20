@@ -20,7 +20,7 @@ import { WorkSection } from './work-section';
 import { ReviewsSection } from './reviews-section';
 import { BookingCard } from './booking-card';
 import { ExpertProfileAnalytics } from './expert-profile-analytics';
-import { ProjectDrawer } from './project-drawer';
+import { ProjectRequestPanel } from '@/components/balo/project-request/panel';
 
 interface ExpertProfileClientProps {
   view: ExpertProfileView;
@@ -64,8 +64,9 @@ export function ExpertProfileClient({
   const firstSection = sections[0]?.key ?? 'about';
   const [activeNav, setActiveNav] = useState<ProfileSectionKey>(firstSection);
 
-  // ProjectDrawer (BAL-253) — opened by the `project` CTA from both the
-  // BookingCard and the QuickStarts empty-state.
+  // ProjectRequestPanel (BAL-253/BAL-264) — opened by the `project` CTA from both
+  // the BookingCard and the QuickStarts empty-state. The trigger + analytics stay
+  // here (profile-specific); the panel itself is a Projects-owned reusable module.
   const [projectOpen, setProjectOpen] = useState(false);
 
   // Suppress scroll-spy updates briefly while a programmatic smooth-scroll runs.
@@ -130,7 +131,7 @@ export function ExpertProfileClient({
   const onMessage = useCallback(() => fireCta('message'), [fireCta]);
 
   // `project` is wired (BAL-253): keep the profile-level CTA event, then open
-  // the ProjectDrawer instead of the "Coming soon" toast.
+  // the ProjectRequestPanel instead of the "Coming soon" toast.
   const onStartProject = useCallback(() => {
     track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'project' });
     setProjectOpen(true);
@@ -192,14 +193,17 @@ export function ExpertProfileClient({
         </div>
       </div>
 
-      <ProjectDrawer
+      <ProjectRequestPanel
         open={projectOpen}
-        onOpenChange={setProjectOpen}
+        onClose={() => setProjectOpen(false)}
+        entryPoint="profile"
         expertProfileId={view.expertId}
-        expertName={view.name}
-        expertFirstName={view.firstName}
-        expertInitials={view.initials}
-        expertAvatarKey={view.avatarKey}
+        expert={{
+          name: view.name,
+          firstName: view.firstName,
+          initials: view.initials,
+          avatarKey: view.avatarKey,
+        }}
         projectTaxonomies={projectTaxonomies}
       />
 

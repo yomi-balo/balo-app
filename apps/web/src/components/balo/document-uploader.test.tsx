@@ -10,19 +10,13 @@ const { mockRequest, mockConfirm, mockRemove } = vi.hoisted(() => ({
   mockConfirm: vi.fn(),
   mockRemove: vi.fn(),
 }));
-vi.mock(
-  '../../app/(marketing)/experts/[username]/_actions/request-project-document-upload',
-  () => ({
-    requestProjectDocumentUploadAction: mockRequest,
-  })
-);
-vi.mock(
-  '../../app/(marketing)/experts/[username]/_actions/confirm-project-document-upload',
-  () => ({
-    confirmProjectDocumentUploadAction: mockConfirm,
-  })
-);
-vi.mock('../../app/(marketing)/experts/[username]/_actions/remove-project-document', () => ({
+vi.mock('@/lib/project-request/actions/request-project-document-upload', () => ({
+  requestProjectDocumentUploadAction: mockRequest,
+}));
+vi.mock('@/lib/project-request/actions/confirm-project-document-upload', () => ({
+  confirmProjectDocumentUploadAction: mockConfirm,
+}));
+vi.mock('@/lib/project-request/actions/remove-project-document', () => ({
   removeProjectDocumentAction: mockRemove,
 }));
 

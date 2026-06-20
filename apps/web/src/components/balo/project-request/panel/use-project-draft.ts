@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectRouting } from './send-to-selector';
-import type { ProjectDocumentRef } from '../../_actions/schemas';
+import type { ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
+
+/** Where the panel was opened from — drives the context-free autosave key. */
+export type ProjectRequestEntryPoint = 'profile' | 'search' | 'card' | 'direct';
 
 export interface ProjectDraft {
   routing: ProjectRouting;
@@ -20,8 +23,10 @@ export interface ProjectDraft {
   timeline: string | null;
 }
 
-const EMPTY_DRAFT: ProjectDraft = {
-  routing: 'direct',
+/** Draft shape minus its routing — routing is computed from the bound expert. */
+type DraftWithoutRouting = Omit<ProjectDraft, 'routing'>;
+
+const EMPTY_DRAFT_WITHOUT_ROUTING: DraftWithoutRouting = {
   title: '',
   descriptionHtml: '',
   tagIds: [],
@@ -41,9 +46,27 @@ const DOCUMENT_CONTENT_TYPES = new Set([
   'image/webp',
 ]);
 
-/** Per-expert localStorage key so drafts never bleed across profiles. */
-function draftKey(expertProfileId: string): string {
-  return `balo:project-draft:${expertProfileId}`;
+/**
+ * Default routing for a fresh draft: expert-bound mounts default to Direct (the
+ * bound expert); context-free mounts default to Match ("find me an expert").
+ */
+function defaultRoutingFor(expertProfileId: string | undefined): ProjectRouting {
+  return expertProfileId ? 'direct' : 'match';
+}
+
+/**
+ * localStorage key. Expert-bound keeps the BYTE-IDENTICAL key from before this
+ * relocation (`balo:project-draft:{id}`) so in-flight drafts survive. Context-free
+ * mounts (no expert) namespace by entry point so different entry surfaces don't
+ * collide.
+ */
+function draftKey(
+  expertProfileId: string | undefined,
+  entryPoint: ProjectRequestEntryPoint
+): string {
+  return expertProfileId
+    ? `balo:project-draft:${expertProfileId}`
+    : `balo:project-draft:entry:${entryPoint}`;
 }
 
 /** Narrow an unknown array to a `string[]` (drops non-strings). */
@@ -91,6 +114,17 @@ function readDocuments(value: unknown): ProjectDocumentRef[] {
 }
 
 /**
+ * Narrow a persisted `routing` value. A stored `'direct'`/`'match'` is honoured
+ * as-is; anything else (missing/corrupt) falls back to the computed default
+ * (expert-bound → direct, context-free → match).
+ */
+function readRouting(value: unknown, defaultRouting: ProjectRouting): ProjectRouting {
+  if (value === 'match') return 'match';
+  if (value === 'direct') return 'direct';
+  return defaultRouting;
+}
+
+/**
  * Reads + narrows a persisted draft. Corrupt / legacy shapes silently fall back
  * to defaults — no throw, no `console.*`. The legacy `focusArea` key and the old
  * free-text `budget` string are silently dropped (we only read the new field
@@ -98,16 +132,21 @@ function readDocuments(value: unknown): ProjectDocumentRef[] {
  * / `budgetMaxCents` (numbers) and `timeline` (string) — so any legacy free-text
  * `budget` value is ignored without collision.
  */
-function readDraft(expertProfileId: string): ProjectDraft {
-  if (typeof window === 'undefined') return EMPTY_DRAFT;
+function readDraft(
+  expertProfileId: string | undefined,
+  entryPoint: ProjectRequestEntryPoint,
+  defaultRouting: ProjectRouting
+): ProjectDraft {
+  const emptyDraft: ProjectDraft = { routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING };
+  if (typeof globalThis.window === 'undefined') return emptyDraft;
   try {
-    const raw = window.localStorage.getItem(draftKey(expertProfileId));
-    if (raw === null) return EMPTY_DRAFT;
+    const raw = globalThis.localStorage.getItem(draftKey(expertProfileId, entryPoint));
+    if (raw === null) return emptyDraft;
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null) return EMPTY_DRAFT;
+    if (typeof parsed !== 'object' || parsed === null) return emptyDraft;
     const record = parsed as Record<string, unknown>;
     return {
-      routing: record.routing === 'match' ? 'match' : 'direct',
+      routing: readRouting(record.routing, defaultRouting),
       title: typeof record.title === 'string' ? record.title : '',
       descriptionHtml: typeof record.descriptionHtml === 'string' ? record.descriptionHtml : '',
       tagIds: readStringArray(record.tagIds),
@@ -119,7 +158,7 @@ function readDraft(expertProfileId: string): ProjectDraft {
     };
   } catch {
     // Corrupt or inaccessible storage — start fresh.
-    return EMPTY_DRAFT;
+    return emptyDraft;
   }
 }
 
@@ -132,10 +171,18 @@ interface UseProjectDraftResult {
 /**
  * localStorage autosave for the project-request form. Lazy-inits from storage,
  * debounces writes (~400ms), and exposes `clearDraft()` (called on a successful
- * submit) which removes the key entirely.
+ * submit) which removes the key entirely and resets to the computed default
+ * routing. The key + default routing both derive from whether an expert is bound
+ * (`expertProfileId`) — expert-bound defaults to Direct, context-free to Match.
  */
-export function useProjectDraft(expertProfileId: string): UseProjectDraftResult {
-  const [draft, setDraft] = useState<ProjectDraft>(() => readDraft(expertProfileId));
+export function useProjectDraft(
+  expertProfileId: string | undefined,
+  entryPoint: ProjectRequestEntryPoint
+): UseProjectDraftResult {
+  const defaultRouting = defaultRoutingFor(expertProfileId);
+  const [draft, setDraft] = useState<ProjectDraft>(() =>
+    readDraft(expertProfileId, entryPoint, defaultRouting)
+  );
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearedRef = useRef(false);
 
@@ -150,24 +197,27 @@ export function useProjectDraft(expertProfileId: string): UseProjectDraftResult 
       clearTimeout(writeTimer.current);
       writeTimer.current = null;
     }
-    setDraft(EMPTY_DRAFT);
-    if (typeof window === 'undefined') return;
+    setDraft({ routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING });
+    if (typeof globalThis.window === 'undefined') return;
     try {
-      window.localStorage.removeItem(draftKey(expertProfileId));
+      globalThis.localStorage.removeItem(draftKey(expertProfileId, entryPoint));
     } catch {
       // Ignore — nothing actionable if storage is unavailable.
     }
-  }, [expertProfileId]);
+  }, [expertProfileId, entryPoint, defaultRouting]);
 
   // Debounced persist on change. Skipped immediately after a clear so we don't
   // re-write an empty draft over the removed key.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof globalThis.window === 'undefined') return;
     if (clearedRef.current) return;
     if (writeTimer.current) clearTimeout(writeTimer.current);
     writeTimer.current = setTimeout(() => {
       try {
-        window.localStorage.setItem(draftKey(expertProfileId), JSON.stringify(draft));
+        globalThis.localStorage.setItem(
+          draftKey(expertProfileId, entryPoint),
+          JSON.stringify(draft)
+        );
       } catch {
         // Ignore — quota / private-mode failures are non-fatal.
       }
@@ -175,7 +225,7 @@ export function useProjectDraft(expertProfileId: string): UseProjectDraftResult 
     return () => {
       if (writeTimer.current) clearTimeout(writeTimer.current);
     };
-  }, [draft, expertProfileId]);
+  }, [draft, expertProfileId, entryPoint]);
 
   return { draft, setField, clearDraft };
 }

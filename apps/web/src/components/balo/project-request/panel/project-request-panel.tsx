@@ -9,31 +9,62 @@ import { InputFloating } from '@/components/enhanced/input-floating';
 import { RichTextEditor, validateDescription } from '@/components/balo/rich-text-editor';
 import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { DocumentUploader } from '@/components/balo/document-uploader';
-import { buildProductNameMap } from '@/lib/search/taxonomy';
+import { buildProductNameMap, EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 import { centsToDollars, dollarsToCents } from '@/lib/utils/currency';
 import { cn } from '@/lib/utils';
 import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
-import { submitProjectRequestAction } from '../../_actions/submit-project-request';
-import { refetchProjectTaxonomiesAction } from '../../_actions/refetch-project-taxonomies';
-import type { ProjectDocumentRef } from '../../_actions/schemas';
+import { submitProjectRequestAction } from '@/lib/project-request/actions/submit-project-request';
+import { refetchProjectTaxonomiesAction } from '@/lib/project-request/actions/refetch-project-taxonomies';
 import { PROJECT_PATHS, PROJECT_STEPS } from './constants';
 import { FieldLabel } from './field-label';
 import { PathCard } from './path-card';
 import { SendToSelector, type ProjectRouting } from './send-to-selector';
 import { ReviewSummary } from './review-summary';
-import { useProjectDraft } from './use-project-draft';
+import {
+  useProjectDraft,
+  type ProjectDraft,
+  type ProjectRequestEntryPoint,
+} from './use-project-draft';
 
-interface ProjectDrawerProps {
+export type { ProjectRequestEntryPoint } from './use-project-draft';
+
+/** Expert display data used by the Direct routing card + review/done copy. */
+interface ProjectRequestExpert {
+  name: string;
+  firstName: string;
+  initials: string;
+  /** R2 key / http URL for the avatar. */
+  avatarKey: string | null;
+}
+
+export interface ProjectRequestPanelProps {
   open: boolean;
-  onOpenChange: (open: boolean) => void;
-  expertProfileId: string;
-  expertName: string;
-  expertFirstName: string;
-  expertInitials: string;
-  /** R2 key / http URL for the expert avatar (Direct routing card). */
-  expertAvatarKey: string | null;
-  /** Tags + products taxonomies, loaded RSC-side (EMPTY on load failure). */
-  projectTaxonomies: ProjectRequestTaxonomies;
+  /** Replaces the old `onOpenChange` — the panel only ever asks to CLOSE. */
+  onClose: () => void;
+  /** Where the panel was opened from. Drives autosave-key fallback + analytics dimension. */
+  entryPoint: ProjectRequestEntryPoint;
+  /**
+   * When present → expert-bound mode: routing defaults to `direct` (this expert),
+   * the SendToSelector + done copy bind to the expert, submit sends `sendTo:'direct'`.
+   * When absent → context-free mode: routing defaults to `match` ("Match for me"),
+   * the Direct card still renders (selectable) but with a neutral "an expert" media,
+   * submit sends `sendTo:'match'`.
+   */
+  expertProfileId?: string;
+  /**
+   * Expert display data — REQUIRED in practice whenever `expertProfileId` is set
+   * (the Direct card / review block need a name + avatar). Grouped into one optional
+   * object so context-free callers pass nothing. Absent → context-free rendering.
+   */
+  expert?: ProjectRequestExpert;
+  /**
+   * Pre-loaded taxonomies (RSC-side). OPTIONAL: when omitted (context-free mounts
+   * with no RSC parent), the panel self-loads via `refetchProjectTaxonomiesAction`
+   * on first open and shows the picker's existing loading→error/Retry states.
+   */
+  projectTaxonomies?: ProjectRequestTaxonomies;
+  /** Fired after a successful submit with the created request id. */
+  onSubmitted?: (requestId: string) => void;
 }
 
 /** Mutable steps for the stepper (the readonly `as const` tuple isn't assignable). */
@@ -41,11 +72,16 @@ const STEPPER_STEPS = PROJECT_STEPS.map((s) => ({ key: s.key, label: s.label }))
 
 const DESCRIPTION_PLACEHOLDER_SUFFIX = ' later.';
 
+const EMPTY_TAXONOMIES: ProjectRequestTaxonomies = {
+  tags: EMPTY_TAXONOMY,
+  products: EMPTY_TAXONOMY,
+};
+
 /** Routing-aware copy — keyed off `draft.routing` to drive the whole flow. */
 interface RoutingCopy {
   /**
    * Routing-aware framing line above the `manual`-step routing selector. Match
-   * gets an explicit matching promise; Direct stays unframed (the drawer's
+   * gets an explicit matching promise; Direct stays unframed (the panel's
    * "Start a project with {expertName}" heading is sufficient).
    */
   manualHeading: string | null;
@@ -57,8 +93,26 @@ interface RoutingCopy {
   reviewReassurance: string;
 }
 
-function getRoutingCopy(routing: ProjectRouting, firstName: string): RoutingCopy {
-  if (routing === 'direct') {
+const MATCH_COPY: RoutingCopy = {
+  manualHeading: "Tell us what you need and we'll match you with the right expert.",
+  formDescription:
+    'Our team reviews your brief and introduces a matched expert, usually within a day.',
+  submitCta: 'Find me an expert',
+  successDescription: "We'll introduce a matched expert soon.",
+  doneHeading: "Request sent — we're finding your expert",
+  doneBody:
+    "Our team will review your brief and introduce a matched expert, usually within a day. We'll email you and notify you in-app.",
+  reviewReassurance:
+    'Our team reviews briefs within a day and introduces a matched expert. No charge to send.',
+};
+
+/**
+ * Routing-aware copy. The Direct copy is only used when an expert is bound (the
+ * panel clamps a context-free Direct selection to Match), so `firstName` is
+ * always defined on the Direct branch.
+ */
+function getRoutingCopy(routing: ProjectRouting, firstName: string | undefined): RoutingCopy {
+  if (routing === 'direct' && firstName !== undefined) {
     return {
       manualHeading: null,
       formDescription: `${firstName} receives this brief directly.`,
@@ -69,63 +123,74 @@ function getRoutingCopy(routing: ProjectRouting, firstName: string): RoutingCopy
       reviewReassurance: `${firstName} usually replies within a day. You won't be charged anything to send this.`,
     };
   }
-  return {
-    manualHeading: "Tell us what you need and we'll match you with the right expert.",
-    formDescription:
-      'Our team reviews your brief and introduces a matched expert, usually within a day.',
-    submitCta: 'Find me an expert',
-    successDescription: "We'll introduce a matched expert soon.",
-    doneHeading: "Request sent — we're finding your expert",
-    doneBody:
-      "Our team will review your brief and introduce a matched expert, usually within a day. We'll email you and notify you in-app.",
-    reviewReassurance:
-      'Our team reviews briefs within a day and introduces a matched expert. No charge to send.',
-  };
+  return MATCH_COPY;
 }
 
 /**
- * Top-level project-request drawer. State machine: `start → manual → review →
+ * Top-level project-request panel. State machine: `start → manual → review →
  * done` (the AI path renders as a disabled card only). Built on the shared
  * `Drawer` / `FlowStepper` flow primitives. Field set (BAL-259): routing
  * (Direct/Match) → title → rich-text brief → optional tags → optional products →
  * optional documents. Routing colours the heading, review summary, submit CTA,
  * and done screen. Autosaves to localStorage and submits via the
  * `submitProjectRequestAction` Server Action (discriminated union on `sendTo`).
+ *
+ * Two mount modes:
+ *  - **Expert-bound** (`expertProfileId` + `expert` supplied): routing defaults
+ *    to Direct, the selector/copy bind to the expert, submit sends `direct`.
+ *  - **Context-free** (no expert): routing defaults to Match, the Direct card is
+ *    neutral, submit clamps to `match` (there is no id to route to).
+ *
+ * Taxonomies are supplied RSC-side (expert-bound profile) or self-loaded via the
+ * Retry action on first open (context-free).
  */
-export function ProjectDrawer({
+export function ProjectRequestPanel({
   open,
-  onOpenChange,
+  onClose,
+  entryPoint,
   expertProfileId,
-  expertName,
-  expertFirstName,
-  expertInitials,
-  expertAvatarKey,
+  expert,
   projectTaxonomies,
-}: Readonly<ProjectDrawerProps>): React.JSX.Element {
+  onSubmitted,
+}: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
   const [step, setStep] = useState<ProjectStep>('start');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Snapshot of the routing at submit time — the done screen + success toast read
-  // this, NOT the live draft (which `clearDraft()` resets to 'direct' on success).
-  const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>('direct');
+  // this, NOT the live draft (which `clearDraft()` resets on success).
+  const expertBound = expertProfileId !== undefined;
+  const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>(
+    expertBound ? 'direct' : 'match'
+  );
 
-  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId);
+  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId, entryPoint);
   const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
     draft;
 
-  // Local taxonomy state so Retry can refresh without a page reload.
-  const [taxonomies, setTaxonomies] = useState<ProjectRequestTaxonomies>(projectTaxonomies);
-  // The project taxonomy is always seeded, so an empty `groups` at load time means
-  // the RSC load failed (returned EMPTY_TAXONOMY) — surface the error state, not empty.
-  const [tagsError, setTagsError] = useState(projectTaxonomies.tags.groups.length === 0);
+  // Local taxonomy state so Retry / self-load can refresh without a page reload.
+  // Context-free mounts (no RSC-supplied taxonomies) seed EMPTY and self-load.
+  const initialTaxonomies = projectTaxonomies ?? EMPTY_TAXONOMIES;
+  const [taxonomies, setTaxonomies] = useState<ProjectRequestTaxonomies>(initialTaxonomies);
+  // The project taxonomy is always seeded, so an empty `groups` for an RSC-supplied
+  // prop means the load failed (returned EMPTY_TAXONOMY) — surface the error state.
+  // Context-free mounts start empty and self-load on first open, so the error flag
+  // stays false until a self-load attempt fails.
+  const [tagsError, setTagsError] = useState(
+    projectTaxonomies !== undefined && projectTaxonomies.tags.groups.length === 0
+  );
   const [productsError, setProductsError] = useState(
-    projectTaxonomies.products.groups.length === 0
+    projectTaxonomies !== undefined && projectTaxonomies.products.groups.length === 0
   );
   const [retrying, setRetrying] = useState(false);
+  // True once a context-free self-load has been kicked off (guard against re-fire).
+  const selfLoadedRef = useRef(false);
 
+  // Sync from the RSC-supplied taxonomies prop ONLY when it is provided (expert-bound).
+  // Context-free mounts have no prop and rely on the self-load below instead.
   useEffect(() => {
+    if (projectTaxonomies === undefined) return;
     setTaxonomies(projectTaxonomies);
     setTagsError(projectTaxonomies.tags.groups.length === 0);
     setProductsError(projectTaxonomies.products.groups.length === 0);
@@ -151,9 +216,26 @@ export function ProjectDrawer({
     budgetMinCents !== null && budgetMaxCents !== null && budgetMaxCents < budgetMinCents;
   const reviewValid = titleValid && descriptionError === null && !budgetRangeInvalid;
 
+  const expertFirstName = expert?.firstName;
   const copy = getRoutingCopy(routing, expertFirstName);
   // Done screen uses the snapshot (draft is cleared on success).
   const doneCopy = getRoutingCopy(submittedRouting, expertFirstName);
+
+  const handleRetryTaxonomies = useCallback(async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const next = await refetchProjectTaxonomiesAction();
+      setTaxonomies(next);
+      setTagsError(next.tags.groups.length === 0);
+      setProductsError(next.products.groups.length === 0);
+    } catch {
+      setTagsError(true);
+      setProductsError(true);
+    } finally {
+      setRetrying(false);
+    }
+  }, [retrying]);
 
   // Fire `drawer_opened` once per open (guard against the effect re-running).
   const openFiredRef = useRef(false);
@@ -167,12 +249,23 @@ export function ProjectDrawer({
     setStep('start');
     setError(null);
     setShowValidation(false);
-    track(PROJECT_EVENTS.PROJECT_DRAWER_OPENED, { expert_id: expertProfileId });
-  }, [open, expertProfileId]);
+    // expert_id-keyed event — fired only when expert-bound (context-free analytics
+    // is a follow-up; the @balo/analytics event map is intentionally not widened).
+    if (expertProfileId !== undefined) {
+      track(PROJECT_EVENTS.PROJECT_DRAWER_OPENED, { expert_id: expertProfileId });
+    }
+    // Context-free self-load: taxonomies were not RSC-supplied, so fetch them once
+    // on first open (reusing the Retry path + the picker's loading/error UI).
+    if (projectTaxonomies === undefined && !selfLoadedRef.current) {
+      selfLoadedRef.current = true;
+      handleRetryTaxonomies().catch(() => {});
+    }
+  }, [open, expertProfileId, projectTaxonomies, handleRetryTaxonomies]);
 
-  // `step_viewed` on every step change while open.
+  // `step_viewed` on every step change while open (expert-bound only).
   useEffect(() => {
     if (!open) return;
+    if (expertProfileId === undefined) return;
     track(PROJECT_EVENTS.PROJECT_STEP_VIEWED, { expert_id: expertProfileId, step });
   }, [open, step, expertProfileId]);
 
@@ -186,10 +279,15 @@ export function ProjectDrawer({
     if (step === 'manual') titleInputRef.current?.focus();
   }, [step]);
 
-  const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
+  const handleClose = useCallback(() => onClose(), [onClose]);
 
   const handleSelectManual = useCallback(() => {
-    track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, { expert_id: expertProfileId, method: 'manual' });
+    if (expertProfileId !== undefined) {
+      track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
+        expert_id: expertProfileId,
+        method: 'manual',
+      });
+    }
     setStep('manual');
   }, [expertProfileId]);
 
@@ -203,7 +301,7 @@ export function ProjectDrawer({
   }, [reviewValid]);
 
   const handleDocumentsChange = useCallback(
-    (docs: ProjectDocumentRef[]) => setField('documents', docs),
+    (docs: ProjectDraft['documents']) => setField('documents', docs),
     [setField]
   );
 
@@ -258,22 +356,6 @@ export function ProjectDrawer({
     [productIdSet, productIds, setField]
   );
 
-  const handleRetryTaxonomies = useCallback(async () => {
-    if (retrying) return;
-    setRetrying(true);
-    try {
-      const next = await refetchProjectTaxonomiesAction();
-      setTaxonomies(next);
-      setTagsError(next.tags.groups.length === 0);
-      setProductsError(next.products.groups.length === 0);
-    } catch {
-      setTagsError(true);
-      setProductsError(true);
-    } finally {
-      setRetrying(false);
-    }
-  }, [retrying]);
-
   const handleSubmit = useCallback(async () => {
     setSubmitting(true);
     setError(null);
@@ -289,10 +371,14 @@ export function ProjectDrawer({
       budgetMaxCents: draft.budgetMaxCents,
       timeline: draft.timeline,
     };
-    const payload =
-      routing === 'direct'
-        ? { sendTo: 'direct' as const, expertProfileId, ...base }
-        : { sendTo: 'match' as const, ...base };
+    // Submit clamp: only emit `direct` when there is an expert id to route to.
+    // A context-free Direct selection (or any missing id) falls back to `match`.
+    const sendDirect = expertProfileId !== undefined && routing === 'direct';
+    const payload = sendDirect
+      ? { sendTo: 'direct' as const, expertProfileId, ...base }
+      : { sendTo: 'match' as const, ...base };
+    // The routing actually submitted (clamped) — drives the done screen + toast.
+    const effectiveRouting: ProjectRouting = sendDirect ? 'direct' : 'match';
 
     const result = await submitProjectRequestAction(payload);
     setSubmitting(false);
@@ -304,23 +390,28 @@ export function ProjectDrawer({
       return;
     }
 
-    track(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
-      expert_id: expertProfileId,
-      send_to: routing,
-      tag_count: tagIds.length,
-      product_count: productIds.length,
-      document_count: draft.documents.length,
-      method: 'manual',
-    });
+    if (expertProfileId !== undefined) {
+      track(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
+        expert_id: expertProfileId,
+        send_to: effectiveRouting,
+        tag_count: tagIds.length,
+        product_count: productIds.length,
+        document_count: draft.documents.length,
+        method: 'manual',
+      });
+    }
     // Snapshot routing for the done screen BEFORE clearing the draft (clear resets
-    // routing to 'direct'), so Match submits keep their done copy.
-    setSubmittedRouting(routing);
+    // routing to the computed default), so Match submits keep their done copy.
+    setSubmittedRouting(effectiveRouting);
     clearDraft();
-    toast.success('Request sent', { description: copy.successDescription });
+    const successCopy = getRoutingCopy(effectiveRouting, expertFirstName);
+    toast.success('Request sent', { description: successCopy.successDescription });
     setStep('done');
+    if (result.projectRequestId !== undefined) onSubmitted?.(result.projectRequestId);
   }, [
     routing,
     expertProfileId,
+    expertFirstName,
     trimmedTitle,
     descriptionHtml,
     tagIds,
@@ -330,10 +421,19 @@ export function ProjectDrawer({
     draft.budgetMaxCents,
     draft.timeline,
     clearDraft,
-    copy.successDescription,
+    onSubmitted,
   ]);
 
   const submitDisabled = !reviewValid || submitting || uploading;
+
+  const startHeading = expert ? `Start a project with ${expert.name}` : 'Start a project';
+  const startBody =
+    expertFirstName === undefined
+      ? "Tell us what you need and we'll match you with the right expert. Pick how you'd like to begin — it only takes a minute or two."
+      : `Tell us what you need and ${expertFirstName} replies with a scoped proposal. Pick how you'd like to begin — it only takes a minute or two.`;
+
+  const descriptionRefinePerson =
+    expertFirstName === undefined ? 'with your expert' : `with ${expertFirstName}`;
 
   const manualBody = (
     <div className="space-y-6 p-6">
@@ -356,9 +456,9 @@ export function ProjectDrawer({
         <SendToSelector
           value={routing}
           onChange={(r) => setField('routing', r)}
-          expertName={expertName}
-          expertInitials={expertInitials}
-          expertAvatarKey={expertAvatarKey}
+          expertName={expert?.name}
+          expertInitials={expert?.initials}
+          expertAvatarKey={expert?.avatarKey}
         />
         <p className="text-muted-foreground text-xs leading-relaxed">{copy.formDescription}</p>
       </div>
@@ -387,7 +487,7 @@ export function ProjectDrawer({
         <RichTextEditor
           value={descriptionHtml}
           onChange={(html) => setField('descriptionHtml', html)}
-          placeholder={`Describe the problem or the outcome you're after — bullet points are fine. You can refine it with ${expertFirstName}${DESCRIPTION_PLACEHOLDER_SUFFIX}`}
+          placeholder={`Describe the problem or the outcome you're after — bullet points are fine. You can refine it ${descriptionRefinePerson}${DESCRIPTION_PLACEHOLDER_SUFFIX}`}
         />
         {showValidation && descriptionError !== null && (
           <p role="alert" className="text-destructive text-xs">
@@ -499,7 +599,9 @@ export function ProjectDrawer({
   return (
     <Drawer
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
       title="Start a project"
       widthClassName="sm:max-w-[560px]"
     >
@@ -517,12 +619,9 @@ export function ProjectDrawer({
             <div className="space-y-5 p-6">
               <div className="space-y-2">
                 <h2 className="text-foreground text-xl font-semibold tracking-[-0.01em]">
-                  Start a project with {expertName}
+                  {startHeading}
                 </h2>
-                <p className="text-muted-foreground text-sm leading-relaxed">
-                  Tell us what you need and {expertFirstName} replies with a scoped proposal. Pick
-                  how you&apos;d like to begin — it only takes a minute or two.
-                </p>
+                <p className="text-muted-foreground text-sm leading-relaxed">{startBody}</p>
               </div>
               <div className="flex flex-col gap-3">
                 {PROJECT_PATHS.map((path) => (
@@ -542,9 +641,9 @@ export function ProjectDrawer({
             <div className="space-y-4 p-6">
               <ReviewSummary
                 draft={draft}
-                expertName={expertName}
-                expertInitials={expertInitials}
-                expertAvatarKey={expertAvatarKey}
+                expertName={expert?.name}
+                expertInitials={expert?.initials}
+                expertAvatarKey={expert?.avatarKey}
                 tagNameMap={tagNameMap}
                 productNameMap={productNameMap}
                 onEdit={() => setStep('manual')}

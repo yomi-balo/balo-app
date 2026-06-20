@@ -11,21 +11,24 @@ vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), err
 // useIsMobile reads window.matchMedia (absent in jsdom) — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
-// Mock the Server Action modules the drawer / sub-components import.
-const { mockSubmit } = vi.hoisted(() => ({ mockSubmit: vi.fn() }));
-vi.mock('../../_actions/submit-project-request', () => ({
+// Mock the Server Action modules the panel / sub-components import.
+const { mockSubmit, mockRefetch } = vi.hoisted(() => ({
+  mockSubmit: vi.fn(),
+  mockRefetch: vi.fn(),
+}));
+vi.mock('@/lib/project-request/actions/submit-project-request', () => ({
   submitProjectRequestAction: mockSubmit,
 }));
-vi.mock('../../_actions/refetch-project-taxonomies', () => ({
-  refetchProjectTaxonomiesAction: vi.fn(),
+vi.mock('@/lib/project-request/actions/refetch-project-taxonomies', () => ({
+  refetchProjectTaxonomiesAction: mockRefetch,
 }));
-vi.mock('../../_actions/request-project-document-upload', () => ({
+vi.mock('@/lib/project-request/actions/request-project-document-upload', () => ({
   requestProjectDocumentUploadAction: vi.fn(),
 }));
-vi.mock('../../_actions/confirm-project-document-upload', () => ({
+vi.mock('@/lib/project-request/actions/confirm-project-document-upload', () => ({
   confirmProjectDocumentUploadAction: vi.fn(),
 }));
-vi.mock('../../_actions/remove-project-document', () => ({
+vi.mock('@/lib/project-request/actions/remove-project-document', () => ({
   removeProjectDocumentAction: vi.fn(),
 }));
 
@@ -62,7 +65,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
   },
 }));
 
-import { ProjectDrawer } from './project-drawer';
+import { ProjectRequestPanel } from './project-request-panel';
 
 const mockTrack = vi.mocked(track);
 const mockToast = vi.mocked(toast);
@@ -91,23 +94,28 @@ const TAXONOMIES: ProjectRequestTaxonomies = {
   },
 };
 
+const EXPERT_PROFILE_ID = '99999999-9999-9999-9999-999999999999';
+
 const BASE_PROPS = {
-  expertProfileId: '99999999-9999-9999-9999-999999999999',
-  expertName: 'Priya Sharma',
-  expertFirstName: 'Priya',
-  expertInitials: 'PS',
-  expertAvatarKey: null,
+  entryPoint: 'profile' as const,
+  expertProfileId: EXPERT_PROFILE_ID,
+  expert: {
+    name: 'Priya Sharma',
+    firstName: 'Priya',
+    initials: 'PS',
+    avatarKey: null,
+  },
   projectTaxonomies: TAXONOMIES,
 } as const;
 
-function renderDrawer(overrides: Partial<React.ComponentProps<typeof ProjectDrawer>> = {}) {
-  return render(<ProjectDrawer open onOpenChange={vi.fn()} {...BASE_PROPS} {...overrides} />);
+function renderPanel(overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}) {
+  return render(<ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} {...overrides} />);
 }
 
 /** start → manual → fill required fields → review. */
 async function advanceToReview(): Promise<ReturnType<typeof userEvent.setup>> {
   const user = userEvent.setup();
-  renderDrawer();
+  renderPanel();
   await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
   await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
   await user.type(
@@ -118,15 +126,16 @@ async function advanceToReview(): Promise<ReturnType<typeof userEvent.setup>> {
   return user;
 }
 
-describe('ProjectDrawer', () => {
+describe('ProjectRequestPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.localStorage.clear();
+    globalThis.localStorage.clear();
     mockSubmit.mockResolvedValue({ success: true, projectRequestId: 'pr-1' });
+    mockRefetch.mockResolvedValue(TAXONOMIES);
   });
 
   it('opens to the start step with both path cards', () => {
-    renderDrawer();
+    renderPanel();
     expect(
       screen.getByRole('heading', { name: /start a project with priya sharma/i })
     ).toBeInTheDocument();
@@ -136,7 +145,7 @@ describe('ProjectDrawer', () => {
 
   it('renders the AI card disabled and does not transition on click', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     const aiCard = screen.getByRole('button', { name: /upload docs/i });
     expect(aiCard).toBeDisabled();
     expect(screen.getByText('AI')).toBeInTheDocument();
@@ -154,19 +163,19 @@ describe('ProjectDrawer', () => {
 
   it('advances to the form and fires PROJECT_ENTRY_SELECTED on selecting manual', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
     expect(screen.getByLabelText(/project title/i)).toBeInTheDocument();
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
-      expert_id: BASE_PROPS.expertProfileId,
+      expert_id: EXPERT_PROFILE_ID,
       method: 'manual',
     });
   });
 
   it('defaults routing to Direct and shows the Direct FormDescription', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
     const radios = screen.getAllByRole('radio');
@@ -178,7 +187,7 @@ describe('ProjectDrawer', () => {
 
   it('switches all routing-aware copy when Match is selected', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
     // Direct (default) shows no routing-aware manual heading.
@@ -199,7 +208,7 @@ describe('ProjectDrawer', () => {
 
   it('blocks Review with an inline message until title + description are valid', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
     // Empty → clicking Review surfaces validation and stays on manual.
@@ -218,7 +227,7 @@ describe('ProjectDrawer', () => {
 
   it('submits a Direct request with the discriminated-union payload + analytics', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
     await user.type(
@@ -236,7 +245,7 @@ describe('ProjectDrawer', () => {
       expect(mockSubmit).toHaveBeenCalledWith(
         expect.objectContaining({
           sendTo: 'direct',
-          expertProfileId: BASE_PROPS.expertProfileId,
+          expertProfileId: EXPERT_PROFILE_ID,
           title: 'Lead routing rebuild',
           description: '<p>Rebuild our lead routing in Flow.</p>',
           tagIds: ['11111111-1111-1111-1111-111111111111'],
@@ -248,7 +257,7 @@ describe('ProjectDrawer', () => {
     });
 
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
-      expert_id: BASE_PROPS.expertProfileId,
+      expert_id: EXPERT_PROFILE_ID,
       send_to: 'direct',
       tag_count: 1,
       product_count: 1,
@@ -259,9 +268,27 @@ describe('ProjectDrawer', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Request sent', expect.objectContaining({}));
   });
 
+  it('calls onSubmitted with the created request id after a successful submit', async () => {
+    const onSubmitted = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} onSubmitted={onSubmitted} />
+    );
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('pr-1'));
+  });
+
   it('captures budget (whole dollars → cents) and timeline into the submit payload', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.type(screen.getByLabelText(/project title/i), 'Budgeted build');
     await user.type(
@@ -290,7 +317,7 @@ describe('ProjectDrawer', () => {
 
   it('clears budget back to null when the input is emptied or invalid', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.type(screen.getByLabelText(/project title/i), 'Budget edge cases');
     await user.type(
@@ -317,7 +344,7 @@ describe('ProjectDrawer', () => {
 
   it('shows the budget-range alert when max is below min', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.type(screen.getByLabelText(/min budget/i), '9000');
     await user.type(screen.getByLabelText(/max budget/i), '1000');
@@ -327,7 +354,7 @@ describe('ProjectDrawer', () => {
 
   it('coerces budget input to whole-dollar cents (tolerates commas, ignores decimals)', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.type(screen.getByLabelText(/project title/i), 'Whole-dollar budget');
     await user.type(
@@ -358,7 +385,7 @@ describe('ProjectDrawer', () => {
 
   it('omits expertProfileId and uses Match copy when routing is Match', async () => {
     const user = userEvent.setup();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.click(screen.getByRole('radio', { name: /find me an expert/i }));
     await user.type(screen.getByLabelText(/project title/i), 'Match me up');
@@ -391,16 +418,16 @@ describe('ProjectDrawer', () => {
   });
 
   it('fires PROJECT_DRAWER_OPENED exactly once on open', () => {
-    renderDrawer();
+    renderPanel();
     const openCalls = mockTrack.mock.calls.filter(
       ([event]) => event === PROJECT_EVENTS.PROJECT_DRAWER_OPENED
     );
     expect(openCalls).toHaveLength(1);
-    expect(openCalls[0]?.[1]).toEqual({ expert_id: BASE_PROPS.expertProfileId });
+    expect(openCalls[0]?.[1]).toEqual({ expert_id: EXPERT_PROFILE_ID });
   });
 
   it('does not fire PROJECT_DRAWER_OPENED when closed', () => {
-    render(<ProjectDrawer open={false} onOpenChange={vi.fn()} {...BASE_PROPS} />);
+    render(<ProjectRequestPanel open={false} onClose={vi.fn()} {...BASE_PROPS} />);
     expect(mockTrack).not.toHaveBeenCalledWith(
       PROJECT_EVENTS.PROJECT_DRAWER_OPENED,
       expect.anything()
@@ -409,17 +436,17 @@ describe('ProjectDrawer', () => {
 
   it('persists the draft to localStorage and hydrates it on remount', async () => {
     const user = userEvent.setup();
-    const { unmount } = renderDrawer();
+    const { unmount } = renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     await user.type(screen.getByLabelText(/project title/i), 'Persisted title');
 
     await waitFor(() => {
-      const raw = window.localStorage.getItem(`balo:project-draft:${BASE_PROPS.expertProfileId}`);
+      const raw = globalThis.localStorage.getItem(`balo:project-draft:${EXPERT_PROFILE_ID}`);
       expect(raw).toContain('Persisted title');
     });
 
     unmount();
-    renderDrawer();
+    renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
     expect(screen.getByLabelText(/project title/i)).toHaveValue('Persisted title');
   });
@@ -428,21 +455,148 @@ describe('ProjectDrawer', () => {
     const user = await advanceToReview();
     await waitFor(() => {
       expect(
-        window.localStorage.getItem(`balo:project-draft:${BASE_PROPS.expertProfileId}`)
+        globalThis.localStorage.getItem(`balo:project-draft:${EXPERT_PROFILE_ID}`)
       ).not.toBeNull();
     });
 
     await user.click(screen.getByRole('button', { name: /send to priya/i }));
 
     await waitFor(() => {
-      expect(
-        window.localStorage.getItem(`balo:project-draft:${BASE_PROPS.expertProfileId}`)
-      ).toBeNull();
+      expect(globalThis.localStorage.getItem(`balo:project-draft:${EXPERT_PROFILE_ID}`)).toBeNull();
     });
   });
 
   it('has no accessibility violations', async () => {
-    const { baseElement } = renderDrawer();
+    const { baseElement } = renderPanel();
     expect(await axe(baseElement)).toHaveNoViolations();
+  });
+
+  // ── AC#6: contract + mount-mode coverage ──────────────────────────────
+
+  describe('context-free mode (no expertProfileId / expert)', () => {
+    const CONTEXT_FREE_PROPS = {
+      entryPoint: 'direct' as const,
+      projectTaxonomies: TAXONOMIES,
+    };
+
+    function renderContextFree(
+      overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}
+    ) {
+      return render(
+        <ProjectRequestPanel open onClose={vi.fn()} {...CONTEXT_FREE_PROPS} {...overrides} />
+      );
+    }
+
+    it('omits the expert name from the start heading', () => {
+      renderContextFree();
+      // The visible start-step <h2> reads "Start a project" with no expert name.
+      // (The drawer also renders an sr-only SheetTitle with the same text, so
+      // assert there is no expert-bound "…with {name}" variant instead.)
+      expect(screen.getAllByRole('heading', { name: /^start a project$/i }).length).toBeGreaterThan(
+        0
+      );
+      expect(
+        screen.queryByRole('heading', { name: /start a project with/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it('defaults routing to Match and renders a neutral Direct card', async () => {
+      const user = userEvent.setup();
+      renderContextFree();
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+      // Match (second radio) is checked by default in context-free mode.
+      expect(screen.getByRole('radio', { name: /find me an expert/i })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      );
+      // Direct card renders neutral copy (no expert name).
+      expect(screen.getByRole('radio', { name: /send to an expert/i })).toBeInTheDocument();
+    });
+
+    it('submits sendTo:match with no expertProfileId even if Direct is selected', async () => {
+      const user = userEvent.setup();
+      renderContextFree();
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      // Select the neutral Direct card — submit must still clamp to match.
+      await user.click(screen.getByRole('radio', { name: /send to an expert/i }));
+      await user.type(screen.getByLabelText(/project title/i), 'Need help scoping');
+      await user.type(
+        screen.getByLabelText(/project description/i),
+        'We need help scoping a Salesforce build.'
+      );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ sendTo: 'match', title: 'Need help scoping' })
+        );
+      });
+      const payload = mockSubmit.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('expertProfileId');
+    });
+
+    it('autosaves to the entry-scoped key (not an expert key)', async () => {
+      const user = userEvent.setup();
+      renderContextFree();
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.type(screen.getByLabelText(/project title/i), 'Context-free draft');
+
+      await waitFor(() => {
+        const raw = globalThis.localStorage.getItem('balo:project-draft:entry:direct');
+        expect(raw).toContain('Context-free draft');
+      });
+    });
+
+    it('does not fire the expert-keyed open analytics event', () => {
+      renderContextFree();
+      expect(mockTrack).not.toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_DRAWER_OPENED,
+        expect.anything()
+      );
+    });
+
+    it('self-loads taxonomies on open when projectTaxonomies is omitted', async () => {
+      const user = userEvent.setup();
+      render(<ProjectRequestPanel open onClose={vi.fn()} entryPoint="direct" />);
+
+      await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1));
+
+      // The self-loaded options render in the picker on the manual step.
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      expect(
+        await screen.findByRole('button', { name: 'New Salesforce Implementation' })
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe('onClose contract', () => {
+    it('invokes onClose from the header close button', async () => {
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      render(<ProjectRequestPanel open onClose={onClose} {...BASE_PROPS} />);
+
+      await user.click(screen.getByRole('button', { name: /close/i }));
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('invokes onClose from the done "Done" button', async () => {
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      render(<ProjectRequestPanel open onClose={onClose} {...BASE_PROPS} />);
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+      await user.type(
+        screen.getByLabelText(/project description/i),
+        'Rebuild our lead routing in Flow.'
+      );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+      const doneButton = await screen.findByRole('button', { name: /^done$/i });
+      await user.click(doneButton);
+      expect(onClose).toHaveBeenCalled();
+    });
   });
 });

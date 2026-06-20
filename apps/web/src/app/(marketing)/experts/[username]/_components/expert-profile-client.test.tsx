@@ -21,9 +21,9 @@ const mockToast = vi.mocked(toast);
 // drives the analytics `viewport` value here, not layout — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
-// The mounted ProjectDrawer imports the `'use server'` action (pulls server-only
-// deps at module load). Mock it so the client tree mounts cleanly.
-vi.mock('../_actions/submit-project-request', () => ({
+// The mounted ProjectRequestPanel imports the `'use server'` action (pulls
+// server-only deps at module load). Mock it so the client tree mounts cleanly.
+vi.mock('@/lib/project-request/actions/submit-project-request', () => ({
   submitProjectRequestAction: vi.fn(),
 }));
 
@@ -275,7 +275,7 @@ describe('ExpertProfileClient — CTA handlers', () => {
     expect(mockToast).toHaveBeenCalledWith('Coming soon', expect.objectContaining({}));
   });
 
-  it('opens the ProjectDrawer (not a toast) and still fires cta_clicked {cta:project}', async () => {
+  it('opens the ProjectRequestPanel (not a toast) and still fires cta_clicked {cta:project}', async () => {
     const user = userEvent.setup();
     render(
       <ExpertProfileClient
