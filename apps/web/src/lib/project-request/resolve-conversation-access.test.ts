@@ -140,6 +140,17 @@ describe('resolveConversationAccess', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('denies a declined EXPERT (the lens resolver excludes their relationship → no lens)', async () => {
+    // A declined relationship no longer grants the expert lens (BAL-276), so the
+    // expert resolves to a non-participant and is denied — distinct from the
+    // client-lens declined case above.
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestGraph({ relationships: [relationship({ status: 'declined' })] })
+    );
+    const result = await resolveConversationAccess(EXPERT_USER, REQUEST_ID, REL_ID);
+    expect(result).toEqual({ ok: false, error: DENIED });
+  });
+
   it('client sender → expert recipient (expertProfileId)', async () => {
     const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID);
     expect(result.ok).toBe(true);

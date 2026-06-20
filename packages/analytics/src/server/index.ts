@@ -1,7 +1,12 @@
-export { getServerAnalytics, shutdownServerAnalytics } from './posthog-server';
+export {
+  getServerAnalytics,
+  shutdownServerAnalytics,
+  flushServerAnalytics,
+} from './posthog-server';
 export { trackServer } from './track-server';
 export type { ServerEvents, ServerEventName } from '../types';
 export { EXPERT_PAYOUT_SERVER_EVENTS } from '../events/expert-payouts';
 export { NOTIFICATION_SERVER_EVENTS } from '../events/notifications';
 export { CALENDAR_SERVER_EVENTS } from '../events/calendar';
 export { SEARCH_SERVER_EVENTS } from '../events/search';
+export { PROJECT_SERVER_EVENTS } from '../events/project';

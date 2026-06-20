@@ -232,3 +232,28 @@ export interface ProjectEventMap {
     had_typed_price: boolean;
   };
 }
+
+/**
+ * Server-side project events (emitted via trackServer from RSC/Server Actions,
+ * never the browser). project_request_access_denied fires at a request-detail
+ * denial boundary when the would-be viewer is a DECLINED expert (BAL-276) — so we
+ * can measure whether dropped/declined experts keep hitting the wall. NO PII:
+ * only the request id, the denial reason, the attempted lens, and the distinct_id
+ * (user UUID) — never the client's contact name/email.
+ */
+export const PROJECT_SERVER_EVENTS = {
+  REQUEST_ACCESS_DENIED: 'project_request_access_denied',
+} as const;
+
+/** Why a would-be participant was denied. Extend as more terminal-negative
+ *  relationship statuses (removed/withdrawn) gain analytics. */
+export type ProjectRequestAccessDenialReason = 'declined_relationship';
+
+export interface ProjectServerEventMap {
+  [PROJECT_SERVER_EVENTS.REQUEST_ACCESS_DENIED]: {
+    request_id: string;
+    reason: ProjectRequestAccessDenialReason;
+    lens_attempted: 'expert';
+    distinct_id: string;
+  };
+}

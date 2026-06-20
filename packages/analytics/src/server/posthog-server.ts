@@ -31,3 +31,16 @@ export async function shutdownServerAnalytics(): Promise<void> {
     instance = null;
   }
 }
+
+/**
+ * Flushes queued events WITHOUT closing the client (unlike shutdown()). Use in a
+ * serverless / short-lived request context (e.g. a Next.js RSC via next/server
+ * `after()`) so batched events are delivered before the function suspends — the
+ * singleton is preserved for the next invocation. No-op when analytics is
+ * disabled (no POSTHOG_API_KEY → no instance).
+ */
+export async function flushServerAnalytics(): Promise<void> {
+  if (instance) {
+    await instance.flush();
+  }
+}

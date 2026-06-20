@@ -3,6 +3,7 @@ import type { ProjectRequestWithRelations } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 import {
   resolveRequestLens,
+  resolveRequestDenialReason,
   requestPhase,
   BEFORE_INVITE_STATUSES,
   PHASE2_STATUSES,
@@ -243,6 +244,92 @@ describe('resolveRequestLens', () => {
     expect(clientCtx?.canSeeContact).toBe(false);
     expect(expertCtx?.canSeeContact).toBe(true);
     expect(adminCtx?.canSeeContact).toBe(true);
+  });
+});
+
+describe('resolveRequestDenialReason', () => {
+  it('classifies a declined expert as declined_relationship across post-invite request statuses', () => {
+    // The relationship is `declined`; only the surrounding REQUEST status varies
+    // — a dropped/declined expert hitting the wall at any phase of the request.
+    for (const requestStatus of [
+      'experts_invited',
+      'eoi_submitted',
+      'proposal_submitted',
+      'accepted',
+    ] as const) {
+      const reason = resolveRequestDenialReason(
+        user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+        request({
+          status: requestStatus,
+          relationships: [relationship({ status: 'declined' })],
+        })
+      );
+      expect(reason).toBe('declined_relationship');
+    }
+  });
+
+  it('returns null for a plain stranger (no event for strangers)', () => {
+    expect(resolveRequestDenialReason(user(), request())).toBeNull();
+  });
+
+  it('returns null for a live (non-declined) expert — they resolve to the expert lens', () => {
+    const reason = resolveRequestDenialReason(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({ relationships: [relationship({ status: 'invited' })] })
+    );
+    expect(reason).toBeNull();
+  });
+
+  it('returns null for the owner (resolves to the client lens, not a denial)', () => {
+    expect(resolveRequestDenialReason(user({ companyId: COMPANY_ID }), request())).toBeNull();
+  });
+
+  it('returns null for an owner who is ALSO a declined expert (owner-precedence wins)', () => {
+    // The companyId match short-circuits before the expert-relationship filter,
+    // mirroring resolveRequestLens's owner precedence — so the owner resolves to
+    // the client lens, never the declined wall. Locks that ordering against a
+    // future reorder that would wrongly emit a declined_relationship event.
+    expect(
+      resolveRequestDenialReason(
+        user({ companyId: COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+        request({ relationships: [relationship({ status: 'declined' })] })
+      )
+    ).toBeNull();
+  });
+
+  it('returns null for a platform admin (observer, never denied)', () => {
+    expect(resolveRequestDenialReason(user({ platformRole: 'admin' }), request())).toBeNull();
+    expect(resolveRequestDenialReason(user({ platformRole: 'super_admin' }), request())).toBeNull();
+  });
+
+  it('returns null for an expert with no matching relationship (a stranger, not declined)', () => {
+    const reason = resolveRequestDenialReason(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: 'some-other-expert' }),
+      request({ relationships: [relationship({ status: 'declined' })] })
+    );
+    expect(reason).toBeNull();
+  });
+
+  it('returns null for an expert with no expertProfileId (cannot match any relationship)', () => {
+    const reason = resolveRequestDenialReason(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined }),
+      request({ relationships: [relationship({ status: 'declined' })] })
+    );
+    expect(reason).toBeNull();
+  });
+
+  it('returns null when the expert has BOTH a live and a declined matching relationship', () => {
+    // A live match anywhere → they still resolve to the expert lens → not denied.
+    const reason = resolveRequestDenialReason(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({
+        relationships: [
+          relationship({ id: 'rel-declined', status: 'declined' }),
+          relationship({ id: 'rel-live', status: 'invited' }),
+        ],
+      })
+    );
+    expect(reason).toBeNull();
   });
 });
 

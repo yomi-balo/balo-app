@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockCapture = vi.fn();
 const mockShutdown = vi.fn();
+const mockFlush = vi.fn();
 
 vi.mock('posthog-node', () => ({
   PostHog: class MockPostHog {
     capture = mockCapture;
     shutdown = mockShutdown;
+    flush = mockFlush;
   },
 }));
 
@@ -18,6 +20,7 @@ describe('shutdownServerAnalytics', () => {
     vi.resetModules();
     mockCapture.mockClear();
     mockShutdown.mockClear();
+    mockFlush.mockClear();
   });
 
   afterEach(() => {
@@ -48,6 +51,46 @@ describe('shutdownServerAnalytics', () => {
   });
 });
 
+describe('flushServerAnalytics', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetModules();
+    mockCapture.mockClear();
+    mockShutdown.mockClear();
+    mockFlush.mockClear();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('flushes the singleton WITHOUT closing it when an instance exists', async () => {
+    process.env.POSTHOG_API_KEY = 'phc_test_key';
+
+    const { getServerAnalytics, flushServerAnalytics } = await import('./posthog-server');
+
+    // Initialize the singleton
+    getServerAnalytics();
+
+    await flushServerAnalytics();
+
+    expect(mockFlush).toHaveBeenCalledOnce();
+    expect(mockShutdown).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when no instance exists', async () => {
+    delete process.env.POSTHOG_API_KEY;
+
+    const { flushServerAnalytics } = await import('./posthog-server');
+
+    await flushServerAnalytics();
+
+    expect(mockFlush).not.toHaveBeenCalled();
+  });
+});
+
 describe('trackServer', () => {
   const originalEnv = process.env;
 
@@ -56,6 +99,7 @@ describe('trackServer', () => {
     vi.resetModules();
     mockCapture.mockClear();
     mockShutdown.mockClear();
+    mockFlush.mockClear();
   });
 
   afterEach(() => {
