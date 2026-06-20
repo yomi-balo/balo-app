@@ -247,6 +247,43 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
     expect(updated.proposalRequestedAt).toBeNull();
   });
 
+  it('derives the parent request status on transition (BAL-295)', async () => {
+    // Factory seeds the request at `requested` (default) + relationship `invited`.
+    // Advancing the relationship to `eoi_submitted` derives the request rollup.
+    const { relationship, projectRequestId } = await requestExpertRelationshipFactory();
+
+    const before = await projectRequestsRepository.findById(projectRequestId);
+    expect(before?.status).toBe('requested');
+
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'eoi_submitted',
+    });
+
+    const after = await projectRequestsRepository.findById(projectRequestId);
+    expect(after?.status).toBe('eoi_submitted');
+  });
+
+  it('does NOT regress the request when a relationship declines (BAL-295)', async () => {
+    // Seed the request already at `eoi_submitted` + relationship `eoi_submitted`,
+    // then decline the relationship. The rollup must not drop the request below
+    // its current floor (declined contributes nothing).
+    const request = await projectRequestFactory({ status: 'eoi_submitted' });
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId ?? undefined,
+      values: { status: 'eoi_submitted' },
+    });
+
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'declined',
+    });
+
+    const after = await projectRequestsRepository.findById(request.id);
+    expect(after?.status).toBe('eoi_submitted');
+  });
+
   it('sets declinedAt when transitioning to declined', async () => {
     const { relationship } = await requestExpertRelationshipFactory();
 

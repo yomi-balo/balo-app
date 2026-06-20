@@ -1,6 +1,11 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { requestExpertRelationships, type RequestExpertRelationship } from '../schema';
+import {
+  projectRequests,
+  requestExpertRelationships,
+  type RequestExpertRelationship,
+} from '../schema';
+import { deriveRequestStatus } from './_shared/derive-request-status';
 
 export type RelationshipStatus = RequestExpertRelationship['status'];
 
@@ -42,9 +47,36 @@ export class InvalidRelationshipTransitionError extends Error {
  * Shared transition implementation. Locks the live relationship row FOR UPDATE,
  * validates against `RELATIONSHIP_STATUS_TRANSITIONS`, sets `declinedAt` when
  * advancing to `declined` and `proposalRequestedAt` when advancing to
- * `proposal_requested`, then persists. Exported so cross-table writers (EOI /
+ * `proposal_requested`, persists the relationship, THEN re-derives and (if it
+ * changed) writes the parent `project_requests.status` — the centrally-derived
+ * max-progress rollup over the request's live relationships (ADR-1025 /
+ * BAL-295). Request + relationship therefore advance ATOMICALLY through a single
+ * source of truth (`deriveRequestStatus`), so cross-table callers no longer
+ * double-write the request status ad hoc. Exported so cross-table writers (EOI /
  * proposal submit, proposal accept) can advance the relationship inside their own
  * transaction atomically with their content insert.
+ *
+ * LOCK ORDER (BAL-295) — relationship row FIRST, then request row LAST. The
+ * request (the shared aggregate every relationship rolls up into) is acquired as
+ * the FINAL lock in every path that touches it, which keeps this consistent with
+ * the documented order in `proposalsRepository.accept` (proposal → relationship →
+ * request) and `promoteToSubmit` (relationship → request → proposal header):
+ *  - `submit-eoi` / `request-proposal` paths: relationship → request.
+ *  - `promoteToSubmit`: relationship → request (here) → proposal header.
+ *  - `accept`: proposal → relationship → request (here).
+ * Two concurrent advances on DIFFERENT relationships of the same request cannot
+ * deadlock (disjoint relationship rows; one waits on the request lock the other
+ * holds while holding nothing the other needs). The `FOR UPDATE` on the request
+ * also serialises derivation: the later transaction re-reads the committed sibling
+ * statuses and re-derives the true max, so concurrent advances can't lost-update
+ * the rollup.
+ *
+ * The request write goes DIRECT (not via `isAllowedTransition` /
+ * `projectRequestsRepository.transitionStatus`): the rollup is authoritative and
+ * may legitimately differ from the single-step admin transition map. If the
+ * request row is missing/soft-deleted the request update is SKIPPED (defensive —
+ * a live relationship normally implies a live request); the relationship advance
+ * still stands.
  *
  * `tx` is the active transaction (a Drizzle transaction client). Throws
  * `InvalidRelationshipTransitionError` for illegal moves / `expectedFrom`
@@ -90,6 +122,45 @@ export async function advanceRelationshipStatus(
 
   if (updated === undefined) {
     throw new Error(`Failed to update request expert relationship: ${input.id}`);
+  }
+
+  // ── Request-level rollup (ADR-1025 / BAL-295) ────────────────────────────
+  // Lock the parent request row LAST (see LOCK ORDER above), then re-read ALL
+  // live relationship statuses AFTER the lock — the just-updated row already
+  // reflects `input.to`, so the rollup sees a consistent committed-or-pending set.
+  const [request] = await tx
+    .select({ status: projectRequests.status })
+    .from(projectRequests)
+    .where(and(eq(projectRequests.id, updated.projectRequestId), isNull(projectRequests.deletedAt)))
+    .for('update');
+
+  // Defensive: a missing/soft-deleted request → skip the rollup (the relationship
+  // advance still stands). A live relationship normally implies a live request.
+  if (request !== undefined) {
+    const liveStatuses = await tx
+      .select({ status: requestExpertRelationships.status })
+      .from(requestExpertRelationships)
+      .where(
+        and(
+          eq(requestExpertRelationships.projectRequestId, updated.projectRequestId),
+          isNull(requestExpertRelationships.deletedAt)
+        )
+      );
+
+    const derived = deriveRequestStatus(
+      liveStatuses.map((r) => r.status),
+      request.status
+    );
+
+    if (derived !== request.status) {
+      // DIRECT write (mirrors `transitionStatus`: set only `status`; `updatedAt` is
+      // auto-managed). NOT routed through `isAllowedTransition` — the rollup is the
+      // authoritative source of truth and may differ from the single-step admin map.
+      await tx
+        .update(projectRequests)
+        .set({ status: derived })
+        .where(eq(projectRequests.id, updated.projectRequestId));
+    }
   }
 
   return updated;

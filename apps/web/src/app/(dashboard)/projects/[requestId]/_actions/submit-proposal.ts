@@ -11,7 +11,6 @@ import {
   projectRequestsRepository,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
-  InvalidStatusTransitionError,
   ProposalNotDraftError,
   ProposalCoherenceError,
   type Proposal,
@@ -223,29 +222,15 @@ async function sanitiseAndPersistDraft(
 }
 
 /**
- * Step 10 — advance the REQUEST aggregate `proposal_requested → proposal_submitted`
- * exactly once. Race-tolerant: a concurrent first-submit that already advanced the
- * aggregate trips `InvalidStatusTransitionError`, which is benign. Returns whether
- * THIS call performed the transition.
+ * Re-source the `transitioned` analytics flag from the now-coherent stored column
+ * (ADR-1025 / BAL-295). The request rollup `proposal_requested → proposal_submitted`
+ * advances ATOMICALLY inside `promoteToSubmit`; this compares the pre-op floor
+ * against a fresh `findById` re-read (race-tolerant snapshot — a concurrent
+ * first-submit that already advanced the aggregate is reflected truthfully).
  */
-async function advanceRequestAggregate(requestId: string, currentStatus: string): Promise<boolean> {
-  if (currentStatus !== 'proposal_requested') {
-    return false;
-  }
-  try {
-    await projectRequestsRepository.transitionStatus({
-      id: requestId,
-      to: 'proposal_submitted',
-      expectedFrom: 'proposal_requested',
-    });
-    return true;
-  } catch (error) {
-    if (error instanceof InvalidStatusTransitionError) {
-      log.warn('Proposal submit request transition skipped (already advanced)', { requestId });
-      return false;
-    }
-    throw error;
-  }
+async function didRequestAdvance(requestId: string, beforeStatus: string): Promise<boolean> {
+  const after = await projectRequestsRepository.findById(requestId);
+  return after !== undefined && after.status !== beforeStatus;
 }
 
 /**
@@ -257,9 +242,10 @@ async function advanceRequestAggregate(requestId: string, currentStatus: string)
  *
  * Transactional ordering (per the plan, steps 5-14): load+verify the draft →
  * re-read children → readiness → sanitise → persist (`updateDraft` +
- * `setForProposal` ×2) → `promoteToSubmit` (relationship + proposal spine in one
- * tx) → advance the request aggregate (race-tolerant) → publish the client
- * notification (fire-and-forget) → revalidate → return analytics for the island.
+ * `setForProposal` ×2) → `promoteToSubmit` (relationship + proposal spine + the
+ * derived request rollup, all in one tx — ADR-1025 / BAL-295) → re-source the
+ * `transitioned` flag from the stored column → publish the client notification
+ * (fire-and-forget) → revalidate → return analytics for the island.
  *
  * Expert-lens guarded; `resolveConversationAccess` denies non-participants and
  * foreign relationship ids. A stale double-submit maps to friendly copy.
@@ -362,8 +348,9 @@ async function runSubmit(
     });
   }
 
-  // 10. Advance the REQUEST aggregate (first-submit-only, race-tolerant).
-  const transitioned = await advanceRequestAggregate(requestId, access.request.status);
+  // 10. Re-source `transitioned` from the stored column — the request rollup
+  //     advanced atomically inside promoteToSubmit (ADR-1025 / BAL-295).
+  const transitioned = await didRequestAdvance(requestId, access.request.status);
 
   // 12. Key business event (after promotion).
   log.info('Proposal submitted', {

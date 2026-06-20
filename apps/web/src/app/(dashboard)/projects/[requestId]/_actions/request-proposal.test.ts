@@ -8,18 +8,9 @@ const EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-000000000004';
 vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
-// Real error classes (hoisted) so the action's `instanceof` checks are exercised
+// Real error class (hoisted) so the action's `instanceof` check is exercised
 // even though `vi.mock` factories run before module-body consts.
-const { InvalidStatusTransitionError, InvalidRelationshipTransitionError } = vi.hoisted(() => {
-  class InvalidStatusTransitionError extends Error {
-    constructor(
-      public readonly from: string,
-      public readonly to: string
-    ) {
-      super(`Invalid: ${from} → ${to}`);
-      this.name = 'InvalidStatusTransitionError';
-    }
-  }
+const { InvalidRelationshipTransitionError } = vi.hoisted(() => {
   class InvalidRelationshipTransitionError extends Error {
     constructor(
       public readonly from: string,
@@ -29,15 +20,17 @@ const { InvalidStatusTransitionError, InvalidRelationshipTransitionError } = vi.
       this.name = 'InvalidRelationshipTransitionError';
     }
   }
-  return { InvalidStatusTransitionError, InvalidRelationshipTransitionError };
+  return { InvalidRelationshipTransitionError };
 });
 
-const mockRequestTransition = vi.fn();
+const mockFindById = vi.fn();
 const mockRelationshipTransition = vi.fn();
 const mockCountThreadActivity = vi.fn();
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
-    transitionStatus: (...args: unknown[]) => mockRequestTransition(...args),
+    // BAL-295: the request rollup is derived inside the relationship transition;
+    // the action re-reads the stored status via findById to source `transitioned`.
+    findById: (...args: unknown[]) => mockFindById(...args),
   },
   requestExpertRelationshipsRepository: {
     transitionStatus: (...args: unknown[]) => mockRelationshipTransition(...args),
@@ -45,7 +38,6 @@ vi.mock('@balo/db', () => ({
   conversationsRepository: {
     countThreadActivity: (...args: unknown[]) => mockCountThreadActivity(...args),
   },
-  InvalidStatusTransitionError,
   InvalidRelationshipTransitionError,
 }));
 
@@ -116,7 +108,9 @@ describe('requestProposalAction', () => {
     mockRequireUser.mockResolvedValue(CLIENT_USER);
     mockResolveAccess.mockResolvedValue(access());
     mockRelationshipTransition.mockResolvedValue({ id: RELATIONSHIP_ID });
-    mockRequestTransition.mockResolvedValue({ id: REQUEST_ID });
+    // Default re-read: the rollup advanced eoi_submitted → proposal_requested (the
+    // access pre-op floor is `eoi_submitted`), so `transitioned` is true.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_requested' });
     mockCountThreadActivity.mockResolvedValue({ messageCount: 7, fileCount: 2 });
     mockPublish.mockResolvedValue(undefined);
   });
@@ -179,7 +173,7 @@ describe('requestProposalAction', () => {
     expect(mockRelationshipTransition).not.toHaveBeenCalled();
   });
 
-  it('happy path: advances the relationship guarded, advances the request first-only, returns analytics', async () => {
+  it('happy path: advances the relationship guarded, re-reads the rollup-derived request status, returns analytics', async () => {
     const result = await requestProposalAction(VALID_INPUT);
 
     expect(mockRelationshipTransition).toHaveBeenCalledWith({
@@ -187,11 +181,9 @@ describe('requestProposalAction', () => {
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
     });
-    expect(mockRequestTransition).toHaveBeenCalledWith({
-      id: REQUEST_ID,
-      to: 'proposal_requested',
-      expectedFrom: 'eoi_submitted',
-    });
+    // BAL-295: the action no longer issues a request transition — the relationship
+    // transition derives it. It re-reads the stored status to source `transitioned`.
+    expect(mockFindById).toHaveBeenCalledWith(REQUEST_ID);
     expect(mockCountThreadActivity).toHaveBeenCalledWith(RELATIONSHIP_ID);
 
     expect(result.success).toBe(true);
@@ -220,11 +212,12 @@ describe('requestProposalAction', () => {
     });
   });
 
-  it('second proposal request (request already proposal_requested): NO request-level transition', async () => {
+  it('second proposal request (request already proposal_requested): re-read unchanged → transitioned:false', async () => {
     mockResolveAccess.mockResolvedValue(access({ requestStatus: 'proposal_requested' }));
+    // The request was already proposal_requested (the pre-op floor) → re-read unchanged.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_requested' });
     const result = await requestProposalAction(VALID_INPUT);
     expect(mockRelationshipTransition).toHaveBeenCalled();
-    expect(mockRequestTransition).not.toHaveBeenCalled();
     expect(result.success && result.transitioned).toBe(false);
   });
 
@@ -270,21 +263,19 @@ describe('requestProposalAction', () => {
       error: "You've already requested a proposal from this expert.",
       code: 'already_requested',
     });
-    expect(mockRequestTransition).not.toHaveBeenCalled();
+    // The relationship transition threw before any re-read → no findById, no publish.
+    expect(mockFindById).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
   });
 
-  it('two-first-requests race (InvalidStatusTransitionError) → success with transitioned:false', async () => {
-    mockRequestTransition.mockRejectedValue(
-      new InvalidStatusTransitionError('proposal_requested', 'proposal_requested')
-    );
+  it('re-read snapshot race (another thread advanced the request further) → success; transitioned reflects the stored column', async () => {
+    // The re-read can land AFTER a concurrent thread advanced the request further;
+    // the action reports the committed status truthfully (still differs from the
+    // pre-op floor → transitioned:true) and never errors.
+    mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_submitted' });
     const result = await requestProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
-    if (result.success) expect(result.transitioned).toBe(false);
-    expect(log.warn).toHaveBeenCalledWith(
-      'Proposal request transition skipped (already advanced via another thread)',
-      { requestId: REQUEST_ID }
-    );
+    if (result.success) expect(result.transitioned).toBe(true);
     // The relationship transition stands — still notify + revalidate.
     expect(mockPublish).toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
