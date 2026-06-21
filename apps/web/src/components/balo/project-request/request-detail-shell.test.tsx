@@ -92,6 +92,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
 
 import { RequestDetailShell } from './request-detail-shell';
 import { ConversationStage } from './conversation/conversation-stage';
+import { EoiEntry } from './eoi-entry';
 import { thread as conversationThread } from '@/test/fixtures/conversation';
 import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
@@ -169,6 +170,17 @@ function ctx(overrides: Partial<RequestViewerContext> = {}): RequestViewerContex
   };
 }
 
+/** Collect every element of `type` in a (server-component) element tree. */
+function findAllOfType(node: unknown, type: React.ElementType): React.ReactElement[] {
+  if (node === null || node === undefined || typeof node !== 'object') return [];
+  if (Array.isArray(node)) {
+    return node.flatMap((child) => findAllOfType(child, type));
+  }
+  const el = node as React.ReactElement<{ children?: unknown }>;
+  const here = el.type === type ? [el] : [];
+  return [...here, ...findAllOfType(el.props?.children, type)];
+}
+
 describe('RequestDetailShell — Lens × Status matrix', () => {
   it('client before Phase 2 renders the full hero (no conversation)', () => {
     render(<RequestDetailShell view={view({ status: 'requested' })} ctx={ctx()} />);
@@ -220,6 +232,42 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
     const stage = findStage(element);
     expect(stage).not.toBeNull();
     expect(stage?.key).toBe('req-1');
+  });
+
+  it('keys every EoiEntry card by request id (no EOI state bleed across /projects/A → /projects/B)', () => {
+    // BAL-280: EoiEntry holds per-request draft state and must remount on request
+    // change — same fix shape as ConversationStage above. Walk the element tree
+    // (RTL can't observe React keys in the DOM) at both phases the card renders.
+
+    // Phase-1 expert: the EOI card sits under the brief (one render site).
+    const phase1 = RequestDetailShell({
+      view: view({
+        status: 'experts_invited',
+        viewerEoi: { hasLiveEoi: false, messageHtml: null },
+      }),
+      ctx: ctx({ lens: 'expert', isOwner: false }),
+    });
+    const phase1Entries = findAllOfType(phase1, EoiEntry);
+    expect(phase1Entries.length).toBeGreaterThan(0);
+    for (const entry of phase1Entries) {
+      expect(entry.key).toBe('req-1');
+    }
+
+    // Phase-2 expert: the compact card renders at both the mobile sheet and the
+    // desktop right column — every instance must be keyed.
+    const phase2 = RequestDetailShell({
+      view: view({
+        status: 'eoi_submitted',
+        viewerEoi: { hasLiveEoi: false, messageHtml: null },
+      }),
+      ctx: ctx({ lens: 'expert', isOwner: false }),
+      conversation: conversation(),
+    });
+    const phase2Entries = findAllOfType(phase2, EoiEntry);
+    expect(phase2Entries.length).toBeGreaterThan(0);
+    for (const entry of phase2Entries) {
+      expect(entry.key).toBe('req-1');
+    }
   });
 
   it('Phase 2 renders the mobile slim request bar that opens the details sheet', () => {

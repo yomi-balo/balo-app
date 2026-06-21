@@ -197,3 +197,41 @@ describe('EoiEntry — submitted state + withdraw', () => {
     expect(screen.getByText('Interest sent')).toBeInTheDocument();
   });
 });
+
+describe('EoiEntry — keyed remount across requests (BAL-280 state bleed)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The shell renders <EoiEntry key={view.id} .../>; navigating /projects/A →
+  // /projects/B keeps the same route but changes the key, which remounts the card.
+  // This proves the remount discards request A's in-progress draft so B never
+  // inherits stale EOI state.
+  function Harness({ requestId }: { requestId: string }): React.JSX.Element {
+    return (
+      <EoiEntry
+        key={requestId}
+        requestId={requestId}
+        initialHasEoi={false}
+        initialMessageHtml={null}
+      />
+    );
+  }
+
+  it('remounts on request-id change → a dirty draft on request A does not carry into request B', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Harness requestId="req-A" />);
+
+    const draft = 'Strong fit — I led the Northwind CPQ rollout end to end.';
+    await user.type(screen.getByLabelText('Your expression of interest'), draft);
+    expect(screen.getByLabelText('Your expression of interest')).toHaveValue(draft);
+    expect(screen.getByRole('button', { name: /send interest/i })).toBeEnabled();
+
+    // Navigate A → B: same dynamic route, new param → new key → remount.
+    rerender(<Harness requestId="req-B" />);
+
+    // Fresh instance: clean compose state, submit gate re-disabled — no bleed from A.
+    expect(screen.getByLabelText('Your expression of interest')).toHaveValue('');
+    expect(screen.getByRole('button', { name: /send interest/i })).toBeDisabled();
+  });
+});
