@@ -54,9 +54,19 @@ if (files.length === 0) {
 
 console.log(`SonarJS: checking ${files.length} changed file(s) vs ${base}…`);
 try {
-  execFileSync('pnpm', ['exec', 'eslint', '--config', CONFIG, '--no-config-lookup', ...files], {
-    stdio: 'inherit',
-  });
+  // `--no-inline-config`: sonar.js only loads the SonarJS/unicorn/react
+  // maintainability rules, so an `eslint-disable` directive naming a rule from a
+  // plugin it does NOT load (e.g. `@next/next/no-img-element`) would throw
+  // "Definition for rule … was not found". These directives target the gating
+  // `next-js` lint, not this proxy; ignore all inline directives here. This also
+  // mirrors SonarCloud, whose findings can't be silenced with eslint comments.
+  execFileSync(
+    'pnpm',
+    ['exec', 'eslint', '--config', CONFIG, '--no-config-lookup', '--no-inline-config', ...files],
+    {
+      stdio: 'inherit',
+    }
+  );
   console.log('SonarJS: clean ✓');
 } catch {
   console.error(

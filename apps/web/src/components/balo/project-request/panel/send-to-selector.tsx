@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Sparkles } from 'lucide-react';
+import { Check, Sparkles, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 
@@ -9,10 +9,14 @@ export type ProjectRouting = 'direct' | 'match';
 interface SendToSelectorProps {
   value: ProjectRouting;
   onChange: (routing: ProjectRouting) => void;
-  expertName: string;
-  expertInitials: string;
+  /**
+   * Expert display name for the Direct card. Absent → context-free mode: the
+   * Direct card renders a neutral "Send to an expert" label + person glyph.
+   */
+  expertName?: string;
+  expertInitials?: string;
   /** R2 key or http URL for the expert's avatar (resolved client-side). */
-  expertAvatarKey: string | null;
+  expertAvatarKey?: string | null;
 }
 
 interface RoutingCardProps {
@@ -64,6 +68,12 @@ function RoutingCard({
  * (find me an expert). The chosen value drives the heading, review summary,
  * submit CTA, and the done screen. Modeled on the `PathCard` structure but
  * selectable, not navigational.
+ *
+ * Expert-bound (an `expertName` is supplied): the Direct card binds to the
+ * expert's name + avatar/initials. Context-free (no expert): the Direct card
+ * renders a neutral "Send to an expert" label + person glyph and is still
+ * selectable (the panel clamps the submit routing to `match` when there is no
+ * expert id to route to).
  */
 export function SendToSelector({
   value,
@@ -72,18 +82,30 @@ export function SendToSelector({
   expertInitials,
   expertAvatarKey,
 }: Readonly<SendToSelectorProps>): React.JSX.Element {
-  const avatarUrl = getAvatarUrl(expertAvatarKey, 'thumbnail');
+  const avatarUrl = getAvatarUrl(expertAvatarKey ?? null, 'thumbnail');
+  const hasExpert = expertName !== undefined;
 
-  const directMedia = (
-    <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
-      {avatarUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing
+  let directMedia: React.ReactNode;
+  if (!hasExpert) {
+    directMedia = (
+      <span className="border-border bg-muted text-muted-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
+        <User className="h-4.5 w-4.5" aria-hidden="true" />
+      </span>
+    );
+  } else if (avatarUrl) {
+    directMedia = (
+      <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
+        {/* eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing */}
         <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
-      ) : (
+      </span>
+    );
+  } else {
+    directMedia = (
+      <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
         <span className="text-foreground text-xs font-semibold">{expertInitials}</span>
-      )}
-    </span>
-  );
+      </span>
+    );
+  }
 
   const matchMedia = (
     <span className="border-primary/25 bg-primary/10 text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
@@ -100,7 +122,7 @@ export function SendToSelector({
       <RoutingCard
         selected={value === 'direct'}
         onSelect={() => onChange('direct')}
-        label={`Send to ${expertName}`}
+        label={hasExpert ? `Send to ${expertName}` : 'Send to an expert'}
         sublabel="They'll reply with a proposal."
         media={directMedia}
       />

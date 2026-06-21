@@ -6,7 +6,7 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
-    "lint:sonar": "pnpm exec eslint --config packages/eslint-config/sonar.js --no-config-lookup .",
+    "lint:sonar": "pnpm exec eslint --config packages/eslint-config/sonar.js --no-config-lookup --no-inline-config .",
     "lint:sonar:diff": "node scripts/lint-sonar-diff.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

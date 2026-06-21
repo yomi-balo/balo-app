@@ -14,11 +14,11 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { requestProjectDocumentUploadAction } from '../../app/(marketing)/experts/[username]/_actions/request-project-document-upload';
-import { confirmProjectDocumentUploadAction } from '../../app/(marketing)/experts/[username]/_actions/confirm-project-document-upload';
-import { removeProjectDocumentAction } from '../../app/(marketing)/experts/[username]/_actions/remove-project-document';
-import type { ProjectDocumentRef } from '../../app/(marketing)/experts/[username]/_actions/schemas';
-import { PROJECT_DOCUMENT_CONTENT_TYPES } from '../../app/(marketing)/experts/[username]/_actions/schemas';
+import { requestProjectDocumentUploadAction } from '@/lib/project-request/actions/request-project-document-upload';
+import { confirmProjectDocumentUploadAction } from '@/lib/project-request/actions/confirm-project-document-upload';
+import { removeProjectDocumentAction } from '@/lib/project-request/actions/remove-project-document';
+import type { ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
+import { PROJECT_DOCUMENT_CONTENT_TYPES } from '@/lib/project-request/actions/schemas';
 import {
   partitionFiles,
   putWithProgress,
