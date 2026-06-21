@@ -12,6 +12,7 @@ import {
   projectRequestDocuments,
   expressionsOfInterest,
   conversationMessages,
+  requestExpertRelationships,
 } from '../schema';
 import {
   userFactory,
@@ -132,6 +133,46 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(tags).toHaveLength(0);
     expect(prods).toHaveLength(0);
     expect(docs).toHaveLength(0);
+  });
+
+  it('seeds no conversation thread or message on a direct submit (BAL-212: nothing auto-posts)', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+
+    const row = await projectRequestsRepository.createProjectRequest({
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        title: 'Lead routing rebuild',
+        description: '<p>Rebuild lead routing in Flow with proper assignment rules.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
+    });
+
+    // BAL-212 guard: submitting a direct request writes ONLY the request row.
+    // No per-expert relationship (conversation thread) is opened, so the
+    // originally-reported "Hi! The expert has submitted their interest in this
+    // project" auto-post is structurally impossible — there is no thread to
+    // post into until the expert submits an EOI (Phase 2), and from then on the
+    // only message-write path is the user's own composer. This test fails loudly
+    // if anyone re-introduces an auto-seeded thread or message on submit.
+    const relationships = await db
+      .select({ id: requestExpertRelationships.id })
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.projectRequestId, row.id));
+    expect(relationships).toHaveLength(0);
+
+    const messages = await db
+      .select({ id: conversationMessages.id })
+      .from(conversationMessages)
+      .innerJoin(
+        requestExpertRelationships,
+        eq(conversationMessages.relationshipId, requestExpertRelationships.id)
+      )
+      .where(eq(requestExpertRelationships.projectRequestId, row.id));
+    expect(messages).toHaveLength(0);
   });
 
   it('creates a match request (no expert) — sendTo=match, expertProfileId null', async () => {
