@@ -284,12 +284,13 @@ const RELATIONSHIP_KEYED_EXPERT_STATUSES = new Set<ProjectRequestStatus>([
 
 /**
  * The expert cell for the viewer's RELATIONSHIP status inside the proposal
- * phase. EVERY relationship status maps explicitly — never fall back to the
- * request-keyed aggregate (it reflects ANOTHER expert's progress and would
- * show this viewer a false prompt):
+ * phase — never the request-keyed aggregate (it reflects ANOTHER expert's
+ * progress and would show this viewer a false prompt). `declined` and the
+ * decided outcomes (`accepted`) are filtered upstream in {@link expertNudgeFor},
+ * so in practice this maps:
  *  - `invited` → the experts_invited cell (their true next step is the EOI);
- *  - `declined` → null (nothing to nudge);
- *  - the three proposal-phase statuses → their own cells.
+ *  - the three proposal-phase statuses → their own cells;
+ *  - anything else → null (defensive; never fall back to the aggregate).
  */
 function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeContent | null {
   if (viewerRelationshipStatus === 'invited') {
@@ -308,27 +309,67 @@ function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeConte
 }
 
 /**
+ * The whole expert-lens page nudge, keyed on the viewer's OWN relationship —
+ * never the request aggregate (max-progress; another expert's progress must not
+ * change this viewer's cell). Routes the three BAL-286 / BAL-272 false-prompt
+ * classes through one place so no request status can leak a stale cell:
+ *
+ *  1. `declined` → null at EVERY request status (BAL-286 item 2). DEFENSIVE
+ *     CONTRACT, not the primary barrier: the live page already gates a declined
+ *     expert out earlier — `resolveRequestLens` only matches a NON-declined
+ *     relationship, so a dropped expert resolves to a `null` lens and the page
+ *     `notFound()`s before this runs (`view.viewerRelationshipStatus` is never
+ *     `declined` from the shell today). The guard keeps `nudgeFor` honest for any
+ *     other caller and if that gating ever loosens: without it a `declined` viewer
+ *     at `experts_invited` — outside the proposal-phase band below — would fall
+ *     through to the request-keyed map and get a false "You're invited — submit
+ *     your EOI" prompt for a thread they walked away from.
+ *  2. DECIDED request (`accepted` / `kickoff_approved`) → suppressed by the
+ *     viewer's OUTCOME, not the aggregate (BAL-286 item 1). The request status is
+ *     max-progress, so a request-keyed accepted cell would prompt EVERY
+ *     non-selected expert. The two outcomes own dedicated surfaces instead —
+ *     winner → the KickoffBoard (right column); loser → the thread-level
+ *     "went with another expert" cell — so the top nudge stays null for BOTH
+ *     (`deriveThreadStage(viewerRelationshipStatus, status)` ∈ {'won','not_selected'}).
+ *     Any future winner/loser page prompt MUST branch on that derived outcome
+ *     here, never on `status`, or it lies to losing experts again.
+ *  3. Proposal phase (`eoi_submitted` / `proposal_requested` / `proposal_submitted`)
+ *     → keyed per-thread via {@link expertCellFor} (BAL-272 divergence fix).
+ *
+ * Anything else (pre-proposal request statuses — `experts_invited`, exploratory…)
+ * can only carry an `invited` viewer here, so the request-keyed expert cell is
+ * served as before.
+ */
+function expertNudgeFor(
+  status: ProjectRequestStatus,
+  viewerRelationshipStatus: RelationshipStatus
+): NudgeContent | null {
+  if (viewerRelationshipStatus === 'declined') return null;
+  if (status === 'accepted' || status === 'kickoff_approved') return null;
+  if (RELATIONSHIP_KEYED_EXPERT_STATUSES.has(status)) {
+    return expertCellFor(viewerRelationshipStatus);
+  }
+  return EXPERT_NUDGES[status] ?? null;
+}
+
+/**
  * The single privileged next step for a (lens, status) cell, or `null` when
  * there's nothing to nudge. Data-driven (no copy-pasted branches).
  *
- * For the EXPERT lens inside the proposal phase, pass the viewer's own
- * `viewerRelationshipStatus` to key the cell per-thread (divergence fix —
- * BAL-272). When provided, the relationship status is AUTHORITATIVE — there
- * is no fallback to the request-keyed aggregate (it carries another expert's
- * progress). Without it (or outside the proposal-phase request statuses) the
- * request status keys the map as before.
+ * For the EXPERT lens, pass the viewer's own `viewerRelationshipStatus` to key
+ * the cell per-thread on the viewer's relationship rather than the request-keyed
+ * aggregate (it carries another expert's progress and would show this viewer a
+ * false prompt) — see {@link expertNudgeFor} for the full mapping (BAL-272 +
+ * BAL-286). Without it (client/admin lenses, or an expert with no relationship)
+ * the request status keys the map as before.
  */
 export function nudgeFor(
   lens: RequestLens,
   status: ProjectRequestStatus,
   viewerRelationshipStatus: RelationshipStatus | null = null
 ): NudgeContent | null {
-  if (
-    lens === 'expert' &&
-    viewerRelationshipStatus !== null &&
-    RELATIONSHIP_KEYED_EXPERT_STATUSES.has(status)
-  ) {
-    return expertCellFor(viewerRelationshipStatus);
+  if (lens === 'expert' && viewerRelationshipStatus !== null) {
+    return expertNudgeFor(status, viewerRelationshipStatus);
   }
   return NUDGES_BY_LENS[lens][status] ?? null;
 }

@@ -289,3 +289,43 @@ describe('nudgeFor — expert relationship keying (BAL-272 divergence fix)', () 
     );
   });
 });
+
+describe('nudgeFor — non-winning / declined expert suppression (BAL-286)', () => {
+  // Item 2: `experts_invited` sits OUTSIDE the relationship-keyed proposal band,
+  // so before the fix a `declined` viewer fell through to the request-keyed map
+  // and saw a false "You're invited — submit your EOI" prompt for a thread they
+  // walked away from. The declined short-circuit must hold at EVERY request status.
+  it('a declined expert gets no nudge even at the pre-EOI experts_invited status', () => {
+    expect(nudgeFor('expert', 'experts_invited', 'declined')).toBeNull();
+    expect(nudgeFor('expert', 'exploratory_meeting_requested', 'declined')).toBeNull();
+    expect(nudgeFor('expert', 'requested', 'declined')).toBeNull();
+  });
+
+  it('an INVITED expert still gets the EOI cell at experts_invited (no regression)', () => {
+    expect(nudgeFor('expert', 'experts_invited', 'invited')?.headline).toBe(
+      "You're invited — submit your expression of interest"
+    );
+  });
+
+  // Item 1: at a DECIDED request the page nudge is keyed on the viewer's OUTCOME,
+  // never the max-progress aggregate — so a LOSING expert (relationship frozen at
+  // any pre-accept status) never inherits the winner's kickoff prompt. Both the
+  // winner (KickoffBoard owns it) and every loser are suppressed at page level.
+  it('a losing expert sees no page nudge at accepted/kickoff_approved (any frozen status)', () => {
+    for (const decided of ['accepted', 'kickoff_approved'] as const) {
+      for (const frozen of [
+        'invited',
+        'eoi_submitted',
+        'proposal_requested',
+        'proposal_submitted',
+      ] as const) {
+        expect(nudgeFor('expert', decided, frozen)).toBeNull();
+      }
+    }
+  });
+
+  it('the winning expert is also suppressed at page level (KickoffBoard owns kickoff)', () => {
+    expect(nudgeFor('expert', 'accepted', 'accepted')).toBeNull();
+    expect(nudgeFor('expert', 'kickoff_approved', 'accepted')).toBeNull();
+  });
+});
