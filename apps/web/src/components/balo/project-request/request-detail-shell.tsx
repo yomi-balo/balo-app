@@ -212,9 +212,14 @@ export function RequestDetailShell({
           <div className="space-y-5">
             <RequestContext view={view} variant="full" />
             {/* Expert Phase-1: the EOI-entry card sits under the brief. The client
-                lens never sees it (no `viewerEoi`). */}
+                lens never sees it (no `viewerEoi`).
+                key={view.id}: App Router preserves client state across dynamic-param
+                navigation (/projects/A → /projects/B) — keying by request remounts the
+                card so A's in-progress EOI draft never lingers under B's URL. Mirrors
+                the ConversationStage keying below. */}
             {ctx.lens === 'expert' && view.viewerEoi && (
               <EoiEntry
+                key={view.id}
                 requestId={view.id}
                 initialHasEoi={view.viewerEoi.hasLiveEoi}
                 initialMessageHtml={view.viewerEoi.messageHtml}
@@ -241,8 +246,12 @@ export function RequestDetailShell({
                             viewerRelationshipId={ctx.relationshipId}
                           />
                         </div>
+                        {/* key={view.id}: remount per request so EOI draft state
+                            never bleeds across /projects/A → /projects/B (see the
+                            Phase-1 card and ConversationStage keying notes). */}
                         {view.viewerEoi && (
                           <EoiEntry
+                            key={view.id}
                             requestId={view.id}
                             initialHasEoi={view.viewerEoi.hasLiveEoi}
                             initialMessageHtml={view.viewerEoi.messageHtml}
@@ -293,8 +302,12 @@ export function RequestDetailShell({
                       viewerRelationshipId={ctx.relationshipId}
                     />
                   </div>
+                  {/* key={view.id}: remount per request so EOI draft state never
+                      bleeds across /projects/A → /projects/B (see the Phase-1 card
+                      and ConversationStage keying notes). */}
                   {view.viewerEoi && (
                     <EoiEntry
+                      key={view.id}
                       requestId={view.id}
                       initialHasEoi={view.viewerEoi.hasLiveEoi}
                       initialMessageHtml={view.viewerEoi.messageHtml}
