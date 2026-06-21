@@ -139,6 +139,21 @@ export function RequestDetailShell({
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 
+  // Phase-2 expert compact EOI card. Rendered at BOTH the mobile sheet and the desktop
+  // right column, so it's built once here — sharing one element avoids duplicating the
+  // JSX at both call sites. key={view.id}: App Router preserves client state across
+  // dynamic-param navigation (/projects/A → /projects/B); keying by request remounts the
+  // card so A's in-progress EOI draft never bleeds into B (mirrors ConversationStage).
+  const expertCompactEoi = view.viewerEoi ? (
+    <EoiEntry
+      key={view.id}
+      requestId={view.id}
+      initialHasEoi={view.viewerEoi.hasLiveEoi}
+      initialMessageHtml={view.viewerEoi.messageHtml}
+      compact
+    />
+  ) : null;
+
   return (
     <div>
       <RequestDetailAnalytics
@@ -246,18 +261,7 @@ export function RequestDetailShell({
                             viewerRelationshipId={ctx.relationshipId}
                           />
                         </div>
-                        {/* key={view.id}: remount per request so EOI draft state
-                            never bleeds across /projects/A → /projects/B (see the
-                            Phase-1 card and ConversationStage keying notes). */}
-                        {view.viewerEoi && (
-                          <EoiEntry
-                            key={view.id}
-                            requestId={view.id}
-                            initialHasEoi={view.viewerEoi.hasLiveEoi}
-                            initialMessageHtml={view.viewerEoi.messageHtml}
-                            compact
-                          />
-                        )}
+                        {expertCompactEoi}
                       </>
                     )}
                     {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
@@ -302,18 +306,7 @@ export function RequestDetailShell({
                       viewerRelationshipId={ctx.relationshipId}
                     />
                   </div>
-                  {/* key={view.id}: remount per request so EOI draft state never
-                      bleeds across /projects/A → /projects/B (see the Phase-1 card
-                      and ConversationStage keying notes). */}
-                  {view.viewerEoi && (
-                    <EoiEntry
-                      key={view.id}
-                      requestId={view.id}
-                      initialHasEoi={view.viewerEoi.hasLiveEoi}
-                      initialMessageHtml={view.viewerEoi.messageHtml}
-                      compact
-                    />
-                  )}
+                  {expertCompactEoi}
                 </>
               )}
               {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
