@@ -96,7 +96,7 @@ export function ReviewSummary({
   if (directToNamedExpert && avatarUrl) {
     routingMedia = (
       <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
-        {}
+        {/* eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing */}
         <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
       </span>
     );
