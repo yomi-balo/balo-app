@@ -189,11 +189,10 @@ export function TaxonomyMultiSelect({
 
   return (
     <div ref={rootRef} className="relative" onBlur={handleRootBlur}>
-      {/* 1 — Search control, anchored at the top. Opens the browse overlay. */}
-      <div
-        onClick={openOverlay}
-        className="border-border bg-card focus-within:border-ring focus-within:ring-ring/30 flex h-11 cursor-text items-center gap-2.5 rounded-[11px] border px-3.5 transition-shadow focus-within:ring-[3px]"
-      >
+      {/* 1 — Search control, anchored at the top. The input opens the overlay
+          on focus/click and the chevron is a real toggle button, so the click
+          affordances live on interactive elements (not the wrapper div). */}
+      <div className="border-border bg-card focus-within:border-ring focus-within:ring-ring/30 flex h-11 cursor-text items-center gap-2.5 rounded-[11px] border px-3.5 transition-shadow focus-within:ring-[3px]">
         <Search className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden />
         <label htmlFor={`taxonomy-search-${fieldId}`} className="sr-only">
           {searchPlaceholder}
@@ -204,6 +203,7 @@ export function TaxonomyMultiSelect({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
           placeholder={searchPlaceholder}
           className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
         />
@@ -221,19 +221,27 @@ export function TaxonomyMultiSelect({
             <X className="h-3.5 w-3.5" aria-hidden />
           </button>
         )}
-        <ChevronDown
-          className={cn(
-            'text-muted-foreground h-4 w-4 shrink-0 transition-transform',
-            open && 'rotate-180'
-          )}
-          aria-hidden
-        />
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => (open ? setOpen(false) : openOverlay())}
+          aria-label={open ? 'Hide options' : 'Show options'}
+          aria-expanded={open}
+          aria-controls={open ? `taxonomy-browse-${fieldId}` : undefined}
+          className="text-muted-foreground hover:text-foreground flex shrink-0"
+        >
+          <ChevronDown
+            className={cn('h-4 w-4 transition-transform', open && 'rotate-180')}
+            aria-hidden
+          />
+        </button>
       </div>
 
       {/* 2 — Browse overlay popup. Absolutely positioned so opening it never
           reflows following sections (e.g. "Attach documents" stays put). */}
       {open && (
         <div
+          id={`taxonomy-browse-${fieldId}`}
           role="group"
           aria-label={`Browse ${noMatchNoun}`}
           className="border-border bg-popover absolute top-[calc(2.75rem+0.5rem)] right-0 left-0 z-30 max-h-[300px] overflow-y-auto rounded-xl border p-2.5 shadow-lg"

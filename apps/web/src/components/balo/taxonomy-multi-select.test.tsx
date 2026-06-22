@@ -150,6 +150,21 @@ describe('TaxonomyMultiSelect', () => {
     expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
   });
 
+  it('toggles the overlay via the chevron button and reflects aria-expanded', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    const toggle = screen.getByRole('button', { name: 'Show options' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+    const close = screen.getByRole('button', { name: 'Hide options' });
+    expect(close).toHaveAttribute('aria-expanded', 'true');
+    await user.click(close);
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+  });
+
   it('exposes the browse popup as a labelled group', async () => {
     const user = userEvent.setup();
     render(
