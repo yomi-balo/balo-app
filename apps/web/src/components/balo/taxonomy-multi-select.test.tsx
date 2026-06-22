@@ -165,13 +165,18 @@ describe('TaxonomyMultiSelect', () => {
     expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
   });
 
-  it('exposes the browse popup as a labelled group', async () => {
+  it('links the chevron toggle to the open popup via aria-controls', async () => {
     const user = userEvent.setup();
     render(
       <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
     );
     await openBrowse(user);
-    expect(screen.getByRole('group', { name: 'Browse project types' })).toBeInTheDocument();
+    const popup = screen.getByTestId('taxonomy-browse-tags');
+    expect(popup.id).toBe('taxonomy-browse-tags');
+    expect(screen.getByRole('button', { name: 'Hide options' })).toHaveAttribute(
+      'aria-controls',
+      popup.id
+    );
   });
 
   it('renders groups + items in the popup when populated', async () => {

@@ -242,15 +242,13 @@ export function TaxonomyMultiSelect({
       {open && (
         <div
           id={`taxonomy-browse-${fieldId}`}
-          role="group"
-          aria-label={`Browse ${noMatchNoun}`}
           className="border-border bg-popover absolute top-[calc(2.75rem+0.5rem)] right-0 left-0 z-30 max-h-[300px] overflow-y-auto rounded-xl border p-2.5 shadow-lg"
           data-testid={`taxonomy-browse-${fieldId}`}
         >
           {filteredGroups.length === 0 && (
-            <p role="status" className="text-muted-foreground py-6 text-center text-[13px]">
+            <output className="text-muted-foreground block py-6 text-center text-[13px]">
               No {noMatchNoun} match &ldquo;{trimmed}&rdquo;
-            </p>
+            </output>
           )}
           {filteredGroups.map((group) => {
             const isDense = group.items.length > DENSE_CAP && trimmed === '';
