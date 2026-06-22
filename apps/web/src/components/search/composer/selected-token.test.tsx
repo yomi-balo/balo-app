@@ -23,4 +23,22 @@ describe('SelectedToken', () => {
     await user.click(screen.getByRole('button', { name: 'Remove CPQ' }));
     expect(onRemove).toHaveBeenCalledOnce();
   });
+
+  it('renders the category line above the label when category is provided', () => {
+    render(<SelectedToken label="Field Service" category="Service Cloud" onRemove={vi.fn()} />);
+    expect(screen.getByText('Field Service')).toBeInTheDocument();
+    expect(screen.getByText('Service Cloud')).toBeInTheDocument();
+  });
+
+  it('omits the category line when category is not provided', () => {
+    render(<SelectedToken label="Field Service" onRemove={vi.fn()} />);
+    expect(screen.getByText('Field Service')).toBeInTheDocument();
+    expect(screen.queryByText('Service Cloud')).not.toBeInTheDocument();
+  });
+
+  it('omits the category line when category is an empty string', () => {
+    render(<SelectedToken label="Field Service" category="" onRemove={vi.fn()} />);
+    expect(screen.getByText('Field Service')).toBeInTheDocument();
+    expect(screen.queryByText('Service Cloud')).not.toBeInTheDocument();
+  });
 });

@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Search, X, Plus, AlertCircle, RotateCw } from 'lucide-react';
+import { Search, X, Plus, ChevronDown, AlertCircle, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { TaxonomyChip } from './taxonomy-chip';
@@ -54,7 +54,9 @@ export function TaxonomyMultiSelect({
   loading = false,
   error = false,
   onRetry,
-  inSheet = false,
+  // `inSheet` stays in the public prop API (the panel passes it) but is no longer
+  // destructured/used: the browse list is now a self-capped floating popup, so it
+  // no longer toggles the scroll cap.
   searchPlaceholder,
   fieldId,
   emptyCopy,
@@ -63,8 +65,49 @@ export function TaxonomyMultiSelect({
 }: Readonly<TaxonomyMultiSelectProps>): React.JSX.Element {
   const reduce = useReducedMotion();
   const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
+  // Close the overlay on outside-mousedown or Escape. Option chips use
+  // `onMouseDown` preventDefault so clicking one never blurs/closes mid-toggle.
+  useEffect(() => {
+    function onPointerDown(event: MouseEvent): void {
+      const root = rootRef.current;
+      if (root && event.target instanceof Node && !root.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  const openOverlay = useCallback((): void => {
+    setOpen(true);
+    inputRef.current?.focus();
+  }, []);
+
+  // Collapse when focus leaves the field entirely — the third dismiss path the
+  // ticket requires alongside outside-mousedown and Escape. Chips, "+N more",
+  // and the clear button use `onMouseDown` preventDefault so focus stays on the
+  // input; intra-field focus moves (relatedTarget inside the root) never close.
+  const handleRootBlur = useCallback((event: React.FocusEvent<HTMLDivElement>): void => {
+    const root = rootRef.current;
+    const next = event.relatedTarget;
+    if (root && (next === null || (next instanceof Node && !root.contains(next)))) {
+      setOpen(false);
+    }
+  }, []);
+
+  const multiGroup = taxonomy.groups.length >= 2;
   const trimmed = query.trim();
   const filteredGroups = useMemo(() => {
     if (trimmed === '') return taxonomy.groups;
@@ -77,10 +120,27 @@ export function TaxonomyMultiSelect({
       .filter((group) => group.items.length > 0 || group.name.toLowerCase().includes(lowered));
   }, [taxonomy.groups, trimmed]);
 
-  const selectedItems = useMemo(
-    () => Array.from(selectedIds).map((id) => ({ id, name: nameMap[id] ?? id })),
-    [selectedIds, nameMap]
-  );
+  // Carry each selection's group name (category) through for the multi-group
+  // pill line. Walk the taxonomy so same-named items keep their group; append
+  // any selected id missing from every group (stale / zero-supply) name-only.
+  const selectedItems = useMemo(() => {
+    const out: Array<{ id: string; name: string; category?: string }> = [];
+    const seen = new Set<string>();
+    for (const group of taxonomy.groups) {
+      for (const item of group.items) {
+        if (selectedIds.has(item.id)) {
+          out.push({ id: item.id, name: item.name, category: group.name });
+          seen.add(item.id);
+        }
+      }
+    }
+    for (const id of selectedIds) {
+      if (!seen.has(id)) {
+        out.push({ id, name: nameMap[id] ?? id, category: undefined });
+      }
+    }
+    return out;
+  }, [taxonomy.groups, selectedIds, nameMap]);
 
   const expandGroup = (groupName: string): void => {
     setExpandedGroups((prev) => new Set(prev).add(groupName));
@@ -128,7 +188,122 @@ export function TaxonomyMultiSelect({
   }
 
   return (
-    <div>
+    <div ref={rootRef} className="relative" onBlur={handleRootBlur}>
+      {/* 1 — Search control, anchored at the top. Opens the browse overlay. */}
+      <div
+        onClick={openOverlay}
+        className="border-border bg-card focus-within:border-ring focus-within:ring-ring/30 flex h-11 cursor-text items-center gap-2.5 rounded-[11px] border px-3.5 transition-shadow focus-within:ring-[3px]"
+      >
+        <Search className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden />
+        <label htmlFor={`taxonomy-search-${fieldId}`} className="sr-only">
+          {searchPlaceholder}
+        </label>
+        <input
+          ref={inputRef}
+          id={`taxonomy-search-${fieldId}`}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => setOpen(true)}
+          placeholder={searchPlaceholder}
+          className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
+        />
+        {query !== '' && (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setQuery('');
+            }}
+            aria-label="Clear search"
+            className="text-muted-foreground hover:text-foreground flex shrink-0"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        )}
+        <ChevronDown
+          className={cn(
+            'text-muted-foreground h-4 w-4 shrink-0 transition-transform',
+            open && 'rotate-180'
+          )}
+          aria-hidden
+        />
+      </div>
+
+      {/* 2 — Browse overlay popup. Absolutely positioned so opening it never
+          reflows following sections (e.g. "Attach documents" stays put). */}
+      {open && (
+        <div
+          role="group"
+          aria-label={`Browse ${noMatchNoun}`}
+          className="border-border bg-popover absolute top-[calc(2.75rem+0.5rem)] right-0 left-0 z-30 max-h-[300px] overflow-y-auto rounded-xl border p-2.5 shadow-lg"
+          data-testid={`taxonomy-browse-${fieldId}`}
+        >
+          {filteredGroups.length === 0 && (
+            <p role="status" className="text-muted-foreground py-6 text-center text-[13px]">
+              No {noMatchNoun} match &ldquo;{trimmed}&rdquo;
+            </p>
+          )}
+          {filteredGroups.map((group) => {
+            const isDense = group.items.length > DENSE_CAP && trimmed === '';
+            const showAll = expandedGroups.has(group.name);
+            const visible = isDense && !showAll ? group.items.slice(0, DENSE_CAP) : group.items;
+            const hiddenCount = group.items.length - visible.length;
+            return (
+              <div key={group.id} className="mb-4 last:mb-0">
+                {multiGroup && (
+                  <div className="mb-2.5 flex items-baseline gap-2">
+                    <span className="text-muted-foreground text-xs font-bold tracking-wide uppercase">
+                      {group.name}
+                    </span>
+                    {group.items.length > 1 && (
+                      <span className="text-muted-foreground/70 text-[11px]">
+                        {group.items.length}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {visible.map((item, index) => {
+                    const revealed = isDense && showAll && index >= DENSE_CAP;
+                    return (
+                      <motion.div
+                        key={item.id}
+                        onMouseDown={(e) => e.preventDefault()}
+                        initial={revealed && !reduce ? { opacity: 0, scale: 0.85 } : false}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{
+                          duration: 0.18,
+                          delay: revealed ? (index - DENSE_CAP) * 0.03 : 0,
+                        }}
+                      >
+                        <TaxonomyChip
+                          label={highlightMatch(item.name, trimmed)}
+                          name={item.name}
+                          selected={selectedIds.has(item.id)}
+                          onToggle={() => onToggle(item.id)}
+                        />
+                      </motion.div>
+                    );
+                  })}
+                  {hiddenCount > 0 && (
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => expandGroup(group.name)}
+                      className="border-border text-muted-foreground hover:bg-muted focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-[10px] border border-dashed px-3.5 py-2 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden /> {hiddenCount} more
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 3 — Selected band, below the search control, grows downward (in flow). */}
       <AnimatePresence initial={false}>
         {selectedItems.length > 0 && (
           <motion.div
@@ -139,7 +314,7 @@ export function TaxonomyMultiSelect({
             transition={{ duration: 0.22 }}
             className="overflow-hidden"
           >
-            <div className="bg-muted/60 border-border/60 mb-3.5 rounded-xl border p-3">
+            <div className="bg-muted/60 border-border/60 mt-2.5 rounded-xl border p-3">
               <div className="mb-2.5 flex items-center justify-between">
                 <span className="text-muted-foreground text-[11px] font-bold tracking-wide uppercase">
                   {selectedItems.length} selected
@@ -158,6 +333,7 @@ export function TaxonomyMultiSelect({
                     <SelectedToken
                       key={item.id}
                       label={item.name}
+                      category={multiGroup ? item.category : undefined}
                       onRemove={() => onToggle(item.id)}
                     />
                   ))}
@@ -167,91 +343,6 @@ export function TaxonomyMultiSelect({
           </motion.div>
         )}
       </AnimatePresence>
-
-      <div className="border-border bg-card focus-within:border-ring focus-within:ring-ring/30 mb-3 flex h-11 items-center gap-2.5 rounded-[11px] border px-3.5 transition-shadow focus-within:ring-[3px]">
-        <Search className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden />
-        <label htmlFor={`taxonomy-search-${fieldId}`} className="sr-only">
-          {searchPlaceholder}
-        </label>
-        <input
-          id={`taxonomy-search-${fieldId}`}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={searchPlaceholder}
-          className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
-        />
-        {query !== '' && (
-          <button
-            type="button"
-            onClick={() => setQuery('')}
-            aria-label="Clear search"
-            className="text-muted-foreground hover:text-foreground flex shrink-0"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        )}
-      </div>
-
-      <div
-        className={cn('overflow-y-auto pr-1', inSheet ? '' : 'max-h-[300px]')}
-        data-testid={`taxonomy-browse-${fieldId}`}
-      >
-        {filteredGroups.length === 0 && (
-          <p className="text-muted-foreground py-6 text-center text-[13px]">
-            No {noMatchNoun} match &ldquo;{trimmed}&rdquo;
-          </p>
-        )}
-        {filteredGroups.map((group) => {
-          const isDense = group.items.length > DENSE_CAP && trimmed === '';
-          const showAll = expandedGroups.has(group.name);
-          const visible = isDense && !showAll ? group.items.slice(0, DENSE_CAP) : group.items;
-          const hiddenCount = group.items.length - visible.length;
-          return (
-            <div key={group.id} className="mb-4">
-              <div className="mb-2.5 flex items-baseline gap-2">
-                <span className="text-muted-foreground text-xs font-bold tracking-wide uppercase">
-                  {group.name}
-                </span>
-                {group.items.length > 1 && (
-                  <span className="text-muted-foreground/70 text-[11px]">{group.items.length}</span>
-                )}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {visible.map((item, index) => {
-                  const revealed = isDense && showAll && index >= DENSE_CAP;
-                  return (
-                    <motion.div
-                      key={item.id}
-                      initial={revealed && !reduce ? { opacity: 0, scale: 0.85 } : false}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{
-                        duration: 0.18,
-                        delay: revealed ? (index - DENSE_CAP) * 0.03 : 0,
-                      }}
-                    >
-                      <TaxonomyChip
-                        label={highlightMatch(item.name, trimmed)}
-                        name={item.name}
-                        selected={selectedIds.has(item.id)}
-                        onToggle={() => onToggle(item.id)}
-                      />
-                    </motion.div>
-                  );
-                })}
-                {hiddenCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => expandGroup(group.name)}
-                    className="border-border text-muted-foreground hover:bg-muted focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-[10px] border border-dashed px-3.5 py-2 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden /> {hiddenCount} more
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

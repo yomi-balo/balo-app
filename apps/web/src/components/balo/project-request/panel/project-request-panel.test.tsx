@@ -234,8 +234,11 @@ describe('ProjectRequestPanel', () => {
       screen.getByLabelText(/project description/i),
       'Rebuild our lead routing in Flow.'
     );
-    // Tags + products live on the manual step.
+    // Tags + products live on the manual step; their browse lists are overlay
+    // popups, so open each picker before toggling a chip.
+    await user.click(screen.getByPlaceholderText('Filter project types…'));
     await user.click(screen.getByRole('button', { name: 'New Salesforce Implementation' }));
+    await user.click(screen.getByPlaceholderText('Filter products…'));
     await user.click(screen.getByRole('button', { name: 'Sales Cloud' }));
     await user.click(screen.getByRole('button', { name: /^review/i }));
 
@@ -563,8 +566,10 @@ describe('ProjectRequestPanel', () => {
 
       await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1));
 
-      // The self-loaded options render in the picker on the manual step.
+      // The self-loaded options render in the picker on the manual step; the
+      // browse list is an overlay popup, so open the picker first.
       await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.click(await screen.findByPlaceholderText('Filter project types…'));
       expect(
         await screen.findByRole('button', { name: 'New Salesforce Implementation' })
       ).toBeInTheDocument();
