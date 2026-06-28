@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { render, screen, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { TaxonomyMultiSelect } from './taxonomy-multi-select';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
@@ -38,11 +38,153 @@ const BASE = {
   noMatchNoun: 'project types',
 } as const;
 
+/** Click the search control to reveal the (overlay) browse popup. */
+async function openBrowse(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByPlaceholderText('Filter project types…'));
+}
+
 describe('TaxonomyMultiSelect', () => {
-  it('renders groups + items when populated', () => {
+  it('does not render the browse tree at rest, but shows the search control', () => {
     render(
       <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
     );
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter project types…')).toBeInTheDocument();
+  });
+
+  it('opens the overlay on focus/click of the search control', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+  });
+
+  it('renders the browse popup as an absolutely positioned overlay', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    expect(screen.getByTestId('taxonomy-browse-tags').className).toContain('absolute');
+  });
+
+  it('places the search control before the selected band in DOM order', () => {
+    render(
+      <TaxonomyMultiSelect
+        {...BASE}
+        selectedIds={new Set(['a'])}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+      />
+    );
+    const input = screen.getByPlaceholderText('Filter project types…');
+    const band = screen.getByText('1 selected');
+    // input precedes band ⇒ band FOLLOWS input.
+    expect(input.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('closes the overlay on Escape', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+  });
+
+  it('closes the overlay on outside mousedown', async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">outside</button>
+        <TaxonomyMultiSelect
+          {...BASE}
+          selectedIds={new Set()}
+          onToggle={vi.fn()}
+          onClear={vi.fn()}
+        />
+      </div>
+    );
+    await openBrowse(user);
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'outside' }));
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+  });
+
+  it('closes the overlay when focus leaves the field (blur)', async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <TaxonomyMultiSelect
+          {...BASE}
+          selectedIds={new Set()}
+          onToggle={vi.fn()}
+          onClear={vi.fn()}
+        />
+        <button type="button">after</button>
+      </div>
+    );
+    await openBrowse(user);
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+    const input = screen.getByPlaceholderText('Filter project types…');
+    const after = screen.getByRole('button', { name: 'after' });
+    // Focus moves out of the field entirely (e.g. Tab to the next section).
+    fireEvent.focusOut(input, { relatedTarget: after });
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+  });
+
+  it('keeps the overlay open while focus stays within the field', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    const input = screen.getByPlaceholderText('Filter project types…');
+    const chip = screen.getByRole('button', { name: 'Data Migration' });
+    // Focus shifts from the input to a chip inside the same field — must NOT close.
+    fireEvent.focusOut(input, { relatedTarget: chip });
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+  });
+
+  it('toggles the overlay via the chevron button and reflects aria-expanded', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    const toggle = screen.getByRole('button', { name: 'Show options' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+    const close = screen.getByRole('button', { name: 'Hide options' });
+    expect(close).toHaveAttribute('aria-expanded', 'true');
+    await user.click(close);
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+  });
+
+  it('links the chevron toggle to the open popup via aria-controls', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    const popup = screen.getByTestId('taxonomy-browse-tags');
+    expect(popup.id).toBe('taxonomy-browse-tags');
+    expect(screen.getByRole('button', { name: 'Hide options' })).toHaveAttribute(
+      'aria-controls',
+      popup.id
+    );
+  });
+
+  it('renders groups + items in the popup when populated', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
     expect(screen.getByText('Foundational')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'New Salesforce Implementation' })
@@ -61,6 +203,7 @@ describe('TaxonomyMultiSelect', () => {
         onClear={vi.fn()}
       />
     );
+    await openBrowse(user);
     await user.click(screen.getByRole('button', { name: 'Data Migration' }));
     expect(onToggle).toHaveBeenCalledWith('b');
   });
@@ -81,11 +224,66 @@ describe('TaxonomyMultiSelect', () => {
     expect(onClear).toHaveBeenCalled();
   });
 
+  it('shows the category line on multi-group pills, including self-titled items', () => {
+    const taxonomy: ProductTaxonomy = {
+      groups: [
+        { id: 'svc', name: 'Service Cloud', items: [{ id: 's', name: 'Service Cloud' }] },
+        { id: 'sales', name: 'Sales Cloud', items: [{ id: 'q', name: 'CPQ' }] },
+      ],
+    };
+    render(
+      <TaxonomyMultiSelect
+        {...BASE}
+        taxonomy={taxonomy}
+        nameMap={{ s: 'Service Cloud', q: 'CPQ' }}
+        selectedIds={new Set(['s'])}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+      />
+    );
+    // Self-titled item: both the category line and the name render (not de-duped).
+    expect(screen.getAllByText('Service Cloud')).toHaveLength(2);
+  });
+
+  it('hides popup group labels and renders name-only pills for a single-group taxonomy', async () => {
+    const user = userEvent.setup();
+    const taxonomy: ProductTaxonomy = {
+      groups: [
+        {
+          id: 'only',
+          name: 'Engagement model',
+          items: [
+            { id: 'p', name: 'Project (scoped)' },
+            { id: 'k', name: 'Package (productized)' },
+          ],
+        },
+      ],
+    };
+    render(
+      <TaxonomyMultiSelect
+        {...BASE}
+        taxonomy={taxonomy}
+        nameMap={{ p: 'Project (scoped)', k: 'Package (productized)' }}
+        selectedIds={new Set(['p'])}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+      />
+    );
+    // Pill: name only, no category line for the single-group flat path.
+    expect(screen.getByText('Project (scoped)')).toBeInTheDocument();
+    expect(screen.queryByText('Engagement model')).not.toBeInTheDocument();
+    // Popup: no group label row.
+    await openBrowse(user);
+    expect(screen.queryByText('Engagement model')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Package (productized)' })).toBeInTheDocument();
+  });
+
   it('filters by search query', async () => {
     const user = userEvent.setup();
     render(
       <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
     );
+    await openBrowse(user);
     await user.type(screen.getByPlaceholderText('Filter project types…'), 'automation');
     expect(screen.getByRole('button', { name: 'Automation Setup' })).toBeInTheDocument();
     expect(
@@ -93,11 +291,25 @@ describe('TaxonomyMultiSelect', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps a group whose name matches even when no item name matches', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    // "Optimization" is a group name, not an item name — group-name match keeps
+    // the group header (existing behaviour) even though its item is filtered out.
+    await user.type(screen.getByPlaceholderText('Filter project types…'), 'optimization');
+    expect(screen.getByText('Optimization')).toBeInTheDocument();
+    expect(screen.queryByText(/no project types match/i)).not.toBeInTheDocument();
+  });
+
   it('shows a no-match message when the search finds nothing', async () => {
     const user = userEvent.setup();
     render(
       <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
     );
+    await openBrowse(user);
     await user.type(screen.getByPlaceholderText('Filter project types…'), 'zzzzz');
     expect(screen.getByText(/no project types match/i)).toBeInTheDocument();
   });

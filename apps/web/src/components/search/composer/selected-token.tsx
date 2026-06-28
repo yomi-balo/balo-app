@@ -6,6 +6,13 @@ import { X } from 'lucide-react';
 interface SelectedTokenProps {
   label: string;
   onRemove: () => void;
+  /**
+   * Optional category line rendered as a small muted line ABOVE the label.
+   * Used by multi-group taxonomies to disambiguate same-named items. When
+   * undefined/empty the token renders name-only (unchanged for `ProductSelector`
+   * and the search composer).
+   */
+  category?: string;
 }
 
 /**
@@ -15,8 +22,10 @@ interface SelectedTokenProps {
 export function SelectedToken({
   label,
   onRemove,
+  category,
 }: Readonly<SelectedTokenProps>): React.JSX.Element {
   const reduce = useReducedMotion();
+  const hasCategory = category !== undefined && category !== '';
   return (
     <motion.span
       layout
@@ -26,7 +35,14 @@ export function SelectedToken({
       transition={{ type: 'spring', stiffness: 500, damping: 32 }}
       className="text-primary border-primary/40 bg-card inline-flex items-center gap-2 rounded-lg border py-1.5 pr-2 pl-3 text-[13px] font-medium"
     >
-      {label}
+      <span className="flex flex-col text-left leading-tight">
+        {hasCategory && (
+          <span className="text-muted-foreground text-[11px] leading-tight font-normal">
+            {category}
+          </span>
+        )}
+        {label}
+      </span>
       <button
         type="button"
         onClick={onRemove}
