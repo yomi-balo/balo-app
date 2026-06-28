@@ -1,6 +1,6 @@
 export { usersRepository } from './users';
 export { companiesRepository } from './companies';
-export { expertsRepository } from './experts';
+export { expertsRepository, isUniqueViolation } from './experts';
 export type {
   ApplicationWithRelations,
   ApplicationCompetencyWithRelations,
@@ -9,6 +9,7 @@ export type {
   ApplicationIndustryWithRelations,
   ProfileSettingsData,
   PublicExpertProfile,
+  ProfileStepWrite,
 } from './experts';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';

@@ -4,6 +4,7 @@ export { submitApplicationAction } from './submit-application';
 export {
   STEP_CONFIG,
   STEP_SCHEMAS,
+  STEP_DRAFT_SCHEMAS,
   profileStepSchema,
   productsStepSchema,
   assessmentStepSchema,
@@ -11,6 +12,10 @@ export {
   workHistoryStepSchema,
   inviteStepSchema,
   termsStepSchema,
+  profileStepDraftSchema,
+  productsStepDraftSchema,
+  assessmentStepDraftSchema,
+  termsStepDraftSchema,
   type StepKey,
   type ProfileStepData,
   type ProductsStepData,
@@ -19,4 +24,7 @@ export {
   type WorkHistoryStepData,
   type InviteStepData,
   type TermsStepData,
+  type ProfileStepDraftData,
+  type ProductsStepDraftData,
+  type AssessmentStepDraftData,
 } from './schemas';

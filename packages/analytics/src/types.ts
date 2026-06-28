@@ -1,6 +1,6 @@
 import type { AuthEventMap } from './events/auth';
 import type { OnboardingEventMap } from './events/onboarding';
-import type { ExpertEventMap } from './events/expert';
+import type { ExpertEventMap, ExpertServerEventMap } from './events/expert';
 import type { ExpertSetupEventMap } from './events/expert-setup';
 import type { ExpertRateEventMap } from './events/expert-rate';
 import type { ExpertPayoutEventMap, ExpertPayoutServerEventMap } from './events/expert-payouts';
@@ -33,7 +33,8 @@ export type AllEvents = AuthEventMap &
 export type EventName = keyof AllEvents;
 
 /** Union of all server-side event maps. */
-export type ServerEvents = ExpertPayoutServerEventMap &
+export type ServerEvents = ExpertServerEventMap &
+  ExpertPayoutServerEventMap &
   NotificationServerEventMap &
   CalendarServerEventMap &
   SearchServerEventMap &

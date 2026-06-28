@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
@@ -579,6 +579,305 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     expect(result?.consultationCount).toBe(0);
   });
 });
+
+// ── findOrCreateDraft ────────────────────────────────────────────────
+
+describe('expertsRepository.findOrCreateDraft', () => {
+  it('is idempotent: two sequential calls for the same (userId, verticalId) converge on one row', async () => {
+    const user = await userFactory({ firstName: 'Casey', lastName: 'Lane' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const input = {
+      userId: user.id,
+      verticalId: vertical.id,
+      type: 'freelancer' as const,
+      firstName: 'Casey',
+      lastName: 'Lane',
+    };
+
+    const first = await expertsRepository.findOrCreateDraft(input);
+    // Second call MUST NOT throw on expert_user_vertical_idx; it adopts the row.
+    const second = await expertsRepository.findOrCreateDraft(input);
+
+    expect(first.id).toBe(second.id);
+
+    const rows = await db.query.expertProfiles.findMany({
+      where: and(eq(expertProfiles.userId, user.id), eq(expertProfiles.verticalId, vertical.id)),
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('adopts a pre-existing draft instead of inserting a new row', async () => {
+    const user = await userFactory({ firstName: 'Dana', lastName: 'Reed' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const draft = await expertDraftFactory({ userId: user.id, verticalId: vertical.id });
+
+    const found = await expertsRepository.findOrCreateDraft({
+      userId: user.id,
+      verticalId: vertical.id,
+      type: 'freelancer',
+      firstName: 'Dana',
+      lastName: 'Reed',
+    });
+
+    expect(found.id).toBe(draft.id);
+
+    const rows = await db.query.expertProfiles.findMany({
+      where: and(eq(expertProfiles.userId, user.id), eq(expertProfiles.verticalId, vertical.id)),
+    });
+    expect(rows).toHaveLength(1);
+  });
+});
+
+// ── saveProfileStep ──────────────────────────────────────────────────
+
+describe('expertsRepository.saveProfileStep', () => {
+  it('creates the profile and writes scalars + languages + industries (happy path)', async () => {
+    const user = await userFactory({ firstName: 'Ева', lastName: 'Stone' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+
+    const [lang1] = await db
+      .insert(languages)
+      .values({ name: 'English', code: uniq('en') })
+      .returning();
+    const [lang2] = await db
+      .insert(languages)
+      .values({ name: 'Spanish', code: uniq('es') })
+      .returning();
+    const [ind1] = await db
+      .insert(industries)
+      .values({ name: 'Tech', slug: uniq('tech') })
+      .returning();
+    const [ind2] = await db
+      .insert(industries)
+      .values({ name: 'Finance', slug: uniq('finance') })
+      .returning();
+    if (!lang1 || !lang2 || !ind1 || !ind2) throw new Error('Failed to seed taxonomy');
+
+    const profile = await expertsRepository.saveProfileStep(
+      undefined,
+      {
+        userId: user.id,
+        verticalId: vertical.id,
+        type: 'freelancer',
+        firstName: 'Eva',
+        lastName: 'Stone',
+      },
+      {
+        yearStartedSalesforce: 2018,
+        projectCountMin: 10,
+        projectLeadCountMin: 2,
+        linkedinUrl: 'https://linkedin.com/in/eva-stone',
+        isSalesforceMvp: true,
+        isSalesforceCta: false,
+        isCertifiedTrainer: false,
+        languages: [
+          { languageId: lang1.id, proficiency: 'native' },
+          { languageId: lang2.id, proficiency: 'intermediate' },
+        ],
+        industryIds: [ind1.id, ind2.id],
+      }
+    );
+
+    const saved = await expertsRepository.findProfileById(profile.id);
+    expect(saved?.yearStartedSalesforce).toBe(2018);
+    expect(saved?.projectCountMin).toBe(10);
+    expect(saved?.projectLeadCountMin).toBe(2);
+    expect(saved?.linkedinUrl).toBe('https://linkedin.com/in/eva-stone');
+    expect(saved?.isSalesforceMvp).toBe(true);
+
+    const langRows = await db.query.expertLanguages.findMany({
+      where: eq(expertLanguages.expertProfileId, profile.id),
+    });
+    expect(langRows).toHaveLength(2);
+
+    const indRows = await db.query.expertIndustries.findMany({
+      where: eq(expertIndustries.expertProfileId, profile.id),
+    });
+    expect(indRows).toHaveLength(2);
+  });
+
+  it('rolls back the whole transaction on a mid-step failure — NO orphan row (headline AC)', async () => {
+    const user = await userFactory({ firstName: 'Finn', lastName: 'Hart' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+
+    const [lang1] = await db
+      .insert(languages)
+      .values({ name: 'German', code: uniq('de') })
+      .returning();
+    if (!lang1) throw new Error('Failed to seed language');
+
+    // An industryId that violates the expert_industries.industry_id FK → the sync
+    // throws mid-transaction, after the profile row + languages were written.
+    await expect(
+      expertsRepository.saveProfileStep(
+        undefined,
+        {
+          userId: user.id,
+          verticalId: vertical.id,
+          type: 'freelancer',
+          firstName: 'Finn',
+          lastName: 'Hart',
+        },
+        {
+          yearStartedSalesforce: 2019,
+          projectCountMin: 5,
+          projectLeadCountMin: 1,
+          linkedinUrl: null,
+          isSalesforceMvp: false,
+          isSalesforceCta: false,
+          isCertifiedTrainer: false,
+          languages: [{ languageId: lang1.id, proficiency: 'native' }],
+          industryIds: [randomUUID()],
+        }
+      )
+    ).rejects.toThrow();
+
+    // No expert_profiles row committed for this (userId, verticalId)…
+    const profileRows = await db.query.expertProfiles.findMany({
+      where: and(eq(expertProfiles.userId, user.id), eq(expertProfiles.verticalId, vertical.id)),
+    });
+    expect(profileRows).toHaveLength(0);
+
+    // …and no partial languages left behind.
+    const langRows = await db.query.expertLanguages.findMany({
+      where: eq(expertLanguages.languageId, lang1.id),
+    });
+    expect(langRows).toHaveLength(0);
+  });
+
+  it('on the existing-id path, a mid-step failure leaves the prior profile state intact', async () => {
+    const user = await userFactory({ firstName: 'Gita', lastName: 'Roy' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const draft = await expertDraftFactory({ userId: user.id, verticalId: vertical.id });
+
+    // Seed a known prior state.
+    await expertsRepository.updateProfile(draft.id, { yearStartedSalesforce: 2010 });
+    const [lang1] = await db
+      .insert(languages)
+      .values({ name: 'Italian', code: uniq('it') })
+      .returning();
+    if (!lang1) throw new Error('Failed to seed language');
+    await expertsRepository.syncLanguages(draft.id, [
+      { languageId: lang1.id, proficiency: 'native' },
+    ]);
+
+    await expect(
+      expertsRepository.saveProfileStep(draft.id, undefined, {
+        yearStartedSalesforce: 2022,
+        projectCountMin: 8,
+        projectLeadCountMin: 1,
+        linkedinUrl: null,
+        isSalesforceMvp: false,
+        isSalesforceCta: false,
+        isCertifiedTrainer: false,
+        languages: [{ languageId: lang1.id, proficiency: 'advanced' }],
+        industryIds: [randomUUID()], // invalid FK → rollback
+      })
+    ).rejects.toThrow();
+
+    // The profile row survives (predates the tx) with its PRIOR scalar value.
+    const saved = await expertsRepository.findProfileById(draft.id);
+    expect(saved).toBeDefined();
+    expect(saved?.yearStartedSalesforce).toBe(2010);
+
+    // The prior language is unchanged (the failed step's child writes rolled back).
+    const langRows = await db.query.expertLanguages.findMany({
+      where: eq(expertLanguages.expertProfileId, draft.id),
+    });
+    expect(langRows).toHaveLength(1);
+    expect(langRows[0]?.proficiency).toBe('native');
+  });
+
+  it('updates an existing draft in place (no second profile row)', async () => {
+    const user = await userFactory({ firstName: 'Hugo', lastName: 'Vale' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const draft = await expertDraftFactory({ userId: user.id, verticalId: vertical.id });
+
+    const [ind1] = await db
+      .insert(industries)
+      .values({ name: 'Retail', slug: uniq('retail') })
+      .returning();
+    if (!ind1) throw new Error('Failed to seed industry');
+
+    const result = await expertsRepository.saveProfileStep(draft.id, undefined, {
+      yearStartedSalesforce: 2021,
+      projectCountMin: 3,
+      projectLeadCountMin: 0,
+      linkedinUrl: null,
+      isSalesforceMvp: false,
+      isSalesforceCta: false,
+      isCertifiedTrainer: false,
+      languages: [],
+      industryIds: [ind1.id],
+    });
+
+    expect(result.id).toBe(draft.id);
+
+    const rows = await db.query.expertProfiles.findMany({
+      where: and(eq(expertProfiles.userId, user.id), eq(expertProfiles.verticalId, vertical.id)),
+    });
+    expect(rows).toHaveLength(1);
+
+    const saved = await expertsRepository.findProfileById(draft.id);
+    expect(saved?.yearStartedSalesforce).toBe(2021);
+
+    const indRows = await db.query.expertIndustries.findMany({
+      where: eq(expertIndustries.expertProfileId, draft.id),
+    });
+    expect(indRows).toHaveLength(1);
+  });
+});
+
+// ── saveCertificationsStep ───────────────────────────────────────────
+
+describe('expertsRepository.saveCertificationsStep', () => {
+  it('writes the trailhead URL and certifications in one transaction', async () => {
+    const draft = await expertDraftFactory();
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const [cert] = await db
+      .insert(certifications)
+      .values({ verticalId: vertical.id, name: 'Admin', slug: uniq('admin') })
+      .returning();
+    if (!cert) throw new Error('Failed to seed certification');
+
+    await expertsRepository.saveCertificationsStep(draft.id, 'https://trailblazer.me/id/jane', [
+      { certificationId: cert.id, earnedAt: '2024-01-01' },
+    ]);
+
+    const saved = await expertsRepository.findProfileById(draft.id);
+    expect(saved?.trailheadUrl).toBe('https://trailblazer.me/id/jane');
+
+    const certRows = await db.query.expertCertifications.findMany({
+      where: eq(expertCertifications.expertProfileId, draft.id),
+    });
+    expect(certRows).toHaveLength(1);
+  });
+
+  it('rolls back the trailhead URL when the certification insert fails', async () => {
+    const draft = await expertDraftFactory();
+    await expectAssertNoTrailhead(draft.id);
+
+    await expect(
+      expertsRepository.saveCertificationsStep(draft.id, 'https://trailblazer.me/id/bob', [
+        { certificationId: randomUUID() }, // invalid FK → rollback
+      ])
+    ).rejects.toThrow();
+
+    const saved = await expertsRepository.findProfileById(draft.id);
+    expect(saved?.trailheadUrl).toBeNull();
+
+    // The child certification write rolled back too — no partial rows left behind.
+    const certRows = await db.query.expertCertifications.findMany({
+      where: eq(expertCertifications.expertProfileId, draft.id),
+    });
+    expect(certRows).toHaveLength(0);
+  });
+});
+
+async function expectAssertNoTrailhead(profileId: string): Promise<void> {
+  const before = await expertsRepository.findProfileById(profileId);
+  expect(before?.trailheadUrl).toBeNull();
+}
 
 // ── findUserIdByProfileId ────────────────────────────────────────────
 
