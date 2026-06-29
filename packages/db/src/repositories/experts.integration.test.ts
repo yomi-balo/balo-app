@@ -15,6 +15,7 @@ import {
   products,
   supportTypes,
   workHistory,
+  type ExpertProfile,
 } from '../schema';
 import {
   userFactory,
@@ -22,7 +23,7 @@ import {
   expertFactory,
   searchExpertFactory,
 } from '../test/factories';
-import { expertsRepository } from './experts';
+import { expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
 import { usersRepository } from './users';
 
@@ -938,5 +939,215 @@ describe('expertsRepository.findUserIdsByProfileIds', () => {
 
     expect(ids).toEqual([liveUser.id]);
     expect(ids).not.toContain(deletedUser.id);
+  });
+});
+
+// ── isUniqueViolation (pure narrowing helper) ────────────────────────
+
+describe('isUniqueViolation', () => {
+  it('returns false for non-object / null inputs', () => {
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation(undefined)).toBe(false);
+    expect(isUniqueViolation('boom')).toBe(false);
+  });
+
+  it('detects a unique violation by SQLSTATE 23505 with no constraint filter', () => {
+    expect(isUniqueViolation({ code: '23505' })).toBe(true);
+  });
+
+  it('detects a unique violation by message when no code field is present', () => {
+    expect(isUniqueViolation({ message: 'duplicate key value violates unique constraint' })).toBe(
+      true
+    );
+  });
+
+  it('returns false for a non-unique error', () => {
+    expect(isUniqueViolation({ code: '23503', message: 'foreign key violation' })).toBe(false);
+  });
+
+  it('matches a specific constraint via constraint_name', () => {
+    const err = {
+      code: '23505',
+      constraint_name: 'expert_user_vertical_idx',
+      message: 'duplicate key value',
+    };
+    expect(isUniqueViolation(err, 'expert_user_vertical_idx')).toBe(true);
+    expect(isUniqueViolation(err, 'expert_profiles_username_idx')).toBe(false);
+  });
+
+  it('falls back to matching the constraint name inside the message', () => {
+    const err = {
+      code: '23505',
+      message: 'duplicate key value violates unique constraint "expert_profiles_username_idx"',
+    };
+    expect(isUniqueViolation(err, 'expert_profiles_username_idx')).toBe(true);
+  });
+
+  it('ignores non-string message / constraint_name fields', () => {
+    expect(isUniqueViolation({ code: '23505', message: 123, constraint_name: {} }, 'x')).toBe(
+      false
+    );
+  });
+});
+
+// ── saveProfileStep resolve/load guards ──────────────────────────────
+
+describe('expertsRepository.saveProfileStep guards', () => {
+  const emptyWrite = { languages: [], industryIds: [] };
+
+  it('throws when neither an expertProfileId nor a draftInput is supplied', async () => {
+    await expect(
+      expertsRepository.saveProfileStep(undefined, undefined, emptyWrite)
+    ).rejects.toThrow('requires either an expertProfileId or a draftInput');
+  });
+
+  it('throws when the supplied expertProfileId does not exist', async () => {
+    await expect(
+      expertsRepository.saveProfileStep(randomUUID(), undefined, emptyWrite)
+    ).rejects.toThrow('Expert profile not found');
+  });
+});
+
+// ── syncCertifications standalone (self-wrapping, no executor) ────────
+
+describe('expertsRepository.syncCertifications (standalone)', () => {
+  it('self-wraps in a transaction; empty date/url fields persist as null', async () => {
+    const draft = await expertDraftFactory();
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const [cert] = await db
+      .insert(certifications)
+      .values({ verticalId: vertical.id, name: 'Admin Standalone', slug: uniq('admin-standalone') })
+      .returning();
+    if (!cert) throw new Error('Failed to seed certification');
+
+    // Empty earnedAt/expiresAt/credentialUrl exercise the `|| null` coercions.
+    await expertsRepository.syncCertifications(draft.id, [
+      { certificationId: cert.id, earnedAt: '', expiresAt: '', credentialUrl: '' },
+    ]);
+    let rows = await db.query.expertCertifications.findMany({
+      where: eq(expertCertifications.expertProfileId, draft.id),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.earnedAt).toBeNull();
+    expect(rows[0]?.credentialUrl).toBeNull();
+
+    // Empty array clears (covers the certs.length === 0 branch).
+    await expertsRepository.syncCertifications(draft.id, []);
+    rows = await db.query.expertCertifications.findMany({
+      where: eq(expertCertifications.expertProfileId, draft.id),
+    });
+    expect(rows).toHaveLength(0);
+  });
+});
+
+// ── findOrCreateDraft race / username-degradation paths ──────────────
+// These branches are unreachable with a real DB in a single-connection
+// integration harness: the ON CONFLICT (user_id, vertical_id) swallow + adopt,
+// and the username-index retry loop. findOrCreateDraft accepts an executor (the
+// same composition seam saveProfileStep uses), so we inject a scripted fake
+// executor; the real test DB still backs the username pre-pick query.
+
+type InsertOutcome = { throw?: unknown; returning?: ExpertProfile[] };
+
+function fakeExecutor(opts: {
+  findFirst: Array<ExpertProfile | undefined>;
+  insert: InsertOutcome[];
+}): Parameters<typeof expertsRepository.findOrCreateDraft>[1] {
+  let f = 0;
+  let i = 0;
+  const exec = {
+    query: { expertProfiles: { findFirst: () => Promise.resolve(opts.findFirst[f++]) } },
+    insert: () => ({
+      values: () => ({
+        onConflictDoNothing: () => ({
+          returning: () => {
+            const step = opts.insert[i++];
+            if (step?.throw) return Promise.reject(step.throw);
+            return Promise.resolve(step?.returning ?? []);
+          },
+        }),
+      }),
+    }),
+  };
+  return exec as unknown as Parameters<typeof expertsRepository.findOrCreateDraft>[1];
+}
+
+const profileRow = (id: string): ExpertProfile => ({ id }) as unknown as ExpertProfile;
+
+const usernameViolation = (): unknown =>
+  Object.assign(new Error('duplicate key value'), {
+    code: '23505',
+    constraint_name: 'expert_profiles_username_idx',
+  });
+
+const draftInput = (firstName: string, lastName: string) => ({
+  userId: randomUUID(),
+  verticalId: randomUUID(),
+  type: 'freelancer' as const,
+  firstName,
+  lastName,
+});
+
+describe('expertsRepository.findOrCreateDraft (race + degradation paths)', () => {
+  it('adopts the winning row when ON CONFLICT swallows a concurrent insert', async () => {
+    const winner = profileRow(randomUUID());
+    const exec = fakeExecutor({ findFirst: [undefined, winner], insert: [{ returning: [] }] });
+
+    const result = await expertsRepository.findOrCreateDraft(draftInput('Race', 'Winner'), exec);
+
+    expect(result.id).toBe(winner.id);
+  });
+
+  it('throws when the conflict is swallowed but no row is found on refetch', async () => {
+    const exec = fakeExecutor({ findFirst: [undefined, undefined], insert: [{ returning: [] }] });
+
+    await expect(
+      expertsRepository.findOrCreateDraft(draftInput('Patho', 'Logical'), exec)
+    ).rejects.toThrow('Failed to find or create draft profile');
+  });
+
+  it('retries on a username-index collision and succeeds with the next username', async () => {
+    const created = profileRow(randomUUID());
+    const exec = fakeExecutor({
+      findFirst: [undefined],
+      insert: [{ throw: usernameViolation() }, { returning: [created] }],
+    });
+
+    const result = await expertsRepository.findOrCreateDraft(draftInput('Retry', 'Once'), exec);
+
+    expect(result.id).toBe(created.id);
+  });
+
+  it('degrades to a null username after exhausting username retries', async () => {
+    const created = profileRow(randomUUID());
+    const exec = fakeExecutor({
+      findFirst: [undefined],
+      insert: [
+        { throw: usernameViolation() },
+        { throw: usernameViolation() },
+        { throw: usernameViolation() },
+        { throw: usernameViolation() },
+        { returning: [created] },
+      ],
+    });
+
+    const result = await expertsRepository.findOrCreateDraft(
+      draftInput('Exhaust', 'Retries'),
+      exec
+    );
+
+    expect(result.id).toBe(created.id);
+  });
+
+  it('rethrows a non-username unique violation without retrying', async () => {
+    const otherViolation = Object.assign(new Error('duplicate key value'), {
+      code: '23505',
+      constraint_name: 'some_other_idx',
+    });
+    const exec = fakeExecutor({ findFirst: [undefined], insert: [{ throw: otherViolation }] });
+
+    await expect(
+      expertsRepository.findOrCreateDraft(draftInput('Other', 'Violation'), exec)
+    ).rejects.toThrow('duplicate key value');
   });
 });
