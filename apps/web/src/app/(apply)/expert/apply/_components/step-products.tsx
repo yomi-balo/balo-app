@@ -1,17 +1,15 @@
 'use client';
 
-import { useEffect, useCallback, useState, useMemo } from 'react';
+import { useEffect, useCallback, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Search, X, Sparkles } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
+import { Sparkles } from 'lucide-react';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
+import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
+import { mapProductsByCategoryToTaxonomy, buildProductNameMap } from '@/lib/search/taxonomy';
 import { productsStepSchema, type ProductsStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
-import { ChipPicker } from './chip-picker';
-import { StepHeading, scaleInVariant } from './design-system';
+import { StepHeading } from './design-system';
 
 interface StepProductsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
@@ -19,7 +17,6 @@ interface StepProductsProps {
 
 export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React.JSX.Element {
   const { productsData, referenceData, updateStepData, registerValidation } = useWizard();
-  const [searchQuery, setSearchQuery] = useState('');
 
   const form = useForm<ProductsStepData>({
     resolver: zodResolver(productsStepSchema),
@@ -28,8 +25,6 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
     },
     mode: 'onSubmit',
   });
-
-  const selectedProductIds = form.watch('productIds');
 
   // Sync form to context
   useEffect(() => {
@@ -48,38 +43,14 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
     registerValidation(validate);
   }, [registerValidation, validate]);
 
-  // Search filtering
-  const filteredCategories = useMemo(() => {
-    const query = searchQuery.toLowerCase().trim();
-    if (!query) return referenceData.productsByCategory;
-
-    return referenceData.productsByCategory
-      .map((cat) => ({
-        ...cat,
-        products: cat.products.filter((p) => p.name.toLowerCase().includes(query)),
-      }))
-      .filter((cat) => cat.products.length > 0);
-  }, [referenceData.productsByCategory, searchQuery]);
-
-  // Build flat map of product id -> name for selected pills
-  const productNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const cat of referenceData.productsByCategory) {
-      for (const product of cat.products) {
-        map.set(product.id, product.name);
-      }
-    }
-    return map;
-  }, [referenceData.productsByCategory]);
-
-  const removeProduct = (id: string): void => {
-    const current = form.getValues('productIds');
-    form.setValue(
-      'productIds',
-      current.filter((p) => p !== id),
-      { shouldValidate: false }
-    );
-  };
+  // Shared taxonomy + id→name map. Same repo source as the project-request panel
+  // (`referenceDataRepository.getProductsByVertical`), mapped through the one
+  // shared client mapper — single product source of truth.
+  const taxonomy = useMemo(
+    () => mapProductsByCategoryToTaxonomy(referenceData.productsByCategory),
+    [referenceData.productsByCategory]
+  );
+  const nameMap = useMemo(() => buildProductNameMap(taxonomy), [taxonomy]);
 
   return (
     <Form {...form}>
@@ -95,114 +66,42 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
           />
         </div>
 
-        {/* Selected pills */}
-        <AnimatePresence>
-          {selectedProductIds.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="border-border flex flex-wrap gap-2 border-b pb-4"
-            >
-              {selectedProductIds.map((id) => (
-                <motion.div
-                  key={id}
-                  initial={scaleInVariant.initial}
-                  animate={scaleInVariant.animate}
-                  exit={{ opacity: 0 }}
-                  transition={scaleInVariant.transition}
-                >
-                  <Badge variant="secondary" className="gap-1.5 rounded-full px-3 py-1">
-                    {productNameMap.get(id) ?? id}
-                    <button
-                      type="button"
-                      onClick={() => removeProduct(id)}
-                      className="hover:text-foreground"
-                      aria-label={`Remove ${productNameMap.get(id) ?? 'product'}`}
-                    >
-                      <X className="h-3 w-3" aria-hidden="true" />
-                    </button>
-                  </Badge>
-                </motion.div>
-              ))}
-              <p className="text-muted-foreground mt-1 w-full text-xs">
-                {selectedProductIds.length} product
-                {selectedProductIds.length === 1 ? '' : 's'} selected
-              </p>
-              {selectedProductIds.length >= 5 && (
-                <p className="text-success w-full text-xs">Great coverage!</p>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-          <Input
-            placeholder="Search products... e.g. Sales Cloud, CPQ"
-            className="pl-9 text-base"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            autoFocus
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              className="text-muted-foreground hover:text-foreground absolute top-1/2 right-3 -translate-y-1/2"
-              aria-label="Clear search"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-
         {/* Hint */}
         <p className="text-muted-foreground text-xs italic">
           Most experts select 3&ndash;8 products. Select all that genuinely apply.
         </p>
 
-        {/* Categories */}
         <FormField
           control={form.control}
           name="productIds"
-          render={({ field }) => (
-            <FormItem>
-              <FormControl>
-                <div className="space-y-8">
-                  {filteredCategories.length === 0 && (
-                    <p className="text-muted-foreground py-8 text-center text-sm">
-                      No products match your search
-                    </p>
-                  )}
-                  {filteredCategories.map((cat) => (
-                    <AnimatePresence key={cat.category.id}>
-                      <motion.div
-                        initial={{ opacity: 1 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        <p className="text-muted-foreground mb-3 text-xs font-semibold tracking-wider uppercase">
-                          {cat.category.name}
-                        </p>
-                        <ChipPicker
-                          options={cat.products.map((s) => ({
-                            id: s.id,
-                            label: s.name,
-                          }))}
-                          selected={field.value}
-                          onChange={field.onChange}
-                        />
-                      </motion.div>
-                    </AnimatePresence>
-                  ))}
-                </div>
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
+          render={({ field }) => {
+            const selectedIds = new Set(field.value);
+            return (
+              <FormItem>
+                <FormControl>
+                  <TaxonomyMultiSelect
+                    taxonomy={taxonomy}
+                    selectedIds={selectedIds}
+                    nameMap={nameMap}
+                    onToggle={(id) =>
+                      field.onChange(
+                        selectedIds.has(id)
+                          ? field.value.filter((p) => p !== id)
+                          : [...field.value, id]
+                      )
+                    }
+                    onClear={() => field.onChange([])}
+                    fieldId="apply-products"
+                    searchPlaceholder="Search products… e.g. Sales Cloud, CPQ"
+                    emptyCopy="Products couldn't load right now."
+                    errorCopy="Couldn't load products. Please refresh and try again."
+                    noMatchNoun="products"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            );
+          }}
         />
       </form>
     </Form>

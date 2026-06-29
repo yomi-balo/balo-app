@@ -21,7 +21,9 @@ vi.mock('../_actions/submit-application', () => ({
   submitApplicationAction: vi.fn().mockResolvedValue({ success: true }),
 }));
 
-// Stub motion to render plain elements.
+// Stub motion to render plain elements. Reduced-motion is forced on so the
+// shared TaxonomyMultiSelect (and its chip/token children) skip entry/tap
+// animations — keeping assertions deterministic.
 const MOTION_PROPS = new Set([
   'initial',
   'animate',
@@ -54,6 +56,7 @@ vi.mock('motion/react', async () => {
       }
     ),
     AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+    useReducedMotion: () => true,
   };
 });
 
@@ -62,9 +65,9 @@ import { ExpertApplicationProvider } from './expert-application-context';
 
 // ── Fixtures ─────────────────────────────────────────────────────
 
-// Two categories, each with a `products` array — drives the filtering useMemo
-// (lines ~59,61), the product-name map loop (line ~68), and the per-category
-// ChipPicker render (line ~191).
+// Two categories drive the shared component's multi-group path: popup group
+// headers, category-tagged pills, and the search filter that can drop a whole
+// group.
 const referenceData: ReferenceData = {
   productsByCategory: [
     {
@@ -99,6 +102,13 @@ function renderStep(): void {
   );
 }
 
+const BROWSE_TESTID = 'taxonomy-browse-apply-products';
+
+/** Open the overlay browse popup by clicking the anchored search control. */
+async function openBrowse(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByPlaceholderText(/search products/i));
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 describe('StepProducts', () => {
@@ -106,45 +116,61 @@ describe('StepProducts', () => {
     vi.clearAllMocks();
   });
 
-  it('renders every category and its products from reference data', () => {
+  it('renders collapsed at rest — search control visible, no browse tree or chips', () => {
     renderStep();
-    expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
-    expect(screen.getByText('Service Cloud')).toBeInTheDocument();
-    expect(screen.getByText('CPQ')).toBeInTheDocument();
-    expect(screen.getByText('Lead Mgmt')).toBeInTheDocument();
-    expect(screen.getByText('Case Mgmt')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search products/i)).toBeInTheDocument();
+    expect(screen.queryByTestId(BROWSE_TESTID)).not.toBeInTheDocument();
+    // The "always-open" defect is gone: products are not on the page until opened.
+    expect(screen.queryByRole('button', { name: 'CPQ' })).not.toBeInTheDocument();
   });
 
-  it('filters products by the search query (exercises the filtering useMemo)', async () => {
+  it('reveals every category and its products in the overlay once opened', async () => {
     const user = userEvent.setup();
     renderStep();
 
+    await openBrowse(user);
+
+    expect(screen.getByTestId(BROWSE_TESTID)).toBeInTheDocument();
+    expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
+    expect(screen.getByText('Service Cloud')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CPQ' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Lead Mgmt' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Case Mgmt' })).toBeInTheDocument();
+  });
+
+  it('filters products by the search query, dropping non-matching groups', async () => {
+    const user = userEvent.setup();
+    renderStep();
+
+    await openBrowse(user);
     await user.type(screen.getByPlaceholderText(/search products/i), 'cpq');
 
-    expect(screen.getByText('CPQ')).toBeInTheDocument();
-    // A product that does not match the query is filtered out.
-    expect(screen.queryByText('Lead Mgmt')).not.toBeInTheDocument();
-    // A whole category with no matching products is dropped.
+    expect(screen.getByRole('button', { name: 'CPQ' })).toBeInTheDocument();
+    // A product that does not match the query is filtered out…
+    expect(screen.queryByRole('button', { name: 'Lead Mgmt' })).not.toBeInTheDocument();
+    // …and a whole category with no matching products is dropped.
     expect(screen.queryByText('Service Cloud')).not.toBeInTheDocument();
   });
 
-  it('shows the empty state when no product matches the query', async () => {
+  it('shows the no-match message when nothing matches the query', async () => {
     const user = userEvent.setup();
     renderStep();
 
+    await openBrowse(user);
     await user.type(screen.getByPlaceholderText(/search products/i), 'zzz-no-match');
-    expect(screen.getByText(/no products match your search/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/no products match/i)).toBeInTheDocument();
   });
 
-  it('selects a product and surfaces it as a removable pill using the skill-name map', async () => {
+  it('selecting a product writes productIds and surfaces a removable pill', async () => {
     const user = userEvent.setup();
     renderStep();
 
-    // Click the CPQ chip to select it.
-    await user.click(screen.getByText('CPQ'));
+    await openBrowse(user);
+    await user.click(screen.getByRole('button', { name: 'CPQ' }));
 
-    // The productNameMap (line ~68) resolves the id → "CPQ" for the pill label.
-    expect(screen.getByText(/1 product selected/i)).toBeInTheDocument();
+    // Selection is reflected in the selected band (driven by the RHF productIds field).
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /remove cpq/i })).toBeInTheDocument();
   });
 
@@ -152,10 +178,26 @@ describe('StepProducts', () => {
     const user = userEvent.setup();
     renderStep();
 
-    await user.click(screen.getByText('CPQ'));
-    expect(screen.getByText(/1 product selected/i)).toBeInTheDocument();
+    await openBrowse(user);
+    await user.click(screen.getByRole('button', { name: 'CPQ' }));
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /remove cpq/i }));
-    expect(screen.queryByText(/1 product selected/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+  });
+
+  it('clears all selected products via Clear all', async () => {
+    const user = userEvent.setup();
+    renderStep();
+
+    await openBrowse(user);
+    await user.click(screen.getByRole('button', { name: 'CPQ' }));
+    await user.click(screen.getByRole('button', { name: 'Lead Mgmt' }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /clear all/i }));
+    // The whole selected band (which owns "Clear all") unmounts once empty.
+    expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
   });
 });
