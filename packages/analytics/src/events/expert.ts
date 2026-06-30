@@ -44,3 +44,23 @@ export interface ExpertEventMap {
     step_number: number;
   };
 }
+
+// -- Server events (fire from server actions via trackServerAndFlush) ------------------
+export const EXPERT_SERVER_EVENTS = {
+  DRAFT_SAVED: 'expert_application_draft_saved',
+  DRAFT_SAVE_FAILED: 'expert_application_draft_save_failed',
+} as const;
+
+export interface ExpertServerEventMap {
+  [EXPERT_SERVER_EVENTS.DRAFT_SAVED]: {
+    step: ExpertStepName;
+    expert_profile_id: string;
+    distinct_id: string;
+  };
+  [EXPERT_SERVER_EVENTS.DRAFT_SAVE_FAILED]: {
+    step: ExpertStepName;
+    error_code: 'validation' | 'duplicate_key' | 'unknown';
+    expert_profile_id: string | null;
+    distinct_id: string;
+  };
+}

@@ -1,9 +1,9 @@
 import 'server-only';
 import { after } from 'next/server';
-import { trackServer, flushServerAnalytics, PROJECT_SERVER_EVENTS } from '@balo/analytics/server';
+import { trackServer, flushServerAnalytics } from '@balo/analytics/server';
 import type { ServerEventName, ServerEvents } from '@balo/analytics/server';
 
-export { PROJECT_SERVER_EVENTS };
+export { PROJECT_SERVER_EVENTS, EXPERT_SERVER_EVENTS } from '@balo/analytics/server';
 
 /**
  * Server-side analytics seam for the web app (RSC / Server Actions). Kept SEPARATE

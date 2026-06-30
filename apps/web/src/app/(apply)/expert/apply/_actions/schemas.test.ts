@@ -7,7 +7,14 @@ import {
   termsStepSchema,
   certificationsStepSchema,
   inviteStepSchema,
+  profileStepDraftSchema,
+  productsStepDraftSchema,
+  assessmentStepDraftSchema,
+  termsStepDraftSchema,
 } from './schemas';
+
+const UUID_A = 'a0000000-0000-4000-8000-000000000001';
+const UUID_B = 'a0000000-0000-4000-8000-000000000002';
 
 describe('profileStepSchema', () => {
   const validData = {
@@ -429,5 +436,155 @@ describe('termsStepSchema', () => {
 
   it('rejects missing termsAccepted', () => {
     expect(termsStepSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+// ── Draft (autosave) variants — lenient ──────────────────────────
+
+describe('profileStepDraftSchema', () => {
+  const fullDraft = {
+    yearStartedSalesforce: 2015,
+    projectCountMin: 10,
+    projectLeadCountMin: 1,
+    linkedinSlug: 'john-doe',
+    isSalesforceMvp: false,
+    isSalesforceCta: false,
+    isCertifiedTrainer: false,
+    languages: [{ languageId: UUID_A, proficiency: 'native' as const }],
+    industryIds: [UUID_A],
+  };
+
+  it('accepts empty languages array (strict rejects it)', () => {
+    const draft = { ...fullDraft, languages: [] };
+    expect(profileStepDraftSchema.safeParse(draft).success).toBe(true);
+    expect(profileStepSchema.safeParse(draft).success).toBe(false);
+  });
+
+  it('accepts empty industryIds array (strict rejects it)', () => {
+    const draft = { ...fullDraft, industryIds: [] };
+    expect(profileStepDraftSchema.safeParse(draft).success).toBe(true);
+    expect(profileStepSchema.safeParse(draft).success).toBe(false);
+  });
+
+  it('accepts a minimal draft with empty arrays and all scalars omitted', () => {
+    const result = profileStepDraftSchema.safeParse({
+      languages: [],
+      industryIds: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('still rejects projectLeadCountMin exceeding projectCountMin when both present', () => {
+    const result = profileStepDraftSchema.safeParse({
+      ...fullDraft,
+      projectCountMin: 1,
+      projectLeadCountMin: 10,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('null-safe refine: allows projectLeadCountMin omitted while projectCountMin set', () => {
+    const result = profileStepDraftSchema.safeParse({
+      projectCountMin: 10,
+      languages: [],
+      industryIds: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('null-safe refine: allows projectCountMin omitted while projectLeadCountMin set', () => {
+    const result = profileStepDraftSchema.safeParse({
+      projectLeadCountMin: 5,
+      languages: [],
+      industryIds: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('still enforces year bounds when provided', () => {
+    expect(
+      profileStepDraftSchema.safeParse({
+        yearStartedSalesforce: 1999,
+        languages: [],
+        industryIds: [],
+      }).success
+    ).toBe(false);
+  });
+
+  it('still rejects an invalid language proficiency', () => {
+    const result = profileStepDraftSchema.safeParse({
+      languages: [{ languageId: UUID_A, proficiency: 'expert' }],
+      industryIds: [],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('productsStepDraftSchema', () => {
+  it('accepts empty productIds (strict rejects it)', () => {
+    expect(productsStepDraftSchema.safeParse({ productIds: [] }).success).toBe(true);
+    expect(productsStepSchema.safeParse({ productIds: [] }).success).toBe(false);
+  });
+
+  it('accepts valid productIds', () => {
+    expect(productsStepDraftSchema.safeParse({ productIds: [UUID_A, UUID_B] }).success).toBe(true);
+  });
+
+  it('still rejects non-UUID productIds', () => {
+    expect(productsStepDraftSchema.safeParse({ productIds: ['not-a-uuid'] }).success).toBe(false);
+  });
+
+  it('still rejects more than 50 products', () => {
+    const ids = Array.from({ length: 51 }, () => UUID_A);
+    expect(productsStepDraftSchema.safeParse({ productIds: ids }).success).toBe(false);
+  });
+});
+
+describe('assessmentStepDraftSchema', () => {
+  it('accepts ratings where every proficiency is zero (strict rejects it)', () => {
+    const ratings = {
+      ratings: [
+        { productId: UUID_A, supportTypeId: UUID_B, proficiency: 0 },
+        { productId: UUID_A, supportTypeId: UUID_A, proficiency: 0 },
+      ],
+    };
+    expect(assessmentStepDraftSchema.safeParse(ratings).success).toBe(true);
+    expect(assessmentStepSchema.safeParse(ratings).success).toBe(false);
+  });
+
+  it('accepts empty ratings', () => {
+    expect(assessmentStepDraftSchema.safeParse({ ratings: [] }).success).toBe(true);
+  });
+
+  it('still bounds proficiency above 10', () => {
+    expect(
+      assessmentStepDraftSchema.safeParse({
+        ratings: [{ productId: UUID_A, supportTypeId: UUID_B, proficiency: 11 }],
+      }).success
+    ).toBe(false);
+  });
+
+  it('still rejects negative proficiency', () => {
+    expect(
+      assessmentStepDraftSchema.safeParse({
+        ratings: [{ productId: UUID_A, supportTypeId: UUID_B, proficiency: -1 }],
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe('termsStepDraftSchema', () => {
+  it('accepts termsAccepted=false (strict rejects it)', () => {
+    expect(termsStepDraftSchema.safeParse({ termsAccepted: false }).success).toBe(true);
+    expect(termsStepSchema.safeParse({ termsAccepted: false }).success).toBe(false);
+  });
+
+  it('accepts an empty object (strict rejects it)', () => {
+    expect(termsStepDraftSchema.safeParse({}).success).toBe(true);
+    expect(termsStepSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts termsAccepted=true', () => {
+    expect(termsStepDraftSchema.safeParse({ termsAccepted: true }).success).toBe(true);
   });
 });

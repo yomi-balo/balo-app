@@ -1,6 +1,6 @@
 import { eq, and, not, inArray, or, like, isNotNull, sql } from 'drizzle-orm';
 import { createLogger } from '@balo/shared/logging';
-import { db } from '../client';
+import { type Database, db } from '../client';
 import { consultationCountExpression } from './_shared/consultation-count';
 import {
   expertProfiles,
@@ -19,6 +19,148 @@ import {
 import { generateBaseUsername, pickNextAvailable } from './username-utils';
 
 const log = createLogger('experts-repository');
+
+/**
+ * Either the base Drizzle client or an in-flight transaction handle. Lets a method
+ * compose under a parent `db.transaction` (executor supplied) while still
+ * self-wrapping when called standalone (executor omitted → defaults to `db`).
+ * Matches the `DbTx` precedent in `proposal-milestones.ts` /
+ * `proposal-payment-installments.ts`, extended to also accept the base client.
+ */
+type DbExecutor = Database | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * True for a Postgres unique-violation (SQLSTATE `23505`); optionally for a
+ * specific constraint / index name. postgres-js surfaces `.code` ('23505'), the
+ * violated index on `.constraint_name`, and includes the index name in `.message`.
+ * Structural narrowing — no `any`, no assertion. Used by both the repository (to
+ * preserve the username-index retry loop while letting the user/vertical conflict
+ * be swallowed by ON CONFLICT) and the action (to classify `error_code`).
+ */
+export function isUniqueViolation(error: unknown, constraintName?: string): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error ? error.code : undefined;
+  const message = 'message' in error && typeof error.message === 'string' ? error.message : '';
+  const constraint =
+    'constraint_name' in error && typeof error.constraint_name === 'string'
+      ? error.constraint_name
+      : '';
+
+  const isUnique = code === '23505' || message.includes('duplicate key value');
+  if (!isUnique) return false;
+  if (constraintName === undefined) return true;
+  return constraint === constraintName || message.includes(constraintName);
+}
+
+// ── Private executor-threaded sync bodies ────────────────────────
+// Each runs its delete-then-reinsert directly on the passed executor (a parent
+// `tx` or a self-opened `tx`), so the public methods can either compose under one
+// parent transaction or self-wrap for standalone atomicity.
+
+async function syncLanguagesTx(
+  exec: DbExecutor,
+  expertProfileId: string,
+  languages: SyncLanguageInput[]
+): Promise<void> {
+  await exec.delete(expertLanguages).where(eq(expertLanguages.expertProfileId, expertProfileId));
+
+  if (languages.length > 0) {
+    await exec.insert(expertLanguages).values(
+      languages.map((l) => ({
+        expertProfileId,
+        languageId: l.languageId,
+        proficiency: l.proficiency,
+      }))
+    );
+  }
+}
+
+async function syncIndustriesTx(
+  exec: DbExecutor,
+  expertProfileId: string,
+  industryIds: string[]
+): Promise<void> {
+  await exec.delete(expertIndustries).where(eq(expertIndustries.expertProfileId, expertProfileId));
+
+  if (industryIds.length > 0) {
+    await exec.insert(expertIndustries).values(
+      industryIds.map((id) => ({
+        expertProfileId,
+        industryId: id,
+      }))
+    );
+  }
+}
+
+async function syncCertificationsTx(
+  exec: DbExecutor,
+  expertProfileId: string,
+  certs: SyncCertInput[]
+): Promise<void> {
+  await exec
+    .delete(expertCertifications)
+    .where(eq(expertCertifications.expertProfileId, expertProfileId));
+
+  if (certs.length > 0) {
+    await exec.insert(expertCertifications).values(
+      certs.map((c) => ({
+        expertProfileId,
+        certificationId: c.certificationId,
+        earnedAt: c.earnedAt || null,
+        expiresAt: c.expiresAt || null,
+        credentialUrl: c.credentialUrl || null,
+      }))
+    );
+  }
+}
+
+/** Single draft lookup by the `(user_id, vertical_id)` unique key. */
+async function findByUserVertical(
+  exec: DbExecutor,
+  userId: string,
+  verticalId: string
+): Promise<ExpertProfile | undefined> {
+  return exec.query.expertProfiles.findFirst({
+    where: and(eq(expertProfiles.userId, userId), eq(expertProfiles.verticalId, verticalId)),
+  });
+}
+
+/**
+ * Insert a draft idempotently on `(user_id, vertical_id)`. Returns the inserted
+ * row, or — when the conflict was swallowed by `onConflictDoNothing` (a concurrent
+ * / retried first-save won the race) — the adopted winner row. Throws only in the
+ * pathological case where the conflict fired but no row is found on refetch. A
+ * username-index collision is NOT the ON CONFLICT target, so it propagates as a
+ * throw for the caller's retry loop.
+ */
+async function insertDraftOrAdopt(
+  exec: DbExecutor,
+  data: CreateDraftInput,
+  username: string | null
+): Promise<ExpertProfile> {
+  const [profile] = await exec
+    .insert(expertProfiles)
+    .values({
+      userId: data.userId,
+      verticalId: data.verticalId,
+      type: data.type,
+      applicationStatus: 'draft',
+      username,
+    })
+    .onConflictDoNothing({ target: [expertProfiles.userId, expertProfiles.verticalId] })
+    .returning();
+
+  if (profile) return profile;
+
+  const winner = await findByUserVertical(exec, data.userId, data.verticalId);
+  if (winner) return winner;
+
+  log.warn(
+    { userId: data.userId, verticalId: data.verticalId },
+    'findOrCreateDraft: ON CONFLICT swallowed insert but no row found on refetch'
+  );
+  throw new Error('Failed to find or create draft profile');
+}
 
 // ── Input types ──────────────────────────────────────────────────
 
@@ -50,6 +192,24 @@ interface UpdateProfileInput {
 interface SyncLanguageInput {
   languageId: string;
   proficiency: 'beginner' | 'intermediate' | 'advanced' | 'native';
+}
+
+/**
+ * Profile-step write shape passed to `saveProfileStep`. Scalars are optional (a
+ * half-filled DRAFT may omit them); the junction arrays may be empty. The
+ * languages/industries are ALWAYS sent (replace-all semantics) so an empty array
+ * clears the set.
+ */
+export interface ProfileStepWrite {
+  yearStartedSalesforce?: number;
+  projectCountMin?: number;
+  projectLeadCountMin?: number;
+  linkedinUrl?: string | null;
+  isSalesforceMvp?: boolean;
+  isSalesforceCta?: boolean;
+  isCertifiedTrainer?: boolean;
+  languages: SyncLanguageInput[];
+  industryIds: string[];
 }
 
 interface CompetencyRatingInput {
@@ -352,109 +512,218 @@ export const expertsRepository = {
     return rows.map((r) => r.username).filter((u): u is string => u !== null);
   },
 
-  /** Create initial draft profile, auto-generating a username from first/last name */
+  /**
+   * Create initial draft profile, auto-generating a username from first/last name.
+   * Behaviour-preserving wrapper over `findOrCreateDraft` (kept for factories and
+   * existing callers): `findOrCreateDraft` short-circuits to an existing
+   * `(user_id, vertical_id)` row when present, and otherwise inserts idempotently —
+   * so first-create is unchanged while a duplicate create no longer throws.
+   */
   async createDraft(data: CreateDraftInput): Promise<ExpertProfile> {
-    const base = generateBaseUsername(data.firstName, data.lastName);
-
-    let username: string | null = null;
-    if (base) {
-      const existing = await this.findUsernamesWithPrefix(base);
-      username = pickNextAvailable(base, existing);
-    }
-
-    const MAX_RETRIES = 3;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const [profile] = await db
-          .insert(expertProfiles)
-          .values({
-            userId: data.userId,
-            verticalId: data.verticalId,
-            type: data.type,
-            applicationStatus: 'draft',
-            username,
-          })
-          .returning();
-        return profile!;
-      } catch (error: unknown) {
-        const isUniqueViolation =
-          error instanceof Error && error.message.includes('expert_profiles_username_idx');
-
-        if (isUniqueViolation && username && attempt < MAX_RETRIES) {
-          // Re-fetch existing usernames and pick the next available
-          const existing = await this.findUsernamesWithPrefix(base!);
-          username = pickNextAvailable(base!, existing);
-          continue;
-        }
-
-        if (isUniqueViolation) {
-          // Graceful degradation: insert without a username
-          log.warn(
-            { userId: data.userId, attemptedBase: base, attempt },
-            'Username generation exhausted retries, inserting without username'
-          );
-          const [profile] = await db
-            .insert(expertProfiles)
-            .values({
-              userId: data.userId,
-              verticalId: data.verticalId,
-              type: data.type,
-              applicationStatus: 'draft',
-              username: null,
-            })
-            .returning();
-          return profile!;
-        }
-
-        throw error;
-      }
-    }
-
-    // Unreachable, but satisfies TypeScript
-    throw new Error('Failed to create draft profile');
+    return this.findOrCreateDraft(data);
   },
 
-  /** Update profile scalar fields */
-  async updateProfile(expertProfileId: string, data: UpdateProfileInput): Promise<void> {
-    await db
+  /**
+   * Idempotent draft creation, safe under retries / orphans / concurrent
+   * first-saves. Never throws on `expert_user_vertical_idx` (the
+   * `(user_id, vertical_id)` unique index):
+   *
+   * 1. SELECT-existing-first short-circuit on `(user_id, vertical_id)` — adopts an
+   *    orphan or prior draft with NO insert (so it never touches the username
+   *    index). This is the dominant retry/idempotency path.
+   * 2. Otherwise generate a username and `INSERT ... ON CONFLICT (user_id,
+   *    vertical_id) DO NOTHING RETURNING`. A username-index collision is NOT the
+   *    ON CONFLICT target, so it still throws → caught by the preserved MAX_RETRIES
+   *    loop (re-pick next available username), with a final null-username fallback.
+   * 3. If the insert returned no row (lost a `(user_id, vertical_id)` race — the
+   *    conflict was swallowed), refetch and return the winner's row; if STILL none
+   *    (pathological), log + throw so callers surface a generic failure.
+   *
+   * Accepts an optional executor so `saveProfileStep` can create the row INSIDE its
+   * transaction (a later-step failure then rolls the row back too — no orphan).
+   */
+  async findOrCreateDraft(data: CreateDraftInput, executor?: DbExecutor): Promise<ExpertProfile> {
+    const exec = executor ?? db;
+
+    // 1. Short-circuit: adopt an existing (orphan / prior) draft.
+    const existing = await findByUserVertical(exec, data.userId, data.verticalId);
+    if (existing) return existing;
+
+    // 2. Generate a username and insert idempotently on (user_id, vertical_id).
+    const base = generateBaseUsername(data.firstName, data.lastName);
+    let username =
+      base === null ? null : pickNextAvailable(base, await this.findUsernamesWithPrefix(base));
+
+    // Up to MAX_RETRIES username re-picks; if all collide, one final attempt with a
+    // null username (graceful degradation, mirrors the prior createDraft behaviour).
+    const MAX_RETRIES = 3;
+    let usernameRetries = 0;
+    for (;;) {
+      try {
+        return await insertDraftOrAdopt(exec, data, username);
+      } catch (error: unknown) {
+        // A (user_id, vertical_id) conflict is swallowed by onConflictDoNothing (not
+        // thrown), so we never throw on `expert_user_vertical_idx`. The only retryable
+        // throw is a username-index collision against a non-null username we set.
+        if (base === null || username === null) throw error;
+        if (!isUniqueViolation(error, 'expert_profiles_username_idx')) throw error;
+
+        if (usernameRetries >= MAX_RETRIES) {
+          // Exhausted re-picks: degrade to a null username and try once more.
+          log.warn(
+            { userId: data.userId, attemptedBase: base, attempts: usernameRetries },
+            'Username generation exhausted retries, inserting without username'
+          );
+          username = null;
+          continue;
+        }
+        usernameRetries++;
+        username = pickNextAvailable(base, await this.findUsernamesWithPrefix(base));
+      }
+    }
+  },
+
+  /**
+   * Load a profile row by id within a transaction. Used by `saveProfileStep` on the
+   * existing-id path (ownership already verified by the caller). Throws if the row
+   * is missing so the orchestrating transaction rolls back rather than writing
+   * children for a phantom profile.
+   */
+  async loadProfileTx(tx: DbExecutor, expertProfileId: string): Promise<ExpertProfile> {
+    const profile = await tx.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+    });
+    if (!profile) {
+      throw new Error('Expert profile not found');
+    }
+    return profile;
+  },
+
+  /**
+   * Resolve the profile for `saveProfileStep` within the transaction: load by id
+   * when provided (existing draft), else find-or-create from `draftInput`. Throws
+   * when neither an id nor a `draftInput` is supplied.
+   */
+  async resolveProfileTx(
+    tx: DbExecutor,
+    expertProfileId: string | undefined,
+    draftInput: CreateDraftInput | undefined
+  ): Promise<ExpertProfile> {
+    if (expertProfileId) {
+      return this.loadProfileTx(tx, expertProfileId);
+    }
+    if (!draftInput) {
+      throw new Error('saveProfileStep requires either an expertProfileId or a draftInput');
+    }
+    return this.findOrCreateDraft(draftInput, tx);
+  },
+
+  /**
+   * Single-transaction profile-step orchestrator (BAL-298). Runs find-or-create +
+   * `updateProfile` + `syncLanguages` + `syncIndustries` in ONE `db.transaction`.
+   * When `expertProfileId` is omitted, the row is created INSIDE the same tx, so a
+   * failure in any later step (e.g. an invalid industry FK) rolls the just-inserted
+   * `expert_profiles` row back too — leaving NO orphan row and NO partial children.
+   * When an id is provided, the row predates the tx and correctly survives (only
+   * this step's child writes roll back). `draftInput` is required ONLY for the
+   * create path (no id); pass it when `expertProfileId` is omitted. Returns the
+   * resolved profile (full row when created; the loaded row when an id was provided).
+   */
+  async saveProfileStep(
+    expertProfileId: string | undefined,
+    draftInput: CreateDraftInput | undefined,
+    data: ProfileStepWrite
+  ): Promise<ExpertProfile> {
+    return db.transaction(async (tx) => {
+      const profile = await this.resolveProfileTx(tx, expertProfileId, draftInput);
+
+      await this.updateProfile(
+        profile.id,
+        {
+          yearStartedSalesforce: data.yearStartedSalesforce,
+          projectCountMin: data.projectCountMin,
+          projectLeadCountMin: data.projectLeadCountMin,
+          linkedinUrl: data.linkedinUrl,
+          isSalesforceMvp: data.isSalesforceMvp,
+          isSalesforceCta: data.isSalesforceCta,
+          isCertifiedTrainer: data.isCertifiedTrainer,
+        },
+        tx
+      );
+      await this.syncLanguages(profile.id, data.languages, tx);
+      await this.syncIndustries(profile.id, data.industryIds, tx);
+
+      return profile;
+    });
+  },
+
+  /**
+   * Single-transaction certifications-step orchestrator (BAL-298). Runs the
+   * trailhead-URL `updateProfile` + `syncCertifications` in ONE `db.transaction` so
+   * a half-applied certifications save can't occur — the same write-atomicity
+   * principle as `saveProfileStep`. The row must already exist (the wizard always
+   * saves the profile step first).
+   */
+  async saveCertificationsStep(
+    expertProfileId: string,
+    trailheadUrl: string | null,
+    certs: SyncCertInput[]
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      await this.updateProfile(expertProfileId, { trailheadUrl }, tx);
+      await this.syncCertifications(expertProfileId, certs, tx);
+    });
+  },
+
+  /**
+   * Update profile scalar fields. Executor-aware: composes under a parent
+   * transaction when one is supplied (e.g. `saveProfileStep`), else uses the base
+   * client. A single UPDATE is atomic on its own, so no standalone wrapping is
+   * needed.
+   */
+  async updateProfile(
+    expertProfileId: string,
+    data: UpdateProfileInput,
+    executor?: DbExecutor
+  ): Promise<void> {
+    const exec = executor ?? db;
+    await exec
       .update(expertProfiles)
       .set({ ...data, updatedAt: new Date() })
       .where(eq(expertProfiles.id, expertProfileId));
   },
 
-  /** Sync languages: delete all then reinsert (transaction) */
-  async syncLanguages(expertProfileId: string, languages: SyncLanguageInput[]): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx.delete(expertLanguages).where(eq(expertLanguages.expertProfileId, expertProfileId));
-
-      if (languages.length > 0) {
-        await tx.insert(expertLanguages).values(
-          languages.map((l) => ({
-            expertProfileId,
-            languageId: l.languageId,
-            proficiency: l.proficiency,
-          }))
-        );
-      }
-    });
+  /**
+   * Sync languages: delete all then reinsert. Executor-aware — runs inline on a
+   * supplied parent transaction (one flat atomic unit with the rest of the
+   * profile-step) and self-wraps in `db.transaction` when called standalone.
+   */
+  async syncLanguages(
+    expertProfileId: string,
+    languages: SyncLanguageInput[],
+    executor?: DbExecutor
+  ): Promise<void> {
+    if (executor) {
+      await syncLanguagesTx(executor, expertProfileId, languages);
+      return;
+    }
+    await db.transaction((tx) => syncLanguagesTx(tx, expertProfileId, languages));
   },
 
-  /** Sync industries: delete all then reinsert (transaction) */
-  async syncIndustries(expertProfileId: string, industryIds: string[]): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx
-        .delete(expertIndustries)
-        .where(eq(expertIndustries.expertProfileId, expertProfileId));
-
-      if (industryIds.length > 0) {
-        await tx.insert(expertIndustries).values(
-          industryIds.map((id) => ({
-            expertProfileId,
-            industryId: id,
-          }))
-        );
-      }
-    });
+  /**
+   * Sync industries: delete all then reinsert. Executor-aware (see
+   * `syncLanguages`).
+   */
+  async syncIndustries(
+    expertProfileId: string,
+    industryIds: string[],
+    executor?: DbExecutor
+  ): Promise<void> {
+    if (executor) {
+      await syncIndustriesTx(executor, expertProfileId, industryIds);
+      return;
+    }
+    await db.transaction((tx) => syncIndustriesTx(tx, expertProfileId, industryIds));
   },
 
   /**
@@ -539,25 +808,22 @@ export const expertsRepository = {
     });
   },
 
-  /** Sync certifications: delete all then reinsert */
-  async syncCertifications(expertProfileId: string, certs: SyncCertInput[]): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx
-        .delete(expertCertifications)
-        .where(eq(expertCertifications.expertProfileId, expertProfileId));
-
-      if (certs.length > 0) {
-        await tx.insert(expertCertifications).values(
-          certs.map((c) => ({
-            expertProfileId,
-            certificationId: c.certificationId,
-            earnedAt: c.earnedAt || null,
-            expiresAt: c.expiresAt || null,
-            credentialUrl: c.credentialUrl || null,
-          }))
-        );
-      }
-    });
+  /**
+   * Sync certifications: delete all then reinsert. Executor-aware so the
+   * certifications step can run `updateProfile` (trailhead URL) + this sync inside
+   * one transaction for write-atomicity, while standalone callers (settings) keep
+   * self-wrapping.
+   */
+  async syncCertifications(
+    expertProfileId: string,
+    certs: SyncCertInput[],
+    executor?: DbExecutor
+  ): Promise<void> {
+    if (executor) {
+      await syncCertificationsTx(executor, expertProfileId, certs);
+      return;
+    }
+    await db.transaction((tx) => syncCertificationsTx(tx, expertProfileId, certs));
   },
 
   /** Sync work history: delete all then reinsert with sortOrder */
