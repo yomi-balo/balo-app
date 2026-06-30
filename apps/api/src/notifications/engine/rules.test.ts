@@ -140,7 +140,9 @@ describe('notificationRules', () => {
   it('project.proposal_requested has expert email + in-app rules (BAL-272 commit moment)', () => {
     const rules = notificationRules['project.proposal_requested'];
     expect(rules).toBeDefined();
-    expect(rules).toHaveLength(2);
+    // BAL-315 adds a 3rd rule (the conditioned client heads-up) — the two expert
+    // rules stay byte-for-byte identical.
+    expect(rules).toHaveLength(3);
     const email = rules!.find((r) => r.channel === 'email');
     expect(email).toMatchObject({
       recipient: 'expert',
@@ -148,12 +150,42 @@ describe('notificationRules', () => {
       timing: 'immediate',
       priority: 'normal',
     });
-    const inApp = rules!.find((r) => r.channel === 'in-app');
-    expect(inApp).toMatchObject({
+    const expertInApp = rules!.find((r) => r.channel === 'in-app' && r.recipient === 'expert');
+    expect(expertInApp).toMatchObject({
       recipient: 'expert',
       template: 'project-proposal-requested',
       timing: 'immediate',
     });
+    // The unconditioned expert rules must never carry a `condition` (they fire for
+    // every initiator).
+    expect(email!.condition).toBeUndefined();
+    expect(expertInApp!.condition).toBeUndefined();
+  });
+
+  it('project.proposal_requested gates the client heads-up on initiatedBy === admin (BAL-315)', () => {
+    const rules = notificationRules['project.proposal_requested']!;
+    const clientRule = rules.find((r) => r.recipient === 'client');
+    expect(clientRule).toMatchObject({
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-proposal-requested-client',
+      timing: 'immediate',
+    });
+    expect(clientRule!.condition).toBeDefined();
+
+    // Fires ONLY for the admin-on-behalf path; the client's OWN request is skipped.
+    const adminCtx = {
+      event: 'project.proposal_requested',
+      payload: { initiatedBy: 'admin' },
+      data: {},
+    };
+    const clientCtx = {
+      event: 'project.proposal_requested',
+      payload: { initiatedBy: 'client' },
+      data: {},
+    };
+    expect(clientRule!.condition!(adminCtx)).toBe(true);
+    expect(clientRule!.condition!(clientCtx)).toBe(false);
   });
 
   it('project.proposal_accepted fans out to expert, non-selected experts, and admins (BAL-289)', () => {

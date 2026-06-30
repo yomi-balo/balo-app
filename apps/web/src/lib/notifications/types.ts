@@ -76,6 +76,8 @@ export interface ProjectProposalRequestedPayload {
   relationshipId: string;
   expertProfileId: string; // → resolver hydrates data.expert; recipient:'expert'
   title: string; // request title — email/in-app body
+  initiatedBy: 'client' | 'admin'; // BAL-315 — gates the client heads-up rule (admin-on-behalf only)
+  recipientId?: string; // BAL-315 — client (request owner) user id; set on the admin path only
 }
 
 export interface ProjectProposalSubmittedPayload {

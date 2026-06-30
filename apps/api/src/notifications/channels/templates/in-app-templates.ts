@@ -80,6 +80,17 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-315: client heads-up when an admin requested a proposal on their behalf.
+  'project-proposal-requested-client': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Proposal requested for you',
+      body: `Balo asked an expert to send a proposal for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
   'project-proposal-submitted': (data) => {
     const title = (data.title as string) ?? 'a project';
     const expertName = (data.expertName as string) ?? 'Your expert';

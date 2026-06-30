@@ -209,6 +209,8 @@ describe('requestProposalAction', () => {
       relationshipId: RELATIONSHIP_ID,
       expertProfileId: EXPERT_PROFILE_ID,
       title: 'CPQ implementation',
+      // BAL-315: client-initiated publishes now tag the initiator; no recipientId.
+      initiatedBy: 'client',
     });
   });
 

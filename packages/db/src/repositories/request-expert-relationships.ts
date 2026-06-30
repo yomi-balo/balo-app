@@ -18,7 +18,11 @@ export const RELATIONSHIP_STATUS_TRANSITIONS: Record<
   RelationshipStatus,
   readonly RelationshipStatus[]
 > = {
-  invited: ['eoi_submitted', 'declined'],
+  // BAL-315: an ADMIN may request a proposal directly from an `invited` expert
+  // (full bypass — no client EOI required), so `proposal_requested` is reachable
+  // from `invited`. The client path still requires `eoi_submitted` (enforced by
+  // its `expectedFrom` guard, not this map).
+  invited: ['eoi_submitted', 'proposal_requested', 'declined'],
   eoi_submitted: ['proposal_requested', 'declined'],
   proposal_requested: ['proposal_submitted', 'declined'],
   proposal_submitted: ['accepted', 'declined'],

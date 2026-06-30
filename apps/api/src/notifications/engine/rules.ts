@@ -133,6 +133,17 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'project-proposal-requested',
       timing: 'immediate',
     },
+    // BAL-315: client heads-up when an ADMIN requested a proposal on the client's
+    // behalf. In-app only (email is a deferred follow-up). Gated on `initiatedBy`
+    // so the client's OWN request (`initiatedBy: 'client'`) never self-notifies.
+    // recipient:'client' resolves via payload.recipientId (the request owner).
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'project-proposal-requested-client',
+      timing: 'immediate',
+      condition: (ctx) => ctx.payload.initiatedBy === 'admin',
+    },
   ],
   // BAL-288: the expert submitted a formal proposal — a commit moment the client
   // is waiting on, so email-worthy (plus in-app). recipient:'client' resolves via

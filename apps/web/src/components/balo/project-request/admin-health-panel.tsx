@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useState, useTransition } from 'react';
-import { Activity, AlertTriangle, Plus, X } from 'lucide-react';
+import { Activity, AlertTriangle, FileText, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type {
   RelationshipState,
   RequestRelationshipView,
@@ -18,7 +19,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { removeInvitedExpertAction } from '@/app/(dashboard)/projects/[requestId]/_actions/remove-invited-expert';
+import {
+  requestProposalAsAdmin,
+  type RequestProposalAsAdminResult,
+} from '@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-as-admin';
 import { RequestCard } from './request-card';
 import { ExpertInviteDialog } from './expert-invite-dialog';
 
@@ -47,6 +53,14 @@ const STATE_META: Record<RelationshipState, { label: string; tone: string }> = {
  * controls render only for `experts_invited ≤ status < proposal_requested`.
  */
 const PANEL_CONTROL_WINDOW_STATUSES = new Set<string>(['experts_invited', 'eoi_submitted']);
+
+/**
+ * RELATIONSHIP-level statuses where the admin may request a proposal on the
+ * client's behalf (BAL-315). Independent of the request-level `windowOpen` that
+ * invite/remove use: BAL-272 lets relationship statuses diverge across threads,
+ * so the gate reads the per-row enum.
+ */
+const REQUEST_PROPOSAL_STATUSES = new Set<string>(['invited', 'eoi_submitted']);
 
 function deriveInitials(name: string): string {
   return (
@@ -122,6 +136,110 @@ function RemoveExpertButton({
 }
 
 /**
+ * Fire the proposal-request analytics after a successful admin commit. Mirrors
+ * the client island's transport (`conversation-stage.tsx`): one
+ * `PROJECT_PROPOSAL_REQUESTED` (surface `'admin'`, `thread_count` omitted) plus a
+ * `PROJECT_REQUEST_STATUS_TRANSITIONED` when the request rollup advanced — keeping
+ * the canonical transition stream complete.
+ */
+function trackProposalRequested(
+  requestId: string,
+  relationship: RequestRelationshipView,
+  result: Extract<RequestProposalAsAdminResult, { success: true }>
+): void {
+  track(PROJECT_EVENTS.PROJECT_PROPOSAL_REQUESTED, {
+    request_id: requestId,
+    relationship_id: relationship.id,
+    expert_id: result.expertProfileId,
+    actor: 'admin',
+    surface: 'admin',
+    proposal_request_count: result.analytics.proposalRequestCount,
+    ...(result.analytics.timeFromFirstEoiMs === null
+      ? {}
+      : { time_from_first_eoi_ms: result.analytics.timeFromFirstEoiMs }),
+    message_count: result.analytics.messageCount,
+    file_count: result.analytics.fileCount,
+  });
+  if (result.requestTransition) {
+    track(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {
+      request_id: requestId,
+      from: result.requestTransition.from,
+      to: result.requestTransition.to,
+      actor: 'admin',
+    });
+  }
+}
+
+/** Single row's "Request proposal" button + its confirmation AlertDialog (BAL-315). */
+function RequestProposalButton({
+  requestId,
+  relationship,
+}: Readonly<{ requestId: string; relationship: RequestRelationshipView }>): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [isPending, startTransition] = useTransition();
+
+  const handleRequest = useCallback((): void => {
+    startTransition(async () => {
+      const result = await requestProposalAsAdmin({
+        requestId,
+        relationshipId: relationship.id,
+      });
+      if (result.success) {
+        trackProposalRequested(requestId, relationship, result);
+        toast.success(`Proposal requested — ${relationship.expertName} has been notified.`);
+        setOpen(false);
+      } else {
+        toast.error(result.error);
+      }
+    });
+  }, [requestId, relationship]);
+
+  return (
+    <>
+      <TooltipProvider delayDuration={0}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              aria-label={`Request proposal from ${relationship.expertName}`}
+              className="border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-primary focus-visible:ring-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+            >
+              <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Request proposal</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Request a proposal from {relationship.expertName}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              They&apos;ll be asked to draft a formal proposal. The client will be notified that you
+              did this on their behalf.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleRequest();
+              }}
+              disabled={isPending}
+            >
+              {isPending ? 'Requesting…' : 'Request proposal'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/**
  * Observer "Pipeline health" panel — a live, per-expert list of the request's
  * relationships with derived state, a "Quiet N days" stall flag, and admin
  * invite-another / remove controls (A2 / BAL-269 wires these; A1 authored them as
@@ -175,6 +293,9 @@ export function AdminHealthPanel({
                   )}
                 </div>
               </div>
+              {REQUEST_PROPOSAL_STATUSES.has(rel.status) && (
+                <RequestProposalButton requestId={requestId} relationship={rel} />
+              )}
               {canRemove && <RemoveExpertButton requestId={requestId} relationship={rel} />}
             </li>
           );

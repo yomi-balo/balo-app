@@ -120,6 +120,7 @@ describe('publishBodySchema', () => {
       relationshipId: '550e8400-e29b-41d4-a716-446655440002',
       expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
       title: 'CPQ implementation',
+      initiatedBy: 'client' as const,
     };
 
     it('accepts a valid payload', () => {
@@ -128,6 +129,43 @@ describe('publishBodySchema', () => {
         payload: validPayload,
       });
       expect(result.success).toBe(true);
+    });
+
+    it('accepts the admin-on-behalf variant with initiatedBy:admin + recipientId (BAL-315)', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_requested',
+        payload: {
+          ...validPayload,
+          initiatedBy: 'admin',
+          recipientId: '550e8400-e29b-41d4-a716-446655440004',
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing initiatedBy (BAL-315 required discriminant)', () => {
+      const { initiatedBy: _initiatedBy, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_requested',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an invalid initiatedBy value', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_requested',
+        payload: { ...validPayload, initiatedBy: 'expert' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-UUID recipientId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.proposal_requested',
+        payload: { ...validPayload, initiatedBy: 'admin', recipientId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
     });
 
     it('rejects a missing relationshipId', () => {
