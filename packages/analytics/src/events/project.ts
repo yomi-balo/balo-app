@@ -121,8 +121,12 @@ export interface ProjectEventMap {
     relationship_id: string;
     expert_id: string;
     actor: 'client' | 'admin';
-    /** Which surface committed the request (A5: desktop thread header vs mobile rail). */
-    surface: 'header' | 'rail';
+    /**
+     * Which surface committed the request. The client commits from the desktop
+     * thread header or the mobile rail (A5); BAL-315 adds `'admin'` for the
+     * admin Pipeline-health control acting on the client's behalf.
+     */
+    surface: 'header' | 'rail' | 'admin';
     /**
      * Relationships at/after `proposal_requested` on this request, INCLUDING this
      * one. Its distribution per request_id feeds the proposal-cap decision.
@@ -144,8 +148,11 @@ export interface ProjectEventMap {
      */
     message_count: number;
     file_count: number;
-    /** Open threads visible to the client's island at commit time. */
-    thread_count: number;
+    /**
+     * Open threads visible to the client's island at commit time. Optional
+     * (BAL-315): the admin surface has no client thread island, so it omits this.
+     */
+    thread_count?: number;
   };
   [PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED]: {
     request_id: string;

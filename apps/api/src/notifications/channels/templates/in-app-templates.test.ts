@@ -123,6 +123,26 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-proposal-requested-client', () => {
+    it('returns the client heads-up title, body, and action url (BAL-315)', () => {
+      const result = getInAppTemplate('project-proposal-requested-client', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Proposal requested for you',
+        body: 'Balo asked an expert to send a proposal for "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back to "your project" when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-proposal-requested-client', {});
+      expect(result.body).toBe('Balo asked an expert to send a proposal for "your project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('project-proposal-submitted', () => {
     it('returns the title, body (with expert name), and action url', () => {
       const result = getInAppTemplate('project-proposal-submitted', {

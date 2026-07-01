@@ -102,7 +102,9 @@ const projectFileSharedPayload = z.object({
 });
 
 // BAL-272 proposal request (client → expert). `correlationId` is the
-// relationship id — dedup per proposal request. Mirrors
+// relationship id — dedup per proposal request. BAL-315 adds the admin-on-behalf
+// path: `initiatedBy` gates the client heads-up rule, and `recipientId` (the
+// request owner's user id) is set on the admin path only. Mirrors
 // apps/web/src/lib/notifications/types.ts.
 const projectProposalRequestedPayload = z.object({
   correlationId: z.uuid(),
@@ -110,6 +112,8 @@ const projectProposalRequestedPayload = z.object({
   relationshipId: z.uuid(),
   expertProfileId: z.uuid(),
   title: z.string().min(1).max(200),
+  initiatedBy: z.enum(['client', 'admin']),
+  recipientId: z.uuid().optional(),
 });
 
 // BAL-288 proposal submit (expert → client). `correlationId` is the proposal id

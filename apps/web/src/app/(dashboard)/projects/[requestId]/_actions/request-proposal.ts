@@ -9,13 +9,15 @@ import {
   requestExpertRelationshipsRepository,
   conversationsRepository,
   InvalidRelationshipTransitionError,
-  type ProjectRequestWithRelations,
-  type RelationshipStatus,
 } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import {
+  AT_OR_PAST_PROPOSAL_REQUEST,
+  firstEoiSubmittedAt,
+} from './_shared/proposal-request-analytics';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -26,13 +28,6 @@ const inputSchema = z.object({
 const ALREADY_REQUESTED = "You've already requested a proposal from this expert.";
 const NO_LONGER_AVAILABLE = 'You can no longer request a proposal from this expert.';
 const GENERIC_FAILURE = 'Could not request the proposal. Please try again.';
-
-/** Relationship statuses at/after a proposal request — re-requesting is a no-op. */
-const AT_OR_PAST_PROPOSAL_REQUEST = new Set<RelationshipStatus>([
-  'proposal_requested',
-  'proposal_submitted',
-  'accepted',
-]);
 
 export type RequestProposalResult =
   | {
@@ -77,23 +72,6 @@ async function advanceRelationshipGuarded(
     }
     throw error;
   }
-}
-
-/**
- * Earliest live-EOI `submittedAt` across the request's relationships (each is
- * hydrated `limit:1` newest-first). Known approximation (recorded in the event
- * map): a withdrawn-and-resubmitted EOI reports the resubmit time.
- */
-function firstEoiSubmittedAt(request: ProjectRequestWithRelations): Date | null {
-  let earliest: Date | null = null;
-  for (const relationship of request.relationships) {
-    const [eoi] = relationship.expressionsOfInterest;
-    if (eoi === undefined) continue;
-    if (earliest === null || eoi.submittedAt.getTime() < earliest.getTime()) {
-      earliest = eoi.submittedAt;
-    }
-  }
-  return earliest;
 }
 
 /**
@@ -193,6 +171,9 @@ export async function requestProposalAction(
       relationshipId,
       expertProfileId: relationship.expertProfileId,
       title: access.request.title,
+      // BAL-315: a client-initiated request never fires the client heads-up rule
+      // (the rule is gated on initiatedBy === 'admin'); no recipientId set.
+      initiatedBy: 'client',
     }).catch(() => {
       // publishNotificationEvent logs internally.
     });

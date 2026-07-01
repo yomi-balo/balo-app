@@ -321,6 +321,60 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
     expect(raw?.proposalRequestedAt).toBeInstanceOf(Date);
   });
 
+  it('advances invited → proposal_requested directly with no expectedFrom (admin full bypass, BAL-315)', async () => {
+    // Factory seeds the request at `requested` (default) + relationship `invited`.
+    // The admin path passes NO expectedFrom, so the widened transition map permits
+    // the direct `invited → proposal_requested` move (no client EOI required).
+    const { relationship, projectRequestId } = await requestExpertRelationshipFactory();
+
+    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'proposal_requested',
+    });
+
+    expect(updated.status).toBe('proposal_requested');
+    expect(updated.proposalRequestedAt).toBeInstanceOf(Date);
+    expect(updated.declinedAt).toBeNull();
+
+    // The parent request rolls up directly to `proposal_requested` (deriveRequestStatus
+    // writes the max-progress aggregate; it never has to step through eoi_submitted).
+    const after = await projectRequestsRepository.findById(projectRequestId);
+    expect(after?.status).toBe('proposal_requested');
+  });
+
+  it('rejects proposal_requested from a disallowed source state (proposal_submitted) — BAL-315 bypass is bounded', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_submitted' },
+    });
+
+    await expect(
+      requestExpertRelationshipsRepository.transitionStatus({
+        id: relationship.id,
+        to: 'proposal_requested',
+      })
+    ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
+
+    // Status untouched on disk.
+    const [raw] = await db
+      .select()
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect(raw?.status).toBe('proposal_submitted');
+  });
+
+  it('rejects proposal_requested from a terminal declined source — BAL-315 bypass is bounded', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'declined' },
+    });
+
+    await expect(
+      requestExpertRelationshipsRepository.transitionStatus({
+        id: relationship.id,
+        to: 'proposal_requested',
+      })
+    ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
+  });
+
   it('rejects a double proposal request (expectedFrom race) without re-stamping', async () => {
     const { relationship } = await requestExpertRelationshipFactory({
       values: { status: 'eoi_submitted' },
