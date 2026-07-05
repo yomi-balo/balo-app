@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { projectRequestsRepository, InvalidKickoffStateError, type KickoffGate } from '@balo/db';
+import { projectRequestsRepository, InvalidKickoffStateError } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
@@ -18,29 +18,32 @@ const inputSchema = z.object({
 export type CompleteKickoffTaskInput = z.infer<typeof inputSchema>;
 
 export type CompleteKickoffTaskResult =
-  | { success: true; gate: 'client_billing' | 'expert_terms' }
+  | { success: true; gate: 'expert_terms' }
   | { success: false; error: string };
 
 const NOT_SIGNED_IN = 'You are not signed in.';
 const INVALID_REQUEST = 'Invalid request.';
 const ONLY_PARTICIPANT = 'Only a participant can complete this step.';
+const BILLING_VIA_FORM = 'Billing details are added from the billing form.';
 const STALE = 'This kickoff is no longer open.';
 const GENERIC_FAILURE = 'Could not complete this step. Please try again.';
 
 /**
- * Client/expert marks THEIR OWN kickoff gate done (BAL-291 / A6.5). The lens the
- * access guard resolves selects which persisted gate this confirms: the client
- * lens clears `client_billing`, the expert lens clears `expert_terms`. The third
- * gate (admin "settle invoice + approve") IS the approval action and lives in
- * `approve-kickoff.ts`, not here.
+ * Expert marks THEIR kickoff gate done (BAL-291 / A6.5) — the expert lens clears
+ * `expert_terms`. The client's `client_billing` gate is NOT confirmed here: BAL-323
+ * routes it through the billing-details form (`submit-billing-details`), which
+ * captures the company's invoicing identity FIRST and then auto-confirms the gate.
+ * A data-less flip here would leave the admin "ready to invoice" with nothing to
+ * invoice, so the client lens is rejected. The third gate (admin "settle invoice +
+ * approve") IS the approval action and lives in `approve-kickoff.ts`.
  *
  * Control flow: requireUser → validate input → `resolveConversationAccess`
  * (denies non-participants + foreign relationship ids, and denies admin
- * observers) → lens→gate map → verify the request AND the relationship are both
- * `accepted` (the kickoff exists only for the accepted deal; this rejects a
- * non-winning expert whose own relationship isn't accepted) → `confirmKickoffGate`
- * (idempotent; `InvalidKickoffStateError` → friendly stale copy) → log →
- * revalidate → return.
+ * observers) → reject the client lens (billing form owns it) → verify the request
+ * AND the relationship are both `accepted` (the kickoff exists only for the accepted
+ * deal; this rejects a non-winning expert whose own relationship isn't accepted) →
+ * `confirmKickoffGate` (idempotent; `InvalidKickoffStateError` → friendly stale
+ * copy) → log → revalidate → return.
  */
 export async function completeKickoffTaskAction(
   input: CompleteKickoffTaskInput
@@ -64,17 +67,17 @@ export async function completeKickoffTaskAction(
       return { success: false, error: access.error };
     }
 
-    // Map the resolved lens → the persisted gate this participant owns. Admin
-    // is already denied by the access guard (it has no participant lens), so the
-    // fallthrough is defensive only.
-    let gate: KickoffGate;
+    // Only the EXPERT confirms a gate here. The client's `client_billing` gate is
+    // owned by the billing-details form (BAL-323) so it can capture the company's
+    // invoicing identity before flipping the gate. Admin is already denied by the
+    // access guard (no participant lens) — the final branch is defensive.
     if (access.ctx.lens === 'client') {
-      gate = 'client_billing';
-    } else if (access.ctx.lens === 'expert') {
-      gate = 'expert_terms';
-    } else {
+      return { success: false, error: BILLING_VIA_FORM };
+    }
+    if (access.ctx.lens !== 'expert') {
       return { success: false, error: ONLY_PARTICIPANT };
     }
+    const gate = 'expert_terms';
 
     // The kickoff board only exists for the accepted deal: both the request
     // aggregate AND this relationship must be `accepted`. A non-winning expert

@@ -539,6 +539,39 @@ describe('publishBodySchema', () => {
     expect(result.success).toBe(false);
   });
 
+  describe('billing.details_confirmed (BAL-323)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      companyId: '550e8400-e29b-41d4-a716-446655440001',
+      companyName: 'Acme Pty Ltd',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440002',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'billing.details_confirmed',
+        payload: valid,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a non-UUID companyId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'billing.details_confirmed',
+        payload: { ...valid, companyId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty companyName', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'billing.details_confirmed',
+        payload: { ...valid, companyName: '' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

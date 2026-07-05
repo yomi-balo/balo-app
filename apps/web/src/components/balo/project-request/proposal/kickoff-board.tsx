@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useTransition } from 'react';
+import { useCallback, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Check,
@@ -15,8 +15,10 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { track, PROJECT_EVENTS } from '@/lib/analytics';
+import { track, PROJECT_EVENTS, BILLING_EVENTS } from '@/lib/analytics';
+import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { RequestCard } from '../request-card';
+import { ClientBillingAffordance } from './billing-details-dialog';
 import { completeKickoffTaskAction } from '@/app/(dashboard)/projects/[requestId]/_actions/complete-kickoff-task';
 import { approveKickoffAction } from '@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff';
 
@@ -31,6 +33,11 @@ interface KickoffBoardProps {
   expertTermsConfirmed: boolean;
   approved: boolean;
   expertName: string;
+  /**
+   * Client billing-capture context (BAL-323). Non-null ONLY for the client lens —
+   * drives the client row's capture form / member notice. `null` for expert/admin.
+   */
+  billing?: KickoffBillingCapture | null;
   /** Tightens padding for the mobile bottom-sheet mount. */
   mobile?: boolean;
 }
@@ -94,6 +101,7 @@ export function KickoffBoard({
   expertTermsConfirmed,
   approved,
   expertName,
+  billing = null,
   mobile = false,
 }: Readonly<KickoffBoardProps>): React.JSX.Element {
   const router = useRouter();
@@ -111,13 +119,38 @@ export function KickoffBoard({
   // this too — but never offer the admin a doomed click).
   const adminGatesReady = clientBillingConfirmed && expertTermsConfirmed;
 
+  // A client-lens MEMBER (not owner/admin) is blocked from the outstanding billing
+  // step — measure how often the role gate stops the person who wants to proceed.
+  const memberBlocked =
+    lens === 'client' && !clientBillingConfirmed && billing !== null && !billing.canManage;
+  // Fire the blocked-view event from the always-mounted desktop board ONLY. The
+  // mobile board lives in a lazily-mounted request sheet, so counting it too would
+  // double-fire when a blocked member opens the sheet. The notice itself still
+  // shows on both boards (it keys on `memberBlocked`, below).
+  const blockedCompanyId = memberBlocked && !mobile && billing !== null ? billing.companyId : null;
+  useEffect(() => {
+    if (blockedCompanyId !== null) {
+      track(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, {
+        company_id: blockedCompanyId,
+        request_id: requestId,
+      });
+    }
+  }, [blockedCompanyId, requestId]);
+
   const rows: KickoffRow[] = KICKOFF_TASKS.map((task) => {
     const done = doneByParty[task.party];
+    // The client billing row gets a "what happens next" notice (never absence-framed)
+    // when the viewer is a member who can't complete it themselves.
+    const blockedHere = task.party === 'client' && memberBlocked;
     return {
       ...task,
       done,
       mine: task.party === lens,
-      sub: done ? task.doneCopy : task.outstandingCopy,
+      sub: blockedHere
+        ? 'A company owner or admin needs to add these billing details before kickoff.'
+        : done
+          ? task.doneCopy
+          : task.outstandingCopy,
     };
   });
 
@@ -133,13 +166,13 @@ export function KickoffBoard({
           toast.error(result.error);
           return;
         }
-        // The confirmed gate determines the actor (client billing → client,
-        // expert terms → expert) — feeds the kickoff-stage dwell funnel.
+        // Expert-only now — the client's billing gate is confirmed by the billing
+        // form (BAL-323), which emits its own `billing_details_submitted` event.
         track(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
           request_id: requestId,
           relationship_id: acceptedRelationshipId,
           gate: result.gate,
-          actor: result.gate === 'client_billing' ? 'client' : 'expert',
+          actor: 'expert',
         });
         toast.success('Marked as done');
         router.refresh();
@@ -206,9 +239,13 @@ export function KickoffBoard({
             <KickoffRowItem
               key={row.party}
               row={row}
+              lens={lens}
               expertName={expertName}
               pending={pending}
               adminGatesReady={adminGatesReady}
+              billing={billing}
+              requestId={requestId}
+              relationshipId={acceptedRelationshipId}
               onComplete={handleComplete}
               onApprove={handleApprove}
             />
@@ -238,9 +275,13 @@ function KickoffCelebration(): React.JSX.Element {
 
 interface KickoffRowItemProps {
   row: KickoffRow;
+  lens: KickoffLens;
   expertName: string;
   pending: boolean;
   adminGatesReady: boolean;
+  billing: KickoffBillingCapture | null;
+  requestId: string;
+  relationshipId: string;
   onComplete: () => void;
   onApprove: () => void;
 }
@@ -249,17 +290,25 @@ interface KickoffRowItemProps {
  * One checklist row. Renders the status badge, the party icon, the label + "You"
  * pill, the generic sub-copy, and the trailing affordance (action button for the
  * viewer's own outstanding row, "Waiting" for someone else's, "Done" once met).
+ * The client's own billing row swaps the generic affordance for the BAL-323 capture
+ * flow (form / member notice / view-edit).
  */
 function KickoffRowItem({
   row,
+  lens,
   expertName,
   pending,
   adminGatesReady,
+  billing,
+  requestId,
+  relationshipId,
   onComplete,
   onApprove,
 }: Readonly<KickoffRowItemProps>): React.JSX.Element {
   const RowIcon = row.icon;
   const highlight = row.mine && !row.done;
+  // The client's billing row (client lens only) owns the capture flow.
+  const isClientBillingRow = lens === 'client' && row.party === 'client' && billing !== null;
 
   return (
     <li
@@ -294,14 +343,24 @@ function KickoffRowItem({
         <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-relaxed">{row.sub}</p>
       </div>
 
-      <RowAffordance
-        row={row}
-        expertName={expertName}
-        pending={pending}
-        adminGatesReady={adminGatesReady}
-        onComplete={onComplete}
-        onApprove={onApprove}
-      />
+      {isClientBillingRow && billing !== null ? (
+        <ClientBillingAffordance
+          done={row.done}
+          canManage={billing.canManage}
+          requestId={requestId}
+          relationshipId={relationshipId}
+          details={billing.details}
+        />
+      ) : (
+        <RowAffordance
+          row={row}
+          expertName={expertName}
+          pending={pending}
+          adminGatesReady={adminGatesReady}
+          onComplete={onComplete}
+          onApprove={onApprove}
+        />
+      )}
     </li>
   );
 }

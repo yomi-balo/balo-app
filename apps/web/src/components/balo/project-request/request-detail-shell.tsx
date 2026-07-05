@@ -7,6 +7,7 @@ import {
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { RequestCard } from './request-card';
 import { RequestContext } from './request-context';
 import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE } from './nudge-bar';
@@ -27,6 +28,11 @@ interface RequestDetailShellProps {
    * a missing payload renders the zero-thread invitation stage, never a crash.
    */
   conversation?: ConversationView | null;
+  /**
+   * Client billing-capture context (BAL-323), loaded by the page. Non-null ONLY for
+   * the client lens on an accepted request; forwarded to the KickoffBoard.
+   */
+  billingCapture?: KickoffBillingCapture | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -127,6 +133,7 @@ export function RequestDetailShell({
   view,
   ctx,
   conversation = null,
+  billingCapture = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -208,6 +215,7 @@ export function RequestDetailShell({
                   expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                   approved={view.kickoff.approved}
                   expertName={view.kickoff.expertName}
+                  billing={billingCapture}
                 />
               )}
               {showHealthPanel && (
@@ -274,6 +282,7 @@ export function RequestDetailShell({
                         expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                         approved={view.kickoff.approved}
                         expertName={view.kickoff.expertName}
+                        billing={billingCapture}
                         mobile
                       />
                     )}
@@ -319,6 +328,7 @@ export function RequestDetailShell({
                   expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                   approved={view.kickoff.approved}
                   expertName={view.kickoff.expertName}
+                  billing={billingCapture}
                 />
               )}
               <RequestContext view={view} variant="compact" />

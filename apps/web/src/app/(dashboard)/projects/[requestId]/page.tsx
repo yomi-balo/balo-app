@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { projectRequestsRepository } from '@balo/db';
+import { projectRequestsRepository, companyBillingRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import {
@@ -13,6 +13,11 @@ import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/serv
 import { mapRequestToDetailView } from '@/lib/project-request/request-detail-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import {
+  canManageBilling,
+  type CapturedBillingDetails,
+  type KickoffBillingCapture,
+} from '@/lib/billing/billing-capture';
 import { RequestDetailShell } from '@/components/balo/project-request/request-detail-shell';
 
 interface RequestDetailPageProps {
@@ -128,5 +133,36 @@ export default async function RequestDetailPage({
     conversation = await loadConversationView(request, ctx, user);
   }
 
-  return <RequestDetailShell view={view} ctx={ctx} conversation={conversation} />;
+  // Client billing-capture context (BAL-323) — loaded ONLY for the client lens on
+  // an active kickoff. `canManage` is the interim owner/admin role gate.
+  let billingCapture: KickoffBillingCapture | null = null;
+  if (ctx.lens === 'client' && view.kickoff) {
+    const canManage = canManageBilling(user.companyRole);
+    // Only owners/admins can view the captured details — a plain member's payload
+    // must NOT carry the tax ID / billing email (the UI hides them AND they never
+    // cross the RSC boundary).
+    const row = canManage
+      ? await companyBillingRepository.findByCompanyId(request.companyId)
+      : undefined;
+    const details: CapturedBillingDetails | null =
+      row === undefined
+        ? null
+        : {
+            legalName: row.legalName,
+            countryCode: row.countryCode,
+            taxId: row.taxId,
+            address: row.address,
+            billingEmail: row.billingEmail,
+          };
+    billingCapture = { companyId: request.companyId, canManage, details };
+  }
+
+  return (
+    <RequestDetailShell
+      view={view}
+      ctx={ctx}
+      conversation={conversation}
+      billingCapture={billingCapture}
+    />
+  );
 }

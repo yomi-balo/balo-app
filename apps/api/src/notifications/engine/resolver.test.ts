@@ -229,4 +229,23 @@ describe('resolveContext', () => {
       expect(context.data.expert).toEqual(winner);
     });
   });
+
+  // ── BAL-323 admin fan-out hydration for billing.details_confirmed ──
+  describe('billing.details_confirmed hydration', () => {
+    it('hydrates adminUserIds for the admin in-app fan-out (no sibling read)', async () => {
+      mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+
+      const context = await resolveContext('billing.details_confirmed', {
+        correlationId: 'company-1',
+        companyId: 'company-1',
+        companyName: 'Acme',
+        projectRequestId: 'req-1',
+      });
+
+      expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+      expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+      // This event never reads sibling proposals (that path is proposal_accepted-only).
+      expect(mockListByRequest).not.toHaveBeenCalled();
+    });
+  });
 });

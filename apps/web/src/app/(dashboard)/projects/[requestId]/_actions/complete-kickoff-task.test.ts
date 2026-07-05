@@ -36,14 +36,16 @@ import { completeKickoffTaskAction } from './complete-kickoff-task';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
-const USER = { id: 'user-client', firstName: 'Grace', lastName: 'Hopper' };
+const USER = { id: 'user-expert', firstName: 'Grace', lastName: 'Hopper' };
 
 const VALID_INPUT = { requestId: REQUEST_ID, relationshipId: REL_ID };
 
+// Default access resolves to the WINNING EXPERT — the only lens that confirms a
+// gate here now that BAL-323 moved client billing to its own form.
 function accessOk(overrides: Record<string, unknown> = {}) {
   return {
     ok: true,
-    ctx: { lens: 'client' },
+    ctx: { lens: 'expert' },
     relationship: { expertProfileId: EXPERT_PROFILE_ID, status: 'accepted' },
     request: { status: 'accepted', title: 'CPQ implementation' },
     recipient: { role: 'expert', expertProfileId: EXPERT_PROFILE_ID },
@@ -88,17 +90,25 @@ describe('completeKickoffTaskAction', () => {
     expect(mockConfirmKickoffGate).not.toHaveBeenCalled();
   });
 
-  it('maps the client lens → client_billing gate', async () => {
-    const result = await completeKickoffTaskAction(VALID_INPUT);
-    expect(result).toEqual({ success: true, gate: 'client_billing' });
-    expect(mockConfirmKickoffGate).toHaveBeenCalledWith({
-      id: REQUEST_ID,
-      gate: 'client_billing',
+  it('rejects the client lens — billing is captured through the billing form', async () => {
+    mockResolveAccess.mockResolvedValue(accessOk({ ctx: { lens: 'client' } }));
+    expect(await completeKickoffTaskAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: 'Billing details are added from the billing form.',
     });
+    expect(mockConfirmKickoffGate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-participant lens (defensive)', async () => {
+    mockResolveAccess.mockResolvedValue(accessOk({ ctx: { lens: 'admin' } }));
+    expect(await completeKickoffTaskAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: 'Only a participant can complete this step.',
+    });
+    expect(mockConfirmKickoffGate).not.toHaveBeenCalled();
   });
 
   it('maps the expert lens → expert_terms gate', async () => {
-    mockResolveAccess.mockResolvedValue(accessOk({ ctx: { lens: 'expert' } }));
     const result = await completeKickoffTaskAction(VALID_INPUT);
     expect(result).toEqual({ success: true, gate: 'expert_terms' });
     expect(mockConfirmKickoffGate).toHaveBeenCalledWith({
@@ -141,10 +151,10 @@ describe('completeKickoffTaskAction', () => {
 
   it('confirms the gate, logs, revalidates, and returns success', async () => {
     const result = await completeKickoffTaskAction(VALID_INPUT);
-    expect(result).toEqual({ success: true, gate: 'client_billing' });
+    expect(result).toEqual({ success: true, gate: 'expert_terms' });
     expect(mockConfirmKickoffGate).toHaveBeenCalledWith({
       id: REQUEST_ID,
-      gate: 'client_billing',
+      gate: 'expert_terms',
     });
     expect(log.info).toHaveBeenCalledWith('Kickoff gate confirmed', expect.any(Object));
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
