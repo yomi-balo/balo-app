@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
@@ -6,6 +6,10 @@ import type { ReferenceData } from '../_actions/load-draft';
 import type { ApplicationWithRelations, SupportType } from '@balo/db';
 
 // ── Mocks ────────────────────────────────────────────────────────
+
+// Togglable reduced-motion state so a dedicated test can execute the
+// `reduce ? …` true-branch in assessment-card.tsx for coverage. Default false.
+const motionState = vi.hoisted(() => ({ reduce: false }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
@@ -55,6 +59,7 @@ vi.mock('motion/react', async () => {
       }
     ),
     AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+    useReducedMotion: () => motionState.reduce,
   };
 });
 
@@ -136,6 +141,58 @@ const completeDraft = {
   workHistory: [],
 } as unknown as ApplicationWithRelations;
 
+// Two products, both fully unrated (every competency at proficiency 0) → both
+// incomplete on entry. Drives auto-expand, Done-advance, and single-open cases.
+// productsData.productIds = ['skill-cpq', 'skill-leads'] (competency order).
+const twoIncompleteDraft = {
+  profile: {
+    id: 'profile-3',
+    userId: 'user-1',
+    applicationStatus: 'draft',
+    yearStartedSalesforce: null,
+    linkedinUrl: null,
+    trailheadUrl: null,
+    isSalesforceMvp: false,
+    isSalesforceCta: false,
+    isCertifiedTrainer: false,
+  },
+  competencies: [
+    { id: 'c1', productId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 0 },
+    { id: 'c2', productId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
+    { id: 'c3', productId: 'skill-leads', supportTypeId: 'st-fix', proficiency: 0 },
+    { id: 'c4', productId: 'skill-leads', supportTypeId: 'st-arch', proficiency: 0 },
+  ],
+  certifications: [],
+  languages: [],
+  industries: [],
+  workHistory: [],
+} as unknown as ApplicationWithRelations;
+
+// One product, unrated on entry → the lone incomplete card. Drives the terminal
+// Done fallback: rating it then clicking Done leaves no next incomplete, so focus
+// returns to its own header rather than dropping to <body>.
+const singleIncompleteDraft = {
+  profile: {
+    id: 'profile-4',
+    userId: 'user-1',
+    applicationStatus: 'draft',
+    yearStartedSalesforce: null,
+    linkedinUrl: null,
+    trailheadUrl: null,
+    isSalesforceMvp: false,
+    isSalesforceCta: false,
+    isCertifiedTrainer: false,
+  },
+  competencies: [
+    { id: 'c1', productId: 'skill-cpq', supportTypeId: 'st-fix', proficiency: 0 },
+    { id: 'c2', productId: 'skill-cpq', supportTypeId: 'st-arch', proficiency: 0 },
+  ],
+  certifications: [],
+  languages: [],
+  industries: [],
+  workHistory: [],
+} as unknown as ApplicationWithRelations;
+
 function renderStep(draftArg: ApplicationWithRelations | null): void {
   const headingRef = createRef<HTMLHeadingElement>();
   render(
@@ -154,6 +211,11 @@ function renderStep(draftArg: ApplicationWithRelations | null): void {
 describe('StepAssessment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    motionState.reduce = false;
+  });
+
+  afterEach(() => {
+    motionState.reduce = false;
   });
 
   it('renders the step heading and dimension guide', () => {
@@ -196,9 +258,11 @@ describe('StepAssessment', () => {
     const user = userEvent.setup();
     renderStep(draft);
 
-    // Cards start collapsed; expand the CPQ card to reveal its sliders. The
-    // toggle button's accessible name combines the skill name and its status
-    // badge ("CPQ ... To assess"/"Completed"), so match by substring.
+    // CPQ is already rated (proficiency 6) → complete on entry, so the single-open
+    // accordion auto-expands the *first incomplete* card — which is none here — and
+    // CPQ starts collapsed. Manually expand it to reveal its sliders. The toggle
+    // button's accessible name combines the skill name and its status badge
+    // ("CPQ ... Completed"), so match by substring.
     await user.click(screen.getByRole('button', { name: /CPQ/ }));
 
     // Each support type renders a slider thumb (desktop + mobile layouts). Drive
@@ -213,5 +277,96 @@ describe('StepAssessment', () => {
 
     // The CPQ skill already had a non-zero rating, so it stays "assessed".
     expect(screen.getByText(/1 of 1 products assessed/i)).toBeInTheDocument();
+  });
+
+  it('auto-expands the first incomplete product on entry, leaving the rest collapsed', () => {
+    // Both products unrated → both incomplete. The first (CPQ) auto-opens on mount
+    // with no click; the second (Lead Mgmt) stays collapsed (single-open).
+    renderStep(twoIncompleteDraft);
+
+    const cpqHeader = screen.getByRole('button', { name: /CPQ/ });
+    const leadsHeader = screen.getByRole('button', { name: /Lead Mgmt/ });
+
+    expect(cpqHeader).toHaveAttribute('aria-expanded', 'true');
+    expect(leadsHeader).toHaveAttribute('aria-expanded', 'false');
+    // The open card reveals its sliders without any interaction.
+    expect(screen.getAllByRole('slider').length).toBeGreaterThan(0);
+  });
+
+  it('advances to the next incomplete product and moves keyboard focus on Done', async () => {
+    const user = userEvent.setup();
+    renderStep(twoIncompleteDraft);
+
+    // CPQ is auto-open; its Done button collapses it and advances to Lead Mgmt.
+    await user.click(screen.getByRole('button', { name: /done/i }));
+
+    const cpqHeader = screen.getByRole('button', { name: /CPQ/ });
+    const leadsHeader = screen.getByRole('button', { name: /Lead Mgmt/ });
+
+    expect(leadsHeader).toHaveAttribute('aria-expanded', 'true');
+    expect(cpqHeader).toHaveAttribute('aria-expanded', 'false');
+    // Focus follows the advance so keyboard users land on the newly-opened card.
+    expect(leadsHeader).toHaveFocus();
+  });
+
+  it('keeps a single card open on manual toggle and never auto-overrides the user', async () => {
+    const user = userEvent.setup();
+    renderStep(twoIncompleteDraft);
+
+    // Opening Lead Mgmt closes the auto-opened CPQ (single-open). Re-query the
+    // headers after each click — the motion stub remounts subtrees per render.
+    await user.click(screen.getByRole('button', { name: /Lead Mgmt/ }));
+    expect(screen.getByRole('button', { name: /Lead Mgmt/ })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: /CPQ/ })).toHaveAttribute('aria-expanded', 'false');
+
+    // Clicking the open card again collapses it, and no other card auto-opens.
+    await user.click(screen.getByRole('button', { name: /Lead Mgmt/ }));
+    expect(screen.getByRole('button', { name: /Lead Mgmt/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+    expect(screen.getByRole('button', { name: /CPQ/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('expands nothing and shows the all-rated note when every product is complete on entry', () => {
+    // CPQ is rated on entry (completeDraft) → findFirstIncomplete returns null, so
+    // no card auto-expands and the success note renders.
+    renderStep(completeDraft);
+
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument();
+    expect(screen.getByText(/all products rated/i)).toBeInTheDocument();
+  });
+
+  it('still auto-expands the first incomplete product under reduced motion', () => {
+    // Exercises the `reduce ? …` true-branch in assessment-card.tsx; behavior is
+    // identical to full motion.
+    motionState.reduce = true;
+    renderStep(twoIncompleteDraft);
+
+    expect(screen.getByRole('button', { name: /CPQ/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getAllByRole('slider').length).toBeGreaterThan(0);
+  });
+
+  it('returns focus to the completed card header (not body) on the terminal Done', async () => {
+    const user = userEvent.setup();
+    renderStep(singleIncompleteDraft);
+
+    // The lone incomplete product auto-opens; rate its first dimension so
+    // proficiency > 0 (mirrors the slider test's keyboard interaction).
+    const [slider] = screen.getAllByRole('slider');
+    expect(slider).toBeDefined();
+    if (!slider) throw new Error('expected a slider to be rendered');
+    slider.focus();
+    await user.keyboard('{ArrowRight}');
+
+    // Terminal Done: no next incomplete → focus falls back to this card's own
+    // still-mounted header instead of dropping to <body>.
+    await user.click(screen.getByRole('button', { name: /done/i }));
+
+    expect(screen.getByRole('button', { name: /CPQ/ })).toHaveFocus();
+    expect(screen.getByText(/all products rated/i)).toBeInTheDocument();
   });
 });

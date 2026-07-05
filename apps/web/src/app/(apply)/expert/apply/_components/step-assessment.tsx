@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback, useMemo, useState } from 'react';
+import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Wrench, Building2, Compass, GraduationCap } from 'lucide-react';
@@ -36,6 +36,40 @@ const DIMENSION_EXPLANATION = [
   },
 ] as const;
 
+// ── Accordion helpers (module scope keeps the component's cognitive complexity low) ──
+
+type RatingRow = { productId: string; supportTypeId: string; proficiency: number };
+
+function productHasRating(ratings: RatingRow[], productId: string): boolean {
+  return ratings.some((r) => r.productId === productId && r.proficiency > 0);
+}
+
+// First incomplete in list order (mount auto-expand). null → nothing to open.
+function findFirstIncomplete(productIds: string[], ratings: RatingRow[]): string | null {
+  for (const id of productIds) {
+    if (!productHasRating(ratings, id)) return id;
+  }
+  return null;
+}
+
+// Next incomplete AFTER current index, wrapping to the start; never returns
+// currentId. null → no other incomplete product anywhere.
+function findNextIncomplete(
+  productIds: string[],
+  ratings: RatingRow[],
+  currentId: string
+): string | null {
+  const n = productIds.length;
+  const currentIndex = productIds.indexOf(currentId);
+  if (currentIndex === -1) return findFirstIncomplete(productIds, ratings);
+  for (let offset = 1; offset <= n; offset++) {
+    const candidate = productIds[(currentIndex + offset) % n];
+    if (candidate === undefined || candidate === currentId) continue; // offset===n wraps to self
+    if (!productHasRating(ratings, candidate)) return candidate;
+  }
+  return null;
+}
+
 interface StepAssessmentProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }
@@ -45,6 +79,11 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     useWizard();
 
   const [guideOpen, setGuideOpen] = useState(true);
+
+  // Single-open accordion: one product expanded at a time (null = all collapsed).
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const headerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const pendingFocusRef = useRef<string | null>(null);
 
   const form = useForm<AssessmentStepData>({
     resolver: zodResolver(assessmentStepSchema),
@@ -139,14 +178,60 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     [form]
   );
 
-  // Check completion per product
+  // Check completion per product (single source of truth: shared predicate)
   const isProductComplete = useCallback(
-    (productId: string): boolean => {
-      const productRatings = ratings.filter((r) => r.productId === productId);
-      return productRatings.some((r) => r.proficiency > 0);
-    },
+    (productId: string): boolean => productHasRating(ratings, productId),
     [ratings]
   );
+
+  // Register/unregister each card's header button so the parent can move focus.
+  const registerHeaderButton = useCallback(
+    (productId: string, el: HTMLButtonElement | null): void => {
+      if (el) headerRefs.current.set(productId, el);
+      else headerRefs.current.delete(productId);
+    },
+    []
+  );
+
+  // Mount-only auto-expand: open the first incomplete product on step entry
+  // (incl. resume). StepAssessment mounts fresh per entry via AnimatePresence,
+  // so an empty-dependency effect == "on step entry". Reads freshest values.
+  useEffect(() => {
+    const first = findFirstIncomplete(selectedProductIds, form.getValues('ratings'));
+    setExpandedProductId(first); // null when zero products or all already complete
+    // Intentionally mount-only: "first incomplete on step entry (incl. resume)".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Manual header click — single-open toggle. No focus request (the click already
+  // focused the button), so auto-advance never overrides a manual choice.
+  const handleToggle = useCallback((productId: string): void => {
+    setExpandedProductId((prev) => (prev === productId ? null : productId));
+  }, []);
+
+  // "Done" — collapse current, advance to the next incomplete (wrapping, never
+  // current), and request focus on its header. Reads live ratings so rapid
+  // Done clicks never use a stale index.
+  const handleDone = useCallback(
+    (productId: string): void => {
+      const next = findNextIncomplete(selectedProductIds, form.getValues('ratings'), productId);
+      setExpandedProductId(next);
+      // Always request focus: the next incomplete header, or (terminal Done, no
+      // next) fall back to the just-completed card's own still-mounted header so
+      // keyboard focus never drops to <body> at the finish line.
+      pendingFocusRef.current = next ?? productId;
+    },
+    [selectedProductIds, form]
+  );
+
+  // Post-commit focus: after a Done-advance commits the expansion, move focus to
+  // the newly-opened header exactly once. Early-returns on mount + manual toggles.
+  useEffect(() => {
+    const target = pendingFocusRef.current;
+    if (target === null) return; // no pending advance → do nothing
+    headerRefs.current.get(target)?.focus({ preventScroll: true });
+    pendingFocusRef.current = null; // clear → no refocus loop
+  }, [expandedProductId]);
 
   const completedCount = selectedProductIds.filter((id) => isProductComplete(id)).length;
   const allComplete = completedCount === selectedProductIds.length && selectedProductIds.length > 0;
@@ -227,6 +312,10 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
                   dimensions={dimensions}
                   onChange={handleChange}
                   isComplete={isProductComplete(productId)}
+                  expanded={expandedProductId === productId}
+                  onToggle={handleToggle}
+                  onDone={handleDone}
+                  registerHeaderButton={registerHeaderButton}
                 />
               </motion.div>
             );
