@@ -13,6 +13,8 @@ export type {
 } from './experts';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
+export { companyBillingRepository, ensureClientBillingGateConfirmed } from './company-billing';
+export type { CompanyBillingDetails, NewCompanyBillingDetails } from '../schema';
 export type {
   ProductsByCategory,
   CertificationsByCategory,

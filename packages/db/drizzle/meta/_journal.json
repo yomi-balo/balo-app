@@ -239,6 +239,13 @@
       "when": 1781446738624,
       "tag": "0033_clear_landau",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1783276156876,
+      "tag": "0034_flimsy_marvel_zombies",
+      "breakpoints": true
     }
   ]
 }
