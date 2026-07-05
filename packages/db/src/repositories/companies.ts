@@ -1,6 +1,6 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { companies, companyMembers, type Company } from '../schema';
+import { companies, companyMembers, type Company, type User } from '../schema';
 
 export const companiesRepository = {
   findById: async (id: string): Promise<Company | undefined> => {
@@ -35,6 +35,22 @@ export const companiesRepository = {
       with: { company: true },
     });
     return membership?.company;
+  },
+
+  /**
+   * The owner user of a company. Ownership is role-based (company_members.role =
+   * 'owner'), written at workspace creation. Throws if the company has no owner —
+   * a structural invariant violation, so fail loud.
+   */
+  findOwnerByCompanyId: async (companyId: string): Promise<User> => {
+    const membership = await db.query.companyMembers.findFirst({
+      where: and(eq(companyMembers.companyId, companyId), eq(companyMembers.role, 'owner')),
+      with: { user: true },
+    });
+    if (membership?.user === undefined) {
+      throw new Error(`No owner found for company: ${companyId}`);
+    }
+    return membership.user;
   },
 
   /**

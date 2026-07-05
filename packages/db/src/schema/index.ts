@@ -11,6 +11,7 @@ export * from './guests';
 export * from './languages';
 export * from './industries';
 export * from './payouts';
+export * from './company-billing';
 export * from './notifications';
 export * from './user-notifications';
 export * from './calendar';
