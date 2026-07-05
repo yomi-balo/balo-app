@@ -225,11 +225,15 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   );
 
   // Post-commit focus: after a Done-advance commits the expansion, move focus to
-  // the newly-opened header exactly once. Early-returns on mount + manual toggles.
+  // the newly-opened header exactly once, then scroll it into view so a header
+  // below the fold (6-8 products) follows the focus for sighted keyboard users.
+  // Early-returns on mount + manual toggles.
   useEffect(() => {
     const target = pendingFocusRef.current;
     if (target === null) return; // no pending advance → do nothing
-    headerRefs.current.get(target)?.focus({ preventScroll: true });
+    const headerEl = headerRefs.current.get(target);
+    headerEl?.focus({ preventScroll: true }); // preventScroll avoids the abrupt browser focus-scroll
+    headerEl?.scrollIntoView({ block: 'nearest' }); // instant, minimal scroll — no reduced-motion gating needed
     pendingFocusRef.current = null; // clear → no refocus loop
   }, [expandedProductId]);
 

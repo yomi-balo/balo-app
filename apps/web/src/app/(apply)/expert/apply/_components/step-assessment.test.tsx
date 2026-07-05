@@ -295,6 +295,7 @@ describe('StepAssessment', () => {
 
   it('advances to the next incomplete product and moves keyboard focus on Done', async () => {
     const user = userEvent.setup();
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
     renderStep(twoIncompleteDraft);
 
     // CPQ is auto-open; its Done button collapses it and advances to Lead Mgmt.
@@ -305,8 +306,12 @@ describe('StepAssessment', () => {
 
     expect(leadsHeader).toHaveAttribute('aria-expanded', 'true');
     expect(cpqHeader).toHaveAttribute('aria-expanded', 'false');
-    // Focus follows the advance so keyboard users land on the newly-opened card.
+    // Focus follows the advance so keyboard users land on the newly-opened card,
+    // and the viewport scrolls minimally to keep that header on-screen.
     expect(leadsHeader).toHaveFocus();
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' });
+
+    scrollSpy.mockRestore();
   });
 
   it('keeps a single card open on manual toggle and never auto-overrides the user', async () => {
