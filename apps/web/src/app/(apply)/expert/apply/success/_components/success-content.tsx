@@ -5,6 +5,7 @@ import { motion } from 'motion/react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { scaleInVariant } from '../../_components/design-system';
+import { ReferralInviteSection } from './referral-invite-section';
 
 interface SuccessContentProps {
   email: string;
@@ -123,6 +124,9 @@ export function SuccessContent({ email }: Readonly<SuccessContentProps>): React.
           </motion.div>
         ))}
       </div>
+
+      {/* Referral invitations — capture referrals at peak goodwill (BAL-325) */}
+      <ReferralInviteSection />
 
       {/* Primary CTA */}
       <motion.div

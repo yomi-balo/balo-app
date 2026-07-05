@@ -208,6 +208,79 @@ describe('dispatch', () => {
     expect(deliveryPayload.recipientId).toBe('client-002');
   });
 
+  // ── BAL-325 email_address: external non-user recipient from the payload ──
+  describe('email_address recipient', () => {
+    const referralRule: NotificationRule = {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'expert-referral-invited',
+      timing: 'immediate',
+      priority: 'normal',
+    };
+
+    it('enqueues one email job with recipientId = correlationId (invitee email kept out of log/jobId) and recipientEmail = payload.recipientEmail', async () => {
+      const context: RuleContext = {
+        event: 'expert.referral_invited',
+        payload: {
+          correlationId: 'invite-1',
+          recipientEmail: 'colleague@example.com',
+          inviterName: 'Ada Lovelace',
+        },
+        data: {},
+      };
+
+      await dispatch(referralRule, context);
+
+      expect(getQueue).toHaveBeenCalledWith('notification-email');
+      expect(mockAdd).toHaveBeenCalledOnce();
+      const deliveryPayload = mockAdd.mock.calls[0][1];
+      // recipientId (log/dedup identity) is the invite correlationId — NOT the raw
+      // invitee address — so no invitee PII leaks into the dispatcher log or jobId.
+      expect(deliveryPayload.recipientId).toBe('invite-1');
+      // Delivery still targets the literal invitee address.
+      expect(deliveryPayload.recipientEmail).toBe('colleague@example.com');
+      const opts = mockAdd.mock.calls[0][2];
+      // jobId stays unique per invite (correlationId appears in both segments).
+      expect(opts.jobId).toBe('expert-referral-invited--invite-1--invite-1');
+    });
+
+    it('skips dispatch when payload.correlationId is missing', async () => {
+      const context: RuleContext = {
+        event: 'expert.referral_invited',
+        payload: { recipientEmail: 'colleague@example.com', inviterName: 'Ada' },
+        data: {},
+      };
+
+      await dispatch(referralRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips when payload.recipientEmail is missing', async () => {
+      const context: RuleContext = {
+        event: 'expert.referral_invited',
+        payload: { correlationId: 'invite-1', inviterName: 'Ada Lovelace' },
+        data: {},
+      };
+
+      await dispatch(referralRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
+    it('warns and skips when payload.recipientEmail is an empty string', async () => {
+      const context: RuleContext = {
+        event: 'expert.referral_invited',
+        payload: { correlationId: 'invite-1', recipientEmail: '', inviterName: 'Ada' },
+        data: {},
+      };
+
+      await dispatch(referralRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+  });
+
   // ── BAL-289 fan-out: list-valued recipients enqueue one job per id ──
   describe('fan-out recipients', () => {
     const adminRule: NotificationRule = {

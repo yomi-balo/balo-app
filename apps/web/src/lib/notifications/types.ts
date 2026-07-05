@@ -25,6 +25,12 @@ export interface ExpertApprovedPayload {
   expertProfileId: string;
 }
 
+export interface ExpertReferralInvitedPayload {
+  correlationId: string; // expert_referral_invites row id — dedup per invite
+  recipientEmail: string; // the invited EXTERNAL address — delivery + dedup identity
+  inviterName: string; // "{First Last}" (or a neutral fallback) — email body
+}
+
 export interface ProjectRequestSubmittedPayload {
   correlationId: string; // projectRequestId
   projectRequestId: string;
@@ -141,6 +147,7 @@ export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
+  | 'expert.referral_invited'
   | 'project.request_submitted'
   | 'project.match_requested'
   | 'project.exploratory_requested'
@@ -159,6 +166,7 @@ export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'expert.referral_invited': ExpertReferralInvitedPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;
   'project.exploratory_requested': ProjectExploratoryRequestedPayload;

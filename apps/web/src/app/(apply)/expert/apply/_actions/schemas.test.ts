@@ -6,11 +6,13 @@ import {
   workHistoryStepSchema,
   termsStepSchema,
   certificationsStepSchema,
-  inviteStepSchema,
   profileStepDraftSchema,
   productsStepDraftSchema,
   assessmentStepDraftSchema,
   termsStepDraftSchema,
+  STEP_CONFIG,
+  STEP_SCHEMAS,
+  STEP_DRAFT_SCHEMAS,
 } from './schemas';
 
 const UUID_A = 'a0000000-0000-4000-8000-000000000001';
@@ -407,24 +409,6 @@ describe('workHistoryStepSchema', () => {
   });
 });
 
-describe('inviteStepSchema', () => {
-  it('accepts empty emails (optional step)', () => {
-    expect(inviteStepSchema.safeParse({ emails: [] }).success).toBe(true);
-  });
-
-  it('accepts valid email addresses', () => {
-    expect(
-      inviteStepSchema.safeParse({
-        emails: ['test@example.com', 'another@test.com'],
-      }).success
-    ).toBe(true);
-  });
-
-  it('rejects invalid email format', () => {
-    expect(inviteStepSchema.safeParse({ emails: ['not-an-email'] }).success).toBe(false);
-  });
-});
-
 describe('termsStepSchema', () => {
   it('accepts termsAccepted=true', () => {
     expect(termsStepSchema.safeParse({ termsAccepted: true }).success).toBe(true);
@@ -586,5 +570,31 @@ describe('termsStepDraftSchema', () => {
 
   it('accepts termsAccepted=true', () => {
     expect(termsStepDraftSchema.safeParse({ termsAccepted: true }).success).toBe(true);
+  });
+});
+
+// ── Step metadata (BAL-325: invite step removed → 6 steps) ────────
+
+describe('STEP_CONFIG', () => {
+  it('has exactly 6 steps with the invite step removed', () => {
+    expect(STEP_CONFIG.length).toBe(6);
+  });
+
+  it('preserves the canonical step order', () => {
+    expect(STEP_CONFIG.map((s) => s.key)).toEqual([
+      'profile',
+      'products',
+      'assessment',
+      'certifications',
+      'work-history',
+      'terms',
+    ]);
+  });
+
+  it('exposes strict + draft schemas for every step and no orphan invite key', () => {
+    expect(Object.keys(STEP_SCHEMAS).sort()).toEqual(STEP_CONFIG.map((s) => s.key).sort());
+    expect(Object.keys(STEP_DRAFT_SCHEMAS).sort()).toEqual(STEP_CONFIG.map((s) => s.key).sort());
+    expect('invite' in STEP_SCHEMAS).toBe(false);
+    expect('invite' in STEP_DRAFT_SCHEMAS).toBe(false);
   });
 });

@@ -23,7 +23,6 @@ import {
   type AssessmentStepData,
   type CertificationsStepData,
   type WorkHistoryStepData,
-  type InviteStepData,
   type TermsStepData,
 } from '../_actions/schemas';
 import type { ReferenceData } from '../_actions/load-draft';
@@ -46,7 +45,6 @@ interface WizardState {
   assessmentData: Partial<AssessmentStepData>;
   certificationsData: Partial<CertificationsStepData>;
   workHistoryData: Partial<WorkHistoryStepData>;
-  inviteData: Partial<InviteStepData>;
   termsData: Partial<TermsStepData>;
   referenceData: ReferenceData;
   user: { id: string; email: string };
@@ -105,12 +103,13 @@ function findFirstIncompleteStep(draft: ApplicationWithRelations): number {
     if (!profs.some((p) => p > 0)) return 2;
   }
 
-  // Steps 3-5 are optional — infer progress from later-step data.
+  // Steps 4-5 are optional — infer progress from later-step data.
   // If work history exists, user must have passed certifications too.
   const hasCertData = draft.certifications.length > 0;
   const hasWorkHistoryData = draft.workHistory.length > 0;
 
-  if (hasWorkHistoryData) return 6; // past both optional steps → terms
+  const termsIndex = STEP_CONFIG.length - 1; // terms is always the last step
+  if (hasWorkHistoryData) return termsIndex; // past both optional steps → terms
   if (hasCertData) return 4; // past certs → work-history
   return 3; // → certifications
 }
@@ -156,19 +155,19 @@ function isAssessmentComplete(draft: ApplicationWithRelations): boolean {
 }
 
 function hydrateStepStatuses(draft: ApplicationWithRelations | null): StepStatus[] {
-  if (!draft) return new Array(7).fill('pending') as StepStatus[];
+  if (!draft) return new Array(STEP_CONFIG.length).fill('pending') as StepStatus[];
 
-  const statuses: StepStatus[] = new Array(7).fill('pending') as StepStatus[];
+  const statuses: StepStatus[] = new Array(STEP_CONFIG.length).fill('pending') as StepStatus[];
 
   if (isProfileComplete(draft)) statuses[0] = 'completed';
   if (isProductsComplete(draft)) statuses[1] = 'completed';
   if (isAssessmentComplete(draft)) statuses[2] = 'completed';
 
-  // Steps 4-6 are optional - mark as skipped if first 3 are done and they have no data
+  // Steps 4-5 are optional - mark as skipped if first 3 are done and they have no data.
+  // Terms (now index 5) is required, so it correctly stays 'pending'.
   if (statuses[0] === 'completed' && statuses[1] === 'completed' && statuses[2] === 'completed') {
     statuses[3] = draft.certifications.length > 0 ? 'completed' : 'skipped';
     statuses[4] = draft.workHistory.length > 0 ? 'completed' : 'skipped';
-    statuses[5] = 'skipped'; // Invites are not persisted server-side
   }
 
   return statuses;
@@ -303,9 +302,6 @@ export function ExpertApplicationProvider({
   const [workHistoryData, setWorkHistoryData] = useState<Partial<WorkHistoryStepData>>(() =>
     hydrateWorkHistoryData(draft)
   );
-  const [inviteData, setInviteData] = useState<Partial<InviteStepData>>({
-    emails: [],
-  });
   const [termsData, setTermsData] = useState<Partial<TermsStepData>>({
     termsAccepted: false,
   });
@@ -359,20 +355,11 @@ export function ExpertApplicationProvider({
         assessment: assessmentData,
         certifications: certificationsData,
         'work-history': workHistoryData,
-        invite: inviteData,
         terms: termsData,
       };
       return dataMap[step];
     },
-    [
-      profileData,
-      productsData,
-      assessmentData,
-      certificationsData,
-      workHistoryData,
-      inviteData,
-      termsData,
-    ]
+    [profileData, productsData, assessmentData, certificationsData, workHistoryData, termsData]
   );
 
   const performSave = useCallback(async (): Promise<boolean> => {
@@ -432,7 +419,6 @@ export function ExpertApplicationProvider({
         assessment: (d) => setAssessmentData(d as Partial<AssessmentStepData>),
         certifications: (d) => setCertificationsData(d as Partial<CertificationsStepData>),
         'work-history': (d) => setWorkHistoryData(d as Partial<WorkHistoryStepData>),
-        invite: (d) => setInviteData(d as Partial<InviteStepData>),
         terms: (d) => setTermsData(d as Partial<TermsStepData>),
       };
       setters[step](data);
@@ -565,7 +551,6 @@ export function ExpertApplicationProvider({
       assessmentData,
       certificationsData,
       workHistoryData,
-      inviteData,
       termsData,
       referenceData,
       user,
@@ -590,7 +575,6 @@ export function ExpertApplicationProvider({
       assessmentData,
       certificationsData,
       workHistoryData,
-      inviteData,
       termsData,
       referenceData,
       user,

@@ -19,6 +19,17 @@ const expertApprovedPayload = z.object({
   expertProfileId: z.uuid(),
 });
 
+// BAL-325 referral invite (expert → EXTERNAL email). `correlationId` is the
+// expert_referral_invites row id — dedup per invite. `recipientEmail` is the
+// invited external address (delivery + dedup identity; the deliberate
+// PII-in-queue exception for a non-user recipient). Mirrors
+// apps/web/src/lib/notifications/types.ts.
+const expertReferralInvitedPayload = z.object({
+  correlationId: z.uuid(),
+  recipientEmail: z.string().email().max(254),
+  inviterName: z.string().min(1).max(120),
+});
+
 const projectRequestSubmittedPayload = z.object({
   correlationId: z.uuid(),
   projectRequestId: z.uuid(),
@@ -196,6 +207,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
     payload: expertApplicationSubmittedPayload,
   }),
   z.object({ event: z.literal('expert.approved'), payload: expertApprovedPayload }),
+  z.object({
+    event: z.literal('expert.referral_invited'),
+    payload: expertReferralInvitedPayload,
+  }),
   z.object({
     event: z.literal('project.request_submitted'),
     payload: projectRequestSubmittedPayload,

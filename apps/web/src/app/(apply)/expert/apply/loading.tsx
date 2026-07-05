@@ -5,20 +5,14 @@ export default function ExpertApplyLoading(): React.JSX.Element {
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
       {/* Progress bar skeleton */}
       <div className="hidden items-center justify-between md:flex">
-        {[
-          'profile',
-          'products',
-          'assessment',
-          'certifications',
-          'work-history',
-          'invite',
-          'terms',
-        ].map((step) => (
-          <div key={step} className="flex flex-col items-center gap-2">
-            <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />
-            <div className="bg-muted h-3 w-12 animate-pulse rounded" />
-          </div>
-        ))}
+        {['profile', 'products', 'assessment', 'certifications', 'work-history', 'terms'].map(
+          (step) => (
+            <div key={step} className="flex flex-col items-center gap-2">
+              <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />
+              <div className="bg-muted h-3 w-12 animate-pulse rounded" />
+            </div>
+          )
+        )}
       </div>
 
       {/* Mobile progress skeleton */}

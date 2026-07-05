@@ -37,6 +37,7 @@ export {
 } from './project-requests';
 export type { ProjectRequest, NewProjectRequest } from '../schema';
 export { requestExpertRelationshipsRepository } from './request-expert-relationships';
+export { expertReferralInvitesRepository } from './expert-referral-invites';
 export {
   RELATIONSHIP_STATUS_TRANSITIONS,
   isAllowedRelationshipTransition,
@@ -113,6 +114,8 @@ export type {
   NewConversationMessage,
   ConversationFile,
   NewConversationFile,
+  ExpertReferralInvite,
+  NewExpertReferralInvite,
 } from '../schema';
 export { expertSearchRepository } from './expert-search';
 export type {

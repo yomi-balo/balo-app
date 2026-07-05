@@ -433,18 +433,20 @@ describe('saveDraftAction', () => {
     });
   });
 
-  describe('invite step', () => {
+  describe('removed invite step (BAL-325)', () => {
     beforeEach(() => {
       setupOwnershipCheck();
     });
 
-    it('returns success without calling any DB-writing repository', async () => {
+    it('rejects the retired step: "invite" as invalid input', async () => {
       const result = await saveDraftAction({
-        step: 'invite',
+        // The invite step was removed — the enum no longer accepts it, so the
+        // envelope parse throws a ZodError and the action returns a save failure.
+        step: 'invite' as unknown as 'terms',
         data: { emails: ['test@example.com'] },
         expertProfileId: PROFILE_ID,
       });
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(mockSaveProfileStep).not.toHaveBeenCalled();
       expect(mockSyncWorkHistory).not.toHaveBeenCalled();
     });
