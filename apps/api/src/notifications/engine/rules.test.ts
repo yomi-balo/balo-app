@@ -270,6 +270,76 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('project.billing_reminder (BAL-324)', () => {
+    it('gives the owner email + in-app via recipient:client, no condition', () => {
+      const rules = notificationRules['project.billing_reminder'];
+      expect(rules).toBeDefined();
+      // owner (email + in-app) + creator (email + in-app) = 4 rules.
+      expect(rules).toHaveLength(4);
+
+      const ownerRules = rules!.filter((r) => r.recipient === 'client');
+      expect(ownerRules).toHaveLength(2);
+      for (const rule of ownerRules) {
+        expect(rule.template).toBe('project-billing-reminder-owner');
+        expect(rule.timing).toBe('immediate');
+        // Owner is always notified — no gating condition.
+        expect(rule.condition).toBeUndefined();
+      }
+      expect(ownerRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+
+    it('gives the creator email + in-app via recipient:billing_creator, gated on creatorUserId', () => {
+      const rules = notificationRules['project.billing_reminder']!;
+      const creatorRules = rules.filter((r) => r.recipient === 'billing_creator');
+      expect(creatorRules).toHaveLength(2);
+      for (const rule of creatorRules) {
+        expect(rule.template).toBe('project-billing-reminder-creator');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeDefined();
+      }
+      expect(creatorRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+
+    it('creator condition fires only when creatorUserId is present AND != recipientId', () => {
+      const rules = notificationRules['project.billing_reminder']!;
+      const [creatorRule] = rules.filter((r) => r.recipient === 'billing_creator');
+      const condition = creatorRule!.condition!;
+
+      // Present + distinct from the owner → fires.
+      expect(
+        condition({
+          event: 'project.billing_reminder',
+          payload: { creatorUserId: 'creator-1', recipientId: 'owner-1' },
+          data: {},
+        })
+      ).toBe(true);
+
+      // Absent → skipped (owner-only publish).
+      expect(
+        condition({
+          event: 'project.billing_reminder',
+          payload: { recipientId: 'owner-1' },
+          data: {},
+        })
+      ).toBe(false);
+
+      // Equal to the owner → never self-notify.
+      expect(
+        condition({
+          event: 'project.billing_reminder',
+          payload: { creatorUserId: 'owner-1', recipientId: 'owner-1' },
+          data: {},
+        })
+      ).toBe(false);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

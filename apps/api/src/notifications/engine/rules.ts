@@ -2,7 +2,14 @@ export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
 export interface NotificationRule {
   channel: NotificationChannel;
-  recipient: 'self' | 'expert' | 'client' | 'admin' | 'non_selected_experts' | 'admin_users';
+  recipient:
+    | 'self'
+    | 'expert'
+    | 'client'
+    | 'admin'
+    | 'non_selected_experts'
+    | 'admin_users'
+    | 'billing_creator';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -283,6 +290,34 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'project-file-shared',
       timing: 'immediate',
       condition: (ctx) => ctx.payload.recipientRole === 'expert',
+    },
+  ],
+  // BAL-324: admin billing reminder. One event, two audiences. The OWNER
+  // (recipient:'client' → payload.recipientId) always gets email + in-app with
+  // the "complete billing" CTA. The request CREATOR (recipient:'billing_creator'
+  // → payload.creatorUserId) gets an email + in-app FYI ONLY when the action set
+  // `creatorUserId` (creator ≠ owner AND a company member) — the condition guards
+  // the resolver too, so a self-notify can never slip through.
+  'project.billing_reminder': [
+    ...emailAndInApp('client', 'project-billing-reminder-owner'),
+    {
+      channel: 'email',
+      recipient: 'billing_creator',
+      template: 'project-billing-reminder-creator',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: (ctx) =>
+        typeof ctx.payload.creatorUserId === 'string' &&
+        ctx.payload.creatorUserId !== ctx.payload.recipientId,
+    },
+    {
+      channel: 'in-app',
+      recipient: 'billing_creator',
+      template: 'project-billing-reminder-creator',
+      timing: 'immediate',
+      condition: (ctx) =>
+        typeof ctx.payload.creatorUserId === 'string' &&
+        ctx.payload.creatorUserId !== ctx.payload.recipientId,
     },
   ],
 };

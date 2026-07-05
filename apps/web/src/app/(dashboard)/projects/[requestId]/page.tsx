@@ -11,6 +11,9 @@ import {
 } from '@/lib/project-request/resolve-request-lens';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { mapRequestToDetailView } from '@/lib/project-request/request-detail-view';
+import { ensureAdminBillingAutoskip } from '@/lib/project-request/ensure-admin-billing-autoskip';
+import { loadAdminKickoffBilling } from '@/lib/project-request/load-admin-kickoff-billing';
+import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
 import { RequestDetailShell } from '@/components/balo/project-request/request-detail-shell';
@@ -119,6 +122,12 @@ export default async function RequestDetailPage({
     notFound();
   }
 
+  // BAL-324 repeat-company auto-skip: when an admin loads the board and the client
+  // already has billing on file, confirm the outstanding `client_billing` gate and
+  // re-read (UNCACHED) so the settled state renders this pass. No-op for everyone
+  // else. Placed BEFORE the view is mapped so the kickoff projection reflects it.
+  request = await ensureAdminBillingAutoskip(request, ctx.lens === 'admin');
+
   const view = mapRequestToDetailView(request, ctx);
 
   // Phase-2 participants get the live conversation payload (thread summaries +
@@ -128,5 +137,22 @@ export default async function RequestDetailPage({
     conversation = await loadConversationView(request, ctx, user);
   }
 
-  return <RequestDetailShell view={view} ctx={ctx} conversation={conversation} />;
+  // BAL-324 admin-only billing + payment-terms panel data. Only the observer
+  // (admin) lens with an active kickoff board pays for the extra reads.
+  let adminBilling: AdminKickoffBillingView | null = null;
+  if (ctx.archetype === 'observer' && view.kickoff) {
+    adminBilling = await loadAdminKickoffBilling(
+      request.companyId,
+      view.kickoff.acceptedRelationshipId
+    );
+  }
+
+  return (
+    <RequestDetailShell
+      view={view}
+      ctx={ctx}
+      conversation={conversation}
+      adminBilling={adminBilling}
+    />
+  );
 }

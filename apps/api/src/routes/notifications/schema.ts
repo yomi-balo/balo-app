@@ -189,6 +189,20 @@ const projectProposalResubmittedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
+// BAL-324 admin billing reminder (kickoff board → outstanding client-billing
+// gate). `correlationId` is minted per click (uuid) so a re-remind is a fresh
+// dispatch, not a jobId no-op. `recipientId` is the owner (recipient:'client');
+// `creatorUserId` is the optional request creator (recipient:'billing_creator').
+// Mirrors apps/web/src/lib/notifications/types.ts.
+const projectBillingReminderPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  title: z.string().min(1).max(200),
+  companyName: z.string().min(1).max(160),
+  recipientId: z.uuid(),
+  creatorUserId: z.uuid().optional(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -247,6 +261,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.file_shared'),
     payload: projectFileSharedPayload,
+  }),
+  z.object({
+    event: z.literal('project.billing_reminder'),
+    payload: projectBillingReminderPayload,
   }),
 ]);
 

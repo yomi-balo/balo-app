@@ -16,6 +16,8 @@ import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
 import { ProposalSlot } from './proposal-slot';
 import { KickoffBoard } from './proposal/kickoff-board';
+import { AdminKickoffBillingPanel } from './proposal/admin-kickoff-billing-panel';
+import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { ConversationStage } from './conversation/conversation-stage';
 import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 
@@ -27,6 +29,11 @@ interface RequestDetailShellProps {
    * a missing payload renders the zero-thread invitation stage, never a crash.
    */
   conversation?: ConversationView | null;
+  /**
+   * BAL-324 admin billing + payment-terms projection (observer lens only, loaded
+   * by the page). Null for participants and when no kickoff board is active.
+   */
+  adminBilling?: AdminKickoffBillingView | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -127,6 +134,7 @@ export function RequestDetailShell({
   view,
   ctx,
   conversation = null,
+  adminBilling = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -208,6 +216,17 @@ export function RequestDetailShell({
                   expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                   approved={view.kickoff.approved}
                   expertName={view.kickoff.expertName}
+                />
+              )}
+              {/* BAL-324: billing + payment-terms visibility (observer only). Sits
+                  under the kickoff board so the admin sees WHY the billing gate is
+                  open and can remind the client inline. */}
+              {view.kickoff && (
+                <AdminKickoffBillingPanel
+                  view={adminBilling ?? null}
+                  requestId={view.id}
+                  acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                  clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
                 />
               )}
               {showHealthPanel && (
