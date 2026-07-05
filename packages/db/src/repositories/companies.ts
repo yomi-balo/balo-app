@@ -40,11 +40,15 @@ export const companiesRepository = {
   /**
    * The owner user of a company. Ownership is role-based (company_members.role =
    * 'owner'), written at workspace creation. Throws if the company has no owner —
-   * a structural invariant violation, so fail loud.
+   * a structural invariant violation, so fail loud. Orders by joinedAt (then id) so
+   * the result is deterministic — the earliest-joined owner — even if a second
+   * owner membership ever exists (nothing at the DB level enforces a single owner,
+   * and multi-owner is a v2 concern).
    */
   findOwnerByCompanyId: async (companyId: string): Promise<User> => {
     const membership = await db.query.companyMembers.findFirst({
       where: and(eq(companyMembers.companyId, companyId), eq(companyMembers.role, 'owner')),
+      orderBy: (members, { asc }) => [asc(members.joinedAt), asc(members.id)],
       with: { user: true },
     });
     if (membership?.user === undefined) {

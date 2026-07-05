@@ -72,14 +72,20 @@ export const companyBillingRepository = {
  * kickoff gate ONLY when it is applicable, delegating the actual write to the
  * existing `projectRequestsRepository.confirmKickoffGate` (never modifying it).
  *
- * Never throws on a valid-but-not-ready request:
+ * Under normal sequential use it does not throw on a valid-but-not-ready request:
  *  1. Unknown / soft-deleted request → throw (fail loud on a bad/dead id).
  *  2. Gate already confirmed → no-op (checked BEFORE status, so a progressed
  *     request never trips the status guard).
  *  3. No billing captured for the company → no-op (nothing to auto-confirm).
  *  4. Request not yet `accepted` → no-op (mirrors confirmKickoffGate's own status
- *     guard so we never surface InvalidKickoffStateError).
+ *     guard so the common not-ready case never surfaces InvalidKickoffStateError).
  *  5. Applicable → delegate to the idempotent, FOR-UPDATE-locked gate confirmer.
+ *
+ * Concurrency note: the step-4 status check is unlocked. If another writer advances
+ * the request from `accepted` to `kickoff_approved` between step 4 and the delegated
+ * call, confirmKickoffGate will throw InvalidKickoffStateError. That window is left
+ * to fail loud rather than swallowed — in the real workflow it is unreachable, since
+ * confirming this gate is a prerequisite of kickoff approval.
  *
  * Import direction is one-way: this file imports `project-requests`, never the
  * reverse.
