@@ -9,11 +9,18 @@ import {
   check,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
-import { pricingMethodEnum, proposalCadenceEnum, engagementStatusEnum } from './enums';
+import {
+  pricingMethodEnum,
+  proposalCadenceEnum,
+  engagementStatusEnum,
+  engagementAcceptanceMethodEnum,
+} from './enums';
 import { companies } from './companies';
 import { expertProfiles } from './experts';
 import { proposals, requestExpertRelationships } from './request-origination';
 import { projectRequests } from './project-requests';
+import { users } from './users';
+import { engagementMilestones } from './engagement-milestones';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -90,6 +97,42 @@ export const engagements = pgTable(
     status: engagementStatusEnum('status').notNull().default('active'),
     activatedAt: timestamp('activated_at', { withTimezone: true }),
 
+    // ── Delivery lifecycle (BAL-330). ALL additive columns below are NULLABLE with
+    //    NO default → backfill-safe on the non-empty prod engagements table. ──
+
+    // Completion request (active → pending_acceptance): the expert asks the client
+    // to accept the delivered work. RESTRICT preserves attribution.
+    completionRequestedByUserId: uuid('completion_requested_by_user_id').references(
+      () => users.id,
+      { onDelete: 'restrict' }
+    ),
+    completionRequestedAt: timestamp('completion_requested_at', { withTimezone: true }),
+
+    // Acceptance (pending_acceptance → completed). NOTE — completed_at SEMANTICS:
+    // there is deliberately NO `completed_at` column. `accepted_at` IS the single
+    // completion-timestamp source of truth (client OR the D7 auto path); any later
+    // "completed on" display derives from `accepted_at` where status='completed'.
+    // A duplicate `completed_at` would only invite the two to drift.
+    acceptedByUserId: uuid('accepted_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }), // NULL for the auto path
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    acceptanceMethod: engagementAcceptanceMethodEnum('acceptance_method'), // NULL until accepted
+
+    // Change request (bounce pending_acceptance → active with a reason).
+    changeRequestNote: text('change_request_note'),
+    changeRequestedByUserId: uuid('change_requested_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    changeRequestedAt: timestamp('change_requested_at', { withTimezone: true }),
+
+    // Cancellation (active | pending_acceptance → cancelled).
+    cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancellationReason: text('cancellation_reason'),
+
     ...timestamps,
     ...softDelete,
   },
@@ -118,12 +161,20 @@ export const engagements = pgTable(
       sql`${t.depositCents} IS NULL OR ${t.depositCents} >= 0`
     ),
     check('engagement_rate_cents_nonneg', sql`${t.rateCents} IS NULL OR ${t.rateCents} >= 0`),
+    // Serves the D7 auto-accept sweep (status='pending_acceptance' AND
+    // completion_requested_at <= cutoff → listPendingAutoAccept). The predicate
+    // references ONLY deleted_at — NEVER the 'pending_acceptance' enum literal
+    // (that would be the ADD-VALUE one-tx migration hazard, plan §5). The sweep
+    // filters on the `status` COLUMN at query time, which is safe.
+    index('engagement_status_completion_requested_idx')
+      .on(t.status, t.completionRequestedAt)
+      .where(sql`${t.deletedAt} IS NULL`),
   ]
 );
 
 // ── Relations ──────────────────────────────────────────────────────────
 
-export const engagementsRelations = relations(engagements, ({ one }) => ({
+export const engagementsRelations = relations(engagements, ({ one, many }) => ({
   company: one(companies, {
     fields: [engagements.companyId],
     references: [companies.id],
@@ -144,6 +195,7 @@ export const engagementsRelations = relations(engagements, ({ one }) => ({
     fields: [engagements.projectRequestId],
     references: [projectRequests.id],
   }),
+  milestones: many(engagementMilestones),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

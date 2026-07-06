@@ -1,9 +1,25 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { engagements, projectRequests, type Engagement, type ProjectRequest } from '../schema';
+import {
+  engagementMilestones,
+  engagements,
+  projectRequests,
+  type Engagement,
+  type EngagementMilestone,
+  type ProjectRequest,
+} from '../schema';
 import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
+import { listByProposalTx } from './proposal-milestones';
+import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
+import { recordAuditEvent } from './audit-events';
+
+/** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Engagement status, derived from the schema column (single source of truth). */
+export type EngagementStatus = Engagement['status'];
 
 /**
  * COHERENCE (BAL-293): assert an engagement's snapshotted commercial terms are
@@ -40,6 +56,182 @@ export class KickoffGatesIncompleteError extends Error {
     this.name = 'KickoffGatesIncompleteError';
   }
 }
+
+// ── Delivery lifecycle transitions (BAL-330) ─────────────────────────────
+//
+// Mirrors the proposal transition pattern (proposals.ts): a `Record` transition
+// map + `isAllowed*Transition` guard + typed `Invalid*TransitionError` + a shared
+// `advance*Status(tx, …)` writer composable inside any caller's transaction.
+//
+// COMPLETED_AT SEMANTICS: there is NO `engagements.completed_at`. A completed
+// engagement's completion timestamp IS `accepted_at` (client or auto); any "completed
+// on" display derives from `accepted_at` where `status = 'completed'`.
+//
+// LOCK ORDER: every transition locks the engagement row FOR UPDATE first (and every
+// milestone transition locks the engagement before the milestone), so the engagement
+// lock is a single-writer gate over the whole engagement. Never lock a milestone
+// before its engagement (deadlock hazard).
+
+/**
+ * Allowed engagement status transitions (BAL-330).
+ *
+ *   active             → pending_acceptance (requestCompletion) | cancelled
+ *   pending_acceptance → active (withdraw / requestChanges) | completed (accept) | cancelled
+ *   completed          → []  terminal
+ *   cancelled          → []  terminal
+ *
+ * Ordering carries no semantics — this map is the single source of truth.
+ */
+export const ENGAGEMENT_STATUS_TRANSITIONS: Record<EngagementStatus, readonly EngagementStatus[]> =
+  {
+    active: ['pending_acceptance', 'cancelled'],
+    pending_acceptance: ['active', 'completed', 'cancelled'],
+    completed: [],
+    cancelled: [],
+  };
+
+export function isAllowedEngagementTransition(
+  from: EngagementStatus,
+  to: EngagementStatus
+): boolean {
+  return ENGAGEMENT_STATUS_TRANSITIONS[from].includes(to);
+}
+
+export class InvalidEngagementTransitionError extends Error {
+  constructor(
+    public readonly from: EngagementStatus,
+    public readonly to: EngagementStatus
+  ) {
+    super(`Invalid engagement status transition: ${from} → ${to}`);
+    this.name = 'InvalidEngagementTransitionError';
+  }
+}
+
+export class MilestonesIncompleteError extends Error {
+  constructor(
+    public readonly engagementId: string,
+    public readonly outstanding: number
+  ) {
+    super(`Engagement ${engagementId} has ${outstanding} milestone(s) not yet completed`);
+    this.name = 'MilestonesIncompleteError';
+  }
+}
+
+/**
+ * D7 auto-accept window: a `pending_acceptance` engagement auto-accepts this many
+ * days after the completion request. Consumed only in D7 (the sweep computes
+ * `cutoff = now - AUTO_ACCEPT_DAYS` and passes it to `listPendingAutoAccept`) — D0
+ * defines it and keeps the repo policy-free. Plain typed const, mirroring
+ * `QUIET_THRESHOLD_DAYS` (not a Zod module).
+ *
+ * FOOTGUN (memory `reference_balo_db_client_bundle_footgun`): do NOT value-import
+ * this into a web *client* component — `@balo/db`'s barrel re-exports `postgres` and
+ * breaks `next build`. If a later slice needs to DISPLAY the window client-side, lift
+ * it to a pure `@balo/shared` subpath there.
+ */
+export const AUTO_ACCEPT_DAYS = 7;
+
+/**
+ * Shared engagement transition writer. Locks the LIVE engagement FOR UPDATE,
+ * validates against `ENGAGEMENT_STATUS_TRANSITIONS` (+ optional `expectedFrom`),
+ * applies `{ status: to, ...set }`, returns the row. Exported so cross-cutting
+ * writers advance the engagement inside their own transaction atomically with the
+ * audit write — mirrors `advanceProposalStatus`.
+ *
+ * `tx` is the active transaction. Throws `InvalidEngagementTransitionError` for
+ * illegal moves / `expectedFrom` mismatch and `Error` for a missing/soft-deleted
+ * engagement.
+ */
+export async function advanceEngagementStatus(
+  tx: DbTx,
+  input: {
+    id: string;
+    to: EngagementStatus;
+    expectedFrom?: EngagementStatus;
+    set?: Partial<typeof engagements.$inferInsert>;
+  }
+): Promise<Engagement> {
+  const [current] = await tx
+    .select()
+    .from(engagements)
+    .where(and(eq(engagements.id, input.id), isNull(engagements.deletedAt)))
+    .for('update');
+
+  if (current === undefined) {
+    throw new Error(`Engagement not found: ${input.id}`);
+  }
+
+  if (input.expectedFrom !== undefined && current.status !== input.expectedFrom) {
+    throw new InvalidEngagementTransitionError(current.status, input.to);
+  }
+
+  if (!isAllowedEngagementTransition(current.status, input.to)) {
+    throw new InvalidEngagementTransitionError(current.status, input.to);
+  }
+
+  const [updated] = await tx
+    .update(engagements)
+    .set({ status: input.to, ...(input.set ?? {}) })
+    .where(eq(engagements.id, input.id))
+    .returning();
+
+  if (updated === undefined) {
+    throw new Error(`Failed to update engagement: ${input.id}`);
+  }
+
+  return updated;
+}
+
+/**
+ * The hydrated engagement + live milestones + expert (with user + nullable agency)
+ * graph behind `findEngagementWithMilestones`. A standalone module function so its
+ * INFERRED return type is the single source of truth for `EngagementWithMilestones`
+ * (mirrors projects-inbox's `PortfolioRequestRow`). `agency` is a LEFT-JOIN `one`
+ * relation → `Agency | null` (a freelancer expert has `agency: null`; the caller
+ * falls back to the expert's own name).
+ */
+function queryEngagementWithMilestones(id: string) {
+  return db.query.engagements.findFirst({
+    where: and(eq(engagements.id, id), isNull(engagements.deletedAt)),
+    with: {
+      milestones: {
+        where: (m, { isNull: childIsNull }) => childIsNull(m.deletedAt),
+        orderBy: (m, { asc: childAsc }) => [childAsc(m.sortOrder), childAsc(m.id)],
+      },
+      // SECURITY (BAL-330 review): explicit `columns:` projections so this
+      // consumer-facing shape carries ONLY what a party-aware delivery view needs
+      // (the expert's person display name + avatar, and the agency name + logo) and
+      // NEVER the secret/PII fields these full rows would otherwise bundle —
+      // `expertProfile.stripeConnectId`, `agency.stripeConnectId`, `user.workosId`,
+      // and the expert's email/phone. A later Server Action can safely return this to
+      // a client component. Notification/billing slices query their own data.
+      expertProfile: {
+        columns: { id: true, agencyId: true, type: true, headline: true },
+        with: {
+          user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+          agency: { columns: { id: true, name: true, logoUrl: true } },
+        },
+      },
+    },
+  });
+}
+
+/** Live engagement + its live milestones + expert (user + nullable agency). */
+export type EngagementWithMilestones = NonNullable<
+  Awaited<ReturnType<typeof queryEngagementWithMilestones>>
+>;
+
+/**
+ * An active engagement plus derived milestone progress counts and a
+ * `lastActivityAt` proxy (the later web "stalled" flag is DERIVED from
+ * `lastActivityAt` vs a threshold — D0 exposes only the raw signal).
+ */
+export type EngagementWithProgress = Engagement & {
+  totalMilestones: number;
+  completedMilestones: number;
+  inProgressMilestones: number;
+  lastActivityAt: Date | null;
+};
 
 export const engagementsRepository = {
   /**
@@ -127,6 +319,12 @@ export const engagementsRepository = {
     expertProfileId: string;
     sourceProposalId: string;
     relationshipId: string;
+    /**
+     * The approving admin (BAL-330). Recorded as the milestone snapshot author
+     * (`engagement_milestones.created_by_user_id`) and the actor on the
+     * `engagement.milestones_snapshotted` audit event. `admin.id` in the caller.
+     */
+    approvingAdminUserId: string;
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
@@ -193,6 +391,24 @@ export const engagementsRepository = {
         throw new Error('Failed to materialise engagement');
       }
 
+      // BAL-330: snapshot the accepted proposal's live milestones into the new
+      // engagement (same tx). A zero-milestone proposal → zero rows; the snapshot
+      // audit still records `milestone_count: 0`.
+      const sources = await listByProposalTx(tx, input.sourceProposalId);
+      await snapshotFromProposalTx(tx, {
+        engagementId: engagement.id,
+        approvingAdminUserId: input.approvingAdminUserId,
+        sources,
+      });
+      await recordAuditEvent(tx, {
+        actorUserId: input.approvingAdminUserId,
+        action: 'engagement.milestones_snapshotted',
+        entityType: 'engagement',
+        entityId: engagement.id,
+        engagementId: engagement.id,
+        metadata: { milestone_count: sources.length, source_proposal_id: input.sourceProposalId },
+      });
+
       return { engagement, request };
     });
   },
@@ -211,5 +427,338 @@ export const engagementsRepository = {
       .from(engagements)
       .where(and(eq(engagements.companyId, companyId), isNull(engagements.deletedAt)))
       .orderBy(desc(engagements.createdAt));
+  },
+
+  // ── Delivery lifecycle transitions (BAL-330) ───────────────────────────
+  // All run in `db.transaction`, lock the engagement FOR UPDATE, and
+  // `recordAuditEvent` in the SAME tx as the state change.
+
+  /**
+   * The expert requests completion (active → pending_acceptance). Guards, under the
+   * engagement lock: status is `active` (else `InvalidEngagementTransitionError`)
+   * AND every LIVE milestone is `completed`. A ZERO-milestone engagement passes
+   * vacuously (the retainer/embedded seam) — this is DELIBERATE. Any incomplete live
+   * milestone → `MilestonesIncompleteError` (nothing mutated). Clears any prior
+   * `change_request_note`.
+   */
+  async requestCompletion(input: { engagementId: string; userId: string }): Promise<Engagement> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(engagements)
+        .where(and(eq(engagements.id, input.engagementId), isNull(engagements.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Engagement not found: ${input.engagementId}`);
+      }
+      if (!isAllowedEngagementTransition(current.status, 'pending_acceptance')) {
+        throw new InvalidEngagementTransitionError(current.status, 'pending_acceptance');
+      }
+
+      // Under the engagement lock (single-writer gate): read live milestones and
+      // require every one completed. Zero milestones ⇒ vacuously allowed.
+      const liveMilestones = await tx
+        .select({ status: engagementMilestones.status })
+        .from(engagementMilestones)
+        .where(
+          and(
+            eq(engagementMilestones.engagementId, input.engagementId),
+            isNull(engagementMilestones.deletedAt)
+          )
+        );
+      const outstanding = liveMilestones.filter((m) => m.status !== 'completed').length;
+      if (outstanding > 0) {
+        throw new MilestonesIncompleteError(input.engagementId, outstanding);
+      }
+
+      const advanced = await advanceEngagementStatus(tx, {
+        id: input.engagementId,
+        to: 'pending_acceptance',
+        expectedFrom: 'active',
+        set: {
+          completionRequestedByUserId: input.userId,
+          completionRequestedAt: new Date(),
+          changeRequestNote: null,
+        },
+      });
+
+      await recordAuditEvent(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.completion_requested',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'active', to: 'pending_acceptance' },
+      });
+      return advanced;
+    });
+  },
+
+  /**
+   * Withdraw a completion request (pending_acceptance → active). Clears the
+   * completion-request stamps. Illegal from any non-`pending_acceptance` status
+   * (`InvalidEngagementTransitionError`, via `expectedFrom`).
+   */
+  async withdrawCompletionRequest(input: {
+    engagementId: string;
+    userId: string;
+  }): Promise<Engagement> {
+    return db.transaction(async (tx) => {
+      const advanced = await advanceEngagementStatus(tx, {
+        id: input.engagementId,
+        to: 'active',
+        expectedFrom: 'pending_acceptance',
+        set: {
+          completionRequestedByUserId: null,
+          completionRequestedAt: null,
+        },
+      });
+
+      await recordAuditEvent(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.completion_withdrawn',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'pending_acceptance', to: 'active' },
+      });
+      return advanced;
+    });
+  },
+
+  /**
+   * Accept a completion request (pending_acceptance → completed). Discriminated
+   * union: the `client` path carries the accepting `userId`; the `auto` path
+   * (D7 sweep) type-CANNOT supply a user — `accepted_by_user_id` and the audit actor
+   * are both NULL. `accepted_at` is the completion timestamp (no `completed_at`).
+   */
+  async acceptCompletion(
+    input: { engagementId: string } & ({ method: 'client'; userId: string } | { method: 'auto' })
+  ): Promise<Engagement> {
+    return db.transaction(async (tx) => {
+      const actorUserId = input.method === 'client' ? input.userId : null;
+
+      const advanced = await advanceEngagementStatus(tx, {
+        id: input.engagementId,
+        to: 'completed',
+        expectedFrom: 'pending_acceptance',
+        set: {
+          acceptedByUserId: actorUserId,
+          acceptedAt: new Date(),
+          acceptanceMethod: input.method,
+        },
+      });
+
+      await recordAuditEvent(tx, {
+        actorUserId,
+        action: 'engagement.accepted',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'pending_acceptance', to: 'completed', acceptance_method: input.method },
+      });
+      return advanced;
+    });
+  },
+
+  /**
+   * The client requests changes instead of accepting (pending_acceptance → active).
+   * Stores the note + attribution and clears the completion-request stamps. `note`
+   * is required by the type (emptiness is validated at the web boundary). Illegal
+   * from any non-`pending_acceptance` status.
+   */
+  async requestChanges(input: {
+    engagementId: string;
+    userId: string;
+    note: string;
+  }): Promise<Engagement> {
+    return db.transaction(async (tx) => {
+      const advanced = await advanceEngagementStatus(tx, {
+        id: input.engagementId,
+        to: 'active',
+        expectedFrom: 'pending_acceptance',
+        set: {
+          changeRequestNote: input.note,
+          changeRequestedByUserId: input.userId,
+          changeRequestedAt: new Date(),
+          completionRequestedByUserId: null,
+          completionRequestedAt: null,
+        },
+      });
+
+      await recordAuditEvent(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.changes_requested',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'pending_acceptance', to: 'active', note: input.note },
+      });
+      return advanced;
+    });
+  },
+
+  /**
+   * Cancel an engagement (active | pending_acceptance → cancelled). Captures the
+   * `from` status under the lock for the audit metadata; NO `expectedFrom` (two
+   * legal sources). Terminal statuses (completed/cancelled) →
+   * `InvalidEngagementTransitionError`. `reason` is required by the type.
+   */
+  async cancelEngagement(input: {
+    engagementId: string;
+    userId: string;
+    reason: string;
+  }): Promise<Engagement> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(engagements)
+        .where(and(eq(engagements.id, input.engagementId), isNull(engagements.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Engagement not found: ${input.engagementId}`);
+      }
+      if (!isAllowedEngagementTransition(current.status, 'cancelled')) {
+        throw new InvalidEngagementTransitionError(current.status, 'cancelled');
+      }
+      const from = current.status;
+
+      const advanced = await advanceEngagementStatus(tx, {
+        id: input.engagementId,
+        to: 'cancelled',
+        set: {
+          cancelledByUserId: input.userId,
+          cancelledAt: new Date(),
+          cancellationReason: input.reason,
+        },
+      });
+
+      await recordAuditEvent(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.cancelled',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from, to: 'cancelled', reason: input.reason },
+      });
+      return advanced;
+    });
+  },
+
+  // ── Delivery reads (BAL-330) ───────────────────────────────────────────
+
+  /**
+   * A live engagement hydrated with its LIVE milestones (ordered `sort_order` asc,
+   * ties by id) and its expert (user + nullable agency — a freelancer gets
+   * `agency: null`). Returns `undefined` when the engagement is missing/soft-deleted.
+   */
+  async findEngagementWithMilestones(id: string): Promise<EngagementWithMilestones | undefined> {
+    const row = await queryEngagementWithMilestones(id);
+    return row ?? undefined;
+  },
+
+  /** Live, ordered milestones for an engagement (delegates to the milestone repo). */
+  async listMilestones(engagementId: string): Promise<EngagementMilestone[]> {
+    return engagementMilestonesRepository.listByEngagement(engagementId);
+  },
+
+  /**
+   * Active engagements for a party (company OR expert) with derived milestone
+   * progress. Per engagement: `totalMilestones`, `completedMilestones`,
+   * `inProgressMilestones` (over LIVE milestones), and `lastActivityAt =
+   * MAX(GREATEST(started_at, completed_at))` over live milestones, falling back to
+   * the engagement's `activated_at` / `created_at` when there is no milestone
+   * activity. Ordered by `lastActivityAt` desc. Excludes non-active engagements and
+   * soft-deleted milestones. (The "stalled" flag is a later web derivation from
+   * `lastActivityAt`.)
+   */
+  async listActiveWithProgress(
+    scope: { companyId: string } | { expertProfileId: string }
+  ): Promise<EngagementWithProgress[]> {
+    const scopeCondition =
+      'companyId' in scope
+        ? eq(engagements.companyId, scope.companyId)
+        : eq(engagements.expertProfileId, scope.expertProfileId);
+
+    const activeEngagements = await db
+      .select()
+      .from(engagements)
+      .where(and(eq(engagements.status, 'active'), isNull(engagements.deletedAt), scopeCondition));
+
+    if (activeEngagements.length === 0) {
+      return [];
+    }
+
+    const engagementIds = activeEngagements.map((e) => e.id);
+
+    // ONE batched grouped aggregate over the loaded engagement ids (mirrors
+    // projects-inbox's batched newest-EOI fold). GREATEST ignores NULL timestamps;
+    // MAX over the group is NULL only when no live milestone has any activity.
+    const aggregates = await db
+      .select({
+        engagementId: engagementMilestones.engagementId,
+        totalMilestones: sql<number>`cast(count(*) as int)`,
+        completedMilestones: sql<number>`cast(count(*) filter (where ${engagementMilestones.status} = 'completed') as int)`,
+        inProgressMilestones: sql<number>`cast(count(*) filter (where ${engagementMilestones.status} = 'in_progress') as int)`,
+        // Raw-SQL aggregate: Drizzle does NOT apply the timestamptz→Date codec to a
+        // `sql` fragment, so postgres-js hands this back as a string — coerced to Date
+        // below. GREATEST ignores NULLs; MAX is NULL only when no live milestone has
+        // any activity.
+        lastMilestoneActivityAt: sql<
+          string | Date | null
+        >`max(greatest(${engagementMilestones.startedAt}, ${engagementMilestones.completedAt}))`,
+      })
+      .from(engagementMilestones)
+      .where(
+        and(
+          inArray(engagementMilestones.engagementId, engagementIds),
+          isNull(engagementMilestones.deletedAt)
+        )
+      )
+      .groupBy(engagementMilestones.engagementId);
+
+    const byEngagement = new Map(aggregates.map((a) => [a.engagementId, a]));
+
+    const rows = activeEngagements.map((engagement) => {
+      const agg = byEngagement.get(engagement.id);
+      const rawActivity = agg?.lastMilestoneActivityAt ?? null;
+      let milestoneActivityAt: Date | null = null;
+      if (rawActivity !== null) {
+        milestoneActivityAt = rawActivity instanceof Date ? rawActivity : new Date(rawActivity);
+      }
+      const lastActivityAt = milestoneActivityAt ?? engagement.activatedAt ?? engagement.createdAt;
+      return {
+        ...engagement,
+        totalMilestones: agg?.totalMilestones ?? 0,
+        completedMilestones: agg?.completedMilestones ?? 0,
+        inProgressMilestones: agg?.inProgressMilestones ?? 0,
+        lastActivityAt,
+      };
+    });
+
+    rows.sort((a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0));
+    return rows;
+  },
+
+  /**
+   * The D7 auto-accept sweep source: live engagements `status = 'pending_acceptance'`
+   * whose `completion_requested_at <= cutoff`, oldest request first. The CALLER
+   * computes `cutoff = now - AUTO_ACCEPT_DAYS` (the repo stays policy-free). Rides
+   * `engagement_status_completion_requested_idx`.
+   */
+  async listPendingAutoAccept(cutoff: Date): Promise<Engagement[]> {
+    return db
+      .select()
+      .from(engagements)
+      .where(
+        and(
+          eq(engagements.status, 'pending_acceptance'),
+          lte(engagements.completionRequestedAt, cutoff),
+          isNull(engagements.deletedAt)
+        )
+      )
+      .orderBy(asc(engagements.completionRequestedAt));
   },
 };

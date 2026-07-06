@@ -225,6 +225,7 @@ describe('approveKickoffAction', () => {
       expertProfileId: EXPERT_PROFILE_ID,
       sourceProposalId: PROPOSAL_ID,
       relationshipId: REL_ID,
+      approvingAdminUserId: 'user-admin',
       pricingMethod: 'fixed',
       priceCents: 500000,
       currency: 'aud',

@@ -253,6 +253,13 @@
       "when": 1783282172024,
       "tag": "0035_flawless_nightshade",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1783348191682,
+      "tag": "0036_woozy_black_queen",
+      "breakpoints": true
     }
   ]
 }

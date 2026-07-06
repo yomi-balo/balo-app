@@ -78,7 +78,34 @@ export {
 export type { ProposalPaymentInstallmentInput } from './proposal-payment-installments';
 export { proposalDocumentsRepository } from './proposal-documents';
 export { proposalChangeRequestsRepository } from './proposal-change-requests';
-export { engagementsRepository, KickoffGatesIncompleteError } from './engagements';
+export {
+  engagementsRepository,
+  KickoffGatesIncompleteError,
+  ENGAGEMENT_STATUS_TRANSITIONS,
+  isAllowedEngagementTransition,
+  InvalidEngagementTransitionError,
+  MilestonesIncompleteError,
+  advanceEngagementStatus,
+  AUTO_ACCEPT_DAYS,
+  type EngagementWithMilestones,
+  type EngagementWithProgress,
+} from './engagements';
+export {
+  engagementMilestonesRepository,
+  snapshotFromProposalTx,
+  ENGAGEMENT_MILESTONE_STATUS_TRANSITIONS,
+  isAllowedMilestoneTransition,
+  InvalidMilestoneTransitionError,
+  EngagementNotActiveError,
+  type EngagementMilestoneStatus,
+} from './engagement-milestones';
+export {
+  auditEventsRepository,
+  recordAuditEvent,
+  type AuditAction,
+  type AuditEntityType,
+  type RecordAuditEventInput,
+} from './audit-events';
 export type {
   PricingMethod,
   ProposalCadence,
@@ -110,6 +137,10 @@ export type {
   NewProposalChangeRequest,
   Engagement,
   NewEngagement,
+  EngagementMilestone,
+  NewEngagementMilestone,
+  AuditEvent,
+  NewAuditEvent,
   ConversationMessage,
   NewConversationMessage,
   ConversationFile,

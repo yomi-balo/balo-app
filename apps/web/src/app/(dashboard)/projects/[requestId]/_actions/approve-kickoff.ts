@@ -100,9 +100,14 @@ async function loadApprovableKickoff(
  * trips `EngagementTermsCoherenceError` (defensive — a coherent accepted proposal
  * always passes) — all three map to friendly copy. Any other error rethrows to the
  * action's generic boundary.
+ *
+ * `approvingAdminUserId` is the authenticated approving admin (`admin.id`) —
+ * recorded by `@balo/db` as the milestone snapshot author + the actor on the
+ * `engagement.milestones_snapshotted` audit event (BAL-330).
  */
 async function commitKickoff(
-  loaded: ApprovableKickoff
+  loaded: ApprovableKickoff,
+  approvingAdminUserId: string
 ): Promise<{ engagementId: string } | { error: string }> {
   const { request, rel, proposal } = loaded;
   try {
@@ -112,6 +117,7 @@ async function commitKickoff(
       expertProfileId: rel.expertProfileId,
       sourceProposalId: proposal.id,
       relationshipId: rel.id,
+      approvingAdminUserId,
       pricingMethod: proposal.pricingMethod,
       priceCents: proposal.priceCents,
       currency: proposal.currency,
@@ -180,7 +186,7 @@ export async function approveKickoffAction(
       return { success: false, error: loaded.error };
     }
 
-    const committed = await commitKickoff(loaded);
+    const committed = await commitKickoff(loaded, admin.id);
     if ('error' in committed) {
       return { success: false, error: committed.error };
     }
