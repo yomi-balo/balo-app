@@ -19,6 +19,19 @@ export interface ProjectChangesRequestedPayload {
   note: string; // the client's change note — email/in-app body
 }
 
+// BAL-323 client billing captured. The CLIENT (a company owner/admin) submitted
+// their company's billing identity for the first time, auto-confirming the
+// `client_billing` kickoff gate — targets the ADMINS (in-app "ready to invoice"
+// ops nudge, fanned out over `data.adminUserIds`). `correlationId` = companyId so
+// the "confirmed" nudge is deduped to once ever per company (billing is a
+// company-level, once-ever concern).
+export interface BillingDetailsConfirmedPayload {
+  correlationId: string; // = companyId — once-ever-per-company dedup
+  companyId: string;
+  companyName: string; // in-app body — "…confirmed for {companyName} — ready to invoice."
+  projectRequestId: string; // deep link to the kickoff board
+}
+
 // BAL-290 (A6.4) proposal versioning. The EXPERT resubmitted as v(n+1) — targets
 // the CLIENT (via `recipientId` = client user id, drives recipient:'client'
 // resolution exactly like project.proposal_submitted).

@@ -2,6 +2,7 @@ import React from 'react';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
+import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
@@ -79,6 +80,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     }),
     subject: `You're approved, ${(data.recipientName as string) ?? 'there'}!`,
   }),
+
+  // BAL-325: the resolver hydrates nothing for this event (no userId/expertProfileId/
+  // companyId in the payload), so `data` carries only the payload fields. Greet
+  // generically — this is an EXTERNAL non-user address, so there is no recipientName.
+  'expert-referral-invited': (data) => {
+    const inviterName = (data.inviterName as string) ?? 'A colleague';
+    return {
+      component: React.createElement(ExpertReferralInvitedEmail, {
+        inviterName,
+        applyUrl: `${BASE_URL}/expert/apply`,
+      }),
+      subject: `${sanitizeSubjectTitle(inviterName)} invited you to join Balo as an expert`,
+    };
+  },
 
   'project-request-submitted': (data) => ({
     component: React.createElement(ProjectRequestSubmittedEmail, {

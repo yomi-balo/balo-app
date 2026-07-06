@@ -1,5 +1,6 @@
 import { Building2, CreditCard, ReceiptText } from 'lucide-react';
 import { formatWholeCurrency } from '@/lib/utils/currency';
+import { getTaxIdLabel } from '@/lib/billing/tax-id-labels';
 import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { RequestCard } from '../request-card';
 import { RemindClientButton } from './remind-client-button';
@@ -31,6 +32,21 @@ function formatMinutes(totalMinutes: number): string {
   if (hours === 0) return `${minutes}m`;
   if (minutes === 0) return `${hours}h`;
   return `${hours}h ${minutes}m`;
+}
+
+/**
+ * The right-aligned milestone value: estimated effort for T&M, the line amount for
+ * Fixed. Em dash when the relevant figure is absent.
+ */
+function formatMilestoneValue(
+  milestone: NonNullable<AdminKickoffBillingView['terms']>['milestones'][number],
+  currency: string,
+  isTm: boolean
+): string {
+  if (isTm) {
+    return milestone.estimatedMinutes === null ? '—' : formatMinutes(milestone.estimatedMinutes);
+  }
+  return milestone.valueCents === null ? '—' : formatWholeCurrency(milestone.valueCents, currency);
 }
 
 /**
@@ -96,20 +112,24 @@ function BillingSection({
         </h4>
       </div>
 
-      {billing !== null ? (
-        <div className="flex flex-col gap-2.5">
-          <DetailRow label="Legal name" value={billing.legalName} />
-          <DetailRow label="Country" value={billing.countryCode} mono />
-          <DetailRow label="Tax ID" value={billing.taxId ?? '—'} mono={billing.taxId !== null} />
-          <DetailRow label="Billing email" value={billing.billingEmail} />
-          {billing.address !== null && <DetailRow label="Address" value={billing.address} />}
-        </div>
-      ) : (
+      {billing === null ? (
         <BillingEmptyState
           clientBillingConfirmed={clientBillingConfirmed}
           requestId={requestId}
           acceptedRelationshipId={acceptedRelationshipId}
         />
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          <DetailRow label="Legal name" value={billing.legalName} />
+          <DetailRow label="Country" value={billing.countryCode} mono />
+          <DetailRow
+            label={getTaxIdLabel(billing.countryCode).label}
+            value={billing.taxId ?? '—'}
+            mono={billing.taxId !== null}
+          />
+          <DetailRow label="Billing email" value={billing.billingEmail} />
+          {billing.address !== null && <DetailRow label="Address" value={billing.address} />}
+        </div>
       )}
     </section>
   );
@@ -188,10 +208,40 @@ function TermsSection({ terms }: Readonly<TermsSectionProps>): React.JSX.Element
   );
 }
 
+type TermsProps = Readonly<{ terms: NonNullable<AdminKickoffBillingView['terms']> }>;
+
+/** A labelled group of line-item rows (Installments / Milestones). */
+function LineItemGroup({
+  heading,
+  children,
+}: Readonly<{ heading: string; children: React.ReactNode }>): React.JSX.Element {
+  return (
+    <div className="mt-1 flex flex-col gap-1.5">
+      <p className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
+        {heading}
+      </p>
+      <ul className="flex flex-col gap-1.5">{children}</ul>
+    </div>
+  );
+}
+
+/** A single line-item row: truncating title on the left, value node on the right. */
+function LineItemRow({
+  title,
+  children,
+}: Readonly<{ title: string; children: React.ReactNode }>): React.JSX.Element {
+  return (
+    <li className="border-border bg-card flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+      <span className="text-foreground min-w-0 truncate text-[12.5px]" title={title}>
+        {title}
+      </span>
+      {children}
+    </li>
+  );
+}
+
 /** T&M terms: non-binding estimate + deposit / rate / cadence. */
-function TimeAndMaterialsTerms({
-  terms,
-}: Readonly<{ terms: NonNullable<AdminKickoffBillingView['terms']> }>): React.JSX.Element {
+function TimeAndMaterialsTerms({ terms }: TermsProps): React.JSX.Element {
   return (
     <>
       <DetailRow
@@ -220,77 +270,45 @@ function TimeAndMaterialsTerms({
 }
 
 /** Fixed terms: committed total + % installment schedule (derived amounts). */
-function FixedTerms({
-  terms,
-}: Readonly<{ terms: NonNullable<AdminKickoffBillingView['terms']> }>): React.JSX.Element {
+function FixedTerms({ terms }: TermsProps): React.JSX.Element {
   return (
     <>
       <DetailRow label="Total" value={formatWholeCurrency(terms.priceCents, terms.currency)} mono />
       {terms.installments.length > 0 && (
-        <div className="mt-1 flex flex-col gap-1.5">
-          <p className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
-            Installments
-          </p>
-          <ul className="flex flex-col gap-1.5">
-            {terms.installments.map((inst) => (
-              <li
-                key={inst.id}
-                className="border-border bg-card flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
-              >
-                <span className="text-foreground min-w-0 truncate text-[12.5px]" title={inst.label}>
-                  {inst.label}
+        <LineItemGroup heading="Installments">
+          {terms.installments.map((inst) => (
+            <LineItemRow key={inst.id} title={inst.label}>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className="text-muted-foreground text-[12.5px] tabular-nums">
+                  ({inst.pct}%)
                 </span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  <span className="text-muted-foreground text-[12.5px] tabular-nums">
-                    ({inst.pct}%)
-                  </span>
-                  <span className="text-foreground font-mono text-[12.5px] tabular-nums">
-                    {formatWholeCurrency(inst.amountCents, terms.currency)}
-                  </span>
+                <span className="text-foreground font-mono text-[12.5px] tabular-nums">
+                  {formatWholeCurrency(inst.amountCents, terms.currency)}
                 </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+              </span>
+            </LineItemRow>
+          ))}
+        </LineItemGroup>
       )}
     </>
   );
 }
 
 /** Milestone list — Fixed shows line value, T&M shows estimated effort. */
-function MilestonesList({
-  terms,
-}: Readonly<{ terms: NonNullable<AdminKickoffBillingView['terms']> }>): React.JSX.Element | null {
+function MilestonesList({ terms }: TermsProps): React.JSX.Element | null {
   if (terms.milestones.length === 0) return null;
   const isTm = terms.pricingMethod === 'tm';
 
   return (
-    <div className="mt-1 flex flex-col gap-1.5">
-      <p className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
-        Milestones
-      </p>
-      <ul className="flex flex-col gap-1.5">
-        {terms.milestones.map((m) => (
-          <li
-            key={m.id}
-            className="border-border bg-card flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
-          >
-            <span className="text-foreground min-w-0 truncate text-[12.5px]" title={m.title}>
-              {m.title}
-            </span>
-            <span className="text-muted-foreground shrink-0 font-mono text-[12.5px] tabular-nums">
-              {isTm
-                ? m.estimatedMinutes !== null
-                  ? formatMinutes(m.estimatedMinutes)
-                  : '—'
-                : m.valueCents !== null
-                  ? formatWholeCurrency(m.valueCents, terms.currency)
-                  : '—'}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <LineItemGroup heading="Milestones">
+      {terms.milestones.map((m) => (
+        <LineItemRow key={m.id} title={m.title}>
+          <span className="text-muted-foreground shrink-0 font-mono text-[12.5px] tabular-nums">
+            {formatMilestoneValue(m, terms.currency, isTm)}
+          </span>
+        </LineItemRow>
+      ))}
+    </LineItemGroup>
   );
 }
 

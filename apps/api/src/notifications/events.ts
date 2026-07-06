@@ -5,6 +5,7 @@
 import type {
   ProjectChangesRequestedPayload,
   ProjectProposalResubmittedPayload,
+  BillingDetailsConfirmedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -23,6 +24,16 @@ export interface ExpertApprovedPayload {
   correlationId: string; // expertProfileId
   userId: string;
   expertProfileId: string;
+}
+
+export interface ExpertReferralInvitedPayload {
+  correlationId: string; // expert_referral_invites row id — dedup per invite
+  // The invited EXTERNAL address — this is BOTH the delivery target and the dedup
+  // identity. Carrying an email in the payload is the deliberate PII-in-queue
+  // exception (BAL-325 R2): there is no Balo user row to hydrate for a non-user
+  // recipient, mirroring the admin/ops-inbox literal-email path.
+  recipientEmail: string;
+  inviterName: string; // "{First Last}" (or a neutral fallback) — email body
 }
 
 export interface CalendarAuthErrorPayload {
@@ -161,6 +172,7 @@ export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
+  | 'expert.referral_invited'
   | 'calendar.auth_error'
   | 'project.request_submitted'
   | 'project.match_requested'
@@ -175,7 +187,8 @@ export type NotificationEvent =
   | 'project.proposal_resubmitted'
   | 'project.message_posted'
   | 'project.file_shared'
-  | 'project.billing_reminder';
+  | 'project.billing_reminder'
+  | 'billing.details_confirmed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook and the Cronofy
@@ -194,6 +207,7 @@ export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'expert.referral_invited': ExpertReferralInvitedPayload;
   'calendar.auth_error': CalendarAuthErrorPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;
@@ -209,4 +223,5 @@ export interface EventPayloadMap {
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
+  'billing.details_confirmed': BillingDetailsConfirmedPayload;
 }

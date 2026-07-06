@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback } from 'react';
 import { Check, Wrench, Building2, Compass, GraduationCap } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -24,6 +24,10 @@ interface AssessmentCardProps {
   dimensions: DimensionRating[];
   onChange: (productId: string, supportTypeId: string, value: number) => void;
   isComplete: boolean;
+  expanded: boolean;
+  onToggle: (productId: string) => void;
+  onDone: (productId: string) => void;
+  registerHeaderButton: (productId: string, el: HTMLButtonElement | null) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -43,12 +47,21 @@ export function AssessmentCard({
   dimensions,
   onChange,
   isComplete,
+  expanded,
+  onToggle,
+  onDone,
+  registerHeaderButton,
 }: Readonly<AssessmentCardProps>): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false);
+  const reduce = useReducedMotion();
+
+  const setHeaderRef = useCallback(
+    (el: HTMLButtonElement | null) => registerHeaderButton(productId, el),
+    [productId, registerHeaderButton]
+  );
 
   return (
     <motion.div
-      layout
+      layout={!reduce}
       className={cn(
         'rounded-xl border transition-colors duration-200',
         expanded && 'border-primary/50',
@@ -57,9 +70,10 @@ export function AssessmentCard({
       )}
     >
       <button
+        ref={setHeaderRef}
         type="button"
-        className="flex w-full items-center justify-between p-4"
-        onClick={() => setExpanded(!expanded)}
+        className="focus-visible:border-ring focus-visible:ring-ring/50 flex w-full items-center justify-between rounded-xl p-4 outline-none focus-visible:ring-[3px]"
+        onClick={() => onToggle(productId)}
         aria-expanded={expanded}
       >
         <span className="text-foreground text-sm font-semibold">{productName}</span>
@@ -79,10 +93,10 @@ export function AssessmentCard({
       <AnimatePresence>
         {expanded && (
           <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            initial={reduce ? { opacity: 0 } : { opacity: 0, height: 0 }}
+            animate={reduce ? { opacity: 1 } : { opacity: 1, height: 'auto' }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, height: 0 }}
+            transition={{ duration: reduce ? 0.12 : 0.3, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
             <div className="space-y-1 px-4 pb-4">
@@ -148,12 +162,7 @@ export function AssessmentCard({
                 );
               })}
               <div className="pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setExpanded(false)}
-                >
+                <Button type="button" variant="outline" size="sm" onClick={() => onDone(productId)}>
                   <Check className="mr-1 h-4 w-4" aria-hidden="true" />
                   Done
                 </Button>

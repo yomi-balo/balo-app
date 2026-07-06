@@ -141,13 +141,7 @@ export const workHistoryStepSchema = z.object({
   entries: z.array(workHistoryEntrySchema).max(50, 'Too many entries'),
 });
 
-// ── Step 6: Invite (optional) ────────────────────────────────────
-
-export const inviteStepSchema = z.object({
-  emails: z.array(z.string().email('Invalid email format')).max(20, 'Too many invitations'),
-});
-
-// ── Step 7: Terms ────────────────────────────────────────────────
+// ── Step 6: Terms ────────────────────────────────────────────────
 
 export const termsStepSchema = z.object({
   termsAccepted: z
@@ -200,7 +194,6 @@ export type ProductsStepData = z.infer<typeof productsStepSchema>;
 export type AssessmentStepData = z.infer<typeof assessmentStepSchema>;
 export type CertificationsStepData = z.infer<typeof certificationsStepSchema>;
 export type WorkHistoryStepData = z.infer<typeof workHistoryStepSchema>;
-export type InviteStepData = z.infer<typeof inviteStepSchema>;
 export type TermsStepData = z.infer<typeof termsStepSchema>;
 
 export type ProfileStepDraftData = z.infer<typeof profileStepDraftSchema>;
@@ -230,7 +223,6 @@ export const STEP_CONFIG = [
     shortLabel: 'History',
     required: false,
   },
-  { key: 'invite', label: 'Invite Experts', shortLabel: 'Invite', required: false },
   { key: 'terms', label: 'Terms', shortLabel: 'Terms', required: true },
 ] as const;
 
@@ -243,15 +235,14 @@ export const STEP_SCHEMAS: Record<StepKey, z.ZodType> = {
   assessment: assessmentStepSchema,
   certifications: certificationsStepSchema,
   'work-history': workHistoryStepSchema,
-  invite: inviteStepSchema,
   terms: termsStepSchema,
 };
 
 /**
  * Map from StepKey to its lenient DRAFT Zod schema — consumed ONLY by
  * saveDraftAction. Half-filled drafts (empty arrays, omitted scalars, unchecked
- * terms) persist; only data-quality rules survive. Certifications / work-history /
- * invite are already lenient, so they reuse their strict schema.
+ * terms) persist; only data-quality rules survive. Certifications / work-history
+ * are already lenient, so they reuse their strict schema.
  */
 export const STEP_DRAFT_SCHEMAS: Record<StepKey, z.ZodType> = {
   profile: profileStepDraftSchema,
@@ -259,6 +250,5 @@ export const STEP_DRAFT_SCHEMAS: Record<StepKey, z.ZodType> = {
   assessment: assessmentStepDraftSchema,
   certifications: certificationsStepSchema,
   'work-history': workHistoryStepSchema,
-  invite: inviteStepSchema,
   terms: termsStepDraftSchema,
 };

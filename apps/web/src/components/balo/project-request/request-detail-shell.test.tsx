@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import type { RequestDetailView } from '@/lib/project-request/request-detail-view';
 import type {
@@ -74,6 +74,9 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/complete-kickoff-task',
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff', () => ({
   approveKickoffAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/submit-billing-details', () => ({
+  submitBillingDetailsAction: vi.fn(),
+}));
 vi.mock(
   '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token',
   () => ({ createConversationRealtimeTokenAction: vi.fn() })
@@ -91,6 +94,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
 }));
 
 import { RequestDetailShell } from './request-detail-shell';
+import { track, BILLING_EVENTS } from '@/lib/analytics';
 import { ConversationStage } from './conversation/conversation-stage';
 import { EoiEntry } from './eoi-entry';
 import { thread as conversationThread } from '@/test/fixtures/conversation';
@@ -547,5 +551,54 @@ describe('RequestDetailShell — renders for every status', () => {
   it.each(ALL_STATUSES)('renders without throwing for status=%s (client)', (status) => {
     render(<RequestDetailShell view={view({ status })} ctx={ctx()} />);
     expect(screen.getByText('Viewing as')).toBeInTheDocument();
+  });
+});
+
+describe('RequestDetailShell — billing blocked-view analytics (BAL-323)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const blockedView = view({ status: 'accepted', kickoff: kickoff() });
+
+  it('fires billing_details_blocked_view exactly once for a blocked client member', () => {
+    render(
+      <RequestDetailShell
+        view={blockedView}
+        ctx={ctx()}
+        billingCapture={{ companyId: 'company-1', canManage: false, details: null }}
+      />
+    );
+    expect(track).toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, {
+      company_id: 'company-1',
+      request_id: 'req-1',
+    });
+    // Once — not per KickoffBoard mount (desktop column + mobile sheet).
+    const blockedCalls = vi
+      .mocked(track)
+      .mock.calls.filter(([event]) => event === BILLING_EVENTS.DETAILS_BLOCKED_VIEW);
+    expect(blockedCalls).toHaveLength(1);
+  });
+
+  it('does not fire for an owner/admin who can manage billing', () => {
+    render(
+      <RequestDetailShell
+        view={blockedView}
+        ctx={ctx()}
+        billingCapture={{ companyId: 'company-1', canManage: true, details: null }}
+      />
+    );
+    expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
+  });
+
+  it('does not fire once billing is already confirmed', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'accepted', kickoff: kickoff({ clientBillingConfirmed: true }) })}
+        ctx={ctx()}
+        billingCapture={{ companyId: 'company-1', canManage: false, details: null }}
+      />
+    );
+    expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
   });
 });

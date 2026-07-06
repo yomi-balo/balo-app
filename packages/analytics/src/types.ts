@@ -13,6 +13,7 @@ import type { ExpertProfileEventMap } from './events/expert-profile';
 import type { ProjectEventMap, ProjectServerEventMap } from './events/project';
 import type { ConversationEventMap } from './events/conversation';
 import type { ProjectsInboxEventMap } from './events/projects-inbox';
+import type { BillingEventMap, BillingServerEventMap } from './events/billing';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -28,7 +29,8 @@ export type AllEvents = AuthEventMap &
   ExpertProfileEventMap &
   ProjectEventMap &
   ConversationEventMap &
-  ProjectsInboxEventMap;
+  ProjectsInboxEventMap &
+  BillingEventMap;
 
 export type EventName = keyof AllEvents;
 
@@ -38,6 +40,7 @@ export type ServerEvents = ExpertServerEventMap &
   NotificationServerEventMap &
   CalendarServerEventMap &
   SearchServerEventMap &
-  ProjectServerEventMap;
+  ProjectServerEventMap &
+  BillingServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

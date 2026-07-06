@@ -22,13 +22,20 @@ vi.mock('next/navigation', () => ({
 }));
 
 import { toast } from 'sonner';
-import { track, PROJECT_EVENTS } from '@/lib/analytics';
+import { track, PROJECT_EVENTS, BILLING_EVENTS } from '@/lib/analytics';
+import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { KickoffBoard } from './kickoff-board';
 
 const mockToast = vi.mocked(toast);
 
 const REQUEST_ID = 'req-1';
 const RELATIONSHIP_ID = 'rel-accepted-1';
+const COMPANY_ID = 'company-1';
+
+/** Client billing-capture context — the page passes this for the client lens. */
+function billingCapture(overrides: Partial<KickoffBillingCapture> = {}): KickoffBillingCapture {
+  return { companyId: COMPANY_ID, canManage: true, details: null, ...overrides };
+}
 
 type BoardProps = React.ComponentProps<typeof KickoffBoard>;
 
@@ -80,10 +87,14 @@ describe('KickoffBoard — per-lens ownership', () => {
     vi.clearAllMocks();
   });
 
-  it('client lens marks its own row "You" and shows a Complete button', () => {
-    renderBoard({ lens: 'client' });
+  it('client owner/admin marks its own row "You" and shows the capture button', () => {
+    renderBoard({ lens: 'client', billing: billingCapture({ canManage: true }) });
     expect(screen.getByText('You')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Complete Add billing details/i })).toBeEnabled();
+    // BAL-323: the client row opens the billing form, not the generic gate flip.
+    expect(screen.getByRole('button', { name: /Add details/i })).toBeEnabled();
+    expect(
+      screen.queryByRole('button', { name: /Complete Add billing details/i })
+    ).not.toBeInTheDocument();
   });
 
   it('expert lens shows a Complete button on the confirm-terms row', () => {
@@ -103,9 +114,22 @@ describe('KickoffBoard — per-lens ownership', () => {
     expect(screen.getAllByText('Waiting')).toHaveLength(2);
   });
 
-  it('shows "Done" on a confirmed row (no action button)', () => {
-    renderBoard({ lens: 'client', clientBillingConfirmed: true });
+  it('shows "Done" + a View affordance on the confirmed billing row (owner/admin)', () => {
+    renderBoard({
+      lens: 'client',
+      clientBillingConfirmed: true,
+      billing: billingCapture({
+        details: {
+          legalName: 'Acme Pty Ltd',
+          countryCode: 'AU',
+          taxId: '51 824 753 556',
+          address: null,
+          billingEmail: 'ap@acme.example',
+        },
+      }),
+    });
     expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /View/i })).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Complete Add billing details/i })
     ).not.toBeInTheDocument();
@@ -133,26 +157,15 @@ describe('KickoffBoard — completing a participant task', () => {
     vi.clearAllMocks();
   });
 
-  it('calls completeKickoffTaskAction with the accepted relationship id, toasts, and refreshes', async () => {
-    mockCompleteKickoff.mockResolvedValue({ success: true, gate: 'client_billing' });
-    renderBoard({ lens: 'client' });
+  it('the client billing row opens the capture form (never the generic gate flip)', async () => {
+    renderBoard({ lens: 'client', billing: billingCapture({ canManage: true }) });
 
-    fireEvent.click(screen.getByRole('button', { name: /Complete Add billing details/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add details/i }));
 
-    await waitFor(() => {
-      expect(mockCompleteKickoff).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        relationshipId: RELATIONSHIP_ID,
-      });
-    });
-    expect(mockToast.success).toHaveBeenCalledWith('Marked as done');
-    expect(mockRefresh).toHaveBeenCalled();
-    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
-      request_id: REQUEST_ID,
-      relationship_id: RELATIONSHIP_ID,
-      gate: 'client_billing',
-      actor: 'client',
-    });
+    // The BAL-323 dialog opens — a form field unique to it — and the client
+    // never invokes the direct completeKickoffTaskAction gate flip.
+    await waitFor(() => expect(screen.getByText('Legal / entity name')).toBeInTheDocument());
+    expect(mockCompleteKickoff).not.toHaveBeenCalled();
   });
 
   it('fires the gate-confirmed event with the expert actor when the expert completes', async () => {
@@ -234,6 +247,35 @@ describe('KickoffBoard — admin approval', () => {
     );
     expect(track).not.toHaveBeenCalled();
     expect(mockRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('KickoffBoard — client billing capture (BAL-323)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a plain member sees the "what happens next" notice, not a capture button', () => {
+    renderBoard({ lens: 'client', billing: billingCapture({ canManage: false }) });
+    expect(
+      screen.getByText(/A company owner or admin needs to add these billing details/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText('Owner/admin only')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add details/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the member notice on the mobile board too', () => {
+    renderBoard({ lens: 'client', billing: billingCapture({ canManage: false }), mobile: true });
+    expect(
+      screen.getByText(/A company owner or admin needs to add these billing details/i)
+    ).toBeInTheDocument();
+  });
+
+  it('the board itself never fires blocked_view analytics — the shell owns that (dedup)', () => {
+    // The board mounts twice per client (desktop + mobile sheet); the blocked-view
+    // event is fired once from the single-mount shell tracker instead.
+    renderBoard({ lens: 'client', billing: billingCapture({ canManage: false }) });
+    expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
   });
 });
 

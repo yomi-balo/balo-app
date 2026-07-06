@@ -113,6 +113,71 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('expert.referral_invited', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440090',
+      recipientEmail: 'colleague@example.com',
+      inviterName: 'Ada Lovelace',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.referral_invited',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing recipientEmail', () => {
+      const { recipientEmail: _recipientEmail, ...rest } = validPayload;
+      const result = publishBodySchema.safeParse({
+        event: 'expert.referral_invited',
+        payload: rest,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an invalid recipientEmail', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.referral_invited',
+        payload: { ...validPayload, recipientEmail: 'not-an-email' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a recipientEmail over 254 chars', () => {
+      const longEmail = `${'a'.repeat(250)}@example.com`;
+      const result = publishBodySchema.safeParse({
+        event: 'expert.referral_invited',
+        payload: { ...validPayload, recipientEmail: longEmail },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-UUID correlationId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.referral_invited',
+        payload: { ...validPayload, correlationId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty inviterName and one over 120 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'expert.referral_invited',
+          payload: { ...validPayload, inviterName: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'expert.referral_invited',
+          payload: { ...validPayload, inviterName: 'a'.repeat(121) },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   describe('project.proposal_requested', () => {
     const validPayload = {
       correlationId: '550e8400-e29b-41d4-a716-446655440002',
@@ -537,6 +602,39 @@ describe('publishBodySchema', () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+
+  describe('billing.details_confirmed (BAL-323)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      companyId: '550e8400-e29b-41d4-a716-446655440001',
+      companyName: 'Acme Pty Ltd',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440002',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'billing.details_confirmed',
+        payload: valid,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a non-UUID companyId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'billing.details_confirmed',
+        payload: { ...valid, companyId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an empty companyName', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'billing.details_confirmed',
+        payload: { ...valid, companyName: '' },
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   it('rejects missing event field', () => {

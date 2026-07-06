@@ -19,6 +19,16 @@ function formatPriceCents(priceCents: unknown, currency: unknown): string {
   return code ? `${code} ${amount}` : amount;
 }
 
+/** The common in-app shape: title + body linking to the project request. */
+function projectRequestNotice(
+  title: string,
+  body: string,
+  data: Record<string, unknown>
+): InAppOutput {
+  const projectRequestId = data.projectRequestId as string | undefined;
+  return { title, body, actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined };
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
   'booking-confirmed': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
@@ -182,6 +192,17 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
+  'billing-details-confirmed-admin': (data) => {
+    const companyName = (data.companyName as string) ?? 'a company';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Billing details confirmed',
+      body: `Billing details confirmed for ${companyName} — ready to invoice.`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
   'project-message-posted': (data) => {
     const senderName = (data.senderName as string) ?? 'Someone';
     const preview = (data.preview as string) ?? 'sent you a message';
@@ -207,23 +228,21 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-324 admin billing reminder — OWNER (must add billing details).
   'project-billing-reminder-owner': (data) => {
     const title = (data.title as string) ?? 'your project';
-    const projectRequestId = data.projectRequestId as string | undefined;
-    return {
-      title: 'Complete your billing details',
-      body: `Add your billing details to kick off "${title}"`,
-      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
-    };
+    return projectRequestNotice(
+      'Complete your billing details',
+      `Add your billing details to kick off "${title}"`,
+      data
+    );
   },
 
   // BAL-324 admin billing reminder — CREATOR (FYI, no action of their own).
   'project-billing-reminder-creator': (data) => {
     const title = (data.title as string) ?? 'your project';
-    const projectRequestId = data.projectRequestId as string | undefined;
-    return {
-      title: 'Billing details still needed',
-      body: `"${title}" is on hold until your company's billing details are added`,
-      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
-    };
+    return projectRequestNotice(
+      'Billing details still needed',
+      `"${title}" is on hold until your company's billing details are added`,
+      data
+    );
   },
 };
 

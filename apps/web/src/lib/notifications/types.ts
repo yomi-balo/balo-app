@@ -5,6 +5,7 @@
 import type {
   ProjectChangesRequestedPayload,
   ProjectProposalResubmittedPayload,
+  BillingDetailsConfirmedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -23,6 +24,12 @@ export interface ExpertApprovedPayload {
   correlationId: string;
   userId: string;
   expertProfileId: string;
+}
+
+export interface ExpertReferralInvitedPayload {
+  correlationId: string; // expert_referral_invites row id — dedup per invite
+  recipientEmail: string; // the invited EXTERNAL address — delivery + dedup identity
+  inviterName: string; // "{First Last}" (or a neutral fallback) — email body
 }
 
 export interface ProjectRequestSubmittedPayload {
@@ -156,6 +163,7 @@ export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
+  | 'expert.referral_invited'
   | 'project.request_submitted'
   | 'project.match_requested'
   | 'project.exploratory_requested'
@@ -169,12 +177,14 @@ export type NotificationEvent =
   | 'project.proposal_resubmitted'
   | 'project.message_posted'
   | 'project.file_shared'
-  | 'project.billing_reminder';
+  | 'project.billing_reminder'
+  | 'billing.details_confirmed';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'expert.referral_invited': ExpertReferralInvitedPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;
   'project.exploratory_requested': ProjectExploratoryRequestedPayload;
@@ -189,4 +199,5 @@ export interface EventPayloadMap {
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
+  'billing.details_confirmed': BillingDetailsConfirmedPayload;
 }

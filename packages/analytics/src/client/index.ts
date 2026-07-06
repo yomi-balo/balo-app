@@ -18,6 +18,7 @@ export {
   PROJECT_EVENTS,
   CONVERSATION_EVENTS,
   PROJECTS_INBOX_EVENTS,
+  BILLING_EVENTS,
 } from '../events';
 
 export type {
@@ -50,4 +51,5 @@ export type {
   ProjectsInboxEventMap,
   ProjectsInboxLens,
   ProjectsInboxFilter,
+  BillingEventMap,
 } from '../events';

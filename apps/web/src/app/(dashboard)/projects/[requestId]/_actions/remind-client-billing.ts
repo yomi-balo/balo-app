@@ -59,6 +59,45 @@ async function computeDaysSinceAcceptance(relationshipId: string): Promise<numbe
   return Math.floor((Date.now() - acceptedAt.getTime()) / DAY_MS);
 }
 
+type HydratedProjectRequest = NonNullable<
+  Awaited<ReturnType<typeof projectRequestsRepository.findByIdWithRelations>>
+>;
+
+interface ReminderRecipients {
+  ownerUserId: string;
+  /** true when the request creator also receives an FYI (decision #2). */
+  creatorNotified: boolean;
+}
+
+/**
+ * Resolves the reminder's recipients: the company OWNER (always) and whether the
+ * request CREATOR gets an FYI — only when the creator is a different person than
+ * the owner AND a company member (never an admin-on-behalf, BAL-315). Returns
+ * `null` (already logged) when the owner cannot be resolved; a thrown
+ * `isCompanyMember` propagates to the caller's outer catch, exactly as before.
+ */
+async function resolveReminderRecipients(
+  request: HydratedProjectRequest
+): Promise<ReminderRecipients | null> {
+  let ownerUserId: string;
+  try {
+    ownerUserId = (await companiesRepository.findOwnerByCompanyId(request.companyId)).id;
+  } catch (error) {
+    log.error('Failed to resolve company owner for billing reminder', {
+      requestId: request.id,
+      companyId: request.companyId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return null;
+  }
+
+  const creatorUserId = request.createdByUserId;
+  const creatorNotified =
+    creatorUserId !== ownerUserId && (await isCompanyMember(creatorUserId, request.companyId));
+  return { ownerUserId, creatorNotified };
+}
+
 /**
  * Admin sends the client a "complete your billing details" reminder from the
  * kickoff board (BAL-324) while the `client_billing` gate is outstanding. Publishes
@@ -106,24 +145,11 @@ export async function remindClientBilling(
       return { success: false, error: STALE };
     }
 
-    let ownerUserId: string;
-    try {
-      ownerUserId = (await companiesRepository.findOwnerByCompanyId(request.companyId)).id;
-    } catch (error) {
-      log.error('Failed to resolve company owner for billing reminder', {
-        requestId,
-        companyId: request.companyId,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+    const recipients = await resolveReminderRecipients(request);
+    if (recipients === null) {
       return { success: false, error: GENERIC_FAILURE };
     }
-
-    // Creator FYI gating (decision #2): only when the creator is a DIFFERENT person
-    // than the owner AND actually a member of the company (never an admin-on-behalf).
-    const creatorUserId = request.createdByUserId;
-    const creatorNotified =
-      creatorUserId !== ownerUserId && (await isCompanyMember(creatorUserId, request.companyId));
+    const { ownerUserId, creatorNotified } = recipients;
 
     // Minted per click (uuid-valid) so a 2nd deliberate "Remind" is a fresh dispatch,
     // not a jobId no-op; per-recipient jobIds still dedup a single click's retries.
@@ -139,7 +165,7 @@ export async function remindClientBilling(
       title: request.title,
       companyName: request.company.name,
       recipientId: ownerUserId,
-      creatorUserId: creatorNotified ? creatorUserId : undefined,
+      creatorUserId: creatorNotified ? request.createdByUserId : undefined,
     }).catch(() => {
       // publishNotificationEvent logs internally.
     });

@@ -108,9 +108,8 @@ export function ProjectBillingReminderEmail({
           headingColor={colors.accent}
         />
 
-        {/* Only the OWNER can act — they get the CTA; the creator email is a
-            no-button FYI. TODO(BAL-323): repoint the CTA to the billing-capture
-            route once it lands (interim target is the request-detail page). */}
+        {/* Only the OWNER can act — they get the CTA (the request-detail page hosts
+            the billing-capture dialog); the creator email is a no-button FYI. */}
         {role === 'owner' && (
           <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
             <Button style={shared.smallCtaButton} href={`${baseUrl}/projects/${projectRequestId}`}>

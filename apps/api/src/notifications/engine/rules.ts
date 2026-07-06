@@ -9,6 +9,7 @@ export interface NotificationRule {
     | 'admin'
     | 'non_selected_experts'
     | 'admin_users'
+    | 'email_address'
     | 'billing_creator';
   template: string;
   timing: 'immediate'; // No scheduling yet
@@ -25,13 +26,32 @@ export interface RuleContext {
 /** The common email + in-app rule pair for a single recipient/template. */
 function emailAndInApp(
   recipient: NotificationRule['recipient'],
-  template: string
+  template: string,
+  condition?: NotificationRule['condition']
 ): NotificationRule[] {
   return [
-    { channel: 'email', recipient, template, timing: 'immediate', priority: 'normal' },
-    { channel: 'in-app', recipient, template, timing: 'immediate' },
+    {
+      channel: 'email',
+      recipient,
+      template,
+      timing: 'immediate',
+      priority: 'normal',
+      ...(condition ? { condition } : {}),
+    },
+    {
+      channel: 'in-app',
+      recipient,
+      template,
+      timing: 'immediate',
+      ...(condition ? { condition } : {}),
+    },
   ];
 }
+
+/** Creator FYI fires only when the creator differs from the owner (recipientId). */
+const creatorIsDistinctMember: NonNullable<NotificationRule['condition']> = (ctx) =>
+  typeof ctx.payload.creatorUserId === 'string' &&
+  ctx.payload.creatorUserId !== ctx.payload.recipientId;
 
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
@@ -59,6 +79,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'expert-approved',
       timing: 'immediate',
       priority: 'critical',
+    },
+  ],
+  // BAL-325: referral invite to an EXTERNAL email (not a Balo user). The
+  // 'email_address' recipient reads the address straight from the event payload in
+  // the dispatcher — there is no user row to hydrate. Email channel only (no in-app
+  // for a non-user).
+  'expert.referral_invited': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'expert-referral-invited',
+      timing: 'immediate',
+      priority: 'normal',
     },
   ],
   'project.request_submitted': [
@@ -300,24 +333,22 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // the resolver too, so a self-notify can never slip through.
   'project.billing_reminder': [
     ...emailAndInApp('client', 'project-billing-reminder-owner'),
-    {
-      channel: 'email',
-      recipient: 'billing_creator',
-      template: 'project-billing-reminder-creator',
-      timing: 'immediate',
-      priority: 'normal',
-      condition: (ctx) =>
-        typeof ctx.payload.creatorUserId === 'string' &&
-        ctx.payload.creatorUserId !== ctx.payload.recipientId,
-    },
+    ...emailAndInApp(
+      'billing_creator',
+      'project-billing-reminder-creator',
+      creatorIsDistinctMember
+    ),
+  ],
+  // BAL-323: the client captured their company's billing details (first-time only —
+  // the publisher never emits this on an edit or the repeat-company auto-skip). The
+  // admins (fanned out over data.adminUserIds) get an in-app "ready to invoice"
+  // nudge — IN-APP ONLY (not time-sensitive; no email, no SMS).
+  'billing.details_confirmed': [
     {
       channel: 'in-app',
-      recipient: 'billing_creator',
-      template: 'project-billing-reminder-creator',
+      recipient: 'admin_users',
+      template: 'billing-details-confirmed-admin',
       timing: 'immediate',
-      condition: (ctx) =>
-        typeof ctx.payload.creatorUserId === 'string' &&
-        ctx.payload.creatorUserId !== ctx.payload.recipientId,
     },
   ],
 };

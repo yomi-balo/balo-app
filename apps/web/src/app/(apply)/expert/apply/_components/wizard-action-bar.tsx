@@ -12,7 +12,6 @@ const NEXT_LABELS: Record<string, string> = {
   assessment: 'Next',
   certifications: 'Next',
   'work-history': 'Next',
-  invite: 'Next',
 };
 
 export function WizardActionBar(): React.JSX.Element {

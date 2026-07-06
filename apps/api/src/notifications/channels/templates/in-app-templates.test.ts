@@ -376,6 +376,26 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('billing-details-confirmed-admin (BAL-323)', () => {
+    it('renders the company name, ready-to-invoice body, and deep link', () => {
+      const result = getInAppTemplate('billing-details-confirmed-admin', {
+        companyName: 'Acme Pty Ltd',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Billing details confirmed',
+        body: 'Billing details confirmed for Acme Pty Ltd — ready to invoice.',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when the company name is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('billing-details-confirmed-admin', {});
+      expect(result.body).toBe('Billing details confirmed for a company — ready to invoice.');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});
