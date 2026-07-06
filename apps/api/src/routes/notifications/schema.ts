@@ -200,6 +200,15 @@ const projectProposalResubmittedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
+// BAL-323 billing details confirmed (client → admins). `correlationId` = companyId
+// (once-ever-per-company dedup). Mirrors apps/web/src/lib/notifications/types.ts.
+const billingDetailsConfirmedPayload = z.object({
+  correlationId: z.uuid(),
+  companyId: z.uuid(),
+  companyName: z.string().min(1).max(200),
+  projectRequestId: z.uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -262,6 +271,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.file_shared'),
     payload: projectFileSharedPayload,
+  }),
+  z.object({
+    event: z.literal('billing.details_confirmed'),
+    payload: billingDetailsConfirmedPayload,
   }),
 ]);
 

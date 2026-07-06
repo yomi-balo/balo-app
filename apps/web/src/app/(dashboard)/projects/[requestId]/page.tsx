@@ -1,18 +1,28 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { projectRequestsRepository } from '@balo/db';
+import { projectRequestsRepository, companyBillingRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import {
   requestPhase,
   resolveRequestLens,
   resolveRequestDenialReason,
+  type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
-import { mapRequestToDetailView } from '@/lib/project-request/request-detail-view';
+import {
+  mapRequestToDetailView,
+  type RequestDetailView,
+} from '@/lib/project-request/request-detail-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import {
+  canManageBilling,
+  type CapturedBillingDetails,
+  type CompanyRole,
+  type KickoffBillingCapture,
+} from '@/lib/billing/billing-capture';
 import { RequestDetailShell } from '@/components/balo/project-request/request-detail-shell';
 
 interface RequestDetailPageProps {
@@ -35,6 +45,34 @@ const GENERIC_METADATA: Metadata = {
   // Private dashboard content — never indexed.
   robots: { index: false, follow: false },
 };
+
+/**
+ * Client billing-capture context (BAL-323) — non-null ONLY for the client lens on
+ * an active kickoff. Owners/admins get the captured details; a plain member's
+ * payload carries `details: null`, so the tax ID / billing email never cross the
+ * RSC boundary to a member.
+ */
+async function loadBillingCapture(
+  ctx: RequestViewerContext,
+  view: RequestDetailView,
+  companyRole: CompanyRole,
+  companyId: string
+): Promise<KickoffBillingCapture | null> {
+  if (ctx.lens !== 'client' || !view.kickoff) return null;
+  const canManage = canManageBilling(companyRole);
+  const row = canManage ? await companyBillingRepository.findByCompanyId(companyId) : undefined;
+  const details: CapturedBillingDetails | null =
+    row === undefined
+      ? null
+      : {
+          legalName: row.legalName,
+          countryCode: row.countryCode,
+          taxId: row.taxId,
+          address: row.address,
+          billingEmail: row.billingEmail,
+        };
+  return { companyId, canManage, details };
+}
 
 export async function generateMetadata({
   params,
@@ -128,5 +166,14 @@ export default async function RequestDetailPage({
     conversation = await loadConversationView(request, ctx, user);
   }
 
-  return <RequestDetailShell view={view} ctx={ctx} conversation={conversation} />;
+  const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
+
+  return (
+    <RequestDetailShell
+      view={view}
+      ctx={ctx}
+      conversation={conversation}
+      billingCapture={billingCapture}
+    />
+  );
 }

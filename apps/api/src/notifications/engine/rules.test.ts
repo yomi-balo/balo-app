@@ -226,6 +226,20 @@ describe('notificationRules', () => {
     });
   });
 
+  it('billing.details_confirmed notifies admins in-app only (BAL-323)', () => {
+    const rules = notificationRules['billing.details_confirmed'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(1);
+    expect(rules![0]).toMatchObject({
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'billing-details-confirmed-admin',
+      timing: 'immediate',
+    });
+    // In-app ONLY — never email/SMS (not time-sensitive).
+    expect(rules!.some((r) => r.channel !== 'in-app')).toBe(false);
+  });
+
   it('has rules for message.received event', () => {
     const rules = notificationRules['message.received'];
     expect(rules).toBeDefined();

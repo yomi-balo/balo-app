@@ -305,4 +305,16 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       condition: (ctx) => ctx.payload.recipientRole === 'expert',
     },
   ],
+  // BAL-323: the client captured their company's billing details (first-time only —
+  // the publisher never emits this on an edit or the repeat-company auto-skip). MJ
+  // (the admins, fanned out over data.adminUserIds) gets an in-app "ready to invoice"
+  // nudge — IN-APP ONLY (not time-sensitive; no email, no SMS).
+  'billing.details_confirmed': [
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'billing-details-confirmed-admin',
+      timing: 'immediate',
+    },
+  ],
 };

@@ -182,6 +182,17 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
+  'billing-details-confirmed-admin': (data) => {
+    const companyName = (data.companyName as string) ?? 'a company';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Billing details confirmed',
+      body: `Billing details confirmed for ${companyName} — ready to invoice.`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
   'project-message-posted': (data) => {
     const senderName = (data.senderName as string) ?? 'Someone';
     const preview = (data.preview as string) ?? 'sent you a message';

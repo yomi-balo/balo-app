@@ -7,6 +7,7 @@ import {
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { RequestCard } from './request-card';
 import { RequestContext } from './request-context';
 import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE } from './nudge-bar';
@@ -16,6 +17,7 @@ import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
 import { ProposalSlot } from './proposal-slot';
 import { KickoffBoard } from './proposal/kickoff-board';
+import { BillingBlockedViewTracker } from './proposal/billing-blocked-view-tracker';
 import { ConversationStage } from './conversation/conversation-stage';
 import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 
@@ -27,6 +29,11 @@ interface RequestDetailShellProps {
    * a missing payload renders the zero-thread invitation stage, never a crash.
    */
   conversation?: ConversationView | null;
+  /**
+   * Client billing-capture context (BAL-323), loaded by the page. Non-null ONLY for
+   * the client lens on an accepted request; forwarded to the KickoffBoard.
+   */
+  billingCapture?: KickoffBillingCapture | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -127,6 +134,7 @@ export function RequestDetailShell({
   view,
   ctx,
   conversation = null,
+  billingCapture = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -138,6 +146,16 @@ export function RequestDetailShell({
     : nudgeFor(ctx.lens, view.status, view.viewerRelationshipStatus);
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
+
+  // A client-lens member (not owner/admin) is blocked from the outstanding billing
+  // step. Fire the blocked-view event ONCE from here (the shell mounts once; the
+  // KickoffBoard mounts twice per client — desktop + mobile sheet).
+  const billingBlocked =
+    ctx.lens === 'client' &&
+    view.kickoff !== null &&
+    !view.kickoff.clientBillingConfirmed &&
+    billingCapture !== null &&
+    !billingCapture.canManage;
 
   // Phase-2 expert compact EOI card. Rendered at BOTH the mobile sheet and the desktop
   // right column, so it's built once here — sharing one element avoids duplicating the
@@ -163,6 +181,10 @@ export function RequestDetailShell({
         status={view.status}
         phase={phase}
       />
+
+      {billingBlocked && billingCapture && (
+        <BillingBlockedViewTracker companyId={billingCapture.companyId} requestId={view.id} />
+      )}
 
       <LensLine ctx={ctx} isPhase2={isPhase2} />
 
@@ -208,6 +230,7 @@ export function RequestDetailShell({
                   expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                   approved={view.kickoff.approved}
                   expertName={view.kickoff.expertName}
+                  billing={billingCapture}
                 />
               )}
               {showHealthPanel && (
@@ -274,6 +297,7 @@ export function RequestDetailShell({
                         expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                         approved={view.kickoff.approved}
                         expertName={view.kickoff.expertName}
+                        billing={billingCapture}
                         mobile
                       />
                     )}
@@ -319,6 +343,7 @@ export function RequestDetailShell({
                   expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
                   approved={view.kickoff.approved}
                   expertName={view.kickoff.expertName}
+                  billing={billingCapture}
                 />
               )}
               <RequestContext view={view} variant="compact" />

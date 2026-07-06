@@ -5,6 +5,7 @@
 import type {
   ProjectChangesRequestedPayload,
   ProjectProposalResubmittedPayload,
+  BillingDetailsConfirmedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -160,7 +161,8 @@ export type NotificationEvent =
   | 'project.changes_requested'
   | 'project.proposal_resubmitted'
   | 'project.message_posted'
-  | 'project.file_shared';
+  | 'project.file_shared'
+  | 'billing.details_confirmed';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -180,4 +182,5 @@ export interface EventPayloadMap {
   'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
+  'billing.details_confirmed': BillingDetailsConfirmedPayload;
 }
