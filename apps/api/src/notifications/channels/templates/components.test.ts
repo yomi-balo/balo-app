@@ -533,6 +533,36 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(subject).toBe('An update on your proposal: CPQ implementation');
   });
 
+  it('resolves project-billing-reminder-owner with a complete-billing subject + CTA (BAL-324)', async () => {
+    const { component, subject } = getEmailTemplate('project-billing-reminder-owner', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      companyName: 'Acme Corp',
+      recipientName: 'Dana',
+    });
+    const html = await render(component);
+    expect(subject).toBe('Complete your billing details to start CPQ implementation');
+    // Owner variant carries the action button pointing at the request.
+    expect(html).toContain('Complete billing details');
+    expect(html).toContain('/projects/req-1');
+    expect(html).toContain('Acme Corp');
+  });
+
+  it('resolves project-billing-reminder-creator as a no-CTA FYI (BAL-324)', async () => {
+    const { component, subject } = getEmailTemplate('project-billing-reminder-creator', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      companyName: 'Acme Corp',
+      recipientName: 'Sam',
+    });
+    const html = await render(component);
+    expect(subject).toBe('Billing details are still needed to start CPQ implementation');
+    // FYI variant has NO action button and no request link.
+    expect(html).not.toContain('Complete billing details');
+    expect(html).not.toContain('/projects/req-1');
+    expect(html).toContain('Acme Corp');
+  });
+
   it('resolves expert-referral-invited with an inviter-named subject (BAL-325)', () => {
     const { component, subject } = getEmailTemplate('expert-referral-invited', {
       inviterName: 'Ada Lovelace',
@@ -589,6 +619,8 @@ describe('sanitizeSubjectTitle', () => {
       'project-kickoff-approved-expert',
       'project-kickoff-approved-client',
       'project-proposal-not-selected',
+      'project-billing-reminder-owner',
+      'project-billing-reminder-creator',
     ];
     for (const name of templateNames) {
       const { subject } = getEmailTemplate(name, {

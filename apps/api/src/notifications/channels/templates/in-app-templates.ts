@@ -19,6 +19,16 @@ function formatPriceCents(priceCents: unknown, currency: unknown): string {
   return code ? `${code} ${amount}` : amount;
 }
 
+/** The common in-app shape: title + body linking to the project request. */
+function projectRequestNotice(
+  title: string,
+  body: string,
+  data: Record<string, unknown>
+): InAppOutput {
+  const projectRequestId = data.projectRequestId as string | undefined;
+  return { title, body, actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined };
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
   'booking-confirmed': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
@@ -213,6 +223,26 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       body: `${senderName} shared ${fileName}`,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
+  },
+
+  // BAL-324 admin billing reminder — OWNER (must add billing details).
+  'project-billing-reminder-owner': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    return projectRequestNotice(
+      'Complete your billing details',
+      `Add your billing details to kick off "${title}"`,
+      data
+    );
+  },
+
+  // BAL-324 admin billing reminder — CREATOR (FYI, no action of their own).
+  'project-billing-reminder-creator': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    return projectRequestNotice(
+      'Billing details still needed',
+      `"${title}" is on hold until your company's billing details are added`,
+      data
+    );
   },
 };
 

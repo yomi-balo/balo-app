@@ -55,6 +55,12 @@ export const PROJECT_EVENTS = {
   // committed pricing-method change (after the Fixed→T&M confirm dialog).
   MILESTONE_EFFORT_ESTIMATED: 'project_milestone_effort_estimated',
   PROPOSAL_PRICING_METHOD_SWITCHED: 'project_proposal_pricing_method_switched',
+  // BAL-324: an admin sent a "complete your billing details" reminder from the
+  // kickoff board while the client-billing gate was still outstanding. Feature
+  // prefix `project_` matches every constant here (the ticket's bare
+  // `billing_reminder_sent` would violate the project-domain naming regex). Fired
+  // CLIENT-side by the RemindClientButton after the server action succeeds.
+  BILLING_REMINDER_SENT: 'project_billing_reminder_sent',
 } as const;
 
 export type ProjectEntryMethod = 'manual' | 'ai';
@@ -237,6 +243,16 @@ export interface ProjectEventMap {
     to_method: 'fixed' | 'tm';
     /** Whether a typed Fixed price existed at switch time (informs the confirm beat). */
     had_typed_price: boolean;
+  };
+  // BAL-324: admin-initiated client-billing reminder from the kickoff board.
+  [PROJECT_EVENTS.BILLING_REMINDER_SENT]: {
+    request_id: string;
+    company_id: string;
+    admin_user_id: string;
+    /** 1 = owner only; 2 = owner + request creator (creator ≠ owner AND a company member). */
+    recipient_count: number;
+    /** Whole days since proposal acceptance; `null` when no acceptance timestamp resolves. */
+    days_since_acceptance: number | null;
   };
 }
 

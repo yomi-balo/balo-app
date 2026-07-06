@@ -337,6 +337,45 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-billing-reminder-owner (BAL-324)', () => {
+    it('renders the owner "complete billing" prompt with the request action url', () => {
+      const result = getInAppTemplate('project-billing-reminder-owner', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Complete your billing details',
+        body: 'Add your billing details to kick off "CPQ implementation"',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when fields are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-billing-reminder-owner', {});
+      expect(result.body).toBe('Add your billing details to kick off "your project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-billing-reminder-creator (BAL-324)', () => {
+    it('renders the creator FYI with the request action url', () => {
+      const result = getInAppTemplate('project-billing-reminder-creator', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Billing details still needed',
+        body: '"CPQ implementation" is on hold until your company\'s billing details are added',
+        actionUrl: '/projects/req-1',
+      });
+    });
+
+    it('falls back when fields are missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-billing-reminder-creator', {});
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('billing-details-confirmed-admin (BAL-323)', () => {
     it('renders the company name, ready-to-invoice body, and deep link', () => {
       const result = getInAppTemplate('billing-details-confirmed-admin', {

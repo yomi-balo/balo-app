@@ -190,6 +190,70 @@ describe('dispatch', () => {
     expect(deliveryPayload.recipientId).toBe('client-001');
   });
 
+  // ── BAL-324: billing_creator resolves to a single payload id (NOT a fan-out) ──
+  it('resolves billing_creator recipient from payload.creatorUserId', async () => {
+    const creatorRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'billing_creator',
+      template: 'project-billing-reminder-creator',
+    };
+    const context: RuleContext = {
+      event: 'project.billing_reminder',
+      payload: { correlationId: 'corr-bill', recipientId: 'owner-1', creatorUserId: 'creator-1' },
+      data: {},
+    };
+
+    await dispatch(creatorRule, context);
+
+    const deliveryPayload = mockAdd.mock.calls[0][1];
+    expect(deliveryPayload.recipientId).toBe('creator-1');
+  });
+
+  it('skips billing_creator dispatch when payload.creatorUserId is absent', async () => {
+    const creatorRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'billing_creator',
+      template: 'project-billing-reminder-creator',
+    };
+    const context: RuleContext = {
+      event: 'project.billing_reminder',
+      payload: { correlationId: 'corr-bill', recipientId: 'owner-1' },
+      data: {},
+    };
+
+    await dispatch(creatorRule, context);
+
+    expect(mockAdd).not.toHaveBeenCalled();
+  });
+
+  it('mints distinct jobIds for owner vs creator on the same billing reminder', async () => {
+    const ownerRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'client',
+      template: 'project-billing-reminder-owner',
+    };
+    const creatorRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'billing_creator',
+      template: 'project-billing-reminder-creator',
+    };
+    const context: RuleContext = {
+      event: 'project.billing_reminder',
+      payload: { correlationId: 'corr-bill', recipientId: 'owner-1', creatorUserId: 'creator-1' },
+      data: {},
+    };
+
+    await dispatch(ownerRule, context);
+    await dispatch(creatorRule, context);
+
+    const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+    expect(jobIds).toEqual([
+      'project-billing-reminder-owner--owner-1--corr-bill',
+      'project-billing-reminder-creator--creator-1--corr-bill',
+    ]);
+    expect(new Set(jobIds).size).toBe(2);
+  });
+
   it('falls back to data.client.id when payload.recipientId is absent', async () => {
     const clientRule: NotificationRule = {
       ...baseRule,

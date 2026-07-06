@@ -203,6 +203,13 @@ function resolveRecipient(
       const client = context.data.client as { id?: string } | undefined;
       return client?.id;
     }
+    case 'billing_creator': {
+      // BAL-324: the request creator, a single resolved id from the payload (NOT a
+      // fan-out list) — so it stays out of FANOUT_RECIPIENTS and flows the normal
+      // single-recipient path. `undefined` when unset ⇒ dispatcher skips.
+      const id = context.payload.creatorUserId;
+      return typeof id === 'string' ? id : undefined;
+    }
     case 'admin':
       // Future: resolve admin user IDs from config or DB
       return undefined;

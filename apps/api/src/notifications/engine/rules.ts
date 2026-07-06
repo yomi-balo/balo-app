@@ -9,7 +9,8 @@ export interface NotificationRule {
     | 'admin'
     | 'non_selected_experts'
     | 'admin_users'
-    | 'email_address';
+    | 'email_address'
+    | 'billing_creator';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -25,13 +26,32 @@ export interface RuleContext {
 /** The common email + in-app rule pair for a single recipient/template. */
 function emailAndInApp(
   recipient: NotificationRule['recipient'],
-  template: string
+  template: string,
+  condition?: NotificationRule['condition']
 ): NotificationRule[] {
   return [
-    { channel: 'email', recipient, template, timing: 'immediate', priority: 'normal' },
-    { channel: 'in-app', recipient, template, timing: 'immediate' },
+    {
+      channel: 'email',
+      recipient,
+      template,
+      timing: 'immediate',
+      priority: 'normal',
+      ...(condition ? { condition } : {}),
+    },
+    {
+      channel: 'in-app',
+      recipient,
+      template,
+      timing: 'immediate',
+      ...(condition ? { condition } : {}),
+    },
   ];
 }
+
+/** Creator FYI fires only when the creator differs from the owner (recipientId). */
+const creatorIsDistinctMember: NonNullable<NotificationRule['condition']> = (ctx) =>
+  typeof ctx.payload.creatorUserId === 'string' &&
+  ctx.payload.creatorUserId !== ctx.payload.recipientId;
 
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
@@ -305,9 +325,23 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       condition: (ctx) => ctx.payload.recipientRole === 'expert',
     },
   ],
+  // BAL-324: admin billing reminder. One event, two audiences. The OWNER
+  // (recipient:'client' → payload.recipientId) always gets email + in-app with
+  // the "complete billing" CTA. The request CREATOR (recipient:'billing_creator'
+  // → payload.creatorUserId) gets an email + in-app FYI ONLY when the action set
+  // `creatorUserId` (creator ≠ owner AND a company member) — the condition guards
+  // the resolver too, so a self-notify can never slip through.
+  'project.billing_reminder': [
+    ...emailAndInApp('client', 'project-billing-reminder-owner'),
+    ...emailAndInApp(
+      'billing_creator',
+      'project-billing-reminder-creator',
+      creatorIsDistinctMember
+    ),
+  ],
   // BAL-323: the client captured their company's billing details (first-time only —
-  // the publisher never emits this on an edit or the repeat-company auto-skip). MJ
-  // (the admins, fanned out over data.adminUserIds) gets an in-app "ready to invoice"
+  // the publisher never emits this on an edit or the repeat-company auto-skip). The
+  // admins (fanned out over data.adminUserIds) get an in-app "ready to invoice"
   // nudge — IN-APP ONLY (not time-sensitive; no email, no SMS).
   'billing.details_confirmed': [
     {

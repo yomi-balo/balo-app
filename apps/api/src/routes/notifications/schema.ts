@@ -200,6 +200,20 @@ const projectProposalResubmittedPayload = z.object({
   currency: z.string().min(2).max(10),
 });
 
+// BAL-324 admin billing reminder (kickoff board → outstanding client-billing
+// gate). `correlationId` is minted per click (uuid) so a re-remind is a fresh
+// dispatch, not a jobId no-op. `recipientId` is the owner (recipient:'client');
+// `creatorUserId` is the optional request creator (recipient:'billing_creator').
+// Mirrors apps/web/src/lib/notifications/types.ts.
+const projectBillingReminderPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  title: z.string().min(1).max(200),
+  companyName: z.string().min(1).max(160),
+  recipientId: z.uuid(),
+  creatorUserId: z.uuid().optional(),
+});
+
 // BAL-323 billing details confirmed (client → admins). `correlationId` = companyId
 // (once-ever-per-company dedup). Mirrors apps/web/src/lib/notifications/types.ts.
 const billingDetailsConfirmedPayload = z.object({
@@ -273,6 +287,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
     payload: projectFileSharedPayload,
   }),
   z.object({
+    event: z.literal('project.billing_reminder'),
+    payload: projectBillingReminderPayload,
+  }),
+  z.object({
     event: z.literal('billing.details_confirmed'),
     payload: billingDetailsConfirmedPayload,
   }),
@@ -298,10 +316,15 @@ export type PublishBody = z.infer<typeof publishBodySchema>;
  * new event without a schema arm (or an arm for a server-only event like
  * `calendar.auth_error`) can never ship silently again.
  */
-type PublishCoverageGap =
-  | Exclude<PublishableNotificationEvent, PublishBody['event']>
-  | Exclude<PublishBody['event'], PublishableNotificationEvent>;
+// Split per direction so neither branch forms a `never | never` union (S6571)
+// while keeping the exact guarantee: a missing schema arm OR a stray one fails
+// `tsc` and prints the offending event right here.
+type MissingSchemaArm = Exclude<PublishableNotificationEvent, PublishBody['event']>;
+type StraySchemaArm = Exclude<PublishBody['event'], PublishableNotificationEvent>;
 
 type AssertNever<T extends never> = T;
 
-export type AssertPublishCoverageComplete = AssertNever<PublishCoverageGap>;
+export type AssertPublishCoverageComplete = [
+  AssertNever<MissingSchemaArm>,
+  AssertNever<StraySchemaArm>,
+];

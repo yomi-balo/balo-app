@@ -144,6 +144,21 @@ export interface ProjectFileSharedPayload {
   fileName: string;
 }
 
+// BAL-324 admin-initiated billing reminder (kickoff board → outstanding
+// client-billing gate). `correlationId` is minted PER CLICK (crypto.randomUUID)
+// — NOT a stable id — so a deliberate re-remind is a genuinely new dispatch, not
+// a BullMQ jobId no-op. One publish fans out to the OWNER (recipient:'client' via
+// `recipientId`, email + in-app, CTA) and — only when set — the request CREATOR
+// (recipient:'billing_creator' via `creatorUserId`, email + in-app FYI, no CTA).
+export interface ProjectBillingReminderPayload {
+  correlationId: string; // minted per click (uuid) — dedup a retry, not a re-click
+  projectRequestId: string;
+  title: string; // request title — email/in-app body
+  companyName: string; // buyer org name — email/in-app body
+  recipientId: string; // ownerUserId → recipient:'client' (owner, CTA)
+  creatorUserId?: string; // → recipient:'billing_creator' (creator, no CTA); set only when != owner & member
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -162,6 +177,7 @@ export type NotificationEvent =
   | 'project.proposal_resubmitted'
   | 'project.message_posted'
   | 'project.file_shared'
+  | 'project.billing_reminder'
   | 'billing.details_confirmed';
 
 export interface EventPayloadMap {
@@ -182,5 +198,6 @@ export interface EventPayloadMap {
   'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
   'project.message_posted': ProjectMessagePostedPayload;
   'project.file_shared': ProjectFileSharedPayload;
+  'project.billing_reminder': ProjectBillingReminderPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;
 }

@@ -18,6 +18,8 @@ import {
 import { ProjectProposalNotSelectedEmail } from './project-proposal-not-selected.js';
 import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
 import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
+import { ProjectBillingReminderOwnerEmail } from './project-billing-reminder-owner.js';
+import { ProjectBillingReminderCreatorEmail } from './project-billing-reminder-creator.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -283,6 +285,40 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `An expert is interested in ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-324 admin billing reminder — OWNER (has the CTA). `companyName` +
+  // `projectTitle` carry the copy; the recipient's own name arrives as
+  // `recipientName` (greeted "Hi {firstName},").
+  'project-billing-reminder-owner': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.companyName as string) ?? 'your company';
+    return {
+      component: React.createElement(ProjectBillingReminderOwnerEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        companyName,
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Complete your billing details to start ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-324 admin billing reminder — CREATOR (FYI, no CTA).
+  'project-billing-reminder-creator': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.companyName as string) ?? 'your company';
+    return {
+      component: React.createElement(ProjectBillingReminderCreatorEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        companyName,
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Billing details are still needed to start ${sanitizeSubjectTitle(title)}`,
     };
   },
 };
