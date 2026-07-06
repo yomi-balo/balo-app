@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
+import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import type { ReferenceData } from '../_actions/load-draft';
 import type { ApplicationWithRelations, SupportType } from '@balo/db';
 
@@ -298,7 +299,15 @@ describe('StepAssessment', () => {
     const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
     renderStep(twoIncompleteDraft);
 
-    // CPQ is auto-open; its Done button collapses it and advances to Lead Mgmt.
+    // CPQ is auto-open but unrated; rate its first dimension so Done isn't gated
+    // (mirrors the terminal-Done test's keyboard interaction).
+    const [slider] = screen.getAllByRole('slider');
+    expect(slider).toBeDefined();
+    if (!slider) throw new Error('expected a slider to be rendered');
+    slider.focus();
+    await user.keyboard('{ArrowRight}');
+
+    // CPQ is now rated; its Done button collapses it and advances to Lead Mgmt.
     await user.click(screen.getByRole('button', { name: /done/i }));
 
     const cpqHeader = screen.getByRole('button', { name: /CPQ/ });
@@ -373,5 +382,75 @@ describe('StepAssessment', () => {
 
     expect(screen.getByRole('button', { name: /CPQ/ })).toHaveFocus();
     expect(screen.getByText(/all products rated/i)).toBeInTheDocument();
+  });
+
+  it('blocks Done on an unrated product and never ping-pongs between two unrated cards', async () => {
+    const user = userEvent.setup();
+    renderStep(twoIncompleteDraft);
+
+    // CPQ auto-opens unrated. Clicking Done must NOT collapse it or advance to
+    // Lead Mgmt — it renders the inline hint and stays put (no focus move).
+    await user.click(screen.getByRole('button', { name: /done/i }));
+
+    expect(screen.getByRole('button', { name: /CPQ/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /Lead Mgmt/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+    // The gate never requests focus (no pendingFocusRef), so the next header
+    // is never focused — focus does not advance to another card.
+    expect(screen.getByRole('button', { name: /Lead Mgmt/ })).not.toHaveFocus();
+
+    // The hint appears inside a role="status" live region.
+    const hint = screen.getByText(/rate at least one dimension first/i);
+    expect(hint).toBeInTheDocument();
+    expect(hint).toHaveAttribute('role', 'status');
+
+    // The gate fires the analytics event with the offending product id.
+    expect(track).toHaveBeenCalledWith(EXPERT_EVENTS.ASSESSMENT_DONE_BLOCKED, {
+      product_id: 'skill-cpq',
+    });
+
+    // Clicking Done again is still blocked — no ping-pong to the other card.
+    await user.click(screen.getByRole('button', { name: /done/i }));
+    expect(screen.getByRole('button', { name: /CPQ/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /Lead Mgmt/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+
+  it('clears the rating hint once a dimension is rated', async () => {
+    const user = userEvent.setup();
+    renderStep(twoIncompleteDraft);
+
+    // A blocked Done on the unrated CPQ surfaces the hint.
+    await user.click(screen.getByRole('button', { name: /done/i }));
+    expect(screen.getByText(/rate at least one dimension first/i)).toBeInTheDocument();
+
+    // Rating any CPQ dimension clears the hint immediately.
+    const [slider] = screen.getAllByRole('slider');
+    expect(slider).toBeDefined();
+    if (!slider) throw new Error('expected a slider to be rendered');
+    slider.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(screen.queryByText(/rate at least one dimension first/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the rating hint when the card is toggled', async () => {
+    const user = userEvent.setup();
+    renderStep(twoIncompleteDraft);
+
+    // A blocked Done on the unrated CPQ surfaces the hint.
+    await user.click(screen.getByRole('button', { name: /done/i }));
+    expect(screen.getByText(/rate at least one dimension first/i)).toBeInTheDocument();
+
+    // Opening Lead Mgmt collapses CPQ (single-open) and clears the blocked state.
+    await user.click(screen.getByRole('button', { name: /Lead Mgmt/ }));
+
+    // Re-opening CPQ must not resurface a stale hint — the toggle cleared it.
+    await user.click(screen.getByRole('button', { name: /CPQ/ }));
+    expect(screen.queryByText(/rate at least one dimension first/i)).not.toBeInTheDocument();
   });
 });

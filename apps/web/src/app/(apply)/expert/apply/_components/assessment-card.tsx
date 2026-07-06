@@ -27,6 +27,7 @@ interface AssessmentCardProps {
   expanded: boolean;
   onToggle: (productId: string) => void;
   onDone: (productId: string) => void;
+  showRatingHint: boolean;
   registerHeaderButton: (productId: string, el: HTMLButtonElement | null) => void;
 }
 
@@ -50,6 +51,7 @@ export function AssessmentCard({
   expanded,
   onToggle,
   onDone,
+  showRatingHint,
   registerHeaderButton,
 }: Readonly<AssessmentCardProps>): React.JSX.Element {
   const reduce = useReducedMotion();
@@ -161,11 +163,14 @@ export function AssessmentCard({
                   </div>
                 );
               })}
-              <div className="pt-2">
+              <div className="flex items-center gap-3 pt-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => onDone(productId)}>
                   <Check className="mr-1 h-4 w-4" aria-hidden="true" />
                   Done
                 </Button>
+                <p role="status" className="text-destructive/90 text-xs">
+                  {showRatingHint ? 'Rate at least one dimension first' : ''}
+                </p>
               </div>
             </div>
           </motion.div>

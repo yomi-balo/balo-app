@@ -8,6 +8,7 @@ import { motion } from 'motion/react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Button } from '@/components/ui/button';
 import { Form } from '@/components/ui/form';
+import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { assessmentStepSchema, type AssessmentStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { AssessmentCard } from './assessment-card';
@@ -82,6 +83,8 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
 
   // Single-open accordion: one product expanded at a time (null = all collapsed).
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  // Product whose Done was clicked while still unrated → shows the inline hint.
+  const [doneBlockedProductId, setDoneBlockedProductId] = useState<string | null>(null);
   const headerRefs = useRef(new Map<string, HTMLButtonElement>());
   const pendingFocusRef = useRef<string | null>(null);
 
@@ -155,6 +158,13 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
     return () => subscription.unsubscribe();
   }, [form, updateStepData]);
 
+  // Clear the blocked-Done hint as soon as the offending product gets any rating.
+  useEffect(() => {
+    if (doneBlockedProductId !== null && productHasRating(ratings, doneBlockedProductId)) {
+      setDoneBlockedProductId(null);
+    }
+  }, [ratings, doneBlockedProductId]);
+
   // Register validation
   const validate = useCallback(async (): Promise<boolean> => {
     return form.trigger();
@@ -207,6 +217,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   // focused the button), so auto-advance never overrides a manual choice.
   const handleToggle = useCallback((productId: string): void => {
     setExpandedProductId((prev) => (prev === productId ? null : productId));
+    setDoneBlockedProductId(null); // toggling/collapsing clears the hint
   }, []);
 
   // "Done" — collapse current, advance to the next incomplete (wrapping, never
@@ -214,7 +225,16 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
   // Done clicks never use a stale index.
   const handleDone = useCallback(
     (productId: string): void => {
-      const next = findNextIncomplete(selectedProductIds, form.getValues('ratings'), productId);
+      const currentRatings = form.getValues('ratings');
+      // Gate: Done on an unrated product renders inline feedback instead of
+      // collapsing/advancing. Focus stays on the Done button (no focus move).
+      if (!productHasRating(currentRatings, productId)) {
+        setDoneBlockedProductId(productId);
+        track(EXPERT_EVENTS.ASSESSMENT_DONE_BLOCKED, { product_id: productId });
+        return;
+      }
+      setDoneBlockedProductId(null); // successful Done clears any prior hint
+      const next = findNextIncomplete(selectedProductIds, currentRatings, productId);
       setExpandedProductId(next);
       // Always request focus: the next incomplete header, or (terminal Done, no
       // next) fall back to the just-completed card's own still-mounted header so
@@ -319,6 +339,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
                   expanded={expandedProductId === productId}
                   onToggle={handleToggle}
                   onDone={handleDone}
+                  showRatingHint={doneBlockedProductId === productId}
                   registerHeaderButton={registerHeaderButton}
                 />
               </motion.div>
