@@ -26,6 +26,7 @@ import react from 'eslint-plugin-react';
  *   react/no-array-index-key             — S6479, do not use the array index as a React key
  *   unicorn/prefer-global-this           — S7764, prefer `globalThis` over `window`
  *   unicorn/no-negated-condition         — S7735, "Unexpected negated condition" (else branch)
+ *   unicorn/no-typeof-undefined          — S7741, compare with `undefined` directly (not `typeof`)
  *
  * All rules are syntactic, so no TypeScript type information
  * (parserOptions.project) is required — the bare parser is enough to parse TS/TSX.
@@ -68,6 +69,7 @@ export default [
       'react/no-array-index-key': 'error',
       'unicorn/prefer-global-this': 'error',
       'unicorn/no-negated-condition': 'error',
+      'unicorn/no-typeof-undefined': 'error',
     },
   },
   {

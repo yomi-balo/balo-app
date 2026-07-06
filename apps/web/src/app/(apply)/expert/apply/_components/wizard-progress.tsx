@@ -42,7 +42,7 @@ function renderDotContent(status: DotStatus, index: number): React.ReactNode {
 }
 
 export function WizardProgress(): React.JSX.Element {
-  const { currentStep, stepStatuses, goToStep } = useWizard();
+  const { currentStep, stepStatuses, maxReachedStep, goToStep } = useWizard();
 
   const completedCount = stepStatuses.filter((s) => s === 'completed' || s === 'skipped').length;
   const progressPercent =
@@ -81,15 +81,25 @@ export function WizardProgress(): React.JSX.Element {
           {/* Dots */}
           {STEP_CONFIG.map((step, i) => {
             const status = getStepDotStatus(i, currentStep, stepStatuses);
-            const isClickable = status === 'completed' || status === 'skipped';
+            // Any already-visited step is navigable — including a still-`future`
+            // step (e.g. Terms) reached before its status flipped to completed.
+            const isClickable = i <= maxReachedStep && i !== currentStep;
 
             return (
               <div key={step.key} className="relative z-10 flex flex-col items-center">
                 <motion.button
                   type="button"
                   className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-300',
-                    DOT_STATUSES[status]
+                    'focus-visible:ring-primary/50 flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-300 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+                    DOT_STATUSES[status],
+                    // A reached-but-not-yet-completed dot must look/act clickable even
+                    // though its status is still `future`. twMerge lets these later
+                    // utilities win over `cursor-not-allowed opacity-60` in `future`.
+                    // The border + foreground text make it read as clickable AT REST,
+                    // not only on hover (e.g. Terms after an Edit jump-back).
+                    status === 'future' &&
+                      isClickable &&
+                      'hover:ring-primary/30 border-primary/30 text-foreground cursor-pointer border opacity-100 hover:ring-2'
                   )}
                   onClick={() => isClickable && goToStep(i)}
                   tabIndex={isClickable ? 0 : -1}
