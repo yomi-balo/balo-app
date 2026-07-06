@@ -32,6 +32,8 @@ Your first step is to gather full context:
 
 Every subsequent phase happens in this worktree on this branch; **Phase 9 just commits and raises the PR from here — it does NOT re-sync `main` or re-create the branch** (Setup already did that).
 
+**Handoff files are ticket-scoped.** The design spec and technical plan are passed between phases via `/tmp/balo-design-bal-<NNN>.md` and `/tmp/balo-plan-bal-<NNN>.md` — scoped to `<NNN>` so two `/implement` runs in different worktrees never clobber each other's specs. Keep them under `/tmp` (not inside the worktree) so `git add -A` in the review phases can't accidentally stage them.
+
 ### Phase 0: Design (conditional)
 
 **Run design phase when the task involves:**
@@ -77,7 +79,7 @@ Show the design output and ask:
 
 If the user requests adjustments, re-run the designer with the feedback appended to the original task description. Maximum **2 design revision rounds** — after that, proceed with what you have and note unresolved design questions.
 
-Save the approved design to `/tmp/balo-design.md`.
+Save the approved design to `/tmp/balo-design-bal-<NNN>.md`.
 
 ### Phase 0.5: Resolver (always runs)
 
@@ -106,10 +108,10 @@ Spawn the architect sub-agent:
 ```bash
 claude -p \
   --system-prompt "$(cat .claude/commands/architect.md)" \
-  "Design the technical plan for: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design.md ] && echo "Approved design spec: $(cat /tmp/balo-design.md)") Read all relevant skills before proposing anything."
+  "Design the technical plan for: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Approved design spec: $(cat /tmp/balo-design-bal-<NNN>.md)") Read all relevant skills before proposing anything."
 ```
 
-**Output:** A `technical-plan.md` written to `/tmp/balo-plan.md`
+**Output:** A `technical-plan.md` written to `/tmp/balo-plan-bal-<NNN>.md`
 
 Review the plan yourself for completeness. Confirm it references the right skills and existing patterns before proceeding.
 
@@ -122,7 +124,7 @@ Spawn the DBA sub-agent:
 ```bash
 claude -p \
   --system-prompt "$(cat .claude/commands/dba.md)" \
-  "Implement the database layer from this plan: $(cat /tmp/balo-plan.md). Read drizzle-schema skill first (including rls-patterns.md reference)."
+  "Implement the database layer from this plan: $(cat /tmp/balo-plan-bal-<NNN>.md). Read drizzle-schema skill first (including rls-patterns.md reference)."
 ```
 
 **Output:** Schema files, migrations, RLS policies, repository files.
@@ -134,7 +136,7 @@ Spawn the builder sub-agent:
 ```bash
 claude -p \
   --system-prompt "$(cat .claude/commands/build.md)" \
-  "Implement this feature: $(cat /tmp/balo-plan.md). $([ -f /tmp/balo-design.md ] && echo "Design spec for reference: $(cat /tmp/balo-design.md)") Schema changes (if any) are already applied. Read all relevant skills before writing code. Run tsc --noEmit and tests when done."
+  "Implement this feature: $(cat /tmp/balo-plan-bal-<NNN>.md). $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Design spec for reference: $(cat /tmp/balo-design-bal-<NNN>.md)") Schema changes (if any) are already applied. Read all relevant skills before writing code. Run tsc --noEmit and tests when done."
 ```
 
 **Output:** Implemented feature with passing types and tests.
@@ -148,7 +150,7 @@ Spawn the UX sub-agent:
 ```bash
 git diff --staged --name-only | claude -p \
   --system-prompt "$(cat .claude/commands/ux-review.md)" \
-  "Validate the UX of these changes against the task: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design.md ] && echo "Original design spec: $(cat /tmp/balo-design.md)") Changed files: $(git diff --staged --name-only). Read each file in full."
+  "Validate the UX of these changes against the task: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Original design spec: $(cat /tmp/balo-design-bal-<NNN>.md)") Changed files: $(git diff --staged --name-only). Read each file in full."
 ```
 
 **Output:** UX verdict with issues or approval.
@@ -176,7 +178,7 @@ Spawn the reviewer sub-agent:
 ```bash
 git diff --staged | claude -p \
   --system-prompt "$(cat .claude/commands/review.md)" \
-  "Review this implementation. Task: {TASK_DESCRIPTION}. Plan: $(cat /tmp/balo-plan.md). Diff: $(git diff --staged). Read each changed file in full before reviewing."
+  "Review this implementation. Task: {TASK_DESCRIPTION}. Plan: $(cat /tmp/balo-plan-bal-<NNN>.md). Diff: $(git diff --staged). Read each changed file in full before reviewing."
 ```
 
 **Output:** Review verdict.
