@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ApplicationWithRelations } from '@balo/db';
 import { STEP_CONFIG } from '../_actions/schemas';
 import type { ReferenceData } from '../_actions/load-draft';
@@ -22,9 +22,33 @@ interface ExpertApplicationWizardProps {
   user: { id: string; email: string };
 }
 
+// Step-slide variants with a reduced-motion guard. Pure + exported so the
+// reduced-motion branches are unit-testable without mounting the wizard.
+export function stepSlideVariants(
+  direction: 'forward' | 'backward',
+  reduce: boolean
+): {
+  initial: { opacity: number; x: number };
+  animate: { opacity: number; x: number };
+  exit: { opacity: number; x: number };
+  transition: { duration: number; ease: 'easeOut' };
+} {
+  const slide = direction === 'forward' ? 40 : -40; // no nested ternary
+  const enterX = reduce ? 0 : slide;
+  const exitX = reduce ? 0 : -slide;
+  return {
+    initial: { opacity: 0, x: enterX },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: exitX },
+    transition: { duration: reduce ? 0.15 : 0.3, ease: 'easeOut' },
+  };
+}
+
 function WizardContent(): React.JSX.Element {
   const { currentStep, direction } = useWizard();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const reduce = useReducedMotion();
+  const variants = stepSlideVariants(direction, reduce ?? false);
 
   // Focus heading on step change
   const handleAnimationComplete = (): void => {
@@ -55,16 +79,10 @@ function WizardContent(): React.JSX.Element {
           <AnimatePresence mode="wait">
             <motion.div
               key={stepKey}
-              initial={{
-                opacity: 0,
-                x: direction === 'forward' ? 40 : -40,
-              }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{
-                opacity: 0,
-                x: direction === 'forward' ? -40 : 40,
-              }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
+              initial={variants.initial}
+              animate={variants.animate}
+              exit={variants.exit}
+              transition={variants.transition}
               onAnimationComplete={handleAnimationComplete}
             >
               {STEP_COMPONENTS[stepKey]}
