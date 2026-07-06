@@ -35,7 +35,6 @@ describe('auditEventsRepository.record', () => {
     expect(row.entityId).toBe(entityId);
     expect(row.metadata).toEqual({ domain: 'acme.com', nested: { count: 2 }, flag: true });
     expect(row.createdAt).toBeInstanceOf(Date);
-    expect(row.deletedAt).toBeNull();
 
     const persisted = await db.select().from(auditEvents).where(eq(auditEvents.id, row.id));
     expect(persisted).toHaveLength(1);

@@ -1,7 +1,6 @@
-import { pgTable, uuid, text, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, jsonb, index, timestamp } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './users';
-import { timestamps, softDelete } from './helpers';
 
 /**
  * audit_events (BAL-344) — a generic, reusable, append-only audit log for the
@@ -12,6 +11,14 @@ import { timestamps, softDelete } from './helpers';
  * `actorUserId` NULLABLE (system/automated events may have no human actor);
  * RESTRICT to preserve attribution. `action` / `entityType` are TEXT not enums —
  * the audit vocabulary is open-ended and grows without a migration per event.
+ *
+ * IMMUTABILITY: this table is genuinely append-only. Rows are only ever inserted —
+ * never updated (there is no `updated_at` and no `$onUpdate` hook) and never
+ * soft-deleted (there is no `deleted_at`); it carries a single `created_at`. This
+ * is a deliberate, documented exception to the CLAUDE.md "every table gets
+ * created_at/updated_at/deleted_at" convention, justified because an audit ledger
+ * must be immutable — mutating or deleting audit rows would defeat the purpose of
+ * the log.
  */
 export const auditEvents = pgTable(
   'audit_events',
@@ -34,8 +41,9 @@ export const auditEvents = pgTable(
     // Arbitrary structured context. Typed per drizzle-schema JSONB rule.
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
 
-    ...timestamps,
-    ...softDelete,
+    // Append-only: a single created_at, no updated_at / no deleted_at (see the
+    // IMMUTABILITY note above).
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     // "History of one entity" — the primary read path.
