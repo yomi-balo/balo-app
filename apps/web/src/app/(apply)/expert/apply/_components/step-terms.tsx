@@ -32,7 +32,6 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     certificationsData,
     workHistoryData,
     profileData,
-    inviteData,
     updateStepData,
     registerValidation,
     submitApplication,
@@ -101,7 +100,6 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         products_count: productsData.productIds?.length ?? 0,
         certs_count: certificationsData.certifications?.length ?? 0,
         work_history_count: workHistoryData.entries?.length ?? 0,
-        referrals_count: inviteData.emails?.length ?? 0,
       });
 
       // Hold success state for 1.2 seconds then redirect
@@ -170,12 +168,6 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
           ? `${profileData.industryIds?.length} selected`
           : 'None',
       stepIndex: 0,
-    },
-    {
-      label: 'Referrals',
-      value:
-        (inviteData.emails?.length ?? 0) > 0 ? `${inviteData.emails?.length} invitations` : 'None',
-      stepIndex: 5,
     },
   ];
 

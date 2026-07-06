@@ -2,7 +2,14 @@ export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
 export interface NotificationRule {
   channel: NotificationChannel;
-  recipient: 'self' | 'expert' | 'client' | 'admin' | 'non_selected_experts' | 'admin_users';
+  recipient:
+    | 'self'
+    | 'expert'
+    | 'client'
+    | 'admin'
+    | 'non_selected_experts'
+    | 'admin_users'
+    | 'email_address';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -52,6 +59,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'expert-approved',
       timing: 'immediate',
       priority: 'critical',
+    },
+  ],
+  // BAL-325: referral invite to an EXTERNAL email (not a Balo user). The
+  // 'email_address' recipient reads the address straight from the event payload in
+  // the dispatcher — there is no user row to hydrate. Email channel only (no in-app
+  // for a non-user).
+  'expert.referral_invited': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'expert-referral-invited',
+      timing: 'immediate',
+      priority: 'normal',
     },
   ],
   'project.request_submitted': [

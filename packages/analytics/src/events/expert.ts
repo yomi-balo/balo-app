@@ -6,6 +6,9 @@ export const EXPERT_EVENTS = {
   APPLICATION_SUBMITTED: 'expert_application_submitted',
   APPLICATION_SUBMIT_FAILED: 'expert_application_submit_failed',
   APPLICATION_ABANDONED: 'expert_application_abandoned',
+  // BAL-325 — referral prompt on the /expert/apply/success page.
+  REFERRAL_PROMPT_VIEWED: 'expert_referral_prompt_viewed', // denominator (prompt shown)
+  REFERRAL_INVITES_SENT: 'expert_referral_invites_sent', // numerator (invites dispatched)
 } as const;
 
 export type ExpertStepName =
@@ -14,7 +17,6 @@ export type ExpertStepName =
   | 'assessment'
   | 'certifications'
   | 'work-history'
-  | 'invite'
   | 'terms';
 
 export interface ExpertEventMap {
@@ -34,7 +36,6 @@ export interface ExpertEventMap {
     products_count: number;
     certs_count: number;
     work_history_count: number;
-    referrals_count: number;
   };
   [EXPERT_EVENTS.APPLICATION_SUBMIT_FAILED]: {
     error_message: string;
@@ -42,6 +43,12 @@ export interface ExpertEventMap {
   [EXPERT_EVENTS.APPLICATION_ABANDONED]: {
     last_step: ExpertStepName;
     step_number: number;
+  };
+  [EXPERT_EVENTS.REFERRAL_PROMPT_VIEWED]: Record<string, never>;
+  [EXPERT_EVENTS.REFERRAL_INVITES_SENT]: {
+    invites_sent: number; // invites newly dispatched this submission
+    invites_attempted: number; // total addresses entered
+    already_invited: number; // addresses already invited (no-op)
   };
 }
 

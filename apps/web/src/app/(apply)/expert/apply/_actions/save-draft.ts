@@ -15,15 +15,7 @@ import {
 } from './schemas';
 
 const saveDraftInputSchema = z.object({
-  step: z.enum([
-    'profile',
-    'products',
-    'assessment',
-    'certifications',
-    'work-history',
-    'invite',
-    'terms',
-  ]),
+  step: z.enum(['profile', 'products', 'assessment', 'certifications', 'work-history', 'terms']),
   data: z.unknown(),
   expertProfileId: z.string().uuid().optional(),
 });
@@ -95,7 +87,7 @@ export const saveDraftAction = withAuth(
         }
         await dispatchNonProfileStep(input.step, profileId, parsed);
       }
-      // `invite` / `terms`: no DB write.
+      // `terms`: no DB write.
 
       trackServerAndFlush(EXPERT_SERVER_EVENTS.DRAFT_SAVED, {
         step: input.step,

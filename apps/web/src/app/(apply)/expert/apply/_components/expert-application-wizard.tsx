@@ -14,7 +14,6 @@ import { StepProducts } from './step-products';
 import { StepAssessment } from './step-assessment';
 import { StepCertifications } from './step-certifications';
 import { StepWorkHistory } from './step-work-history';
-import { StepInvite } from './step-invite';
 import { StepTerms } from './step-terms';
 
 interface ExpertApplicationWizardProps {
@@ -40,7 +39,6 @@ function WizardContent(): React.JSX.Element {
     assessment: <StepAssessment headingRef={headingRef} />,
     certifications: <StepCertifications headingRef={headingRef} />,
     'work-history': <StepWorkHistory headingRef={headingRef} />,
-    invite: <StepInvite headingRef={headingRef} />,
     terms: <StepTerms headingRef={headingRef} />,
   };
 

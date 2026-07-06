@@ -3,6 +3,7 @@ import { render } from '@react-email/render';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
+import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
@@ -74,6 +75,29 @@ describe('ExpertApprovedEmail', () => {
 
     expect(element).toBeDefined();
     expect(element.type).toBeDefined();
+  });
+});
+
+describe('ExpertReferralInvitedEmail', () => {
+  it('returns a React element', () => {
+    const element = ExpertReferralInvitedEmail({
+      inviterName: 'Ada Lovelace',
+      applyUrl: 'https://app.balo.expert/expert/apply',
+    });
+    expect(element).toBeDefined();
+    expect(element.type).toBeDefined();
+  });
+
+  it('renders the inviter name and the apply CTA href, greeting generically (no recipientName)', async () => {
+    const html = await render(
+      ExpertReferralInvitedEmail({
+        inviterName: 'Ada Lovelace',
+        applyUrl: 'https://app.balo.expert/expert/apply',
+      })
+    );
+    expect(html).toContain('Ada Lovelace');
+    expect(html).toContain('https://app.balo.expert/expert/apply');
+    expect(html).toContain('Hi there,');
   });
 });
 
@@ -507,6 +531,26 @@ describe('getEmailTemplate — A2 templates', () => {
     });
     expect(component).toBeDefined();
     expect(subject).toBe('An update on your proposal: CPQ implementation');
+  });
+
+  it('resolves expert-referral-invited with an inviter-named subject (BAL-325)', () => {
+    const { component, subject } = getEmailTemplate('expert-referral-invited', {
+      inviterName: 'Ada Lovelace',
+    });
+    expect(component).toBeDefined();
+    expect(subject).toBe('Ada Lovelace invited you to join Balo as an expert');
+  });
+
+  it('falls back to a neutral inviter name when expert-referral-invited payload is sparse', () => {
+    const { subject } = getEmailTemplate('expert-referral-invited', {});
+    expect(subject).toBe('A colleague invited you to join Balo as an expert');
+  });
+
+  it('sanitizes a hostile inviterName in the expert-referral-invited subject', () => {
+    const { subject } = getEmailTemplate('expert-referral-invited', {
+      inviterName: 'Ada\r\nBcc: attacker@evil.com',
+    });
+    expect(subject).not.toMatch(/[\r\n]/);
   });
 
   it('throws on an unknown template name', () => {
