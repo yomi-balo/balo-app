@@ -177,7 +177,7 @@ export const EmailChipsInput = forwardRef<EmailChipsInputHandle, Readonly<EmailC
           Enter email addresses separated by commas or new lines.{' '}
           {atCapacity
             ? `You've reached the ${maxEmails}-invitation limit.`
-            : "We'll send each person a friendly invitation — one per address, ever."}
+            : "We'll send each person a friendly invitation — we won't email an address you've already invited."}
         </p>
       </div>
     );

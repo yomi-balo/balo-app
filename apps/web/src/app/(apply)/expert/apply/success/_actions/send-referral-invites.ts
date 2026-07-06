@@ -83,9 +83,11 @@ export const sendReferralInvitesAction = withAuth(
       const inviterName = resolveInviterName(session.user.firstName, session.user.lastName);
 
       // 4. Claim + conditionally publish, one address at a time. The insert-returning
-      //    gate is the permanent "one invitation per address ever" guarantee: a NEW
-      //    row means we publish; a conflict (undefined) means it was already invited
-      //    and we NEVER publish again.
+      //    gate is the PER-REFERRER idempotency guarantee — one live invite per
+      //    (this expert, address): a NEW row means we publish; a conflict (undefined)
+      //    means THIS expert already invited the address and we NEVER publish again.
+      //    (Different experts can each independently invite the same address —
+      //    attribution is intentionally per referrer, not global.)
       const results: ReferralInviteResult[] = [];
       let sentCount = 0;
       let alreadyCount = 0;
