@@ -4,11 +4,12 @@ import 'server-only';
 
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
-import { usersRepository } from '@balo/db';
+import { usersRepository, type DomainCaptureResult } from '@balo/db';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { emitDomainCapture } from '@/lib/analytics/party-domains';
 
 export type VerifyEmailInput = VerifyEmailFormData;
 
@@ -44,6 +45,9 @@ export async function verifyEmailAction(
     // 3. Check if user already exists (handles double-submit / retry race conditions)
     let existingUser = await usersRepository.findByWorkosId(workosUser.id);
     let isNewUser = false;
+    // BAL-344: the domain auto-capture outcome from the create tx, emitted
+    // post-commit below. Non-applicable unless a new user was created here.
+    let domainCapture: DomainCaptureResult = { outcome: 'not_applicable' };
 
     if (!existingUser) {
       // Create Balo user + personal workspace in a single transaction.
@@ -58,6 +62,7 @@ export async function verifyEmailAction(
       });
       existingUser = created.user;
       isNewUser = true;
+      domainCapture = created.domainCapture;
     }
 
     // 4. Load company membership (always exists — created at signup or recovery above)
@@ -100,6 +105,10 @@ export async function verifyEmailAction(
       }).catch(() => {
         // publishNotificationEvent logs internally
       });
+
+      // BAL-344: emit the domain auto-capture outcome (post-commit). Email
+      // verification is the primary capture path — the domain is now verified.
+      emitDomainCapture(domainCapture, user.id);
     }
 
     log.info('Email verification completed, user created', {

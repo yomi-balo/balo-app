@@ -1,4 +1,5 @@
 import { eq, and, isNull, inArray } from 'drizzle-orm';
+import { extractEmailDomain } from '@balo/shared/domains';
 import { db } from '../client';
 import {
   users,
@@ -7,7 +8,10 @@ import {
   expertProfiles,
   type User,
   type NewUser,
+  type Company,
+  type CompanyMember,
 } from '../schema';
+import { partyDomainsRepository, type DomainCaptureResult } from './party-domains';
 
 /**
  * Platform-role enum values, derived from the inferred `users.platformRole`
@@ -132,10 +136,18 @@ export const usersRepository = {
    * - apps/web: OAuth callback (BAL-43)
    * - apps/api: Future invite acceptance webhooks
    */
-  createWithWorkspace: async (data: NewUser) => {
+  createWithWorkspace: async (
+    data: NewUser
+  ): Promise<{
+    user: User;
+    company: Company;
+    membership: CompanyMember;
+    domainCapture: DomainCaptureResult;
+  }> => {
     return db.transaction(async (tx) => {
       // 1. Create user
       const [user] = await tx.insert(users).values(data).returning();
+      if (user === undefined) throw new Error('users insert returned no row');
 
       // 2. Create personal workspace
       const workspaceName = data.firstName ? `${data.firstName}'s Workspace` : 'My Workspace';
@@ -148,18 +160,34 @@ export const usersRepository = {
           creditBalance: 0,
         })
         .returning();
+      if (company === undefined) throw new Error('companies insert returned no row');
 
       // 3. Add user as owner
       const [membership] = await tx
         .insert(companyMembers)
         .values({
-          companyId: company!.id,
-          userId: user!.id,
+          companyId: company.id,
+          userId: user.id,
           role: 'owner',
         })
         .returning();
+      if (membership === undefined) throw new Error('company_members insert returned no row');
 
-      return { user: user!, company: company!, membership: membership! };
+      // 4. BAL-344: auto-capture the creator's VERIFIED corporate domain onto this
+      // workspace (personal or not — do NOT gate on isPersonal). Gate strictly on
+      // emailVerified === true; derive the domain from the email. Runs INSIDE this
+      // tx, so a capture failure rolls the whole workspace creation back; `capture`
+      // itself never throws on the conflict path (blocked/claimed are clean skips).
+      let domainCapture: DomainCaptureResult = { outcome: 'not_applicable' };
+      const domain = data.emailVerified === true ? extractEmailDomain(data.email) : null;
+      if (domain !== null) {
+        domainCapture = await partyDomainsRepository.capture(
+          { partyType: 'company', partyId: company.id, domain, actorUserId: user.id },
+          tx
+        );
+      }
+
+      return { user, company, membership, domainCapture };
     });
   },
 

@@ -22,3 +22,5 @@ export * from './project-requests';
 export * from './request-origination';
 export * from './expert-referral-invites';
 export * from './engagements';
+export * from './party-domains';
+export * from './audit-events';
