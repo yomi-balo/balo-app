@@ -127,24 +127,12 @@ describe('verifyEmailAction', () => {
       expect(mockAuthenticateWithEmailVerification).not.toHaveBeenCalled();
     });
 
-    it('returns error for code shorter than 6 digits', async () => {
-      const result = await verifyEmailAction({ pendingAuthToken: 'pat_test', code: '12345' });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('6 digits');
-      }
-    });
-
-    it('returns error for code with non-numeric characters', async () => {
-      const result = await verifyEmailAction({ pendingAuthToken: 'pat_test', code: '12345a' });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('6 digits');
-      }
-    });
-
-    it('returns error for code longer than 6 digits', async () => {
-      const result = await verifyEmailAction({ pendingAuthToken: 'pat_test', code: '1234567' });
+    it.each([
+      { description: 'shorter than 6 digits', code: '12345' },
+      { description: 'non-numeric characters', code: '12345a' },
+      { description: 'longer than 6 digits', code: '1234567' },
+    ])('returns error for code $description', async ({ code }) => {
+      const result = await verifyEmailAction({ pendingAuthToken: 'pat_test', code });
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('6 digits');
