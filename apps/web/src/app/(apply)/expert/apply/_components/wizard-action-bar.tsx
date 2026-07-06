@@ -1,8 +1,10 @@
 'use client';
 
-import { ArrowLeft, ArrowRight } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, LogOut } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { STEP_CONFIG } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 
@@ -14,8 +16,47 @@ const NEXT_LABELS: Record<string, string> = {
   'work-history': 'Next',
 };
 
+/**
+ * Low-emphasis "Save & exit" affordance. Wired to `abandon()` (saves + toasts +
+ * tracks APPLICATION_ABANDONED + routes to /dashboard). Visible on every step and
+ * both viewports — this is what makes the abandon flow actually reachable.
+ */
+function SaveExitButton({ className }: Readonly<{ className?: string }>): React.JSX.Element {
+  const { abandon } = useWizard();
+  const [exiting, setExiting] = useState(false);
+
+  // `abandon()` now stays on the page when the save fails, so the `finally`
+  // re-enables the button. On success the component unmounts on navigation, so
+  // resetting `exiting` is harmless.
+  const handleClick = async (): Promise<void> => {
+    setExiting(true);
+    try {
+      await abandon();
+    } finally {
+      setExiting(false);
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      disabled={exiting}
+      className={cn('text-muted-foreground', className)}
+      onClick={() => void handleClick()}
+    >
+      {exiting ? (
+        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />
+      ) : (
+        <LogOut className="mr-1.5 h-4 w-4" aria-hidden="true" />
+      )}
+      Save &amp; exit
+    </Button>
+  );
+}
+
 export function WizardActionBar(): React.JSX.Element {
-  const { currentStep, goNext, goPrevious, skipStep, abandon } = useWizard();
+  const { currentStep, goNext, goPrevious, skipStep } = useWizard();
   const stepConfig = STEP_CONFIG[currentStep] ?? STEP_CONFIG[0];
   const isFirst = currentStep === 0;
   const isLast = currentStep === STEP_CONFIG.length - 1;
@@ -27,21 +68,15 @@ export function WizardActionBar(): React.JSX.Element {
       {/* Desktop action bar */}
       <div className="border-border mt-8 hidden items-center justify-between border-t pt-6 md:flex">
         <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={isFirst ? () => void abandon() : goPrevious}
-            disabled={isFirst}
-            className={isFirst ? 'text-muted-foreground opacity-50' : 'group'}
-          >
-            <motion.span
-              className="inline-flex items-center gap-1.5"
-              whileHover={!isFirst ? { x: -3 } : undefined}
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Previous
-            </motion.span>
-          </Button>
+          <SaveExitButton />
+          {!isFirst && (
+            <Button type="button" variant="ghost" className="group" onClick={goPrevious}>
+              <motion.span className="inline-flex items-center gap-1.5" whileHover={{ x: -3 }}>
+                <ArrowLeft className="h-4 w-4" />
+                Previous
+              </motion.span>
+            </Button>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -84,20 +119,21 @@ export function WizardActionBar(): React.JSX.Element {
           </Button>
         )}
         <div className="flex gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            className="flex-1"
-            onClick={isFirst ? () => void abandon() : goPrevious}
-            disabled={isFirst}
-          >
-            <ArrowLeft className="mr-1 h-4 w-4" />
-            Previous
-          </Button>
+          {!isFirst && (
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 flex-1"
+              onClick={goPrevious}
+            >
+              <ArrowLeft className="mr-1 h-4 w-4" />
+              Previous
+            </Button>
+          )}
           {!isLast && (
             <Button
               type="button"
-              className="from-primary flex-1 bg-gradient-to-r to-violet-600 text-white"
+              className="from-primary min-h-11 flex-1 bg-gradient-to-r to-violet-600 text-white"
               onClick={() => void goNext()}
             >
               {nextLabel}
@@ -105,6 +141,7 @@ export function WizardActionBar(): React.JSX.Element {
             </Button>
           )}
         </div>
+        <SaveExitButton className="mt-2 min-h-11 w-full" />
       </div>
     </>
   );

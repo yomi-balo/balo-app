@@ -37,6 +37,7 @@ type Direction = 'forward' | 'backward';
 interface WizardState {
   expertProfileId: string | null;
   currentStep: number;
+  maxReachedStep: number;
   stepStatuses: StepStatus[];
   direction: Direction;
   autoSaveState: AutoSaveState;
@@ -282,6 +283,9 @@ export function ExpertApplicationProvider({
 
   const [expertProfileId, setExpertProfileId] = useState<string | null>(draft?.profile.id ?? null);
   const [currentStep, setCurrentStep] = useState(initialStep);
+  // Furthest step the user has reached. On resume this is `initialStep`, so every
+  // step up to it is immediately navigable (reachable-step navigation, defect 3).
+  const [maxReachedStep, setMaxReachedStep] = useState(initialStep);
   const [stepStatuses, setStepStatuses] = useState<StepStatus[]>(() => hydrateStepStatuses(draft));
   const [direction, setDirection] = useState<Direction>('forward');
   const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>('idle');
@@ -337,6 +341,12 @@ export function ExpertApplicationProvider({
     }
   }, [currentStep]);
 
+  // Track the furthest step reached so the user can freely jump back and forth.
+  // Covers goNext, skipStep, and forward goToStep jumps in one place.
+  useEffect(() => {
+    setMaxReachedStep((prev) => Math.max(prev, currentStep));
+  }, [currentStep]);
+
   // Update URL on step change
   useEffect(() => {
     const stepKey = STEP_CONFIG[currentStep]?.key ?? 'profile';
@@ -361,6 +371,24 @@ export function ExpertApplicationProvider({
     },
     [profileData, productsData, assessmentData, certificationsData, workHistoryData, termsData]
   );
+
+  // Latest step key + data + id for the once-attached unload flush listener, so it
+  // never reads a stale closure. Kept fresh by a dep-less effect below.
+  const flushStateRef = useRef<{
+    stepKey: StepKey;
+    data: unknown;
+    expertProfileId: string | null;
+  }>({
+    stepKey: getCurrentStepKey(),
+    data: getStepData(getCurrentStepKey()),
+    expertProfileId,
+  });
+
+  // Seed the saved-snapshot baseline so a pristine first load isn't seen as dirty.
+  useEffect(() => {
+    lastSavedDataRef.current = JSON.stringify(getStepData(getCurrentStepKey()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const performSave = useCallback(async (): Promise<boolean> => {
     const stepKey = getCurrentStepKey();
@@ -405,6 +433,69 @@ export function ExpertApplicationProvider({
     }, 30_000);
   }, [getCurrentStepKey, getStepData, performSave]);
 
+  // Save-on-exit: reads the CURRENT step's key + data synchronously, so when called
+  // before `setCurrentStep(...)` it captures the step being LEFT (no stale closure).
+  // Skips the network call when nothing changed since the last successful save.
+  const saveIfDirty = useCallback(async (): Promise<boolean> => {
+    const currentData = JSON.stringify(getStepData(getCurrentStepKey()));
+    if (currentData === lastSavedDataRef.current) return true; // no unsaved changes
+    return performSave();
+  }, [getCurrentStepKey, getStepData, performSave]);
+
+  // Keep the flush ref current after every render (cheap object assign, always fresh).
+  useEffect(() => {
+    flushStateRef.current = {
+      stepKey: getCurrentStepKey(),
+      data: getStepData(getCurrentStepKey()),
+      expertProfileId,
+    };
+  });
+
+  // Best-effort flush on tab close / hard navigation / backgrounding. Attached once;
+  // reads `flushStateRef` so it never sees stale state.
+  useEffect(() => {
+    const flush = (): void => {
+      const { stepKey, data, expertProfileId: profileId } = flushStateRef.current;
+      // Only flush when there are unsaved changes relative to the last successful save.
+      if (JSON.stringify(data) === lastSavedDataRef.current) return;
+
+      const payload: Record<string, unknown> = { step: stepKey, data };
+      if (profileId) payload.expertProfileId = profileId; // omit when null
+      const body = JSON.stringify(payload);
+
+      if (
+        typeof globalThis.navigator !== 'undefined' &&
+        typeof globalThis.navigator.sendBeacon === 'function'
+      ) {
+        globalThis.navigator.sendBeacon(
+          '/api/expert/apply/flush-draft',
+          new Blob([body], { type: 'application/json' })
+        );
+      } else {
+        // Fallback when sendBeacon is unavailable: a keepalive fetch reusing the
+        // SAME fresh body built above from flushStateRef, so it stays stale-safe
+        // (the effect's first-render `performSave` closure would save stale data).
+        void globalThis.fetch('/api/expert/apply/flush-draft', {
+          method: 'POST',
+          body,
+          keepalive: true,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+    };
+
+    const onVisibilityChange = (): void => {
+      if (globalThis.document.visibilityState === 'hidden') flush();
+    };
+
+    globalThis.addEventListener('pagehide', flush);
+    globalThis.document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      globalThis.removeEventListener('pagehide', flush);
+      globalThis.document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
   // ── Actions ──────────────────────────────────────────────────
 
   const registerValidation = useCallback((fn: () => Promise<boolean>): void => {
@@ -430,12 +521,14 @@ export function ExpertApplicationProvider({
   const goToStep = useCallback(
     (stepIndex: number): void => {
       if (stepIndex < 0 || stepIndex >= STEP_CONFIG.length) return;
-      // Only allow navigating to completed steps or the current step
-      if (stepStatuses[stepIndex] === 'pending' && stepIndex > currentStep) return;
+      if (stepIndex === currentStep) return;
+      // Reachable-step navigation: any step the user has already visited.
+      if (stepIndex > maxReachedStep) return;
+      void saveIfDirty(); // persist the step being LEFT before we switch
       setDirection(stepIndex > currentStep ? 'forward' : 'backward');
       setCurrentStep(stepIndex);
     },
-    [stepStatuses, currentStep]
+    [currentStep, maxReachedStep, saveIfDirty]
   );
 
   const goNext = useCallback(async (): Promise<void> => {
@@ -472,10 +565,11 @@ export function ExpertApplicationProvider({
 
   const goPrevious = useCallback((): void => {
     if (currentStep > 0) {
+      void saveIfDirty(); // persist the step being LEFT before we step back
       setDirection('backward');
       setCurrentStep((prev) => prev - 1);
     }
-  }, [currentStep]);
+  }, [currentStep, saveIfDirty]);
 
   const skipStep = useCallback(async (): Promise<void> => {
     // Save whatever is there (optional steps)
@@ -518,8 +612,15 @@ export function ExpertApplicationProvider({
   }, [expertProfileId]);
 
   const abandon = useCallback(async (): Promise<void> => {
-    // Save current state before leaving
-    await performSave();
+    // Save current state before leaving; bail if it fails so the user keeps
+    // their data and doesn't get a false "saved" confirmation.
+    const saved = await performSave();
+    if (!saved) {
+      // performSave already set error state + showed its own error toast; add a
+      // clear "stay on the page" message so the button re-enables (see FIX 2).
+      toast.error("Couldn't save your progress — please try again before leaving.");
+      return;
+    }
 
     // Track analytics
     const abandonStepConfig = STEP_CONFIG[currentStep];
@@ -543,6 +644,7 @@ export function ExpertApplicationProvider({
     () => ({
       expertProfileId,
       currentStep,
+      maxReachedStep,
       stepStatuses,
       direction,
       autoSaveState,
@@ -567,6 +669,7 @@ export function ExpertApplicationProvider({
     [
       expertProfileId,
       currentStep,
+      maxReachedStep,
       stepStatuses,
       direction,
       autoSaveState,
