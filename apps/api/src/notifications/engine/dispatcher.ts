@@ -57,6 +57,42 @@ async function enqueueDelivery(
   );
 }
 
+/**
+ * External email recipient (BAL-325): the address is carried in the event payload
+ * (recipientEmail); there is no Balo user to resolve. We use the invite's
+ * correlationId (the expert_referral_invites row UUID, already unique per
+ * (profile,email)) as the recipientId — the log/dedup identity — so the invitee's
+ * raw address never lands in the structured dispatcher log or the BullMQ jobId.
+ * Delivery still targets the literal recipientEmail (the email adapter honours
+ * payload.recipientEmail), and dedup is preserved because the jobId stays unique
+ * per invite.
+ *
+ * NOTE: external (non-user) email_address deliveries are intentionally NOT recorded
+ * in notification_log — its recipientId is a NOT NULL FK to users.id, so an external
+ * recipient has no valid key and logNotification's internal try/catch swallows the
+ * failed insert. A durable external-recipient audit trail is a follow-up (BAL-341;
+ * mirrors the pre-existing admin/ops-inbox literal-email limitation).
+ */
+async function dispatchExternalEmail(rule: NotificationRule, context: RuleContext): Promise<void> {
+  const email = context.payload.recipientEmail;
+  if (typeof email !== 'string' || email.length === 0) {
+    log.warn(
+      { template: rule.template, event: context.event },
+      'email_address recipient missing payload.recipientEmail — skipping dispatch'
+    );
+    return;
+  }
+  const correlationId = context.payload.correlationId;
+  if (typeof correlationId !== 'string' || correlationId.length === 0) {
+    log.warn(
+      { template: rule.template, event: context.event },
+      'email_address recipient missing payload.correlationId — skipping dispatch'
+    );
+    return;
+  }
+  await enqueueDelivery(rule, context, correlationId, email);
+}
+
 export async function dispatch(rule: NotificationRule, context: RuleContext): Promise<void> {
   // 1. Evaluate condition
   if (rule.condition && !rule.condition(context)) {
@@ -82,39 +118,11 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
     return;
   }
 
-  // 1c. External email recipient (BAL-325): the address is carried in the event
-  //     payload (recipientEmail); there is no Balo user to resolve. Use the
-  //     invite's correlationId (the expert_referral_invites row UUID, already
-  //     unique per (profile,email)) as the recipientId — the log/dedup identity —
-  //     so the invitee's raw address never lands in the structured dispatcher log
-  //     or the BullMQ jobId. Delivery still targets the literal recipientEmail
-  //     (the email adapter honours payload.recipientEmail), and dedup is preserved
-  //     because the jobId stays unique per invite.
-  //
-  //     NOTE: external (non-user) email_address deliveries are intentionally NOT
-  //     recorded in notification_log — its recipientId is a NOT NULL FK to
-  //     users.id, so an external recipient has no valid key and logNotification's
-  //     internal try/catch swallows the failed insert. A durable external-recipient
-  //     audit trail is a follow-up (mirrors the pre-existing admin/ops-inbox
-  //     literal-email limitation).
+  // 1c. External email recipient (BAL-325): delivered to a literal address carried
+  //     in the event payload — there is no Balo user to resolve. Extracted to keep
+  //     this function's cognitive complexity in check; see dispatchExternalEmail.
   if (rule.recipient === 'email_address') {
-    const email = context.payload.recipientEmail;
-    if (typeof email !== 'string' || email.length === 0) {
-      log.warn(
-        { template: rule.template, event: context.event },
-        'email_address recipient missing payload.recipientEmail — skipping dispatch'
-      );
-      return;
-    }
-    const correlationId = context.payload.correlationId;
-    if (typeof correlationId !== 'string' || correlationId.length === 0) {
-      log.warn(
-        { template: rule.template, event: context.event },
-        'email_address recipient missing payload.correlationId — skipping dispatch'
-      );
-      return;
-    }
-    await enqueueDelivery(rule, context, correlationId, email);
+    await dispatchExternalEmail(rule, context);
     return;
   }
 

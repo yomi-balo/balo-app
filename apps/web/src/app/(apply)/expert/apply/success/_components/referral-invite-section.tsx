@@ -150,14 +150,18 @@ export function ReferralInviteSection(): React.JSX.Element {
               <button type="button" onClick={handleRetry} className="underline underline-offset-2">
                 Try again
               </button>
-              .
+              {'.'}
             </p>
           )}
 
           <div className="flex justify-end">
             <Button
               type="button"
-              onClick={() => void handleSend()}
+              onClick={() => {
+                handleSend().catch(() => {
+                  // handleSend owns its error state (sets sendState); nothing to do here.
+                });
+              }}
               disabled={emails.length === 0 || sendState === 'sending'}
             >
               {sendState === 'sending' ? (

@@ -577,7 +577,7 @@ describe('termsStepDraftSchema', () => {
 
 describe('STEP_CONFIG', () => {
   it('has exactly 6 steps with the invite step removed', () => {
-    expect(STEP_CONFIG.length).toBe(6);
+    expect(STEP_CONFIG).toHaveLength(6);
   });
 
   it('preserves the canonical step order', () => {
