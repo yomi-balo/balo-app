@@ -4,8 +4,10 @@ export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
   dts: true,
-  // Bundle workspace packages that export raw TypeScript (main: ./src/index.ts)
-  noExternal: ['@balo/shared', '@balo/db'],
+  // Bundle workspace packages that export raw TypeScript (they have no compiled
+  // dist). Leaving one external makes Node resolve the specifier to a raw .ts
+  // file at runtime → ERR_UNKNOWN_FILE_EXTENSION.
+  noExternal: ['@balo/shared', '@balo/db', '@balo/analytics'],
   // Pino transports use require.resolve() + worker threads at runtime —
   // they MUST stay external so Node can find them in node_modules
   external: ['pino', 'pino-pretty', '@axiomhq/pino'],
