@@ -9,6 +9,8 @@ export const EXPERT_EVENTS = {
   // BAL-325 — referral prompt on the /expert/apply/success page.
   REFERRAL_PROMPT_VIEWED: 'expert_referral_prompt_viewed', // denominator (prompt shown)
   REFERRAL_INVITES_SENT: 'expert_referral_invites_sent', // numerator (invites dispatched)
+  // BAL-337 — fired when Done is clicked on a product with no rating yet.
+  ASSESSMENT_DONE_BLOCKED: 'expert_application_assessment_done_blocked',
 } as const;
 
 export type ExpertStepName =
@@ -49,6 +51,9 @@ export interface ExpertEventMap {
     invites_sent: number; // invites newly dispatched this submission
     invites_attempted: number; // total addresses entered
     already_invited: number; // addresses already invited (no-op)
+  };
+  [EXPERT_EVENTS.ASSESSMENT_DONE_BLOCKED]: {
+    product_id: string;
   };
 }
 
