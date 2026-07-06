@@ -264,26 +264,17 @@ describe('KickoffBoard — client billing capture (BAL-323)', () => {
     expect(screen.queryByRole('button', { name: /Add details/i })).not.toBeInTheDocument();
   });
 
-  it('fires billing_details_blocked_view when a member is blocked', () => {
-    renderBoard({ lens: 'client', billing: billingCapture({ canManage: false }) });
-    expect(track).toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, {
-      company_id: COMPANY_ID,
-      request_id: REQUEST_ID,
-    });
-  });
-
-  it('does NOT fire the blocked event for an owner/admin who can proceed', () => {
-    renderBoard({ lens: 'client', billing: billingCapture({ canManage: true }) });
-    expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
-  });
-
-  it('shows the notice but does NOT re-fire the blocked event from the mobile board', () => {
-    // The mobile board lives in a lazily-mounted sheet; only the desktop board
-    // counts the block, so opening the sheet must not double-fire.
+  it('shows the member notice on the mobile board too', () => {
     renderBoard({ lens: 'client', billing: billingCapture({ canManage: false }), mobile: true });
     expect(
       screen.getByText(/A company owner or admin needs to add these billing details/i)
     ).toBeInTheDocument();
+  });
+
+  it('the board itself never fires blocked_view analytics — the shell owns that (dedup)', () => {
+    // The board mounts twice per client (desktop + mobile sheet); the blocked-view
+    // event is fired once from the single-mount shell tracker instead.
+    renderBoard({ lens: 'client', billing: billingCapture({ canManage: false }) });
     expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
   });
 });

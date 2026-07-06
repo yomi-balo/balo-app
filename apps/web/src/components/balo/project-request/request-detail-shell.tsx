@@ -17,6 +17,7 @@ import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
 import { ProposalSlot } from './proposal-slot';
 import { KickoffBoard } from './proposal/kickoff-board';
+import { BillingBlockedViewTracker } from './proposal/billing-blocked-view-tracker';
 import { ConversationStage } from './conversation/conversation-stage';
 import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 
@@ -146,6 +147,16 @@ export function RequestDetailShell({
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 
+  // A client-lens member (not owner/admin) is blocked from the outstanding billing
+  // step. Fire the blocked-view event ONCE from here (the shell mounts once; the
+  // KickoffBoard mounts twice per client — desktop + mobile sheet).
+  const billingBlocked =
+    ctx.lens === 'client' &&
+    view.kickoff !== null &&
+    !view.kickoff.clientBillingConfirmed &&
+    billingCapture !== null &&
+    !billingCapture.canManage;
+
   // Phase-2 expert compact EOI card. Rendered at BOTH the mobile sheet and the desktop
   // right column, so it's built once here — sharing one element avoids duplicating the
   // JSX at both call sites. key={view.id}: App Router preserves client state across
@@ -170,6 +181,10 @@ export function RequestDetailShell({
         status={view.status}
         phase={phase}
       />
+
+      {billingBlocked && billingCapture && (
+        <BillingBlockedViewTracker companyId={billingCapture.companyId} requestId={view.id} />
+      )}
 
       <LensLine ctx={ctx} isPhase2={isPhase2} />
 

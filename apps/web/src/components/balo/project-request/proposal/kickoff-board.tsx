@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useTransition } from 'react';
+import { useCallback, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Check,
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { track, PROJECT_EVENTS, BILLING_EVENTS } from '@/lib/analytics';
+import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { RequestCard } from '../request-card';
 import { ClientBillingAffordance } from './billing-details-dialog';
@@ -93,6 +93,16 @@ function actionLabelFor(party: KickoffLens): 'Complete' | 'Approve' {
   return party === 'admin' ? 'Approve' : 'Complete';
 }
 
+/** Notice shown on the client billing row for a member who can't complete it (never absence-framed). */
+const MEMBER_BLOCKED_SUB =
+  'A company owner or admin needs to add these billing details before kickoff.';
+
+/** A row's sub-copy: the member notice for a blocked billing row, else done/outstanding. */
+function rowSubCopy(task: KickoffTaskDef, done: boolean, blocked: boolean): string {
+  if (blocked) return MEMBER_BLOCKED_SUB;
+  return done ? task.doneCopy : task.outstandingCopy;
+}
+
 export function KickoffBoard({
   requestId,
   acceptedRelationshipId,
@@ -120,37 +130,21 @@ export function KickoffBoard({
   const adminGatesReady = clientBillingConfirmed && expertTermsConfirmed;
 
   // A client-lens MEMBER (not owner/admin) is blocked from the outstanding billing
-  // step — measure how often the role gate stops the person who wants to proceed.
+  // step — its row gets a "what happens next" notice. The blocked-VIEW analytics is
+  // fired once from a single page-level tracker (see request-detail-shell), NOT here:
+  // the board mounts twice per client (desktop + mobile sheet), so firing from the
+  // component would over-count.
   const memberBlocked =
     lens === 'client' && !clientBillingConfirmed && billing !== null && !billing.canManage;
-  // Fire the blocked-view event from the always-mounted desktop board ONLY. The
-  // mobile board lives in a lazily-mounted request sheet, so counting it too would
-  // double-fire when a blocked member opens the sheet. The notice itself still
-  // shows on both boards (it keys on `memberBlocked`, below).
-  const blockedCompanyId = memberBlocked && !mobile && billing !== null ? billing.companyId : null;
-  useEffect(() => {
-    if (blockedCompanyId !== null) {
-      track(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, {
-        company_id: blockedCompanyId,
-        request_id: requestId,
-      });
-    }
-  }, [blockedCompanyId, requestId]);
 
   const rows: KickoffRow[] = KICKOFF_TASKS.map((task) => {
     const done = doneByParty[task.party];
-    // The client billing row gets a "what happens next" notice (never absence-framed)
-    // when the viewer is a member who can't complete it themselves.
     const blockedHere = task.party === 'client' && memberBlocked;
     return {
       ...task,
       done,
       mine: task.party === lens,
-      sub: blockedHere
-        ? 'A company owner or admin needs to add these billing details before kickoff.'
-        : done
-          ? task.doneCopy
-          : task.outstandingCopy,
+      sub: rowSubCopy(task, done, blockedHere),
     };
   });
 
