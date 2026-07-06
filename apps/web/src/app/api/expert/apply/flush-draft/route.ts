@@ -26,10 +26,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (error instanceof Error && error.message === 'Unauthorized') {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    // A malformed request — invalid JSON or a body that fails schema validation —
+    // is a client error: return 400 and skip server-side error logging.
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return NextResponse.json({ success: false, error: 'flush_failed' }, { status: 400 });
+    }
+    // Anything else is a genuine server failure — log it and return 500.
     log.error('Failed to flush expert application draft', {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return NextResponse.json({ success: false, error: 'flush_failed' }, { status: 400 });
+    return NextResponse.json({ success: false, error: 'flush_failed' }, { status: 500 });
   }
 }

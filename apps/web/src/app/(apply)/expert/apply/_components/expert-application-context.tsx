@@ -436,10 +436,15 @@ export function ExpertApplicationProvider({
   // Save-on-exit: reads the CURRENT step's key + data synchronously, so when called
   // before `setCurrentStep(...)` it captures the step being LEFT (no stale closure).
   // Skips the network call when nothing changed since the last successful save.
-  const saveIfDirty = useCallback(async (): Promise<boolean> => {
+  // Synchronous (returns void) and owns its own promise, so callers navigate
+  // immediately without a `void` operator or a floating promise.
+  const saveIfDirty = useCallback((): void => {
     const currentData = JSON.stringify(getStepData(getCurrentStepKey()));
-    if (currentData === lastSavedDataRef.current) return true; // no unsaved changes
-    return performSave();
+    if (currentData === lastSavedDataRef.current) return; // no unsaved changes
+    performSave().catch(() => {
+      // performSave resolves false and shows its own error toast; guard only so
+      // the promise is handled.
+    });
   }, [getCurrentStepKey, getStepData, performSave]);
 
   // Keep the flush ref current after every render (cheap object assign, always fresh).
@@ -463,10 +468,7 @@ export function ExpertApplicationProvider({
       if (profileId) payload.expertProfileId = profileId; // omit when null
       const body = JSON.stringify(payload);
 
-      if (
-        typeof globalThis.navigator !== 'undefined' &&
-        typeof globalThis.navigator.sendBeacon === 'function'
-      ) {
+      if (typeof globalThis.navigator?.sendBeacon === 'function') {
         globalThis.navigator.sendBeacon(
           '/api/expert/apply/flush-draft',
           new Blob([body], { type: 'application/json' })
@@ -475,12 +477,16 @@ export function ExpertApplicationProvider({
         // Fallback when sendBeacon is unavailable: a keepalive fetch reusing the
         // SAME fresh body built above from flushStateRef, so it stays stale-safe
         // (the effect's first-render `performSave` closure would save stale data).
-        void globalThis.fetch('/api/expert/apply/flush-draft', {
-          method: 'POST',
-          body,
-          keepalive: true,
-          headers: { 'content-type': 'application/json' },
-        });
+        globalThis
+          .fetch('/api/expert/apply/flush-draft', {
+            method: 'POST',
+            body,
+            keepalive: true,
+            headers: { 'content-type': 'application/json' },
+          })
+          .catch(() => {
+            // Best-effort unload flush; nothing to do if it fails.
+          });
       }
     };
 
@@ -524,7 +530,7 @@ export function ExpertApplicationProvider({
       if (stepIndex === currentStep) return;
       // Reachable-step navigation: any step the user has already visited.
       if (stepIndex > maxReachedStep) return;
-      void saveIfDirty(); // persist the step being LEFT before we switch
+      saveIfDirty(); // persist the step being LEFT before we switch
       setDirection(stepIndex > currentStep ? 'forward' : 'backward');
       setCurrentStep(stepIndex);
     },
@@ -565,7 +571,7 @@ export function ExpertApplicationProvider({
 
   const goPrevious = useCallback((): void => {
     if (currentStep > 0) {
-      void saveIfDirty(); // persist the step being LEFT before we step back
+      saveIfDirty(); // persist the step being LEFT before we step back
       setDirection('backward');
       setCurrentStep((prev) => prev - 1);
     }
