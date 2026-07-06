@@ -17,7 +17,20 @@ Your first step is to gather full context:
 
 ## Workflow
 
-**Setup — do this FIRST, before any other phase.** Unless otherwise instructed: switch cleanly to `main`, **pull the latest changes**, and create a new branch off the freshly pulled `main` for the task (use the Linear ticket's `gitBranchName` when available). Syncing `main` up front guarantees the entire run is built on the latest code. Every subsequent phase happens on this branch; **Phase 9 just commits it and raises the PR — it does NOT switch to `main` or pull again** (the sync already happened here).
+**Setup — do this FIRST, before any other phase.** Unless otherwise instructed, run the entire task in a dedicated git worktree cut from the latest `main`, and label this session with the ticket. This repo follows a one-worktree-per-ticket convention: sibling directories named `../balo-app-bal-<NNN>` on branches `yomi/bal-<NNN>-<slug>` (Linear's `gitBranchName`) — match it exactly.
+
+1. **Sync `main`.** From the repo root, run `git fetch origin` so `origin/main` is current. Don't `git checkout main` / `git pull` in place — `main` stays checked out in the primary worktree; you branch off the freshly-fetched `origin/main` instead. Fetching up front is what guarantees the whole run is built on the latest code.
+2. **Create (or reuse) the worktree**, deriving `<NNN>` and `<gitBranchName>` from the Linear ticket:
+   ```bash
+   git worktree list | grep -q "balo-app-bal-<NNN>" \
+     || git worktree add "../balo-app-bal-<NNN>" -b "<gitBranchName>" origin/main
+   cd "../balo-app-bal-<NNN>"
+   ```
+   (If `<gitBranchName>` already exists, omit `-b`.) **Every subsequent phase — DBA, build, review, commit, PR — runs from inside this worktree**, never the primary checkout. (Native alternative: the `EnterWorktree` tool lets Claude Code manage the worktree cwd + cleanup for you; either mechanism is fine as long as the whole run happens in the worktree.)
+3. **Install dependencies.** A fresh worktree has no `node_modules` — run `pnpm install` inside it before any typecheck/build/test phase, or they will fail.
+4. **Label the session.** Claude Code can't rename its own session programmatically, so ask the user once, up front, to run `/rename BAL-<NNN>` (titles the session in the resume picker; `claude -n BAL-<NNN>` does the same at launch). State it in one line and continue — don't block the run waiting for it.
+
+Every subsequent phase happens in this worktree on this branch; **Phase 9 just commits and raises the PR from here — it does NOT re-sync `main` or re-create the branch** (Setup already did that).
 
 ### Phase 0: Design (conditional)
 
@@ -162,7 +175,7 @@ Spawn the reviewer sub-agent:
 
 ```bash
 git diff --staged | claude -p \
-  --system-prompt "$(cat .claude/commands/reviewer.md)" \
+  --system-prompt "$(cat .claude/commands/review.md)" \
   "Review this implementation. Task: {TASK_DESCRIPTION}. Plan: $(cat /tmp/balo-plan.md). Diff: $(git diff --staged). Read each changed file in full before reviewing."
 ```
 
@@ -199,7 +212,7 @@ claude -p \
 
 Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a pull request. **This is part of the workflow — invoking `/implement` authorizes it; don't ask again unless something is genuinely ambiguous (unrelated changes to exclude, a rebase conflict, or the user said not to raise a PR).**
 
-1. **Confirm you're on the task's feature branch** — the one cut from the latest `main` during **Setup**, so the work is already built on current code. Do **not** switch to `main` or pull here; that sync belongs in Setup, before the build. (Fallback only: if the work somehow ended up on `main`, create the branch now carrying the changes — `git switch -c <gitBranchName>`. If `main` genuinely advanced mid-run and must be integrated, rebase onto `origin/main` and **surface any conflicts to the user — never force-resolve or force-push**.)
+1. **Confirm you're in the task's worktree** (`../balo-app-bal-<NNN>`) on branch `<gitBranchName>`, cut from the freshly-fetched `origin/main` during **Setup**, so the work is already built on current code. Do **not** re-sync or pull here; that belongs in Setup. (Fallback only: if changes somehow landed in the primary checkout on `main`, move them onto the worktree branch before committing. If `origin/main` genuinely advanced mid-run and must be integrated, rebase onto `origin/main` and **surface any conflicts to the user — never force-resolve or force-push**.)
 2. **Stage only this task's files.** Drop any unrelated pre-existing working-tree changes from the commit with `git restore --staged <path>` (leave them in the working tree). Verify with `git diff --cached --name-only` before committing.
 3. **Commit.** Follow the repo convention `feat|fix|chore: <concise summary> (BAL-XXX)`, with a body summarizing what shipped and what was deliberately deferred. End the message with the required trailer:
    `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
@@ -214,6 +227,7 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
    The PR body should cover: what & why (link the Linear ticket), what's built, any approved scope additions, security/quality notes, testing (and what's deferred to CI — e.g. integration tests, the production build), and the deliberately-stubbed boundary. End the body with:
    `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 5. **Report the PR URL.** Then offer to watch CI and/or move the Linear ticket to In Review with the PR attached.
+6. **Worktree cleanup (offer, never auto-run).** Leave the worktree in place until the PR merges. After merge, offer to remove it: `git worktree remove ../balo-app-bal-<NNN>` (only add `--force`, and only if the user confirms discarding leftover changes). Never remove a worktree that still has uncommitted or unmerged work.
 
 ## Rules
 
@@ -226,4 +240,5 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
 7. Stage changes with `git add -A` before running review agents so they see the full diff
 8. The designer's approved output feeds into the architect, builder, and UX validator — it is the source of truth for what the user experience should be
 9. Phase 7 (pre-PR gate) is the last automated check before declaring success — never skip it, even if review passed cleanly
-10. Sync `main` and cut the feature branch **at Setup, before any build work** (not at the end), so the whole run is built on the latest code. Phase 9 then always runs on a successful completion unless the user said not to raise a PR: it commits **only this task's files** (exclude unrelated working-tree changes) on that branch, pushes, and raises the PR to `main` with `gh` — it does not re-pull `main`. Never force-push; if `main` must be integrated mid-run, rebase and surface conflicts to the user. Use the Linear ticket's `gitBranchName` and end the commit/PR with the required co-author/footer trailers.
+10. Isolate the run in a per-ticket worktree (`../balo-app-bal-<NNN>` on `<gitBranchName>`) cut from the freshly-fetched `origin/main` **at Setup, before any build work** (not at the end) — never build in the primary checkout, and run `pnpm install` in the new worktree first, so the whole run is built on the latest code with deps present. Phase 9 then always runs on a successful completion unless the user said not to raise a PR: from inside that worktree it commits **only this task's files** (exclude unrelated working-tree changes), pushes, and raises the PR to `main` with `gh` — it does not re-sync `main`. Never force-push; if `origin/main` must be integrated mid-run, rebase and surface conflicts to the user. Use the Linear ticket's `gitBranchName` and end the commit/PR with the required co-author/footer trailers.
+11. Claude Code cannot rename its own session — the only mechanism is the user running `/rename BAL-<NNN>` (or launching with `claude -n BAL-<NNN>`). Surface that prompt once at Setup and continue; never claim the session was renamed automatically.
