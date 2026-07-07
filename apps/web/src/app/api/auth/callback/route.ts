@@ -6,6 +6,7 @@ import { isValidReturnTo } from '@/lib/auth/validation';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { emitDomainCapture } from '@/lib/analytics/party-domains';
+import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
 export const dynamic = 'force-dynamic';
 
@@ -162,6 +163,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       if (resolved.domainCapture) {
         emitDomainCapture(resolved.domainCapture, resolved.user.id);
       }
+
+      // BAL-345: run the domain auto-join match engine (post-commit). OAuth may
+      // return an UNVERIFIED email — pass the real WorkOS flag, never assume true.
+      // The engine's verified hard-gate stands down when it is false. The `.catch`
+      // is belt-and-suspenders so a domain-join failure can NEVER break auth.
+      await runDomainJoinAndEmit({
+        userId: resolved.user.id,
+        email: resolved.user.email,
+        emailVerified: workosUser.emailVerified === true,
+      }).catch(() => {
+        // runDomainJoinAndEmit already logs internally.
+      });
     }
 
     log.info('OAuth callback succeeded', {

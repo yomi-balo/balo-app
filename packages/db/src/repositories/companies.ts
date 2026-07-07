@@ -1,4 +1,4 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { companies, companyMembers, type Company, type User } from '../schema';
 
@@ -27,11 +27,19 @@ export const companiesRepository = {
   },
 
   /**
-   * Get user's company (for session - users have exactly one company)
+   * Get user's company (for session).
+   *
+   * BAL-345: with the global unique on `company_members.userId` dropped a user may
+   * hold >1 live membership, so this must exclude soft-removed rows and order
+   * deterministically `[role, joinedAt, id]` (native pg enum `role` sorts
+   * owner→admin→member, so the personal-workspace owner row wins). NB this method
+   * has no live app callers today — the fix is forward-safety/consistency, not the
+   * load-bearing seam (that is `usersRepository.findWithCompany`).
    */
   findByUserId: async (userId: string) => {
     const membership = await db.query.companyMembers.findFirst({
-      where: eq(companyMembers.userId, userId),
+      where: and(eq(companyMembers.userId, userId), isNull(companyMembers.deletedAt)),
+      orderBy: (members, { asc }) => [asc(members.role), asc(members.joinedAt), asc(members.id)],
       with: { company: true },
     });
     return membership?.company;
@@ -47,7 +55,13 @@ export const companiesRepository = {
    */
   findOwnerByCompanyId: async (companyId: string): Promise<User> => {
     const membership = await db.query.companyMembers.findFirst({
-      where: and(eq(companyMembers.companyId, companyId), eq(companyMembers.role, 'owner')),
+      // BAL-345: exclude soft-removed owner memberships (a soft-removed owner must
+      // not be returned as the live owner).
+      where: and(
+        eq(companyMembers.companyId, companyId),
+        eq(companyMembers.role, 'owner'),
+        isNull(companyMembers.deletedAt)
+      ),
       orderBy: (members, { asc }) => [asc(members.joinedAt), asc(members.id)],
       with: { user: true },
     });

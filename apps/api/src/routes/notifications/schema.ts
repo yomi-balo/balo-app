@@ -223,6 +223,17 @@ const billingDetailsConfirmedPayload = z.object({
   projectRequestId: z.uuid(),
 });
 
+// BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the
+// subject (joiner/requester), `correlationId` the stable membership/request id.
+// One schema, reused for all four arms (DRY — the completeness guard still checks
+// each event name has an arm). Mirrors apps/web/src/lib/notifications/types.ts.
+const partyJoinEventPayload = z.object({
+  correlationId: z.uuid(),
+  partyType: z.enum(['company', 'agency']),
+  partyId: z.uuid(),
+  userId: z.uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -293,6 +304,22 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('billing.details_confirmed'),
     payload: billingDetailsConfirmedPayload,
+  }),
+  z.object({
+    event: z.literal('party.member_joined_via_domain'),
+    payload: partyJoinEventPayload,
+  }),
+  z.object({
+    event: z.literal('party.join_request_created'),
+    payload: partyJoinEventPayload,
+  }),
+  z.object({
+    event: z.literal('party.join_request_approved'),
+    payload: partyJoinEventPayload,
+  }),
+  z.object({
+    event: z.literal('party.join_request_declined'),
+    payload: partyJoinEventPayload,
   }),
 ]);
 

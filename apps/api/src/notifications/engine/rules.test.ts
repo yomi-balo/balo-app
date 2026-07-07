@@ -354,6 +354,49 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-345 domain auto-join', () => {
+    it('member_joined_via_domain notifies party_admins in-app ONLY (low-signal FYI)', () => {
+      const rules = notificationRules['party.member_joined_via_domain'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(1);
+      expect(rules![0]).toMatchObject({
+        channel: 'in-app',
+        recipient: 'party_admins',
+        template: 'party-member-joined-via-domain',
+        timing: 'immediate',
+      });
+    });
+
+    it('join_request_created notifies party_admins via email + in-app', () => {
+      const rules = notificationRules['party.join_request_created'];
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('party_admins');
+        expect(rule.template).toBe('party-join-request-created');
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+
+    it.each([
+      ['party.join_request_approved', 'party-join-request-approved'],
+      ['party.join_request_declined', 'party-join-request-declined'],
+    ] as const)('%s notifies the requester (self) via email + in-app', (event, template) => {
+      const rules = notificationRules[event];
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('self');
+        expect(rule.template).toBe(template);
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

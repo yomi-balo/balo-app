@@ -20,6 +20,12 @@ import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
 import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
 import { ProjectBillingReminderOwnerEmail } from './project-billing-reminder-owner.js';
 import { ProjectBillingReminderCreatorEmail } from './project-billing-reminder-creator.js';
+import {
+  PartyMemberJoinedViaDomainEmail,
+  PartyJoinRequestCreatedEmail,
+  PartyJoinRequestApprovedEmail,
+  PartyJoinRequestDeclinedEmail,
+} from './party-domain-join.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -36,6 +42,24 @@ function arrayLength(value: unknown): number {
 /** Coerce a payload field to a non-negative integer count; 0 when absent. */
 function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * BAL-345 — the joiner/requester display name from the resolver-hydrated
+ * `data.user` (the SUBJECT, `payload.userId`). Degrades to "A teammate" when the
+ * user has no name yet (email signups collect the name in onboarding).
+ */
+function partyActorName(data: Record<string, unknown>): string {
+  const user = data.user as { firstName?: string | null; lastName?: string | null } | undefined;
+  const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+  return name.length > 0 ? name : 'A teammate';
+}
+
+/** BAL-345 — human noun for the party type carried in `data.partyType`. */
+function partyNoun(data: Record<string, unknown>): string {
+  if (data.partyType === 'company') return 'company';
+  if (data.partyType === 'agency') return 'agency';
+  return 'organization';
 }
 
 const SUBJECT_TITLE_MAX_LENGTH = 160;
@@ -319,6 +343,66 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `Billing details are still needed to start ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-345 domain auto-join — admin FYI (in-app is the live channel; the email
+  // template is registered for completeness/coverage).
+  'party-member-joined-via-domain': (data) => {
+    const actorName = partyActorName(data);
+    const noun = partyNoun(data);
+    return {
+      component: React.createElement(PartyMemberJoinedViaDomainEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorName,
+        partyNoun: noun,
+        teamUrl: `${BASE_URL}/settings/team`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorName)} joined your ${noun}`,
+    };
+  },
+
+  // BAL-345 domain auto-join — admins must approve/decline.
+  'party-join-request-created': (data) => {
+    const actorName = partyActorName(data);
+    const noun = partyNoun(data);
+    return {
+      component: React.createElement(PartyJoinRequestCreatedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorName,
+        partyNoun: noun,
+        teamUrl: `${BASE_URL}/settings/team`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorName)} requested to join your ${noun}`,
+    };
+  },
+
+  // BAL-345 domain auto-join — requester's request approved.
+  'party-join-request-approved': (data) => {
+    const noun = partyNoun(data);
+    return {
+      component: React.createElement(PartyJoinRequestApprovedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        partyNoun: noun,
+        teamUrl: `${BASE_URL}/dashboard`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `You're in — your request to join the ${noun} was approved`,
+    };
+  },
+
+  // BAL-345 domain auto-join — requester's request declined.
+  'party-join-request-declined': (data) => {
+    const noun = partyNoun(data);
+    return {
+      component: React.createElement(PartyJoinRequestDeclinedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        partyNoun: noun,
+        baseUrl: BASE_URL,
+      }),
+      subject: `An update on your request to join the ${noun}`,
     };
   },
 };

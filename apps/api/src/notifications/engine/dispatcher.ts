@@ -19,6 +19,7 @@ const CHANNEL_QUEUES: Record<NotificationChannel, string> = {
 const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
   'non_selected_experts',
   'admin_users',
+  'party_admins',
 ]);
 
 /**
@@ -176,6 +177,11 @@ function resolveRecipientIds(
       break;
     case 'non_selected_experts':
       source = context.data.nonSelectedExpertUserIds;
+      break;
+    case 'party_admins':
+      // BAL-345: the party's admin (MANAGE_MEMBERS) member ids, hydrated by the
+      // resolver from partyMembershipsRepository.listAdminUserIds.
+      source = context.data.partyAdminUserIds;
       break;
     default:
       return [];

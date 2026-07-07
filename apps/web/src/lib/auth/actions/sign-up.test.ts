@@ -33,6 +33,13 @@ vi.mock('@balo/db', () => ({
 // tests sign-up logic, not emission; the emit is covered in verify-email.test.ts).
 vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
 
+// BAL-345: the domain auto-join match engine, dynamically imported in the fallback
+// (verification-disabled) create path. vi.mock intercepts dynamic imports too.
+const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
+vi.mock('@/lib/domain-join/run-domain-join', () => ({
+  runDomainJoinAndEmit: (...args: unknown[]) => mockRunDomainJoinAndEmit(...args),
+}));
+
 import { signUpAction } from './sign-up';
 import type { UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 
@@ -316,6 +323,45 @@ describe('signUpAction', () => {
         success: false,
         error: 'Something went wrong. Please try again.',
       });
+    });
+  });
+
+  // BAL-345 — domain auto-join seam wiring (verification-disabled fallback path).
+  describe('domain auto-join wiring (BAL-345)', () => {
+    it('runs the match engine with the WorkOS emailVerified flag (true)', async () => {
+      setupFallbackPath({ emailVerified: true });
+      await signUpAction(validInput());
+      expect(mockRunDomainJoinAndEmit).toHaveBeenCalledWith({
+        userId: 'user-1',
+        email: 'jane@example.com',
+        emailVerified: true,
+      });
+    });
+
+    it('passes emailVerified: false when WorkOS reports it unverified (never hardcoded)', async () => {
+      setupFallbackPath({ emailVerified: false });
+      await signUpAction(validInput());
+      expect(mockRunDomainJoinAndEmit).toHaveBeenCalledWith(
+        expect.objectContaining({ emailVerified: false })
+      );
+    });
+
+    it('does NOT run the match engine on the verification-required path (no user created)', async () => {
+      mockCreateUser.mockResolvedValue(mockWorkOSUser());
+      mockAuthenticateWithPassword.mockResolvedValue({
+        pendingAuthenticationToken: 'pat_test_123',
+        user: mockWorkOSUser(),
+      });
+
+      await signUpAction(validInput());
+      expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a throw from the match engine is swallowed — sign-up still succeeds', async () => {
+      setupFallbackPath({ emailVerified: true });
+      mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('engine boom'));
+      const result = await signUpAction(validInput());
+      expect(result.success).toBe(true);
     });
   });
 });

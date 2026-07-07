@@ -97,6 +97,25 @@ export const partyDomainsRepository = {
     return { outcome: 'skipped', reason: 'already_claimed' };
   },
 
+  /**
+   * The single LIVE party that owns a domain platform-wide, or `undefined`. The
+   * partial-unique index guarantees ≤1 live row per domain, so this is the
+   * BAL-345 match engine's ownership lookup. Kept PURE (party_domains only) — it
+   * does NOT join `companies.isPersonal` (party_domains is polymorphic; agencies
+   * have no `isPersonal`). The isPersonal stand-down lives in
+   * `getPartyJoinSettings` + the engine decision tree.
+   */
+  findActiveByDomain: async (domain: string): Promise<PartyDomain | undefined> => {
+    const d = normalizeDomain(domain);
+    if (d === '') return undefined;
+    const [row] = await db
+      .select()
+      .from(partyDomains)
+      .where(and(eq(partyDomains.domain, d), isNull(partyDomains.deletedAt)))
+      .limit(1);
+    return row;
+  },
+
   /** All live domains for a party (reverse lookup — used by BAL-345), oldest first. */
   listByParty: async (partyType: PartyType, partyId: string): Promise<PartyDomain[]> => {
     return db

@@ -52,6 +52,7 @@ export async function listUsersAction(): Promise<AdminUserRow[]> {
         companyMembershipCount: sql<number>`(
           SELECT COUNT(*)::int FROM "company_members"
           WHERE "company_members"."user_id" = "users"."id"
+            AND "company_members"."deleted_at" IS NULL
         )`,
       })
       .from(users)

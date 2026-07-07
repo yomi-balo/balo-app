@@ -159,6 +159,22 @@ export interface ProjectBillingReminderPayload {
   creatorUserId?: string; // → recipient:'billing_creator' (creator, no CTA); set only when != owner & member
 }
 
+// BAL-345 domain auto-join. All four share one shape: `userId` is the SUBJECT
+// (the joiner, or the requester) so the resolver's existing `payload.userId →
+// data.user` hydration names the actor in every template with no new resolver
+// code. `correlationId` is the stable membership id (member_joined) or join
+// request id (the three request events) → the BullMQ jobId dedup key.
+interface PartyJoinEventBase {
+  correlationId: string;
+  partyType: 'company' | 'agency';
+  partyId: string;
+  userId: string;
+}
+export type PartyMemberJoinedViaDomainPayload = PartyJoinEventBase; // correlationId = membershipId
+export type PartyJoinRequestCreatedPayload = PartyJoinEventBase; // correlationId = joinRequestId
+export type PartyJoinRequestApprovedPayload = PartyJoinEventBase; // correlationId = joinRequestId
+export type PartyJoinRequestDeclinedPayload = PartyJoinEventBase; // correlationId = joinRequestId
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -178,7 +194,11 @@ export type NotificationEvent =
   | 'project.message_posted'
   | 'project.file_shared'
   | 'project.billing_reminder'
-  | 'billing.details_confirmed';
+  | 'billing.details_confirmed'
+  | 'party.member_joined_via_domain'
+  | 'party.join_request_created'
+  | 'party.join_request_approved'
+  | 'party.join_request_declined';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -200,4 +220,8 @@ export interface EventPayloadMap {
   'project.file_shared': ProjectFileSharedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;
+  'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
+  'party.join_request_created': PartyJoinRequestCreatedPayload;
+  'party.join_request_approved': PartyJoinRequestApprovedPayload;
+  'party.join_request_declined': PartyJoinRequestDeclinedPayload;
 }

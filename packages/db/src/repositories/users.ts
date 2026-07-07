@@ -49,13 +49,23 @@ export const usersRepository = {
   },
 
   /**
-   * Find user with their company membership (for session hydration, excludes soft-deleted)
+   * Find user with their company membership (for session hydration, excludes soft-deleted).
+   *
+   * BAL-345: the global unique on `company_members.userId` was dropped, so a user
+   * may hold more than one live membership. Session consumers read
+   * `companyMemberships[0]`, so this read MUST be deterministic: filter out
+   * soft-removed memberships and order `[role, joinedAt, id]`. `role` is a NATIVE
+   * pg enum (`owner|admin|member`) ordered by DECLARATION order, so `asc(role)`
+   * puts the user's own personal-workspace `owner` row FIRST — the session lands
+   * in the personal workspace, never a domain-joined secondary org.
    */
   findWithCompany: async (id: string) => {
     return db.query.users.findFirst({
       where: and(eq(users.id, id), isNull(users.deletedAt)),
       with: {
         companyMemberships: {
+          where: (m, { isNull: isNullOp }) => isNullOp(m.deletedAt),
+          orderBy: (m, { asc }) => [asc(m.role), asc(m.joinedAt), asc(m.id)],
           with: { company: true },
         },
       },
@@ -169,6 +179,9 @@ export const usersRepository = {
           companyId: company.id,
           userId: user.id,
           role: 'owner',
+          // BAL-345: self-documenting — this is the personal-workspace owner row
+          // (the column also defaults to this value as a safety net).
+          joinMethod: 'personal_workspace',
         })
         .returning();
       if (membership === undefined) throw new Error('company_members insert returned no row');

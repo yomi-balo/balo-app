@@ -395,6 +395,46 @@ describe('dispatch', () => {
       expect(mockAdd).not.toHaveBeenCalled();
     });
 
+    // ── BAL-345: party_admins fan-out ──
+    const partyAdminsRule: NotificationRule = {
+      channel: 'in-app',
+      recipient: 'party_admins',
+      template: 'party-join-request-created',
+      timing: 'immediate',
+    };
+
+    it('enqueues one job per id in data.partyAdminUserIds (BAL-345 party_admins)', async () => {
+      const context: RuleContext = {
+        event: 'party.join_request_created',
+        payload: { correlationId: 'req-1' },
+        data: { partyAdminUserIds: ['owner-1', 'admin-2'] },
+      };
+
+      await dispatch(partyAdminsRule, context);
+
+      expect(getQueue).toHaveBeenCalledWith('notification-in-app');
+      expect(mockAdd).toHaveBeenCalledTimes(2);
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['owner-1', 'admin-2']);
+      const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+      expect(jobIds).toEqual([
+        'party-join-request-created--owner-1--req-1',
+        'party-join-request-created--admin-2--req-1',
+      ]);
+    });
+
+    it('does not enqueue when data.partyAdminUserIds is absent (BAL-345)', async () => {
+      const context: RuleContext = {
+        event: 'party.join_request_created',
+        payload: { correlationId: 'req-1' },
+        data: {},
+      };
+
+      await dispatch(partyAdminsRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
     it('does not enqueue when data.adminUserIds is absent', async () => {
       const context: RuleContext = {
         event: 'project.proposal_accepted',
