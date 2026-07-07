@@ -309,8 +309,8 @@ describe('loadClientPortfolio', () => {
     const row = dto.rows.find((r) => r.id === 'eng-pa');
     expect(row?.needsYou).toBe(true);
     // completionRequestedAt = day(1) (2026-06-15) + AUTO_ACCEPT_DAYS(7) = 2026-06-22,
-    // UTC-formatted "Jun 22" — locks the 7-day window + UTC "MMM D" format.
-    expect(row?.nudgeLabel).toBe('Review project completion — auto-accepts Jun 22');
+    // UTC-formatted "22 Jun" — locks the 7-day window + UTC "D MMM" format.
+    expect(row?.nudgeLabel).toBe('Review project completion — auto-accepts 22 Jun');
     expect(dto.tiles.needs).toBe(1);
   });
 
@@ -351,7 +351,7 @@ describe('loadExpertPortfolio', () => {
     expect(invitation?.href).toBe('/projects/req-9');
 
     const engagement = dto.rows.find((r) => r.kind === 'engagement');
-    expect(engagement?.href).toBe('/engagements/eng-live?entry=inbox');
+    expect(engagement?.href).toBe('/engagements/eng-live?from=inbox');
     expect(engagement?.stage).toBe('kicked');
   });
 
@@ -424,7 +424,7 @@ describe('loadExpertPortfolio', () => {
 
     const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
     expect(dto.rows).toHaveLength(1);
-    expect(dto.rows[0]?.href).toBe('/engagements/eng-retainer?entry=inbox');
+    expect(dto.rows[0]?.href).toBe('/engagements/eng-retainer?from=inbox');
     expect(dto.rows[0]?.title).toBe('Ongoing engagement');
   });
 
@@ -500,7 +500,7 @@ describe('loadAdminPortfolio', () => {
     expect(delivery?.label).toBe('In delivery');
     expect(delivery?.items.map((i) => i.id)).toEqual(['eng-active', 'eng-pa']);
     expect(delivery?.items.find((i) => i.id === 'eng-active')?.href).toBe(
-      '/engagements/eng-active?entry=inbox'
+      '/engagements/eng-active?from=inbox'
     );
     expect(delivery?.items.find((i) => i.id === 'eng-pa')?.stalledLabel).toBe('Awaiting client');
     // Origination-only pipeline tile is unaffected by the delivery column.
