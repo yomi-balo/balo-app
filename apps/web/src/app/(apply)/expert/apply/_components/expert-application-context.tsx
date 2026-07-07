@@ -33,6 +33,7 @@ import type { ApplicationWithRelations } from '@balo/db';
 type StepStatus = 'pending' | 'completed' | 'skipped';
 type AutoSaveState = 'idle' | 'saving' | 'saved' | 'error';
 type Direction = 'forward' | 'backward';
+export type SubmitState = 'idle' | 'submitting' | 'success';
 
 interface WizardState {
   expertProfileId: string | null;
@@ -41,6 +42,7 @@ interface WizardState {
   stepStatuses: StepStatus[];
   direction: Direction;
   autoSaveState: AutoSaveState;
+  submitState: SubmitState;
   profileData: Partial<ProfileStepData>;
   productsData: Partial<ProductsStepData>;
   assessmentData: Partial<AssessmentStepData>;
@@ -58,6 +60,9 @@ interface WizardActions {
   skipStep: () => Promise<void>;
   updateStepData: (step: StepKey, data: unknown) => void;
   registerValidation: (fn: () => Promise<boolean>) => void;
+  setSubmitState: (state: SubmitState) => void;
+  registerSubmit: (fn: () => void | Promise<void>) => void;
+  submit: () => void;
   triggerSave: () => Promise<void>;
   submitApplication: () => Promise<{
     success: boolean;
@@ -289,6 +294,10 @@ export function ExpertApplicationProvider({
   const [stepStatuses, setStepStatuses] = useState<StepStatus[]>(() => hydrateStepStatuses(draft));
   const [direction, setDirection] = useState<Direction>('forward');
   const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>('idle');
+  // Reactive submit UI state. Lives here (the common ancestor) so the relocated
+  // Submit button in WizardActionBar can render idle → submitting → success while
+  // the Terms step still owns the submit handler that drives these transitions.
+  const [submitState, setSubmitState] = useState<SubmitState>('idle');
 
   // Per-step form data
   const [profileData, setProfileData] = useState<Partial<ProfileStepData>>(() =>
@@ -312,6 +321,10 @@ export function ExpertApplicationProvider({
 
   // Validation ref
   const validationRef = useRef<(() => Promise<boolean>) | null>(null);
+
+  // Submit handler ref — the Terms step registers its handler here (mirrors
+  // validationRef). The bar invokes it via submit(); state lives in submitState.
+  const submitRef = useRef<(() => void | Promise<void>) | null>(null);
 
   // Idle auto-save
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -508,6 +521,14 @@ export function ExpertApplicationProvider({
     validationRef.current = fn;
   }, []);
 
+  const registerSubmit = useCallback((fn: () => void | Promise<void>): void => {
+    submitRef.current = fn;
+  }, []);
+
+  const submit = useCallback((): void => {
+    void submitRef.current?.();
+  }, []);
+
   const updateStepData = useCallback(
     (step: StepKey, data: unknown): void => {
       const setters: Record<StepKey, (d: unknown) => void> = {
@@ -654,6 +675,7 @@ export function ExpertApplicationProvider({
       stepStatuses,
       direction,
       autoSaveState,
+      submitState,
       profileData,
       productsData,
       assessmentData,
@@ -668,6 +690,9 @@ export function ExpertApplicationProvider({
       skipStep,
       updateStepData,
       registerValidation,
+      setSubmitState,
+      registerSubmit,
+      submit,
       triggerSave,
       submitApplication: submitApplicationFn,
       abandon,
@@ -679,6 +704,7 @@ export function ExpertApplicationProvider({
       stepStatuses,
       direction,
       autoSaveState,
+      submitState,
       profileData,
       productsData,
       assessmentData,
@@ -693,6 +719,9 @@ export function ExpertApplicationProvider({
       skipStep,
       updateStepData,
       registerValidation,
+      setSubmitState,
+      registerSubmit,
+      submit,
       triggerSave,
       submitApplicationFn,
       abandon,

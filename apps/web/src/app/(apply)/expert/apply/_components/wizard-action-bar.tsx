@@ -1,7 +1,7 @@
 'use client';
 
-import { ArrowLeft, ArrowRight, Loader2, LogOut } from 'lucide-react';
-import { motion } from 'motion/react';
+import { ArrowLeft, ArrowRight, Check, Loader2, LogOut } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -55,6 +55,73 @@ function SaveExitButton({ className }: Readonly<{ className?: string }>): React.
   );
 }
 
+/**
+ * Relocated "Submit Application" affordance for the final (Terms) step. Reads the
+ * reactive submitState from context and invokes the Terms-owned handler via
+ * `submit()`. Intentionally NOT disabled — clicking with the box unchecked runs
+ * `form.trigger()` in the handler, which surfaces the zod message and focuses the
+ * checkbox. Single definition so both viewport slots share it (avoids duplication).
+ *
+ * The success state adds `bg-none`: it and the base `bg-gradient-to-r` are in the
+ * same background-image group, so `cn()`/tailwind-merge drops the gradient and the
+ * solid `bg-success` shows through (mode-independent, order-independent).
+ */
+function SubmitButton({ className }: Readonly<{ className?: string }>): React.JSX.Element {
+  const { submitState, submit } = useWizard();
+  return (
+    <Button
+      type="button"
+      size="lg"
+      onClick={submit}
+      className={cn(
+        'group from-primary shadow-primary/20 hover:shadow-primary/25 bg-gradient-to-r to-violet-600 text-white shadow-md hover:shadow-lg',
+        submitState === 'success' && 'bg-success hover:bg-success text-success-foreground bg-none',
+        className
+      )}
+    >
+      <AnimatePresence mode="wait">
+        {submitState === 'idle' && (
+          <motion.span
+            key="idle"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            Submit Application
+          </motion.span>
+        )}
+        {submitState === 'submitting' && (
+          <motion.span
+            key="submitting"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="inline-flex items-center gap-2"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            Submitting your application...
+          </motion.span>
+        )}
+        {submitState === 'success' && (
+          <motion.span
+            key="success"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="inline-flex items-center gap-2"
+          >
+            <Check className="h-4 w-4" aria-hidden="true" />
+            Submitted!
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </Button>
+  );
+}
+
 export function WizardActionBar(): React.JSX.Element {
   const { currentStep, goNext, goPrevious, skipStep } = useWizard();
   const stepConfig = STEP_CONFIG[currentStep] ?? STEP_CONFIG[0];
@@ -90,7 +157,9 @@ export function WizardActionBar(): React.JSX.Element {
               Skip
             </Button>
           )}
-          {!isLast && (
+          {isLast ? (
+            <SubmitButton />
+          ) : (
             <Button
               type="button"
               size="lg"
@@ -130,7 +199,9 @@ export function WizardActionBar(): React.JSX.Element {
               Previous
             </Button>
           )}
-          {!isLast && (
+          {isLast ? (
+            <SubmitButton className="min-h-11 flex-1" />
+          ) : (
             <Button
               type="button"
               className="from-primary min-h-11 flex-1 bg-gradient-to-r to-violet-600 text-white"

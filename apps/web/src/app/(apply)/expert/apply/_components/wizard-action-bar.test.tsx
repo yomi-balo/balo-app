@@ -210,5 +210,9 @@ describe('WizardActionBar', () => {
     expect(screen.queryByRole('button', { name: /next/i })).toBeNull();
     // Not the first step → Previous is available.
     expect(screen.getAllByRole('button', { name: /previous/i }).length).toBeGreaterThanOrEqual(1);
+    // The relocated Submit Application button takes Next's slot on Terms.
+    expect(
+      screen.getAllByRole('button', { name: /submit application/i }).length
+    ).toBeGreaterThanOrEqual(1);
   });
 });
