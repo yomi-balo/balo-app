@@ -195,6 +195,17 @@ export const engagementsRelations = relations(engagements, ({ one, many }) => ({
     fields: [engagements.projectRequestId],
     references: [projectRequests.id],
   }),
+  // Retrospective actor attribution for the delivery workspace (BAL-331): the
+  // client person who accepted (NULL on the D7 auto path) and the client person
+  // who requested changes. `restrict` FKs on both columns preserve the attribution.
+  acceptedBy: one(users, {
+    fields: [engagements.acceptedByUserId],
+    references: [users.id],
+  }),
+  changeRequestedBy: one(users, {
+    fields: [engagements.changeRequestedByUserId],
+    references: [users.id],
+  }),
   milestones: many(engagementMilestones),
 }));
 

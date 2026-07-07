@@ -1,7 +1,11 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { projectRequestsRepository, companyBillingRepository } from '@balo/db';
+import {
+  projectRequestsRepository,
+  companyBillingRepository,
+  engagementsRepository,
+} from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import {
@@ -187,6 +191,16 @@ export default async function RequestDetailPage({
 
   const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
 
+  // BAL-331 deep-link: once the request is `kickoff_approved` a delivery
+  // engagement exists — resolve its id so the shell can surface the "View delivery
+  // workspace" entry for every lens. `undefined` (no engagement yet / not that
+  // status) → the link is omitted.
+  let deliveryEngagementId: string | null = null;
+  if (view.status === 'kickoff_approved') {
+    deliveryEngagementId =
+      (await engagementsRepository.findIdByProjectRequestId(requestId)) ?? null;
+  }
+
   return (
     <RequestDetailShell
       view={view}
@@ -194,6 +208,7 @@ export default async function RequestDetailPage({
       conversation={conversation}
       adminBilling={adminBilling}
       billingCapture={billingCapture}
+      deliveryEngagementId={deliveryEngagementId}
     />
   );
 }
