@@ -39,6 +39,9 @@ interface SignupStepProps {
   onError: (error: string) => void;
 }
 
+/** The success variant of `signUpAction`'s result (discriminated on `success`). */
+type SignUpSuccessResult = Extract<Awaited<ReturnType<typeof signUpAction>>, { success: true }>;
+
 export function SignupStep({
   email,
   formError,
@@ -96,6 +99,17 @@ export function SignupStep({
     [form]
   );
 
+  // Fire-and-forget wrapper for the effect below. `runDomainCheck` fails open
+  // internally and never rejects; the `.catch` is a defensive, lint-satisfying
+  // backstop (no floating promise, no `void` operator) that preserves the
+  // fail-open default should a future change ever let it throw.
+  const triggerDomainCheck = useCallback(
+    (candidateEmail: string): void => {
+      runDomainCheck(candidateEmail).catch(() => setDomainStatus('new'));
+    },
+    [runDomainCheck]
+  );
+
   // Trigger the check: immediately on the first valid email (mount / arrival), then
   // debounced (350 ms) on subsequent edits so the field state stays live without
   // per-keystroke server chatter. Partial/invalid emails are never checked.
@@ -105,12 +119,36 @@ export function SignupStep({
     if (!emailSchema.safeParse({ email: watchedEmail }).success) return;
     if (isFirstCheck.current) {
       isFirstCheck.current = false;
-      void runDomainCheck(watchedEmail);
+      triggerDomainCheck(watchedEmail);
       return;
     }
-    const timer = setTimeout(() => void runDomainCheck(watchedEmail), 350);
+    const timer = setTimeout(() => triggerDomainCheck(watchedEmail), 350);
     return () => clearTimeout(timer);
-  }, [watchedEmail, runDomainCheck]);
+  }, [watchedEmail, triggerDomainCheck]);
+
+  // Route a SUCCESSFUL signup: the fallback (already-verified) path identifies and
+  // lands the user, while the verification-required path carries the captured name
+  // to the verify step. Extracted from `onSubmit` to keep its cognitive load low.
+  const handleSignUpSuccess = useCallback(
+    (result: SignUpSuccessResult, companyName: string | undefined): void => {
+      if (result.data?.verified) {
+        // Fallback path: no verification required.
+        analytics.identify(result.data.userId ?? '', {
+          email: result.data.email,
+          active_mode: result.data.activeMode,
+          platform_role: result.data.platformRole,
+        });
+        if (result.data.needsOnboarding) {
+          router.push('/onboarding');
+        }
+        onSuccess();
+      } else if (result.data?.pendingAuthToken) {
+        // Email verification required — carry the captured name to the verify step.
+        onVerificationRequired(result.data.pendingAuthToken, companyName);
+      }
+    },
+    [router, onSuccess, onVerificationRequired]
+  );
 
   const onSubmit = async (data: UnifiedSignUpFormData): Promise<void> => {
     setIsSubmitting(true);
@@ -142,36 +180,19 @@ export function SignupStep({
         companyName,
       });
 
-      if (result.success) {
-        track(AUTH_EVENTS.SIGNUP_COMPLETED, { method: 'email' });
-        if (showField && companyName) {
-          track(AUTH_EVENTS.SIGNUP_COMPANY_NAME_CAPTURED, {
-            domain_type: status === 'blocked' ? 'blocked' : 'new',
-          });
-        }
-
-        if (result.data?.verified) {
-          // Fallback path: no verification required
-          analytics.identify(result.data.userId ?? '', {
-            email: result.data.email,
-            active_mode: result.data.activeMode,
-            platform_role: result.data.platformRole,
-          });
-          if (result.data.needsOnboarding) {
-            router.push('/onboarding');
-          }
-          onSuccess();
-        } else if (result.data?.pendingAuthToken) {
-          // Email verification required — carry the captured name to the verify step.
-          onVerificationRequired(result.data.pendingAuthToken, companyName);
-        }
-      } else {
-        track(AUTH_EVENTS.SIGNUP_FAILED, {
-          method: 'email',
-          error_message: result.error,
-        });
+      if (!result.success) {
+        track(AUTH_EVENTS.SIGNUP_FAILED, { method: 'email', error_message: result.error });
         onError(result.error);
+        return;
       }
+
+      track(AUTH_EVENTS.SIGNUP_COMPLETED, { method: 'email' });
+      if (showField && companyName) {
+        track(AUTH_EVENTS.SIGNUP_COMPANY_NAME_CAPTURED, {
+          domain_type: status === 'blocked' ? 'blocked' : 'new',
+        });
+      }
+      handleSignUpSuccess(result, companyName);
     } finally {
       setIsSubmitting(false);
     }

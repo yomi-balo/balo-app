@@ -172,12 +172,14 @@ export const usersRepository = {
       //    Trim defensively (belt-and-suspenders; the action's zod is the length
       //    authority); empty-after-trim falls back.
       const explicitName = options?.companyName?.trim();
-      const workspaceName =
-        explicitName !== undefined && explicitName.length > 0
-          ? explicitName
-          : data.firstName
-            ? `${data.firstName}'s Workspace`
-            : 'My Workspace';
+      let workspaceName: string;
+      if (explicitName !== undefined && explicitName.length > 0) {
+        workspaceName = explicitName;
+      } else if (data.firstName) {
+        workspaceName = `${data.firstName}'s Workspace`;
+      } else {
+        workspaceName = 'My Workspace';
+      }
 
       const [company] = await tx
         .insert(companies)
