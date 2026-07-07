@@ -104,14 +104,41 @@ export const proposalChangeSectionEnum = pgEnum('proposal_change_section', [
 export const proposalDocumentKindEnum = pgEnum('proposal_document_kind', ['terms', 'ref']);
 
 /**
- * Engagement lifecycle. Greenfield seam — only `active` is written in A6.5;
- * `completed`/`cancelled` are reserved for the delivery epic so a later writer
- * does not need an enum migration.
+ * Engagement lifecycle. Greenfield seam — `active` is written in A6.5.
+ * `pending_acceptance` (BAL-330 / delivery epic) is the mid-state after the expert
+ * requests completion and before the client accepts; `completed`/`cancelled` are
+ * terminal.
+ *
+ * `pending_acceptance` was APPENDED at the END (Postgres `ADD VALUE` is
+ * append-only; drizzle-kit emits a bare `ALTER TYPE ... ADD VALUE`). Enum ORDERING
+ * carries NO semantics — the transition map in `repositories/engagements.ts`
+ * (`ENGAGEMENT_STATUS_TRANSITIONS`) is the single source of truth for legal moves.
  */
 export const engagementStatusEnum = pgEnum('engagement_status', [
   'active',
   'completed',
   'cancelled',
+  'pending_acceptance', // APPENDED (BAL-330) — never used as a default/CHECK/index predicate (§5 enum hazard)
+]);
+
+/**
+ * Delivery milestone lifecycle (BAL-330). Standalone `CREATE TYPE` — all values
+ * commit atomically with the type, so `DEFAULT 'pending'` is safe in the same
+ * migration (no ADD-VALUE one-tx hazard).
+ */
+export const engagementMilestoneStatusEnum = pgEnum('engagement_milestone_status', [
+  'pending',
+  'in_progress',
+  'completed',
+]);
+
+/**
+ * How an engagement's completion was accepted: by the `client`, or by the D7
+ * auto-accept sweep (`auto`). NULL until the engagement reaches `completed`.
+ */
+export const engagementAcceptanceMethodEnum = pgEnum('engagement_acceptance_method', [
+  'client',
+  'auto',
 ]);
 
 // ── Domain auto-join (BAL-344 / ADR-1031) ────────────────────────────────
