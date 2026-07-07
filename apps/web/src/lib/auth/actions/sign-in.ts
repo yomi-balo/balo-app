@@ -8,6 +8,7 @@ import { getSession } from '@/lib/auth/session';
 import { db, usersRepository } from '@balo/db';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 import { log } from '@/lib/logging';
+import { emitDomainCapture } from '@/lib/analytics/party-domains';
 
 interface SignInResult {
   needsOnboarding: boolean;
@@ -53,6 +54,9 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
         activeMode: 'client',
       });
       user = result.user;
+      // BAL-344: emit the domain auto-capture outcome (post-commit). Usually
+      // not_applicable unless WorkOS reports the orphaned user's email verified.
+      emitDomainCapture(result.domainCapture, user.id);
     }
 
     // 4. Load company membership (always exists — created at signup or recovery above)

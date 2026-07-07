@@ -6,6 +6,7 @@ import { unifiedSignUpSchema, type UnifiedSignUpFormData } from '@/components/ba
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 import { log } from '@/lib/logging';
+import { emitDomainCapture } from '@/lib/analytics/party-domains';
 
 interface SignUpResult {
   pendingAuthToken?: string;
@@ -17,6 +18,14 @@ interface SignUpResult {
   activeMode?: 'client' | 'expert';
   platformRole?: 'user' | 'admin' | 'super_admin';
   needsOnboarding?: boolean;
+}
+
+/** Serialize an unknown error into structured log fields. */
+function serializeError(error: unknown): { error: string; stack: string | undefined } {
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  };
 }
 
 export async function signUpAction(
@@ -40,8 +49,7 @@ export async function signUpAction(
   } catch (error) {
     log.error('WorkOS user creation failed', {
       email,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+      ...serializeError(error),
     });
     return { success: false, error: mapWorkOSError(error) };
   }
@@ -77,7 +85,7 @@ export async function signUpAction(
     const { usersRepository } = await import('@balo/db');
     const { getSession } = await import('@/lib/auth/session');
 
-    const { user, company, membership } = await usersRepository.createWithWorkspace({
+    const { user, company, membership, domainCapture } = await usersRepository.createWithWorkspace({
       workosId: workosUser.id,
       email: workosUser.email,
       firstName: null,
@@ -103,6 +111,9 @@ export async function signUpAction(
     session.accessToken = authResponse.accessToken;
     session.refreshToken = authResponse.refreshToken;
     await session.save();
+
+    // BAL-344: emit the domain auto-capture outcome (post-commit).
+    emitDomainCapture(domainCapture, user.id);
 
     return {
       success: true,
@@ -143,8 +154,7 @@ export async function signUpAction(
 
     log.error('Sign-up failed', {
       email,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+      ...serializeError(error),
     });
     return { success: false, error: mapWorkOSError(error) };
   }

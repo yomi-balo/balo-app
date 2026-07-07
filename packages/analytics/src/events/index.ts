@@ -67,3 +67,4 @@ export {
   BILLING_SERVER_EVENTS,
   type BillingServerEventMap,
 } from './billing';
+export { PARTY_DOMAIN_SERVER_EVENTS, type PartyDomainServerEventMap } from './party-domains';

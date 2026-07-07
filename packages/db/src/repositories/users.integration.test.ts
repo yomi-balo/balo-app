@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
+import { and, eq, isNull } from 'drizzle-orm';
+import { db } from '../client';
+import { partyDomains } from '../schema';
 import { userFactory } from '../test/factories';
 import { usersRepository } from './users';
 
@@ -128,5 +131,65 @@ describe('usersRepository.findIdsByPlatformRoles', () => {
     const ids = await usersRepository.findIdsByPlatformRoles([]);
 
     expect(ids).toEqual([]);
+  });
+});
+
+describe('usersRepository.createWithWorkspace domain capture (BAL-344)', () => {
+  /** Live party_domains rows for a company party. */
+  async function liveDomainsForCompany(companyId: string): Promise<string[]> {
+    const rows = await db
+      .select()
+      .from(partyDomains)
+      .where(and(eq(partyDomains.partyId, companyId), isNull(partyDomains.deletedAt)));
+    return rows.map((r) => r.domain);
+  }
+
+  it('captures the verified corporate domain onto the new workspace', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace({
+      workosId: `wos-${suffix}`,
+      email: `founder@corp-${suffix}.com`,
+      firstName: 'Founder',
+      lastName: 'One',
+      emailVerified: true,
+      activeMode: 'client',
+    });
+
+    expect(result.domainCapture).toEqual({
+      outcome: 'captured',
+      partyType: 'company',
+      source: 'auto_captured',
+    });
+    await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([`corp-${suffix}.com`]);
+  });
+
+  it('does not capture when the email is unverified (not_applicable, no row)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace({
+      workosId: `wos-${suffix}`,
+      email: `founder@corp-${suffix}.com`,
+      firstName: 'Founder',
+      lastName: 'Two',
+      emailVerified: false,
+      activeMode: 'client',
+    });
+
+    expect(result.domainCapture).toEqual({ outcome: 'not_applicable' });
+    await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([]);
+  });
+
+  it('skips a verified freemail domain (blocked_domain, no row)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace({
+      workosId: `wos-${suffix}`,
+      email: `person-${suffix}@gmail.com`,
+      firstName: 'Person',
+      lastName: 'Three',
+      emailVerified: true,
+      activeMode: 'client',
+    });
+
+    expect(result.domainCapture).toEqual({ outcome: 'skipped', reason: 'blocked_domain' });
+    await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([]);
   });
 });
