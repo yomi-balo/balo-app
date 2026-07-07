@@ -7,10 +7,39 @@ import {
   type EngagementMilestone,
   type ProposalMilestone,
 } from '../schema';
-import { recordAuditEvent } from './audit-events';
+import { auditEventsRepository } from './audit-events';
 
 /** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The delivery audit vocabulary (BAL-330). `audit_events` (BAL-344) stores `action`
+ * and `entityType` as open `text`, so these unions keep OUR emitted taxonomy
+ * typo-safe at compile time WITHOUT the generic repo needing to know it — each
+ * emitted literal is annotated `satisfies DeliveryAuditAction` /
+ * `satisfies DeliveryAuditEntityType`. Shared with `engagements.ts` (the engagement
+ * lifecycle half of the same vocabulary).
+ *
+ * NOTE: `audit_events` has NO `engagement_id` column — every delivery event FOLDS
+ * the engagement id into `metadata.engagementId` (see the `.record(...)` calls).
+ */
+export type DeliveryAuditAction =
+  // milestone lifecycle
+  | 'engagement_milestone.started'
+  | 'engagement_milestone.completed'
+  | 'engagement_milestone.reverted'
+  | 'engagement_milestone.added'
+  | 'engagement_milestone.edited'
+  | 'engagement_milestone.removed'
+  // engagement lifecycle
+  | 'engagement.completion_requested'
+  | 'engagement.completion_withdrawn'
+  | 'engagement.accepted'
+  | 'engagement.changes_requested'
+  | 'engagement.cancelled'
+  | 'engagement.milestones_snapshotted';
+
+export type DeliveryAuditEntityType = 'engagement' | 'engagement_milestone';
 
 /** Milestone status, derived from the schema column (single source of truth). */
 export type EngagementMilestoneStatus = EngagementMilestone['status'];
@@ -197,14 +226,20 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to start milestone: ${input.milestoneId}`);
       }
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement_milestone.started',
-        entityType: 'engagement_milestone',
-        entityId: milestone.id,
-        engagementId: milestone.engagementId,
-        metadata: { from: milestone.status, to: 'in_progress' },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement_milestone.started' satisfies DeliveryAuditAction,
+          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
+          entityId: milestone.id,
+          metadata: {
+            from: milestone.status,
+            to: 'in_progress',
+            engagementId: milestone.engagementId,
+          },
+        },
+        tx
+      );
       return updated;
     });
   },
@@ -239,18 +274,21 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to complete milestone: ${input.milestoneId}`);
       }
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement_milestone.completed',
-        entityType: 'engagement_milestone',
-        entityId: milestone.id,
-        engagementId: milestone.engagementId,
-        metadata: {
-          from: milestone.status,
-          to: 'completed',
-          ...(input.completionNote === undefined ? {} : { note: input.completionNote }),
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement_milestone.completed' satisfies DeliveryAuditAction,
+          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
+          entityId: milestone.id,
+          metadata: {
+            from: milestone.status,
+            to: 'completed',
+            engagementId: milestone.engagementId,
+            ...(input.completionNote === undefined ? {} : { note: input.completionNote }),
+          },
         },
-      });
+        tx
+      );
       return updated;
     });
   },
@@ -282,14 +320,20 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to revert milestone: ${input.milestoneId}`);
       }
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement_milestone.reverted',
-        entityType: 'engagement_milestone',
-        entityId: milestone.id,
-        engagementId: milestone.engagementId,
-        metadata: { from: milestone.status, to: 'in_progress' },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement_milestone.reverted' satisfies DeliveryAuditAction,
+          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
+          entityId: milestone.id,
+          metadata: {
+            from: milestone.status,
+            to: 'in_progress',
+            engagementId: milestone.engagementId,
+          },
+        },
+        tx
+      );
       return updated;
     });
   },
@@ -339,14 +383,16 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to edit milestone: ${input.milestoneId}`);
       }
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement_milestone.edited',
-        entityType: 'engagement_milestone',
-        entityId: milestone.id,
-        engagementId: milestone.engagementId,
-        metadata: { fields },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement_milestone.edited' satisfies DeliveryAuditAction,
+          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
+          entityId: milestone.id,
+          metadata: { fields, engagementId: milestone.engagementId },
+        },
+        tx
+      );
       return updated;
     });
   },
@@ -404,14 +450,16 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to add milestone to engagement: ${input.engagementId}`);
       }
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement_milestone.added',
-        entityType: 'engagement_milestone',
-        entityId: inserted.id,
-        engagementId: input.engagementId,
-        metadata: { sort_order: sortOrder },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement_milestone.added' satisfies DeliveryAuditAction,
+          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
+          entityId: inserted.id,
+          metadata: { sort_order: sortOrder, engagementId: input.engagementId },
+        },
+        tx
+      );
       return inserted;
     });
   },
@@ -436,14 +484,16 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to soft-delete milestone: ${input.milestoneId}`);
       }
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement_milestone.removed',
-        entityType: 'engagement_milestone',
-        entityId: milestone.id,
-        engagementId: milestone.engagementId,
-        metadata: {},
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement_milestone.removed' satisfies DeliveryAuditAction,
+          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
+          entityId: milestone.id,
+          metadata: { engagementId: milestone.engagementId },
+        },
+        tx
+      );
       return updated;
     });
   },

@@ -1,69 +1,56 @@
-import { pgTable, uuid, text, jsonb, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, jsonb, index, timestamp } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './users';
-import { engagements } from './engagements';
-import { timestamps } from './helpers'; // NOTE: timestamps ONLY — NO softDelete (append-only)
 
 /**
- * audit_events — the immutable delivery audit trail (BAL-330).
+ * audit_events (BAL-344) — a generic, reusable, append-only audit log for the
+ * whole platform. Introduced for domain auto-capture but deliberately domain-
+ * agnostic: any feature can record an immutable "who did what to which entity"
+ * row, participating in the same transaction as the change it records.
  *
- * ADR-lite / DELIBERATE CLAUDE.md EXCEPTION: this is the ONE table in the schema
- * WITHOUT a `deleted_at` soft-delete column. An audit trail is append-only by
- * definition — rows are NEVER updated or deleted. A `deleted_at` column would
- * invite exactly the accidental filtering/mutation an audit log exists to
- * prevent, and would let a bug silently erase history. Immutability IS the
- * feature, so the "every table gets `deleted_at`" rule is intentionally waived
- * here (flagged in the BAL-330 plan §9.1 for review acknowledgement). The
- * `...timestamps` `updated_at` is kept only for column-shape convention; because
- * rows are never updated, `updated_at` always equals `created_at`.
+ * `actorUserId` NULLABLE (system/automated events may have no human actor);
+ * RESTRICT to preserve attribution. `action` / `entityType` are TEXT not enums —
+ * the audit vocabulary is open-ended and grows without a migration per event.
  *
- * Every delivery state transition writes exactly one row here via
- * `recordAuditEvent(tx, …)` in the SAME transaction as the state change (see
- * `repositories/audit-events.ts`). This is an INTERNAL log — it is NOT the
- * notification engine and never sends anything.
- *
- * `action` / `entity_type` are free `text` (not pg enums) deliberately — the TS
- * unions `AuditAction` / `AuditEntityType` enforce the value space at the single
- * write entry point, avoiding an `ALTER TYPE ... ADD VALUE` migration every time a
- * future slice audits a new action (same rationale as
- * `engagements.billing_model`/`approval_model` being text).
+ * IMMUTABILITY: this table is genuinely append-only. Rows are only ever inserted —
+ * never updated (there is no `updated_at` and no `$onUpdate` hook) and never
+ * soft-deleted (there is no `deleted_at`); it carries a single `created_at`. This
+ * is a deliberate, documented exception to the CLAUDE.md "every table gets
+ * created_at/updated_at/deleted_at" convention, justified because an audit ledger
+ * must be immutable — mutating or deleting audit rows would defeat the purpose of
+ * the log.
  */
 export const auditEvents = pgTable(
   'audit_events',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    // Null for system/auto actions (e.g. D7 auto-accept). RESTRICT: a user with
-    // audit history can never be hard-deleted (mirrors
-    // proposal_change_requests.requested_by_user_id RESTRICT).
+
+    // Who performed the action. NULLABLE (system/automated events may have no
+    // human actor); restrict to preserve attribution.
     actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'restrict' }),
-    // Free text (TS union `AuditAction` enforced in recordAuditEvent).
-    // e.g. 'engagement_milestone.started'.
+
+    // Dot-namespaced event type, e.g. 'party_domain.captured'. TEXT not enum —
+    // the audit vocabulary is open-ended and grows without a migration per event.
     action: text('action').notNull(),
-    // Polymorphic entity kind (TS union `AuditEntityType`).
-    // e.g. 'engagement' | 'engagement_milestone'.
+
+    // The affected entity. entityType groups by domain ('party_domain'); entityId
+    // is that row's uuid (all Balo PKs are uuid).
     entityType: text('entity_type').notNull(),
-    // Polymorphic id — NO FK (points at an engagement OR a milestone). Integrity is
-    // enforced by the helper + the engagement_id FK. Mirrors credit_transactions'
-    // reference_id/reference_type polymorphic pattern.
     entityId: uuid('entity_id').notNull(),
-    // Denormalised for cheap per-engagement history. Nullable (a non-engagement
-    // audit could omit it). SET NULL so a hard-deleted engagement never destroys
-    // the immutable trail.
-    engagementId: uuid('engagement_id').references(() => engagements.id, {
-      onDelete: 'set null',
-    }),
-    // Transition-specific context: { from, to, note?, reason?, acceptance_method?,
-    // milestone_count?, … }.
-    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
-    // Domain event time (caller may pass; defaults now). The ORDER-BY column for
-    // history reads.
-    occurredAt: timestamp('occurred_at', { withTimezone: true }).defaultNow().notNull(),
-    ...timestamps,
+
+    // Arbitrary structured context. Typed per drizzle-schema JSONB rule.
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+
+    // Append-only: a single created_at, no updated_at / no deleted_at (see the
+    // IMMUTABILITY note above).
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
-    index('audit_event_engagement_occurred_idx').on(t.engagementId, t.occurredAt),
-    index('audit_event_entity_idx').on(t.entityType, t.entityId),
-    index('audit_event_actor_idx').on(t.actorUserId),
+    // "History of one entity" — the primary read path.
+    index('audit_events_entity_idx').on(t.entityType, t.entityId),
+    index('audit_events_actor_idx').on(t.actorUserId),
+    index('audit_events_action_idx').on(t.action),
+    index('audit_events_created_at_idx').on(t.createdAt),
   ]
 );
 
@@ -71,10 +58,6 @@ export const auditEvents = pgTable(
 
 export const auditEventsRelations = relations(auditEvents, ({ one }) => ({
   actor: one(users, { fields: [auditEvents.actorUserId], references: [users.id] }),
-  engagement: one(engagements, {
-    fields: [auditEvents.engagementId],
-    references: [engagements.id],
-  }),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

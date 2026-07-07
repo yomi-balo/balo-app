@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { db } from '../client';
-import { engagementMilestones, proposalMilestones } from '../schema';
+import { auditEvents, engagementMilestones, proposalMilestones, type AuditEvent } from '../schema';
 import type { EngagementStatus } from './engagements';
 import {
   engagementFactory,
@@ -16,7 +16,20 @@ import {
   InvalidMilestoneTransitionError,
   EngagementNotActiveError,
 } from './engagement-milestones';
-import { auditEventsRepository } from './audit-events';
+
+/**
+ * Read delivery audit rows for one polymorphic entity from main's generic
+ * `audit_events` table (BAL-344). That table has NO `engagement_id` column — the
+ * engagement id is FOLDED into `metadata.engagementId` by the delivery repos — and
+ * is keyed by (`entity_type`, `entity_id`). Ordered createdAt asc, ties by id.
+ */
+async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(eq(auditEvents.entityId, entityId))
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+}
 
 /** Seed an active engagement + a milestone in the given status + an acting user. */
 async function seedMilestone(
@@ -52,10 +65,13 @@ describe('engagementMilestonesRepository.start', () => {
     expect(updated.startedByUserId).toBe(userId);
     expect(updated.startedAt).toBeInstanceOf(Date);
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement_milestone.started');
-    expect(events.at(-1)?.entityId).toBe(milestoneId);
-    expect(events.at(-1)?.metadata).toMatchObject({ from: 'pending', to: 'in_progress' });
+    const events = await auditEventsForEntity(milestoneId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.action).toBe('engagement_milestone.started');
+    expect(events[0]?.entityType).toBe('engagement_milestone');
+    expect(events[0]?.entityId).toBe(milestoneId);
+    // engagementId is folded into metadata (main's table has no engagement_id column).
+    expect(events[0]?.metadata).toMatchObject({ from: 'pending', to: 'in_progress', engagementId });
   });
 });
 
@@ -73,9 +89,9 @@ describe('engagementMilestonesRepository.complete', () => {
     expect(updated.completedAt).toBeInstanceOf(Date);
     expect(updated.completionNote).toBe('Deployed to prod.');
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement_milestone.completed');
-    expect(events.at(-1)?.metadata).toMatchObject({ note: 'Deployed to prod.' });
+    const events = await auditEventsForEntity(milestoneId);
+    expect(events[0]?.action).toBe('engagement_milestone.completed');
+    expect(events[0]?.metadata).toMatchObject({ note: 'Deployed to prod.', engagementId });
   });
 });
 
@@ -98,8 +114,9 @@ describe('engagementMilestonesRepository.revert', () => {
     // started_* preserved.
     expect(updated.startedAt?.getTime()).toBe(startedAt.getTime());
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement_milestone.reverted');
+    const events = await auditEventsForEntity(milestoneId);
+    expect(events[0]?.action).toBe('engagement_milestone.reverted');
+    expect(events[0]?.metadata).toMatchObject({ engagementId });
   });
 });
 
@@ -194,10 +211,11 @@ describe('engagementMilestonesRepository.editDescriptive', () => {
     expect(updated.valueCents).toBe(100_000);
     expect(updated.status).toBe('pending'); // no status change
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement_milestone.edited');
-    expect(events.at(-1)?.metadata).toMatchObject({
+    const events = await auditEventsForEntity(milestoneId);
+    expect(events[0]?.action).toBe('engagement_milestone.edited');
+    expect(events[0]?.metadata).toMatchObject({
       fields: ['title', 'descriptionHtml', 'acceptanceCriteria', 'estimatedMinutes'],
+      engagementId,
     });
   });
 });
@@ -221,9 +239,9 @@ describe('engagementMilestonesRepository.add', () => {
     expect(added.sortOrder).toBe(6); // max(0,5) + 1
     expect(added.estimatedMinutes).toBe(120);
 
-    const events = await auditEventsRepository.listByEngagement(engagement.id);
-    expect(events.at(-1)?.action).toBe('engagement_milestone.added');
-    expect(events.at(-1)?.metadata).toMatchObject({ sort_order: 6 });
+    const events = await auditEventsForEntity(added.id);
+    expect(events[0]?.action).toBe('engagement_milestone.added');
+    expect(events[0]?.metadata).toMatchObject({ sort_order: 6, engagementId: engagement.id });
   });
 
   it('uses sort_order 0 for the first milestone of an engagement', async () => {
@@ -259,8 +277,9 @@ describe('engagementMilestonesRepository.softDelete', () => {
     const live = await engagementMilestonesRepository.listByEngagement(engagementId);
     expect(live.map((m) => m.id)).not.toContain(milestoneId);
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement_milestone.removed');
+    const events = await auditEventsForEntity(milestoneId);
+    expect(events[0]?.action).toBe('engagement_milestone.removed');
+    expect(events[0]?.metadata).toMatchObject({ engagementId });
   });
 
   it('permits removing a COMPLETED milestone under an active engagement (D0 policy)', async () => {

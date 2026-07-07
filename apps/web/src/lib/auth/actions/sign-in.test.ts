@@ -39,6 +39,10 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
+// BAL-344: the orphan-recovery branch emits domain capture — stub it (this suite
+// tests sign-in logic, not emission; the emit is covered in verify-email.test.ts).
+vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
+
 import { signInAction } from './sign-in';
 import type { SignInFormData } from '@/components/balo/auth/schemas';
 

@@ -4,12 +4,14 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
+  auditEvents,
   companies,
   engagements,
   expertProfiles,
   projectRequests,
   proposalMilestones,
   proposals,
+  type AuditEvent,
 } from '../schema';
 import {
   engagementFactory,
@@ -25,9 +27,22 @@ import {
   InvalidEngagementTransitionError,
   MilestonesIncompleteError,
 } from './engagements';
-import { auditEventsRepository } from './audit-events';
 import { EngagementTermsCoherenceError } from './proposal-coherence';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
+
+/**
+ * Read delivery audit rows for one entity from main's generic `audit_events` table
+ * (BAL-344). Engagement lifecycle events use `entity_id = engagementId`; that table
+ * has no `engagement_id` column (the id is folded into `metadata.engagementId`).
+ * Ordered createdAt asc, ties by id.
+ */
+async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(eq(auditEvents.entityId, entityId))
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+}
 
 /**
  * Seed the A6.5 kickoff fixture: a proposal whose request is advanced to
@@ -651,13 +666,15 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
     });
 
     // Exactly one snapshot audit event with milestone_count=3.
-    const events = await auditEventsRepository.listByEngagement(engagement.id);
+    const events = await auditEventsForEntity(engagement.id);
     const snapshotEvents = events.filter((e) => e.action === 'engagement.milestones_snapshotted');
     expect(snapshotEvents).toHaveLength(1);
+    expect(snapshotEvents[0]?.entityType).toBe('engagement');
     expect(snapshotEvents[0]?.actorUserId).toBe(adminId);
     expect(snapshotEvents[0]?.metadata).toMatchObject({
       milestone_count: 3,
       source_proposal_id: source.proposal.id,
+      engagementId: engagement.id,
     });
   });
 
@@ -676,7 +693,7 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
     });
 
     expect(await engagementsRepository.listMilestones(engagement.id)).toHaveLength(0);
-    const events = await auditEventsRepository.listByEngagement(engagement.id);
+    const events = await auditEventsForEntity(engagement.id);
     const snapshotEvent = events.find((e) => e.action === 'engagement.milestones_snapshotted');
     expect(snapshotEvent?.metadata).toMatchObject({ milestone_count: 0 });
   });
@@ -699,8 +716,11 @@ describe('engagementsRepository.requestCompletion', () => {
     expect(advanced.completionRequestedByUserId).toBe(userId);
     expect(advanced.completionRequestedAt).toBeInstanceOf(Date);
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement.completion_requested');
+    const events = await auditEventsForEntity(engagementId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.action).toBe('engagement.completion_requested');
+    expect(events[0]?.entityType).toBe('engagement');
+    expect(events[0]?.metadata).toMatchObject({ engagementId });
   });
 
   it('zero-milestone engagement → allowed (vacuous "all completed")', async () => {
@@ -728,7 +748,7 @@ describe('engagementsRepository.requestCompletion', () => {
     expect(reloaded?.status).toBe('active');
     expect(reloaded?.completionRequestedAt).toBeNull();
     // No audit event written (whole tx rolled back).
-    expect(await auditEventsRepository.listByEngagement(engagementId)).toHaveLength(0);
+    expect(await auditEventsForEntity(engagementId)).toHaveLength(0);
   });
 
   it('a SOFT-DELETED incomplete milestone does not block completion (only live milestones count)', async () => {
@@ -766,8 +786,9 @@ describe('engagementsRepository.withdrawCompletionRequest', () => {
     expect(advanced.completionRequestedByUserId).toBeNull();
     expect(advanced.completionRequestedAt).toBeNull();
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
-    expect(events.at(-1)?.action).toBe('engagement.completion_withdrawn');
+    const events = await auditEventsForEntity(engagementId);
+    expect(events[0]?.action).toBe('engagement.completion_withdrawn');
+    expect(events[0]?.metadata).toMatchObject({ engagementId });
   });
 
   it('illegal from active → InvalidEngagementTransitionError', async () => {
@@ -792,10 +813,10 @@ describe('engagementsRepository.acceptCompletion', () => {
     expect(advanced.acceptanceMethod).toBe('client');
     expect(advanced.acceptedAt).toBeInstanceOf(Date);
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
+    const events = await auditEventsForEntity(engagementId);
     const acceptEvent = events.find((e) => e.action === 'engagement.accepted');
     expect(acceptEvent?.actorUserId).toBe(userId);
-    expect(acceptEvent?.metadata).toMatchObject({ acceptance_method: 'client' });
+    expect(acceptEvent?.metadata).toMatchObject({ acceptance_method: 'client', engagementId });
   });
 
   it('auto path: → completed, accepted_by=null, acceptance_method=auto, audit actor null', async () => {
@@ -807,10 +828,10 @@ describe('engagementsRepository.acceptCompletion', () => {
     expect(advanced.acceptanceMethod).toBe('auto');
     expect(advanced.acceptedAt).toBeInstanceOf(Date);
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
+    const events = await auditEventsForEntity(engagementId);
     const acceptEvent = events.find((e) => e.action === 'engagement.accepted');
     expect(acceptEvent?.actorUserId).toBeNull();
-    expect(acceptEvent?.metadata).toMatchObject({ acceptance_method: 'auto' });
+    expect(acceptEvent?.metadata).toMatchObject({ acceptance_method: 'auto', engagementId });
   });
 
   it('illegal from active → InvalidEngagementTransitionError', async () => {
@@ -837,9 +858,12 @@ describe('engagementsRepository.requestChanges', () => {
     expect(advanced.completionRequestedByUserId).toBeNull();
     expect(advanced.completionRequestedAt).toBeNull();
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
+    const events = await auditEventsForEntity(engagementId);
     const changeEvent = events.find((e) => e.action === 'engagement.changes_requested');
-    expect(changeEvent?.metadata).toMatchObject({ note: 'Please revise the data model section.' });
+    expect(changeEvent?.metadata).toMatchObject({
+      note: 'Please revise the data model section.',
+      engagementId,
+    });
   });
 
   it('illegal from active → InvalidEngagementTransitionError', async () => {
@@ -864,12 +888,13 @@ describe('engagementsRepository.cancelEngagement', () => {
     expect(advanced.cancellationReason).toBe('Client withdrew.');
     expect(advanced.cancelledAt).toBeInstanceOf(Date);
 
-    const events = await auditEventsRepository.listByEngagement(engagementId);
+    const events = await auditEventsForEntity(engagementId);
     const cancelEvent = events.find((e) => e.action === 'engagement.cancelled');
     expect(cancelEvent?.metadata).toMatchObject({
       from: 'active',
       to: 'cancelled',
       reason: 'Client withdrew.',
+      engagementId,
     });
   });
 
@@ -882,9 +907,10 @@ describe('engagementsRepository.cancelEngagement', () => {
       reason: 'Scope void.',
     });
     expect(advanced.status).toBe('cancelled');
-    const events = await auditEventsRepository.listByEngagement(engagementId);
+    const events = await auditEventsForEntity(engagementId);
     expect(events.find((e) => e.action === 'engagement.cancelled')?.metadata).toMatchObject({
       from: 'pending_acceptance',
+      engagementId,
     });
   });
 

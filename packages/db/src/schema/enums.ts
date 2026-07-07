@@ -140,3 +140,23 @@ export const engagementAcceptanceMethodEnum = pgEnum('engagement_acceptance_meth
   'client',
   'auto',
 ]);
+
+// ── Domain auto-join (BAL-344 / ADR-1031) ────────────────────────────────
+
+/**
+ * Party kind a domain mapping points at. Polymorphic target for
+ * `party_domains.party_id` — `company` is the only value written this ticket;
+ * `agency` is reserved (capture is party-agnostic) for a future agency-creation
+ * seam.
+ */
+export const partyTypeEnum = pgEnum('party_type', ['company', 'agency']);
+
+/**
+ * How a `party_domains` row was created. `auto_captured` = derived from a
+ * creator's verified corporate email at party creation; `admin_added` = manual
+ * admin path (future). No column default — every writer states it explicitly.
+ */
+export const partyDomainSourceEnum = pgEnum('party_domain_source', [
+  'auto_captured',
+  'admin_added',
+]);

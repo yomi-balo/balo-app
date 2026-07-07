@@ -29,6 +29,10 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
+// BAL-344: the fallback create path emits domain capture — stub it (this suite
+// tests sign-up logic, not emission; the emit is covered in verify-email.test.ts).
+vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
+
 import { signUpAction } from './sign-up';
 import type { UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 

@@ -99,13 +99,6 @@ export {
   EngagementNotActiveError,
   type EngagementMilestoneStatus,
 } from './engagement-milestones';
-export {
-  auditEventsRepository,
-  recordAuditEvent,
-  type AuditAction,
-  type AuditEntityType,
-  type RecordAuditEventInput,
-} from './audit-events';
 export type {
   PricingMethod,
   ProposalCadence,
@@ -139,8 +132,6 @@ export type {
   NewEngagement,
   EngagementMilestone,
   NewEngagementMilestone,
-  AuditEvent,
-  NewAuditEvent,
   ConversationMessage,
   NewConversationMessage,
   ConversationFile,
@@ -155,3 +146,15 @@ export type {
   ExpertSearchCompetencyRow,
   FacetCount,
 } from './expert-search';
+export { partyDomainsRepository } from './party-domains';
+export type { DomainCaptureResult, CaptureDomainInput } from './party-domains';
+export { auditEventsRepository } from './audit-events';
+export type { RecordAuditInput } from './audit-events';
+export type {
+  PartyDomain,
+  NewPartyDomain,
+  PartyType,
+  PartyDomainSource,
+  AuditEvent,
+  NewAuditEvent,
+} from '../schema';

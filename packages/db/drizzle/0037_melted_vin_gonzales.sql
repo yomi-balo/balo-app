@@ -26,19 +26,6 @@ CREATE TABLE "engagement_milestones" (
 	CONSTRAINT "engagement_milestone_sort_nonneg" CHECK ("engagement_milestones"."sort_order" >= 0)
 );
 --> statement-breakpoint
-CREATE TABLE "audit_events" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"actor_user_id" uuid,
-	"action" text NOT NULL,
-	"entity_type" text NOT NULL,
-	"entity_id" uuid NOT NULL,
-	"engagement_id" uuid,
-	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
-	"occurred_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
-);
---> statement-breakpoint
 ALTER TABLE "engagements" ADD COLUMN "completion_requested_by_user_id" uuid;--> statement-breakpoint
 ALTER TABLE "engagements" ADD COLUMN "completion_requested_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "engagements" ADD COLUMN "accepted_by_user_id" uuid;--> statement-breakpoint
@@ -55,14 +42,9 @@ ALTER TABLE "engagement_milestones" ADD CONSTRAINT "engagement_milestones_source
 ALTER TABLE "engagement_milestones" ADD CONSTRAINT "engagement_milestones_started_by_user_id_users_id_fk" FOREIGN KEY ("started_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "engagement_milestones" ADD CONSTRAINT "engagement_milestones_completed_by_user_id_users_id_fk" FOREIGN KEY ("completed_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "engagement_milestones" ADD CONSTRAINT "engagement_milestones_created_by_user_id_users_id_fk" FOREIGN KEY ("created_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_user_id_users_id_fk" FOREIGN KEY ("actor_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_engagement_id_engagements_id_fk" FOREIGN KEY ("engagement_id") REFERENCES "public"."engagements"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "engagement_milestone_engagement_idx" ON "engagement_milestones" USING btree ("engagement_id");--> statement-breakpoint
 CREATE INDEX "engagement_milestone_status_idx" ON "engagement_milestones" USING btree ("engagement_id","status") WHERE "engagement_milestones"."deleted_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "engagement_milestone_order_idx" ON "engagement_milestones" USING btree ("engagement_id","sort_order") WHERE "engagement_milestones"."deleted_at" IS NULL;--> statement-breakpoint
-CREATE INDEX "audit_event_engagement_occurred_idx" ON "audit_events" USING btree ("engagement_id","occurred_at");--> statement-breakpoint
-CREATE INDEX "audit_event_entity_idx" ON "audit_events" USING btree ("entity_type","entity_id");--> statement-breakpoint
-CREATE INDEX "audit_event_actor_idx" ON "audit_events" USING btree ("actor_user_id");--> statement-breakpoint
 ALTER TABLE "engagements" ADD CONSTRAINT "engagements_completion_requested_by_user_id_users_id_fk" FOREIGN KEY ("completion_requested_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "engagements" ADD CONSTRAINT "engagements_accepted_by_user_id_users_id_fk" FOREIGN KEY ("accepted_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "engagements" ADD CONSTRAINT "engagements_change_requested_by_user_id_users_id_fk" FOREIGN KEY ("change_requested_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

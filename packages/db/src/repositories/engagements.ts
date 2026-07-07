@@ -12,8 +12,13 @@ import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
 import { listByProposalTx } from './proposal-milestones';
-import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
-import { recordAuditEvent } from './audit-events';
+import {
+  engagementMilestonesRepository,
+  snapshotFromProposalTx,
+  type DeliveryAuditAction,
+  type DeliveryAuditEntityType,
+} from './engagement-milestones';
+import { auditEventsRepository } from './audit-events';
 
 /** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -400,14 +405,20 @@ export const engagementsRepository = {
         approvingAdminUserId: input.approvingAdminUserId,
         sources,
       });
-      await recordAuditEvent(tx, {
-        actorUserId: input.approvingAdminUserId,
-        action: 'engagement.milestones_snapshotted',
-        entityType: 'engagement',
-        entityId: engagement.id,
-        engagementId: engagement.id,
-        metadata: { milestone_count: sources.length, source_proposal_id: input.sourceProposalId },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.approvingAdminUserId,
+          action: 'engagement.milestones_snapshotted' satisfies DeliveryAuditAction,
+          entityType: 'engagement' satisfies DeliveryAuditEntityType,
+          entityId: engagement.id,
+          metadata: {
+            milestone_count: sources.length,
+            source_proposal_id: input.sourceProposalId,
+            engagementId: engagement.id,
+          },
+        },
+        tx
+      );
 
       return { engagement, request };
     });
@@ -431,7 +442,9 @@ export const engagementsRepository = {
 
   // ── Delivery lifecycle transitions (BAL-330) ───────────────────────────
   // All run in `db.transaction`, lock the engagement FOR UPDATE, and
-  // `recordAuditEvent` in the SAME tx as the state change.
+  // `auditEventsRepository.record(..., tx)` in the SAME tx as the state change.
+  // audit_events (BAL-344) has no engagement_id column → the engagement id is folded
+  // into `metadata.engagementId`.
 
   /**
    * The expert requests completion (active → pending_acceptance). Guards, under the
@@ -483,14 +496,16 @@ export const engagementsRepository = {
         },
       });
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement.completion_requested',
-        entityType: 'engagement',
-        entityId: input.engagementId,
-        engagementId: input.engagementId,
-        metadata: { from: 'active', to: 'pending_acceptance' },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement.completion_requested' satisfies DeliveryAuditAction,
+          entityType: 'engagement' satisfies DeliveryAuditEntityType,
+          entityId: input.engagementId,
+          metadata: { from: 'active', to: 'pending_acceptance', engagementId: input.engagementId },
+        },
+        tx
+      );
       return advanced;
     });
   },
@@ -515,14 +530,16 @@ export const engagementsRepository = {
         },
       });
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement.completion_withdrawn',
-        entityType: 'engagement',
-        entityId: input.engagementId,
-        engagementId: input.engagementId,
-        metadata: { from: 'pending_acceptance', to: 'active' },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement.completion_withdrawn' satisfies DeliveryAuditAction,
+          entityType: 'engagement' satisfies DeliveryAuditEntityType,
+          entityId: input.engagementId,
+          metadata: { from: 'pending_acceptance', to: 'active', engagementId: input.engagementId },
+        },
+        tx
+      );
       return advanced;
     });
   },
@@ -550,14 +567,21 @@ export const engagementsRepository = {
         },
       });
 
-      await recordAuditEvent(tx, {
-        actorUserId,
-        action: 'engagement.accepted',
-        entityType: 'engagement',
-        entityId: input.engagementId,
-        engagementId: input.engagementId,
-        metadata: { from: 'pending_acceptance', to: 'completed', acceptance_method: input.method },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId,
+          action: 'engagement.accepted' satisfies DeliveryAuditAction,
+          entityType: 'engagement' satisfies DeliveryAuditEntityType,
+          entityId: input.engagementId,
+          metadata: {
+            from: 'pending_acceptance',
+            to: 'completed',
+            acceptance_method: input.method,
+            engagementId: input.engagementId,
+          },
+        },
+        tx
+      );
       return advanced;
     });
   },
@@ -587,14 +611,21 @@ export const engagementsRepository = {
         },
       });
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement.changes_requested',
-        entityType: 'engagement',
-        entityId: input.engagementId,
-        engagementId: input.engagementId,
-        metadata: { from: 'pending_acceptance', to: 'active', note: input.note },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement.changes_requested' satisfies DeliveryAuditAction,
+          entityType: 'engagement' satisfies DeliveryAuditEntityType,
+          entityId: input.engagementId,
+          metadata: {
+            from: 'pending_acceptance',
+            to: 'active',
+            note: input.note,
+            engagementId: input.engagementId,
+          },
+        },
+        tx
+      );
       return advanced;
     });
   },
@@ -635,14 +666,21 @@ export const engagementsRepository = {
         },
       });
 
-      await recordAuditEvent(tx, {
-        actorUserId: input.userId,
-        action: 'engagement.cancelled',
-        entityType: 'engagement',
-        entityId: input.engagementId,
-        engagementId: input.engagementId,
-        metadata: { from, to: 'cancelled', reason: input.reason },
-      });
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'engagement.cancelled' satisfies DeliveryAuditAction,
+          entityType: 'engagement' satisfies DeliveryAuditEntityType,
+          entityId: input.engagementId,
+          metadata: {
+            from,
+            to: 'cancelled',
+            reason: input.reason,
+            engagementId: input.engagementId,
+          },
+        },
+        tx
+      );
       return advanced;
     });
   },

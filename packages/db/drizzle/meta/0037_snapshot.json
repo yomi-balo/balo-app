@@ -1,6 +1,6 @@
 {
-  "id": "6216d5eb-3694-4918-8c78-b18f567527fb",
-  "prevId": "9cc30c13-7dbb-4011-b97f-f0c6ff2595e6",
+  "id": "fc3249ae-0d92-4e82-94c2-f835c967badb",
+  "prevId": "6216d5eb-3694-4918-8c78-b18f567527fb",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -6397,6 +6397,73 @@
           "primaryKey": false,
           "notNull": false
         },
+        "completion_requested_by_user_id": {
+          "name": "completion_requested_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completion_requested_at": {
+          "name": "completion_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accepted_by_user_id": {
+          "name": "accepted_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "acceptance_method": {
+          "name": "acceptance_method",
+          "type": "engagement_acceptance_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "change_request_note": {
+          "name": "change_request_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "change_requested_by_user_id": {
+          "name": "change_requested_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "change_requested_at": {
+          "name": "change_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_by_user_id": {
+          "name": "cancelled_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancellation_reason": {
+          "name": "cancellation_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -6509,6 +6576,28 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "engagement_status_completion_requested_idx": {
+          "name": "engagement_status_completion_requested_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "completion_requested_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"engagements\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -6556,6 +6645,42 @@
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
+        },
+        "engagements_completion_requested_by_user_id_users_id_fk": {
+          "name": "engagements_completion_requested_by_user_id_users_id_fk",
+          "tableFrom": "engagements",
+          "tableTo": "users",
+          "columnsFrom": ["completion_requested_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "engagements_accepted_by_user_id_users_id_fk": {
+          "name": "engagements_accepted_by_user_id_users_id_fk",
+          "tableFrom": "engagements",
+          "tableTo": "users",
+          "columnsFrom": ["accepted_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "engagements_change_requested_by_user_id_users_id_fk": {
+          "name": "engagements_change_requested_by_user_id_users_id_fk",
+          "tableFrom": "engagements",
+          "tableTo": "users",
+          "columnsFrom": ["change_requested_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "engagements_cancelled_by_user_id_users_id_fk": {
+          "name": "engagements_cancelled_by_user_id_users_id_fk",
+          "tableFrom": "engagements",
+          "tableTo": "users",
+          "columnsFrom": ["cancelled_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6573,6 +6698,257 @@
         "engagement_rate_cents_nonneg": {
           "name": "engagement_rate_cents_nonneg",
           "value": "\"engagements\".\"rate_cents\" IS NULL OR \"engagements\".\"rate_cents\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.engagement_milestones": {
+      "name": "engagement_milestones",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "engagement_id": {
+          "name": "engagement_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_proposal_milestone_id": {
+          "name": "source_proposal_milestone_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description_html": {
+          "name": "description_html",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "acceptance_criteria": {
+          "name": "acceptance_criteria",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "value_cents": {
+          "name": "value_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "estimated_minutes": {
+          "name": "estimated_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "engagement_milestone_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "started_by_user_id": {
+          "name": "started_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_user_id": {
+          "name": "completed_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completion_note": {
+          "name": "completion_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "engagement_milestone_engagement_idx": {
+          "name": "engagement_milestone_engagement_idx",
+          "columns": [
+            {
+              "expression": "engagement_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "engagement_milestone_status_idx": {
+          "name": "engagement_milestone_status_idx",
+          "columns": [
+            {
+              "expression": "engagement_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"engagement_milestones\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "engagement_milestone_order_idx": {
+          "name": "engagement_milestone_order_idx",
+          "columns": [
+            {
+              "expression": "engagement_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"engagement_milestones\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "engagement_milestones_engagement_id_engagements_id_fk": {
+          "name": "engagement_milestones_engagement_id_engagements_id_fk",
+          "tableFrom": "engagement_milestones",
+          "tableTo": "engagements",
+          "columnsFrom": ["engagement_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "engagement_milestones_source_proposal_milestone_id_proposal_milestones_id_fk": {
+          "name": "engagement_milestones_source_proposal_milestone_id_proposal_milestones_id_fk",
+          "tableFrom": "engagement_milestones",
+          "tableTo": "proposal_milestones",
+          "columnsFrom": ["source_proposal_milestone_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "engagement_milestones_started_by_user_id_users_id_fk": {
+          "name": "engagement_milestones_started_by_user_id_users_id_fk",
+          "tableFrom": "engagement_milestones",
+          "tableTo": "users",
+          "columnsFrom": ["started_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "engagement_milestones_completed_by_user_id_users_id_fk": {
+          "name": "engagement_milestones_completed_by_user_id_users_id_fk",
+          "tableFrom": "engagement_milestones",
+          "tableTo": "users",
+          "columnsFrom": ["completed_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "engagement_milestones_created_by_user_id_users_id_fk": {
+          "name": "engagement_milestones_created_by_user_id_users_id_fk",
+          "tableFrom": "engagement_milestones",
+          "tableTo": "users",
+          "columnsFrom": ["created_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "engagement_milestone_value_nonneg": {
+          "name": "engagement_milestone_value_nonneg",
+          "value": "\"engagement_milestones\".\"value_cents\" IS NULL OR \"engagement_milestones\".\"value_cents\" >= 0"
+        },
+        "engagement_milestone_estimated_minutes_nonneg": {
+          "name": "engagement_milestone_estimated_minutes_nonneg",
+          "value": "\"engagement_milestones\".\"estimated_minutes\" IS NULL OR \"engagement_milestones\".\"estimated_minutes\" >= 0"
+        },
+        "engagement_milestone_sort_nonneg": {
+          "name": "engagement_milestone_sort_nonneg",
+          "value": "\"engagement_milestones\".\"sort_order\" >= 0"
         }
       },
       "isRLSEnabled": false
@@ -6883,10 +7259,20 @@
       "schema": "public",
       "values": ["confirmed", "cancelled"]
     },
+    "public.engagement_acceptance_method": {
+      "name": "engagement_acceptance_method",
+      "schema": "public",
+      "values": ["client", "auto"]
+    },
+    "public.engagement_milestone_status": {
+      "name": "engagement_milestone_status",
+      "schema": "public",
+      "values": ["pending", "in_progress", "completed"]
+    },
     "public.engagement_status": {
       "name": "engagement_status",
       "schema": "public",
-      "values": ["active", "completed", "cancelled"]
+      "values": ["active", "completed", "cancelled", "pending_acceptance"]
     },
     "public.expert_type": {
       "name": "expert_type",
