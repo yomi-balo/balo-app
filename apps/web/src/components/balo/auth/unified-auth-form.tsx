@@ -32,6 +32,9 @@ export function UnifiedAuthForm({
   const [step, setStep] = useState<AuthStep>(defaultStep);
   const [email, setEmail] = useState(defaultEmail);
   const [pendingAuthToken, setPendingAuthToken] = useState<string | null>(null);
+  // BAL-350: the captured company name is lifted here so the PRIMARY (verification)
+  // path can hand it from the signup step to the verify step.
+  const [companyName, setCompanyName] = useState<string | undefined>(undefined);
   const [formError, setFormError] = useState<string | null>(initialError);
   const stepRef = useRef<AuthStep>(defaultStep);
 
@@ -73,8 +76,9 @@ export function UnifiedAuthForm({
             email={email}
             formError={formError}
             onEmailChange={setEmail}
-            onVerificationRequired={(token: string) => {
+            onVerificationRequired={(token: string, name?: string) => {
               setPendingAuthToken(token);
+              setCompanyName(name);
               goToStep('verify');
             }}
             onSuccess={onSuccess}
@@ -86,6 +90,7 @@ export function UnifiedAuthForm({
           <VerifyStep
             email={email}
             pendingAuthToken={pendingAuthToken}
+            companyName={companyName}
             formError={formError}
             onSuccess={onSuccess}
             onError={setFormError}

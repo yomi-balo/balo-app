@@ -234,3 +234,91 @@ describe('usersRepository.createWithWorkspace domain capture (BAL-344)', () => {
     await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([]);
   });
 });
+
+describe('usersRepository.createWithWorkspace company name (BAL-350)', () => {
+  it('applies an explicit companyName as the workspace name AND still captures the verified domain', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace(
+      {
+        workosId: `wos-${suffix}`,
+        email: `founder@corp-${suffix}.com`,
+        firstName: 'Founder',
+        lastName: 'Named',
+        emailVerified: true,
+        activeMode: 'client',
+      },
+      { companyName: 'Acme Inc' }
+    );
+
+    expect(result.company.name).toBe('Acme Inc');
+    // The custom name does NOT change isPersonal — capture still runs.
+    expect(result.company.isPersonal).toBe(true);
+    expect(result.domainCapture).toEqual({
+      outcome: 'captured',
+      partyType: 'company',
+      source: 'auto_captured',
+    });
+  });
+
+  it('trims the explicit companyName before applying it', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace(
+      {
+        workosId: `wos-${suffix}`,
+        email: `person-${suffix}@corp-${suffix}.com`,
+        firstName: 'Founder',
+        lastName: 'Trim',
+        emailVerified: false,
+        activeMode: 'client',
+      },
+      { companyName: '  Acme  ' }
+    );
+
+    expect(result.company.name).toBe('Acme');
+  });
+
+  it('falls back to the firstName-derived default for a whitespace-only companyName', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace(
+      {
+        workosId: `wos-${suffix}`,
+        email: `person-${suffix}@corp-${suffix}.com`,
+        firstName: 'Person',
+        lastName: 'Blank',
+        emailVerified: false,
+        activeMode: 'client',
+      },
+      { companyName: '   ' }
+    );
+
+    expect(result.company.name).toBe("Person's Workspace");
+  });
+
+  it('omitting options keeps the firstName-derived default (OAuth/sign-in regression guard)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace({
+      workosId: `wos-${suffix}`,
+      email: `person-${suffix}@corp-${suffix}.com`,
+      firstName: 'Solo',
+      lastName: 'Default',
+      emailVerified: false,
+      activeMode: 'client',
+    });
+
+    expect(result.company.name).toBe("Solo's Workspace");
+  });
+
+  it('firstName null + no companyName → "My Workspace" (existing behaviour preserved)', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const result = await usersRepository.createWithWorkspace({
+      workosId: `wos-${suffix}`,
+      email: `person-${suffix}@corp-${suffix}.com`,
+      firstName: null,
+      lastName: null,
+      emailVerified: false,
+      activeMode: 'client',
+    });
+
+    expect(result.company.name).toBe('My Workspace');
+  });
+});

@@ -12,6 +12,8 @@ import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 interface VerifyStepProps {
   email: string;
   pendingAuthToken: string;
+  /** BAL-350: company name captured on the signup step, threaded into the create tx. */
+  companyName?: string;
   formError: string | null;
   onSuccess: () => void;
   onError: (error: string) => void;
@@ -21,6 +23,7 @@ interface VerifyStepProps {
 export function VerifyStep({
   email,
   pendingAuthToken,
+  companyName,
   formError,
   onSuccess,
   onError,
@@ -47,6 +50,7 @@ export function VerifyStep({
       const result = await verifyEmailAction({
         pendingAuthToken,
         code: verificationCode,
+        companyName,
       });
 
       if (result.success) {
