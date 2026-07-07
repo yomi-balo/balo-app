@@ -10,7 +10,8 @@ export interface NotificationRule {
     | 'non_selected_experts'
     | 'admin_users'
     | 'email_address'
-    | 'billing_creator';
+    | 'billing_creator'
+    | 'party_admins';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -351,4 +352,23 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-345 domain auto-join. `party_admins` is a fan-out recipient (one delivery
+  // per admin) resolved from data.partyAdminUserIds; `self` (approve/decline)
+  // resolves to payload.userId (the requester). The base-member joiner/requester
+  // is naturally excluded from the admin fan-out (they lack MANAGE_MEMBERS).
+  //
+  // member_joined: admins-only FYI, IN-APP ONLY (not email-worthy — an auto-join
+  // is low-signal). request_created: admins must act → email + in-app.
+  // approved/declined: the requester is waiting → email + in-app.
+  'party.member_joined_via_domain': [
+    {
+      channel: 'in-app',
+      recipient: 'party_admins',
+      template: 'party-member-joined-via-domain',
+      timing: 'immediate',
+    },
+  ],
+  'party.join_request_created': emailAndInApp('party_admins', 'party-join-request-created'),
+  'party.join_request_approved': emailAndInApp('self', 'party-join-request-approved'),
+  'party.join_request_declined': emailAndInApp('self', 'party-join-request-declined'),
 };

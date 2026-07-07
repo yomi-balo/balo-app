@@ -7,6 +7,7 @@ const {
   mockFindIdsByPlatformRoles,
   mockFindUserIdsByProfileIds,
   mockListByRequest,
+  mockListAdminUserIds,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
@@ -14,6 +15,7 @@ const {
   mockFindIdsByPlatformRoles: vi.fn(),
   mockFindUserIdsByProfileIds: vi.fn(),
   mockListByRequest: vi.fn(),
+  mockListAdminUserIds: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -27,6 +29,7 @@ vi.mock('@balo/db', () => ({
   },
   companiesRepository: { findById: mockCompanyFindById },
   proposalsRepository: { listByRequest: mockListByRequest },
+  partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
 }));
 
 import { resolveContext } from './resolver.js';
@@ -227,6 +230,60 @@ describe('resolveContext', () => {
 
       expect(mockFindUserIdByProfileId).toHaveBeenCalledWith('profile-winner');
       expect(context.data.expert).toEqual(winner);
+    });
+  });
+
+  // ── BAL-345 party-admin fan-out hydration ──
+  describe('BAL-345 domain auto-join hydration', () => {
+    it.each(['party.member_joined_via_domain', 'party.join_request_created'] as const)(
+      'hydrates data.partyAdminUserIds + data.user (the actor) for %s',
+      async (event) => {
+        const actor = { id: 'joiner-1', firstName: 'Jo', lastName: 'Iner' };
+        mockFindById.mockResolvedValue(actor);
+        mockListAdminUserIds.mockResolvedValue(['admin-1', 'admin-2']);
+
+        const context = await resolveContext(event, {
+          correlationId: 'corr-1',
+          partyType: 'company',
+          partyId: 'party-1',
+          userId: 'joiner-1',
+        });
+
+        // data.user hydrated from payload.userId (the joiner/requester subject).
+        expect(mockFindById).toHaveBeenCalledWith('joiner-1');
+        expect(context.data.user).toEqual(actor);
+        // partyAdminUserIds hydrated from listAdminUserIds(partyType, partyId).
+        expect(mockListAdminUserIds).toHaveBeenCalledWith('company', 'party-1');
+        expect(context.data.partyAdminUserIds).toEqual(['admin-1', 'admin-2']);
+      }
+    );
+
+    it('does NOT hydrate partyAdminUserIds for the self-facing approved/declined events', async () => {
+      mockFindById.mockResolvedValue({ id: 'req-1', firstName: 'Re' });
+
+      const context = await resolveContext('party.join_request_approved', {
+        correlationId: 'corr-2',
+        partyType: 'company',
+        partyId: 'party-1',
+        userId: 'req-1',
+      });
+
+      expect(mockListAdminUserIds).not.toHaveBeenCalled();
+      expect(context.data.partyAdminUserIds).toBeUndefined();
+      // The requester is still hydrated as data.user (recipient:'self').
+      expect(context.data.user).toEqual({ id: 'req-1', firstName: 'Re' });
+    });
+
+    it('skips the admin fan-out when partyType is invalid', async () => {
+      mockFindById.mockResolvedValue({ id: 'u-1' });
+      const context = await resolveContext('party.member_joined_via_domain', {
+        correlationId: 'corr-3',
+        partyType: 'not-a-party',
+        partyId: 'party-1',
+        userId: 'u-1',
+      });
+      expect(mockListAdminUserIds).not.toHaveBeenCalled();
+      expect(context.data.partyAdminUserIds).toBeUndefined();
     });
   });
 

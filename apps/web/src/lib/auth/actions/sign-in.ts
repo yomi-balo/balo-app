@@ -9,6 +9,7 @@ import { db, usersRepository } from '@balo/db';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 import { log } from '@/lib/logging';
 import { emitDomainCapture } from '@/lib/analytics/party-domains';
+import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
 interface SignInResult {
   needsOnboarding: boolean;
@@ -57,6 +58,18 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       // BAL-344: emit the domain auto-capture outcome (post-commit). Usually
       // not_applicable unless WorkOS reports the orphaned user's email verified.
       emitDomainCapture(result.domainCapture, user.id);
+
+      // BAL-345: run the domain auto-join match engine (post-commit). Pass the
+      // SAME WorkOS emailVerified flag createWithWorkspace received — never
+      // hardcode true; the engine's verified hard-gate stands down when false. The
+      // `.catch` is belt-and-suspenders so a domain-join failure can NEVER break auth.
+      await runDomainJoinAndEmit({
+        userId: user.id,
+        email: user.email,
+        emailVerified: workosUser.emailVerified === true,
+      }).catch(() => {
+        // runDomainJoinAndEmit already logs internally.
+      });
     }
 
     // 4. Load company membership (always exists — created at signup or recovery above)

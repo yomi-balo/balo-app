@@ -1,4 +1,6 @@
 export { userFactory } from './user.factory';
+export { companyFactory, companyMemberFactory } from './company.factory';
+export { agencyFactory, agencyMemberFactory } from './agency.factory';
 export { expertFactory } from './expert.factory';
 export { expertDraftFactory } from './expert-draft.factory';
 export { searchExpertFactory } from './search-expert.factory';

@@ -3,6 +3,7 @@ import {
   expertsRepository,
   companiesRepository,
   proposalsRepository,
+  partyMembershipsRepository,
 } from '@balo/db';
 import type { RuleContext } from './rules.js';
 
@@ -35,6 +36,22 @@ export async function resolveContext(
   // nudge) and billing.details_confirmed (BAL-323 "ready to invoice" nudge) need it.
   if (event === 'project.proposal_accepted' || event === 'billing.details_confirmed') {
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
+  }
+
+  // BAL-345: the two admin-facing domain-join events fan out to the party's admin
+  // (MANAGE_MEMBERS) members. `data.user` (the joiner/requester) is already
+  // hydrated above from payload.userId — no requesterUserId/joinedUserId special
+  // case needed. listAdminUserIds derives the admin-role set from the pure authz
+  // map (never a hardcoded role IN (...)), so a base-member joiner is excluded.
+  if (event === 'party.member_joined_via_domain' || event === 'party.join_request_created') {
+    const partyType = payload.partyType;
+    const partyId = payload.partyId;
+    if ((partyType === 'company' || partyType === 'agency') && typeof partyId === 'string') {
+      data.partyAdminUserIds = await partyMembershipsRepository.listAdminUserIds(
+        partyType,
+        partyId
+      );
+    }
   }
 
   // BAL-289: project.proposal_accepted ALSO fans out to the non-selected experts —

@@ -1,8 +1,13 @@
 import { pgTable, uuid, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
-import { agencyRoleEnum } from './enums';
+import { relations, sql } from 'drizzle-orm';
+import {
+  agencyRoleEnum,
+  domainJoinModeEnum,
+  membershipAuthorityEnum,
+  joinMethodEnum,
+} from './enums';
 import { users } from './users';
-import { timestamps } from './helpers';
+import { timestamps, softDelete } from './helpers';
 
 export const agencies = pgTable('agencies', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -12,6 +17,11 @@ export const agencies = pgTable('agencies', {
   logoUrl: text('logo_url'),
 
   stripeConnectId: text('stripe_connect_id'),
+
+  // BAL-345: domain auto-join governance — symmetric with `companies`. Built for
+  // symmetry; the agency path has no v1 runtime trigger (forward-compat only).
+  domainJoinMode: domainJoinModeEnum('domain_join_mode').notNull().default('auto'),
+  membershipAuthority: membershipAuthorityEnum('membership_authority').notNull().default('balo'),
 
   ...timestamps,
 });
@@ -29,11 +39,23 @@ export const agencyMembers = pgTable(
 
     role: agencyRoleEnum('role').notNull().default('expert'),
 
+    // BAL-345: how this membership originated (symmetric with company_members).
+    joinMethod: joinMethodEnum('join_method').notNull().default('personal_workspace'),
+
     invitedById: uuid('invited_by_id').references(() => users.id),
     joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
+
+    // BAL-345: soft-delete + attribution (ADR-1030), symmetric with company_members.
+    ...softDelete,
+    deletedByUserId: uuid('deleted_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
   },
   (table) => ({
-    agencyUserIdx: uniqueIndex('agency_user_idx').on(table.agencyId, table.userId),
+    // PARTIAL on `deleted_at IS NULL` (BAL-345), symmetric with company_user_idx.
+    agencyUserIdx: uniqueIndex('agency_user_idx')
+      .on(table.agencyId, table.userId)
+      .where(sql`${table.deletedAt} IS NULL`),
   })
 );
 
@@ -54,4 +76,5 @@ export const agencyMembersRelations = relations(agencyMembers, ({ one }) => ({
 }));
 
 export type Agency = typeof agencies.$inferSelect;
+export type NewAgency = typeof agencies.$inferInsert;
 export type AgencyMember = typeof agencyMembers.$inferSelect;

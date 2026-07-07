@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { partyDomains } from '../schema';
-import { userFactory } from '../test/factories';
+import { userFactory, companyFactory, companyMemberFactory } from '../test/factories';
 import { usersRepository } from './users';
 
 describe('usersRepository.setPhoneVerified', () => {
@@ -131,6 +131,47 @@ describe('usersRepository.findIdsByPlatformRoles', () => {
     const ids = await usersRepository.findIdsByPlatformRoles([]);
 
     expect(ids).toEqual([]);
+  });
+});
+
+describe('usersRepository.findWithCompany (BAL-345 deterministic session read)', () => {
+  it('orders companyMemberships owner-first and excludes soft-deleted', async () => {
+    const user = await userFactory();
+    const personal = await companyFactory({ isPersonal: true });
+    const shared = await companyFactory({ isPersonal: false });
+    const removed = await companyFactory({ isPersonal: false });
+
+    // Domain-match member seeded first; personal-workspace owner second; a
+    // soft-removed owner third. Deterministic read must surface personal first.
+    await companyMemberFactory({
+      companyId: shared.id,
+      userId: user.id,
+      role: 'member',
+      joinMethod: 'domain_match',
+    });
+    await companyMemberFactory({
+      companyId: personal.id,
+      userId: user.id,
+      role: 'owner',
+      joinMethod: 'personal_workspace',
+    });
+    await companyMemberFactory({
+      companyId: removed.id,
+      userId: user.id,
+      role: 'owner',
+      deletedAt: new Date(),
+      deletedByUserId: user.id,
+    });
+
+    const result = await usersRepository.findWithCompany(user.id);
+    const memberships = result?.companyMemberships ?? [];
+
+    // Soft-deleted membership excluded → exactly the two live rows.
+    expect(memberships).toHaveLength(2);
+    // The personal-workspace owner row is [0] — the session lands here.
+    expect(memberships[0]?.companyId).toBe(personal.id);
+    expect(memberships[0]?.role).toBe('owner');
+    expect(memberships.map((m) => m.companyId)).not.toContain(removed.id);
   });
 });
 

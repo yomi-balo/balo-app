@@ -41,6 +41,14 @@ vi.mock('@/lib/analytics/server', () => ({
   },
 }));
 
+// BAL-345: the domain auto-join match engine, wired post-commit in the isNewUser
+// branch. Mocked so we can assert the exact emailVerified value the OTP seam
+// passes (hardcoded true) and that a throw never breaks auth.
+const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
+vi.mock('@/lib/domain-join/run-domain-join', () => ({
+  runDomainJoinAndEmit: (...args: unknown[]) => mockRunDomainJoinAndEmit(...args),
+}));
+
 import { verifyEmailAction } from './verify-email';
 import type { VerifyEmailInput } from './verify-email';
 
@@ -384,6 +392,43 @@ describe('verifyEmailAction', () => {
         reason: 'blocked_domain',
         distinct_id: 'user-1',
       });
+    });
+  });
+
+  // BAL-345 — domain auto-join seam wiring.
+  describe('domain auto-join wiring (BAL-345)', () => {
+    it('runs the match engine with emailVerified: true (OTP proves verification)', async () => {
+      setupHappyPath();
+      await verifyEmailAction(validInput());
+      expect(mockRunDomainJoinAndEmit).toHaveBeenCalledWith({
+        userId: 'user-1',
+        email: 'jane@example.com',
+        emailVerified: true,
+      });
+    });
+
+    it('does NOT run the match engine when the user already exists (race path)', async () => {
+      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
+      mockFindByWorkosId.mockResolvedValue({
+        id: 'user-1',
+        email: 'jane@example.com',
+        firstName: null,
+        lastName: null,
+        activeMode: 'client',
+      });
+      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
+      mockSave.mockResolvedValue(undefined);
+
+      await verifyEmailAction(validInput());
+      expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a throw from the match engine is swallowed — auth still succeeds', async () => {
+      setupHappyPath();
+      mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('engine boom'));
+
+      const result = await verifyEmailAction(validInput());
+      expect(result.success).toBe(true);
     });
   });
 });

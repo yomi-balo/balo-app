@@ -15,6 +15,7 @@ import type { ConversationEventMap } from './events/conversation';
 import type { ProjectsInboxEventMap } from './events/projects-inbox';
 import type { BillingEventMap, BillingServerEventMap } from './events/billing';
 import type { PartyDomainServerEventMap } from './events/party-domains';
+import type { PartyJoinServerEventMap } from './events/party-join';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -43,6 +44,7 @@ export type ServerEvents = ExpertServerEventMap &
   SearchServerEventMap &
   ProjectServerEventMap &
   BillingServerEventMap &
-  PartyDomainServerEventMap;
+  PartyDomainServerEventMap &
+  PartyJoinServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

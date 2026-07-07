@@ -295,3 +295,45 @@ describe('partyDomainsRepository.listByParty', () => {
     expect(rows).toEqual([]);
   });
 });
+
+describe('partyDomainsRepository.findActiveByDomain', () => {
+  it('returns the single live party that owns a domain (normalising the input)', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'acme.com', actorUserId: actor.id },
+      db
+    );
+
+    // Mixed-case + leading '@' input proves the repo normalises before matching.
+    const owner = await partyDomainsRepository.findActiveByDomain('@ACME.com');
+    expect(owner?.partyType).toBe('company');
+    expect(owner?.partyId).toBe(companyId);
+    expect(owner?.domain).toBe('acme.com');
+  });
+
+  it('returns undefined for a domain no live party owns', async () => {
+    await expect(partyDomainsRepository.findActiveByDomain('nobody.com')).resolves.toBeUndefined();
+  });
+
+  it('returns undefined for an empty/whitespace domain', async () => {
+    await expect(partyDomainsRepository.findActiveByDomain('   ')).resolves.toBeUndefined();
+  });
+
+  it('returns undefined once the mapping is soft-deleted (the slot is free)', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'gone.com', actorUserId: actor.id },
+      db
+    );
+    const [row] = await liveRowsForDomain('gone.com');
+    if (row === undefined) throw new Error('expected the mapping');
+    await db
+      .update(partyDomains)
+      .set({ deletedAt: new Date(), deletedByUserId: actor.id })
+      .where(eq(partyDomains.id, row.id));
+
+    await expect(partyDomainsRepository.findActiveByDomain('gone.com')).resolves.toBeUndefined();
+  });
+});

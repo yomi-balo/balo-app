@@ -115,6 +115,21 @@ export async function signUpAction(
     // BAL-344: emit the domain auto-capture outcome (post-commit).
     emitDomainCapture(domainCapture, user.id);
 
+    // BAL-345: run the domain auto-join match engine (post-commit). Dynamically
+    // imported (like @balo/db above) so it stays out of the primary bundle — this
+    // fallback path runs only when WorkOS email-verification is disabled. Pass the
+    // SAME real WorkOS emailVerified flag createWithWorkspace received, never true.
+    const { runDomainJoinAndEmit } = await import('@/lib/domain-join/run-domain-join');
+    // The `.catch` is belt-and-suspenders (runDomainJoinAndEmit swallows
+    // internally) so a domain-join failure can NEVER break auth.
+    await runDomainJoinAndEmit({
+      userId: user.id,
+      email: user.email,
+      emailVerified: workosUser.emailVerified === true,
+    }).catch(() => {
+      // runDomainJoinAndEmit already logs internally.
+    });
+
     return {
       success: true,
       data: {

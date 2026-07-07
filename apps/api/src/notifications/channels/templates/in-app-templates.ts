@@ -19,6 +19,23 @@ function formatPriceCents(priceCents: unknown, currency: unknown): string {
   return code ? `${code} ${amount}` : amount;
 }
 
+/**
+ * BAL-345 — the joiner/requester display name from the resolver-hydrated
+ * `data.user` (payload.userId). Degrades to "A teammate" when the name is unset.
+ */
+function partyMemberName(data: Record<string, unknown>): string {
+  const user = data.user as { firstName?: string | null; lastName?: string | null } | undefined;
+  const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+  return name.length > 0 ? name : 'A teammate';
+}
+
+/** BAL-345 — human noun for the party type carried in `data.partyType`. */
+function partyTypeNoun(data: Record<string, unknown>): string {
+  if (data.partyType === 'company') return 'company';
+  if (data.partyType === 'agency') return 'agency';
+  return 'organization';
+}
+
 /** The common in-app shape: title + body linking to the project request. */
 function projectRequestNotice(
   title: string,
@@ -191,6 +208,38 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
+
+  // BAL-345 domain auto-join. `data.user` (the joiner/requester) is hydrated by
+  // the resolver from payload.userId; `data.partyType` names the party. member/
+  // request notices go to party admins; approved/declined go to the requester.
+  'party-member-joined-via-domain': (data) => {
+    const actorName = partyMemberName(data);
+    return {
+      title: 'New teammate joined',
+      body: `${actorName} joined your ${partyTypeNoun(data)} via a matched email domain`,
+      actionUrl: '/settings/team',
+    };
+  },
+
+  'party-join-request-created': (data) => {
+    const actorName = partyMemberName(data);
+    return {
+      title: 'Join request',
+      body: `${actorName} requested to join your ${partyTypeNoun(data)}`,
+      actionUrl: '/settings/team',
+    };
+  },
+
+  'party-join-request-approved': (data) => ({
+    title: "You're in",
+    body: `Your request to join the ${partyTypeNoun(data)} was approved`,
+    actionUrl: '/dashboard',
+  }),
+
+  'party-join-request-declined': (data) => ({
+    title: 'Request declined',
+    body: `Your request to join the ${partyTypeNoun(data)} was not approved`,
+  }),
 
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {

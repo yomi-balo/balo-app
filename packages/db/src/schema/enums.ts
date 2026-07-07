@@ -160,3 +160,50 @@ export const partyDomainSourceEnum = pgEnum('party_domain_source', [
   'auto_captured',
   'admin_added',
 ]);
+
+// ── Domain auto-join match engine (BAL-345 / ADR-1031) ───────────────────
+
+/**
+ * How a party (company/agency) admits users whose verified email domain matches
+ * a `party_domains` row. `auto` = create the membership immediately; `request` =
+ * file a pending `party_join_requests` row an admin approves; `off` = do nothing.
+ * Standalone `CREATE TYPE` — all values commit atomically with the type, so using
+ * a value as a column DEFAULT in the same migration is safe.
+ */
+export const domainJoinModeEnum = pgEnum('domain_join_mode', ['auto', 'request', 'off']);
+
+/**
+ * Who is authoritative over a party's membership. `balo` = Balo's own join engine
+ * governs membership (the only value the v1 engine acts on); `directory` = an
+ * external directory (SCIM/SSO) owns membership and the engine stands down.
+ */
+export const membershipAuthorityEnum = pgEnum('membership_authority', ['balo', 'directory']);
+
+/**
+ * How a membership row (company_members / agency_members) originated.
+ * `personal_workspace` = the auto-created workspace at signup (the ONLY existing
+ * writer today); `invite` = future explicit invitation acceptance; `domain_match`
+ * = BAL-345 auto-join OR an approved join request; `owner` = future founding owner
+ * of a non-personal org. Standalone `CREATE TYPE` → safe as a column DEFAULT in
+ * the same migration.
+ */
+export const joinMethodEnum = pgEnum('join_method', [
+  'personal_workspace',
+  'invite',
+  'domain_match',
+  'owner',
+]);
+
+/**
+ * Lifecycle of a `party_join_requests` row. `pending` is the only non-terminal
+ * status; `approved`/`declined`/`withdrawn` are terminal. Standalone `CREATE TYPE`
+ * → the value `'pending'` is safe as a column DEFAULT and as a partial-index
+ * predicate literal in the same migration. Ordering carries no semantics — the
+ * transition map in `repositories/party-join-requests.ts` is the source of truth.
+ */
+export const partyJoinRequestStatusEnum = pgEnum('party_join_request_status', [
+  'pending',
+  'approved',
+  'declined',
+  'withdrawn',
+]);

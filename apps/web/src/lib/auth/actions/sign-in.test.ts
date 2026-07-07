@@ -43,6 +43,14 @@ vi.mock('@balo/db', () => ({
 // tests sign-in logic, not emission; the emit is covered in verify-email.test.ts).
 vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
 
+// BAL-345: the domain auto-join match engine, wired only in the orphan-recovery
+// (!user) create branch. Mocked to assert the WorkOS emailVerified flag is passed
+// through (never hardcoded) and that a throw never breaks sign-in.
+const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
+vi.mock('@/lib/domain-join/run-domain-join', () => ({
+  runDomainJoinAndEmit: (...args: unknown[]) => mockRunDomainJoinAndEmit(...args),
+}));
+
 import { signInAction } from './sign-in';
 import type { SignInFormData } from '@/components/balo/auth/schemas';
 
@@ -395,6 +403,49 @@ describe('signInAction', () => {
         success: false,
         error: 'Something went wrong. Please try again.',
       });
+    });
+  });
+
+  // BAL-345 — domain auto-join seam wiring (orphan-recovery create branch only).
+  describe('domain auto-join wiring (BAL-345)', () => {
+    function setupOrphanRecovery(workosOverrides: Record<string, unknown> = {}) {
+      mockAuthenticateWithPassword.mockResolvedValue(mockWorkOSAuthResponse(workosOverrides));
+      mockFindByWorkosId.mockResolvedValue(undefined);
+      mockCreateWithWorkspace.mockResolvedValue({ user: mockBaloUser() });
+      mockFindWithCompany.mockResolvedValue(mockCompanyData());
+      mockTouch.mockResolvedValue(undefined);
+      mockSave.mockResolvedValue(undefined);
+    }
+
+    it('runs the match engine with the WorkOS emailVerified flag (true)', async () => {
+      setupOrphanRecovery({ emailVerified: true });
+      await signInAction(validInput());
+      expect(mockRunDomainJoinAndEmit).toHaveBeenCalledWith({
+        userId: 'user-1',
+        email: 'user@example.com',
+        emailVerified: true,
+      });
+    });
+
+    it('passes emailVerified: false when WorkOS reports it unverified (never hardcoded true)', async () => {
+      setupOrphanRecovery({ emailVerified: null });
+      await signInAction(validInput());
+      expect(mockRunDomainJoinAndEmit).toHaveBeenCalledWith(
+        expect.objectContaining({ emailVerified: false })
+      );
+    });
+
+    it('does NOT run the match engine for an existing (non-orphan) user', async () => {
+      setupHappyPath();
+      await signInAction(validInput());
+      expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a throw from the match engine is swallowed — sign-in still succeeds', async () => {
+      setupOrphanRecovery();
+      mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('engine boom'));
+      const result = await signInAction(validInput());
+      expect(result.success).toBe(true);
     });
   });
 });

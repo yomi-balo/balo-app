@@ -147,6 +147,29 @@ export { partyDomainsRepository } from './party-domains';
 export type { DomainCaptureResult, CaptureDomainInput } from './party-domains';
 export { auditEventsRepository } from './audit-events';
 export type { RecordAuditInput } from './audit-events';
+export { partyMembershipsRepository } from './party-memberships';
+export type {
+  DomainMembershipInput,
+  FindOrCreateMembershipResult,
+  SoftRemoveMembershipResult,
+  PartyJoinSettings,
+} from './party-memberships';
+export {
+  partyJoinRequestsRepository,
+  PARTY_JOIN_REQUEST_STATUS_TRANSITIONS,
+  isAllowedJoinRequestTransition,
+  InvalidJoinRequestTransitionError,
+  advanceJoinRequestStatus,
+} from './party-join-requests';
+export type {
+  FindOrCreatePendingResult,
+  CreatePendingInput,
+  ResolveRequestInput,
+} from './party-join-requests';
+export { partyJoinOptoutsRepository } from './party-join-optouts';
+export type { OptOutInput, OptOutResult } from './party-join-optouts';
+export { partyJoinRepository } from './party-join';
+export type { LeaveDomainPartyInput, LeaveDomainPartyResult } from './party-join';
 export type {
   PartyDomain,
   NewPartyDomain,
@@ -154,4 +177,9 @@ export type {
   PartyDomainSource,
   AuditEvent,
   NewAuditEvent,
+  PartyJoinRequest,
+  NewPartyJoinRequest,
+  PartyJoinRequestStatus,
+  PartyJoinOptout,
+  NewPartyJoinOptout,
 } from '../schema';

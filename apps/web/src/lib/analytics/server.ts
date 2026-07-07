@@ -8,6 +8,7 @@ export {
   EXPERT_SERVER_EVENTS,
   BILLING_SERVER_EVENTS,
   PARTY_DOMAIN_SERVER_EVENTS,
+  PARTY_JOIN_SERVER_EVENTS,
 } from '@balo/analytics/server';
 
 /**

@@ -10,6 +10,7 @@ import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/a
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { emitDomainCapture } from '@/lib/analytics/party-domains';
+import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
 export type VerifyEmailInput = VerifyEmailFormData;
 
@@ -109,6 +110,16 @@ export async function verifyEmailAction(
       // BAL-344: emit the domain auto-capture outcome (post-commit). Email
       // verification is the primary capture path — the domain is now verified.
       emitDomainCapture(domainCapture, user.id);
+
+      // BAL-345: run the domain auto-join match engine (post-commit). `true` is
+      // legitimately hardcoded here — the OTP flow PROVES the email is verified.
+      // runDomainJoinAndEmit swallows its own failures; the `.catch` is
+      // belt-and-suspenders so a domain-join failure can NEVER break auth.
+      await runDomainJoinAndEmit({ userId: user.id, email: user.email, emailVerified: true }).catch(
+        () => {
+          // runDomainJoinAndEmit already logs internally.
+        }
+      );
     }
 
     log.info('Email verification completed, user created', {
