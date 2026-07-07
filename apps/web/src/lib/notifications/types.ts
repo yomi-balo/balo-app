@@ -6,6 +6,8 @@ import type {
   ProjectChangesRequestedPayload,
   ProjectProposalResubmittedPayload,
   BillingDetailsConfirmedPayload,
+  EngagementMilestoneCompletedPayload,
+  EngagementMilestoneRevertedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -195,6 +197,8 @@ export type NotificationEvent =
   | 'project.file_shared'
   | 'project.billing_reminder'
   | 'billing.details_confirmed'
+  | 'engagement.milestone_completed'
+  | 'engagement.milestone_reverted'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
@@ -220,6 +224,8 @@ export interface EventPayloadMap {
   'project.file_shared': ProjectFileSharedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;
+  'engagement.milestone_completed': EngagementMilestoneCompletedPayload;
+  'engagement.milestone_reverted': EngagementMilestoneRevertedPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;

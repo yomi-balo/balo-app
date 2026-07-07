@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { render, screen } from '@/test/utils';
 import type {
@@ -6,6 +6,13 @@ import type {
   EngagementWorkspaceView,
   MilestoneNodeView,
 } from '@/lib/engagement/engagement-view';
+
+// Stub the interactive expert rail so this composition test doesn't pull the
+// server-action module graph (@balo/db); its behaviour is covered in
+// expert-milestone-rail.test.tsx.
+vi.mock('./expert-milestone-rail', () => ({
+  ExpertMilestoneRail: () => <div data-testid="expert-milestone-rail">Interactive rail</div>,
+}));
 
 import { EngagementWorkspace } from './engagement-workspace';
 
@@ -193,6 +200,39 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     );
     expect(screen.getByText('Engagement cancelled')).toBeInTheDocument();
     expect(screen.getByText(/Client changed direction\./)).toBeInTheDocument();
+  });
+
+  it('expert lens · active renders the INTERACTIVE rail (not the read-only rail)', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          lens: 'expert',
+          archetype: 'participant',
+          isClientOwner: false,
+          isDeliveringExpert: true,
+        })}
+      />
+    );
+    expect(screen.getByTestId('expert-milestone-rail')).toBeInTheDocument();
+    // The read-only rail (which renders the milestone titles) is NOT used here.
+    expect(screen.queryByText('Discovery workshop')).not.toBeInTheDocument();
+  });
+
+  it('expert lens · pending_acceptance renders the READ-ONLY rail (plan locked in review)', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          lens: 'expert',
+          archetype: 'participant',
+          isClientOwner: false,
+          isDeliveringExpert: true,
+          status: 'pending_acceptance',
+        })}
+      />
+    );
+    expect(screen.queryByTestId('expert-milestone-rail')).not.toBeInTheDocument();
+    expect(screen.getByText('Delivery plan')).toBeInTheDocument();
+    expect(screen.getAllByText('Discovery workshop').length).toBeGreaterThan(0);
   });
 
   it('admin lens renders the oversight strip above the progress/rail', () => {

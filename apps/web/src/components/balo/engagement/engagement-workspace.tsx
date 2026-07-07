@@ -8,6 +8,7 @@ import { CancelledBanner } from './cancelled-banner';
 import { AdminOversightStrip } from './admin-oversight-strip';
 import { EngagementProgress } from './engagement-progress';
 import { MilestoneRail } from './milestone-rail';
+import { ExpertMilestoneRail } from './expert-milestone-rail';
 import { MilestoneEmptyState } from './milestone-empty-state';
 
 interface EngagementWorkspaceProps {
@@ -30,6 +31,21 @@ interface EngagementWorkspaceProps {
 export function EngagementWorkspace({
   view,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
+  // The delivering expert gets the INTERACTIVE rail only while the engagement is
+  // active — the plan locks during client review / terminal states, where the
+  // read-only rail (a server component) preserves D1's no-client-bundle posture.
+  const isInteractiveExpertRail = view.lens === 'expert' && view.status === 'active';
+  const rail = isInteractiveExpertRail ? (
+    <ExpertMilestoneRail
+      engagementId={view.engagementId}
+      milestones={view.milestones}
+      expertPersonShort={view.parties.expertPersonShort}
+      clientCompanyName={view.parties.clientCompanyName}
+    />
+  ) : (
+    <MilestoneRail milestones={view.milestones} />
+  );
+
   return (
     <div className="space-y-5">
       <Reveal>
@@ -73,9 +89,7 @@ export function EngagementWorkspace({
       )}
 
       {view.hasMilestones ? (
-        <Reveal delay={0.2}>
-          <MilestoneRail milestones={view.milestones} />
-        </Reveal>
+        <Reveal delay={0.2}>{rail}</Reveal>
       ) : (
         view.emptyState !== null && (
           <Reveal delay={0.2}>

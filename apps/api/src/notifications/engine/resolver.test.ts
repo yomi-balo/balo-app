@@ -287,6 +287,26 @@ describe('resolveContext', () => {
     });
   });
 
+  // ── BAL-332 admin fan-out hydration for the milestone delivery events ──
+  describe('milestone delivery events hydration', () => {
+    it.each(['engagement.milestone_completed', 'engagement.milestone_reverted'] as const)(
+      'hydrates adminUserIds for %s (no sibling proposal read)',
+      async (event) => {
+        mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+
+        const context = await resolveContext(event, {
+          correlationId: `${'b'.repeat(8)}:123`,
+          engagementId: '550e8400-e29b-41d4-a716-446655440001',
+          milestoneId: '550e8400-e29b-41d4-a716-446655440002',
+        });
+
+        expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+        expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+        expect(mockListByRequest).not.toHaveBeenCalled();
+      }
+    );
+  });
+
   // ── BAL-323 admin fan-out hydration for billing.details_confirmed ──
   describe('billing.details_confirmed hydration', () => {
     it('hydrates adminUserIds for the admin in-app fan-out (no sibling read)', async () => {

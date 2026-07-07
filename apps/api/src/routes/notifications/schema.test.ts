@@ -637,6 +637,106 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.milestone_completed (BAL-332)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      milestoneId: '550e8400-e29b-41d4-a716-446655440002',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      expertPartyLabel: 'CloudPeak Consulting',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      milestoneTitle: 'Discovery',
+      completedOn: '30 Jun 2026',
+      completionNote: 'Shipped the deck.',
+      completedCount: 2,
+      totalCount: 3,
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.milestone_completed',
+        payload: valid,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts the payload without the optional recipientId + completionNote', () => {
+      const { recipientId: _r, completionNote: _n, ...rest } = valid;
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.milestone_completed',
+        payload: rest,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a non-uuid (epoch-suffixed) correlationId but rejects one over 120 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_completed',
+          payload: { ...valid, correlationId: 'a'.repeat(121) },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a non-uuid milestoneId and a negative completedCount', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_completed',
+          payload: { ...valid, milestoneId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_completed',
+          payload: { ...valid, completedCount: -1 },
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe('engagement.milestone_reverted (BAL-332)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:reverted:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      milestoneId: '550e8400-e29b-41d4-a716-446655440002',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      milestoneTitle: 'Discovery',
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.milestone_reverted',
+        payload: valid,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts the payload without the optional recipientId', () => {
+      const { recipientId: _r, ...rest } = valid;
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.milestone_reverted',
+        payload: rest,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a missing actorExpertLabel and a non-uuid engagementId', () => {
+      const { actorExpertLabel: _a, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.milestone_reverted', payload: rest })
+          .success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_reverted',
+          payload: { ...valid, engagementId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

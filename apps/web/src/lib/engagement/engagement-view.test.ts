@@ -277,6 +277,34 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     expect(node?.descriptionHtml).toBe('<p>Workshops and architecture.</p>');
   });
 
+  it('strips hostile markup from the milestone descriptionHtml (server sanitises for the client)', () => {
+    // D2 moved sanitisation into this mapper — the client `MilestoneRow` injects the
+    // result via dangerouslySetInnerHTML with NO further sanitise, so a regression to
+    // raw HTML here would be a stored-XSS hole. Feed hostile markup and assert it is
+    // stripped before it ever reaches the read model.
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        milestones: [
+          makeMilestone({
+            descriptionHtml:
+              '<p>Legit summary.</p><img src=x onerror="alert(1)"><script>alert(1)</script><a href="javascript:alert(1)">x</a>',
+          }),
+        ],
+      }),
+      ctxFor('client'),
+      NOW
+    );
+    const [node] = view.milestones;
+    const html = node?.descriptionHtml ?? '';
+    // Dangerous tags/attributes are gone.
+    expect(html).not.toContain('onerror');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('javascript:');
+    // The safe content survives.
+    expect(html).toContain('<p>Legit summary.</p>');
+  });
+
   it('pending node has no started/completed labels and an empty connector', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone({ status: 'pending' })] }),

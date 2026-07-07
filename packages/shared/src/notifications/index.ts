@@ -46,3 +46,41 @@ export interface ProjectProposalResubmittedPayload {
   priceCents: number; // updated proposal price — email/in-app body
   currency: string; // e.g. 'aud' — email/in-app body
 }
+
+// BAL-332 (D2) expert milestone completed. The delivering EXPERT marked a milestone
+// complete on a live engagement — fans out to the CLIENT company owner
+// (recipient:'client' via `recipientId`; email + in-app) and the Balo ADMINS
+// (recipient:'admin_users' fan-out; in-app). `correlationId =
+// `${milestoneId}:${completedAtEpochMs}`` — idempotent per completion, yet a genuine
+// revert→re-complete cycle gets a fresh `completedAt` → a new key → re-notifies.
+// `recipientId` is absent for a retainer / owner-miss (the client rules skip; admins
+// still fire). Copy uses BAL-329 conventions (PROSPECTIVE names the PARTY,
+// RETROSPECTIVE names the PERSON "@ agency" first mention).
+export interface EngagementMilestoneCompletedPayload {
+  correlationId: string; // `${milestoneId}:${completedAtEpochMs}` — idempotent per completion
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  milestoneId: string;
+  recipientId?: string; // client company owner user id → recipient:'client'; absent for retainers/no-owner
+  expertPartyLabel: string; // {Expert} — email subject (prospective party)
+  actorExpertLabel: string; // {actorExpert} — email/in-app body (retrospective person)
+  projectTitle: string; // {title} — subject + admin in-app body
+  milestoneTitle: string;
+  completedOn: string; // "30 Jun 2026" (server, UTC en-GB)
+  completionNote?: string; // verbatim when present
+  completedCount: number; // {n} — completed live milestones incl. this one
+  totalCount: number; // {m} — total live milestones
+}
+
+// BAL-332 (D2) expert milestone reverted. The delivering EXPERT moved a completed
+// milestone back to in progress — fans out to the CLIENT company owner and the Balo
+// ADMINS (in-app both; reverts are never silent). `correlationId =
+// `${milestoneId}:reverted:${updatedAtEpochMs}``. `recipientId` absent → client rule
+// skips; admins still fire.
+export interface EngagementMilestoneRevertedPayload {
+  correlationId: string; // `${milestoneId}:reverted:${updatedAtEpochMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  milestoneId: string;
+  recipientId?: string; // client owner user id → recipient:'client'
+  actorExpertLabel: string; // {actorExpert} — in-app body
+  milestoneTitle: string;
+}

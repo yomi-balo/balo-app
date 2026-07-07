@@ -32,9 +32,15 @@ export async function resolveContext(
   }
 
   // Admin fan-out recipients (dispatcher resolves recipient:'admin_users' from
-  // data.adminUserIds). Both project.proposal_accepted (BAL-289 ops "raise invoice"
-  // nudge) and billing.details_confirmed (BAL-323 "ready to invoice" nudge) need it.
-  if (event === 'project.proposal_accepted' || event === 'billing.details_confirmed') {
+  // data.adminUserIds). project.proposal_accepted (BAL-289 ops "raise invoice"
+  // nudge), billing.details_confirmed (BAL-323 "ready to invoice" nudge), and the
+  // BAL-332 milestone completed/reverted delivery signals all need it.
+  if (
+    event === 'project.proposal_accepted' ||
+    event === 'billing.details_confirmed' ||
+    event === 'engagement.milestone_completed' ||
+    event === 'engagement.milestone_reverted'
+  ) {
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
   }
 
