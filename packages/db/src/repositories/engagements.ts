@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import {
   engagementMilestones,
@@ -255,6 +255,144 @@ export type EngagementWithMilestones = NonNullable<
  * `lastActivityAt` vs a threshold — D0 exposes only the raw signal).
  */
 export type EngagementWithProgress = Engagement & {
+  totalMilestones: number;
+  completedMilestones: number;
+  inProgressMilestones: number;
+  lastActivityAt: Date | null;
+};
+
+/** Derived milestone-progress counts + a `lastActivityAt` proxy for one engagement. */
+interface MilestoneProgressAgg {
+  totalMilestones: number;
+  completedMilestones: number;
+  inProgressMilestones: number;
+  lastMilestoneActivityAt: Date | null;
+}
+
+/**
+ * ONE batched grouped milestone aggregate over the given engagement ids →
+ * a Map keyed by engagement id. Shared by `listActiveWithProgress` AND
+ * `listPortfolioEngagements` (dedup, not copy — keeps the Sonar new-code
+ * duplication gate green). Counts live milestones only; `lastMilestoneActivityAt
+ * = MAX(GREATEST(started_at, completed_at))` is NULL only when no live milestone
+ * has any activity (GREATEST ignores NULLs). The raw-SQL activity aggregate is
+ * coerced string→Date here (Drizzle does NOT apply the timestamptz→Date codec to
+ * a `sql` fragment). Empty ids → empty Map.
+ */
+async function aggregateMilestoneProgress(
+  engagementIds: string[]
+): Promise<Map<string, MilestoneProgressAgg>> {
+  if (engagementIds.length === 0) {
+    return new Map();
+  }
+
+  const aggregates = await db
+    .select({
+      engagementId: engagementMilestones.engagementId,
+      totalMilestones: sql<number>`cast(count(*) as int)`,
+      completedMilestones: sql<number>`cast(count(*) filter (where ${engagementMilestones.status} = 'completed') as int)`,
+      inProgressMilestones: sql<number>`cast(count(*) filter (where ${engagementMilestones.status} = 'in_progress') as int)`,
+      // GREATEST ignores NULLs; MAX is NULL only when no live milestone has any
+      // activity. Drizzle hands this raw fragment back as a string → coerced below.
+      lastMilestoneActivityAt: sql<
+        string | Date | null
+      >`max(greatest(${engagementMilestones.startedAt}, ${engagementMilestones.completedAt}))`,
+    })
+    .from(engagementMilestones)
+    .where(
+      and(
+        inArray(engagementMilestones.engagementId, engagementIds),
+        isNull(engagementMilestones.deletedAt)
+      )
+    )
+    .groupBy(engagementMilestones.engagementId);
+
+  return new Map(
+    aggregates.map((agg): [string, MilestoneProgressAgg] => {
+      const rawActivity = agg.lastMilestoneActivityAt ?? null;
+      let lastMilestoneActivityAt: Date | null = null;
+      if (rawActivity !== null) {
+        lastMilestoneActivityAt = rawActivity instanceof Date ? rawActivity : new Date(rawActivity);
+      }
+      return [
+        agg.engagementId,
+        {
+          totalMilestones: agg.totalMilestones,
+          completedMilestones: agg.completedMilestones,
+          inProgressMilestones: agg.inProgressMilestones,
+          lastMilestoneActivityAt,
+        },
+      ];
+    })
+  );
+}
+
+/**
+ * The batched, counterpart-hydrated engagement graph behind
+ * `listPortfolioEngagements` — a standalone module function so its INFERRED
+ * return type is the single source of truth for `PortfolioEngagementView`
+ * (mirrors `queryEngagementWithMilestones`). Scope is the party lens: a company
+ * (client), an expert profile (expert), or platform-wide (admin — no party
+ * scope, mirroring `listAll`). Returns EVERY non-deleted status; the web loader
+ * owns render policy, the repo stays policy-free.
+ */
+function queryPortfolioEngagements(
+  scope: { companyId: string } | { expertProfileId: string } | { platform: true }
+) {
+  let scopeCondition: SQL | undefined;
+  if ('companyId' in scope) {
+    scopeCondition = eq(engagements.companyId, scope.companyId);
+  } else if ('expertProfileId' in scope) {
+    scopeCondition = eq(engagements.expertProfileId, scope.expertProfileId);
+  }
+
+  return db.query.engagements.findMany({
+    where: and(isNull(engagements.deletedAt), scopeCondition),
+    columns: {
+      id: true,
+      companyId: true,
+      expertProfileId: true,
+      projectRequestId: true,
+      status: true,
+      changeRequestNote: true,
+      changeRequestedAt: true,
+      completionRequestedAt: true,
+      acceptedAt: true,
+      acceptanceMethod: true,
+      activatedAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    with: {
+      // SECURITY (mirrors queryEngagementWithMilestones): explicit allow-lists so
+      // this consumer-facing shape carries ONLY the counterpart identity an inbox
+      // row needs (client name; expert person + avatar; agency name + logo) and
+      // NEVER the secret/PII fields these full rows would otherwise bundle —
+      // `stripeConnectId`, `workosId`, the expert's email/phone. A Server Action
+      // can safely return this to a client component.
+      company: { columns: { id: true, name: true } },
+      projectRequest: { columns: { id: true, title: true } },
+      expertProfile: {
+        columns: { id: true, agencyId: true, type: true },
+        with: {
+          user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+          agency: { columns: { id: true, name: true, logoUrl: true } },
+        },
+      },
+    },
+  });
+}
+
+/** The hydrated identity graph element (non-null — `findMany` rows). */
+type PortfolioEngagementIdentity = Awaited<ReturnType<typeof queryPortfolioEngagements>>[number];
+
+/**
+ * One A7 portfolio engagement row: the counterpart-hydrated identity graph plus
+ * derived milestone-progress counts and a `lastActivityAt` recency proxy. The
+ * web loader folds this into a delivery inbox row across all three lenses
+ * (BAL-336). `projectRequest` is null for a retainer engagement.
+ */
+export type PortfolioEngagementView = PortfolioEngagementIdentity & {
   totalMilestones: number;
   completedMilestones: number;
   inProgressMilestones: number;
@@ -699,44 +837,12 @@ export const engagementsRepository = {
       return [];
     }
 
-    const engagementIds = activeEngagements.map((e) => e.id);
-
-    // ONE batched grouped aggregate over the loaded engagement ids (mirrors
-    // projects-inbox's batched newest-EOI fold). GREATEST ignores NULL timestamps;
-    // MAX over the group is NULL only when no live milestone has any activity.
-    const aggregates = await db
-      .select({
-        engagementId: engagementMilestones.engagementId,
-        totalMilestones: sql<number>`cast(count(*) as int)`,
-        completedMilestones: sql<number>`cast(count(*) filter (where ${engagementMilestones.status} = 'completed') as int)`,
-        inProgressMilestones: sql<number>`cast(count(*) filter (where ${engagementMilestones.status} = 'in_progress') as int)`,
-        // Raw-SQL aggregate: Drizzle does NOT apply the timestamptz→Date codec to a
-        // `sql` fragment, so postgres-js hands this back as a string — coerced to Date
-        // below. GREATEST ignores NULLs; MAX is NULL only when no live milestone has
-        // any activity.
-        lastMilestoneActivityAt: sql<
-          string | Date | null
-        >`max(greatest(${engagementMilestones.startedAt}, ${engagementMilestones.completedAt}))`,
-      })
-      .from(engagementMilestones)
-      .where(
-        and(
-          inArray(engagementMilestones.engagementId, engagementIds),
-          isNull(engagementMilestones.deletedAt)
-        )
-      )
-      .groupBy(engagementMilestones.engagementId);
-
-    const byEngagement = new Map(aggregates.map((a) => [a.engagementId, a]));
+    const byEngagement = await aggregateMilestoneProgress(activeEngagements.map((e) => e.id));
 
     const rows = activeEngagements.map((engagement) => {
       const agg = byEngagement.get(engagement.id);
-      const rawActivity = agg?.lastMilestoneActivityAt ?? null;
-      let milestoneActivityAt: Date | null = null;
-      if (rawActivity !== null) {
-        milestoneActivityAt = rawActivity instanceof Date ? rawActivity : new Date(rawActivity);
-      }
-      const lastActivityAt = milestoneActivityAt ?? engagement.activatedAt ?? engagement.createdAt;
+      const lastActivityAt =
+        agg?.lastMilestoneActivityAt ?? engagement.activatedAt ?? engagement.createdAt;
       return {
         ...engagement,
         totalMilestones: agg?.totalMilestones ?? 0,
@@ -748,6 +854,46 @@ export const engagementsRepository = {
 
     rows.sort((a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0));
     return rows;
+  },
+
+  /**
+   * All non-deleted engagements for a party lens (company / expert / platform),
+   * counterpart-hydrated (company name, project-request title, expert person +
+   * nullable agency) with derived milestone progress + a `lastActivityAt` recency
+   * proxy, newest activity first. Returns EVERY non-deleted status (`active`,
+   * `pending_acceptance`, `completed`, `cancelled`) — the web A7 loader owns
+   * render policy (excluding `completed` re-creates the "vanishes from inbox"
+   * defect BAL-336 fixes; excluding `cancelled` leaves the client dedup rendering
+   * a stale request row for a dead project). Two queries, independent of row
+   * count: one relational graph + one grouped aggregate. Explicit `columns:`
+   * projections — NEVER stripeConnectId / workosId / email / phone. Empty → `[]`.
+   */
+  async listPortfolioEngagements(
+    scope: { companyId: string } | { expertProfileId: string } | { platform: true }
+  ): Promise<PortfolioEngagementView[]> {
+    const rows = await queryPortfolioEngagements(scope);
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const byId = await aggregateMilestoneProgress(rows.map((r) => r.id));
+
+    const hydrated = rows.map((e) => {
+      const agg = byId.get(e.id);
+      const lastActivityAt = agg?.lastMilestoneActivityAt ?? e.activatedAt ?? e.createdAt;
+      return {
+        ...e,
+        totalMilestones: agg?.totalMilestones ?? 0,
+        completedMilestones: agg?.completedMilestones ?? 0,
+        inProgressMilestones: agg?.inProgressMilestones ?? 0,
+        lastActivityAt,
+      };
+    });
+
+    hydrated.sort(
+      (a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0)
+    );
+    return hydrated;
   },
 
   /**

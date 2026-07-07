@@ -2,11 +2,9 @@ import { and, desc, eq, inArray, isNull, max, ne } from 'drizzle-orm';
 import { db } from '../client';
 import {
   companies,
-  engagements,
   expressionsOfInterest,
   projectRequests,
   requestExpertRelationships,
-  type Engagement,
 } from '../schema';
 import type { ProjectRequestStatus } from './project-requests';
 
@@ -231,29 +229,6 @@ export const projectsInboxRepository = {
       newestEoiAt: newestEoiByRelationship.get(row.relationshipId) ?? null,
     }));
   },
-
-  /**
-   * Expert lens (source 2 of 2) — the expert's active delivery engagements (the
-   * "Live project" rows). LIVE, `status = 'active'`, newest first by `activatedAt`
-   * (falling back to `createdAt` when an active engagement has no activation
-   * stamp). Carries the nullable `projectRequestId` so the web row links to
-   * `/projects/{id}` only when present (the retainer seam leaves it null). Rides
-   * `engagement_expert_idx`; mirrors `engagementsRepository.listByCompany` keyed by
-   * expert. Empty expert → `[]`.
-   */
-  async listEngagementsByExpert(expertProfileId: string): Promise<PortfolioEngagementRow[]> {
-    return db
-      .select()
-      .from(engagements)
-      .where(
-        and(
-          eq(engagements.expertProfileId, expertProfileId),
-          eq(engagements.status, 'active'),
-          isNull(engagements.deletedAt)
-        )
-      )
-      .orderBy(desc(engagements.activatedAt), desc(engagements.createdAt));
-  },
 };
 
 /**
@@ -277,11 +252,3 @@ export interface PortfolioInvitationRow {
   companyName: string;
   newestEoiAt: Date | null;
 }
-
-/**
- * One active-engagement row for the expert lens "Live project" cards. Mirrors
- * `engagementsRepository.listByCompany`'s shape (the full `Engagement` row) but
- * keyed by expert. `projectRequestId` is preserved nullable (the retainer seam):
- * the web row links to `/projects/{id}` only when present.
- */
-export type PortfolioEngagementRow = Engagement;

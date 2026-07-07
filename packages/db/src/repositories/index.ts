@@ -89,6 +89,7 @@ export {
   AUTO_ACCEPT_DAYS,
   type EngagementWithMilestones,
   type EngagementWithProgress,
+  type PortfolioEngagementView,
 } from './engagements';
 export {
   engagementMilestonesRepository,
@@ -108,11 +109,7 @@ export type {
 } from './proposal-types';
 export { conversationsRepository } from './conversations';
 export { projectsInboxRepository } from './projects-inbox';
-export type {
-  PortfolioRequestRow,
-  PortfolioInvitationRow,
-  PortfolioEngagementRow,
-} from './projects-inbox';
+export type { PortfolioRequestRow, PortfolioInvitationRow } from './projects-inbox';
 export type {
   RequestExpertRelationship,
   NewRequestExpertRelationship,

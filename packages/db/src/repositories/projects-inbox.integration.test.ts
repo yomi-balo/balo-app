@@ -13,7 +13,6 @@ import {
   expertDraftFactory,
   projectRequestFactory,
   requestExpertRelationshipFactory,
-  engagementFactory,
 } from '../test/factories';
 import { projectsInboxRepository } from './projects-inbox';
 
@@ -325,86 +324,6 @@ describe('projectsInboxRepository.listInvitationsByExpert', () => {
   it('returns [] for an expert with no invitations', async () => {
     const expert = await expertDraftFactory();
     expect(await projectsInboxRepository.listInvitationsByExpert(expert.id)).toEqual([]);
-  });
-});
-
-// ── listEngagementsByExpert (expert lens — engagements) ───────────────────
-
-describe('projectsInboxRepository.listEngagementsByExpert', () => {
-  it('returns only active live engagements for the expert, newest first', async () => {
-    const expert = await expertDraftFactory();
-    const companyId = await seedCompanyId();
-
-    const older = await engagementFactory({
-      companyId,
-      expertProfileId: expert.id,
-      values: { activatedAt: new Date('2026-01-01T00:00:00.000Z') },
-    });
-    const newer = await engagementFactory({
-      companyId,
-      expertProfileId: expert.id,
-      values: { activatedAt: new Date('2026-02-01T00:00:00.000Z') },
-    });
-
-    const rows = await projectsInboxRepository.listEngagementsByExpert(expert.id);
-    expect(rows).toHaveLength(2);
-    // Newest activatedAt first.
-    expect(rows[0]?.id).toBe(newer.engagement.id);
-    expect(rows[1]?.id).toBe(older.engagement.id);
-  });
-
-  it('excludes soft-deleted and non-active engagements', async () => {
-    const expert = await expertDraftFactory();
-    const companyId = await seedCompanyId();
-
-    const active = await engagementFactory({ companyId, expertProfileId: expert.id });
-    const completed = await engagementFactory({
-      companyId,
-      expertProfileId: expert.id,
-      values: { status: 'completed' },
-    });
-    const removed = await engagementFactory({
-      companyId,
-      expertProfileId: expert.id,
-      values: { deletedAt: new Date() },
-    });
-
-    const rows = await projectsInboxRepository.listEngagementsByExpert(expert.id);
-    const ids = rows.map((e) => e.id);
-    expect(ids).toContain(active.engagement.id);
-    expect(ids).not.toContain(completed.engagement.id);
-    expect(ids).not.toContain(removed.engagement.id);
-  });
-
-  it('excludes another expert engagements', async () => {
-    const expertA = await expertDraftFactory();
-    const expertB = await expertDraftFactory();
-    const companyId = await seedCompanyId();
-
-    const mine = await engagementFactory({ companyId, expertProfileId: expertA.id });
-    const theirs = await engagementFactory({ companyId, expertProfileId: expertB.id });
-
-    const rows = await projectsInboxRepository.listEngagementsByExpert(expertA.id);
-    const ids = rows.map((e) => e.id);
-    expect(ids).toContain(mine.engagement.id);
-    expect(ids).not.toContain(theirs.engagement.id);
-  });
-
-  it('preserves a nullable projectRequestId (the retainer seam)', async () => {
-    const expert = await expertDraftFactory();
-    const companyId = await seedCompanyId();
-    // No source proposal → projectRequestId stays null (the retainer seam).
-    const retainer = await engagementFactory({ companyId, expertProfileId: expert.id });
-
-    const rows = await projectsInboxRepository.listEngagementsByExpert(expert.id);
-    const row = rows.find((e) => e.id === retainer.engagement.id);
-    expect(row).toBeDefined();
-    expect(row?.projectRequestId).toBeNull();
-  });
-
-  it('returns [] for an expert with no engagements', async () => {
-    const expert = await expertDraftFactory();
-    expect(await projectsInboxRepository.listEngagementsByExpert(expert.id)).toEqual([]);
   });
 });
 

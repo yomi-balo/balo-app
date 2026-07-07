@@ -31,12 +31,12 @@ export function HeroCard({ row, lens, index }: Readonly<HeroCardProps>): React.J
   const handleCtaClick = useCallback(() => {
     track(PROJECTS_INBOX_EVENTS.INBOX_HERO_CTA_CLICKED, {
       lens,
-      request_id: row.id,
+      request_id: row.kind === 'engagement' ? null : row.id,
       stage: row.stage,
       nudge: row.nudgeLabel,
       time_to_first_action_ms: readTimeToFirstAction(),
     });
-  }, [lens, row.id, row.stage, row.nudgeLabel]);
+  }, [lens, row.kind, row.id, row.stage, row.nudgeLabel]);
 
   const href = row.href ?? '#';
 
