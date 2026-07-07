@@ -283,9 +283,9 @@ interface MilestoneProgressAgg {
 
 /**
  * ONE batched grouped milestone aggregate over the given engagement ids →
- * a Map keyed by engagement id. Shared by `listActiveWithProgress` AND
- * `listPortfolioEngagements` (dedup, not copy — keeps the Sonar new-code
- * duplication gate green). Counts live milestones only; `lastMilestoneActivityAt
+ * a Map keyed by engagement id. Shared by `listActiveWithProgress`,
+ * `listPortfolioEngagements`, AND `listAllWithProgress` (dedup, not copy — keeps the
+ * Sonar new-code duplication gate green). Counts live milestones only; `lastMilestoneActivityAt
  * = MAX(GREATEST(started_at, completed_at))` is NULL only when no live milestone
  * has any activity (GREATEST ignores NULLs). The raw-SQL activity aggregate is
  * coerced string→Date here (Drizzle does NOT apply the timestamptz→Date codec to
@@ -405,6 +405,64 @@ type PortfolioEngagementIdentity = Awaited<ReturnType<typeof queryPortfolioEngag
  * (BAL-336). `projectRequest` is null for a retainer engagement.
  */
 export type PortfolioEngagementView = PortfolioEngagementIdentity & {
+  totalMilestones: number;
+  completedMilestones: number;
+  inProgressMilestones: number;
+  lastActivityAt: Date | null;
+};
+
+/**
+ * The parties-hydrated read behind the admin oversight list (BAL-335) —
+ * `listAllWithProgress`. A standalone module function so its INFERRED row type is
+ * the single source of truth for `EngagementWithParties` / `AdminEngagementListItem`
+ * (mirrors `queryEngagementWithMilestones`).
+ *
+ * `acceptedBy` / `cancelledBy` are nullable `one` relations over the
+ * existing actor FK columns — NULL on the auto-accept path / when never cancelled —
+ * hydrated name-only for retrospective attribution ("Accepted by {name} @ company",
+ * "Cancelled by {name} @ Balo").
+ *
+ * `statuses`: when non-empty, narrows to those engagement statuses (`inArray`);
+ * omitted → every non-deleted engagement. Always filters `isNull(deletedAt)`.
+ */
+function queryEngagementsWithParties(statuses?: readonly EngagementStatus[]) {
+  const statusFilter =
+    statuses && statuses.length > 0 ? inArray(engagements.status, [...statuses]) : undefined;
+  return db.query.engagements.findMany({
+    where: and(isNull(engagements.deletedAt), statusFilter),
+    with: {
+      company: { columns: { id: true, name: true } },
+      // SECURITY: explicit columns — NEVER stripeConnectId / workosId / email / phone.
+      expertProfile: {
+        columns: { id: true, agencyId: true, type: true, headline: true },
+        with: {
+          user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+          agency: { columns: { id: true, name: true, logoUrl: true } },
+        },
+      },
+      projectRequest: { columns: { id: true, title: true } },
+      // Actor attribution — name + platformRole only (PII-safe), nullable relations.
+      // `platformRole` (NOT PII) lets the web deriver name the actor's affiliation
+      // from data (Balo staff vs client member vs expert) instead of hard-coding it.
+      acceptedBy: {
+        columns: { id: true, firstName: true, lastName: true, platformRole: true },
+      },
+      cancelledBy: {
+        columns: { id: true, firstName: true, lastName: true, platformRole: true },
+      },
+    },
+  });
+}
+
+type EngagementWithParties = Awaited<ReturnType<typeof queryEngagementsWithParties>>[number];
+
+/**
+ * An engagement hydrated with its parties (client company, expert person +
+ * nullable agency, originating request) PLUS derived milestone progress counts and
+ * the `lastActivityAt` proxy — one admin oversight list row (BAL-335). The web
+ * "stalled" flag is a later derivation from `lastActivityAt` vs a threshold.
+ */
+export type AdminEngagementListItem = EngagementWithParties & {
   totalMilestones: number;
   completedMilestones: number;
   inProgressMilestones: number;
@@ -921,6 +979,47 @@ export const engagementsRepository = {
       (a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0)
     );
     return hydrated;
+  },
+
+  /**
+   * The admin oversight list (BAL-335): EVERY non-deleted engagement (all statuses)
+   * hydrated with its parties (client company, expert person + nullable agency,
+   * originating request) and derived milestone progress. Per engagement:
+   * `totalMilestones`, `completedMilestones`, `inProgressMilestones` (over LIVE
+   * milestones), and `lastActivityAt = MAX(GREATEST(started_at, completed_at))` over
+   * live milestones, falling back to `activated_at` / `created_at` when there is no
+   * milestone activity. Ordered by `lastActivityAt` desc.
+   *
+   * `opts.statuses` (optional) narrows to those statuses (`inArray`) — kept for the
+   * v2 stalled-nudge derivation; the oversight loader passes none (all statuses).
+   * Excludes soft-deleted engagements and soft-deleted milestones. One batched
+   * aggregate (no N+1). The parties projection is PII-safe — see
+   * `queryEngagementsWithParties`.
+   */
+  async listAllWithProgress(opts?: {
+    statuses?: readonly EngagementStatus[];
+  }): Promise<AdminEngagementListItem[]> {
+    const rows = await queryEngagementsWithParties(opts?.statuses);
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const progressById = await aggregateMilestoneProgress(rows.map((r) => r.id));
+
+    const items = rows.map((row) => {
+      const progress = progressById.get(row.id);
+      const lastActivityAt = progress?.lastMilestoneActivityAt ?? row.activatedAt ?? row.createdAt;
+      return {
+        ...row,
+        totalMilestones: progress?.totalMilestones ?? 0,
+        completedMilestones: progress?.completedMilestones ?? 0,
+        inProgressMilestones: progress?.inProgressMilestones ?? 0,
+        lastActivityAt,
+      };
+    });
+
+    items.sort((a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0));
+    return items;
   },
 
   /**

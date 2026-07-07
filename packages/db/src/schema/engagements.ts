@@ -195,11 +195,17 @@ export const engagementsRelations = relations(engagements, ({ one, many }) => ({
     fields: [engagements.projectRequestId],
     references: [projectRequests.id],
   }),
-  // Retrospective actor attribution for the delivery workspace (BAL-331): the
-  // client person who accepted (NULL on the D7 auto path) and the client person
-  // who requested changes. `restrict` FKs on both columns preserve the attribution.
+  // Retrospective actor attribution across delivery surfaces (query-time only over
+  // existing FK columns — NO DDL/migration; `restrict` FKs preserve attribution):
+  // the person who accepted (NULL on the D7 auto path — BAL-331), the person who
+  // cancelled (BAL-335 admin oversight), and the person who requested changes
+  // (BAL-331). Consumers project name-only (+ platformRole) columns.
   acceptedBy: one(users, {
     fields: [engagements.acceptedByUserId],
+    references: [users.id],
+  }),
+  cancelledBy: one(users, {
+    fields: [engagements.cancelledByUserId],
     references: [users.id],
   }),
   changeRequestedBy: one(users, {

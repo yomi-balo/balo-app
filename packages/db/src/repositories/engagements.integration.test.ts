@@ -1457,3 +1457,260 @@ describe('engagementsRepository.listPendingAutoAccept', () => {
     });
   });
 });
+
+describe('engagementsRepository.listAllWithProgress', () => {
+  it('returns engagements of ALL statuses; the { statuses } filter narrows correctly', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement: active } = await engagementFactory({
+      companyId,
+      values: { status: 'active' },
+    });
+    const { engagement: pending } = await engagementFactory({
+      companyId,
+      values: { status: 'pending_acceptance' },
+    });
+    const { engagement: completed } = await engagementFactory({
+      companyId,
+      values: { status: 'completed' },
+    });
+    const { engagement: cancelled } = await engagementFactory({
+      companyId,
+      values: { status: 'cancelled' },
+    });
+
+    const all = await engagementsRepository.listAllWithProgress();
+    const allIds = all.map((r) => r.id);
+    expect(allIds).toContain(active.id);
+    expect(allIds).toContain(pending.id);
+    expect(allIds).toContain(completed.id);
+    expect(allIds).toContain(cancelled.id);
+    expect(all).toHaveLength(4); // every status, no scoping
+
+    // { statuses } narrows to exactly the requested statuses.
+    const completedOnly = await engagementsRepository.listAllWithProgress({
+      statuses: ['completed'],
+    });
+    expect(completedOnly.map((r) => r.id)).toEqual([completed.id]);
+
+    const inFlight = await engagementsRepository.listAllWithProgress({
+      statuses: ['active', 'pending_acceptance'],
+    });
+    const inFlightIds = inFlight.map((r) => r.id);
+    expect(inFlightIds).toContain(active.id);
+    expect(inFlightIds).toContain(pending.id);
+    expect(inFlightIds).not.toContain(completed.id);
+    expect(inFlightIds).not.toContain(cancelled.id);
+    expect(inFlight).toHaveLength(2);
+  });
+
+  it('hydrates parties (company + expert person + agency-or-null) and NEVER leaks secrets/PII', async () => {
+    // Independent (freelancer) expert → agency is null; company + user hydrated.
+    const [freelanceCo] = await db
+      .insert(companies)
+      .values({ name: 'Freelance Client Co', isPersonal: true })
+      .returning();
+    if (freelanceCo === undefined) throw new Error('company insert failed');
+    const freelancer = await expertDraftFactory(); // freelancer default
+    const { engagement: soloEngagement } = await engagementFactory({
+      companyId: freelanceCo.id,
+      expertProfileId: freelancer.id,
+    });
+
+    // Agency expert → agency object hydrated.
+    const [agency] = await db.insert(agencies).values({ name: 'Cloud Consulting Co' }).returning();
+    if (agency === undefined) throw new Error('agency insert failed');
+    const agencyExpert = await expertDraftFactory({ type: 'agency' });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, agencyExpert.id));
+    const { engagement: agencyEngagement } = await engagementFactory({
+      expertProfileId: agencyExpert.id,
+    });
+
+    const rows = await engagementsRepository.listAllWithProgress();
+    const solo = rows.find((r) => r.id === soloEngagement.id);
+    const withAgency = rows.find((r) => r.id === agencyEngagement.id);
+
+    // Company + expert person display fields are hydrated.
+    expect(solo?.company.name).toBe('Freelance Client Co');
+    expect(solo?.expertProfile.user?.firstName).toBe('Test');
+    // Independent expert → agency is null (the caller falls back to the person).
+    expect(solo?.expertProfile.agency).toBeNull();
+    // Agency expert → agency object present (name + projected logoUrl key).
+    expect(withAgency?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
+    expect(withAgency?.expertProfile.agency).toHaveProperty('logoUrl');
+
+    // SECURITY (mirrors findEngagementWithMilestones): the projected shape must NOT
+    // leak secrets/PII.
+    expect(withAgency?.expertProfile).not.toHaveProperty('stripeConnectId');
+    expect(withAgency?.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(withAgency?.expertProfile.user).not.toHaveProperty('workosId');
+    expect(withAgency?.expertProfile.user).not.toHaveProperty('email');
+    expect(withAgency?.expertProfile.user).not.toHaveProperty('phone');
+    // The person display name IS present (party-aware copy needs it).
+    expect(withAgency?.expertProfile.user).toHaveProperty('firstName');
+  });
+
+  it('counts live milestones (soft-deleted excluded); soft-deleted engagements excluded', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId });
+
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: {
+        status: 'completed',
+        sortOrder: 0,
+        completedAt: new Date('2026-03-03T00:00:00.000Z'),
+      },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: {
+        status: 'in_progress',
+        sortOrder: 1,
+        startedAt: new Date('2026-02-02T00:00:00.000Z'),
+      },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'pending', sortOrder: 2 },
+    });
+    // Soft-deleted milestone must NOT count.
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'completed', sortOrder: 3, completedAt: new Date(), deletedAt: new Date() },
+    });
+
+    // A soft-deleted engagement must be excluded entirely.
+    const { engagement: deleted } = await engagementFactory({
+      companyId,
+      values: { deletedAt: new Date() },
+    });
+
+    const rows = await engagementsRepository.listAllWithProgress();
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(engagement.id);
+    expect(ids).not.toContain(deleted.id);
+
+    const row = rows.find((r) => r.id === engagement.id);
+    expect(row?.totalMilestones).toBe(3); // soft-deleted milestone excluded
+    expect(row?.completedMilestones).toBe(1);
+    expect(row?.inProgressMilestones).toBe(1);
+  });
+
+  it('lastActivityAt = MAX(GREATEST(started, completed)) over live milestones, else activated_at', async () => {
+    const companyId = await seedCompanyId();
+
+    // Engagement WITH milestone activity → lastActivityAt = max activity (NOT activated_at).
+    const activatedEarly = new Date('2026-01-01T00:00:00.000Z');
+    const started = new Date('2026-02-02T00:00:00.000Z');
+    const completed = new Date('2026-03-03T00:00:00.000Z');
+    const { engagement: withActivity } = await engagementFactory({
+      companyId,
+      values: { activatedAt: activatedEarly },
+    });
+    await engagementMilestoneFactory({
+      engagementId: withActivity.id,
+      values: { status: 'in_progress', sortOrder: 0, startedAt: started },
+    });
+    await engagementMilestoneFactory({
+      engagementId: withActivity.id,
+      values: { status: 'completed', sortOrder: 1, completedAt: completed },
+    });
+
+    // Engagement with NO milestone activity → falls back to activated_at.
+    const activatedAt = new Date('2026-04-04T00:00:00.000Z');
+    const { engagement: noActivity } = await engagementFactory({
+      companyId,
+      values: { activatedAt },
+    });
+
+    const rows = await engagementsRepository.listAllWithProgress();
+    const a = rows.find((r) => r.id === withActivity.id);
+    const b = rows.find((r) => r.id === noActivity.id);
+
+    expect(a?.lastActivityAt?.getTime()).toBe(completed.getTime());
+    expect(b?.lastActivityAt?.getTime()).toBe(activatedAt.getTime());
+  });
+
+  it('orders by lastActivityAt desc', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement: oldest } = await engagementFactory({
+      companyId,
+      values: { activatedAt: new Date('2026-01-01T00:00:00.000Z') },
+    });
+    const { engagement: middle } = await engagementFactory({
+      companyId,
+      values: { activatedAt: new Date('2026-02-01T00:00:00.000Z') },
+    });
+    const { engagement: newest } = await engagementFactory({
+      companyId,
+      values: { activatedAt: new Date('2026-03-01T00:00:00.000Z') },
+    });
+
+    const ids = (await engagementsRepository.listAllWithProgress()).map((r) => r.id);
+    expect(ids.indexOf(newest.id)).toBeLessThan(ids.indexOf(middle.id));
+    expect(ids.indexOf(middle.id)).toBeLessThan(ids.indexOf(oldest.id));
+  });
+
+  it('hydrates accepted-by / cancelled-by actor NAMES (PII-safe); null on the auto path', async () => {
+    const companyId = await seedCompanyId();
+    const accepter = await userFactory({ firstName: 'Alice' });
+    const canceller = await userFactory({ firstName: 'Bob' });
+
+    // Client-accepted completed engagement → acceptedBy hydrated, method 'client'.
+    const { engagement: clientAccepted } = await engagementFactory({
+      companyId,
+      values: {
+        status: 'completed',
+        acceptanceMethod: 'client',
+        acceptedByUserId: accepter.id,
+        acceptedAt: new Date('2026-06-03T00:00:00.000Z'),
+      },
+    });
+    // Auto-accepted completed engagement → acceptedBy is null (no actor).
+    const { engagement: autoAccepted } = await engagementFactory({
+      companyId,
+      values: {
+        status: 'completed',
+        acceptanceMethod: 'auto',
+        acceptedAt: new Date('2026-06-04T00:00:00.000Z'),
+      },
+    });
+    // Cancelled engagement → cancelledBy hydrated.
+    const { engagement: cancelled } = await engagementFactory({
+      companyId,
+      values: {
+        status: 'cancelled',
+        cancelledByUserId: canceller.id,
+        cancelledAt: new Date('2026-05-28T00:00:00.000Z'),
+        cancellationReason: 'Scope void.',
+      },
+    });
+
+    const rows = await engagementsRepository.listAllWithProgress();
+    const accepted = rows.find((r) => r.id === clientAccepted.id);
+    const auto = rows.find((r) => r.id === autoAccepted.id);
+    const cancelledRow = rows.find((r) => r.id === cancelled.id);
+
+    // Client-accepted: actor name + method + role present.
+    expect(accepted?.acceptanceMethod).toBe('client');
+    expect(accepted?.acceptedBy?.firstName).toBe('Alice');
+    // Auto-accepted: no actor.
+    expect(auto?.acceptedBy).toBeNull();
+    // Cancelled: actor name present.
+    expect(cancelledRow?.cancelledBy?.firstName).toBe('Bob');
+
+    // Allow-list: actor rows carry name + platformRole (role is NOT PII — it drives
+    // the web attribution rule) and NOTHING else — no email / workosId / phone.
+    expect(accepted?.acceptedBy).toHaveProperty('platformRole');
+    expect(cancelledRow?.cancelledBy).toHaveProperty('platformRole');
+    expect(accepted?.acceptedBy).not.toHaveProperty('email');
+    expect(accepted?.acceptedBy).not.toHaveProperty('workosId');
+    expect(accepted?.acceptedBy).not.toHaveProperty('phone');
+    expect(cancelledRow?.cancelledBy).not.toHaveProperty('email');
+    expect(cancelledRow?.cancelledBy).not.toHaveProperty('workosId');
+    expect(cancelledRow?.cancelledBy).not.toHaveProperty('phone');
+  });
+});

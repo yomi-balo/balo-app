@@ -1,4 +1,5 @@
 import type { SessionUser } from '@/lib/auth/session';
+import { isPlatformAdmin } from '@/lib/auth/is-admin';
 import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 
 /**
@@ -15,18 +16,11 @@ import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 
 export type PortfolioLens = RequestLens;
 
-const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin']);
-
 export interface ResolvedPortfolioLens {
   /** The lens to render. */
   lens: PortfolioLens;
   /** Lenses this viewer qualifies for — drives the segmented control visibility. */
   allowedLenses: PortfolioLens[];
-}
-
-/** True when the viewer is a platform admin / super-admin. */
-function isAdmin(user: SessionUser): boolean {
-  return ADMIN_ROLES.has(user.platformRole);
 }
 
 /** True when the viewer has an expert profile (qualifies for the expert lens). */
@@ -42,7 +36,7 @@ function isExpert(user: SessionUser): boolean {
 function allowedLensesFor(user: SessionUser): PortfolioLens[] {
   const allowed: PortfolioLens[] = ['client'];
   if (isExpert(user)) allowed.push('expert');
-  if (isAdmin(user)) allowed.push('admin');
+  if (isPlatformAdmin(user)) allowed.push('admin');
   return allowed;
 }
 
@@ -54,7 +48,7 @@ function allowedLensesFor(user: SessionUser): PortfolioLens[] {
  *  3. else → `client`.
  */
 function defaultLensFor(user: SessionUser): PortfolioLens {
-  if (isAdmin(user)) return 'admin';
+  if (isPlatformAdmin(user)) return 'admin';
   if (user.activeMode === 'expert' && isExpert(user)) return 'expert';
   return 'client';
 }

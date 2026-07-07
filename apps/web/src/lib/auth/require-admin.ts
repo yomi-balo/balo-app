@@ -1,8 +1,7 @@
 import 'server-only';
 
 import { getSession, type SessionUser } from './session';
-
-const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin']);
+import { isPlatformAdmin } from './is-admin';
 
 /**
  * Resolve the current admin session user, or throw `'Unauthorized'` / `'Forbidden'`.
@@ -20,7 +19,7 @@ export async function requireAdmin(): Promise<SessionUser> {
   if (!session?.user?.id) {
     throw new Error('Unauthorized');
   }
-  if (!ADMIN_ROLES.has(session.user.platformRole)) {
+  if (!isPlatformAdmin(session.user)) {
     throw new Error('Forbidden');
   }
   return session.user;
