@@ -1,4 +1,8 @@
-import type { PortfolioRequestRow, PortfolioInvitationRow, PortfolioEngagementRow } from '@balo/db';
+import type {
+  PortfolioRequestRow,
+  PortfolioInvitationRow,
+  PortfolioEngagementView,
+} from '@balo/db';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import { QUIET_THRESHOLD_DAYS } from '@/lib/project-request/request-detail-view';
@@ -47,6 +51,8 @@ export interface PortfolioRowView {
   stageLabel: string;
   needsYou: boolean;
   nudgeLabel: string;
+  /** "3 of 5 milestones" for engagement rows; unset for request rows / zero-milestone. */
+  progressLabel?: string | null;
   unread: boolean;
   /** "2 days ago" — relative label of the recency timestamp. */
   updatedRelative: string;
@@ -407,17 +413,94 @@ export function needsYouForExpert(
   return expertNeedsYou(invitation, signal);
 }
 
-/** Expert engagement-row nudge — delivery is never needs-you. */
-export function nudgeForEngagement(engagement: PortfolioEngagementRow): {
+// ── Engagement-row deriver (post-kickoff delivery, D6) ─────────────
+
+/** The engagement status the deriver switches on (schema-derived; import type only). */
+type EngagementRowStatus = PortfolioEngagementView['status'];
+
+/**
+ * The plain, serialisable facts a loader assembles for ONE engagement row — the
+ * deriver is DB-free so it is exhaustively unit-testable. `counterpartName` is the
+ * OTHER party (client lens → the expert party display name; expert lens → the
+ * client company). `autoAcceptLabel` is a preformatted date, non-null only for
+ * `pending_acceptance` (the loader owns TZ-pinned formatting).
+ */
+export interface EngagementRowInput {
+  engagementId: string;
+  status: EngagementRowStatus;
+  lens: 'client' | 'expert';
+  hasChangeRequest: boolean;
+  counterpartName: string;
+  totalMilestones: number;
+  completedMilestones: number;
+  autoAcceptLabel: string | null;
+}
+
+/** The derived engagement-row render facts. `href` is ALWAYS present. */
+export interface EngagementRowDeriv {
   needsYou: boolean;
   nudgeLabel: string;
-  href: string | null;
-} {
-  return {
-    needsYou: false,
-    nudgeLabel: 'Live project',
-    href: engagement.projectRequestId === null ? null : `/projects/${engagement.projectRequestId}`,
-  };
+  href: string;
+  progressLabel: string | null;
+}
+
+/** Compile-time exhaustiveness guard — a new engagement status fails typecheck here. */
+function assertNeverStatus(status: never): never {
+  throw new Error(`Unhandled engagement status: ${String(status)}`);
+}
+
+/**
+ * Pure engagement-row deriver (BAL-336, D6) — the (status × lens × change-note)
+ * rule table for a post-kickoff delivery engagement in the A7 inbox. A total
+ * function over the finite state space; the exhaustive `switch` has a `default` so
+ * a future engagement status fails typecheck. `href` keys on the always-present
+ * engagement id (retainer-safe — never the nullable projectRequestId). The route
+ * is D1/BAL-331's (`?entry=inbox`); typedRoutes is OFF so it is a plain string.
+ */
+export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDeriv {
+  const href = `/engagements/${input.engagementId}?entry=inbox`;
+  const progressLabel =
+    input.totalMilestones > 0
+      ? `${input.completedMilestones} of ${input.totalMilestones} milestones`
+      : null;
+
+  switch (input.status) {
+    case 'active': {
+      if (input.hasChangeRequest) {
+        if (input.lens === 'expert') {
+          return {
+            needsYou: true,
+            nudgeLabel: `${input.counterpartName} requested changes`,
+            href,
+            progressLabel,
+          };
+        }
+        return { needsYou: false, nudgeLabel: 'Changes requested', href, progressLabel };
+      }
+      return { needsYou: false, nudgeLabel: 'In delivery', href, progressLabel };
+    }
+    case 'pending_acceptance': {
+      if (input.lens === 'client') {
+        const nudgeLabel =
+          input.autoAcceptLabel === null
+            ? 'Review project completion'
+            : `Review project completion — auto-accepts ${input.autoAcceptLabel}`;
+        return { needsYou: true, nudgeLabel, href, progressLabel: null };
+      }
+      return {
+        needsYou: false,
+        nudgeLabel: `Awaiting ${input.counterpartName} review`,
+        href,
+        progressLabel: null,
+      };
+    }
+    case 'completed':
+      return { needsYou: false, nudgeLabel: 'Completed', href, progressLabel: null };
+    case 'cancelled':
+      return { needsYou: false, nudgeLabel: 'Cancelled', href, progressLabel: null };
+    default:
+      return assertNeverStatus(input.status);
+  }
 }
 
 // ── Tile / filter helpers (used client-side by participant-dash) ───

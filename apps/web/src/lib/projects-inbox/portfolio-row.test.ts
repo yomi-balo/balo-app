@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { PortfolioRequestRow, PortfolioInvitationRow, PortfolioEngagementRow } from '@balo/db';
+import type { PortfolioRequestRow, PortfolioInvitationRow } from '@balo/db';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import {
@@ -9,10 +9,11 @@ import {
   stageDistribution,
   needsYouFor,
   needsYouForExpert,
-  nudgeForEngagement,
+  deriveEngagementRow,
   adminStallDays,
   rowMatchesFilter,
   tilesFromRows,
+  type EngagementRowInput,
   type PortfolioRowView,
   type RequestThreadSignal,
 } from './portfolio-row';
@@ -70,19 +71,18 @@ function makeInvitation(overrides: Partial<PortfolioInvitationRow> = {}): Portfo
   };
 }
 
-function makeEngagement(overrides: Partial<PortfolioEngagementRow> = {}): PortfolioEngagementRow {
+function makeEngagementInput(overrides: Partial<EngagementRowInput> = {}): EngagementRowInput {
   return {
-    id: 'eng-1',
-    projectRequestId: 'req-1',
-    expertProfileId: 'expert-1',
-    companyId: 'company-1',
+    engagementId: 'eng-1',
     status: 'active',
-    activatedAt: day(5),
-    createdAt: day(6),
-    updatedAt: day(5),
-    deletedAt: null,
+    lens: 'client',
+    hasChangeRequest: false,
+    counterpartName: 'Northwind',
+    totalMilestones: 0,
+    completedMilestones: 0,
+    autoAcceptLabel: null,
     ...overrides,
-  } as PortfolioEngagementRow;
+  };
 }
 
 const SIGNAL_UNREAD: RequestThreadSignal = {
@@ -308,18 +308,125 @@ describe('needsYouForExpert', () => {
   });
 });
 
-describe('nudgeForEngagement', () => {
-  it('links to the request when projectRequestId is present', () => {
-    expect(nudgeForEngagement(makeEngagement({ projectRequestId: 'req-9' }))).toEqual({
+describe('deriveEngagementRow', () => {
+  it('client active no-note, 3/5 → In delivery with progress + inbox href', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({
+        lens: 'client',
+        status: 'active',
+        totalMilestones: 5,
+        completedMilestones: 3,
+      })
+    );
+    expect(res).toEqual({
       needsYou: false,
-      nudgeLabel: 'Live project',
-      href: '/projects/req-9',
+      nudgeLabel: 'In delivery',
+      progressLabel: '3 of 5 milestones',
+      href: '/engagements/eng-1?entry=inbox',
     });
   });
 
-  it('disables the link when projectRequestId is null (retainer seam)', () => {
-    const res = nudgeForEngagement(makeEngagement({ projectRequestId: null }));
-    expect(res.href).toBeNull();
+  it('client active no-note with zero milestones → null progressLabel', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({ lens: 'client', status: 'active', totalMilestones: 0 })
+    );
+    expect(res.progressLabel).toBeNull();
+    expect(res.nudgeLabel).toBe('In delivery');
+  });
+
+  it('expert active no-note → In delivery, progress present', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({
+        lens: 'expert',
+        status: 'active',
+        totalMilestones: 4,
+        completedMilestones: 1,
+      })
+    );
+    expect(res.needsYou).toBe(false);
+    expect(res.nudgeLabel).toBe('In delivery');
+    expect(res.progressLabel).toBe('1 of 4 milestones');
+  });
+
+  it('expert active + change request → needs-you, "{counterpart} requested changes"', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({
+        lens: 'expert',
+        status: 'active',
+        hasChangeRequest: true,
+        counterpartName: 'Northwind',
+      })
+    );
+    expect(res).toMatchObject({ needsYou: true, nudgeLabel: 'Northwind requested changes' });
+  });
+
+  it('client active + change request → not needs-you, "Changes requested"', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({ lens: 'client', status: 'active', hasChangeRequest: true })
+    );
+    expect(res).toMatchObject({ needsYou: false, nudgeLabel: 'Changes requested' });
+  });
+
+  it('client pending_acceptance → needs-you, review + auto-accept date, null progress', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({
+        lens: 'client',
+        status: 'pending_acceptance',
+        autoAcceptLabel: 'Jul 14',
+      })
+    );
+    expect(res).toMatchObject({
+      needsYou: true,
+      nudgeLabel: 'Review project completion — auto-accepts Jul 14',
+      progressLabel: null,
+    });
+  });
+
+  it('client pending_acceptance with null autoAcceptLabel → fallback copy', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({ lens: 'client', status: 'pending_acceptance', autoAcceptLabel: null })
+    );
+    expect(res.nudgeLabel).toBe('Review project completion');
+  });
+
+  it('expert pending_acceptance → not needs-you, "Awaiting {counterpart} review"', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({
+        lens: 'expert',
+        status: 'pending_acceptance',
+        counterpartName: 'Northwind',
+      })
+    );
+    expect(res).toMatchObject({ needsYou: false, nudgeLabel: 'Awaiting Northwind review' });
+  });
+
+  it('completed / cancelled → not needs-you, terminal copy, null progress (both lenses)', () => {
+    for (const lens of ['client', 'expert'] as const) {
+      const completed = deriveEngagementRow(
+        makeEngagementInput({
+          lens,
+          status: 'completed',
+          totalMilestones: 3,
+          completedMilestones: 3,
+        })
+      );
+      expect(completed).toMatchObject({
+        needsYou: false,
+        nudgeLabel: 'Completed',
+        progressLabel: null,
+      });
+      const cancelled = deriveEngagementRow(makeEngagementInput({ lens, status: 'cancelled' }));
+      expect(cancelled).toMatchObject({
+        needsYou: false,
+        nudgeLabel: 'Cancelled',
+        progressLabel: null,
+      });
+    }
+  });
+
+  it('href is ALWAYS present, keyed on the engagement id (retainer-safe)', () => {
+    const res = deriveEngagementRow(makeEngagementInput({ engagementId: 'eng-retainer' }));
+    expect(res.href).toBe('/engagements/eng-retainer?entry=inbox');
   });
 });
 
@@ -405,16 +512,31 @@ describe('tilesFromRows + rowMatchesFilter', () => {
       recencyAtIso: NOW.toISOString(),
       kind: 'request',
     },
+    {
+      id: 'd',
+      href: '/engagements/d?entry=inbox',
+      title: 'D',
+      companyName: 'Northwind',
+      stage: 'kicked',
+      stageLabel: 'Kicked off',
+      needsYou: false,
+      nudgeLabel: 'In delivery',
+      progressLabel: '2 of 4 milestones',
+      unread: false,
+      updatedRelative: 'today',
+      recencyAtIso: NOW.toISOString(),
+      kind: 'engagement',
+    },
   ];
 
-  it('computes tile counts', () => {
-    expect(tilesFromRows(rows)).toEqual({ needs: 1, inProgress: 1, kicked: 1, total: 3 });
+  it('computes tile counts (an engagement row folds into the kicked tile)', () => {
+    expect(tilesFromRows(rows)).toEqual({ needs: 1, inProgress: 1, kicked: 2, total: 4 });
   });
 
   it('filters needs / in_progress / kicked / all', () => {
     expect(rows.filter((r) => rowMatchesFilter(r, 'needs')).map((r) => r.id)).toEqual(['a']);
     expect(rows.filter((r) => rowMatchesFilter(r, 'in_progress')).map((r) => r.id)).toEqual(['b']);
-    expect(rows.filter((r) => rowMatchesFilter(r, 'kicked')).map((r) => r.id)).toEqual(['c']);
-    expect(rows.filter((r) => rowMatchesFilter(r, 'all'))).toHaveLength(3);
+    expect(rows.filter((r) => rowMatchesFilter(r, 'kicked')).map((r) => r.id)).toEqual(['c', 'd']);
+    expect(rows.filter((r) => rowMatchesFilter(r, 'all'))).toHaveLength(4);
   });
 });

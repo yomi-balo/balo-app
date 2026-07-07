@@ -37,14 +37,16 @@ export interface ProjectsInboxEventMap {
   };
   [PROJECTS_INBOX_EVENTS.INBOX_HERO_CTA_CLICKED]: {
     lens: ProjectsInboxLens;
-    request_id: string;
+    /** `project_requests.id`, or null for engagement rows (whose id is an engagement id). */
+    request_id: string | null;
     stage: string;
     nudge: string;
     time_to_first_action_ms: number | null;
   };
   [PROJECTS_INBOX_EVENTS.INBOX_LIST_ROW_CLICKED]: {
     lens: ProjectsInboxLens;
-    request_id: string;
+    /** `project_requests.id`, or null for engagement rows (whose id is an engagement id). */
+    request_id: string | null;
     stage: string;
     needs_you: boolean;
     from_filter: ProjectsInboxFilter;

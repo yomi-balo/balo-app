@@ -12,7 +12,8 @@
     "./timezone": "./src/timezone/index.ts",
     "./notifications": "./src/notifications/index.ts",
     "./pricing": "./src/pricing/index.ts",
-    "./domains": "./src/domains/index.ts"
+    "./domains": "./src/domains/index.ts",
+    "./parties": "./src/parties/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

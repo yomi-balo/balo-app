@@ -2,27 +2,31 @@ import 'server-only';
 
 import {
   conversationsRepository,
+  engagementsRepository,
   projectsInboxRepository,
+  AUTO_ACCEPT_DAYS,
   type PortfolioRequestRow,
   type PortfolioInvitationRow,
-  type PortfolioEngagementRow,
+  type PortfolioEngagementView,
 } from '@balo/db';
+import { expertPartyDisplayName } from '@balo/shared/parties';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { isThreadOpenStatus, previewOfHtml } from '@/lib/project-request/conversation-view-types';
 import { formatPostedRelative } from '@/lib/project-request/request-detail-view';
 import type { PortfolioLens } from './resolve-portfolio-lens';
 import {
+  deriveEngagementRow,
   maxDate,
   needsYouFor,
   needsYouForExpert,
-  nudgeForEngagement,
   requestRecencyAt,
   stageChipFor,
   stageChipForRelationship,
   stageLabelFor,
   adminStallDays,
   tilesFromRows,
+  type AdminKanbanCard,
   type AdminKanbanColumn,
   type AdminPortfolioDTO,
   type AdminTriageCard,
@@ -57,6 +61,42 @@ type ThreadSummary = Awaited<
 
 /** Days threshold for the admin triage "overdue" pill (the design's `>24h`). */
 const TRIAGE_OVERDUE_MS = 24 * 60 * 60 * 1000;
+
+/** The D7 auto-accept window in ms — value-imported ONLY in this server-only file. */
+const AUTO_ACCEPT_MS = AUTO_ACCEPT_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Short absolute auto-accept label ("Jul 14") — UTC-pinned so it is deterministic
+ * across viewers and CI runners (memory `reference_web_tests_need_tz_utc`). The
+ * date is the completion request plus the D7 window; the loader passes the result
+ * to the pure deriver as a preformatted string (no `Date` crosses the boundary).
+ */
+function formatAutoAcceptLabel(completionRequestedAt: Date): string {
+  const at = new Date(completionRequestedAt.getTime() + AUTO_ACCEPT_MS);
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(at);
+}
+
+/**
+ * The set of `projectRequestId`s that already have an engagement row — used to
+ * suppress the superseded `kickoff_approved` request/invitation row (one project,
+ * one row). Retainer engagements (`projectRequestId === null`) NEVER enter the set
+ * — a null must never key the dedup.
+ */
+function buildEngagedRequestIds(
+  engagementRows: ReadonlyArray<PortfolioEngagementView>
+): Set<string> {
+  const ids = new Set<string>();
+  for (const e of engagementRows) {
+    if (e.projectRequestId !== null) {
+      ids.add(e.projectRequestId);
+    }
+  }
+  return ids;
+}
 
 /** Counterpart label for an inbound signal, by lens. */
 const COUNTERPART_LABEL: Record<'client' | 'expert', string> = {
@@ -214,19 +254,55 @@ function toExpertRowView(
   };
 }
 
-/** Build an expert engagement row view ("Live project"). */
-function toEngagementRowView(engagement: PortfolioEngagementRow, now: Date): PortfolioRowView {
-  const { needsYou, nudgeLabel, href } = nudgeForEngagement(engagement);
-  const recencyAt = engagement.activatedAt ?? engagement.createdAt;
+/**
+ * Build a delivery-engagement inbox row from a hydrated portfolio engagement.
+ * The counterpart (client lens → the expert party display name; expert lens → the
+ * client company) is resolved here, so only the resulting string crosses the RSC
+ * boundary. The auto-accept date is preformatted server-side (UTC-pinned).
+ */
+function toEngagementRowView(
+  e: PortfolioEngagementView,
+  lens: 'client' | 'expert',
+  now: Date
+): PortfolioRowView {
+  const counterpartName =
+    lens === 'client'
+      ? expertPartyDisplayName({
+          type: e.expertProfile.type,
+          agencyName: e.expertProfile.agency?.name ?? null,
+          firstName: e.expertProfile.user.firstName,
+          lastName: e.expertProfile.user.lastName,
+        })
+      : e.company.name;
+
+  const autoAcceptLabel =
+    e.status === 'pending_acceptance' && e.completionRequestedAt !== null
+      ? formatAutoAcceptLabel(e.completionRequestedAt)
+      : null;
+
+  const { needsYou, nudgeLabel, href, progressLabel } = deriveEngagementRow({
+    engagementId: e.id,
+    status: e.status,
+    lens,
+    hasChangeRequest: e.status === 'active' && e.changeRequestNote !== null,
+    counterpartName,
+    totalMilestones: e.totalMilestones,
+    completedMilestones: e.completedMilestones,
+    autoAcceptLabel,
+  });
+
+  const recencyAt = e.lastActivityAt ?? e.createdAt;
+
   return {
-    id: engagement.id,
+    id: e.id,
     href,
-    title: 'Live project',
-    companyName: null,
+    title: e.projectRequest?.title ?? 'Ongoing engagement',
+    companyName: counterpartName,
     stage: 'kicked',
     stageLabel: stageLabelFor('kicked'),
     needsYou,
     nudgeLabel,
+    progressLabel,
     unread: false,
     updatedRelative: formatPostedRelative(recencyAt, now),
     recencyAtIso: recencyAt.toISOString(),
@@ -243,17 +319,29 @@ function rankRows(rows: PortfolioRowView[]): PortfolioRowView[] {
   });
 }
 
-/** Client lens loader. */
+/** Client lens loader (requests + delivery engagements, deduped on request id). */
 export async function loadClientPortfolio(
   user: SessionUser,
   allowedLenses: PortfolioLens[],
   now: Date = new Date()
 ): Promise<PortfolioDTO> {
-  const requests = await projectsInboxRepository.listByCompany(user.companyId);
-  const relationshipIds = requests.flatMap(openRelationshipIds);
+  const [requests, engagementRows] = await Promise.all([
+    projectsInboxRepository.listByCompany(user.companyId),
+    engagementsRepository.listPortfolioEngagements({ companyId: user.companyId }),
+  ]);
+
+  const engagedRequestIds = buildEngagedRequestIds(engagementRows);
+  // One project, one row: drop the kickoff_approved request row once its
+  // engagement exists. A kickoff_approved request with NO engagement yet is KEPT
+  // — the project never vanishes from the inbox.
+  const survivingRequests = requests.filter(
+    (r) => !(r.status === 'kickoff_approved' && engagedRequestIds.has(r.id))
+  );
+
+  const relationshipIds = survivingRequests.flatMap(openRelationshipIds);
   const summaryById = await loadSummaryIndex(relationshipIds, user.id);
 
-  const rows = requests.map((row) => {
+  const requestRows = survivingRequests.map((row) => {
     const signal = foldSignal(
       openRelationshipIds(row),
       summaryById,
@@ -263,7 +351,9 @@ export async function loadClientPortfolio(
     return toClientRowView(row, signal, now);
   });
 
-  const ranked = rankRows(rows);
+  const engagementViews = engagementRows.map((e) => toEngagementRowView(e, 'client', now));
+
+  const ranked = rankRows([...requestRows, ...engagementViews]);
   return {
     lens: 'client',
     allowedLenses,
@@ -273,23 +363,30 @@ export async function loadClientPortfolio(
   };
 }
 
-/** Expert lens loader (invitations + active engagements). */
+/** Expert lens loader (invitations + delivery engagements, deduped on request id). */
 export async function loadExpertPortfolio(
   user: SessionUser & { expertProfileId: string },
   allowedLenses: PortfolioLens[],
   now: Date = new Date()
 ): Promise<PortfolioDTO> {
-  const [invitations, engagements] = await Promise.all([
+  const [invitations, engagementRows] = await Promise.all([
     projectsInboxRepository.listInvitationsByExpert(user.expertProfileId),
-    projectsInboxRepository.listEngagementsByExpert(user.expertProfileId),
+    engagementsRepository.listPortfolioEngagements({ expertProfileId: user.expertProfileId }),
   ]);
 
+  const engagedRequestIds = buildEngagedRequestIds(engagementRows);
+  // FIX the live double-render: a kicked-off invitation is superseded by its
+  // engagement row (both carry the same projectRequestId today), so drop it.
+  const survivingInvitations = invitations.filter(
+    (i) => !(i.requestStatus === 'kickoff_approved' && engagedRequestIds.has(i.projectRequestId))
+  );
+
   // Only the viewer's own relationship threads matter for the expert lens; one
-  // relationship id per invitation row.
-  const relationshipIds = invitations.map((i) => i.relationshipId);
+  // relationship id per surviving invitation row (no wasted lookup for suppressed).
+  const relationshipIds = survivingInvitations.map((i) => i.relationshipId);
   const summaryById = await loadSummaryIndex(relationshipIds, user.id);
 
-  const invitationRows = invitations.map((invitation) => {
+  const invitationRows = survivingInvitations.map((invitation) => {
     const signal = foldSignal(
       [invitation.relationshipId],
       summaryById,
@@ -299,9 +396,9 @@ export async function loadExpertPortfolio(
     return toExpertRowView(invitation, signal, now);
   });
 
-  const engagementRows = engagements.map((e) => toEngagementRowView(e, now));
+  const engagementViews = engagementRows.map((e) => toEngagementRowView(e, 'expert', now));
 
-  const ranked = rankRows([...invitationRows, ...engagementRows]);
+  const ranked = rankRows([...invitationRows, ...engagementViews]);
   return {
     lens: 'expert',
     allowedLenses,
@@ -334,7 +431,10 @@ export async function loadAdminPortfolio(
     throw new Error('loadAdminPortfolio called for a viewer without the admin lens');
   }
 
-  const requests = await projectsInboxRepository.listAll();
+  const [requests, engagementRows] = await Promise.all([
+    projectsInboxRepository.listAll(),
+    engagementsRepository.listPortfolioEngagements({ platform: true }),
+  ]);
 
   // Triage hero = status 'requested' (+ draft), newest first.
   const triage: AdminTriageCard[] = requests
@@ -348,8 +448,9 @@ export async function loadAdminPortfolio(
       overdue: now.getTime() - r.createdAt.getTime() > TRIAGE_OVERDUE_MS,
     }));
 
-  // Kanban columns by stage (requested → triage hero; kickoff_approved → live, excluded).
-  const kanban: AdminKanbanColumn[] = KANBAN_STAGES.map(({ stage, label }) => ({
+  // Origination kanban columns by stage (requested → triage hero; kickoff_approved
+  // → in delivery, excluded here and appended below).
+  const originationColumns: AdminKanbanColumn[] = KANBAN_STAGES.map(({ stage, label }) => ({
     stage,
     label,
     items: requests
@@ -381,8 +482,10 @@ export async function loadAdminPortfolio(
       }),
   }));
 
-  const pipeline = kanban.reduce((sum, col) => sum + col.items.length, 0);
-  const stalled = kanban.reduce(
+  // Pipeline + stalled tiles span the ORIGINATION columns ONLY — computed BEFORE
+  // appending the delivery column so the tile semantics stay stable.
+  const pipeline = originationColumns.reduce((sum, col) => sum + col.items.length, 0);
+  const stalled = originationColumns.reduce(
     (sum, col) => sum + col.items.filter((i) => i.stalledLabel !== null).length,
     0
   );
@@ -392,12 +495,30 @@ export async function loadAdminPortfolio(
       (r.clientBillingConfirmedAt === null || r.expertTermsConfirmedAt === null)
   ).length;
 
+  // "In delivery" — post-kickoff engagements still in flight (terminal excluded).
+  // Presence + link only; delivery-oversight metrics belong to D5 (not this slice).
+  const delivery: AdminKanbanCard[] = engagementRows
+    .filter((e) => e.status === 'active' || e.status === 'pending_acceptance')
+    .map((e) => ({
+      id: e.id,
+      href: `/engagements/${e.id}?entry=inbox`,
+      title: e.projectRequest?.title ?? 'Ongoing engagement',
+      companyName: e.company.name,
+      updatedRelative: formatPostedRelative(e.lastActivityAt ?? e.createdAt, now),
+      stalledLabel: e.status === 'pending_acceptance' ? 'Awaiting client' : null,
+    }));
+
+  const kanban: AdminKanbanColumn[] = [
+    ...originationColumns,
+    { stage: 'kicked', label: 'In delivery', items: delivery },
+  ];
+
   return {
     lens: 'admin',
     allowedLenses,
     triage,
     kanban,
     tiles: { untriaged: triage.length, stalled, pipeline, gate },
-    isEmpty: triage.length === 0 && pipeline === 0,
+    isEmpty: triage.length === 0 && pipeline === 0 && delivery.length === 0,
   };
 }

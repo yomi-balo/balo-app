@@ -1076,6 +1076,217 @@ describe('engagementsRepository.listActiveWithProgress', () => {
   });
 });
 
+describe('engagementsRepository.listPortfolioEngagements', () => {
+  it('returns ALL four non-deleted statuses for one company', async () => {
+    const companyId = await seedCompanyId();
+    const statuses = ['active', 'pending_acceptance', 'completed', 'cancelled'] as const;
+    for (const status of statuses) {
+      await engagementFactory({ companyId, values: { status } });
+    }
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    expect(new Set(rows.map((r) => r.status))).toEqual(new Set(statuses));
+  });
+
+  it('excludes soft-deleted engagements', async () => {
+    const companyId = await seedCompanyId();
+    const live = await engagementFactory({ companyId });
+    const gone = await engagementFactory({ companyId, values: { deletedAt: new Date() } });
+
+    const ids = (await engagementsRepository.listPortfolioEngagements({ companyId })).map(
+      (r) => r.id
+    );
+    expect(ids).toContain(live.engagement.id);
+    expect(ids).not.toContain(gone.engagement.id);
+  });
+
+  it('scopes by company (company A rows never appear for company B)', async () => {
+    const companyA = await seedCompanyId();
+    const companyB = await seedCompanyId();
+    const a = await engagementFactory({ companyId: companyA });
+    const b = await engagementFactory({ companyId: companyB });
+
+    const ids = (await engagementsRepository.listPortfolioEngagements({ companyId: companyB })).map(
+      (r) => r.id
+    );
+    expect(ids).toContain(b.engagement.id);
+    expect(ids).not.toContain(a.engagement.id);
+  });
+
+  it('scopes by expert (another expert’s engagement is excluded)', async () => {
+    const companyId = await seedCompanyId();
+    const expertA = await expertDraftFactory();
+    const expertB = await expertDraftFactory();
+    const mine = await engagementFactory({ companyId, expertProfileId: expertA.id });
+    await engagementFactory({ companyId, expertProfileId: expertB.id });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({
+      expertProfileId: expertA.id,
+    });
+    expect(rows.map((r) => r.id)).toEqual([mine.engagement.id]);
+  });
+
+  it('platform scope returns engagements spanning ≥2 companies', async () => {
+    const companyA = await seedCompanyId();
+    const companyB = await seedCompanyId();
+    const a = await engagementFactory({ companyId: companyA });
+    const b = await engagementFactory({ companyId: companyB });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ platform: true });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(a.engagement.id);
+    expect(ids).toContain(b.engagement.id);
+    expect(new Set(rows.map((r) => r.companyId)).size).toBeGreaterThanOrEqual(2);
+  });
+
+  it('derives milestone progress + lastActivityAt = MAX(GREATEST(started, completed))', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId });
+    const startedAt = new Date('2026-02-02T00:00:00.000Z');
+    const latestCompleted = new Date('2026-03-03T00:00:00.000Z');
+    const earlierCompleted = new Date('2026-01-01T00:00:00.000Z');
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'completed', sortOrder: 0, completedAt: latestCompleted },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'completed', sortOrder: 1, completedAt: earlierCompleted },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'in_progress', sortOrder: 2, startedAt },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'pending', sortOrder: 3 },
+    });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const row = rows.find((r) => r.id === engagement.id);
+    expect(row?.totalMilestones).toBe(4);
+    expect(row?.completedMilestones).toBe(2);
+    expect(row?.inProgressMilestones).toBe(1);
+    expect(row?.lastActivityAt?.getTime()).toBe(latestCompleted.getTime());
+  });
+
+  it('zero-milestone (retainer) → total 0, lastActivityAt falls back to activatedAt', async () => {
+    const companyId = await seedCompanyId();
+    const activatedAt = new Date('2026-01-15T00:00:00.000Z');
+    const { engagement } = await engagementFactory({ companyId, values: { activatedAt } });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const row = rows.find((r) => r.id === engagement.id);
+    expect(row?.totalMilestones).toBe(0);
+    expect(row?.lastActivityAt?.getTime()).toBe(activatedAt.getTime());
+  });
+
+  it('hydrates a freelancer counterpart (agency null, person + company names present)', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const row = rows.find((r) => r.id === engagement.id);
+    expect(row?.expertProfile.type).toBe('freelancer');
+    expect(row?.expertProfile.agency).toBeNull();
+    expect(typeof row?.expertProfile.user.firstName).toBe('string');
+    expect(row?.company.name).toBeDefined();
+  });
+
+  it('hydrates an agency counterpart (agency name present)', async () => {
+    const [agency] = await db.insert(agencies).values({ name: 'Cloud Consulting Co' }).returning();
+    if (agency === undefined) throw new Error('agency insert failed');
+    const expert = await expertDraftFactory({ type: 'agency' });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, expert.id));
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const row = rows.find((r) => r.id === engagement.id);
+    expect(row?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
+  });
+
+  it('hydrates the projectRequest title (source proposal) and null for a retainer', async () => {
+    const withRequest = await engagementFactory({ withSourceProposal: true });
+    const retainer = await engagementFactory({ companyId: withRequest.companyId });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({
+      companyId: withRequest.companyId,
+    });
+    const requestRow = rows.find((r) => r.id === withRequest.engagement.id);
+    const retainerRow = rows.find((r) => r.id === retainer.engagement.id);
+    expect(typeof requestRow?.projectRequest?.title).toBe('string');
+    expect(retainerRow?.projectRequest).toBeNull();
+  });
+
+  it('projects ONLY the allow-listed columns — never secrets/PII', async () => {
+    const [agency] = await db.insert(agencies).values({ name: 'Redshift Partners' }).returning();
+    if (agency === undefined) throw new Error('agency insert failed');
+    const expert = await expertDraftFactory({ type: 'agency' });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, expert.id));
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const row = rows.find((r) => r.id === engagement.id);
+    if (row === undefined) throw new Error('expected the seeded engagement row');
+
+    // The expertProfile graph carries ONLY the allow-listed keys.
+    expect(new Set(Object.keys(row.expertProfile))).toEqual(
+      new Set(['id', 'agencyId', 'type', 'user', 'agency'])
+    );
+    expect(row.expertProfile.user).not.toHaveProperty('workosId');
+    expect(row.expertProfile.user).not.toHaveProperty('email');
+    expect(row.expertProfile.user).not.toHaveProperty('phone');
+    expect(row.expertProfile).not.toHaveProperty('stripeConnectId');
+    expect(row.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(row.company).not.toHaveProperty('stripeConnectId');
+  });
+
+  it('orders by lastActivityAt desc', async () => {
+    const companyId = await seedCompanyId();
+    const older = await engagementFactory({
+      companyId,
+      values: { activatedAt: new Date('2026-01-01T00:00:00.000Z') },
+    });
+    const newer = await engagementFactory({
+      companyId,
+      values: { activatedAt: new Date('2026-05-01T00:00:00.000Z') },
+    });
+
+    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const ids = rows.map((r) => r.id);
+    expect(ids.indexOf(newer.engagement.id)).toBeLessThan(ids.indexOf(older.engagement.id));
+  });
+
+  it('listActiveWithProgress stays behaviour-preserving after the aggregate extraction', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId });
+    const completedAt = new Date('2026-04-04T00:00:00.000Z');
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'completed', sortOrder: 0, completedAt },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'in_progress', sortOrder: 1 },
+    });
+
+    const rows = await engagementsRepository.listActiveWithProgress({ companyId });
+    const row = rows.find((r) => r.id === engagement.id);
+    expect(row?.totalMilestones).toBe(2);
+    expect(row?.completedMilestones).toBe(1);
+    expect(row?.inProgressMilestones).toBe(1);
+    expect(row?.lastActivityAt?.getTime()).toBe(completedAt.getTime());
+  });
+});
+
 describe('engagementsRepository.listPendingAutoAccept', () => {
   it('returns only pending_acceptance with completion_requested_at <= cutoff, oldest first; excludes others + soft-deleted', async () => {
     const now = new Date();

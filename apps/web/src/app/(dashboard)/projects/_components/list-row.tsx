@@ -16,8 +16,9 @@ import { StageChip } from './stage-chip';
  * + a nudge chip (WHAT to do) — needs-you rows get the gradient nudge chip, the
  * rest get a quiet `Clock` + status. Unread dot, truncated title,
  * `updatedRelative` on the right (desktop). Needs-you rows appear here AND in the
- * hero (promotion). Fires `inbox_list_row_clicked`. A null `href` (retainer
- * engagement) renders a non-navigable row.
+ * hero (promotion). Fires `inbox_list_row_clicked`. Engagement rows (including
+ * retainers) always carry an `/engagements/{id}?entry=inbox` href, so they are
+ * navigable; the `row.href === null` branch is defensive-only.
  */
 
 interface ListRowProps {
@@ -36,12 +37,12 @@ export function ListRow({
   const handleClick = useCallback(() => {
     track(PROJECTS_INBOX_EVENTS.INBOX_LIST_ROW_CLICKED, {
       lens,
-      request_id: row.id,
+      request_id: row.kind === 'engagement' ? null : row.id,
       stage: row.stage,
       needs_you: row.needsYou,
       from_filter: fromFilter,
     });
-  }, [lens, row.id, row.stage, row.needsYou, fromFilter]);
+  }, [lens, row.kind, row.id, row.stage, row.needsYou, fromFilter]);
 
   const rowBody = (
     <>
@@ -67,18 +68,21 @@ export function ListRow({
             <span className="text-muted-foreground text-xs">{row.companyName}</span>
           )}
           <StageChip stage={row.stage} label={row.stageLabel} />
+          {row.progressLabel && (
+            <span className="text-muted-foreground text-xs tabular-nums">{row.progressLabel}</span>
+          )}
           <span className="text-muted-foreground text-xs sm:hidden">{row.updatedRelative}</span>
         </div>
       </div>
       {row.needsYou ? (
         <span
           className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold shadow-sm',
+            'inline-flex max-w-[60%] min-w-0 shrink items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold shadow-sm sm:max-w-none sm:shrink-0',
             PROPOSAL_CTA_GRADIENT_CLASS
           )}
         >
-          <Zap className="h-3 w-3" aria-hidden="true" />
-          {row.nudgeLabel}
+          <Zap className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">{row.nudgeLabel}</span>
         </span>
       ) : (
         <span className="text-muted-foreground hidden shrink-0 items-center gap-1.5 text-xs sm:inline-flex">
