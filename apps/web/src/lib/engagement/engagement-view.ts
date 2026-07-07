@@ -506,15 +506,19 @@ function deriveEmptyState(
 
 /** Latest delivery-signal timestamp: milestone starts / completions, activation, request. */
 function deriveLastActivityAt(engagement: EngagementWithMilestones): Date {
+  // `createdAt` always exists, so it seeds the fold — the reduce can never run on
+  // an empty array (S6959) while still yielding the max of every delivery signal.
   const candidates: Date[] = [];
   if (engagement.activatedAt !== null) candidates.push(engagement.activatedAt);
-  candidates.push(engagement.createdAt);
   if (engagement.completionRequestedAt !== null) candidates.push(engagement.completionRequestedAt);
   for (const m of engagement.milestones) {
     if (m.startedAt !== null) candidates.push(m.startedAt);
     if (m.completedAt !== null) candidates.push(m.completedAt);
   }
-  return candidates.reduce((latest, d) => (d.getTime() > latest.getTime() ? d : latest));
+  return candidates.reduce(
+    (latest, d) => (d.getTime() > latest.getTime() ? d : latest),
+    engagement.createdAt
+  );
 }
 
 function deriveAdminOversight(
