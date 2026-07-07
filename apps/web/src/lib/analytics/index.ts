@@ -19,6 +19,7 @@ export {
   CONVERSATION_EVENTS,
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
+  ADMIN_ENGAGEMENTS_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -39,4 +40,5 @@ export type {
   ProjectsInboxEventMap,
   ProjectsInboxLens,
   ProjectsInboxFilter,
+  AdminEngagementsFilter,
 } from '@balo/analytics/client';

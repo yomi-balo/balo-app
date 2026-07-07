@@ -344,6 +344,20 @@
   background: linear-gradient(160deg, var(--hero-soft) 0%, var(--hero) 45%, var(--hero-deep) 100%);
 }
 
+/* Delivery-workspace in-progress milestone node "breathe" (BAL-331).
+   Consumed via `animate-[nodeBreathe_2.2s_ease-in-out_infinite]` on the rail
+   node, always paired with `motion-reduce:animate-none`. The blue→violet
+   signature glow is the sanctioned raw-palette device for the rail. */
+@keyframes nodeBreathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(37 99 235 / 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgb(37 99 235 / 0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-shake,
   .animate-fade-in,
@@ -356,13 +370,16 @@
 }
 
 /* Hide scrollbars while keeping the element scrollable (conversation tab
-   strip). Tailwind 4 @utility — webkit + Firefox/IE variants. */
+   strip). Tailwind 4 @utility — webkit + Firefox/IE variants. The webkit
+   pseudo-element rule is kept un-nested (explicit `.scrollbar-none` scoping
+   root) — compiles to the same CSS as a nested `&`, but avoids the CSS-nesting
+   analyzer's "missing scoping root" flag on the bare `&` inside @utility. */
 @utility scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
-  &::-webkit-scrollbar {
-    display: none;
-  }
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 /* White inputs on tinted wizard background */

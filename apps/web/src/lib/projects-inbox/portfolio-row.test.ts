@@ -322,7 +322,7 @@ describe('deriveEngagementRow', () => {
       needsYou: false,
       nudgeLabel: 'In delivery',
       progressLabel: '3 of 5 milestones',
-      href: '/engagements/eng-1?entry=inbox',
+      href: '/engagements/eng-1?from=inbox',
     });
   });
 
@@ -426,7 +426,7 @@ describe('deriveEngagementRow', () => {
 
   it('href is ALWAYS present, keyed on the engagement id (retainer-safe)', () => {
     const res = deriveEngagementRow(makeEngagementInput({ engagementId: 'eng-retainer' }));
-    expect(res.href).toBe('/engagements/eng-retainer?entry=inbox');
+    expect(res.href).toBe('/engagements/eng-retainer?from=inbox');
   });
 });
 
@@ -514,7 +514,7 @@ describe('tilesFromRows + rowMatchesFilter', () => {
     },
     {
       id: 'd',
-      href: '/engagements/d?entry=inbox',
+      href: '/engagements/d?from=inbox',
       title: 'D',
       companyName: 'Northwind',
       stage: 'kicked',

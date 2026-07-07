@@ -22,6 +22,7 @@ import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickof
 import { BillingBlockedViewTracker } from './proposal/billing-blocked-view-tracker';
 import { ConversationStage } from './conversation/conversation-stage';
 import { MobileRequestSheet } from './conversation/mobile-request-sheet';
+import { DeliveryWorkspaceLink } from '@/components/balo/engagement/delivery-workspace-link';
 
 interface RequestDetailShellProps {
   view: RequestDetailView;
@@ -41,6 +42,13 @@ interface RequestDetailShellProps {
    * the client lens on an accepted request; forwarded to the KickoffBoard.
    */
   billingCapture?: KickoffBillingCapture | null;
+  /**
+   * BAL-331 deep-link: the delivery engagement's id, resolved by the page ONLY
+   * when the request is `kickoff_approved`. When set, every lens sees the "View
+   * delivery workspace" entry in the kickoff region. Null before an engagement
+   * exists.
+   */
+  deliveryEngagementId?: string | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -143,6 +151,7 @@ export function RequestDetailShell({
   conversation = null,
   adminBilling = null,
   billingCapture = null,
+  deliveryEngagementId = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -204,6 +213,22 @@ export function RequestDetailShell({
       >
         <StatusStepper current={view.status} />
       </div>
+
+      {/* BAL-331 deep-link: once kickoff is approved and a delivery engagement
+          exists, surface the workspace entry for EVERY lens. Rendered once here
+          (a single navigational Link) so it never duplicates across the mobile /
+          desktop kickoff-board mounts. */}
+      {deliveryEngagementId && (
+        <div
+          className="border-border bg-card animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 duration-500 motion-reduce:animate-none"
+          style={{ animationDelay: '90ms' }}
+        >
+          <span className="text-muted-foreground text-sm">
+            Kickoff approved — delivery is underway.
+          </span>
+          <DeliveryWorkspaceLink engagementId={deliveryEngagementId} />
+        </div>
+      )}
 
       {nudge && (
         <div

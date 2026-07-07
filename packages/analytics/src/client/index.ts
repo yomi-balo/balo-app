@@ -19,6 +19,7 @@ export {
   CONVERSATION_EVENTS,
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
+  ADMIN_ENGAGEMENTS_EVENTS,
 } from '../events';
 
 export type {
@@ -52,4 +53,6 @@ export type {
   ProjectsInboxLens,
   ProjectsInboxFilter,
   BillingEventMap,
+  AdminEngagementsEventMap,
+  AdminEngagementsFilter,
 } from '../events';

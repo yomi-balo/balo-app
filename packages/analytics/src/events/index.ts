@@ -69,3 +69,14 @@ export {
 } from './billing';
 export { PARTY_DOMAIN_SERVER_EVENTS, type PartyDomainServerEventMap } from './party-domains';
 export { PARTY_JOIN_SERVER_EVENTS, type PartyJoinServerEventMap } from './party-join';
+export {
+  ENGAGEMENT_SERVER_EVENTS,
+  type EngagementServerEventMap,
+  type EngagementWorkspaceLens,
+  type EngagementWorkspaceEntry,
+} from './engagement';
+export {
+  ADMIN_ENGAGEMENTS_EVENTS,
+  type AdminEngagementsEventMap,
+  type AdminEngagementsFilter,
+} from './admin-engagements';

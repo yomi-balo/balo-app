@@ -17,7 +17,7 @@ import { StageChip } from './stage-chip';
  * rest get a quiet `Clock` + status. Unread dot, truncated title,
  * `updatedRelative` on the right (desktop). Needs-you rows appear here AND in the
  * hero (promotion). Fires `inbox_list_row_clicked`. Engagement rows (including
- * retainers) always carry an `/engagements/{id}?entry=inbox` href, so they are
+ * retainers) always carry an `/engagements/{id}?from=inbox` href, so they are
  * navigable; the `row.href === null` branch is defensive-only.
  */
 

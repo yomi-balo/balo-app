@@ -73,7 +73,7 @@ const AUTO_ACCEPT_MS = AUTO_ACCEPT_DAYS * 24 * 60 * 60 * 1000;
  */
 function formatAutoAcceptLabel(completionRequestedAt: Date): string {
   const at = new Date(completionRequestedAt.getTime() + AUTO_ACCEPT_MS);
-  return new Intl.DateTimeFormat('en', {
+  return new Intl.DateTimeFormat('en-GB', {
     month: 'short',
     day: 'numeric',
     timeZone: 'UTC',
@@ -501,7 +501,7 @@ export async function loadAdminPortfolio(
     .filter((e) => e.status === 'active' || e.status === 'pending_acceptance')
     .map((e) => ({
       id: e.id,
-      href: `/engagements/${e.id}?entry=inbox`,
+      href: `/engagements/${e.id}?from=inbox`,
       title: e.projectRequest?.title ?? 'Ongoing engagement',
       companyName: e.company.name,
       updatedRelative: formatPostedRelative(e.lastActivityAt ?? e.createdAt, now),

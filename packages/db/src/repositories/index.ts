@@ -90,6 +90,7 @@ export {
   type EngagementWithMilestones,
   type EngagementWithProgress,
   type PortfolioEngagementView,
+  type AdminEngagementListItem,
 } from './engagements';
 export {
   engagementMilestonesRepository,
