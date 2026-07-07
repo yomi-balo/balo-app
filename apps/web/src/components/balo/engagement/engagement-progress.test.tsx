@@ -24,22 +24,23 @@ describe('EngagementProgress', () => {
     expect(screen.getByText('40%')).toBeInTheDocument();
   });
 
-  it('exposes an accessible progressbar with the correct aria values', () => {
+  it('exposes an accessible native progress element with the correct value', () => {
     render(<EngagementProgress progress={makeProgress({ pct: 40 })} />);
 
     const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '40');
-    expect(bar).toHaveAttribute('aria-valuemin', '0');
-    expect(bar).toHaveAttribute('aria-valuemax', '100');
-    expect(bar).toHaveStyle({ width: '40%' });
+    expect(bar).toHaveAttribute('value', '40');
+    expect(bar).toHaveAttribute('max', '100');
+    expect(bar).toHaveAttribute('aria-label', 'Milestones completed');
   });
 
-  it('applies the signature gradient fill', () => {
-    render(<EngagementProgress progress={makeProgress()} />);
+  it('applies the signature gradient fill to the decorative bar', () => {
+    const { container } = render(<EngagementProgress progress={makeProgress()} />);
 
-    const bar = screen.getByRole('progressbar');
-    expect(bar.className).toContain('from-primary');
-    expect(bar.className).toContain('to-violet-600');
+    const fill = container.querySelector<HTMLElement>('[aria-hidden="true"]');
+    expect(fill).not.toBeNull();
+    expect(fill?.className).toContain('from-primary');
+    expect(fill?.className).toContain('to-violet-600');
+    expect(fill).toHaveStyle({ width: '40%' });
   });
 
   it('renders the client-lens review copy when present', () => {
@@ -64,6 +65,6 @@ describe('EngagementProgress', () => {
     render(<EngagementProgress progress={makeProgress({ done: 5, total: 5, pct: 100 })} />);
 
     expect(screen.getByText('5 of 5')).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('value', '100');
   });
 });

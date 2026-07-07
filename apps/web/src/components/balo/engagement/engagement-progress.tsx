@@ -26,12 +26,11 @@ export function EngagementProgress({
         <span className="text-primary ml-auto text-xs font-semibold">{pct}%</span>
       </div>
       <div className="bg-muted mt-3 h-2 overflow-hidden rounded-full">
+        {/* Native <progress> carries the semantics/accessible value (visually
+            hidden); the gradient bar below is the decorative signature fill. */}
+        <progress className="sr-only" value={pct} max={100} aria-label="Milestones completed" />
         <div
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label="Milestones completed"
+          aria-hidden="true"
           className="from-primary h-full rounded-full bg-gradient-to-br to-violet-600 transition-[width] duration-500 ease-out"
           style={{ width: `${pct}%` }}
         />

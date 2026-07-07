@@ -171,7 +171,7 @@ export async function advanceEngagementStatus(
 
   const [updated] = await tx
     .update(engagements)
-    .set({ status: input.to, ...(input.set ?? {}) })
+    .set({ status: input.to, ...input.set })
     .where(eq(engagements.id, input.id))
     .returning();
 
