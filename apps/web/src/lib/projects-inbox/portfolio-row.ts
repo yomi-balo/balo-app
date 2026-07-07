@@ -455,10 +455,11 @@ function assertNeverStatus(status: never): never {
  * function over the finite state space; the exhaustive `switch` has a `default` so
  * a future engagement status fails typecheck. `href` keys on the always-present
  * engagement id (retainer-safe — never the nullable projectRequestId). The route
- * is D1/BAL-331's (`?entry=inbox`); typedRoutes is OFF so it is a plain string.
+ * matches D1/BAL-331's workspace `?from` entry whitelist (value `inbox`); typedRoutes
+ * is OFF so it is a plain string.
  */
 export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDeriv {
-  const href = `/engagements/${input.engagementId}?entry=inbox`;
+  const href = `/engagements/${input.engagementId}?from=inbox`;
   const progressLabel =
     input.totalMilestones > 0
       ? `${input.completedMilestones} of ${input.totalMilestones} milestones`

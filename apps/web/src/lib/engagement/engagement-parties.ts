@@ -1,4 +1,5 @@
 import type { EngagementWithMilestones } from '@balo/db';
+import { expertPartyDisplayName } from '@balo/shared/parties';
 import type { EngagementLens } from './resolve-engagement-lens';
 
 /**
@@ -15,7 +16,7 @@ import type { EngagementLens } from './resolve-engagement-lens';
  *    agency" on first mention.
  */
 export interface EngagementParties {
-  /** The expert delivers under an agency (`expertProfile.agency !== null`). */
+  /** The expert delivers under an agency (`expertProfile.type === 'agency'`). */
   isAgencyExpert: boolean;
   /** Retrospective full person name, e.g. `Priya Sharma`. */
   expertPerson: string;
@@ -43,21 +44,36 @@ function joinName(firstName: string | null, lastName: string | null, fallback: s
 
 /**
  * Derive every party / person string for an engagement from the hydrated read
- * model. `isAgencyExpert = expertProfile.agency !== null`; the person always comes
+ * model. `isAgencyExpert = expertProfile.type === 'agency'`; the person always comes
  * from `expertProfile.user` (gender-neutral full + first name).
  */
 export function deriveEngagementParties(e: EngagementWithMilestones): EngagementParties {
-  const { user, agency, headline } = e.expertProfile;
-  const isAgencyExpert = agency !== null;
+  const { user, agency, headline, type } = e.expertProfile;
+  const isAgencyExpert = type === 'agency';
 
   const expertPerson = joinName(user.firstName, user.lastName, 'the expert');
   const expertPersonShort =
     user.firstName !== null && user.firstName.trim() !== '' ? user.firstName : expertPerson;
 
-  const expertParty = isAgencyExpert ? agency.name : expertPerson;
-  const expertPartyShort = isAgencyExpert ? agency.name : expertPersonShort;
-  const expertRetroFirstMention = isAgencyExpert
-    ? `${expertPersonShort} @ ${agency.name}`
+  // Party display name via the shared BAL-329 convention (single source of truth,
+  // shared with the D6 inbox): agency name when type === 'agency' with a non-blank
+  // name; otherwise the person's full name; otherwise 'An expert'. Never touches
+  // `agency.name` unguarded.
+  const expertParty = expertPartyDisplayName({
+    type,
+    agencyName: agency?.name ?? null,
+    firstName: user.firstName,
+    lastName: user.lastName,
+  });
+
+  // True only when the party resolved to the AGENCY name (vs a person fallback) —
+  // i.e. an agency-typed profile with a non-blank joined agency name. Optional-chained
+  // + nullish-guarded, so it type-checks when `agency` is null.
+  const showsAgencyName = isAgencyExpert && (agency?.name?.trim() ?? '') !== '';
+
+  const expertPartyShort = showsAgencyName ? expertParty : expertPersonShort;
+  const expertRetroFirstMention = showsAgencyName
+    ? `${expertPersonShort} @ ${expertParty}`
     : expertPersonShort;
 
   return {

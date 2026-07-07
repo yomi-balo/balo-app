@@ -15,6 +15,7 @@ function makeAgency(over: Partial<NonNullable<Agency>> = {}): NonNullable<Agency
 
 function makeEngagement(opts: {
   agency?: Agency;
+  type?: ExpertProfile['type'];
   headline?: string | null;
   firstName?: string | null;
   lastName?: string | null;
@@ -23,7 +24,7 @@ function makeEngagement(opts: {
   const expertProfile: ExpertProfile = {
     id: 'expert-1',
     agencyId: opts.agency ? opts.agency.id : null,
-    type: opts.agency ? 'agency' : 'freelancer',
+    type: opts.type ?? (opts.agency ? 'agency' : 'freelancer'),
     headline: 'headline' in opts ? (opts.headline ?? null) : 'CPQ Specialist',
     user: {
       id: 'user-priya',
@@ -67,6 +68,39 @@ describe('deriveEngagementParties', () => {
     );
     expect(p.expertPerson).toBe('the expert');
     expect(p.expertPersonShort).toBe('the expert');
+  });
+
+  it('(drift a) freelancer-typed profile carrying an agencyId shows the PERSON, not the agency', () => {
+    // type wins over agency-presence: a freelancer linked to an agency is still party==person.
+    const p = deriveEngagementParties(makeEngagement({ agency: makeAgency(), type: 'freelancer' }));
+    expect(p.isAgencyExpert).toBe(false);
+    expect(p.expertParty).toBe('Priya Sharma');
+    expect(p.expertPartyShort).toBe('Priya');
+    expect(p.expertRetroFirstMention).toBe('Priya');
+  });
+
+  it('(drift b) agency-typed with a null/blank agency name falls back to the person (no crash)', () => {
+    // Null joined agency row — the null-safety trap: must not deref agency.name.
+    const nullAgency = deriveEngagementParties(makeEngagement({ agency: null, type: 'agency' }));
+    expect(nullAgency.isAgencyExpert).toBe(true);
+    expect(nullAgency.expertParty).toBe('Priya Sharma');
+    expect(nullAgency.expertPartyShort).toBe('Priya');
+    expect(nullAgency.expertRetroFirstMention).toBe('Priya');
+
+    // Blank agency name — same shared fallback.
+    const blankAgency = deriveEngagementParties(
+      makeEngagement({ agency: makeAgency({ name: '   ' }), type: 'agency' })
+    );
+    expect(blankAgency.expertParty).toBe('Priya Sharma');
+  });
+
+  it('(drift c) a nameless expert party falls back to "An expert" (shared convention)', () => {
+    const p = deriveEngagementParties(
+      makeEngagement({ agency: null, firstName: null, lastName: null })
+    );
+    expect(p.expertParty).toBe('An expert');
+    // Person-side fields keep their own "the expert" fallback (unchanged).
+    expect(p.expertPerson).toBe('the expert');
   });
 });
 
