@@ -7,39 +7,10 @@ import {
   type EngagementMilestone,
   type ProposalMilestone,
 } from '../schema';
-import { auditEventsRepository } from './audit-events';
+import { recordDeliveryAudit, type DeliveryAuditAction } from './_shared/delivery-audit';
 
 /** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-/**
- * The delivery audit vocabulary (BAL-330). `audit_events` (BAL-344) stores `action`
- * and `entityType` as open `text`, so these unions keep OUR emitted taxonomy
- * typo-safe at compile time WITHOUT the generic repo needing to know it — each
- * emitted literal is annotated `satisfies DeliveryAuditAction` /
- * `satisfies DeliveryAuditEntityType`. Shared with `engagements.ts` (the engagement
- * lifecycle half of the same vocabulary).
- *
- * NOTE: `audit_events` has NO `engagement_id` column — every delivery event FOLDS
- * the engagement id into `metadata.engagementId` (see the `.record(...)` calls).
- */
-export type DeliveryAuditAction =
-  // milestone lifecycle
-  | 'engagement_milestone.started'
-  | 'engagement_milestone.completed'
-  | 'engagement_milestone.reverted'
-  | 'engagement_milestone.added'
-  | 'engagement_milestone.edited'
-  | 'engagement_milestone.removed'
-  // engagement lifecycle
-  | 'engagement.completion_requested'
-  | 'engagement.completion_withdrawn'
-  | 'engagement.accepted'
-  | 'engagement.changes_requested'
-  | 'engagement.cancelled'
-  | 'engagement.milestones_snapshotted';
-
-export type DeliveryAuditEntityType = 'engagement' | 'engagement_milestone';
 
 /** Milestone status, derived from the schema column (single source of truth). */
 export type EngagementMilestoneStatus = EngagementMilestone['status'];
@@ -162,6 +133,50 @@ async function lockEngagementAndMilestone(
 }
 
 /**
+ * Shared milestone status transition writer (mirrors `advanceEngagementStatus`).
+ * Validates the move against `ENGAGEMENT_MILESTONE_STATUS_TRANSITIONS`, applies
+ * `{ status: to, ...set, updatedAt }`, and emits the audit event with the standard
+ * `{ from, to, ...extraMetadata }` shape (the caller has already locked the
+ * engagement + milestone via `lockEngagementAndMilestone`). Used by
+ * start/complete/revert so their bodies stay a single call. Throws
+ * `InvalidMilestoneTransitionError` for an illegal move.
+ */
+async function advanceMilestoneStatus(
+  tx: DbTx,
+  input: {
+    milestone: EngagementMilestone;
+    to: EngagementMilestoneStatus;
+    userId: string;
+    action: DeliveryAuditAction;
+    set: Partial<typeof engagementMilestones.$inferInsert>;
+    extraMetadata?: Record<string, unknown>;
+  }
+): Promise<EngagementMilestone> {
+  if (!isAllowedMilestoneTransition(input.milestone.status, input.to)) {
+    throw new InvalidMilestoneTransitionError(input.milestone.status, input.to);
+  }
+
+  const [updated] = await tx
+    .update(engagementMilestones)
+    .set({ status: input.to, ...input.set, updatedAt: new Date() })
+    .where(eq(engagementMilestones.id, input.milestone.id))
+    .returning();
+  if (updated === undefined) {
+    throw new Error(`Failed to transition milestone: ${input.milestone.id}`);
+  }
+
+  await recordDeliveryAudit(tx, {
+    actorUserId: input.userId,
+    action: input.action,
+    entityType: 'engagement_milestone',
+    entityId: input.milestone.id,
+    engagementId: input.milestone.engagementId,
+    metadata: { from: input.milestone.status, to: input.to, ...input.extraMetadata },
+  });
+  return updated;
+}
+
+/**
  * Snapshot the accepted proposal's live milestones into `engagement_milestones`
  * within an EXISTING transaction — the delivery counterpart to
  * `insertMilestonesTx`. Pure insert primitive (NO audit inside — the single
@@ -208,39 +223,13 @@ export const engagementMilestonesRepository = {
   async start(input: { milestoneId: string; userId: string }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
-      if (!isAllowedMilestoneTransition(milestone.status, 'in_progress')) {
-        throw new InvalidMilestoneTransitionError(milestone.status, 'in_progress');
-      }
-
-      const [updated] = await tx
-        .update(engagementMilestones)
-        .set({
-          status: 'in_progress',
-          startedByUserId: input.userId,
-          startedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(engagementMilestones.id, milestone.id))
-        .returning();
-      if (updated === undefined) {
-        throw new Error(`Failed to start milestone: ${input.milestoneId}`);
-      }
-
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement_milestone.started' satisfies DeliveryAuditAction,
-          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
-          entityId: milestone.id,
-          metadata: {
-            from: milestone.status,
-            to: 'in_progress',
-            engagementId: milestone.engagementId,
-          },
-        },
-        tx
-      );
-      return updated;
+      return advanceMilestoneStatus(tx, {
+        milestone,
+        to: 'in_progress',
+        userId: input.userId,
+        action: 'engagement_milestone.started',
+        set: { startedByUserId: input.userId, startedAt: new Date() },
+      });
     });
   },
 
@@ -255,41 +244,19 @@ export const engagementMilestonesRepository = {
   }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
-      if (!isAllowedMilestoneTransition(milestone.status, 'completed')) {
-        throw new InvalidMilestoneTransitionError(milestone.status, 'completed');
-      }
-
-      const [updated] = await tx
-        .update(engagementMilestones)
-        .set({
-          status: 'completed',
+      return advanceMilestoneStatus(tx, {
+        milestone,
+        to: 'completed',
+        userId: input.userId,
+        action: 'engagement_milestone.completed',
+        set: {
           completedByUserId: input.userId,
           completedAt: new Date(),
           completionNote: input.completionNote ?? null,
-          updatedAt: new Date(),
-        })
-        .where(eq(engagementMilestones.id, milestone.id))
-        .returning();
-      if (updated === undefined) {
-        throw new Error(`Failed to complete milestone: ${input.milestoneId}`);
-      }
-
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement_milestone.completed' satisfies DeliveryAuditAction,
-          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
-          entityId: milestone.id,
-          metadata: {
-            from: milestone.status,
-            to: 'completed',
-            engagementId: milestone.engagementId,
-            ...(input.completionNote === undefined ? {} : { note: input.completionNote }),
-          },
         },
-        tx
-      );
-      return updated;
+        extraMetadata:
+          input.completionNote === undefined ? undefined : { note: input.completionNote },
+      });
     });
   },
 
@@ -301,40 +268,13 @@ export const engagementMilestonesRepository = {
   async revert(input: { milestoneId: string; userId: string }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
-      if (!isAllowedMilestoneTransition(milestone.status, 'in_progress')) {
-        throw new InvalidMilestoneTransitionError(milestone.status, 'in_progress');
-      }
-
-      const [updated] = await tx
-        .update(engagementMilestones)
-        .set({
-          status: 'in_progress',
-          completedByUserId: null,
-          completedAt: null,
-          completionNote: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(engagementMilestones.id, milestone.id))
-        .returning();
-      if (updated === undefined) {
-        throw new Error(`Failed to revert milestone: ${input.milestoneId}`);
-      }
-
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement_milestone.reverted' satisfies DeliveryAuditAction,
-          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
-          entityId: milestone.id,
-          metadata: {
-            from: milestone.status,
-            to: 'in_progress',
-            engagementId: milestone.engagementId,
-          },
-        },
-        tx
-      );
-      return updated;
+      return advanceMilestoneStatus(tx, {
+        milestone,
+        to: 'in_progress',
+        userId: input.userId,
+        action: 'engagement_milestone.reverted',
+        set: { completedByUserId: null, completedAt: null, completionNote: null },
+      });
     });
   },
 
@@ -383,16 +323,14 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to edit milestone: ${input.milestoneId}`);
       }
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement_milestone.edited' satisfies DeliveryAuditAction,
-          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
-          entityId: milestone.id,
-          metadata: { fields, engagementId: milestone.engagementId },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_milestone.edited',
+        entityType: 'engagement_milestone',
+        entityId: milestone.id,
+        engagementId: milestone.engagementId,
+        metadata: { fields },
+      });
       return updated;
     });
   },
@@ -450,16 +388,14 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to add milestone to engagement: ${input.engagementId}`);
       }
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement_milestone.added' satisfies DeliveryAuditAction,
-          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
-          entityId: inserted.id,
-          metadata: { sort_order: sortOrder, engagementId: input.engagementId },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_milestone.added',
+        entityType: 'engagement_milestone',
+        entityId: inserted.id,
+        engagementId: input.engagementId,
+        metadata: { sort_order: sortOrder },
+      });
       return inserted;
     });
   },
@@ -484,16 +420,14 @@ export const engagementMilestonesRepository = {
         throw new Error(`Failed to soft-delete milestone: ${input.milestoneId}`);
       }
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement_milestone.removed' satisfies DeliveryAuditAction,
-          entityType: 'engagement_milestone' satisfies DeliveryAuditEntityType,
-          entityId: milestone.id,
-          metadata: { engagementId: milestone.engagementId },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_milestone.removed',
+        entityType: 'engagement_milestone',
+        entityId: milestone.id,
+        engagementId: milestone.engagementId,
+        metadata: {},
+      });
       return updated;
     });
   },

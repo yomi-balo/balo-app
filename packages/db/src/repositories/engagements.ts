@@ -12,13 +12,8 @@ import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
 import { listByProposalTx } from './proposal-milestones';
-import {
-  engagementMilestonesRepository,
-  snapshotFromProposalTx,
-  type DeliveryAuditAction,
-  type DeliveryAuditEntityType,
-} from './engagement-milestones';
-import { auditEventsRepository } from './audit-events';
+import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
+import { recordDeliveryAudit } from './_shared/delivery-audit';
 
 /** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -185,6 +180,34 @@ export async function advanceEngagementStatus(
   }
 
   return updated;
+}
+
+/**
+ * Lock the LIVE engagement FOR UPDATE and validate that `→ to` is a legal move from
+ * its current status, returning the locked row. Shared pre-step of the transitions
+ * that must inspect the current row BEFORE the flip (`requestCompletion` reads live
+ * milestones under this lock; `cancelEngagement` captures the `from` status).
+ * `advanceEngagementStatus` then re-locks the same row reentrantly in the same tx.
+ * Throws `Error` (missing/soft-deleted) / `InvalidEngagementTransitionError`.
+ */
+async function lockEngagementForTransition(
+  tx: DbTx,
+  engagementId: string,
+  to: EngagementStatus
+): Promise<Engagement> {
+  const [current] = await tx
+    .select()
+    .from(engagements)
+    .where(and(eq(engagements.id, engagementId), isNull(engagements.deletedAt)))
+    .for('update');
+
+  if (current === undefined) {
+    throw new Error(`Engagement not found: ${engagementId}`);
+  }
+  if (!isAllowedEngagementTransition(current.status, to)) {
+    throw new InvalidEngagementTransitionError(current.status, to);
+  }
+  return current;
 }
 
 /**
@@ -405,20 +428,14 @@ export const engagementsRepository = {
         approvingAdminUserId: input.approvingAdminUserId,
         sources,
       });
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.approvingAdminUserId,
-          action: 'engagement.milestones_snapshotted' satisfies DeliveryAuditAction,
-          entityType: 'engagement' satisfies DeliveryAuditEntityType,
-          entityId: engagement.id,
-          metadata: {
-            milestone_count: sources.length,
-            source_proposal_id: input.sourceProposalId,
-            engagementId: engagement.id,
-          },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.approvingAdminUserId,
+        action: 'engagement.milestones_snapshotted',
+        entityType: 'engagement',
+        entityId: engagement.id,
+        engagementId: engagement.id,
+        metadata: { milestone_count: sources.length, source_proposal_id: input.sourceProposalId },
+      });
 
       return { engagement, request };
     });
@@ -442,9 +459,9 @@ export const engagementsRepository = {
 
   // ── Delivery lifecycle transitions (BAL-330) ───────────────────────────
   // All run in `db.transaction`, lock the engagement FOR UPDATE, and
-  // `auditEventsRepository.record(..., tx)` in the SAME tx as the state change.
-  // audit_events (BAL-344) has no engagement_id column → the engagement id is folded
-  // into `metadata.engagementId`.
+  // `recordDeliveryAudit(tx, …)` in the SAME tx as the state change. audit_events
+  // (BAL-344) has no engagement_id column → the shared helper folds the engagement
+  // id into `metadata.engagementId`.
 
   /**
    * The expert requests completion (active → pending_acceptance). Guards, under the
@@ -456,18 +473,7 @@ export const engagementsRepository = {
    */
   async requestCompletion(input: { engagementId: string; userId: string }): Promise<Engagement> {
     return db.transaction(async (tx) => {
-      const [current] = await tx
-        .select()
-        .from(engagements)
-        .where(and(eq(engagements.id, input.engagementId), isNull(engagements.deletedAt)))
-        .for('update');
-
-      if (current === undefined) {
-        throw new Error(`Engagement not found: ${input.engagementId}`);
-      }
-      if (!isAllowedEngagementTransition(current.status, 'pending_acceptance')) {
-        throw new InvalidEngagementTransitionError(current.status, 'pending_acceptance');
-      }
+      await lockEngagementForTransition(tx, input.engagementId, 'pending_acceptance');
 
       // Under the engagement lock (single-writer gate): read live milestones and
       // require every one completed. Zero milestones ⇒ vacuously allowed.
@@ -496,16 +502,14 @@ export const engagementsRepository = {
         },
       });
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement.completion_requested' satisfies DeliveryAuditAction,
-          entityType: 'engagement' satisfies DeliveryAuditEntityType,
-          entityId: input.engagementId,
-          metadata: { from: 'active', to: 'pending_acceptance', engagementId: input.engagementId },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.completion_requested',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'active', to: 'pending_acceptance' },
+      });
       return advanced;
     });
   },
@@ -530,16 +534,14 @@ export const engagementsRepository = {
         },
       });
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement.completion_withdrawn' satisfies DeliveryAuditAction,
-          entityType: 'engagement' satisfies DeliveryAuditEntityType,
-          entityId: input.engagementId,
-          metadata: { from: 'pending_acceptance', to: 'active', engagementId: input.engagementId },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.completion_withdrawn',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'pending_acceptance', to: 'active' },
+      });
       return advanced;
     });
   },
@@ -567,21 +569,14 @@ export const engagementsRepository = {
         },
       });
 
-      await auditEventsRepository.record(
-        {
-          actorUserId,
-          action: 'engagement.accepted' satisfies DeliveryAuditAction,
-          entityType: 'engagement' satisfies DeliveryAuditEntityType,
-          entityId: input.engagementId,
-          metadata: {
-            from: 'pending_acceptance',
-            to: 'completed',
-            acceptance_method: input.method,
-            engagementId: input.engagementId,
-          },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId,
+        action: 'engagement.accepted',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'pending_acceptance', to: 'completed', acceptance_method: input.method },
+      });
       return advanced;
     });
   },
@@ -611,21 +606,14 @@ export const engagementsRepository = {
         },
       });
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement.changes_requested' satisfies DeliveryAuditAction,
-          entityType: 'engagement' satisfies DeliveryAuditEntityType,
-          entityId: input.engagementId,
-          metadata: {
-            from: 'pending_acceptance',
-            to: 'active',
-            note: input.note,
-            engagementId: input.engagementId,
-          },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.changes_requested',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from: 'pending_acceptance', to: 'active', note: input.note },
+      });
       return advanced;
     });
   },
@@ -642,18 +630,7 @@ export const engagementsRepository = {
     reason: string;
   }): Promise<Engagement> {
     return db.transaction(async (tx) => {
-      const [current] = await tx
-        .select()
-        .from(engagements)
-        .where(and(eq(engagements.id, input.engagementId), isNull(engagements.deletedAt)))
-        .for('update');
-
-      if (current === undefined) {
-        throw new Error(`Engagement not found: ${input.engagementId}`);
-      }
-      if (!isAllowedEngagementTransition(current.status, 'cancelled')) {
-        throw new InvalidEngagementTransitionError(current.status, 'cancelled');
-      }
+      const current = await lockEngagementForTransition(tx, input.engagementId, 'cancelled');
       const from = current.status;
 
       const advanced = await advanceEngagementStatus(tx, {
@@ -666,21 +643,14 @@ export const engagementsRepository = {
         },
       });
 
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.userId,
-          action: 'engagement.cancelled' satisfies DeliveryAuditAction,
-          entityType: 'engagement' satisfies DeliveryAuditEntityType,
-          entityId: input.engagementId,
-          metadata: {
-            from,
-            to: 'cancelled',
-            reason: input.reason,
-            engagementId: input.engagementId,
-          },
-        },
-        tx
-      );
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement.cancelled',
+        entityType: 'engagement',
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { from, to: 'cancelled', reason: input.reason },
+      });
       return advanced;
     });
   },
