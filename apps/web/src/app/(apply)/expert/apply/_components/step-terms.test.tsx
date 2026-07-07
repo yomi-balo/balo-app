@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@/test/utils';
+import { render, screen, waitFor, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import type { ReferenceData } from '../_actions/load-draft';
@@ -62,6 +62,7 @@ vi.mock('motion/react', async () => {
 });
 
 import { StepTerms } from './step-terms';
+import { WizardActionBar } from './wizard-action-bar';
 import { ExpertApplicationProvider } from './expert-application-context';
 import { submitApplicationAction } from '../_actions/submit-application';
 import { toast } from 'sonner';
@@ -83,9 +84,11 @@ const referenceData: ReferenceData = {
 };
 
 // A draft with a profile id (so the provider's `expertProfileId` is non-null and
-// `submitApplication` actually calls the action), plus competencies/certs/work-history
-// so the summary build (incl. the `productsData.productIds?.length` ternary at
-// lines 137-138) renders real counts rather than "None".
+// `submitApplication` actually calls the action), plus competencies/certs and a
+// non-empty work-history entry so `findFirstIncompleteStep` resolves the initial
+// step to Terms (the last index) — that makes `isLast` true so the relocated
+// Submit button renders in the WizardActionBar. Also drives the summary ternaries
+// (e.g. `productsData.productIds?.length`) so real counts render rather than "None".
 const draft = {
   profile: {
     id: 'profile-1',
@@ -122,7 +125,17 @@ const draft = {
   ],
   languages: [{ languageId: '44444444-4444-4444-4444-444444444444', proficiency: 'native' }],
   industries: [{ industryId: '55555555-5555-5555-5555-555555555555' }],
-  workHistory: [],
+  workHistory: [
+    {
+      id: '66666666-6666-6666-6666-666666666666',
+      role: 'Consultant',
+      company: 'Acme',
+      startedAt: new Date('2020-01-01'),
+      endedAt: null,
+      isCurrent: true,
+      responsibilities: null,
+    },
+  ],
 } as unknown as ApplicationWithRelations;
 
 function renderStep(draftArg: ApplicationWithRelations | null): void {
@@ -134,6 +147,7 @@ function renderStep(draftArg: ApplicationWithRelations | null): void {
       user={{ id: 'user-1', email: 'jane@example.com' }}
     >
       <StepTerms headingRef={headingRef} />
+      <WizardActionBar />
     </ExpertApplicationProvider>
   );
 }
@@ -171,9 +185,30 @@ describe('StepTerms', () => {
     expect(screen.getAllByText('Skipped').length).toBeGreaterThan(0);
   });
 
-  it('keeps the submit button disabled until the terms are accepted', () => {
-    renderStep(draft);
-    expect(screen.getByRole('button', { name: /submit application/i })).toBeDisabled();
+  it('surfaces the terms validation message and does not submit when the box is unchecked', async () => {
+    const user = userEvent.setup();
+    // jsdom has no scrollIntoView impl — the handler calls it on the invalid path.
+    // Stub it, then restore so the mock never leaks into later tests in this file.
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      renderStep(draft);
+
+      // Click the relocated Submit (desktop bar is [0]) WITHOUT checking the box.
+      const [submitBtn] = screen.getAllByRole('button', { name: /submit application/i });
+      if (submitBtn === undefined) throw new Error('Submit button not rendered');
+      await user.click(submitBtn);
+
+      // The zod message surfaces via <FormMessage/>, the action is never called,
+      // and the checkbox is scrolled into view.
+      expect(await screen.findByText('You must accept the terms to continue')).toBeInTheDocument();
+      expect(submitMock).not.toHaveBeenCalled();
+      expect(scrollIntoView).toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it('submits successfully, tracks the event, and redirects after the success hold', async () => {
@@ -183,13 +218,15 @@ describe('StepTerms', () => {
     renderStep(draft);
 
     await user.click(screen.getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: /submit application/i }));
+    const [submitBtn] = screen.getAllByRole('button', { name: /submit application/i });
+    if (submitBtn === undefined) throw new Error('Submit button not rendered');
+    await user.click(submitBtn);
 
     // The action runs with the resolved expert profile id from the hydrated draft.
     await waitFor(() => expect(submitMock).toHaveBeenCalledWith('profile-1'));
 
     // Success state surfaces and the submitted event fires with the real counts.
-    await waitFor(() => expect(screen.getByText(/submitted!/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/submitted!/i)[0]).toBeInTheDocument());
     expect(trackMock).toHaveBeenCalledWith(
       EXPERT_EVENTS.APPLICATION_SUBMITTED,
       expect.objectContaining({ products_count: 2, certs_count: 1 })
@@ -208,7 +245,9 @@ describe('StepTerms', () => {
     renderStep(draft);
 
     await user.click(screen.getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: /submit application/i }));
+    const [submitBtn] = screen.getAllByRole('button', { name: /submit application/i });
+    if (submitBtn === undefined) throw new Error('Submit button not rendered');
+    await user.click(submitBtn);
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith('Server exploded'));
     expect(trackMock).toHaveBeenCalledWith(
@@ -216,7 +255,59 @@ describe('StepTerms', () => {
       expect.objectContaining({ error_message: 'Server exploded' })
     );
     // Button returns to its idle (re-submittable) label.
-    expect(screen.getByRole('button', { name: /submit application/i })).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('button', { name: /submit application/i }).length
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it('recovers when the submit action throws: resets state, toasts, and stays retryable', async () => {
+    const user = userEvent.setup();
+    // The action rejects (e.g. network failure) instead of returning a result —
+    // the catch path must release the latch and return the button to idle so the
+    // never-disabled button can never lock the user out.
+    submitMock.mockRejectedValueOnce(new Error('network down'));
+
+    renderStep(draft);
+
+    await user.click(screen.getByRole('checkbox'));
+    const [submitBtn] = screen.getAllByRole('button', { name: /submit application/i });
+    if (submitBtn === undefined) throw new Error('Submit button not rendered');
+    await user.click(submitBtn);
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        'Something went wrong submitting your application. Please try again.'
+      )
+    );
+    expect(trackMock).toHaveBeenCalledWith(
+      EXPERT_EVENTS.APPLICATION_SUBMIT_FAILED,
+      expect.objectContaining({ error_message: 'network down' })
+    );
+    // Latch released → the button is back to its idle, re-submittable label.
+    expect(screen.getAllByText('Submit Application').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('guards against double-submit: two synchronous clicks fire exactly one server mutation', async () => {
+    const user = userEvent.setup();
+    submitMock.mockResolvedValue({ success: true });
+
+    renderStep(draft);
+
+    // Accept the terms so form validation passes on submit.
+    await user.click(screen.getByRole('checkbox'));
+
+    const [submitBtn] = screen.getAllByRole('button', { name: /submit application/i });
+    if (submitBtn === undefined) throw new Error('Submit button not rendered');
+
+    // Two SYNCHRONOUS dispatches with no await between them: the second lands
+    // inside the first handler's `await form.trigger()` microtask window, before
+    // the reactive 'submitting' state can commit. The synchronous ref latch must
+    // swallow the second one so the server mutation runs exactly once.
+    fireEvent.click(submitBtn);
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => expect(submitMock).toHaveBeenCalled());
+    expect(submitMock).toHaveBeenCalledTimes(1);
   });
 
   it('routes to the failing step and toasts when submit returns a failingStep', async () => {
@@ -226,7 +317,9 @@ describe('StepTerms', () => {
     renderStep(draft);
 
     await user.click(screen.getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: /submit application/i }));
+    const [submitBtn] = screen.getAllByRole('button', { name: /submit application/i });
+    if (submitBtn === undefined) throw new Error('Submit button not rendered');
+    await user.click(submitBtn);
 
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(

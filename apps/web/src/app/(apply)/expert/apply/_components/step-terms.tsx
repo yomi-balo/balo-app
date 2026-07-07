@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Loader2, Check, Shield } from 'lucide-react';
+import { ChevronDown, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -22,8 +22,6 @@ interface StepTermsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }
 
-type SubmitState = 'idle' | 'submitting' | 'success';
-
 export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.Element {
   const router = useRouter();
   const {
@@ -36,10 +34,12 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     registerValidation,
     submitApplication,
     goToStep,
+    submitState,
+    setSubmitState,
+    registerSubmit,
   } = useWizard();
 
   const [summaryOpen, setSummaryOpen] = useState(true);
-  const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
 
   const form = useForm<TermsStepData>({
@@ -50,7 +50,16 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     mode: 'onSubmit',
   });
 
-  const termsAccepted = form.watch('termsAccepted');
+  // Scroll/focus target for the unchecked-box path. The ref lives on a wrapping
+  // <div> because FormItem/FormControl are plain function components (not
+  // forwardRef); the checkbox is then located by role.
+  const termsFieldRef = useRef<HTMLDivElement>(null);
+
+  // Synchronous double-submit latch. The reactive `submitState` guard reads a
+  // render snapshot, so two synchronous submit() dispatches before the first
+  // click's 'submitting' state commits would both pass and fire duplicate server
+  // mutations. This ref flips synchronously (before any await), closing that window.
+  const isSubmittingRef = useRef(false);
 
   // Sync form to context
   useEffect(() => {
@@ -86,46 +95,94 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     return () => viewport.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const handleSubmit = async (): Promise<void> => {
+  const handleSubmit = useCallback(async (): Promise<void> => {
+    // Guard double-clicks while submitting/success — the button is intentionally
+    // NOT disabled (per BAL-327), so this prevents a duplicate server call. The
+    // ref latch is the airtight guard (flips synchronously before the first
+    // await); the reactive `submitState` check is defense-in-depth for the
+    // post-commit case.
+    if (isSubmittingRef.current || submitState !== 'idle') return;
+    isSubmittingRef.current = true;
+
     const isValid = await form.trigger();
-    if (!isValid) return;
+    if (!isValid) {
+      // Release the latch first — an unchecked click must never permanently lock
+      // the button. Then surface the zod message, bring the checkbox into view,
+      // and focus it for screen-reader announcement.
+      isSubmittingRef.current = false;
+      const container = termsFieldRef.current;
+      container?.scrollIntoView({ block: 'center' });
+      container?.querySelector<HTMLElement>('[role="checkbox"]')?.focus({ preventScroll: true });
+      return;
+    }
 
     setSubmitState('submitting');
-    const result = await submitApplication();
+    try {
+      const result = await submitApplication();
 
-    if (result.success) {
-      setSubmitState('success');
+      if (result.success) {
+        setSubmitState('success');
 
-      track(EXPERT_EVENTS.APPLICATION_SUBMITTED, {
-        products_count: productsData.productIds?.length ?? 0,
-        certs_count: certificationsData.certifications?.length ?? 0,
-        work_history_count: workHistoryData.entries?.length ?? 0,
-      });
+        track(EXPERT_EVENTS.APPLICATION_SUBMITTED, {
+          products_count: productsData.productIds?.length ?? 0,
+          certs_count: certificationsData.certifications?.length ?? 0,
+          work_history_count: workHistoryData.entries?.length ?? 0,
+        });
 
-      // Hold success state for 1.2 seconds then redirect
-      setTimeout(() => {
-        router.push('/expert/apply/success');
-      }, 1200);
-    } else {
-      setSubmitState('idle');
-
-      if (result.failingStep) {
-        toast.error("Some fields need your attention. We've taken you to the first one.");
-        const stepIndex = STEP_CONFIG.findIndex((s) => s.key === result.failingStep);
-        if (stepIndex !== -1) {
-          goToStep(stepIndex);
-        }
+        // Hold success state for 1.2 seconds then redirect. The latch stays set —
+        // the component navigates away, so no re-submit is possible.
+        setTimeout(() => {
+          router.push('/expert/apply/success');
+        }, 1200);
       } else {
-        toast.error(
-          result.error ?? 'Something went wrong submitting your application. Please try again.'
-        );
-      }
+        // Release the latch so the user can retry after a failed submit.
+        isSubmittingRef.current = false;
+        setSubmitState('idle');
 
+        if (result.failingStep) {
+          toast.error("Some fields need your attention. We've taken you to the first one.");
+          const stepIndex = STEP_CONFIG.findIndex((s) => s.key === result.failingStep);
+          if (stepIndex !== -1) {
+            goToStep(stepIndex);
+          }
+        } else {
+          toast.error(
+            result.error ?? 'Something went wrong submitting your application. Please try again.'
+          );
+        }
+
+        track(EXPERT_EVENTS.APPLICATION_SUBMIT_FAILED, {
+          error_message: result.error ?? 'Unknown error',
+        });
+      }
+    } catch (error) {
+      // The server action threw (e.g. network failure) instead of returning
+      // `{ success: false }`. Release the latch and reset state so the
+      // never-disabled button stays retryable rather than locking forever.
+      isSubmittingRef.current = false;
+      setSubmitState('idle');
+      toast.error('Something went wrong submitting your application. Please try again.');
       track(EXPERT_EVENTS.APPLICATION_SUBMIT_FAILED, {
-        error_message: result.error ?? 'Unknown error',
+        error_message: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-  };
+  }, [
+    submitState,
+    form,
+    submitApplication,
+    setSubmitState,
+    productsData,
+    certificationsData,
+    workHistoryData,
+    router,
+    goToStep,
+  ]);
+
+  // Register the submit handler so the relocated bar button can invoke it
+  // (mirrors the registerValidation effect above).
+  useEffect(() => {
+    registerSubmit(handleSubmit);
+  }, [registerSubmit, handleSubmit]);
 
   // Build summary data
   const summaryItems = [
@@ -259,34 +316,36 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         </div>
 
         {/* Checkbox agreement */}
-        <FormField
-          control={form.control}
-          name="termsAccepted"
-          render={({ field }) => (
-            <FormItem>
-              <div className="flex items-start gap-3">
-                <FormControl>
-                  <Checkbox
-                    id="terms-accepted"
-                    checked={field.value === true}
-                    onCheckedChange={field.onChange}
-                  />
-                </FormControl>
-                <label
-                  htmlFor="terms-accepted"
-                  className="text-foreground cursor-pointer text-sm leading-snug font-medium"
-                >
-                  I have read and agree to the Balo Expert Terms & Conditions
-                </label>
-              </div>
-              <p className="text-muted-foreground mt-2 ml-7 text-xs">
-                By submitting, you agree to our platform guidelines, community standards, and
-                payment terms.
-              </p>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        <div ref={termsFieldRef}>
+          <FormField
+            control={form.control}
+            name="termsAccepted"
+            render={({ field }) => (
+              <FormItem>
+                <div className="flex items-start gap-3">
+                  <FormControl>
+                    <Checkbox
+                      id="terms-accepted"
+                      checked={field.value === true}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <label
+                    htmlFor="terms-accepted"
+                    className="text-foreground cursor-pointer text-sm leading-snug font-medium"
+                  >
+                    I have read and agree to the Balo Expert Terms & Conditions
+                  </label>
+                </div>
+                <p className="text-muted-foreground mt-2 ml-7 text-xs">
+                  By submitting, you agree to our platform guidelines, community standards, and
+                  payment terms.
+                </p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
 
         {/* Application summary */}
         <Collapsible open={summaryOpen} onOpenChange={setSummaryOpen}>
@@ -327,62 +386,6 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
             </div>
           </CollapsibleContent>
         </Collapsible>
-
-        {/* Submit button */}
-        <div className="mt-8 text-center">
-          <Button
-            type="button"
-            size="lg"
-            className={cn(
-              'w-full rounded-xl px-8 py-3 shadow-lg transition-all duration-300 sm:w-auto',
-              submitState === 'success' && 'bg-success hover:bg-success text-success-foreground',
-              !termsAccepted && 'cursor-not-allowed opacity-50',
-              termsAccepted && submitState === 'idle' && 'hover:shadow-primary/20 hover:shadow-xl'
-            )}
-            disabled={!termsAccepted || submitState !== 'idle'}
-            onClick={() => void handleSubmit()}
-          >
-            <AnimatePresence mode="wait">
-              {submitState === 'idle' && (
-                <motion.span
-                  key="idle"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  Submit Application
-                </motion.span>
-              )}
-              {submitState === 'submitting' && (
-                <motion.span
-                  key="submitting"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="inline-flex items-center gap-2"
-                >
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  Submitting your application...
-                </motion.span>
-              )}
-              {submitState === 'success' && (
-                <motion.span
-                  key="success"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="inline-flex items-center gap-2"
-                >
-                  <Check className="h-4 w-4" aria-hidden="true" />
-                  Submitted!
-                </motion.span>
-              )}
-            </AnimatePresence>
-          </Button>
-        </div>
 
         <p className="text-muted-foreground mt-3 text-center text-xs">
           You can continue using Balo as a client while we review your application. We&apos;ll email
