@@ -29,6 +29,27 @@ describe('roleHasCapability — MANAGE_MEMBERS (the approve/decline gate)', () =
   });
 });
 
+describe('roleHasCapability — MANAGE_BILLING (the billing-management gate)', () => {
+  it('grants MANAGE_BILLING to owner', () => {
+    expect(roleHasCapability('owner', CAPABILITIES.MANAGE_BILLING)).toBe(true);
+  });
+
+  it('grants MANAGE_BILLING to admin', () => {
+    expect(roleHasCapability('admin', CAPABILITIES.MANAGE_BILLING)).toBe(true);
+  });
+
+  // MANAGE_BILLING is a DISTINCT token from MANAGE_MEMBERS (ADR-1029's future
+  // `finance` role manages billing without managing members). Today owner/admin
+  // only; base members must NOT hold it.
+  it('DENIES MANAGE_BILLING to a company member', () => {
+    expect(roleHasCapability('member', CAPABILITIES.MANAGE_BILLING)).toBe(false);
+  });
+
+  it('DENIES MANAGE_BILLING to an agency expert', () => {
+    expect(roleHasCapability('expert', CAPABILITIES.MANAGE_BILLING)).toBe(false);
+  });
+});
+
 describe('roleHasCapability — the base member bundle', () => {
   it('grants the member bundle (participate/manage_requests/approve_own_proposals) to member', () => {
     expect(roleHasCapability('member', CAPABILITIES.PARTICIPATE)).toBe(true);
@@ -69,6 +90,10 @@ describe('roleHasCapability — unknown role', () => {
 describe('rolesWithCapability', () => {
   it('returns exactly [owner, admin] for MANAGE_MEMBERS (admin-role fan-out source of truth)', () => {
     expect(rolesWithCapability(CAPABILITIES.MANAGE_MEMBERS)).toEqual(['owner', 'admin']);
+  });
+
+  it('returns exactly [owner, admin] for MANAGE_BILLING', () => {
+    expect(rolesWithCapability(CAPABILITIES.MANAGE_BILLING)).toEqual(['owner', 'admin']);
   });
 
   it('returns all four roles for a base-member capability', () => {

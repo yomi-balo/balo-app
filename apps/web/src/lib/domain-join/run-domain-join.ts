@@ -32,6 +32,7 @@ import {
 
 export interface DomainJoinResult {
   outcome:
+    | 'unverified'
     | 'no_domain'
     | 'blocked'
     | 'no_match'
@@ -62,7 +63,10 @@ export interface RunDomainJoinInput {
  */
 export async function runDomainJoin(input: RunDomainJoinInput): Promise<DomainJoinResult> {
   // 1. Verified gate (HARD, defence-in-depth) — never match an unverified email.
-  if (!input.emailVerified) return { outcome: 'no_domain' };
+  //    A dedicated 'unverified' stand-down (distinct from 'no_domain', which means
+  //    a verified email had no usable/owned domain). Like every non-matched outcome
+  //    it carries no `mode`/`partyType`, so it fires NO analytics and NO notification.
+  if (!input.emailVerified) return { outcome: 'unverified' };
 
   // 2. Extract + normalise the email domain.
   const domain = extractEmailDomain(input.email);

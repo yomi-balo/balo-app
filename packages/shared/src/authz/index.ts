@@ -31,6 +31,13 @@ export const CAPABILITIES = {
    * ONLY. This is the capability the BAL-345 approve/decline actions check.
    */
   MANAGE_MEMBERS: 'manage_members',
+  /**
+   * The billing-management gate — owner/admin ONLY today, but DISTINCT from
+   * `MANAGE_MEMBERS` on purpose: ADR-1029's future `finance` role manages billing
+   * WITHOUT managing members. Kept separate so the map stays the single point that
+   * decides who can manage billing (no coupling to member management).
+   */
+  MANAGE_BILLING: 'manage_billing',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -43,8 +50,14 @@ const MEMBER_BUNDLE: readonly Capability[] = [
   CAPABILITIES.APPROVE_OWN_PROPOSALS,
 ];
 
-// The admin bundle = everything a member has PLUS member management.
-const ADMIN_BUNDLE: readonly Capability[] = [...MEMBER_BUNDLE, CAPABILITIES.MANAGE_MEMBERS];
+// The admin bundle = everything a member has PLUS member management + billing
+// management. (`MANAGE_BILLING` is a distinct token so a future `finance` role can
+// hold it without `MANAGE_MEMBERS`.)
+const ADMIN_BUNDLE: readonly Capability[] = [
+  ...MEMBER_BUNDLE,
+  CAPABILITIES.MANAGE_MEMBERS,
+  CAPABILITIES.MANAGE_BILLING,
+];
 
 /**
  * Static, membership-axis-only role→capability map. Company roles are

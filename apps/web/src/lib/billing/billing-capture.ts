@@ -22,13 +22,17 @@ export type CompanyRole = 'owner' | 'admin' | 'member';
  * authoritative re-check).
  *
  * BAL-345 authz seam: the pure static map (`@balo/shared/authz`) is now the single
- * source of truth for role→capability. Server-side gates call
- * `hasCapability(actor, 'manage_members', { companyId })` (apps/web/src/lib/authz);
- * this sync helper is client-safe (pure, no `@balo/db`) so it stays in the map.
- * `owner`/`admin` == the `MANAGE_MEMBERS` bundle, matching the prior gate exactly.
+ * source of truth for role→capability. This seam gates billing on the dedicated
+ * `manage_billing` capability (NOT `manage_members`) — ADR-1029's future `finance`
+ * role manages billing WITHOUT managing members, so the two must not be coupled.
+ * The async server seam `hasCapability(actor, 'manage_billing', { companyId })`
+ * (apps/web/src/lib/authz) resolves the same capability from this map for live
+ * gates; billing uses this sync helper, which is client-safe (pure, no `@balo/db`)
+ * so it stays a bundle-safe import of the map. `owner`/`admin` hold `MANAGE_BILLING`,
+ * matching the prior owner/admin gate exactly.
  */
 export function canManageBilling(role: CompanyRole): boolean {
-  return roleHasCapability(role, CAPABILITIES.MANAGE_MEMBERS);
+  return roleHasCapability(role, CAPABILITIES.MANAGE_BILLING);
 }
 
 /** The captured company billing identity, for the read-only success view + edit prefill. */

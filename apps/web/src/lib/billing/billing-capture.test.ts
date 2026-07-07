@@ -3,12 +3,12 @@ import { canManageBilling, type CompanyRole } from './billing-capture';
 
 /**
  * BAL-345 — `canManageBilling` now delegates to the pure `@balo/shared/authz` map
- * (roleHasCapability(role, MANAGE_MEMBERS)) instead of an inline `role === 'owner'
+ * (roleHasCapability(role, MANAGE_BILLING)) instead of an inline `role === 'owner'
  * || role === 'admin'`. This asserts the fold-in preserved the exact owner/admin
  * gate. `@balo/shared/authz` is pure (bundle-safe) so this needs no mocks.
  */
 describe('canManageBilling (BAL-345 authz fold-in)', () => {
-  it('grants owner and admin (the MANAGE_MEMBERS bundle)', () => {
+  it('grants owner and admin (they hold MANAGE_BILLING)', () => {
     expect(canManageBilling('owner')).toBe(true);
     expect(canManageBilling('admin')).toBe(true);
   });

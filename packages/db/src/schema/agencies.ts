@@ -47,6 +47,11 @@ export const agencyMembers = pgTable(
 
     // BAL-345: soft-delete + attribution (ADR-1030), symmetric with company_members.
     ...softDelete,
+    // ON DELETE RESTRICT (not CASCADE/SET NULL). Safe in v1 ONLY because the escape
+    // hatch is SELF-removal (deletedByUserId === the row's own userId), so on a
+    // user hard-delete this column cascades away WITH the user. The first
+    // ADMIN-removal path (a different actor as deleter) will require a delete-user
+    // anonymization/null phase for this column before RESTRICT can be honoured.
     deletedByUserId: uuid('deleted_by_user_id').references(() => users.id, {
       onDelete: 'restrict',
     }),

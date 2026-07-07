@@ -70,13 +70,13 @@ beforeEach(() => {
 // ── Decision tree ───────────────────────────────────────────────
 
 describe('runDomainJoin — decision tree', () => {
-  it('unverified email → no_domain (no repo calls)', async () => {
+  it('unverified email → unverified (no repo calls)', async () => {
     const result = await runDomainJoin({
       userId: USER_ID,
       email: CORP_EMAIL,
       emailVerified: false,
     });
-    expect(result).toEqual({ outcome: 'no_domain' });
+    expect(result).toEqual({ outcome: 'unverified' });
     expect(mockFindActiveByDomain).not.toHaveBeenCalled();
   });
 
