@@ -17,6 +17,7 @@ import {
   engagementFactory,
   engagementMilestoneFactory,
   expertDraftFactory,
+  projectRequestFactory,
   proposalFactory,
   userFactory,
 } from '../test/factories';
@@ -353,6 +354,61 @@ describe('engagementsRepository.findById / listByCompany', () => {
     const afterDelete = await engagementsRepository.listByCompany(companyId);
     expect(afterDelete.map((e) => e.id)).not.toContain(e1.id);
     expect(afterDelete.map((e) => e.id)).toContain(e2.id);
+  });
+});
+
+describe('engagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', () => {
+  it('returns the live engagement id for a request that has one', async () => {
+    const { engagement } = await engagementFactory({ withSourceProposal: true });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    expect(await engagementsRepository.findIdByProjectRequestId(requestId)).toBe(engagement.id);
+  });
+
+  it('returns undefined for a request with no engagement (and for an unknown request id)', async () => {
+    const request = await projectRequestFactory();
+    expect(await engagementsRepository.findIdByProjectRequestId(request.id)).toBeUndefined();
+    expect(await engagementsRepository.findIdByProjectRequestId(randomUUID())).toBeUndefined();
+  });
+
+  it('returns undefined when the only engagement for the request is soft-deleted', async () => {
+    const { engagement } = await engagementFactory({ withSourceProposal: true });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+
+    expect(await engagementsRepository.findIdByProjectRequestId(requestId)).toBeUndefined();
+  });
+
+  it('returns the LIVE id when a soft-deleted engagement co-exists for the same request', async () => {
+    const { engagement, companyId, expertProfileId } = await engagementFactory({
+      withSourceProposal: true,
+    });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    // Soft-delete the original, then re-create a live one for the same request
+    // (the partial unique index permits this).
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+    const replacement = await engagementsRepository.create({
+      companyId,
+      expertProfileId,
+      projectRequestId: requestId,
+      pricingMethod: 'fixed',
+      priceCents: 2000,
+    });
+
+    const found = await engagementsRepository.findIdByProjectRequestId(requestId);
+    expect(found).toBe(replacement.id);
+    expect(found).not.toBe(engagement.id);
   });
 });
 
@@ -1005,6 +1061,86 @@ describe('engagementsRepository.findEngagementWithMilestones', () => {
       .where(eq(engagements.id, engagement.id));
     expect(await engagementsRepository.findEngagementWithMilestones(engagement.id)).toBeUndefined();
     expect(await engagementsRepository.findEngagementWithMilestones(randomUUID())).toBeUndefined();
+  });
+});
+
+describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additive projections', () => {
+  it('hydrates the client company name and the source request title (PII-safe projections)', async () => {
+    const [company] = await db
+      .insert(companies)
+      .values({ name: 'Northwind Industrial', isPersonal: false })
+      .returning();
+    if (company === undefined) throw new Error('company insert failed');
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ title: 'Salesforce CPQ rollout' });
+
+    const engagement = await engagementsRepository.create({
+      companyId: company.id,
+      expertProfileId: expert.id,
+      projectRequestId: request.id,
+      pricingMethod: 'fixed',
+      priceCents: 300_000,
+    });
+
+    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    expect(hydrated?.company.name).toBe('Northwind Industrial');
+    expect(hydrated?.projectRequest?.title).toBe('Salesforce CPQ rollout');
+
+    // SECURITY: company is projected to {id, name} only — never the client's
+    // billing secrets/PII (stripe_customer_id, credit_balance, domain, …).
+    expect(hydrated?.company).not.toHaveProperty('stripeCustomerId');
+    expect(hydrated?.company).not.toHaveProperty('creditBalance');
+    expect(Object.keys(hydrated?.company ?? {}).sort()).toEqual(['id', 'name']);
+    // projectRequest carries only {id, title} — not description/budget/timeline.
+    expect(hydrated?.projectRequest).not.toHaveProperty('description');
+    expect(hydrated?.projectRequest).not.toHaveProperty('budgetMinCents');
+    expect(Object.keys(hydrated?.projectRequest ?? {}).sort()).toEqual(['id', 'title']);
+  });
+
+  it('projectRequest is null for a retainer-shaped engagement (no project_request_id)', async () => {
+    // The default engagementFactory seeds NO origination provenance (the retainer seam).
+    const { engagement } = await engagementFactory();
+    expect(engagement.projectRequestId).toBeNull();
+
+    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    expect(hydrated?.projectRequest).toBeNull();
+  });
+
+  it('acceptedBy / changeRequestedBy are null when unset', async () => {
+    const { engagement } = await engagementFactory();
+    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    expect(hydrated?.acceptedBy).toBeNull();
+    expect(hydrated?.changeRequestedBy).toBeNull();
+  });
+
+  it('hydrates acceptedBy / changeRequestedBy client-person names when set (PII-safe)', async () => {
+    // D1 ships no write repo for these transitions in the read path, so set the
+    // attribution columns directly in the arrange step.
+    const acceptor = await userFactory({ firstName: 'Dana', lastName: 'Client' });
+    const changeRequester = await userFactory({ firstName: 'Riley', lastName: 'Buyer' });
+    const { engagement } = await engagementFactory();
+    await db
+      .update(engagements)
+      .set({
+        acceptedByUserId: acceptor.id,
+        changeRequestedByUserId: changeRequester.id,
+      })
+      .where(eq(engagements.id, engagement.id));
+
+    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    expect(hydrated?.acceptedBy?.firstName).toBe('Dana');
+    expect(hydrated?.acceptedBy?.lastName).toBe('Client');
+    expect(hydrated?.changeRequestedBy?.firstName).toBe('Riley');
+    expect(hydrated?.changeRequestedBy?.lastName).toBe('Buyer');
+
+    // SECURITY: each attributed client person is projected to {id, firstName,
+    // lastName} only — no workos_id / email / phone leak.
+    for (const person of [hydrated?.acceptedBy, hydrated?.changeRequestedBy]) {
+      expect(person).not.toHaveProperty('workosId');
+      expect(person).not.toHaveProperty('email');
+      expect(person).not.toHaveProperty('phone');
+      expect(Object.keys(person ?? {}).sort()).toEqual(['firstName', 'id', 'lastName']);
+    }
   });
 });
 

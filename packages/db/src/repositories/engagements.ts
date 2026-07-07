@@ -240,6 +240,18 @@ function queryEngagementWithMilestones(id: string) {
           agency: { columns: { id: true, name: true, logoUrl: true } },
         },
       },
+      // BAL-331 delivery workspace: all additive, all `columns:`-projected, PII-safe
+      // (same discipline as `expertProfile` above — never bundle a full row).
+      //   - company: the client party's display name for per-lens headers.
+      //   - projectRequest: the header title (LEFT-JOIN `one` → null for a retainer
+      //     engagement with no `project_request_id`; the caller falls back).
+      //   - acceptedBy / changeRequestedBy: retrospective client-person attribution
+      //     (each nullable — `acceptedBy` is NULL on the D7 auto path, and both are
+      //     NULL until the corresponding transition happens).
+      company: { columns: { id: true, name: true } },
+      projectRequest: { columns: { id: true, title: true } },
+      acceptedBy: { columns: { id: true, firstName: true, lastName: true } },
+      changeRequestedBy: { columns: { id: true, firstName: true, lastName: true } },
     },
   });
 }
@@ -446,6 +458,21 @@ export const engagementsRepository = {
     return db.query.engagements.findFirst({
       where: and(eq(engagements.id, id), isNull(engagements.deletedAt)),
     });
+  },
+
+  /**
+   * The live engagement id for a source project request (BAL-331 deep-link
+   * resolution). At most one live engagement per request
+   * (`engagement_request_unique_idx`, partial on `project_request_id IS NOT NULL
+   * AND deleted_at IS NULL`), so `findFirst` is deterministic. Returns `undefined`
+   * for retainers / not-yet-approved requests / soft-deleted engagements.
+   */
+  async findIdByProjectRequestId(projectRequestId: string): Promise<string | undefined> {
+    const row = await db.query.engagements.findFirst({
+      where: and(eq(engagements.projectRequestId, projectRequestId), isNull(engagements.deletedAt)),
+      columns: { id: true },
+    });
+    return row?.id;
   },
 
   /** Live engagements for a company, newest first. */

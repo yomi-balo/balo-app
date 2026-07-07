@@ -481,6 +481,67 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
   });
 });
 
+describe('RequestDetailShell — delivery-workspace deep-link (BAL-331)', () => {
+  it('renders the "View delivery workspace" link at kickoff_approved when an engagement id is set', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'kickoff_approved', kickoff: kickoff({ approved: true }) })}
+        ctx={ctx()}
+        conversation={conversation()}
+        deliveryEngagementId="eng-42"
+      />
+    );
+    const link = screen.getByRole('link', { name: /View delivery workspace/i });
+    expect(link).toHaveAttribute('href', '/engagements/eng-42?from=request_detail');
+  });
+
+  it('surfaces the link for the delivering expert lens too', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'kickoff_approved',
+          viewerRelationshipStatus: 'accepted',
+          kickoff: kickoff({ approved: true }),
+        })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+        conversation={conversation()}
+        deliveryEngagementId="eng-42"
+      />
+    );
+    expect(screen.getByRole('link', { name: /View delivery workspace/i })).toHaveAttribute(
+      'href',
+      '/engagements/eng-42?from=request_detail'
+    );
+  });
+
+  it('omits the link when no delivery engagement id is provided', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'kickoff_approved', kickoff: kickoff({ approved: true }) })}
+        ctx={ctx()}
+        conversation={conversation()}
+      />
+    );
+    expect(
+      screen.queryByRole('link', { name: /View delivery workspace/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('omits the link at earlier statuses (the page only resolves an id at kickoff_approved)', () => {
+    // The page passes `deliveryEngagementId` ONLY at kickoff_approved, so a pre-
+    // kickoff request never carries one → no link.
+    render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
+    expect(
+      screen.queryByRole('link', { name: /View delivery workspace/i })
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
   it('renders the KickoffBoard in the admin observer right column when kickoff is populated', () => {
     render(
