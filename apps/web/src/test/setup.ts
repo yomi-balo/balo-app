@@ -82,6 +82,7 @@ vi.mock('@/lib/analytics', async () => {
     CONVERSATION_EVENTS: events.CONVERSATION_EVENTS,
     PROJECTS_INBOX_EVENTS: events.PROJECTS_INBOX_EVENTS,
     BILLING_EVENTS: events.BILLING_EVENTS,
+    ADMIN_ENGAGEMENTS_EVENTS: events.ADMIN_ENGAGEMENTS_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

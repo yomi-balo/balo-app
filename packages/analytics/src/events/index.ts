@@ -74,3 +74,8 @@ export {
   type EngagementWorkspaceLens,
   type EngagementWorkspaceEntry,
 } from './engagement';
+export {
+  ADMIN_ENGAGEMENTS_EVENTS,
+  type AdminEngagementsEventMap,
+  type AdminEngagementsFilter,
+} from './admin-engagements';

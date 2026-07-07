@@ -115,4 +115,11 @@ describe('AdminDash', () => {
       from_filter: 'all',
     });
   });
+
+  it('cross-links to the delivery oversight list from the pipeline section', () => {
+    render(<AdminDash dto={DTO} />);
+    const pipeline = screen.getByRole('region', { name: /pipeline by stage/i });
+    const link = within(pipeline).getByRole('link', { name: /delivery oversight/i });
+    expect(link).toHaveAttribute('href', '/engagements');
+  });
 });

@@ -1,6 +1,7 @@
 'use client';
 
-import { AlertCircle, Briefcase, Clock, Zap } from 'lucide-react';
+import Link from 'next/link';
+import { AlertCircle, ArrowRight, Briefcase, Clock, Zap } from 'lucide-react';
 import type { AdminPortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
 import { StatTiles, type StatTileDescriptor } from './stat-tiles';
 import { AdminTriageCard } from './admin-triage-card';
@@ -76,11 +77,22 @@ export function AdminDash({ dto }: Readonly<AdminDashProps>): React.JSX.Element 
       )}
 
       <section aria-label="Pipeline by stage">
-        <div className="mb-2.5 flex items-center gap-2">
-          <Briefcase className="text-muted-foreground h-4 w-4" aria-hidden="true" />
-          <span className="text-muted-foreground text-xs font-bold tracking-wider uppercase">
-            Pipeline by stage
-          </span>
+        <div className="mb-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Briefcase className="text-muted-foreground h-4 w-4" aria-hidden="true" />
+            <span className="text-muted-foreground text-xs font-bold tracking-wider uppercase">
+              Pipeline by stage
+            </span>
+          </div>
+          {/* Cross-link to the delivery oversight list — the pipeline ends at
+              kickoff; the engagements list begins there ("after the board"). */}
+          <Link
+            href="/engagements"
+            className="text-primary focus-visible:ring-ring inline-flex shrink-0 items-center gap-1 rounded text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+          >
+            Delivery oversight
+            <ArrowRight className="h-3 w-3" aria-hidden="true" />
+          </Link>
         </div>
         <PipelineKanban columns={dto.kanban} />
       </section>
