@@ -160,6 +160,15 @@ describe('startMilestoneAction', () => {
     });
   });
 
+  it('is plan-locked during pending_acceptance review (BAL-334 D4 verify)', async () => {
+    mockFindEngagement.mockResolvedValue(engagement({ status: 'pending_acceptance' }));
+    expect(await startMilestoneAction(INPUT)).toEqual({
+      success: false,
+      error: 'The delivery plan is locked while the project is in review.',
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
   it('returns MILESTONE_GONE for a foreign milestoneId (IDOR)', async () => {
     expect(
       await startMilestoneAction({

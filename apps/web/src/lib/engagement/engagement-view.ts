@@ -132,7 +132,7 @@ export interface CountdownView {
   autoOnDate: string;
   /** Whole days remaining, clamped >= 0 (informational — no action in D1). */
   daysRemaining: number;
-  /** e.g. "5 days" / "1 day" / "0 days". */
+  /** Full pill label, e.g. "Auto-accepts in 5 days" / "Auto-accepts in 1 day" / "Auto-accepts today". */
   autoInLabel: string;
 }
 
@@ -179,6 +179,20 @@ export interface AdminOversightView {
   stalledNote: string | null;
 }
 
+export interface CompletionCardView {
+  /** The engagement has ≥1 live milestone (vs the retainer/embedded zero case). */
+  hasMilestones: boolean;
+  /** Live milestones still to complete (total − done), clamped ≥ 0. */
+  milestonesRemaining: number;
+  milestonesTotal: number;
+  /** The finish button is enabled: zero milestones OR every milestone done. */
+  canRequest: boolean;
+  /** Pre-derived card body — one of the three variants (zero / allDone / blocked). */
+  bodyCopy: string;
+  /** Pre-derived request-completion modal body (window + plan-lock + invoice copy). */
+  modalBody: string;
+}
+
 export interface EngagementWorkspaceView {
   engagementId: string;
   lens: EngagementLens;
@@ -197,6 +211,8 @@ export interface EngagementWorkspaceView {
   cancelledBanner: CancelledBannerView | null;
   emptyState: EmptyStateView | null;
   adminOversight: AdminOversightView | null;
+  /** Expert-lens + active only: the "Finish the project" card (D4); null otherwise. */
+  completionCard: CompletionCardView | null;
 }
 
 // ── Date / relative helpers (deterministic under TZ=UTC) ─────────────────────
@@ -233,8 +249,14 @@ function formatRelativeDays(from: Date, now: Date): string {
   return `${days}d ago`;
 }
 
-function pluralDays(n: number): string {
-  return `${n} day${n === 1 ? '' : 's'}`;
+/**
+ * The full auto-accept pill label. The final day (0 days remaining) reads
+ * "Auto-accepts today" — never the awkward "Auto-accepts in 0 days"; every other
+ * value keeps the singular/plural "Auto-accepts in N day(s)".
+ */
+function autoAcceptPillLabel(daysRemaining: number): string {
+  if (daysRemaining === 0) return 'Auto-accepts today';
+  return `Auto-accepts in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
 }
 
 // ── Derivations ──────────────────────────────────────────────────────────────
@@ -401,7 +423,11 @@ function deriveReviewBanner(
     const daysRemaining = Math.max(0, Math.ceil((autoOn.getTime() - now.getTime()) / DAY_MS));
     autoOnLabel = formatLongDate(autoOn);
     requestedAtLabel = formatShortDate(requestedAt);
-    countdown = { autoOnDate: autoOnLabel, daysRemaining, autoInLabel: pluralDays(daysRemaining) };
+    countdown = {
+      autoOnDate: autoOnLabel,
+      daysRemaining,
+      autoInLabel: autoAcceptPillLabel(daysRemaining),
+    };
   }
 
   if (lens === 'client') {
@@ -562,6 +588,54 @@ function deriveAdminOversight(
 }
 
 /**
+ * The expert "Finish the project" card (D4) — derived server-side, gated to the
+ * EXPERT lens on an `active` engagement (else null; the plan locks during review /
+ * terminal states). Copy is pre-derived here (incl. `AUTO_ACCEPT_DAYS`, party-named
+ * via `clientCompanyName`) so the client island stays a primitive-props impression
+ * surface and never value-imports `@balo/db`.
+ */
+function deriveCompletionCard(
+  engagement: EngagementWithMilestones,
+  lens: EngagementLens,
+  parties: EngagementParties
+): CompletionCardView | null {
+  if (lens !== 'expert') return null;
+  if (engagement.status !== 'active') return null;
+
+  const total = engagement.milestones.length;
+  const done = engagement.milestones.filter((m) => m.status === 'completed').length;
+  const remaining = Math.max(0, total - done);
+  const hasMilestones = total > 0;
+  const allDone = remaining === 0;
+  const canRequest = total === 0 || allDone;
+  const client = parties.clientCompanyName;
+
+  let bodyCopy: string;
+  if (total === 0) {
+    bodyCopy = `This project has no milestones — you can still send it for ${client}'s review, but a visible plan builds trust.`;
+  } else if (allDone) {
+    bodyCopy = `Every milestone is delivered. Marking complete sends the project to ${client} for review — ${client} can accept or request changes within ${AUTO_ACCEPT_DAYS} days, after which it's accepted automatically.`;
+  } else {
+    bodyCopy = `${remaining} of ${total} milestone${remaining === 1 ? '' : 's'} still to complete before the project can be sent for ${client}'s review.`;
+  }
+
+  const modalOpening =
+    total === 0
+      ? "This project has no milestones, so there's nothing blocking completion — but only send it if delivery is genuinely done. "
+      : `All ${total} milestones are delivered. `;
+  const modalBody = `${modalOpening}${client} reviews the whole project and can accept it or request changes within ${AUTO_ACCEPT_DAYS} days — after that it's accepted automatically. The delivery plan is locked while the project is in review, and Balo raises the final invoice once accepted.`;
+
+  return {
+    hasMilestones,
+    milestonesRemaining: remaining,
+    milestonesTotal: total,
+    canRequest,
+    bodyCopy,
+    modalBody,
+  };
+}
+
+/**
  * Map the hydrated engagement + resolved viewer context into the single
  * serializable workspace view. SERVER-ONLY (value-imports `AUTO_ACCEPT_DAYS` from
  * `@balo/db`) — the returned object is plain data safe to pass to any component.
@@ -616,5 +690,6 @@ export function mapEngagementToWorkspaceView(
     cancelledBanner: deriveCancelledBanner(engagement),
     emptyState: deriveEmptyState(engagement, ctx.lens, parties),
     adminOversight: deriveAdminOversight(engagement, ctx.lens, parties, now),
+    completionCard: deriveCompletionCard(engagement, ctx.lens, parties),
   };
 }

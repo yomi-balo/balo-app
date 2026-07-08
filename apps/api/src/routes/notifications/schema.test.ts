@@ -803,6 +803,132 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.completion_requested (BAL-334)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:completion_requested:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak Consulting',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      milestonesTotal: 4,
+      requestedDate: '4 Jul',
+      autoDate: '11 Jul',
+      reviewDays: 7,
+    };
+
+    it('accepts a valid payload', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.completion_requested', payload: valid })
+          .success
+      ).toBe(true);
+    });
+
+    it('accepts the payload without the optional recipientId (retainer / no-owner)', () => {
+      const { recipientId: _r, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.completion_requested', payload: rest })
+          .success
+      ).toBe(true);
+    });
+
+    it('accepts a suffixed correlationId but rejects one over 120 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.completion_requested',
+          payload: { ...valid, correlationId: 'a'.repeat(121) },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a non-uuid engagementId and a negative milestonesTotal', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.completion_requested',
+          payload: { ...valid, engagementId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.completion_requested',
+          payload: { ...valid, milestonesTotal: -1 },
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe('engagement.completion_withdrawn (BAL-334)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:completion_withdrawn:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+    };
+
+    it('accepts a valid payload (and without the optional recipientId)', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.completion_withdrawn', payload: valid })
+          .success
+      ).toBe(true);
+      const { recipientId: _r, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.completion_withdrawn', payload: rest })
+          .success
+      ).toBe(true);
+    });
+
+    it('rejects a missing actorExpertLabel and a non-uuid engagementId', () => {
+      const { actorExpertLabel: _a, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.completion_withdrawn', payload: rest })
+          .success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.completion_withdrawn',
+          payload: { ...valid, engagementId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe('engagement.cancelled (BAL-334)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:cancelled',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+      projectTitle: 'CPQ implementation',
+      cancelledOn: '9 Jul 2026',
+      reason: 'Client changed direction.',
+    };
+
+    it('accepts a valid payload (and without the optional recipientId)', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.cancelled', payload: valid }).success
+      ).toBe(true);
+      const { recipientId: _r, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.cancelled', payload: rest }).success
+      ).toBe(true);
+    });
+
+    it('rejects a missing expertProfileId and an empty reason', () => {
+      const { expertProfileId: _e, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.cancelled', payload: rest }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.cancelled',
+          payload: { ...valid, reason: '' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

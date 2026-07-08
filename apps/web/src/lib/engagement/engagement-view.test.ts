@@ -356,7 +356,7 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
     expect(view.reviewBanner?.countdown).toEqual({
       autoOnDate: '11 Jul 2026',
       daysRemaining: 4,
-      autoInLabel: '4 days',
+      autoInLabel: 'Auto-accepts in 4 days',
     });
   });
 
@@ -373,10 +373,10 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
       NOW
     );
     expect(view.reviewBanner?.countdown?.daysRemaining).toBe(5);
-    expect(view.reviewBanner?.countdown?.autoInLabel).toBe('5 days');
+    expect(view.reviewBanner?.countdown?.autoInLabel).toBe('Auto-accepts in 5 days');
   });
 
-  it('countdown clamps to 0 when the window has already elapsed', () => {
+  it('countdown clamps to 0 (final day) and labels it "Auto-accepts today"', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
         status: 'pending_acceptance',
@@ -386,7 +386,8 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
       NOW
     );
     expect(view.reviewBanner?.countdown?.daysRemaining).toBe(0);
-    expect(view.reviewBanner?.countdown?.autoInLabel).toBe('0 days');
+    // Final day reads "Auto-accepts today", never "Auto-accepts in 0 days".
+    expect(view.reviewBanner?.countdown?.autoInLabel).toBe('Auto-accepts today');
   });
 
   it('expert review banner names the client company, not the person', () => {
@@ -634,5 +635,83 @@ describe('mapEngagementToWorkspaceView — admin oversight', () => {
     expect(view.adminOversight?.stalled).toBe(true);
     expect(view.adminOversight?.stalledNote).toContain('CloudPeak Consulting');
     expect(view.adminOversight?.stalledNote).not.toContain('Priya');
+  });
+});
+
+describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
+  it('is null for the client and admin lenses', () => {
+    expect(
+      mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW).completionCard
+    ).toBeNull();
+    expect(
+      mapEngagementToWorkspaceView(makeEngagement(), ctxFor('admin'), NOW).completionCard
+    ).toBeNull();
+  });
+
+  it('is null for the expert lens on a non-active engagement', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.completionCard).toBeNull();
+  });
+
+  it('zero milestones: enabled, "no milestones" body + modal copy', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [] }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.completionCard).toMatchObject({
+      hasMilestones: false,
+      milestonesRemaining: 0,
+      milestonesTotal: 0,
+      canRequest: true,
+    });
+    expect(view.completionCard?.bodyCopy).toContain('no milestones');
+    expect(view.completionCard?.bodyCopy).toContain("Northwind Industrial's review");
+    expect(view.completionCard?.modalBody).toContain('no milestones');
+  });
+
+  it('all milestones done: enabled, "Every milestone is delivered" body', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [makeMilestone({ status: 'completed' })] }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.completionCard).toMatchObject({
+      hasMilestones: true,
+      milestonesRemaining: 0,
+      milestonesTotal: 1,
+      canRequest: true,
+    });
+    expect(view.completionCard?.bodyCopy).toContain('Every milestone is delivered.');
+    // The window length is baked into the copy (server-derived, not client-imported).
+    expect(view.completionCard?.bodyCopy).toContain('7 days');
+    expect(view.completionCard?.modalBody).toContain('All 1 milestones are delivered.');
+  });
+
+  it('blocked: disabled, remaining count + "still to complete" body', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        milestones: [
+          makeMilestone({ id: 'ms-a', status: 'completed' }),
+          makeMilestone({ id: 'ms-b', status: 'pending' }),
+        ],
+      }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.completionCard).toMatchObject({
+      hasMilestones: true,
+      milestonesRemaining: 1,
+      milestonesTotal: 2,
+      canRequest: false,
+    });
+    // Singular "milestone" when exactly one remains.
+    expect(view.completionCard?.bodyCopy).toBe(
+      "1 of 2 milestone still to complete before the project can be sent for Northwind Industrial's review."
+    );
   });
 });

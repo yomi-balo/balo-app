@@ -272,6 +272,50 @@ const engagementScopeChangedPayload = z.object({
   changeSummary: z.string().min(1).max(240),
 });
 
+// BAL-334 (D4) expert requested project completion (expert → client owner + admins).
+// `correlationId` = `${engagementId}:completion_requested:${requestedAtMs}` (z.string
+// not z.uuid so the epoch suffix validates). `recipientId` is the client company owner
+// (recipient:'client'; optional — absent for retainers/no-owner). Mirrors
+// packages/shared/src/notifications/index.ts.
+const engagementCompletionRequestedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  clientCompanyName: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  actorExpertLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  milestonesTotal: z.number().int().nonnegative(),
+  requestedDate: z.string().min(1).max(40),
+  autoDate: z.string().min(1).max(40),
+  reviewDays: z.number().int().nonnegative(),
+});
+
+// BAL-334 (D4) expert withdrew the completion request (expert → client owner + admins).
+// `correlationId` = `${engagementId}:completion_withdrawn:${nowMs}`. Mirrors
+// packages/shared/src/notifications/index.ts.
+const engagementCompletionWithdrawnPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  actorExpertLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+});
+
+// BAL-334 (D4) admin cancelled the engagement (admin → client owner + expert).
+// `correlationId` = `${engagementId}:cancelled` (one-shot terminal transition).
+// `expertProfileId` → resolver hydrates data.expert (recipient:'expert'). Mirrors
+// packages/shared/src/notifications/index.ts.
+const engagementCancelledPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid(),
+  projectTitle: z.string().min(1).max(200),
+  cancelledOn: z.string().min(1).max(40),
+  reason: z.string().min(1).max(2000),
+});
+
 // BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the
 // subject (joiner/requester), `correlationId` the stable membership/request id.
 // One schema, reused for all four arms (DRY — the completeness guard still checks
@@ -365,6 +409,18 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.scope_changed'),
     payload: engagementScopeChangedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.completion_requested'),
+    payload: engagementCompletionRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.completion_withdrawn'),
+    payload: engagementCompletionWithdrawnPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.cancelled'),
+    payload: engagementCancelledPayload,
   }),
   z.object({
     event: z.literal('party.member_joined_via_domain'),

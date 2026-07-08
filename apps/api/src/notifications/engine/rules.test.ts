@@ -474,6 +474,68 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-334 engagement lifecycle events', () => {
+    it('completion_requested: client owner email + in-app AND admins in-app', () => {
+      const rules = notificationRules['engagement.completion_requested'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(3);
+
+      const clientRules = rules!.filter((r) => r.recipient === 'client');
+      expect(clientRules).toHaveLength(2);
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('engagement-completion-requested-client');
+      }
+      expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
+      expect(adminRules).toHaveLength(1);
+      expect(adminRules[0]).toMatchObject({
+        channel: 'in-app',
+        template: 'engagement-completion-requested-admin',
+        timing: 'immediate',
+      });
+    });
+
+    it('completion_withdrawn: client + admins, in-app ONLY, one shared template', () => {
+      const rules = notificationRules['engagement.completion_withdrawn'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.channel).toBe('in-app');
+        expect(rule.template).toBe('engagement-completion-withdrawn');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
+        'admin_users',
+        'client',
+      ]);
+      expect(rules!.some((r) => r.channel !== 'in-app')).toBe(false);
+    });
+
+    it('cancelled: client + expert email + in-app, one shared template, no admin recipient', () => {
+      const rules = notificationRules['engagement.cancelled'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(4);
+      for (const rule of rules!) {
+        expect(rule.template).toBe('engagement-cancelled');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
+        'client',
+        'client',
+        'expert',
+        'expert',
+      ]);
+      // Both parties get email + in-app; admins are never a recipient (they are the actor).
+      expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
+      expect(rules!.filter((r) => r.channel === 'email')).toHaveLength(2);
+      expect(rules!.filter((r) => r.channel === 'in-app')).toHaveLength(2);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {
