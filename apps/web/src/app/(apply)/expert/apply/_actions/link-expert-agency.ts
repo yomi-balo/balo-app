@@ -2,7 +2,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { expertsRepository, AgencyDomainCaptureConflictError } from '@balo/db';
+import { expertsRepository, usersRepository, AgencyDomainCaptureConflictError } from '@balo/db';
 import { withAuth } from '@/lib/auth/with-auth';
 import {
   runLinkExpertAgency,
@@ -26,8 +26,10 @@ const RETRYABLE_ERROR =
  *
  * Security (workos-auth):
  *   - `withAuth` guarantees a session (fails closed on no auth).
- *   - The outcome is RE-RESOLVED server-side from `session.user.email` — the client
- *     never supplies a `kind`; only the `expertProfileId` is accepted (Zod-validated).
+ *   - The outcome is RE-RESOLVED server-side from the DB-authoritative email + verified
+ *     flag (`users` row) — the client never supplies a `kind`; only the
+ *     `expertProfileId` is accepted (Zod-validated). An UNVERIFIED email re-resolves to
+ *     solo (ADR-1034 gate) → `provisionSolo`, never provision/join a domain.
  *   - Ownership is verified (`profile.userId === session.user.id`) before any write.
  *
  * FAILS CLOSED: any error (including a lost domain-capture race →
@@ -46,9 +48,19 @@ export const linkExpertAgencyAction = withAuth(
         return { success: false, error: 'Unauthorized' };
       }
 
+      // Authoritative user read — email + verified flag come from the DB (never the
+      // session copy), so the ADR-1034 verified-email gate reflects real state. An
+      // unverified email re-resolves to solo (no domain capture/join).
+      const dbUser = await usersRepository.findById(session.user.id);
+      if (dbUser === undefined) {
+        // Defensive: an authed user should always have a row. Fail closed, retryable.
+        return { success: false, error: RETRYABLE_ERROR };
+      }
+
       const result = await runLinkExpertAgency({
         userId: session.user.id,
-        email: session.user.email,
+        email: dbUser.email,
+        emailVerified: dbUser.emailVerified,
         firstName: session.user.firstName,
         lastName: session.user.lastName,
         expertProfileId,

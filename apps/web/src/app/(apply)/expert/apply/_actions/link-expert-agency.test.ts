@@ -4,27 +4,34 @@ import { log } from '@/lib/logging';
 // ── Mocks ───────────────────────────────────────────────────────
 // `@/lib/logging` is globally mocked in test/setup.ts.
 
-const { mockFindProfileById, mockRun, mockPublishNotifs, MockAgencyDomainCaptureConflictError } =
-  vi.hoisted(() => {
-    class MockAgencyDomainCaptureConflictError extends Error {
-      constructor(
-        public readonly domain: string,
-        public readonly captureOutcome: string
-      ) {
-        super(`Agency domain capture conflict for "${domain}"`);
-        this.name = 'AgencyDomainCaptureConflictError';
-      }
+const {
+  mockFindProfileById,
+  mockFindById,
+  mockRun,
+  mockPublishNotifs,
+  MockAgencyDomainCaptureConflictError,
+} = vi.hoisted(() => {
+  class MockAgencyDomainCaptureConflictError extends Error {
+    constructor(
+      public readonly domain: string,
+      public readonly captureOutcome: string
+    ) {
+      super(`Agency domain capture conflict for "${domain}"`);
+      this.name = 'AgencyDomainCaptureConflictError';
     }
-    return {
-      mockFindProfileById: vi.fn(),
-      mockRun: vi.fn(),
-      mockPublishNotifs: vi.fn(() => Promise.resolve()),
-      MockAgencyDomainCaptureConflictError,
-    };
-  });
+  }
+  return {
+    mockFindProfileById: vi.fn(),
+    mockFindById: vi.fn(),
+    mockRun: vi.fn(),
+    mockPublishNotifs: vi.fn(() => Promise.resolve()),
+    MockAgencyDomainCaptureConflictError,
+  };
+});
 
 vi.mock('@balo/db', () => ({
   expertsRepository: { findProfileById: mockFindProfileById },
+  usersRepository: { findById: mockFindById },
   AgencyDomainCaptureConflictError: MockAgencyDomainCaptureConflictError,
 }));
 
@@ -50,9 +57,11 @@ const RETRYABLE =
 beforeEach(() => {
   vi.clearAllMocks();
   mockSessionObj = {
-    user: { id: USER_ID, email: 'founder@acme.io', firstName: 'Jane', lastName: 'Doe' },
+    user: { id: USER_ID, email: 'session-copy@acme.io', firstName: 'Jane', lastName: 'Doe' },
   };
   mockFindProfileById.mockResolvedValue({ id: PROFILE_ID, userId: USER_ID, agencyId: null });
+  // DB is authoritative for email + verification state (never the session copy).
+  mockFindById.mockResolvedValue({ id: USER_ID, email: 'founder@acme.io', emailVerified: true });
 });
 
 describe('linkExpertAgencyAction', () => {
@@ -114,15 +123,37 @@ describe('linkExpertAgencyAction', () => {
 
     // The outcome is the SERVER-re-resolved one (solo), not the client's 'join'.
     expect(result).toEqual({ success: true, outcome: 'solo', agencyId: 'agency-solo' });
-    // runLinkExpertAgency receives only the trusted, session-derived fields — no `kind`.
+    // runLinkExpertAgency receives only trusted fields — email + emailVerified from the
+    // DB row (not the session copy), and no `kind`.
     expect(mockRun).toHaveBeenCalledWith({
       userId: USER_ID,
       email: 'founder@acme.io',
+      emailVerified: true,
       firstName: 'Jane',
       lastName: 'Doe',
       expertProfileId: PROFILE_ID,
     });
     expect(mockRun.mock.calls[0]?.[0]).not.toHaveProperty('kind');
+  });
+
+  it('passes emailVerified=false to the orchestrator for an UNVERIFIED user (write goes solo)', async () => {
+    mockFindById.mockResolvedValue({ id: USER_ID, email: 'founder@acme.io', emailVerified: false });
+    mockRun.mockResolvedValue({ outcome: 'solo', agencyId: 'agency-solo', fresh: true });
+
+    const result = await linkExpertAgencyAction({ expertProfileId: PROFILE_ID });
+
+    // Still succeeds — an unverified user is not blocked, just routed to solo.
+    expect(result).toEqual({ success: true, outcome: 'solo', agencyId: 'agency-solo' });
+    expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ emailVerified: false }));
+  });
+
+  it('fails CLOSED (retryable) when the authoritative user row is missing', async () => {
+    mockFindById.mockResolvedValue(undefined);
+
+    const result = await linkExpertAgencyAction({ expertProfileId: PROFILE_ID });
+
+    expect(result).toEqual({ success: false, error: RETRYABLE });
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it('fails CLOSED with a retryable message when the write throws', async () => {

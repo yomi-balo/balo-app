@@ -21,6 +21,11 @@ import type { LinkExpertAgencyOutcome } from './types';
 export interface LinkExpertAgencyInput {
   userId: string;
   email: string;
+  /**
+   * Authoritative (DB-sourced) verification state of `email`. ADR-1034: an unverified
+   * email re-resolves to SOLO — it can never provision or join a domain.
+   */
+  emailVerified: boolean;
   /** For the SOLO internal payout-entity name (never surfaced to the solo expert). */
   firstName: string | null;
   lastName: string | null;
@@ -53,8 +58,9 @@ export async function runLinkExpertAgency(input: LinkExpertAgencyInput): Promise
     return { outcome: 'already_linked', agencyId: existing.agencyId, fresh: false };
   }
 
-  // 1. Authoritative re-resolve from the (session) email — never trust the client.
-  const resolved = await resolveExpertAgency(input.email);
+  // 1. Authoritative re-resolve from the DB-sourced email + verified flag — never trust
+  //    the client. An unverified email short-circuits to solo (ADR-1034 gate).
+  const resolved = await resolveExpertAgency(input.email, input.emailVerified);
   const actorUserId = input.userId;
 
   switch (resolved.kind) {

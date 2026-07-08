@@ -18,6 +18,10 @@ export type { ResolveExpertAgencyResult } from './types';
  * repositories `findActiveByDomain` + `getSummaryById`.
  *
  * Decision tree (Decision 3 of the plan):
+ *   - email NOT verified                    → SOLO  (ADR-1034: agency membership is
+ *                                                     determined by the VERIFIED signup
+ *                                                     email — an unproven email must
+ *                                                     never provision/join a domain)
  *   - blocked / no usable domain            → SOLO  (freemail/disposable — independent)
  *   - domain unowned                        → PROVISION (signer becomes owner)
  *   - domain owned by a COMPANY             → SOLO  (an agency can't claim a company
@@ -27,11 +31,25 @@ export type { ResolveExpertAgencyResult } from './types';
  *                                             the company-only path)
  *   - domain owned by an AGENCY (row gone)  → PROVISION (defensive: dangling owner)
  *
+ * The verified-email gate is the FIRST check and short-circuits to SOLO BEFORE any
+ * domain lookup — so an unverified corporate email can neither provision (capture) a
+ * domain nor join an existing agency. This fails SAFE to the independent path
+ * (consistent with the "resolve fails open to solo" philosophy — never a hard block).
+ *
  * Agency JOIN is deliberately unconditional once `partyType==='agency'` — unlike
  * `resolveOnboardingCompanyAction`, agency membership is DETERMINED BY EMAIL and never
  * mode-gated.
  */
-export async function resolveExpertAgency(email: string): Promise<ResolveExpertAgencyResult> {
+export async function resolveExpertAgency(
+  email: string,
+  emailVerified: boolean
+): Promise<ResolveExpertAgencyResult> {
+  // ADR-1034 verified-email gate: an unverified email must NEVER provision or join a
+  // domain. Short-circuit to solo BEFORE any domain lookup (fail safe to independent).
+  if (emailVerified !== true) {
+    return { kind: 'solo' };
+  }
+
   const domain = extractEmailDomain(email);
   if (domain === null || isBlockedDomain(domain)) {
     return { kind: 'solo' };

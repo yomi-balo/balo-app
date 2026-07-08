@@ -53,6 +53,7 @@ function baseInput(over: Partial<Parameters<typeof runLinkExpertAgency>[0]> = {}
   return {
     userId: USER_ID,
     email: CORP_EMAIL,
+    emailVerified: true,
     firstName: 'Jane',
     lastName: 'Doe',
     expertProfileId: PROFILE_ID,
@@ -168,6 +169,29 @@ describe('runLinkExpertAgency', () => {
     expect(mockProvisionSolo).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Independent Expert' })
     );
+  });
+
+  it('UNVERIFIED email → SOLO (provisionSolo), even for an agency/company-owned domain', async () => {
+    mockFindProfileById.mockResolvedValue({ id: PROFILE_ID, userId: USER_ID, agencyId: null });
+    // Prime the domain as agency-owned — a verified email here would JOIN. The gate
+    // must short-circuit to solo before any domain lookup.
+    mockFindActiveByDomain.mockResolvedValue({ partyType: 'agency', partyId: 'agency-1' });
+    mockGetSummaryById.mockResolvedValue({ id: 'agency-1', name: 'Lattice', memberCount: 4 });
+    mockProvisionSolo.mockResolvedValue({ agencyId: 'agency-solo', ownerMembershipId: 'own-1' });
+
+    const result = await runLinkExpertAgency(baseInput({ emailVerified: false }));
+
+    expect(result).toEqual({ outcome: 'solo', agencyId: 'agency-solo', fresh: true });
+    expect(mockProvisionSolo).toHaveBeenCalledWith({
+      name: 'Jane Doe',
+      userId: USER_ID,
+      expertProfileId: PROFILE_ID,
+      actorUserId: USER_ID,
+    });
+    // Never provisions/joins a domain, never even looks the domain up.
+    expect(mockFindActiveByDomain).not.toHaveBeenCalled();
+    expect(mockProvision).not.toHaveBeenCalled();
+    expect(mockJoinExisting).not.toHaveBeenCalled();
   });
 
   it('surfaces a provision write error (lost capture race) to the caller', async () => {
