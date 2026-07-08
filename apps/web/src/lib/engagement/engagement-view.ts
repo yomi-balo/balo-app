@@ -486,7 +486,7 @@ function deriveCompletedBanner(
   if (lens === 'expert') {
     return {
       title: 'Project delivered',
-      body: `All ${total} milestones delivered and the project ${acceptedLine}. Balo has been notified.`,
+      body: `${total === 0 ? 'The project was delivered' : `All ${total} milestone${total === 1 ? '' : 's'} delivered`} and the project ${acceptedLine}. Balo has been notified.`,
       readyToInvoice: false,
     };
   }
@@ -501,7 +501,7 @@ function deriveCompletedBanner(
   }
   return {
     title: 'Project completed',
-    body: `Project ${acceptedLine} — ${total} milestones delivered.`,
+    body: `Project ${acceptedLine}${total === 0 ? '' : ` — ${total} milestone${total === 1 ? '' : 's'} delivered`}.`,
     readyToInvoice: true,
   };
 }
@@ -616,13 +616,18 @@ function deriveCompletionCard(
   } else if (allDone) {
     bodyCopy = `Every milestone is delivered. Marking complete sends the project to ${client} for review — ${client} can accept or request changes within ${AUTO_ACCEPT_DAYS} days, after which it's accepted automatically.`;
   } else {
-    bodyCopy = `${remaining} of ${total} milestone${remaining === 1 ? '' : 's'} still to complete before the project can be sent for ${client}'s review.`;
+    bodyCopy = `${remaining} of ${total} milestone${total === 1 ? '' : 's'} still to complete before the project can be sent for ${client}'s review.`;
   }
 
-  const modalOpening =
-    total === 0
-      ? "This project has no milestones, so there's nothing blocking completion — but only send it if delivery is genuinely done. "
-      : `All ${total} milestones are delivered. `;
+  let modalOpening: string;
+  if (total === 0) {
+    modalOpening =
+      "This project has no milestones, so there's nothing blocking completion — but only send it if delivery is genuinely done. ";
+  } else if (total === 1) {
+    modalOpening = 'The milestone is delivered. ';
+  } else {
+    modalOpening = `All ${total} milestones are delivered. `;
+  }
   const modalBody = `${modalOpening}${client} reviews the whole project and can accept it or request changes within ${AUTO_ACCEPT_DAYS} days — after that it's accepted automatically. The delivery plan is locked while the project is in review, and Balo raises the final invoice once accepted.`;
 
   return {

@@ -485,6 +485,34 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
       'accepted automatically on 30 Aug 2026 after the 7-day review window'
     );
   });
+
+  it('expert/admin count copy is singular at 1 and drops entirely at 0 (retainer seam)', () => {
+    const base = {
+      status: 'completed' as const,
+      acceptanceMethod: 'auto' as const,
+      acceptedBy: null,
+      acceptedAt: new Date('2026-08-30T00:00:00.000Z'),
+    };
+
+    // total === 1 → singular, never "1 milestones".
+    const one = makeEngagement({ ...base, milestones: [makeMilestone({ status: 'completed' })] });
+    const expertOne = mapEngagementToWorkspaceView(one, ctxFor('expert'), NOW);
+    expect(expertOne.completedBanner?.body).toContain('All 1 milestone delivered and the project');
+    expect(expertOne.completedBanner?.body).not.toContain('1 milestones');
+    const adminOne = mapEngagementToWorkspaceView(one, ctxFor('admin'), NOW);
+    expect(adminOne.completedBanner?.body).toContain('— 1 milestone delivered.');
+    expect(adminOne.completedBanner?.body).not.toContain('1 milestones');
+
+    // total === 0 → no count at all.
+    const zero = makeEngagement({ ...base, milestones: [] });
+    const expertZero = mapEngagementToWorkspaceView(zero, ctxFor('expert'), NOW);
+    expect(expertZero.completedBanner?.body).toContain('The project was delivered and the project');
+    expect(expertZero.completedBanner?.body).not.toContain('0 milestones');
+    const adminZero = mapEngagementToWorkspaceView(zero, ctxFor('admin'), NOW);
+    expect(adminZero.completedBanner?.body).not.toContain('0 milestones');
+    // The count clause is omitted → the body ends right after the acceptance clause.
+    expect(adminZero.completedBanner?.body).toMatch(/review window\.$/);
+  });
 });
 
 describe('mapEngagementToWorkspaceView — cancelled banner', () => {
@@ -689,15 +717,21 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
     expect(view.completionCard?.bodyCopy).toContain('Every milestone is delivered.');
     // The window length is baked into the copy (server-derived, not client-imported).
     expect(view.completionCard?.bodyCopy).toContain('7 days');
-    expect(view.completionCard?.modalBody).toContain('All 1 milestones are delivered.');
+    // Single-milestone modal opener is singular with subject/verb agreement, never
+    // the "All 1 milestones are delivered" bug.
+    expect(view.completionCard?.modalBody).toContain('The milestone is delivered.');
+    expect(view.completionCard?.modalBody).not.toContain('All 1 milestone');
   });
 
-  it('blocked: disabled, remaining count + "still to complete" body', () => {
+  it('blocked (remaining 1, total > 1): plural "milestones" keyed on TOTAL, not remaining', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
         milestones: [
           makeMilestone({ id: 'ms-a', status: 'completed' }),
-          makeMilestone({ id: 'ms-b', status: 'pending' }),
+          makeMilestone({ id: 'ms-b', status: 'completed' }),
+          makeMilestone({ id: 'ms-c', status: 'completed' }),
+          makeMilestone({ id: 'ms-d', status: 'completed' }),
+          makeMilestone({ id: 'ms-e', status: 'pending' }),
         ],
       }),
       ctxFor('expert'),
@@ -706,12 +740,29 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
     expect(view.completionCard).toMatchObject({
       hasMilestones: true,
       milestonesRemaining: 1,
-      milestonesTotal: 2,
+      milestonesTotal: 5,
       canRequest: false,
     });
-    // Singular "milestone" when exactly one remains.
+    // The noun agrees with TOTAL (5), so it stays plural even though exactly one remains.
     expect(view.completionCard?.bodyCopy).toBe(
-      "1 of 2 milestone still to complete before the project can be sent for Northwind Industrial's review."
+      "1 of 5 milestones still to complete before the project can be sent for Northwind Industrial's review."
+    );
+  });
+
+  it('blocked (total 1, single pending milestone): singular "1 of 1 milestone"', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [makeMilestone({ status: 'pending' })] }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.completionCard).toMatchObject({
+      hasMilestones: true,
+      milestonesRemaining: 1,
+      milestonesTotal: 1,
+      canRequest: false,
+    });
+    expect(view.completionCard?.bodyCopy).toBe(
+      "1 of 1 milestone still to complete before the project can be sent for Northwind Industrial's review."
     );
   });
 });

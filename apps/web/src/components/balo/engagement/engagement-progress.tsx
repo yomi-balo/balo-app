@@ -22,7 +22,9 @@ export function EngagementProgress({
         <p className="text-foreground text-xl font-semibold">
           {done} of {total}
         </p>
-        <p className="text-muted-foreground text-sm">milestones completed</p>
+        <p className="text-muted-foreground text-sm">
+          {total === 1 ? 'milestone' : 'milestones'} completed
+        </p>
         <span className="text-primary ml-auto text-xs font-semibold">{pct}%</span>
       </div>
       <div className="bg-muted mt-3 h-2 overflow-hidden rounded-full">

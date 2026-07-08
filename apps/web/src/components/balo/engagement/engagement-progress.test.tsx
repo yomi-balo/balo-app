@@ -67,4 +67,12 @@ describe('EngagementProgress', () => {
     expect(screen.getByText('5 of 5')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('value', '100');
   });
+
+  it('uses the singular noun when there is exactly one milestone', () => {
+    render(<EngagementProgress progress={makeProgress({ done: 0, total: 1, pct: 0 })} />);
+
+    expect(screen.getByText('0 of 1')).toBeInTheDocument();
+    expect(screen.getByText('milestone completed')).toBeInTheDocument();
+    expect(screen.queryByText('milestones completed')).not.toBeInTheDocument();
+  });
 });

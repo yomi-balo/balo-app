@@ -1,34 +1,39 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@react-email/render';
-import { CompletionRequestEmail } from './engagement-completion-requested.js';
+import { CompletionRequestEmail, milestonePhrases } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
 import { getEmailTemplate } from './index.js';
 import { getInAppTemplate } from './in-app-templates.js';
 
 const BASE = 'https://app.balo.expert';
 
+// Shared props builder — only `milestonesTotal` varies across the count-copy cases.
+const completionProps = (milestonesTotal: number) => ({
+  firstName: 'Dana',
+  clientCompany: 'Northwind Industrial',
+  expertParty: 'CloudPeak Consulting',
+  actorExpert: 'Priya @ CloudPeak',
+  projectTitle: 'CPQ implementation',
+  milestonesTotal,
+  requestedDate: '4 Jul',
+  autoDate: '11 Jul',
+  reviewDays: 7,
+  engagementUrl: `${BASE}/engagements/eng-1`,
+});
+
 describe('CompletionRequestEmail (BAL-334, VARIANT 1)', () => {
   it('renders the actor, project, counts, dates, window block, and the dual review CTAs', async () => {
-    const html = await render(
-      CompletionRequestEmail({
-        firstName: 'Dana',
-        clientCompany: 'Northwind Industrial',
-        expertParty: 'CloudPeak Consulting',
-        actorExpert: 'Priya @ CloudPeak',
-        projectTitle: 'CPQ implementation',
-        milestonesTotal: 4,
-        requestedDate: '4 Jul',
-        autoDate: '11 Jul',
-        reviewDays: 7,
-        engagementUrl: `${BASE}/engagements/eng-1`,
-      })
-    );
+    const html = await render(CompletionRequestEmail(completionProps(4)));
     // Celebratory hero + prospective party naming.
     expect(html).toContain('Your project is complete!');
     expect(html).toContain('CloudPeak Consulting');
     // Retrospective actor + the marked-complete date.
     expect(html).toContain('Priya @ CloudPeak');
     expect(html).toContain('4 Jul');
+    // Many-path phrasing is pinned: preview, body clause, and delivery-plan value.
+    expect(html).toContain('delivered all 4 milestones');
+    expect(html).toContain('with all 4 milestones delivered');
+    expect(html).toContain('All 4 milestones delivered');
     // The signature window block keeps the auto-accept date unmissable. (react-email
     // injects `<!-- -->` markers around interpolations, so assert the contiguous parts.)
     expect(html).toContain('The final step');
@@ -41,6 +46,60 @@ describe('CompletionRequestEmail (BAL-334, VARIANT 1)', () => {
     expect(html).toContain('/engagements/eng-1?action=request-changes');
     expect(html).toContain('Accept project');
     expect(html).toContain('Request changes');
+  });
+
+  it('zero milestones (retainer seam): project-level framing, never "0 milestones"', async () => {
+    const html = await render(CompletionRequestEmail(completionProps(0)));
+    // Positive — the count is dropped, warm project-level phrasing throughout.
+    expect(html).toContain('marked the project complete'); // preview lead
+    expect(html).toContain('wrapped up the work'); // hero subtext lead
+    expect(html).toContain('No milestones'); // delivery-plan value
+    // Negative — none of the "all 0 / 0 milestones" bugs survive, and the body
+    // clause is omitted (no dangling "milestones delivered").
+    expect(html).not.toContain('all 0');
+    expect(html).not.toContain('All 0');
+    expect(html).not.toContain('0 milestones');
+    expect(html).not.toContain('milestones delivered');
+    expect(html).not.toContain('milestone delivered');
+    expect(html).not.toContain('every milestone'); // subtext no longer over-claims
+  });
+
+  it('one milestone: singular everywhere, never "1 milestones" or "All 1 milestone"', async () => {
+    const html = await render(CompletionRequestEmail(completionProps(1)));
+    expect(html).toContain('delivered the milestone'); // preview lead
+    expect(html).toContain('with the milestone delivered'); // body clause (contiguous node)
+    expect(html).toContain('1 milestone delivered'); // delivery-plan value
+    // Negative — no plural-with-1 and no "all 1".
+    expect(html).not.toContain('1 milestones');
+    expect(html).not.toContain('all 1 milestone');
+    expect(html).not.toContain('All 1 milestone');
+  });
+});
+
+describe('milestonePhrases (zero-milestone / singular correctness)', () => {
+  it('zero → no count, warm project-level framing', () => {
+    expect(milestonePhrases(0)).toEqual({
+      previewLead: 'marked the project complete',
+      subtextLead: 'wrapped up the work',
+      bodyClause: '',
+      planValue: 'No milestones',
+    });
+  });
+
+  it('one → singular, never "1 milestones"', () => {
+    const p = milestonePhrases(1);
+    expect(p.previewLead).toBe('delivered the milestone');
+    expect(p.bodyClause).toBe('the milestone delivered');
+    expect(p.planValue).toBe('1 milestone delivered');
+    expect(JSON.stringify(p)).not.toContain('1 milestones');
+    expect(JSON.stringify(p)).not.toContain('All 1 milestone');
+  });
+
+  it('many → plural with the count', () => {
+    const p = milestonePhrases(3);
+    expect(p.previewLead).toBe('delivered all 3 milestones');
+    expect(p.bodyClause).toBe('all 3 milestones delivered');
+    expect(p.planValue).toBe('All 3 milestones delivered');
   });
 });
 

@@ -271,7 +271,12 @@ function ReviewEmailLayout({ preview, pill, heading, subtext, children }: Review
           <Section style={styles.hero}>
             <Row>
               <Column align="center">
-                <table cellPadding={0} cellSpacing={0} style={{ display: 'inline-table' }}>
+                <table
+                  role="presentation"
+                  cellPadding={0}
+                  cellSpacing={0}
+                  style={{ display: 'inline-table' }}
+                >
                   <tbody>
                     <tr>
                       <td>
@@ -314,17 +319,56 @@ function ReviewEmailLayout({ preview, pill, heading, subtext, children }: Review
   );
 }
 
+/**
+ * Count-aware milestone phrasing for the completion email. The retainer seam lets a
+ * ZERO-milestone engagement reach completion (engagementsRepository.requestCompletion
+ * passes the milestone guard vacuously → pending_acceptance → this email with
+ * milestonesTotal === 0), so every count-bearing string must read naturally at 0 / 1 / N
+ * — never "all 0 milestones" or "all 1 milestones". The zero case drops the count
+ * entirely and mirrors the workspace's "no milestones" framing (deriveCompletionCard /
+ * deriveEmptyState in engagement-view.ts), kept warm for the client's happiest email.
+ */
+export function milestonePhrases(total: number): {
+  readonly previewLead: string;
+  readonly subtextLead: string;
+  readonly bodyClause: string;
+  readonly planValue: string;
+} {
+  if (total <= 0) {
+    return {
+      previewLead: 'marked the project complete',
+      subtextLead: 'wrapped up the work',
+      bodyClause: '',
+      planValue: 'No milestones',
+    };
+  }
+  if (total === 1) {
+    return {
+      previewLead: 'delivered the milestone',
+      subtextLead: 'delivered every milestone',
+      bodyClause: 'the milestone delivered',
+      planValue: '1 milestone delivered',
+    };
+  }
+  return {
+    previewLead: `delivered all ${total} milestones`,
+    subtextLead: 'delivered every milestone',
+    bodyClause: `all ${total} milestones delivered`,
+    planValue: `All ${total} milestones delivered`,
+  };
+}
+
 interface ProjectSummaryProps {
   readonly projectTitle: string;
   readonly expertParty: string;
-  readonly milestonesTotal: number;
+  readonly deliveryPlanValue: string;
   readonly requestedDate: string;
 }
 
 function ProjectSummary({
   projectTitle,
   expertParty,
-  milestonesTotal,
+  deliveryPlanValue,
   requestedDate,
 }: ProjectSummaryProps) {
   return (
@@ -341,7 +385,7 @@ function ProjectSummary({
       <div style={styles.summaryRowLast}>
         <p style={styles.summaryLabel}>Delivery plan</p>
         <p style={styles.summaryValue}>
-          All {milestonesTotal} milestones delivered · marked complete {requestedDate}
+          {deliveryPlanValue} · marked complete {requestedDate}
         </p>
       </div>
     </Section>
@@ -401,24 +445,26 @@ export function CompletionRequestEmail({
   reviewDays,
   engagementUrl,
 }: Readonly<CompletionRequestEmailProps>) {
+  const phrases = milestonePhrases(milestonesTotal);
   return (
     <ReviewEmailLayout
-      preview={`${actorExpert} delivered all ${milestonesTotal} milestones. Take a look and make it official — you have until ${autoDate}.`}
+      preview={`${actorExpert} ${phrases.previewLead}. Take a look and make it official — you have until ${autoDate}.`}
       pill="🎉 Project delivered"
       heading="Your project is complete!"
-      subtext={`${expertParty} has delivered every milestone — the finishing touch is ${clientCompany}'s.`}
+      subtext={`${expertParty} has ${phrases.subtextLead} — the finishing touch is ${clientCompany}'s.`}
     >
       <Text style={styles.greeting}>Hi {firstName},</Text>
       <Text style={styles.bodyText}>
         Great news — {actorExpert} marked <strong>{projectTitle}</strong> complete on{' '}
-        {requestedDate}, with all {milestonesTotal} milestones delivered. Nice work getting this
+        {requestedDate}
+        {phrases.bodyClause === '' ? '' : `, with ${phrases.bodyClause}`}. Nice work getting this
         over the line together. The last step is yours: take a look and make it official.
       </Text>
 
       <ProjectSummary
         projectTitle={projectTitle}
         expertParty={expertParty}
-        milestonesTotal={milestonesTotal}
+        deliveryPlanValue={phrases.planValue}
         requestedDate={requestedDate}
       />
 
