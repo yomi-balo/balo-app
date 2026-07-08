@@ -7,11 +7,14 @@ import { NameStep } from './name-step';
 import { WelcomeStep } from './welcome-step';
 import { TimezoneStep } from './timezone-step';
 import { IntentStep } from './intent-step';
+import { CompanyStep } from './company-step';
 import { ProgressDots } from './progress-dots';
 import { cn } from '@/lib/utils';
+import type { AuthMethodSignal } from '@/lib/auth/auth-method';
 
 interface OnboardingWizardProps {
   firstName: string | null;
+  authMethod?: AuthMethodSignal;
 }
 
 const variants = {
@@ -20,12 +23,17 @@ const variants = {
   exit: (dir: number) => ({ x: dir > 0 ? -80 : 80, opacity: 0 }),
 };
 
-export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JSX.Element {
+export function OnboardingWizard({
+  firstName,
+  authMethod,
+}: OnboardingWizardProps): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const needsNameStep = firstName === null;
-  const totalSteps = needsNameStep ? 4 : 3;
+  // BAL-350: base + 1 for the new client-only company step (the client terminal).
+  // Experts redirect away at Intent so they never reach the final dot.
+  const totalSteps = needsNameStep ? 5 : 4;
 
   function clampStep(step: number): number {
     return Math.max(1, Math.min(totalSteps, step));
@@ -106,8 +114,19 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
             <IntentStep
               ref={headingRef}
               onBack={goBack}
+              onClientContinue={goForward}
               timezone={selectedTimezone}
               stepNumber={4}
+            />
+          );
+        case 5:
+          return (
+            <CompanyStep
+              ref={headingRef}
+              authMethod={authMethod}
+              timezone={selectedTimezone}
+              onBack={goBack}
+              stepNumber={5}
             />
           );
         default:
@@ -115,7 +134,7 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
       }
     }
 
-    // Standard 3-step flow (existing code, unchanged)
+    // Standard flow (no name step): Welcome → Timezone → Intent → Company
     switch (currentStep) {
       case 1:
         return <WelcomeStep ref={headingRef} firstName={firstName} onContinue={goForward} />;
@@ -129,7 +148,24 @@ export function OnboardingWizard({ firstName }: OnboardingWizardProps): React.JS
           />
         );
       case 3:
-        return <IntentStep ref={headingRef} onBack={goBack} timezone={selectedTimezone} />;
+        return (
+          <IntentStep
+            ref={headingRef}
+            onBack={goBack}
+            onClientContinue={goForward}
+            timezone={selectedTimezone}
+          />
+        );
+      case 4:
+        return (
+          <CompanyStep
+            ref={headingRef}
+            authMethod={authMethod}
+            timezone={selectedTimezone}
+            onBack={goBack}
+            stepNumber={4}
+          />
+        );
       default:
         return <WelcomeStep ref={headingRef} firstName={firstName} onContinue={goForward} />;
     }

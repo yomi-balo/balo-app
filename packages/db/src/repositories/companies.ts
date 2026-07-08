@@ -85,4 +85,31 @@ export const companiesRepository = {
       .returning();
     return company!;
   },
+
+  /**
+   * Rename a company (BAL-350 onboarding workspace naming). Bumps `updatedAt`
+   * and returns the updated row. Throws if no row matches `id` so the caller
+   * surfaces a retryable error instead of a silent no-op.
+   *
+   * NOTE: the `companies` table has no `deleted_at` column (only
+   * `company_members` is soft-deletable — see schema/companies.ts), so there is
+   * no soft-delete predicate to apply here; the not-found guard is the only
+   * liveness check this table admits. Matches the `updateCredits` mutation
+   * pattern (explicit `updatedAt` bump + `.returning()`).
+   *
+   * The caller (the onboarding Server Action) owns zod validation of `name`
+   * (non-empty after trim, max length); this method assumes a pre-validated,
+   * non-empty value and does not trim or re-validate.
+   */
+  updateName: async (id: string, name: string): Promise<Company> => {
+    const [company] = await db
+      .update(companies)
+      .set({ name, updatedAt: new Date() })
+      .where(eq(companies.id, id))
+      .returning();
+    if (company === undefined) {
+      throw new Error(`Company not found: ${id}`);
+    }
+    return company;
+  },
 };

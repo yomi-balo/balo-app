@@ -16,6 +16,9 @@ interface IntentStepProps {
   onBack: () => void;
   timezone?: string | null;
   stepNumber?: number;
+  // BAL-350: the CLIENT branch ADVANCES to the company step (client terminal)
+  // instead of completing here. The EXPERT branch still completes at Intent.
+  onClientContinue: () => void;
 }
 
 type Intent = 'client' | 'expert';
@@ -31,7 +34,7 @@ const item = {
 };
 
 export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(function IntentStep(
-  { onBack, timezone, stepNumber = 3 },
+  { onBack, timezone, stepNumber = 3, onClientContinue },
   ref
 ) {
   const router = useRouter();
@@ -46,16 +49,30 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
     if (isPending || selectedIntent !== null) return;
 
     setSelectedIntent(intent);
+
+    if (intent === 'client') {
+      // Client branch ADVANCES to the company step (the client terminal). Do NOT
+      // complete onboarding or fire COMPLETED here — the company step owns both.
+      track(ONBOARDING_EVENTS.STEP_COMPLETED, {
+        step: 'intent',
+        step_number: stepNumber,
+        value: 'client',
+      });
+      onClientContinue();
+      return;
+    }
+
+    // Expert branch — the expert TERMINAL (unchanged): complete + redirect.
     startTransition(async () => {
-      const result = await completeOnboardingAction(intent);
+      const result = await completeOnboardingAction('expert');
       if (result.success) {
         track(ONBOARDING_EVENTS.STEP_COMPLETED, {
           step: 'intent',
           step_number: stepNumber,
-          value: intent,
+          value: 'expert',
         });
         track(ONBOARDING_EVENTS.COMPLETED, {
-          intent,
+          intent: 'expert',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
         router.push(result.data?.redirectTo ?? '/dashboard');

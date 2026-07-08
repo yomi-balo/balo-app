@@ -54,3 +54,22 @@ export function isBlockedDomain(domain: string): boolean {
   if (d === '') return true; // empty is not a capturable corporate domain
   return FREEMAIL_DOMAINS.has(d) || DISPOSABLE_DOMAINS.has(d);
 }
+
+/**
+ * Best-effort EDITABLE company-name suggestion from an email's domain apex, for
+ * the BAL-350 onboarding company-name prefill: founder@acme.com → "Acme",
+ * jane@acme-corp.io → "Acme Corp". Returns '' for blocked/freemail or unusable
+ * input (so a freemail signup shows an empty field, not "Gmail"). PURE — no I/O,
+ * no db.
+ */
+export function suggestCompanyNameFromEmail(email: string): string {
+  const domain = extractEmailDomain(email);
+  if (domain === null || isBlockedDomain(domain)) return '';
+  const [label] = domain.split('.');
+  if (label === undefined || label === '') return '';
+  return label
+    .split(/[-_]/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}

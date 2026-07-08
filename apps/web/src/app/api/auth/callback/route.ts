@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession, type SessionUser } from '@/lib/auth/session';
+import { mapWorkosAuthMethod } from '@/lib/auth/auth-method';
 import { db, usersRepository, type DomainCaptureResult } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
 import { log } from '@/lib/logging';
@@ -82,7 +83,8 @@ async function resolveOrCreateUser(workosUser: {
 async function createSession(
   resolved: ResolvedUser,
   accessToken: string,
-  refreshToken: string
+  refreshToken: string,
+  authenticationMethod?: string
 ): Promise<void> {
   const expertProfile = await db.query.expertProfiles.findFirst({
     where: (profiles, { eq }) => eq(profiles.userId, resolved.user.id),
@@ -98,6 +100,9 @@ async function createSession(
     activeMode: resolved.user.activeMode,
     onboardingCompleted: resolved.user.onboardingCompleted,
     platformRole: resolved.user.platformRole,
+    // BAL-350: coarse auth method from the WorkOS OAuth response, for onboarding
+    // analytics. Undefined for non-OAuth / unknown providers (never mislabelled).
+    authMethod: mapWorkosAuthMethod(authenticationMethod),
     companyId: resolved.companyId,
     companyName: resolved.companyName,
     companyRole: resolved.companyRole,
@@ -140,10 +145,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       user: workosUser,
       accessToken,
       refreshToken,
+      authenticationMethod,
     } = await getWorkOS().userManagement.authenticateWithCode({ code, clientId });
 
     const resolved = await resolveOrCreateUser(workosUser);
-    await createSession(resolved, accessToken, refreshToken);
+    await createSession(resolved, accessToken, refreshToken, authenticationMethod);
 
     if (resolved.isNewUser) {
       // role is always 'client' — experts sign up as clients first,

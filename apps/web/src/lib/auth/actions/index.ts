@@ -8,3 +8,8 @@ export { updateTimezoneAction } from './update-timezone';
 export { completeOnboardingAction } from './complete-onboarding';
 export { verifyEmailAction } from './verify-email';
 export { updateNameAction } from './update-name';
+export {
+  resolveOnboardingCompanyAction,
+  type ResolveOnboardingCompanyResult,
+} from './resolve-onboarding-company';
+export { nameWorkspaceAndCompleteAction } from './name-workspace-and-complete';

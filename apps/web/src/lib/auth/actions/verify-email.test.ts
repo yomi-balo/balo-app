@@ -295,6 +295,8 @@ describe('verifyEmailAction', () => {
         activeMode: 'client',
         onboardingCompleted: false,
         platformRole: 'user',
+        // BAL-350: OTP verification is hardcoded to the 'email' auth-method signal.
+        authMethod: 'email',
         companyId: 'co-1',
         companyName: 'My Workspace',
         companyRole: 'owner',
