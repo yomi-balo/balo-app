@@ -444,6 +444,36 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-333 delivery-plan scope changed', () => {
+    it('scope_changed: client owner email + in-app AND admins in-app', () => {
+      const rules = notificationRules['engagement.scope_changed'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(3);
+
+      const clientRules = rules!.filter((r) => r.recipient === 'client');
+      expect(clientRules).toHaveLength(2);
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('engagement-scope-changed-client');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
+      expect(adminRules).toHaveLength(1);
+      expect(adminRules[0]).toMatchObject({
+        channel: 'in-app',
+        template: 'engagement-scope-changed-admin',
+        timing: 'immediate',
+      });
+
+      // No SMS — client is told by email + in-app; admins get an in-app ops signal.
+      expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

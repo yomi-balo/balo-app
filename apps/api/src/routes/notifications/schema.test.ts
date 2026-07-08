@@ -737,6 +737,72 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.scope_changed (BAL-333)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:added',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      milestoneId: '550e8400-e29b-41d4-a716-446655440002',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      changeKind: 'added' as const,
+      changeSummary: "added 'Data migration dry-run'",
+    };
+
+    it('accepts a valid payload', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.scope_changed',
+        payload: valid,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts the payload without the optional recipientId + milestoneId', () => {
+      const { recipientId: _r, milestoneId: _m, ...rest } = valid;
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.scope_changed',
+        payload: rest,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts an edited (epoch-suffixed) correlationId but rejects one over 120 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.scope_changed',
+          payload: { ...valid, correlationId: `${valid.milestoneId}:edited:1719705600000` },
+        }).success
+      ).toBe(true);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.scope_changed',
+          payload: { ...valid, correlationId: 'a'.repeat(121) },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects an invalid changeKind, an empty changeSummary, and a non-uuid engagementId', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.scope_changed',
+          payload: { ...valid, changeKind: 'reordered' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.scope_changed',
+          payload: { ...valid, changeSummary: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.scope_changed',
+          payload: { ...valid, engagementId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

@@ -10,6 +10,7 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     id: 'm-1',
     title: 'Discovery workshop',
     descriptionHtml: null,
+    descriptionText: null,
     acceptanceCriteria: null,
     status: 'pending',
     nodeVariant: 'pending',

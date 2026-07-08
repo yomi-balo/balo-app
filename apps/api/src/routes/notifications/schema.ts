@@ -255,6 +255,23 @@ const engagementMilestoneRevertedPayload = z.object({
   milestoneTitle: z.string().min(1).max(200),
 });
 
+// BAL-333 (D3) expert delivery-plan scope changed (expert → client owner + admins).
+// `correlationId` = the dedup/debounce key (z.string not z.uuid so the `:added` /
+// `:edited:${ms|bucket}` suffix validates). `recipientId` is the client company owner
+// (recipient:'client'; optional — absent for retainers/no-owner). `milestoneId` is the
+// affected milestone (optional for forward-compat). Mirrors
+// packages/shared/src/notifications/index.ts.
+const engagementScopeChangedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  milestoneId: z.uuid().optional(),
+  recipientId: z.uuid().optional(),
+  actorExpertLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  changeKind: z.enum(['added', 'edited', 'removed']),
+  changeSummary: z.string().min(1).max(240),
+});
+
 // BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the
 // subject (joiner/requester), `correlationId` the stable membership/request id.
 // One schema, reused for all four arms (DRY — the completeness guard still checks
@@ -344,6 +361,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.milestone_reverted'),
     payload: engagementMilestoneRevertedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.scope_changed'),
+    payload: engagementScopeChangedPayload,
   }),
   z.object({
     event: z.literal('party.member_joined_via_domain'),

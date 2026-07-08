@@ -66,6 +66,19 @@ export class EngagementNotActiveError extends Error {
 }
 
 /**
+ * Thrown by {@link engagementMilestonesRepository.reorder} when the provided id list
+ * is not an exact permutation of the engagement's LIVE milestone id set (a stale tab
+ * racing a concurrent add/remove, a duplicate id, or a foreign/soft-deleted id). The
+ * whole reorder is rolled back — sort_order is never partially rewritten.
+ */
+export class MilestoneReorderMismatchError extends Error {
+  constructor(public readonly engagementId: string) {
+    super(`Reorder id set does not match the live milestones of engagement ${engagementId}`);
+    this.name = 'MilestoneReorderMismatchError';
+  }
+}
+
+/**
  * CONCURRENCY (document once, obeyed everywhere): every milestone transition locks
  * the parent `engagements` row FOR UPDATE FIRST, THEN the milestone row. Holding
  * the engagement lock is a single-writer gate over the whole engagement, so an
@@ -444,5 +457,82 @@ export const engagementMilestonesRepository = {
         )
       )
       .orderBy(asc(engagementMilestones.sortOrder), asc(engagementMilestones.id));
+  },
+
+  /**
+   * Reorder the LIVE milestones of an active engagement by writing sequential
+   * `sort_order` (0..n-1) in the given order (D3 / BAL-333). ONLY touches
+   * `sort_order` + `updated_at` — status, provenance, `value_cents`, completion
+   * timestamps are UNTOUCHED (this is NOT the destructive REPLACE-ALL that
+   * `setForProposal` performs). Lock order: engagement FOR UPDATE + active guard,
+   * THEN the live rows FOR UPDATE (single-writer gate over the whole engagement).
+   * `orderedMilestoneIds` MUST be an exact permutation of the live id set (same
+   * size, no duplicates, same membership) — this guards the concurrent add/remove
+   * race — else {@link MilestoneReorderMismatchError}. One transaction, one audit
+   * `engagement_milestone.reordered` (engagement-scoped). Returns the fresh ordered
+   * live list (mirrors `listByEngagement` ordering).
+   */
+  async reorder(input: {
+    engagementId: string;
+    userId: string;
+    orderedMilestoneIds: string[];
+  }): Promise<EngagementMilestone[]> {
+    return db.transaction(async (tx) => {
+      await lockActiveEngagement(tx, input.engagementId); // engagement lock + active guard
+
+      const live = await tx
+        .select({ id: engagementMilestones.id })
+        .from(engagementMilestones)
+        .where(
+          and(
+            eq(engagementMilestones.engagementId, input.engagementId),
+            isNull(engagementMilestones.deletedAt)
+          )
+        )
+        .for('update'); // rows locked under the engagement lock
+
+      const liveIds = new Set(live.map((r) => r.id));
+      const provided = input.orderedMilestoneIds;
+      const uniqueProvided = new Set(provided);
+      // Exact permutation: same size, no dupes, same membership (foreign / soft-deleted
+      // ids fail the membership check because they are absent from the LIVE set).
+      if (
+        provided.length !== liveIds.size ||
+        uniqueProvided.size !== provided.length ||
+        provided.some((id) => !liveIds.has(id))
+      ) {
+        throw new MilestoneReorderMismatchError(input.engagementId);
+      }
+
+      const now = new Date();
+      for (let i = 0; i < provided.length; i++) {
+        const id = provided[i];
+        if (id === undefined) continue; // noUncheckedIndexedAccess guard (unreachable post-validation)
+        await tx
+          .update(engagementMilestones)
+          .set({ sortOrder: i, updatedAt: now })
+          .where(eq(engagementMilestones.id, id));
+      }
+
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_milestone.reordered',
+        entityType: 'engagement', // engagement-scoped op (no single milestone entity)
+        entityId: input.engagementId,
+        engagementId: input.engagementId,
+        metadata: { order: provided },
+      });
+
+      return tx
+        .select()
+        .from(engagementMilestones)
+        .where(
+          and(
+            eq(engagementMilestones.engagementId, input.engagementId),
+            isNull(engagementMilestones.deletedAt)
+          )
+        )
+        .orderBy(asc(engagementMilestones.sortOrder), asc(engagementMilestones.id));
+    });
   },
 };

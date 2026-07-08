@@ -21,6 +21,7 @@ import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.
 import { ProjectBillingReminderOwnerEmail } from './project-billing-reminder-owner.js';
 import { ProjectBillingReminderCreatorEmail } from './project-billing-reminder-creator.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
+import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import {
   PartyMemberJoinedViaDomainEmail,
   PartyJoinRequestCreatedEmail,
@@ -366,6 +367,24 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(expertParty)} completed a milestone on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-333 (D3) delivery-plan scope changed — CLIENT owner email. Subject names the
+  // project; the body (exact ticket copy) states the price is unchanged. `projectTitle`
+  // feeds both the subject and the hero project-context line in the component.
+  'engagement-scope-changed-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(EngagementScopeChangedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel: (data.actorExpertLabel as string) ?? 'Your expert',
+        changeSummary: (data.changeSummary as string) ?? 'updated the delivery plan',
+        projectTitle,
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `The delivery plan for ${sanitizeSubjectTitle(projectTitle)} was updated`,
     };
   },
 

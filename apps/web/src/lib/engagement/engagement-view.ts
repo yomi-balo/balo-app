@@ -1,6 +1,7 @@
 import { AUTO_ACCEPT_DAYS, type EngagementWithMilestones } from '@balo/db';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
+import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
@@ -103,6 +104,12 @@ export interface MilestoneNodeView {
   title: string;
   /** Server-sanitised HTML — injected as-is by the shared `MilestoneRow`. Null if none. */
   descriptionHtml: string | null;
+  /**
+   * Plain-text of `descriptionHtml` (server-derived via `htmlToPlainText`) — the edit
+   * form modal prefills from THIS so the client never touches server-only HTML. Null
+   * when the description is blank.
+   */
+  descriptionText: string | null;
   acceptanceCriteria: string | null;
   status: MilestoneNodeVariant;
   nodeVariant: MilestoneNodeVariant;
@@ -316,9 +323,16 @@ function deriveMilestones(
       m.valueCents !== null && m.valueCents > 0
         ? formatWholeCurrency(m.valueCents, engagement.currency)
         : null;
+    // Plain-text of the raw description for the expert edit-form prefill — kept out
+    // of the client's hands as HTML (the modal only sees text). Blank/tag-only → null.
+    const descriptionText =
+      m.descriptionHtml !== null && m.descriptionHtml.trim() !== ''
+        ? htmlToPlainText(m.descriptionHtml) || null
+        : null;
     return {
       id: m.id,
       title: m.title,
+      descriptionText,
       // Sanitise ONCE here (the mapper is server-only) so both the read-only rail and
       // the client `ExpertMilestoneRail` inject already-safe HTML — the client-safe
       // `MilestoneRow` cannot call the `server-only` `RichText`/`sanitizeProjectHtml`.

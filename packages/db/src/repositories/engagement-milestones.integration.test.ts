@@ -15,6 +15,7 @@ import {
   snapshotFromProposalTx,
   InvalidMilestoneTransitionError,
   EngagementNotActiveError,
+  MilestoneReorderMismatchError,
 } from './engagement-milestones';
 
 /**
@@ -183,6 +184,13 @@ describe('engagementMilestonesRepository — engagement-active guard (Engagement
       await expect(
         engagementMilestonesRepository.add({ engagementId: engagement.id, userId, title: 'y' })
       ).rejects.toBeInstanceOf(EngagementNotActiveError);
+      await expect(
+        engagementMilestonesRepository.reorder({
+          engagementId: engagement.id,
+          userId,
+          orderedMilestoneIds: [milestoneId],
+        })
+      ).rejects.toBeInstanceOf(EngagementNotActiveError);
     });
   }
 });
@@ -286,6 +294,162 @@ describe('engagementMilestonesRepository.softDelete', () => {
     const { milestoneId, userId } = await seedMilestone({ status: 'completed' });
     const removed = await engagementMilestonesRepository.softDelete({ milestoneId, userId });
     expect(removed.deletedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('engagementMilestonesRepository.reorder', () => {
+  /** Seed an active engagement + three live milestones (A/B/C) + an acting user. */
+  async function seedThree(): Promise<{
+    engagementId: string;
+    userId: string;
+    a: string;
+    b: string;
+    c: string;
+  }> {
+    const { engagement } = await engagementFactory();
+    const { milestone: mA } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { title: 'A', sortOrder: 0 },
+    });
+    const { milestone: mB } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { title: 'B', sortOrder: 1 },
+    });
+    const { milestone: mC } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { title: 'C', sortOrder: 2, status: 'completed', completedAt: new Date() },
+    });
+    const user = await userFactory();
+    return { engagementId: engagement.id, userId: user.id, a: mA.id, b: mB.id, c: mC.id };
+  }
+
+  it('rewrites sort_order to 0..n-1 in the given order and returns the new live order', async () => {
+    const { engagementId, userId, a, b, c } = await seedThree();
+
+    const result = await engagementMilestonesRepository.reorder({
+      engagementId,
+      userId,
+      orderedMilestoneIds: [c, a, b],
+    });
+    expect(result.map((m) => m.id)).toEqual([c, a, b]);
+    expect(result.map((m) => m.sortOrder)).toEqual([0, 1, 2]);
+
+    const live = await engagementMilestonesRepository.listByEngagement(engagementId);
+    expect(live.map((m) => m.id)).toEqual([c, a, b]);
+  });
+
+  it('is NOT a REPLACE-ALL: a completed milestone keeps status/completedAt/valueCents/completionNote', async () => {
+    const { engagement } = await engagementFactory();
+    const completedAt = new Date('2026-06-30T00:00:00.000Z');
+    const { milestone: mDone } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: {
+        title: 'Done',
+        sortOrder: 0,
+        status: 'completed',
+        completedAt,
+        completionNote: 'shipped',
+        valueCents: 250_000,
+      },
+    });
+    const { milestone: mNext } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { title: 'Next', sortOrder: 1 },
+    });
+    const user = await userFactory();
+
+    await engagementMilestonesRepository.reorder({
+      engagementId: engagement.id,
+      userId: user.id,
+      orderedMilestoneIds: [mNext.id, mDone.id],
+    });
+
+    const [done] = await db
+      .select()
+      .from(engagementMilestones)
+      .where(eq(engagementMilestones.id, mDone.id));
+    expect(done?.status).toBe('completed');
+    expect(done?.completedAt?.getTime()).toBe(completedAt.getTime());
+    expect(done?.completionNote).toBe('shipped');
+    expect(done?.valueCents).toBe(250_000);
+    expect(done?.sortOrder).toBe(1); // moved to the end
+  });
+
+  it('audits engagement_milestone.reordered engagement-scoped with metadata { order, engagementId }', async () => {
+    const { engagementId, userId, a, b, c } = await seedThree();
+    const order = [b, c, a];
+
+    await engagementMilestonesRepository.reorder({
+      engagementId,
+      userId,
+      orderedMilestoneIds: order,
+    });
+
+    const events = await auditEventsForEntity(engagementId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.action).toBe('engagement_milestone.reordered');
+    expect(events[0]?.entityType).toBe('engagement');
+    expect(events[0]?.entityId).toBe(engagementId);
+    expect(events[0]?.metadata).toMatchObject({ order, engagementId });
+  });
+
+  it('throws MilestoneReorderMismatchError when the list OMITS a live id', async () => {
+    const { engagementId, userId, a, b } = await seedThree();
+    await expect(
+      engagementMilestonesRepository.reorder({ engagementId, userId, orderedMilestoneIds: [a, b] })
+    ).rejects.toBeInstanceOf(MilestoneReorderMismatchError);
+  });
+
+  it('throws MilestoneReorderMismatchError when the list includes a FOREIGN id', async () => {
+    const { engagementId, userId, a, b, c } = await seedThree();
+    await expect(
+      engagementMilestonesRepository.reorder({
+        engagementId,
+        userId,
+        orderedMilestoneIds: [a, b, c, randomUUID()],
+      })
+    ).rejects.toBeInstanceOf(MilestoneReorderMismatchError);
+  });
+
+  it('throws MilestoneReorderMismatchError when the list contains a DUPLICATE id', async () => {
+    const { engagementId, userId, a, b } = await seedThree();
+    await expect(
+      engagementMilestonesRepository.reorder({
+        engagementId,
+        userId,
+        orderedMilestoneIds: [a, b, a],
+      })
+    ).rejects.toBeInstanceOf(MilestoneReorderMismatchError);
+  });
+
+  it('excludes soft-deleted rows from the live set (a deleted id in the list → mismatch)', async () => {
+    const { engagement } = await engagementFactory();
+    const { milestone: mLive } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { title: 'Live', sortOrder: 0 },
+    });
+    const { milestone: mDeleted } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { title: 'Deleted', sortOrder: 1, deletedAt: new Date() },
+    });
+    const user = await userFactory();
+
+    // The deleted row is NOT part of the live set, so a list of just [live] is a valid
+    // permutation, but a list including the deleted id is a mismatch.
+    await expect(
+      engagementMilestonesRepository.reorder({
+        engagementId: engagement.id,
+        userId: user.id,
+        orderedMilestoneIds: [mLive.id, mDeleted.id],
+      })
+    ).rejects.toBeInstanceOf(MilestoneReorderMismatchError);
+
+    const okResult = await engagementMilestonesRepository.reorder({
+      engagementId: engagement.id,
+      userId: user.id,
+      orderedMilestoneIds: [mLive.id],
+    });
+    expect(okResult.map((m) => m.id)).toEqual([mLive.id]);
   });
 });
 

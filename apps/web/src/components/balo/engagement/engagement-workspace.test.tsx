@@ -38,6 +38,7 @@ function milestone(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeVie
     id: 'm-1',
     title: 'Discovery workshop',
     descriptionHtml: null,
+    descriptionText: null,
     acceptanceCriteria: null,
     status: 'completed',
     nodeVariant: 'completed',
@@ -96,7 +97,32 @@ describe('EngagementWorkspace — composition', () => {
 });
 
 describe('EngagementWorkspace — state × lens matrix', () => {
-  it('empty state renders and rail/progress are absent when hasMilestones is false', () => {
+  it('read-only empty state renders and rail/progress are absent when hasMilestones is false', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          lens: 'client',
+          archetype: 'participant',
+          isClientOwner: true,
+          isDeliveringExpert: false,
+          milestones: [],
+          hasMilestones: false,
+          progress: { done: 0, total: 0, pct: 0, reviewCopy: null },
+          emptyState: {
+            icon: 'Flag',
+            title: 'Shape the delivery plan',
+            body: 'Add your first milestone so Northwind Industrial can follow progress.',
+          },
+        })}
+      />
+    );
+    expect(screen.getByText('Shape the delivery plan')).toBeInTheDocument();
+    expect(screen.queryByTestId('expert-milestone-rail')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delivery plan')).not.toBeInTheDocument();
+    expect(screen.queryByText('milestones completed')).not.toBeInTheDocument();
+  });
+
+  it('expert lens · active · EMPTY routes to the interactive rail (owns the add-first CTA), no progress bar', () => {
     render(
       <EngagementWorkspace
         view={view({
@@ -115,8 +141,8 @@ describe('EngagementWorkspace — state × lens matrix', () => {
         })}
       />
     );
-    expect(screen.getByText('Shape the delivery plan')).toBeInTheDocument();
-    expect(screen.queryByText('Delivery plan')).not.toBeInTheDocument();
+    // The interactive island (stubbed) owns the empty case now — not the read-only state.
+    expect(screen.getByTestId('expert-milestone-rail')).toBeInTheDocument();
     expect(screen.queryByText('milestones completed')).not.toBeInTheDocument();
   });
 
