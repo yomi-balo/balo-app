@@ -111,6 +111,7 @@ describe('resolveOnboardingCompanyAction', () => {
     expect(result).toEqual({
       status: 'matched',
       company: { name: 'Northwind', memberCount: 3, joinMode: 'request' },
+      suggestion: 'Acme',
     });
     expect(mockGetPartyJoinSettings).toHaveBeenCalledWith('company', 'company-1');
     expectNoWrites();

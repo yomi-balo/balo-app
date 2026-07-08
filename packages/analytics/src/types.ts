@@ -18,6 +18,7 @@ import type { PartyDomainServerEventMap } from './events/party-domains';
 import type { PartyJoinServerEventMap } from './events/party-join';
 import type { EngagementServerEventMap } from './events/engagement';
 import type { AdminEngagementsEventMap } from './events/admin-engagements';
+import type { DomainJoinEventMap } from './events/domain-join';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -35,7 +36,8 @@ export type AllEvents = AuthEventMap &
   ConversationEventMap &
   ProjectsInboxEventMap &
   BillingEventMap &
-  AdminEngagementsEventMap;
+  AdminEngagementsEventMap &
+  DomainJoinEventMap;
 
 export type EventName = keyof AllEvents;
 

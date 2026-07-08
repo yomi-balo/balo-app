@@ -20,6 +20,7 @@ export {
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,
+  DOMAIN_JOIN_EVENTS,
 } from '@balo/analytics/client';
 
 export type {

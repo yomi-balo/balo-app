@@ -13,3 +13,5 @@ export {
   type ResolveOnboardingCompanyResult,
 } from './resolve-onboarding-company';
 export { nameWorkspaceAndCompleteAction } from './name-workspace-and-complete';
+export { joinMatchedCompanyAction } from './join-matched-company';
+export { requestJoinCompanyAction } from './request-join-company';

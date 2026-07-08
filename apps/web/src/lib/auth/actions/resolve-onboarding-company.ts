@@ -25,6 +25,10 @@ export type ResolveOnboardingCompanyResult =
   | {
       status: 'matched';
       company: { name: string; memberCount: number; joinMode: 'auto' | 'request' };
+      // BAL-346: email-derived name that powers the JOIN branch's escape hatch
+      // ("This isn't my company") — prefilling the create field rather than
+      // landing the user on a blank one.
+      suggestion: string;
     };
 
 /**
@@ -81,6 +85,7 @@ export async function resolveOnboardingCompanyAction(): Promise<ResolveOnboardin
           memberCount: company?.members?.length ?? 0,
           joinMode: settings.domainJoinMode === 'request' ? 'request' : 'auto',
         },
+        suggestion: suggestCompanyNameFromEmail(email),
       };
     }
     return { status: 'new', suggestion: suggestCompanyNameFromEmail(email) };
