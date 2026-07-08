@@ -17,9 +17,6 @@ export const AUTH_EVENTS = {
   STEP_CHANGED: 'auth_step_changed',
   VERIFICATION_CODE_SUBMITTED: 'auth_verification_code_submitted',
   VERIFICATION_CODE_RESENT: 'auth_verification_code_resent',
-  // BAL-350: compulsory company-name capture on client signup. Value uses the
-  // ticket-literal name (intentionally drops the sibling `auth_` prefix).
-  SIGNUP_COMPANY_NAME_CAPTURED: 'signup_company_name_captured',
 } as const;
 
 export type AuthMethod = 'email' | 'google' | 'microsoft';
@@ -70,9 +67,4 @@ export interface AuthEventMap {
     success: boolean;
   };
   [AUTH_EVENTS.VERIFICATION_CODE_RESENT]: Record<string, never>;
-  // BAL-350: fired once at signup submit when the compulsory company-name field
-  // was shown + filled. `domain_type` folds the fail-open case into 'new'.
-  [AUTH_EVENTS.SIGNUP_COMPANY_NAME_CAPTURED]: {
-    domain_type: 'blocked' | 'new';
-  };
 }

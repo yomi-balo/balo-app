@@ -14,7 +14,6 @@ import {
   emitAutoJoinCompleted,
   emitJoinRequestCreated,
 } from '@/lib/analytics/party-join';
-import { evaluateMatchStandDown } from './match-stand-down';
 
 /**
  * Domain auto-join match engine (BAL-345 §4). A PURE orchestrator: `runDomainJoin`
@@ -88,18 +87,16 @@ export async function runDomainJoin(input: RunDomainJoinInput): Promise<DomainJo
   );
   if (!settings) return { outcome: 'no_match' };
 
-  // 5a–5c. STAND-DOWN evaluation, factored into the single `evaluateMatchStandDown`
-  //     predicate (BAL-350) that the pre-submit `checkSignupDomainAction` also
-  //     reads — so the show/hide decision and the engine can never diverge. Map its
-  //     reason back to the EXISTING granular outcomes (no returned-outcome changes):
-  //       personal_owner → no_match (v1: fires for EVERY company match, all personal)
-  //       directory_authority → directory_authority (membership managed externally)
-  //       mode_off → mode_off (join mode off)
-  const standDown = evaluateMatchStandDown(owner.partyType, settings);
-  if (standDown === 'personal_owner') return { outcome: 'no_match' };
-  if (standDown === 'directory_authority') return { outcome: 'directory_authority' };
-  if (standDown === 'mode_off') return { outcome: 'mode_off' };
-  // standDown === null → fall through to the opt-out check (6) + auto/request (7/8).
+  // 5a. isPersonal STAND-DOWN — the matched company is someone's personal
+  //     workspace; the engine stands down entirely (no trace, no write). In v1
+  //     this fires for EVERY company match (all companies are personal).
+  if (owner.partyType === 'company' && settings.isPersonal) return { outcome: 'no_match' };
+
+  // 5b. Directory-authoritative party — membership is managed externally.
+  if (settings.membershipAuthority === 'directory') return { outcome: 'directory_authority' };
+
+  // 5c. Join mode off.
+  if (settings.domainJoinMode === 'off') return { outcome: 'mode_off' };
 
   // 6. The user previously escaped this party (durable opt-out).
   if (await partyJoinOptoutsRepository.exists(owner.partyType, owner.partyId, input.userId)) {

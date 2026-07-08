@@ -5,7 +5,6 @@ import {
   unifiedSignUpSchema,
   emailSchema,
   verifyEmailSchema,
-  companyNameField,
 } from './schemas';
 
 // ── signInSchema ────────────────────────────────────────────────
@@ -158,61 +157,6 @@ describe('verifyEmailSchema', () => {
   it('rejects code shorter than 6 digits', () => {
     const result = verifyEmailSchema.safeParse({ pendingAuthToken: 'token', code: '12345' });
     expect(result.success).toBe(false);
-  });
-});
-
-// ── companyNameField (BAL-350) ────────────────────────────────
-
-describe('companyNameField', () => {
-  it('trims surrounding whitespace', () => {
-    const result = companyNameField.safeParse('  Acme  ');
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toBe('Acme');
-    }
-  });
-
-  it('accepts a name at exactly 120 characters', () => {
-    expect(companyNameField.safeParse('a'.repeat(120)).success).toBe(true);
-  });
-
-  it('rejects a name longer than 120 characters', () => {
-    const result = companyNameField.safeParse('a'.repeat(121));
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.message).toBe('Company name must be 120 characters or less');
-    }
-  });
-
-  it('accepts an empty string (compulsory-ness is enforced client-side, not here)', () => {
-    expect(companyNameField.safeParse('').success).toBe(true);
-  });
-});
-
-describe('companyName optionality in write-seam schemas', () => {
-  const signUp = { email: 'john@example.com', password: 'Passw0rd' }; // NOSONAR — test fixture
-  const verify = { pendingAuthToken: 'token123', code: '123456' };
-
-  it('unifiedSignUpSchema accepts a valid companyName', () => {
-    expect(unifiedSignUpSchema.safeParse({ ...signUp, companyName: 'Acme' }).success).toBe(true);
-  });
-
-  it('unifiedSignUpSchema accepts input WITHOUT companyName (optional)', () => {
-    expect(unifiedSignUpSchema.safeParse(signUp).success).toBe(true);
-  });
-
-  it('unifiedSignUpSchema rejects an over-long companyName', () => {
-    expect(unifiedSignUpSchema.safeParse({ ...signUp, companyName: 'a'.repeat(121) }).success).toBe(
-      false
-    );
-  });
-
-  it('verifyEmailSchema accepts a valid companyName', () => {
-    expect(verifyEmailSchema.safeParse({ ...verify, companyName: 'Acme' }).success).toBe(true);
-  });
-
-  it('verifyEmailSchema accepts input WITHOUT companyName (optional)', () => {
-    expect(verifyEmailSchema.safeParse(verify).success).toBe(true);
   });
 });
 
