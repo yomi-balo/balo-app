@@ -436,7 +436,7 @@ describe('buildChangeSummary', () => {
   it('formats each change kind with a single-quoted title', () => {
     expect(buildChangeSummary('added', 'Data migration')).toBe("added 'Data migration'");
     expect(buildChangeSummary('removed', 'Data migration')).toBe("removed 'Data migration'");
-    expect(buildChangeSummary('edited', 'Data migration')).toBe("updated 'Data migration'");
+    expect(buildChangeSummary('edited', 'Data migration')).toBe("revised 'Data migration'");
   });
 });
 

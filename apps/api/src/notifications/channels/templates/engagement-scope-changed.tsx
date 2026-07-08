@@ -8,7 +8,7 @@ import { shared, EmailShell, LogoRow, StatusPill, SupportFooter } from './shared
  * whose CTA href is hardwired to `/projects/{id}`): this email's CTA deep-links to the
  * delivery workspace `/engagements/{id}`. The client is TOLD, not asked — the body states
  * plainly that the project price is unchanged. `changeSummary` is the pre-computed,
- * change-kind-agnostic phrase ("added 'X'" / "updated 'Y'" / "removed 'Z'").
+ * change-kind-agnostic phrase ("added 'X'" / "revised 'Y'" / "removed 'Z'").
  */
 export interface EngagementScopeChangedClientEmailProps {
   readonly firstName: string;

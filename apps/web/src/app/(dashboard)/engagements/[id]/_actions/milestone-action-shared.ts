@@ -370,14 +370,18 @@ export async function runExpertEngagementAction(
 // ── Scope-change helpers (add / edit / remove) — DRY the summary + notify + edge
 //    sanitise so each thin action never copy-pastes them (duplication gate) ──────
 
-/** The past-tense verb each change kind reads as in the client-facing summary. */
+/**
+ * The past-tense verb each change kind reads as in the client-facing summary. `edited`
+ * reads as "revised" (not "updated") so the notification body — "{expert} updated the
+ * delivery plan: {summary}" — doesn't double up to "updated … updated 'X'".
+ */
 const CHANGE_SUMMARY_VERB: Record<'added' | 'edited' | 'removed', string> = {
   added: 'added',
   removed: 'removed',
-  edited: 'updated',
+  edited: 'revised',
 };
 
-/** `added 'X'` | `removed 'X'` | `updated 'X'` — the single change-summary builder. */
+/** `added 'X'` | `removed 'X'` | `revised 'X'` — the single change-summary builder. */
 export function buildChangeSummary(kind: 'added' | 'edited' | 'removed', title: string): string {
   return `${CHANGE_SUMMARY_VERB[kind]} '${title}'`;
 }

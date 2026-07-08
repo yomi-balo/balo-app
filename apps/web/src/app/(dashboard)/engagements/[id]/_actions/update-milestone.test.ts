@@ -193,7 +193,7 @@ describe('updateMilestoneAction', () => {
       actorExpertLabel: 'Priya',
       projectTitle: 'CPQ implementation',
       changeKind: 'edited',
-      changeSummary: "updated 'Discovery'",
+      changeSummary: "revised 'Discovery'",
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
   });
@@ -217,7 +217,7 @@ describe('updateMilestoneAction', () => {
     const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
     // Time-bucketed key (Math.floor(now / DEBOUNCE)) — assert the shape, not the bucket.
     expect(payload.correlationId).toMatch(new RegExp(`^${MILESTONE_ID}:edited:\\d+$`));
-    expect(payload.changeSummary).toBe("updated 'Discovery v2'");
+    expect(payload.changeSummary).toBe("revised 'Discovery v2'");
   });
 
   it('re-sending an unchanged field alongside a real change writes + audits only what changed', async () => {
