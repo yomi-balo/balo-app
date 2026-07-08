@@ -144,18 +144,10 @@ export const usersRepository = {
    *
    * Used by:
    * - apps/web: OAuth callback (BAL-43)
-   * - apps/web: client email/password signup (BAL-350 — passes `companyName`)
    * - apps/api: Future invite acceptance webhooks
-   *
-   * BAL-350: `options.companyName`, when a non-empty (after trim) string, overrides
-   * the firstName-derived workspace name. Callers that omit it (OAuth, sign-in
-   * auto-create) keep today's behaviour. This does NOT change `isPersonal` — the
-   * workspace stays personal, so BAL-344 domain capture and BAL-345 stand-down are
-   * unaffected.
    */
   createWithWorkspace: async (
-    data: NewUser,
-    options?: { companyName?: string }
+    data: NewUser
   ): Promise<{
     user: User;
     company: Company;
@@ -167,19 +159,8 @@ export const usersRepository = {
       const [user] = await tx.insert(users).values(data).returning();
       if (user === undefined) throw new Error('users insert returned no row');
 
-      // 2. Create personal workspace. Prefer an explicit, validated company name
-      //    (BAL-350 client signup capture); else the firstName-derived default.
-      //    Trim defensively (belt-and-suspenders; the action's zod is the length
-      //    authority); empty-after-trim falls back.
-      const explicitName = options?.companyName?.trim();
-      let workspaceName: string;
-      if (explicitName !== undefined && explicitName.length > 0) {
-        workspaceName = explicitName;
-      } else if (data.firstName) {
-        workspaceName = `${data.firstName}'s Workspace`;
-      } else {
-        workspaceName = 'My Workspace';
-      }
+      // 2. Create personal workspace
+      const workspaceName = data.firstName ? `${data.firstName}'s Workspace` : 'My Workspace';
 
       const [company] = await tx
         .insert(companies)
