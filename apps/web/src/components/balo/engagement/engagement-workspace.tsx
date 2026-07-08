@@ -38,6 +38,35 @@ export function EngagementWorkspace({
   // can host the "Add the first milestone" CTA + the scope-edit modals.
   const isInteractiveExpertRail = view.lens === 'expert' && view.status === 'active';
 
+  // Milestone section, resolved as an independent statement (not a nested JSX ternary):
+  // interactive expert rail (active) → read-only rail (has milestones) → empty state.
+  let milestoneSection: React.JSX.Element | null = null;
+  if (isInteractiveExpertRail) {
+    milestoneSection = (
+      <Reveal delay={0.2}>
+        <ExpertMilestoneRail
+          engagementId={view.engagementId}
+          milestones={view.milestones}
+          emptyState={view.emptyState}
+          expertPersonShort={view.parties.expertPersonShort}
+          clientCompanyName={view.parties.clientCompanyName}
+        />
+      </Reveal>
+    );
+  } else if (view.hasMilestones) {
+    milestoneSection = (
+      <Reveal delay={0.2}>
+        <MilestoneRail milestones={view.milestones} />
+      </Reveal>
+    );
+  } else if (view.emptyState !== null) {
+    milestoneSection = (
+      <Reveal delay={0.2}>
+        <MilestoneEmptyState emptyState={view.emptyState} />
+      </Reveal>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <Reveal>
@@ -80,27 +109,7 @@ export function EngagementWorkspace({
         </Reveal>
       )}
 
-      {isInteractiveExpertRail ? (
-        <Reveal delay={0.2}>
-          <ExpertMilestoneRail
-            engagementId={view.engagementId}
-            milestones={view.milestones}
-            emptyState={view.emptyState}
-            expertPersonShort={view.parties.expertPersonShort}
-            clientCompanyName={view.parties.clientCompanyName}
-          />
-        </Reveal>
-      ) : view.hasMilestones ? (
-        <Reveal delay={0.2}>
-          <MilestoneRail milestones={view.milestones} />
-        </Reveal>
-      ) : (
-        view.emptyState !== null && (
-          <Reveal delay={0.2}>
-            <MilestoneEmptyState emptyState={view.emptyState} />
-          </Reveal>
-        )
-      )}
+      {milestoneSection}
     </div>
   );
 }

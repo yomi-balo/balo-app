@@ -90,7 +90,7 @@ function escapeToParagraphs(text: string): string | null {
     .replaceAll("'", '&#39;');
   return escaped
     .split(/\n{2,}/)
-    .map((para) => `<p>${para.replace(/\n/g, '<br>')}</p>`)
+    .map((para) => `<p>${para.replaceAll('\n', '<br>')}</p>`)
     .join('');
 }
 
