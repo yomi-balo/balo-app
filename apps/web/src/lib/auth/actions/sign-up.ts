@@ -36,7 +36,7 @@ export async function signUpAction(
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid input.' };
   }
-  const { email, password } = parsed.data;
+  const { email, password, companyName } = parsed.data;
 
   let workosUser;
 
@@ -85,14 +85,19 @@ export async function signUpAction(
     const { usersRepository } = await import('@balo/db');
     const { getSession } = await import('@/lib/auth/session');
 
-    const { user, company, membership, domainCapture } = await usersRepository.createWithWorkspace({
-      workosId: workosUser.id,
-      email: workosUser.email,
-      firstName: null,
-      lastName: null,
-      emailVerified: workosUser.emailVerified ?? false,
-      activeMode: 'client',
-    });
+    const { user, company, membership, domainCapture } = await usersRepository.createWithWorkspace(
+      {
+        workosId: workosUser.id,
+        email: workosUser.email,
+        firstName: null,
+        lastName: null,
+        emailVerified: workosUser.emailVerified ?? false,
+        activeMode: 'client',
+      },
+      // BAL-350: names the personal workspace when the compulsory field was shown +
+      // filled; undefined on the matched path (repo falls back to the default).
+      { companyName }
+    );
 
     const session = await getSession();
     session.user = {

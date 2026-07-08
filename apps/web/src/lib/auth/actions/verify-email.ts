@@ -53,14 +53,19 @@ export async function verifyEmailAction(
     if (!existingUser) {
       // Create Balo user + personal workspace in a single transaction.
       // Name is null -- will be collected in onboarding for email sign-ups.
-      const created = await usersRepository.createWithWorkspace({
-        workosId: workosUser.id,
-        email: workosUser.email,
-        firstName: workosUser.firstName ?? null,
-        lastName: workosUser.lastName ?? null,
-        emailVerified: true,
-        activeMode: 'client',
-      });
+      const created = await usersRepository.createWithWorkspace(
+        {
+          workosId: workosUser.id,
+          email: workosUser.email,
+          firstName: workosUser.firstName ?? null,
+          lastName: workosUser.lastName ?? null,
+          emailVerified: true,
+          activeMode: 'client',
+        },
+        // BAL-350: names the personal workspace when the signup step captured a
+        // company name; undefined on the matched path (repo falls back).
+        { companyName: parsed.data.companyName }
+      );
       existingUser = created.user;
       isNewUser = true;
       domainCapture = created.domainCapture;

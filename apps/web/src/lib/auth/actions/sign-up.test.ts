@@ -238,7 +238,8 @@ describe('signUpAction', () => {
         expect.objectContaining({
           firstName: null,
           lastName: null,
-        })
+        }),
+        { companyName: undefined }
       );
     });
 
@@ -323,6 +324,39 @@ describe('signUpAction', () => {
         success: false,
         error: 'Something went wrong. Please try again.',
       });
+    });
+  });
+
+  // BAL-350 — company-name capture threading (verification-disabled fallback path).
+  describe('company name capture (BAL-350)', () => {
+    it('threads a captured companyName into createWithWorkspace as the 2nd arg', async () => {
+      setupFallbackPath();
+      await signUpAction({ ...validInput(), companyName: 'Acme Inc' });
+      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ firstName: null }),
+        {
+          companyName: 'Acme Inc',
+        }
+      );
+    });
+
+    it('passes companyName undefined when the field was omitted (matched path)', async () => {
+      setupFallbackPath();
+      await signUpAction(validInput());
+      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(expect.anything(), {
+        companyName: undefined,
+      });
+    });
+
+    it('does NOT create a workspace on the verification-required path (name carried by client)', async () => {
+      mockCreateUser.mockResolvedValue(mockWorkOSUser());
+      mockAuthenticateWithPassword.mockResolvedValue({
+        pendingAuthenticationToken: 'pat_test_123',
+        user: mockWorkOSUser(),
+      });
+
+      await signUpAction({ ...validInput(), companyName: 'Acme Inc' });
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
     });
   });
 

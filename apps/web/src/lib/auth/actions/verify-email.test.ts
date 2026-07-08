@@ -207,14 +207,17 @@ describe('verifyEmailAction', () => {
     it('creates user + workspace when user does not exist', async () => {
       setupHappyPath();
       await verifyEmailAction(validInput());
-      expect(mockCreateWithWorkspace).toHaveBeenCalledWith({
-        workosId: 'workos-user-1',
-        email: 'jane@example.com',
-        firstName: null,
-        lastName: null,
-        emailVerified: true,
-        activeMode: 'client',
-      });
+      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
+        {
+          workosId: 'workos-user-1',
+          email: 'jane@example.com',
+          firstName: null,
+          lastName: null,
+          emailVerified: true,
+          activeMode: 'client',
+        },
+        { companyName: undefined }
+      );
     });
 
     it('skips creation when user already exists (race condition)', async () => {
@@ -238,7 +241,8 @@ describe('verifyEmailAction', () => {
       setupHappyPath();
       await verifyEmailAction(validInput());
       expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ firstName: null, lastName: null })
+        expect.objectContaining({ firstName: null, lastName: null }),
+        { companyName: undefined }
       );
     });
 
@@ -262,7 +266,8 @@ describe('verifyEmailAction', () => {
 
       await verifyEmailAction(validInput());
       expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ firstName: 'Jane', lastName: 'Doe' })
+        expect.objectContaining({ firstName: 'Jane', lastName: 'Doe' }),
+        { companyName: undefined }
       );
     });
 
@@ -270,7 +275,8 @@ describe('verifyEmailAction', () => {
       setupHappyPath();
       await verifyEmailAction(validInput());
       expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ emailVerified: true })
+        expect.objectContaining({ emailVerified: true }),
+        { companyName: undefined }
       );
     });
 
@@ -278,7 +284,20 @@ describe('verifyEmailAction', () => {
       setupHappyPath();
       await verifyEmailAction(validInput());
       expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ activeMode: 'client' })
+        expect.objectContaining({ activeMode: 'client' }),
+        { companyName: undefined }
+      );
+    });
+
+    // BAL-350 — company-name threading from the signup step through verify.
+    it('threads a captured companyName into createWithWorkspace as the 2nd arg', async () => {
+      setupHappyPath();
+      await verifyEmailAction({ ...validInput(), companyName: 'Acme Inc' });
+      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ emailVerified: true }),
+        {
+          companyName: 'Acme Inc',
+        }
       );
     });
   });

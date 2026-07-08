@@ -8,3 +8,4 @@ export { updateTimezoneAction } from './update-timezone';
 export { completeOnboardingAction } from './complete-onboarding';
 export { verifyEmailAction } from './verify-email';
 export { updateNameAction } from './update-name';
+export { checkSignupDomainAction } from './check-signup-domain';
