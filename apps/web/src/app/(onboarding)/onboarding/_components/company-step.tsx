@@ -155,6 +155,11 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
   );
 
   // Escape hatch from the JOIN branch — "This isn't my company / start my own".
+  // DORMANT in v1 (the join branch is unreachable). Resets to an EMPTY field
+  // because the `matched` resolve result carries no name suggestion. BAL-346 (which
+  // activates the join branch) should carry a suggestion through the matched result
+  // and prefill it here, so escaping to create lands on a prefilled field rather
+  // than a blank one.
   const handleCreateInstead = useCallback((): void => {
     resolveFailedOpenRef.current = false;
     initialSuggestionRef.current = '';

@@ -150,7 +150,11 @@ describe('suggestCompanyNameFromEmail', () => {
     expect(suggestCompanyNameFromEmail('ops@big_co.com')).toBe('Big Co');
   });
 
-  it('ignores sub-domains beyond the apex label', () => {
+  it('takes the FIRST label — known simplification: subdomained mail yields the subdomain (no PSL)', () => {
+    // jane@mail.acme.co.uk -> "Mail" (the leftmost label), NOT "Acme" (the
+    // registrable label). Documented trade-off: the prefill is editable and
+    // PSL/eTLD+1 is out of scope. If registrable-domain accuracy is ever added,
+    // this expectation must change alongside the suggestCompanyNameFromEmail impl.
     expect(suggestCompanyNameFromEmail('a@mail.acme.co.uk')).toBe('Mail');
   });
 

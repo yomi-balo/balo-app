@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition, forwardRef, useEffect } from 'react';
+import { useState, useTransition, forwardRef, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -40,13 +40,20 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
   const router = useRouter();
   const [selectedIntent, setSelectedIntent] = useState<Intent | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Synchronous re-entry latch: the client branch advances (and unmounts) without
+  // ever entering `startTransition`, so `isPending` stays false and `selectedIntent`
+  // only guards re-entry AFTER the next render. A ref updates immediately, closing
+  // the same-tick double-fire window (double-click / Enter+click) so STEP_COMPLETED
+  // and `onClientContinue` can't fire twice.
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     track(ONBOARDING_EVENTS.STEP_VIEWED, { step: 'intent', step_number: stepNumber });
   }, [stepNumber]);
 
   function handleSelect(intent: Intent): void {
-    if (isPending || selectedIntent !== null) return;
+    if (submittingRef.current || isPending || selectedIntent !== null) return;
+    submittingRef.current = true;
 
     setSelectedIntent(intent);
 
@@ -77,6 +84,8 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
         });
         router.push(result.data?.redirectTo ?? '/dashboard');
       } else {
+        // Allow a retry after a failed expert completion.
+        submittingRef.current = false;
         toast.error(result.error);
         setSelectedIntent(null);
       }

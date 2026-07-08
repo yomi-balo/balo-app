@@ -25,6 +25,16 @@ export const AUTH_EVENTS = {
 
 export type AuthMethod = 'email' | 'google' | 'microsoft';
 
+/**
+ * BAL-350 coarse auth-method signal — the SINGLE SOURCE OF TRUTH for the
+ * `auth_method` analytics dimension. Distinct from `AuthMethod` above (this one
+ * carries the `oauth_` prefix). Reused by the onboarding event maps and by
+ * apps/web's session mapper (`mapWorkosAuthMethod` re-exports this type), so the
+ * union can never drift across the three call sites. Optional at call sites:
+ * pre-existing sessions / unknown providers leave it unset.
+ */
+export type AuthMethodSignal = 'email' | 'oauth_google' | 'oauth_microsoft';
+
 export type AuthStepName = 'email' | 'password' | 'signup' | 'verify' | 'forgot';
 
 export interface AuthEventMap {
@@ -80,6 +90,6 @@ export interface AuthEventMap {
     domain_type: 'blocked' | 'new';
     prefill_used: boolean;
     prefill_edited: boolean;
-    auth_method?: 'email' | 'oauth_google' | 'oauth_microsoft';
+    auth_method?: AuthMethodSignal;
   };
 }
