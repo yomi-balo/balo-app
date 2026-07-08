@@ -20,6 +20,7 @@ import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
 import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
 import { ProjectBillingReminderOwnerEmail } from './project-billing-reminder-owner.js';
 import { ProjectBillingReminderCreatorEmail } from './project-billing-reminder-creator.js';
+import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
 import {
   PartyMemberJoinedViaDomainEmail,
   PartyJoinRequestCreatedEmail,
@@ -343,6 +344,28 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `Billing details are still needed to start ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-332 (D2) milestone completed — CLIENT owner email. Subject names the expert
+  // PARTY (prospective, BAL-329); the greeting uses the recipient's own first name.
+  // The delivery note (when present) renders verbatim in the component's Callout.
+  'engagement-milestone-completed-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(EngagementMilestoneCompletedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel: (data.actorExpertLabel as string) ?? 'Your expert',
+        milestoneTitle: (data.milestoneTitle as string) ?? 'a milestone',
+        completedOn: (data.completedOn as string) ?? '',
+        completionNote: data.completionNote as string | undefined,
+        completedCount: numberCount(data.completedCount),
+        totalCount: numberCount(data.totalCount),
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(expertParty)} completed a milestone on ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
 

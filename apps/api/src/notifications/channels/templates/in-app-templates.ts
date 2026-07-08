@@ -46,6 +46,19 @@ function projectRequestNotice(
   return { title, body, actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined };
 }
 
+/** BAL-332 — the common in-app shape for a milestone notice, deep-linked to the workspace. */
+function engagementNotice(title: string, body: string, data: Record<string, unknown>): InAppOutput {
+  const engagementId = data.engagementId as string | undefined;
+  return { title, body, actionUrl: engagementId ? `/engagements/${engagementId}` : undefined };
+}
+
+/** BAL-332 — "n/m" milestone progress from the payload counts; "" when either is absent. */
+function milestoneProgress(data: Record<string, unknown>): string {
+  const done = data.completedCount;
+  const total = data.totalCount;
+  return typeof done === 'number' && typeof total === 'number' ? `${done}/${total}` : '';
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
   'booking-confirmed': (data) => {
     const clientName = (data.clientName as string) ?? 'A client';
@@ -240,6 +253,43 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     title: 'Request declined',
     body: `Your request to join the ${partyTypeNoun(data)} was not approved`,
   }),
+
+  // BAL-332 (D2) milestone completed — CLIENT owner ("your expert delivered").
+  'engagement-milestone-completed-client': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const progress = milestoneProgress(data);
+    const suffix = progress ? ` (${progress})` : '';
+    return engagementNotice(
+      'Milestone completed',
+      `${actor} completed '${milestone}'${suffix}.`,
+      data
+    );
+  },
+
+  // BAL-332 (D2) milestone completed — ADMIN ops signal (project-scoped).
+  'engagement-milestone-completed-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const progress = milestoneProgress(data);
+    const suffix = progress ? ` (${progress})` : '';
+    return engagementNotice(
+      'Milestone completed',
+      `${title}: '${milestone}' completed${suffix}.`,
+      data
+    );
+  },
+
+  // BAL-332 (D2) milestone reverted — shared by the client-owner + admin rules.
+  'engagement-milestone-reverted': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    return engagementNotice(
+      'Milestone reopened',
+      `${actor} moved '${milestone}' back to in progress.`,
+      data
+    );
+  },
 
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {

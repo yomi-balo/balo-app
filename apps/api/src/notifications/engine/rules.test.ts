@@ -397,6 +397,53 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-332 milestone delivery events', () => {
+    it('milestone_completed: client owner email + in-app AND admins in-app', () => {
+      const rules = notificationRules['engagement.milestone_completed'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(3);
+
+      const clientRules = rules!.filter((r) => r.recipient === 'client');
+      expect(clientRules).toHaveLength(2);
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('engagement-milestone-completed-client');
+      }
+      expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
+      expect(adminRules).toHaveLength(1);
+      expect(adminRules[0]).toMatchObject({
+        channel: 'in-app',
+        template: 'engagement-milestone-completed-admin',
+        timing: 'immediate',
+      });
+    });
+
+    it('milestone_reverted: client + admins, in-app ONLY, one shared template', () => {
+      const rules = notificationRules['engagement.milestone_reverted'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.channel).toBe('in-app');
+        expect(rule.template).toBe('engagement-milestone-reverted');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
+        'admin_users',
+        'client',
+      ]);
+      // Never email/SMS — reverts are never silent but aren't email-worthy.
+      expect(rules!.some((r) => r.channel !== 'in-app')).toBe(false);
+    });
+
+    it('milestone_started publishes nothing (no rule set)', () => {
+      expect(notificationRules['engagement.milestone_started']).toBeUndefined();
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

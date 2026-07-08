@@ -352,6 +352,37 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-332 (D2): the delivering expert marked a milestone complete. Fans out to the
+  // CLIENT company owner (recipient:'client' via payload.recipientId; email + in-app —
+  // a delivery moment the client reviews against) and the Balo ADMINS
+  // (recipient:'admin_users' fan-out over data.adminUserIds; in-app ops signal). The
+  // owner rules skip gracefully when recipientId is absent (retainer / no-owner).
+  'engagement.milestone_completed': [
+    ...emailAndInApp('client', 'engagement-milestone-completed-client'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-milestone-completed-admin',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-332 (D2): the expert reopened a completed milestone. IN-APP ONLY to BOTH the
+  // client owner and the admins — reverts are never silent, but they aren't
+  // email-worthy. One template shared by both rules.
+  'engagement.milestone_reverted': [
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'engagement-milestone-reverted',
+      timing: 'immediate',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-milestone-reverted',
+      timing: 'immediate',
+    },
+  ],
   // BAL-345 domain auto-join. `party_admins` is a fan-out recipient (one delivery
   // per admin) resolved from data.partyAdminUserIds; `self` (approve/decline)
   // resolves to payload.userId (the requester). The base-member joiner/requester

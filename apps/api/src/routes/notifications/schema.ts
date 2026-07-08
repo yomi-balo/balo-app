@@ -223,6 +223,38 @@ const billingDetailsConfirmedPayload = z.object({
   projectRequestId: z.uuid(),
 });
 
+// BAL-332 (D2) expert milestone completed (expert → client owner + admins).
+// `correlationId` = `${milestoneId}:${completedAtEpochMs}` (idempotent per
+// completion; z.string not z.uuid so the epoch suffix validates). `recipientId` is
+// the client company owner (recipient:'client'; optional — absent for retainers/
+// no-owner). Mirrors packages/shared/src/notifications/index.ts.
+const engagementMilestoneCompletedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  milestoneId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  expertPartyLabel: z.string().min(1).max(200),
+  actorExpertLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  milestoneTitle: z.string().min(1).max(200),
+  completedOn: z.string().min(1).max(40),
+  completionNote: z.string().max(4000).optional(),
+  completedCount: z.number().int().nonnegative(),
+  totalCount: z.number().int().nonnegative(),
+});
+
+// BAL-332 (D2) expert milestone reverted (expert → client owner + admins).
+// `correlationId` = `${milestoneId}:reverted:${updatedAtEpochMs}`. Mirrors
+// packages/shared/src/notifications/index.ts.
+const engagementMilestoneRevertedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  milestoneId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  actorExpertLabel: z.string().min(1).max(200),
+  milestoneTitle: z.string().min(1).max(200),
+});
+
 // BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the
 // subject (joiner/requester), `correlationId` the stable membership/request id.
 // One schema, reused for all four arms (DRY — the completeness guard still checks
@@ -304,6 +336,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('billing.details_confirmed'),
     payload: billingDetailsConfirmedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.milestone_completed'),
+    payload: engagementMilestoneCompletedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.milestone_reverted'),
+    payload: engagementMilestoneRevertedPayload,
   }),
   z.object({
     event: z.literal('party.member_joined_via_domain'),

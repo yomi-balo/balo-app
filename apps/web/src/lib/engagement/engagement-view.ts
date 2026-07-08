@@ -1,5 +1,6 @@
 import { AUTO_ACCEPT_DAYS, type EngagementWithMilestones } from '@balo/db';
 import { formatWholeCurrency } from '@/lib/utils/currency';
+import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
@@ -100,7 +101,7 @@ export interface EngagementProgressView {
 export interface MilestoneNodeView {
   id: string;
   title: string;
-  /** Raw (pre-sanitised) HTML — `<RichText>` re-sanitises at render. Null if none. */
+  /** Server-sanitised HTML — injected as-is by the shared `MilestoneRow`. Null if none. */
   descriptionHtml: string | null;
   acceptanceCriteria: string | null;
   status: MilestoneNodeVariant;
@@ -318,8 +319,14 @@ function deriveMilestones(
     return {
       id: m.id,
       title: m.title,
+      // Sanitise ONCE here (the mapper is server-only) so both the read-only rail and
+      // the client `ExpertMilestoneRail` inject already-safe HTML — the client-safe
+      // `MilestoneRow` cannot call the `server-only` `RichText`/`sanitizeProjectHtml`.
+      // Preserves the two-layer guarantee: ingest sanitise + mapper sanitise.
       descriptionHtml:
-        m.descriptionHtml !== null && m.descriptionHtml.trim() !== '' ? m.descriptionHtml : null,
+        m.descriptionHtml !== null && m.descriptionHtml.trim() !== ''
+          ? sanitizeProjectHtml(m.descriptionHtml)
+          : null,
       acceptanceCriteria:
         m.acceptanceCriteria !== null && m.acceptanceCriteria.trim() !== ''
           ? m.acceptanceCriteria
@@ -329,11 +336,11 @@ function deriveMilestones(
       statusLabel: statusLabels[m.status],
       connectorFilled: isCompleted,
       valueLabel,
-      startedLabel: m.startedAt !== null ? `Started ${formatShortDate(m.startedAt)}` : null,
+      startedLabel: m.startedAt === null ? null : `Started ${formatShortDate(m.startedAt)}`,
       completedLabel:
-        m.completedAt !== null
-          ? `Completed ${formatShortDate(m.completedAt)} by ${parties.expertPersonShort}`
-          : null,
+        m.completedAt === null
+          ? null
+          : `Completed ${formatShortDate(m.completedAt)} by ${parties.expertPersonShort}`,
       completionNote:
         isCompleted && m.completionNote !== null && m.completionNote.trim() !== ''
           ? m.completionNote
@@ -430,7 +437,7 @@ function deriveCompletedBanner(
   if (engagement.status !== 'completed') return null;
   const total = engagement.milestones.length;
   const acceptedAtLabel =
-    engagement.acceptedAt !== null ? formatLongDate(engagement.acceptedAt) : 'the review date';
+    engagement.acceptedAt === null ? 'the review date' : formatLongDate(engagement.acceptedAt);
   const isAuto = engagement.acceptanceMethod === 'auto' || engagement.acceptedBy === null;
   const acceptedLine = isAuto
     ? `accepted automatically on ${acceptedAtLabel} after the ${AUTO_ACCEPT_DAYS}-day review window`
@@ -462,7 +469,7 @@ function deriveCompletedBanner(
 function deriveCancelledBanner(engagement: EngagementWithMilestones): CancelledBannerView | null {
   if (engagement.status !== 'cancelled') return null;
   const cancelledAtLabel =
-    engagement.cancelledAt !== null ? formatLongDate(engagement.cancelledAt) : 'an earlier date';
+    engagement.cancelledAt === null ? 'an earlier date' : formatLongDate(engagement.cancelledAt);
   const reason =
     engagement.cancellationReason !== null && engagement.cancellationReason.trim() !== ''
       ? engagement.cancellationReason
@@ -561,12 +568,12 @@ export function mapEngagementToWorkspaceView(
       : `Delivery with ${parties.expertPartyShort}`;
 
   const provenance: ProvenanceLinkView | null =
-    engagement.projectRequest !== null
-      ? {
+    engagement.projectRequest === null
+      ? null
+      : {
           requestId: engagement.projectRequest.id,
           href: `/projects/${engagement.projectRequest.id}`,
-        }
-      : null;
+        };
 
   const header: EngagementHeaderView = {
     engagementTitle,
