@@ -573,16 +573,17 @@ describe('termsStepDraftSchema', () => {
   });
 });
 
-// ── Step metadata (BAL-325: invite step removed → 6 steps) ────────
+// ── Step metadata (BAL-356: agency step inserted at index 1 → 7 steps) ─
 
 describe('STEP_CONFIG', () => {
-  it('has exactly 6 steps with the invite step removed', () => {
-    expect(STEP_CONFIG).toHaveLength(6);
+  it('has exactly 7 steps (agency inserted, invite removed)', () => {
+    expect(STEP_CONFIG).toHaveLength(7);
   });
 
-  it('preserves the canonical step order', () => {
+  it('preserves the canonical step order with agency at index 1', () => {
     expect(STEP_CONFIG.map((s) => s.key)).toEqual([
       'profile',
+      'agency',
       'products',
       'assessment',
       'certifications',
@@ -591,10 +592,22 @@ describe('STEP_CONFIG', () => {
     ]);
   });
 
+  it('marks the agency step self-advancing and outcome-neutral (never "Agency")', () => {
+    const agency = STEP_CONFIG.find((s) => s.key === 'agency');
+    expect(agency).toBeDefined();
+    expect(agency?.label).toBe('Get Started');
+    expect(agency?.shortLabel).toBe('Setup');
+    expect(agency?.required).toBe(true);
+    // Type guard: the flag lives only on the agency entry.
+    expect(agency && 'selfAdvancing' in agency && agency.selfAdvancing).toBe(true);
+  });
+
   it('exposes strict + draft schemas for every step and no orphan invite key', () => {
     expect(Object.keys(STEP_SCHEMAS).sort()).toEqual(STEP_CONFIG.map((s) => s.key).sort());
     expect(Object.keys(STEP_DRAFT_SCHEMAS).sort()).toEqual(STEP_CONFIG.map((s) => s.key).sort());
     expect('invite' in STEP_SCHEMAS).toBe(false);
     expect('invite' in STEP_DRAFT_SCHEMAS).toBe(false);
+    expect('agency' in STEP_SCHEMAS).toBe(true);
+    expect('agency' in STEP_DRAFT_SCHEMAS).toBe(true);
   });
 });

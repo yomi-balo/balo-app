@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "agency_owner_unique_idx" ON "agency_members" USING btree ("agency_id") WHERE "agency_members"."role" = 'owner' AND "agency_members"."deleted_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "expert_profiles_agency_id_idx" ON "expert_profiles" USING btree ("agency_id");

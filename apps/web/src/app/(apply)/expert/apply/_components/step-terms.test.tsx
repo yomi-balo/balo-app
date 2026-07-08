@@ -95,6 +95,7 @@ const draft = {
     userId: 'user-1',
     applicationStatus: 'draft',
     yearStartedSalesforce: 2018,
+    agencyId: '77777777-7777-7777-7777-777777777777',
     linkedinUrl: null,
     trailheadUrl: null,
     isSalesforceMvp: false,

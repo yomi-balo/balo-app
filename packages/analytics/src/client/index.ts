@@ -21,6 +21,7 @@ export {
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,
   DOMAIN_JOIN_EVENTS,
+  EXPERT_AGENCY_EVENTS,
 } from '../events';
 
 export type {
@@ -57,4 +58,6 @@ export type {
   AdminEngagementsEventMap,
   AdminEngagementsFilter,
   DomainJoinEventMap,
+  ExpertAgencyEventMap,
+  ExpertAgencyOutcome,
 } from '../events';

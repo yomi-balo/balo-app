@@ -468,6 +468,28 @@ describe('saveDraftAction', () => {
     });
   });
 
+  describe('agency step (BAL-356 — self-advancing no-op)', () => {
+    beforeEach(() => {
+      setupOwnershipCheck();
+    });
+
+    it('accepts the permissive agency draft and writes nothing (the write is its own action)', async () => {
+      const result = await saveDraftAction({
+        step: 'agency',
+        data: { agencyId: null },
+        expertProfileId: PROFILE_ID,
+      });
+      expect(result.success).toBe(true);
+      expect(result.expertProfileId).toBe(PROFILE_ID);
+      // No repository write path runs for the agency step.
+      expect(mockSaveProfileStep).not.toHaveBeenCalled();
+      expect(mockSyncProducts).not.toHaveBeenCalled();
+      expect(mockUpdateCompetencyProficiency).not.toHaveBeenCalled();
+      expect(mockSyncWorkHistory).not.toHaveBeenCalled();
+      expect(mockSaveCertificationsStep).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('returns the known id (not empty) when the repository throws during save', async () => {
       setupOwnershipCheck();

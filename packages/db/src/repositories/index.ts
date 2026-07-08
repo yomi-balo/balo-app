@@ -1,5 +1,15 @@
 export { usersRepository } from './users';
 export { companiesRepository } from './companies';
+export { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
+export type {
+  AgencySummary,
+  JoinExistingInput,
+  JoinExistingResult,
+  ProvisionInput,
+  ProvisionSoloInput,
+  ProvisionResult,
+  TransferOwnershipInput,
+} from './agencies';
 export { expertsRepository, isUniqueViolation } from './experts';
 export type {
   ApplicationWithRelations,

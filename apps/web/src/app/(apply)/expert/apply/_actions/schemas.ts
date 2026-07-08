@@ -141,6 +141,14 @@ export const workHistoryStepSchema = z.object({
   entries: z.array(workHistoryEntrySchema).max(50, 'Too many entries'),
 });
 
+// ── Agency step (BAL-356 / ADR-1034) — self-advancing, no form ───
+// The agency-resolution step (STEP_CONFIG index 1) owns its own in-card Continue and
+// performs a determined write (join / provision / solo). It has no form fields, so
+// both its strict and draft schemas are permissive: an incidental autosave of the
+// (empty) agency data must never fail validation. `save-draft` treats `'agency'` as a
+// no-op write.
+export const agencyStepSchema = z.object({}).passthrough();
+
 // ── Step 6: Terms ────────────────────────────────────────────────
 
 export const termsStepSchema = z.object({
@@ -189,6 +197,7 @@ export const termsStepDraftSchema = z.object({
 
 // ── Inferred types ───────────────────────────────────────────────
 
+export type AgencyStepData = z.infer<typeof agencyStepSchema>;
 export type ProfileStepData = z.infer<typeof profileStepSchema>;
 export type ProductsStepData = z.infer<typeof productsStepSchema>;
 export type AssessmentStepData = z.infer<typeof assessmentStepSchema>;
@@ -202,8 +211,25 @@ export type AssessmentStepDraftData = z.infer<typeof assessmentStepDraftSchema>;
 
 // ── Step metadata (data-driven iteration) ────────────────────────
 
+/**
+ * Shape of a wizard step config entry. `selfAdvancing` marks a step that owns its own
+ * in-card forward action (BAL-356 agency step) — the action bar then suppresses
+ * Next/Skip so the in-card Continue is the sole forward path.
+ */
+interface StepConfigItem {
+  key: string;
+  label: string;
+  shortLabel: string;
+  required: boolean;
+  selfAdvancing?: boolean;
+}
+
 export const STEP_CONFIG = [
   { key: 'profile', label: 'Your Profile', shortLabel: 'Profile', required: true },
+  // BAL-356 / ADR-1034: outcome-neutral label — must never read "Agency" for a solo
+  // expert on the progress UI (Locked Decision 4). Self-advancing: the step's in-card
+  // Continue performs the write, then advances.
+  { key: 'agency', label: 'Get Started', shortLabel: 'Setup', required: true, selfAdvancing: true },
   { key: 'products', label: 'Products', shortLabel: 'Products', required: true },
   {
     key: 'assessment',
@@ -224,13 +250,14 @@ export const STEP_CONFIG = [
     required: false,
   },
   { key: 'terms', label: 'Terms', shortLabel: 'Terms', required: true },
-] as const;
+] as const satisfies readonly StepConfigItem[];
 
 export type StepKey = (typeof STEP_CONFIG)[number]['key'];
 
 /** Map from StepKey to its strict Zod schema (submit + client "Next" gate). */
 export const STEP_SCHEMAS: Record<StepKey, z.ZodType> = {
   profile: profileStepSchema,
+  agency: agencyStepSchema,
   products: productsStepSchema,
   assessment: assessmentStepSchema,
   certifications: certificationsStepSchema,
@@ -246,6 +273,7 @@ export const STEP_SCHEMAS: Record<StepKey, z.ZodType> = {
  */
 export const STEP_DRAFT_SCHEMAS: Record<StepKey, z.ZodType> = {
   profile: profileStepDraftSchema,
+  agency: agencyStepSchema,
   products: productsStepDraftSchema,
   assessment: assessmentStepDraftSchema,
   certifications: certificationsStepSchema,

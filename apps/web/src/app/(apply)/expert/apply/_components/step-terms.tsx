@@ -14,7 +14,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
 import { cn } from '@/lib/utils';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
-import { termsStepSchema, type TermsStepData, STEP_CONFIG } from '../_actions/schemas';
+import {
+  termsStepSchema,
+  type TermsStepData,
+  type StepKey,
+  STEP_CONFIG,
+} from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { StepHeading } from './design-system';
 
@@ -184,6 +189,11 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     registerSubmit(handleSubmit);
   }, [registerSubmit, handleSubmit]);
 
+  // Derive each summary row's jump target by KEY so inserting/reordering steps (e.g.
+  // BAL-356's agency step at index 1) never leaves an "Edit" link pointing at the
+  // wrong step.
+  const indexOfStep = (key: StepKey): number => STEP_CONFIG.findIndex((s) => s.key === key);
+
   // Build summary data
   const summaryItems = [
     {
@@ -192,7 +202,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         (productsData.productIds?.length ?? 0) > 0
           ? `${productsData.productIds?.length} selected`
           : 'None',
-      stepIndex: 1,
+      stepIndex: indexOfStep('products'),
     },
     {
       label: 'Certifications',
@@ -200,7 +210,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         (certificationsData.certifications?.length ?? 0) > 0
           ? `${certificationsData.certifications?.length} added`
           : 'Skipped',
-      stepIndex: 3,
+      stepIndex: indexOfStep('certifications'),
     },
     {
       label: 'Work history',
@@ -208,7 +218,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         (workHistoryData.entries?.length ?? 0) > 0
           ? `${workHistoryData.entries?.length} positions`
           : 'Skipped',
-      stepIndex: 4,
+      stepIndex: indexOfStep('work-history'),
     },
     {
       label: 'Languages',
@@ -216,7 +226,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         (profileData.languages?.length ?? 0) > 0
           ? `${profileData.languages?.length} languages`
           : 'None',
-      stepIndex: 0,
+      stepIndex: indexOfStep('profile'),
     },
     {
       label: 'Industries',
@@ -224,7 +234,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
         (profileData.industryIds?.length ?? 0) > 0
           ? `${profileData.industryIds?.length} selected`
           : 'None',
-      stepIndex: 0,
+      stepIndex: indexOfStep('profile'),
     },
   ];
 

@@ -15,7 +15,15 @@ import {
 } from './schemas';
 
 const saveDraftInputSchema = z.object({
-  step: z.enum(['profile', 'products', 'assessment', 'certifications', 'work-history', 'terms']),
+  step: z.enum([
+    'profile',
+    'agency',
+    'products',
+    'assessment',
+    'certifications',
+    'work-history',
+    'terms',
+  ]),
   data: z.unknown(),
   expertProfileId: z.string().uuid().optional(),
 });
@@ -87,7 +95,8 @@ export const saveDraftAction = withAuth(
         }
         await dispatchNonProfileStep(input.step, profileId, parsed);
       }
-      // `terms`: no DB write.
+      // `terms` and `agency` (BAL-356, self-advancing): no DB write here — the agency
+      // step performs its own determined write via `linkExpertAgencyAction`.
 
       trackServerAndFlush(EXPERT_SERVER_EVENTS.DRAFT_SAVED, {
         step: input.step,

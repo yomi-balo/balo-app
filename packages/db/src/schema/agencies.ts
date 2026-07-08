@@ -61,6 +61,16 @@ export const agencyMembers = pgTable(
     agencyUserIdx: uniqueIndex('agency_user_idx')
       .on(table.agencyId, table.userId)
       .where(sql`${table.deletedAt} IS NULL`),
+    // BAL-356: exactly one LIVE owner per agency. Ownership is derived from the
+    // role='owner' membership row (agencies has no owner column), so this partial
+    // unique is the single-owner invariant and makes transferOwnership a role swap
+    // (demote-then-promote) rather than membership churn. `'owner'` is an EXISTING
+    // enum value → no ADD-VALUE/same-tx cast hazard; nothing writes role 'owner'
+    // today (findOrCreateDomainMembership hardcodes 'expert'), so no live agency has
+    // ≥2 owners — safe on a populated table.
+    agencyOwnerIdx: uniqueIndex('agency_owner_unique_idx')
+      .on(table.agencyId)
+      .where(sql`${table.role} = 'owner' AND ${table.deletedAt} IS NULL`),
   })
 );
 

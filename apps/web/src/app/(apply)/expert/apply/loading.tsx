@@ -1,18 +1,18 @@
 import { Card } from '@/components/ui/card';
+import { STEP_CONFIG } from './_actions/schemas';
 
 export default function ExpertApplyLoading(): React.JSX.Element {
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
-      {/* Progress bar skeleton */}
+      {/* Progress bar skeleton — one dot per wizard step, derived from STEP_CONFIG so
+          it never drifts from the real step count (e.g. the BAL-356 agency step). */}
       <div className="hidden items-center justify-between md:flex">
-        {['profile', 'products', 'assessment', 'certifications', 'work-history', 'terms'].map(
-          (step) => (
-            <div key={step} className="flex flex-col items-center gap-2">
-              <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />
-              <div className="bg-muted h-3 w-12 animate-pulse rounded" />
-            </div>
-          )
-        )}
+        {STEP_CONFIG.map((step) => (
+          <div key={step.key} className="flex flex-col items-center gap-2">
+            <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />
+            <div className="bg-muted h-3 w-12 animate-pulse rounded" />
+          </div>
+        ))}
       </div>
 
       {/* Mobile progress skeleton */}

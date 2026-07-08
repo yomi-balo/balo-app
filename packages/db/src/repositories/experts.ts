@@ -273,6 +273,31 @@ export const expertsRepository = {
   },
 
   /**
+   * BAL-356: link an expert draft/profile to its payout agency by setting
+   * `agency_id`. A single UPDATE — `expert_profiles` has no `deletedAt`, so only a
+   * not-found guard applies (no soft-delete predicate). Executor-aware: the three
+   * agency-resolution write paths (join / provision / solo) call this INSIDE their
+   * `db.transaction`, so the link commits or rolls back with the agency + membership
+   * writes. Throws when no row matches so the orchestrating tx rolls back rather
+   * than silently linking a phantom profile.
+   */
+  async linkAgency(
+    expertProfileId: string,
+    agencyId: string,
+    executor?: DbExecutor
+  ): Promise<void> {
+    const exec = executor ?? db;
+    const [row] = await exec
+      .update(expertProfiles)
+      .set({ agencyId, updatedAt: new Date() })
+      .where(eq(expertProfiles.id, expertProfileId))
+      .returning({ id: expertProfiles.id });
+    if (row === undefined) {
+      throw new Error(`Expert profile not found: ${expertProfileId}`);
+    }
+  },
+
+  /**
    * Focused single-column read of an expert's timezone — used by the availability
    * resolver wire-up on every webhook + staleness cron run. Returns null if the
    * profile doesn't exist (so callers can short-circuit without throwing).

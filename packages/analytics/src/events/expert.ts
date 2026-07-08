@@ -15,6 +15,7 @@ export const EXPERT_EVENTS = {
 
 export type ExpertStepName =
   | 'profile'
+  | 'agency' // BAL-356 / ADR-1034 — agency-resolution step (index 1)
   | 'products'
   | 'assessment'
   | 'certifications'

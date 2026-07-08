@@ -18,6 +18,7 @@ import { submitApplicationAction } from '../_actions/submit-application';
 import {
   STEP_CONFIG,
   type StepKey,
+  type AgencyStepData,
   type ProfileStepData,
   type ProductsStepData,
   type AssessmentStepData,
@@ -43,6 +44,7 @@ interface WizardState {
   direction: Direction;
   autoSaveState: AutoSaveState;
   submitState: SubmitState;
+  agencyData: Partial<AgencyStepData>;
   profileData: Partial<ProfileStepData>;
   productsData: Partial<ProductsStepData>;
   assessmentData: Partial<AssessmentStepData>;
@@ -88,36 +90,27 @@ export function useWizard(): WizardContextType {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/**
+ * Resolve a step's live numeric index by KEY. Every gate below routes through this so
+ * inserting/reordering STEP_CONFIG (e.g. the BAL-356 agency step at index 1) never
+ * requires touching a hardcoded literal here.
+ */
+function stepIndex(key: StepKey): number {
+  return STEP_CONFIG.findIndex((s) => s.key === key);
+}
+
 function findFirstIncompleteStep(draft: ApplicationWithRelations): number {
-  // Step 1: Check profile fields populated + languages + industries
-  const hasProfile = draft.profile.yearStartedSalesforce !== null;
-  const hasLanguages = draft.languages.length > 0;
-  const hasIndustries = draft.industries.length > 0;
-  if (!hasProfile || !hasLanguages || !hasIndustries) return 0;
+  // Required steps, in order. Each gate returns the FIRST incomplete step's live index.
+  if (!isProfileComplete(draft)) return stepIndex('profile');
+  if (!isAgencyComplete(draft)) return stepIndex('agency'); // BAL-356 — agencyId not set yet
+  if (!isProductsComplete(draft)) return stepIndex('products');
+  if (!isAssessmentComplete(draft)) return stepIndex('assessment');
 
-  // Step 2: Check competencies exist
-  if (draft.competencies.length === 0) return 1;
-
-  // Step 3: Check all competencies have at least 1 non-zero rating
-  const productProficiencies = new Map<string, number[]>();
-  for (const c of draft.competencies) {
-    const arr = productProficiencies.get(c.productId) ?? [];
-    arr.push(c.proficiency);
-    productProficiencies.set(c.productId, arr);
-  }
-  for (const [, profs] of productProficiencies) {
-    if (!profs.some((p) => p > 0)) return 2;
-  }
-
-  // Steps 4-5 are optional — infer progress from later-step data.
-  // If work history exists, user must have passed certifications too.
-  const hasCertData = draft.certifications.length > 0;
-  const hasWorkHistoryData = draft.workHistory.length > 0;
-
-  const termsIndex = STEP_CONFIG.length - 1; // terms is always the last step
-  if (hasWorkHistoryData) return termsIndex; // past both optional steps → terms
-  if (hasCertData) return 4; // past certs → work-history
-  return 3; // → certifications
+  // Optional steps (certifications, work-history) — infer progress from later-step
+  // data. Work history present ⇒ certifications were passed too ⇒ land on terms.
+  if (draft.workHistory.length > 0) return stepIndex('terms');
+  if (draft.certifications.length > 0) return stepIndex('work-history');
+  return stepIndex('certifications');
 }
 
 function resolveInitialStep(
@@ -142,6 +135,15 @@ function isProfileComplete(draft: ApplicationWithRelations): boolean {
   );
 }
 
+/**
+ * BAL-356 — the agency step is complete once the draft is linked to its payout agency
+ * (`agencyId` set). `Boolean(...)` treats both null (real row default) and undefined
+ * (partial fixtures) as incomplete.
+ */
+function isAgencyComplete(draft: ApplicationWithRelations): boolean {
+  return Boolean(draft.profile.agencyId);
+}
+
 function isProductsComplete(draft: ApplicationWithRelations): boolean {
   return draft.competencies.length > 0;
 }
@@ -161,22 +163,41 @@ function isAssessmentComplete(draft: ApplicationWithRelations): boolean {
 }
 
 function hydrateStepStatuses(draft: ApplicationWithRelations | null): StepStatus[] {
-  if (!draft) return new Array(STEP_CONFIG.length).fill('pending') as StepStatus[];
-
   const statuses: StepStatus[] = new Array(STEP_CONFIG.length).fill('pending') as StepStatus[];
+  if (!draft) return statuses;
 
-  if (isProfileComplete(draft)) statuses[0] = 'completed';
-  if (isProductsComplete(draft)) statuses[1] = 'completed';
-  if (isAssessmentComplete(draft)) statuses[2] = 'completed';
+  // Set a step's status by KEY (index-shift safe — BAL-356 agency insertion).
+  const set = (key: StepKey, status: StepStatus): void => {
+    const i = stepIndex(key);
+    if (i !== -1) statuses[i] = status;
+  };
 
-  // Steps 4-5 are optional - mark as skipped if first 3 are done and they have no data.
-  // Terms (now index 5) is required, so it correctly stays 'pending'.
-  if (statuses[0] === 'completed' && statuses[1] === 'completed' && statuses[2] === 'completed') {
-    statuses[3] = draft.certifications.length > 0 ? 'completed' : 'skipped';
-    statuses[4] = draft.workHistory.length > 0 ? 'completed' : 'skipped';
+  const profileDone = isProfileComplete(draft);
+  const agencyDone = isAgencyComplete(draft);
+  const productsDone = isProductsComplete(draft);
+  const assessmentDone = isAssessmentComplete(draft);
+
+  if (profileDone) set('profile', 'completed');
+  if (agencyDone) set('agency', 'completed');
+  if (productsDone) set('products', 'completed');
+  if (assessmentDone) set('assessment', 'completed');
+
+  // The optional steps (certifications, work-history) resolve to completed-or-skipped
+  // only once EVERY required step before them — profile, agency, products, assessment
+  // — is complete. Terms stays 'pending' (required, not inferable from data).
+  if (profileDone && agencyDone && productsDone && assessmentDone) {
+    set('certifications', draft.certifications.length > 0 ? 'completed' : 'skipped');
+    set('work-history', draft.workHistory.length > 0 ? 'completed' : 'skipped');
   }
 
   return statuses;
+}
+
+function hydrateAgencyData(draft: ApplicationWithRelations | null): Partial<AgencyStepData> {
+  // The agency step is self-advancing and carries no form fields. We keep `agencyId`
+  // as the sole snapshot value so any incidental autosave has a stable, serialisable
+  // payload; the resolve/write itself reads the session email server-side.
+  return { agencyId: draft?.profile.agencyId ?? null } as Partial<AgencyStepData>;
 }
 
 function hydrateProfileData(draft: ApplicationWithRelations | null): Partial<ProfileStepData> {
@@ -300,6 +321,9 @@ export function ExpertApplicationProvider({
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
 
   // Per-step form data
+  const [agencyData, setAgencyData] = useState<Partial<AgencyStepData>>(() =>
+    hydrateAgencyData(draft)
+  );
   const [profileData, setProfileData] = useState<Partial<ProfileStepData>>(() =>
     hydrateProfileData(draft)
   );
@@ -373,6 +397,7 @@ export function ExpertApplicationProvider({
   const getStepData = useCallback(
     (step: StepKey): unknown => {
       const dataMap: Record<StepKey, unknown> = {
+        agency: agencyData,
         profile: profileData,
         products: productsData,
         assessment: assessmentData,
@@ -382,7 +407,15 @@ export function ExpertApplicationProvider({
       };
       return dataMap[step];
     },
-    [profileData, productsData, assessmentData, certificationsData, workHistoryData, termsData]
+    [
+      agencyData,
+      profileData,
+      productsData,
+      assessmentData,
+      certificationsData,
+      workHistoryData,
+      termsData,
+    ]
   );
 
   // Latest step key + data + id for the once-attached unload flush listener, so it
@@ -532,6 +565,7 @@ export function ExpertApplicationProvider({
   const updateStepData = useCallback(
     (step: StepKey, data: unknown): void => {
       const setters: Record<StepKey, (d: unknown) => void> = {
+        agency: (d) => setAgencyData(d as Partial<AgencyStepData>),
         profile: (d) => setProfileData(d as Partial<ProfileStepData>),
         products: (d) => setProductsData(d as Partial<ProductsStepData>),
         assessment: (d) => setAssessmentData(d as Partial<AssessmentStepData>),
@@ -559,15 +593,27 @@ export function ExpertApplicationProvider({
   );
 
   const goNext = useCallback(async (): Promise<void> => {
-    // 1. Trigger step validation
-    if (validationRef.current) {
-      const isValid = await validationRef.current();
-      if (!isValid) return;
-    }
+    const stepConfig = STEP_CONFIG[currentStep];
+    const selfAdvancing =
+      stepConfig !== undefined &&
+      'selfAdvancing' in stepConfig &&
+      stepConfig.selfAdvancing === true;
 
-    // 2. Save draft
-    const saved = await performSave();
-    if (!saved) return;
+    // Self-advancing steps (e.g. the agency step, BAL-356) own their forward path: the
+    // in-card action performs the write and gating, so the wizard core must NOT run the
+    // shared (possibly stale) validationRef or a no-op save for them — doing so can strand
+    // the step (busy stuck, no advance).
+    if (!selfAdvancing) {
+      // 1. Trigger step validation
+      if (validationRef.current) {
+        const isValid = await validationRef.current();
+        if (!isValid) return;
+      }
+
+      // 2. Save draft
+      const saved = await performSave();
+      if (!saved) return;
+    }
 
     // 3. Mark current step as completed
     setStepStatuses((prev) => {
@@ -577,7 +623,6 @@ export function ExpertApplicationProvider({
     });
 
     // 4. Track analytics
-    const stepConfig = STEP_CONFIG[currentStep];
     track(EXPERT_EVENTS.APPLICATION_STEP_COMPLETED, {
       step: stepConfig?.key ?? 'profile',
       step_number: currentStep + 1,
@@ -676,6 +721,7 @@ export function ExpertApplicationProvider({
       direction,
       autoSaveState,
       submitState,
+      agencyData,
       profileData,
       productsData,
       assessmentData,
@@ -705,6 +751,7 @@ export function ExpertApplicationProvider({
       direction,
       autoSaveState,
       submitState,
+      agencyData,
       profileData,
       productsData,
       assessmentData,

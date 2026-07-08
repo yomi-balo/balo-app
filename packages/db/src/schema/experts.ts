@@ -98,6 +98,10 @@ export const expertProfiles = pgTable(
     userVerticalIdx: uniqueIndex('expert_user_vertical_idx').on(table.userId, table.verticalId),
     usernameIdx: uniqueIndex('expert_profiles_username_idx').on(table.username),
     searchVectorIdx: index('expert_profiles_search_vector_idx').using('gin', table.searchVector),
+    // BAL-356: FK index on the payout-agency link (index-all-FKs) — powers the
+    // "experts by agency" / payout-entity lookups. `agencyId` is set by
+    // expertsRepository.linkAgency for all three agency-resolution outcomes.
+    agencyIdx: index('expert_profiles_agency_id_idx').on(table.agencyId),
   })
 );
 
