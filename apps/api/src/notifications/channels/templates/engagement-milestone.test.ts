@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@react-email/render';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
+import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { getEmailTemplate } from './index.js';
 import { getInAppTemplate } from './in-app-templates.js';
 
@@ -119,5 +120,81 @@ describe('getInAppTemplate — BAL-332 milestone factories', () => {
       engagementId: 'eng-1',
     });
     expect(out.body).toBe("Priya completed 'Discovery'.");
+  });
+});
+
+describe('EngagementScopeChangedClientEmail (BAL-333)', () => {
+  it('renders the actor, exact body copy (summary + price-unchanged), project context, and workspace CTA', async () => {
+    const html = await render(
+      EngagementScopeChangedClientEmail({
+        firstName: 'Dana',
+        actorExpertLabel: 'Priya @ CloudPeak',
+        // Quote-free summary so the full sentence is assertable without HTML-entity escaping.
+        changeSummary: 'added a data-migration milestone',
+        projectTitle: 'CPQ implementation',
+        engagementId: 'eng-1',
+        baseUrl: BASE,
+      })
+    );
+    // Hero pill + heading.
+    expect(html).toContain('Delivery plan updated');
+    expect(html).toContain('The delivery plan changed.');
+    // Project context (hero subtext).
+    expect(html).toContain('CPQ implementation');
+    // Exact ticket body copy — the change summary + the price-unchanged reassurance.
+    expect(html).toContain(
+      'Priya @ CloudPeak updated the delivery plan: added a data-migration milestone. The project price is unchanged.'
+    );
+    // Deep-links to the delivery workspace (NOT /projects/*).
+    expect(html).toContain('/engagements/eng-1');
+    expect(html).not.toContain('/projects/');
+    expect(html).toContain('View the delivery plan');
+  });
+});
+
+describe('getEmailTemplate — engagement-scope-changed-client', () => {
+  it('builds the exact ticket subject naming the project title', () => {
+    const result = getEmailTemplate('engagement-scope-changed-client', {
+      recipientName: 'Dana',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      changeSummary: "added 'Data migration dry-run'",
+      projectTitle: 'CPQ implementation',
+      engagementId: 'eng-1',
+    });
+    expect(result.subject).toBe('The delivery plan for CPQ implementation was updated');
+    expect(result.component).toBeDefined();
+  });
+});
+
+describe('getInAppTemplate — BAL-333 scope-changed factories', () => {
+  it('scope-changed-client → exact ticket copy, links to the workspace', () => {
+    const out = getInAppTemplate('engagement-scope-changed-client', {
+      actorExpertLabel: 'Priya',
+      changeSummary: "added 'Data migration dry-run'",
+      engagementId: 'eng-1',
+    });
+    expect(out.title).toBe('Delivery plan updated');
+    expect(out.body).toBe("Priya updated the delivery plan: added 'Data migration dry-run'.");
+    expect(out.actionUrl).toBe('/engagements/eng-1');
+  });
+
+  it('scope-changed-admin → project-scoped body with the same summary format', () => {
+    const out = getInAppTemplate('engagement-scope-changed-admin', {
+      projectTitle: 'CPQ implementation',
+      actorExpertLabel: 'Priya',
+      changeSummary: "removed 'Legacy import'",
+      engagementId: 'eng-1',
+    });
+    expect(out.title).toBe('Delivery plan updated');
+    expect(out.body).toBe("CPQ implementation: Priya removed 'Legacy import'.");
+    expect(out.actionUrl).toBe('/engagements/eng-1');
+  });
+
+  it('falls back gracefully when actor / summary / project are absent', () => {
+    const client = getInAppTemplate('engagement-scope-changed-client', { engagementId: 'eng-1' });
+    expect(client.body).toBe('Your expert updated the delivery plan: updated the delivery plan.');
+    const admin = getInAppTemplate('engagement-scope-changed-admin', {});
+    expect(admin.body).toBe('A project: The expert updated the delivery plan.');
+    expect(admin.actionUrl).toBeUndefined();
   });
 });

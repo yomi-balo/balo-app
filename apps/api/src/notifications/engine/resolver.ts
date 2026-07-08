@@ -39,7 +39,8 @@ export async function resolveContext(
     event === 'project.proposal_accepted' ||
     event === 'billing.details_confirmed' ||
     event === 'engagement.milestone_completed' ||
-    event === 'engagement.milestone_reverted'
+    event === 'engagement.milestone_reverted' ||
+    event === 'engagement.scope_changed'
   ) {
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
   }

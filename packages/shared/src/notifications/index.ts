@@ -84,3 +84,27 @@ export interface EngagementMilestoneRevertedPayload {
   actorExpertLabel: string; // {actorExpert} — in-app body
   milestoneTitle: string;
 }
+
+// BAL-333 (D3) expert delivery-plan scope changed. The delivering EXPERT adjusted the
+// delivery plan on a live engagement — added a milestone, materially/cosmetically
+// edited one, or removed one. Fans out to the CLIENT company owner (recipient:'client'
+// via `recipientId`; email + in-app — the client is TOLD, not asked; the price is
+// unchanged, stated in copy) and the Balo ADMINS (recipient:'admin_users' fan-out;
+// in-app). One event covers add/edit/remove (the subject/body/CTA are identical — only
+// `changeSummary` differs); `changeKind` is carried for observability + a future
+// divergence seam. Idempotency/debounce lives in `correlationId` (Decision D):
+// `${milestoneId}:added|:removed` (one-shot) | `${id}:edited:${updatedAtMs}` (material,
+// always re-notifies) | `${id}:edited:${bucket}` (cosmetic title-only, debounced).
+// `recipientId` is absent for a retainer / owner-miss (the client rules skip; admins
+// still fire). Copy uses BAL-329 conventions (RETROSPECTIVE names the PERSON "@ agency"
+// on first mention).
+export interface EngagementScopeChangedPayload {
+  correlationId: string; // dedup/debounce key — see Decision D
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  milestoneId?: string; // the affected milestone
+  recipientId?: string; // client company owner user id → recipient:'client'; absent → client rules skip
+  actorExpertLabel: string; // {actorExpert} — retrospective person ("Priya" / "Priya @ CloudPeak")
+  projectTitle: string; // {title} — subject + admin in-app body
+  changeKind: 'added' | 'edited' | 'removed';
+  changeSummary: string; // "added 'Data migration dry-run'" | "removed 'X'" | "updated 'Y'"
+}

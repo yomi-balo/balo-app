@@ -51,6 +51,11 @@ interface MilestoneRowProps {
   isLast: boolean;
   /** Optional per-status action buttons rendered at the row foot (expert rail only). */
   actions?: React.ReactNode;
+  /**
+   * Optional edit / remove / reorder icon buttons rendered in the title cluster,
+   * top-right of the row (design L804–809). Expert rail only; presentational here.
+   */
+  controls?: React.ReactNode;
 }
 
 /**
@@ -71,6 +76,7 @@ export function MilestoneRow({
   node,
   isLast,
   actions,
+  controls,
 }: Readonly<MilestoneRowProps>): React.JSX.Element {
   const timing = [node.startedLabel, node.completedLabel].filter(
     (label): label is string => label !== null
@@ -111,6 +117,9 @@ export function MilestoneRow({
             >
               {node.valueLabel}
             </Badge>
+          )}
+          {controls !== undefined && (
+            <span className="ml-auto inline-flex shrink-0 items-center gap-0.5">{controls}</span>
           )}
         </div>
 

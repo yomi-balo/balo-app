@@ -33,18 +33,39 @@ export function EngagementWorkspace({
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
   // The delivering expert gets the INTERACTIVE rail only while the engagement is
   // active — the plan locks during client review / terminal states, where the
-  // read-only rail (a server component) preserves D1's no-client-bundle posture.
+  // read-only rail (a server component) preserves D1's no-client-bundle posture. On an
+  // active expert engagement the interactive island OWNS the empty case too (D3), so it
+  // can host the "Add the first milestone" CTA + the scope-edit modals.
   const isInteractiveExpertRail = view.lens === 'expert' && view.status === 'active';
-  const rail = isInteractiveExpertRail ? (
-    <ExpertMilestoneRail
-      engagementId={view.engagementId}
-      milestones={view.milestones}
-      expertPersonShort={view.parties.expertPersonShort}
-      clientCompanyName={view.parties.clientCompanyName}
-    />
-  ) : (
-    <MilestoneRail milestones={view.milestones} />
-  );
+
+  // Milestone section, resolved as an independent statement (not a nested JSX ternary):
+  // interactive expert rail (active) → read-only rail (has milestones) → empty state.
+  let milestoneSection: React.JSX.Element | null = null;
+  if (isInteractiveExpertRail) {
+    milestoneSection = (
+      <Reveal delay={0.2}>
+        <ExpertMilestoneRail
+          engagementId={view.engagementId}
+          milestones={view.milestones}
+          emptyState={view.emptyState}
+          expertPersonShort={view.parties.expertPersonShort}
+          clientCompanyName={view.parties.clientCompanyName}
+        />
+      </Reveal>
+    );
+  } else if (view.hasMilestones) {
+    milestoneSection = (
+      <Reveal delay={0.2}>
+        <MilestoneRail milestones={view.milestones} />
+      </Reveal>
+    );
+  } else if (view.emptyState !== null) {
+    milestoneSection = (
+      <Reveal delay={0.2}>
+        <MilestoneEmptyState emptyState={view.emptyState} />
+      </Reveal>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -88,15 +109,7 @@ export function EngagementWorkspace({
         </Reveal>
       )}
 
-      {view.hasMilestones ? (
-        <Reveal delay={0.2}>{rail}</Reveal>
-      ) : (
-        view.emptyState !== null && (
-          <Reveal delay={0.2}>
-            <MilestoneEmptyState emptyState={view.emptyState} />
-          </Reveal>
-        )
-      )}
+      {milestoneSection}
     </div>
   );
 }

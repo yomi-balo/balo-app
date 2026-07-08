@@ -99,6 +99,7 @@ export {
   isAllowedMilestoneTransition,
   InvalidMilestoneTransitionError,
   EngagementNotActiveError,
+  MilestoneReorderMismatchError,
   type EngagementMilestoneStatus,
 } from './engagement-milestones';
 export type {

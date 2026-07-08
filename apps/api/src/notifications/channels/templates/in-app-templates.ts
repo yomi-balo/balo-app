@@ -291,6 +291,25 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-333 (D3) delivery-plan scope changed — CLIENT owner (exact ticket copy).
+  'engagement-scope-changed-client': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    const summary = (data.changeSummary as string) ?? 'updated the delivery plan';
+    return engagementNotice(
+      'Delivery plan updated',
+      `${actor} updated the delivery plan: ${summary}.`,
+      data
+    );
+  },
+
+  // BAL-333 (D3) delivery-plan scope changed — ADMIN ops signal (project-scoped, same summary).
+  'engagement-scope-changed-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const actor = (data.actorExpertLabel as string) ?? 'The expert';
+    const summary = (data.changeSummary as string) ?? 'updated the delivery plan';
+    return engagementNotice('Delivery plan updated', `${title}: ${actor} ${summary}.`, data);
+  },
+
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {
     const companyName = (data.companyName as string) ?? 'a company';

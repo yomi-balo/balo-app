@@ -275,6 +275,27 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     expect(node?.completionNote).toBe('Design doc approved.');
     expect(node?.valueLabel).toBe('A$14,500');
     expect(node?.descriptionHtml).toBe('<p>Workshops and architecture.</p>');
+    // Plain-text of the description for the expert edit-form prefill.
+    expect(node?.descriptionText).toBe('Workshops and architecture.');
+  });
+
+  it('derives descriptionText as plain text (and null when the description is blank)', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        milestones: [
+          makeMilestone({ id: 'm-has', descriptionHtml: '<p>Do the work.</p>' }),
+          makeMilestone({ id: 'm-blank', descriptionHtml: null }),
+          makeMilestone({ id: 'm-empty', descriptionHtml: '<p></p>' }),
+        ],
+      }),
+      ctxFor('expert'),
+      NOW
+    );
+    const [withText, blank, emptyTags] = view.milestones;
+    expect(withText?.descriptionText).toBe('Do the work.');
+    expect(blank?.descriptionText).toBeNull();
+    // Tag-only HTML has no visible text → null (no phantom prefill).
+    expect(emptyTags?.descriptionText).toBeNull();
   });
 
   it('strips hostile markup from the milestone descriptionHtml (server sanitises for the client)', () => {

@@ -42,12 +42,30 @@ vi.mock('@balo/db', () => ({
   InvalidMilestoneTransitionError,
 }));
 
+const mockPublish = vi.fn();
+vi.mock('@/lib/notifications/publish', () => ({
+  publishNotificationEvent: (...a: unknown[]) => {
+    mockPublish(...a);
+    return Promise.resolve();
+  },
+}));
+
+// Marker so `descriptionTextToSafeHtml`'s edge-sanitise call is assertable.
+vi.mock('@/lib/sanitize/project-html', () => ({
+  sanitizeProjectHtml: (html: string) => `S:${html}`,
+}));
+
 import { revalidatePath } from 'next/cache';
 import {
   authorizeExpertMilestone,
+  authorizeExpertEngagement,
+  buildChangeSummary,
+  descriptionTextToSafeHtml,
+  publishScopeChange,
   requireExpertUser,
   resolveClientRecipientId,
   runExpertMilestoneAction,
+  runExpertEngagementAction,
   runMilestoneTransition,
   deriveEngagementTitle,
   formatCompletedOn,
@@ -80,6 +98,12 @@ function engagement(overrides: Record<string, unknown> = {}) {
     status: 'active',
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
+    expertProfile: {
+      user: { firstName: 'Priya', lastName: 'Sharma' },
+      agency: null,
+      headline: null,
+      type: 'freelancer',
+    },
     milestones: [milestone()],
     ...overrides,
   };
@@ -312,5 +336,154 @@ describe('runExpertMilestoneAction', () => {
       perform
     );
     expect(res).toEqual({ success: false, error: 'Something went wrong. Please try again.' });
+  });
+});
+
+describe('authorizeExpertEngagement', () => {
+  it('returns NOT_FOUND for a stranger (lens resolves to null)', async () => {
+    mockResolveLens.mockReturnValue(null);
+    expect(await authorizeExpertEngagement(USER, ENGAGEMENT_ID)).toEqual({
+      ok: false,
+      error: 'This engagement could not be found.',
+    });
+  });
+
+  it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin' });
+    expect(await authorizeExpertEngagement(USER, ENGAGEMENT_ID)).toEqual({
+      ok: false,
+      error: 'Only the delivering expert can update milestones.',
+    });
+  });
+
+  it('returns ENGAGEMENT_LOCKED when the engagement is not active', async () => {
+    mockFindEngagement.mockResolvedValue(engagement({ status: 'pending_acceptance' }));
+    expect(await authorizeExpertEngagement(USER, ENGAGEMENT_ID)).toEqual({
+      ok: false,
+      error: 'The delivery plan is locked while the project is in review.',
+    });
+  });
+
+  it('returns ok WITHOUT a milestone when no milestoneId is supplied (add / reorder)', async () => {
+    const res = await authorizeExpertEngagement(USER, ENGAGEMENT_ID);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.engagement.id).toBe(ENGAGEMENT_ID);
+      expect(res.milestone).toBeUndefined();
+    }
+  });
+
+  it('returns MILESTONE_GONE for an optional milestoneId not in the engagement (IDOR)', async () => {
+    const res = await authorizeExpertEngagement(USER, ENGAGEMENT_ID, {
+      milestoneId: 'd0000000-0000-4000-8000-000000000999',
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/no longer part of this engagement/);
+  });
+
+  it('returns ok WITH the validated milestone when the milestoneId is in the engagement', async () => {
+    const res = await authorizeExpertEngagement(USER, ENGAGEMENT_ID, { milestoneId: MILESTONE_ID });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.milestone?.id).toBe(MILESTONE_ID);
+  });
+});
+
+describe('runExpertEngagementAction', () => {
+  it('revalidates + returns the result on a successful perform', async () => {
+    const perform = vi
+      .fn()
+      .mockResolvedValue({ success: true, milestoneId: '', status: 'pending' });
+    const res = await runExpertEngagementAction(
+      USER,
+      ENGAGEMENT_ID,
+      {},
+      'Failed to reorder milestones',
+      perform
+    );
+    expect(res).toEqual({ success: true, milestoneId: '', status: 'pending' });
+    expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
+  });
+
+  it('short-circuits to the authorize error without calling perform', async () => {
+    mockFindEngagement.mockResolvedValue(undefined);
+    const perform = vi.fn();
+    const res = await runExpertEngagementAction(
+      USER,
+      ENGAGEMENT_ID,
+      { milestoneId: MILESTONE_ID },
+      'Failed to update milestone',
+      perform
+    );
+    expect(res).toEqual({ success: false, error: 'This engagement could not be found.' });
+    expect(perform).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it('maps a thrown error inside perform to GENERIC_FAILURE', async () => {
+    const perform = vi.fn().mockRejectedValue(new Error('boom'));
+    const res = await runExpertEngagementAction(
+      USER,
+      ENGAGEMENT_ID,
+      {},
+      'Failed to reorder milestones',
+      perform
+    );
+    expect(res).toEqual({ success: false, error: 'Something went wrong. Please try again.' });
+  });
+});
+
+describe('buildChangeSummary', () => {
+  it('formats each change kind with a single-quoted title', () => {
+    expect(buildChangeSummary('added', 'Data migration')).toBe("added 'Data migration'");
+    expect(buildChangeSummary('removed', 'Data migration')).toBe("removed 'Data migration'");
+    expect(buildChangeSummary('edited', 'Data migration')).toBe("revised 'Data migration'");
+  });
+});
+
+describe('descriptionTextToSafeHtml', () => {
+  it('returns null for null / blank / whitespace-only input', () => {
+    expect(descriptionTextToSafeHtml(null)).toBeNull();
+    expect(descriptionTextToSafeHtml(undefined)).toBeNull();
+    expect(descriptionTextToSafeHtml('   ')).toBeNull();
+  });
+
+  it('escapes entities, paragraph-wraps, and runs the project sanitiser (marker)', () => {
+    const out = descriptionTextToSafeHtml('a & b\n\nsecond');
+    // Marker prefix proves sanitizeProjectHtml ran on the escaped, wrapped HTML.
+    expect(out).toBe('S:<p>a &amp; b</p><p>second</p>');
+  });
+});
+
+describe('publishScopeChange', () => {
+  it('publishes engagement.scope_changed with the derived payload', async () => {
+    mockFindOwner.mockResolvedValue({ id: 'owner-1' });
+    await publishScopeChange(engagement() as never, {
+      changeKind: 'added',
+      milestoneId: MILESTONE_ID,
+      milestoneTitle: 'Discovery',
+      correlationId: `${MILESTONE_ID}:added`,
+    });
+    expect(mockPublish).toHaveBeenCalledWith('engagement.scope_changed', {
+      correlationId: `${MILESTONE_ID}:added`,
+      engagementId: ENGAGEMENT_ID,
+      milestoneId: MILESTONE_ID,
+      recipientId: 'owner-1',
+      actorExpertLabel: 'Priya',
+      projectTitle: 'CPQ implementation',
+      changeKind: 'added',
+      changeSummary: "added 'Discovery'",
+    });
+  });
+
+  it('omits recipientId when the owner lookup fails', async () => {
+    mockFindOwner.mockRejectedValue(new Error('no owner'));
+    await publishScopeChange(engagement() as never, {
+      changeKind: 'removed',
+      milestoneId: MILESTONE_ID,
+      milestoneTitle: 'Discovery',
+      correlationId: `${MILESTONE_ID}:removed`,
+    });
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.recipientId).toBeUndefined();
   });
 });

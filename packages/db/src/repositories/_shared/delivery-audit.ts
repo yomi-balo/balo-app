@@ -15,6 +15,7 @@ export type DeliveryAuditAction =
   | 'engagement_milestone.added'
   | 'engagement_milestone.edited'
   | 'engagement_milestone.removed'
+  | 'engagement_milestone.reordered'
   // engagement lifecycle
   | 'engagement.completion_requested'
   | 'engagement.completion_withdrawn'

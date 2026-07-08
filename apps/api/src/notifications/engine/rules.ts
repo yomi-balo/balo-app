@@ -383,6 +383,20 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-333 (D3): the delivering expert changed the delivery plan (add / material edit
+  // / remove). CLIENT owner (recipient:'client' via payload.recipientId; email + in-app
+  // — the client is TOLD, not asked; the price is unchanged, stated in copy) + Balo
+  // ADMINS (recipient:'admin_users' fan-out over data.adminUserIds; in-app ops signal).
+  // Owner rules skip gracefully when recipientId is absent (retainer / no-owner). No SMS.
+  'engagement.scope_changed': [
+    ...emailAndInApp('client', 'engagement-scope-changed-client'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-scope-changed-admin',
+      timing: 'immediate',
+    },
+  ],
   // BAL-345 domain auto-join. `party_admins` is a fan-out recipient (one delivery
   // per admin) resolved from data.partyAdminUserIds; `self` (approve/decline)
   // resolves to payload.userId (the requester). The base-member joiner/requester

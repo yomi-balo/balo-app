@@ -17,6 +17,10 @@ export const ENGAGEMENT_SERVER_EVENTS = {
   MILESTONE_STARTED: 'engagement_milestone_started',
   MILESTONE_COMPLETED: 'engagement_milestone_completed',
   MILESTONE_REVERTED: 'engagement_milestone_reverted',
+  // BAL-333 (D3) expert delivery-plan scope edits.
+  MILESTONE_ADDED: 'engagement_milestone_added',
+  MILESTONE_EDITED: 'engagement_milestone_edited',
+  MILESTONE_REMOVED: 'engagement_milestone_removed',
 } as const;
 
 /** Viewer lens on the delivery workspace (admin is the observer archetype). */
@@ -61,6 +65,26 @@ export interface EngagementServerEventMap {
     milestone_id: string;
     /** Whole hours from the PRE-revert `completedAt` to now, int ≥0 (0 when absent). */
     hours_since_completed: number;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.MILESTONE_ADDED]: {
+    engagement_id: string;
+    /** Live milestone count AFTER the add. */
+    milestones_total: number;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.MILESTONE_EDITED]: {
+    engagement_id: string;
+    milestone_id: string;
+    /** Descriptive fields changed this edit, e.g. ['title','acceptance_criteria']. */
+    fields_changed: string[];
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.MILESTONE_REMOVED]: {
+    engagement_id: string;
+    milestone_id: string;
+    was_completed: boolean;
+    had_source_provenance: boolean;
     distinct_id: string;
   };
 }
