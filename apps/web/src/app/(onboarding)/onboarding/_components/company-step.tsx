@@ -19,13 +19,17 @@ import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import {
   resolveOnboardingCompanyAction,
   nameWorkspaceAndCompleteAction,
+  joinMatchedCompanyAction,
+  requestJoinCompanyAction,
+  completeOnboardingAction,
   type ResolveOnboardingCompanyResult,
 } from '@/lib/auth/actions';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
 import { companyNameSchema, type CompanyNameForm } from '@/lib/auth/company-name-schema';
-import { track, AUTH_EVENTS, ONBOARDING_EVENTS } from '@/lib/analytics';
+import { track, AUTH_EVENTS, ONBOARDING_EVENTS, DOMAIN_JOIN_EVENTS } from '@/lib/analytics';
+import { DomainJoinPending } from './domain-join-pending';
 
-type Phase = 'resolving' | 'create' | 'join';
+type Phase = 'resolving' | 'create' | 'join' | 'pending';
 
 type JoinCompany = { name: string; memberCount: number; joinMode: 'auto' | 'request' };
 
@@ -59,6 +63,9 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
   // re-trigger effects or renders.
   const initialSuggestionRef = useRef('');
   const resolveFailedOpenRef = useRef(false);
+  // The email-derived name carried on a `matched` result — prefills the create
+  // field when the user escapes the JOIN branch via "This isn't my company".
+  const matchedSuggestionRef = useRef('');
 
   const form = useForm<CompanyNameForm>({
     resolver: zodResolver(companyNameSchema),
@@ -90,6 +97,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         const result: ResolveOnboardingCompanyResult = await resolveOnboardingCompanyAction();
         if (!live) return;
         if (result.status === 'matched') {
+          matchedSuggestionRef.current = result.suggestion;
           setJoinCompany(result.company);
           setPhase('join');
           return;
@@ -119,6 +127,17 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
     }, 120);
     return () => clearTimeout(timer);
   }, [phase, ref]);
+
+  // Fire the interstitial-viewed event once when the JOIN branch renders. Keyed
+  // on phase + joinCompany so it fires on entry and never re-fires on transition
+  // to pending / create (both leave `phase !== 'join'`).
+  useEffect(() => {
+    if (phase !== 'join' || joinCompany === null) return;
+    track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_VIEWED, {
+      mode: joinCompany.joinMode,
+      party_type: 'company',
+    });
+  }, [phase, joinCompany]);
 
   const onCreateSubmit = useCallback(
     (data: CompanyNameForm): void => {
@@ -154,26 +173,79 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
     [authMethod, resolvedStatus, stepNumber, timezone, router]
   );
 
-  // Escape hatch from the JOIN branch — "This isn't my company / start my own".
-  // DORMANT in v1 (the join branch is unreachable). Resets to an EMPTY field
-  // because the `matched` resolve result carries no name suggestion. BAL-346 (which
-  // activates the join branch) should carry a suggestion through the matched result
-  // and prefill it here, so escaping to create lands on a prefilled field rather
-  // than a blank one.
+  // Escape hatch from the JOIN branch / pending screen — "This isn't my company /
+  // set up my own". Records the opt-out and prefills the create field with the
+  // matched suggestion so the user lands on a filled field, not a blank one.
   const handleCreateInstead = useCallback((): void => {
+    track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_OPTED_OUT, {
+      mode: joinCompany?.joinMode ?? 'request',
+      party_type: 'company',
+    });
+    const suggestion = matchedSuggestionRef.current;
     resolveFailedOpenRef.current = false;
-    initialSuggestionRef.current = '';
+    initialSuggestionRef.current = suggestion; // keeps prefill_used analytics correct
     setJoinCompany(null);
     setResolvedStatus('new');
-    form.reset({ companyName: '' });
+    setActionError(null);
+    form.reset({ companyName: suggestion });
     setPhase('create');
-  }, [form]);
+  }, [form, joinCompany]);
 
-  // JOIN submit (DORMANT in v1 — unreachable until `status: 'matched'` can occur;
-  // the membership-join mutation lands with the shared-org seam, BAL-346).
-  const handleJoin = useCallback((): void => {
+  // JOIN interstitial primary action (DORMANT in v1 — unreachable until
+  // `status: 'matched'` can occur). Branches on join mode: `auto` creates the
+  // membership + completes onboarding + navigates; `request` files a pending
+  // request + transitions to the waiting screen. Both fail CLOSED — a write
+  // failure surfaces an inline banner with NO navigation.
+  const handleInterstitialPrimary = useCallback((): void => {
+    if (joinCompany === null) return;
+    const mode = joinCompany.joinMode;
     setActionError(null);
     startTransition(async () => {
+      if (mode === 'auto') {
+        const result = await joinMatchedCompanyAction();
+        if (!result.success) {
+          setActionError(result.error);
+          return;
+        }
+        track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_CONTINUED, { mode: 'auto', party_type: 'company' });
+        track(AUTH_EVENTS.SIGNUP_COMPANY_JOINED, {
+          party_type: 'company',
+          auth_method: authMethod,
+        });
+        track(ONBOARDING_EVENTS.STEP_COMPLETED, {
+          step: 'company',
+          step_number: stepNumber,
+          auth_method: authMethod,
+        });
+        track(ONBOARDING_EVENTS.COMPLETED, {
+          intent: 'client',
+          timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
+        router.push(result.data?.redirectTo ?? '/dashboard');
+        return;
+      }
+
+      const result = await requestJoinCompanyAction();
+      if (!result.success) {
+        setActionError(result.error);
+        return;
+      }
+      track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_CONTINUED, { mode: 'request', party_type: 'company' });
+      setPhase('pending');
+    });
+  }, [joinCompany, authMethod, stepNumber, timezone, router]);
+
+  // "Explore Balo while you wait" from the pending screen — completes onboarding
+  // (client mode, no rename/join) and navigates. Fails CLOSED — an inline banner
+  // keeps the user on the pending screen with the request intact.
+  const handleExplore = useCallback((): void => {
+    setActionError(null);
+    startTransition(async () => {
+      const result = await completeOnboardingAction('client');
+      if (!result.success) {
+        setActionError(result.error);
+        return;
+      }
       track(ONBOARDING_EVENTS.STEP_COMPLETED, {
         step: 'company',
         step_number: stepNumber,
@@ -183,7 +255,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         intent: 'client',
         timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
-      router.push('/dashboard');
+      router.push(result.data?.redirectTo ?? '/dashboard');
     });
   }, [authMethod, stepNumber, timezone, router]);
 
@@ -197,6 +269,11 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
   }
 
   if (phase === 'join' && joinCompany !== null) {
+    const isRequestMode = joinCompany.joinMode === 'request';
+    const primaryLabel = isRequestMode
+      ? `Request to join ${joinCompany.name}`
+      : `Join ${joinCompany.name}`;
+    const busyLabel = isRequestMode ? 'Sending request…' : 'Joining…';
     return (
       <div className="flex w-full flex-col items-center text-center">
         <div
@@ -214,8 +291,10 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         </h1>
         <p className="text-muted-foreground mt-2 max-w-md text-sm leading-relaxed">
           Your email domain is managed by{' '}
-          <span className="text-foreground font-medium">{joinCompany.name}</span>. You&apos;ll join
-          their workspace with {joinCompany.memberCount} teammates already on Balo.
+          <span className="text-foreground font-medium">{joinCompany.name}</span>.{' '}
+          {isRequestMode
+            ? 'Ask to join their workspace — an admin will review your request.'
+            : `You'll join their workspace with ${joinCompany.memberCount} teammates already on Balo.`}
         </p>
 
         {actionError !== null && (
@@ -230,19 +309,19 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         <div className="mt-7 flex w-full max-w-sm flex-col gap-3">
           <ShimmerButton
             type="button"
-            onClick={handleJoin}
+            onClick={handleInterstitialPrimary}
             disabled={isPending}
             className="h-11 w-full rounded-lg text-sm font-medium"
             shimmerColor="rgba(255, 255, 255, 0.15)"
             background="var(--primary)"
           >
             {isPending ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Joining&hellip;
-              </>
+              <span className="flex items-center" aria-live="polite">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                {busyLabel}
+              </span>
             ) : (
-              `Join ${joinCompany.name}`
+              primaryLabel
             )}
           </ShimmerButton>
           <Button
@@ -250,12 +329,24 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
             size="lg"
             onClick={handleCreateInstead}
             disabled={isPending}
-            className="w-full"
+            className="h-11 w-full"
           >
             This isn&apos;t my company
           </Button>
         </div>
       </div>
+    );
+  }
+
+  if (phase === 'pending') {
+    return (
+      <DomainJoinPending
+        companyName={joinCompany?.name ?? ''}
+        isBusy={isPending}
+        actionError={actionError}
+        onExplore={handleExplore}
+        onCreateInstead={handleCreateInstead}
+      />
     );
   }
 

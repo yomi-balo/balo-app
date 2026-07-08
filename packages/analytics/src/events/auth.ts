@@ -21,6 +21,10 @@ export const AUTH_EVENTS = {
   // company step. Fired once when the client create branch save succeeds. Value
   // uses the ticket-literal name (intentionally drops the sibling `auth_` prefix).
   SIGNUP_COMPANY_NAME_CAPTURED: 'signup_company_name_captured',
+  // BAL-346: join-sibling of SIGNUP_COMPANY_NAME_CAPTURED — fired once when the
+  // client auto-joins the domain-matched company from the onboarding company step
+  // (DORMANT in v1). Value follows the same ticket-literal `signup_` convention.
+  SIGNUP_COMPANY_JOINED: 'signup_company_joined',
 } as const;
 
 export type AuthMethod = 'email' | 'google' | 'microsoft';
@@ -90,6 +94,13 @@ export interface AuthEventMap {
     domain_type: 'blocked' | 'new';
     prefill_used: boolean;
     prefill_edited: boolean;
+    auth_method?: AuthMethodSignal;
+  };
+  // BAL-346: fired once when the client auto-joins the domain-matched company at
+  // the onboarding company step (DORMANT in v1). `party_type` is always 'company'
+  // in Scope A; `auth_method` is the coarse BAL-350 signal, optional as elsewhere.
+  [AUTH_EVENTS.SIGNUP_COMPANY_JOINED]: {
+    party_type: 'company';
     auth_method?: AuthMethodSignal;
   };
 }
