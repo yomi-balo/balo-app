@@ -3,6 +3,7 @@ import {
   normalizeDomain,
   extractEmailDomain,
   isBlockedDomain,
+  suggestCompanyNameFromEmail,
   FREEMAIL_DOMAINS,
   DISPOSABLE_DOMAINS,
 } from './index';
@@ -133,5 +134,36 @@ describe('isBlockedDomain', () => {
     for (const domain of DISPOSABLE_DOMAINS) {
       expect(isBlockedDomain(domain)).toBe(true);
     }
+  });
+});
+
+describe('suggestCompanyNameFromEmail', () => {
+  it('title-cases a single-label corporate apex', () => {
+    expect(suggestCompanyNameFromEmail('founder@acme.com')).toBe('Acme');
+  });
+
+  it('splits hyphenated labels into Title Case words', () => {
+    expect(suggestCompanyNameFromEmail('jane@acme-corp.io')).toBe('Acme Corp');
+  });
+
+  it('splits underscore-separated labels too', () => {
+    expect(suggestCompanyNameFromEmail('ops@big_co.com')).toBe('Big Co');
+  });
+
+  it('takes the FIRST label — known simplification: subdomained mail yields the subdomain (no PSL)', () => {
+    // jane@mail.acme.co.uk -> "Mail" (the leftmost label), NOT "Acme" (the
+    // registrable label). Documented trade-off: the prefill is editable and
+    // PSL/eTLD+1 is out of scope. If registrable-domain accuracy is ever added,
+    // this expectation must change alongside the suggestCompanyNameFromEmail impl.
+    expect(suggestCompanyNameFromEmail('a@mail.acme.co.uk')).toBe('Mail');
+  });
+
+  it('returns "" for a freemail/blocked domain (no "Gmail" prefill)', () => {
+    expect(suggestCompanyNameFromEmail('someone@gmail.com')).toBe('');
+  });
+
+  it('returns "" when the input has no usable domain', () => {
+    expect(suggestCompanyNameFromEmail('foo')).toBe('');
+    expect(suggestCompanyNameFromEmail('')).toBe('');
   });
 });

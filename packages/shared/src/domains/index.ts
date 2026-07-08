@@ -54,3 +54,28 @@ export function isBlockedDomain(domain: string): boolean {
   if (d === '') return true; // empty is not a capturable corporate domain
   return FREEMAIL_DOMAINS.has(d) || DISPOSABLE_DOMAINS.has(d);
 }
+
+/**
+ * Best-effort EDITABLE company-name suggestion from the FIRST label of an email's
+ * domain, for the BAL-350 onboarding company-name prefill: founder@acme.com →
+ * "Acme", jane@acme-corp.io → "Acme Corp". Returns '' for blocked/freemail or
+ * unusable input (so a freemail signup shows an empty field, not "Gmail").
+ *
+ * KNOWN SIMPLIFICATION: this uses the leftmost label, NOT the registrable domain
+ * (no PSL/eTLD+1 here — see `normalizeDomain`). A SUBDOMAINED address therefore
+ * yields the subdomain: jane@mail.acme.co.uk → "Mail" (not "Acme"). Intentional
+ * and acceptable because the prefill is fully editable; if a future ticket wants
+ * registrable-domain accuracy it must add PSL AND update the domains test that
+ * pins this case. PURE — no I/O, no db.
+ */
+export function suggestCompanyNameFromEmail(email: string): string {
+  const domain = extractEmailDomain(email);
+  if (domain === null || isBlockedDomain(domain)) return '';
+  const [label] = domain.split('.');
+  if (label === undefined || label === '') return '';
+  return label
+    .split(/[-_]/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}

@@ -86,6 +86,9 @@ export async function verifyEmailAction(
       activeMode: user.activeMode,
       onboardingCompleted: false,
       platformRole: 'user',
+      // BAL-350: OTP verification is definitionally an email signup — hardcode
+      // 'email' rather than trusting WorkOS (which may report MagicAuth/Password).
+      authMethod: 'email',
       companyId: membership.company.id,
       companyName: membership.company.name,
       companyRole: membership.role,

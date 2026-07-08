@@ -142,3 +142,48 @@ describe('companiesRepository.findByUserId', () => {
     await expect(companiesRepository.findByUserId(user.id)).resolves.toBeUndefined();
   });
 });
+
+// ── companiesRepository.updateName (BAL-350 onboarding rename) ───────────
+//
+// NOTE: the `companies` table has NO `deleted_at` column (only `company_members`
+// is soft-deletable — see schema/companies.ts), so there is no soft-delete
+// "resurrection" case to assert here: the not-found guard is the only liveness
+// check this table admits, and it is covered below.
+
+describe('companiesRepository.updateName', () => {
+  it('renames the company, bumps updatedAt, and returns the updated row', async () => {
+    const company = await companyFactory({
+      name: 'Old Name',
+      updatedAt: new Date('2020-01-01T00:00:00.000Z'),
+    });
+
+    const updated = await companiesRepository.updateName(company.id, 'New Name');
+
+    expect(updated.id).toBe(company.id);
+    expect(updated.name).toBe('New Name');
+    // updatedAt is bumped past the seeded value.
+    expect(updated.updatedAt.getTime()).toBeGreaterThan(
+      new Date('2020-01-01T00:00:00.000Z').getTime()
+    );
+
+    // The rename is persisted, not just reflected in the returned row.
+    const reread = await companiesRepository.findById(company.id);
+    expect(reread?.name).toBe('New Name');
+  });
+
+  it('throws for an unknown company id', async () => {
+    await expect(companiesRepository.updateName(randomUUID(), 'Whatever')).rejects.toThrow(
+      /Company not found/
+    );
+  });
+
+  it('scopes the rename to the target id and leaves other companies untouched', async () => {
+    const target = await companyFactory({ name: 'Target Co' });
+    const other = await companyFactory({ name: 'Bystander Co' });
+
+    await companiesRepository.updateName(target.id, 'Renamed Co');
+
+    const otherAfter = await companiesRepository.findById(other.id);
+    expect(otherAfter?.name).toBe('Bystander Co');
+  });
+});

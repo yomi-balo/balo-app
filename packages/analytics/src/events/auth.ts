@@ -17,9 +17,23 @@ export const AUTH_EVENTS = {
   STEP_CHANGED: 'auth_step_changed',
   VERIFICATION_CODE_SUBMITTED: 'auth_verification_code_submitted',
   VERIFICATION_CODE_RESENT: 'auth_verification_code_resent',
+  // BAL-350: compulsory company-name capture, reshaped into the onboarding
+  // company step. Fired once when the client create branch save succeeds. Value
+  // uses the ticket-literal name (intentionally drops the sibling `auth_` prefix).
+  SIGNUP_COMPANY_NAME_CAPTURED: 'signup_company_name_captured',
 } as const;
 
 export type AuthMethod = 'email' | 'google' | 'microsoft';
+
+/**
+ * BAL-350 coarse auth-method signal — the SINGLE SOURCE OF TRUTH for the
+ * `auth_method` analytics dimension. Distinct from `AuthMethod` above (this one
+ * carries the `oauth_` prefix). Reused by the onboarding event maps and by
+ * apps/web's session mapper (`mapWorkosAuthMethod` re-exports this type), so the
+ * union can never drift across the three call sites. Optional at call sites:
+ * pre-existing sessions / unknown providers leave it unset.
+ */
+export type AuthMethodSignal = 'email' | 'oauth_google' | 'oauth_microsoft';
 
 export type AuthStepName = 'email' | 'password' | 'signup' | 'verify' | 'forgot';
 
@@ -67,4 +81,15 @@ export interface AuthEventMap {
     success: boolean;
   };
   [AUTH_EVENTS.VERIFICATION_CODE_RESENT]: Record<string, never>;
+  // BAL-350: fired once at the onboarding company step when the client create
+  // branch save (workspace rename + onboarding completion) succeeds.
+  // `domain_type` folds the resolve fail-open case into 'new'. `auth_method` is
+  // the coarse BAL-350 signal (`oauth_*`), distinct from the `AuthMethod` union
+  // above; optional because pre-existing sessions / unknown providers are unset.
+  [AUTH_EVENTS.SIGNUP_COMPANY_NAME_CAPTURED]: {
+    domain_type: 'blocked' | 'new';
+    prefill_used: boolean;
+    prefill_edited: boolean;
+    auth_method?: AuthMethodSignal;
+  };
 }

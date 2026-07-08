@@ -13,5 +13,5 @@ export default async function OnboardingPage(): Promise<React.JSX.Element> {
     redirect('/dashboard');
   }
 
-  return <OnboardingWizard firstName={user.firstName} />;
+  return <OnboardingWizard firstName={user.firstName} authMethod={user.authMethod} />;
 }

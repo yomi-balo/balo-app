@@ -3,6 +3,7 @@ import 'server-only';
 import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import { sessionConfig } from './config';
+import type { AuthMethodSignal } from './auth-method';
 
 export interface SessionUser {
   id: string;
@@ -13,6 +14,10 @@ export interface SessionUser {
   activeMode: 'client' | 'expert';
   onboardingCompleted: boolean;
   platformRole: 'user' | 'admin' | 'super_admin';
+
+  // BAL-350: coarse auth method for onboarding analytics. Optional — pre-existing
+  // sessions and unknown providers are undefined.
+  authMethod?: AuthMethodSignal;
 
   // Company context (always present - personal workspace or real company)
   companyId: string;

@@ -1,4 +1,4 @@
-export { AUTH_EVENTS, type AuthEventMap, type AuthMethod } from './auth';
+export { AUTH_EVENTS, type AuthEventMap, type AuthMethod, type AuthMethodSignal } from './auth';
 export { ONBOARDING_EVENTS, type OnboardingEventMap, type OnboardingStepName } from './onboarding';
 export {
   EXPERT_EVENTS,
