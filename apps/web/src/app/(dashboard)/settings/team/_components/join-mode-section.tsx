@@ -152,7 +152,7 @@ export function JoinModeSection({
             selected={mode === option.value}
             disabled={isBusy}
             onSelect={() => {
-              void choose(option.value);
+              choose(option.value).catch(() => undefined);
             }}
           />
         ))}

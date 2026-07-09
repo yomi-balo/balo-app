@@ -91,7 +91,7 @@ export async function advanceJoinRequestStatus(
 
   const [updated] = await tx
     .update(partyJoinRequests)
-    .set({ status: input.to, ...(input.set ?? {}) })
+    .set({ status: input.to, ...input.set })
     .where(eq(partyJoinRequests.id, input.id))
     .returning();
 
@@ -197,8 +197,9 @@ export interface PendingJoinRequestRow {
 
 /**
  * A resolved (approved/declined/withdrawn) join-request row for the collapsed
- * history disclosure (BAL-347). `resolver` is the admin who resolved it (null for a
- * self-withdraw, where `resolved_by_user_id` is unset); only names are projected.
+ * history disclosure (BAL-347). `resolver` is the admin who approved/declined it, and
+ * is `null` for a withdrawn row: a self-withdraw stamps `resolved_by_user_id` with the
+ * requester (for audit), but there is no admin resolver to surface. Only names are projected.
  */
 export interface ResolvedJoinRequestRow {
   id: string;
@@ -397,8 +398,9 @@ export const partyJoinRequestsRepository = {
   /**
    * Resolved (approved/declined/withdrawn) requests for a party, most-recently
    * resolved first (BAL-347 collapsed history). INNER JOIN the requester + LEFT JOIN
-   * an ALIASED `users` for the resolver (null for a self-withdraw). Projected columns
-   * only; `resolver` collapses to `null` when `resolved_by_user_id` is unset.
+   * an ALIASED `users` for the resolver. Projected columns only; `resolver` collapses
+   * to `null` for withdrawn rows (a self-withdraw has no admin resolver) and whenever
+   * `resolved_by_user_id` is unset.
    */
   listResolvedByParty: async (
     partyType: PartyType,
@@ -443,8 +445,11 @@ export const partyJoinRequestsRepository = {
         lastName: row.requesterLastName,
         email: row.requesterEmail,
       },
+      // A self-withdrawal has no admin resolver: `resolved_by_user_id` records the
+      // requester (for audit), but we surface `resolver: null` so the collapsed history
+      // never renders the requester as their own resolver.
       resolver:
-        row.resolverId === null
+        row.status === 'withdrawn' || row.resolverId === null
           ? null
           : { firstName: row.resolverFirstName, lastName: row.resolverLastName },
     }));

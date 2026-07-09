@@ -68,14 +68,14 @@ export function AddDomainForm({
     (event: React.KeyboardEvent<HTMLInputElement>): void => {
       if (event.key === 'Enter') {
         event.preventDefault();
-        void submit();
+        submit().catch(() => undefined);
       }
     },
     [submit]
   );
 
   const handleClick = useCallback((): void => {
-    void submit();
+    submit().catch(() => undefined);
   }, [submit]);
 
   const hasError = error !== null;
@@ -144,13 +144,10 @@ export function AddDomainForm({
       )}
 
       {justAdded && !hasError && (
-        <p
-          role="status"
-          className="text-success mt-3 flex items-center gap-1.5 text-sm font-medium"
-        >
+        <output className="text-success mt-3 flex items-center gap-1.5 text-sm font-medium">
           <Check className="h-4 w-4" aria-hidden="true" />
           Domain added and recorded in your audit log.
-        </p>
+        </output>
       )}
     </div>
   );

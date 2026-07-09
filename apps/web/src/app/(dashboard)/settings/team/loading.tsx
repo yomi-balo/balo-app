@@ -8,12 +8,12 @@ import { SectionCard, SectionSkeleton } from '@/components/balo/domain-join/sect
 function JoinModeSkeleton(): React.JSX.Element {
   const keys = ['auto', 'request', 'off'];
   return (
-    <div role="status" aria-label="Loading" className="flex flex-col gap-2.5">
+    <output aria-label="Loading" className="flex flex-col gap-2.5">
       {keys.map((key) => (
         <div key={key} className="bg-muted h-16 w-full animate-pulse rounded-xl" />
       ))}
       <span className="sr-only">Loading…</span>
-    </div>
+    </output>
   );
 }
 

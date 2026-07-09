@@ -407,6 +407,15 @@ describe('partyJoinRequestsRepository.listResolvedByParty', () => {
     if (approvedRow === undefined) throw new Error('expected the approved row');
     expect(approvedRow.requester.email).toBe('appr@northwind.com');
     expect(approvedRow.resolver).toEqual({ firstName: 'Admin', lastName: 'Boss' });
+
+    // A self-withdrawal has no admin resolver: resolved_by_user_id is stamped with the
+    // requester (for audit), but the history must surface `resolver: null` — never the
+    // requester rendered as their own resolver. Regression guard for BAL-347.
+    const withdrawnRow = rows[2];
+    if (withdrawnRow === undefined) throw new Error('expected the withdrawn row');
+    expect(withdrawnRow.status).toBe('withdrawn');
+    expect(withdrawnRow.requester.email).toBe('wd@northwind.com');
+    expect(withdrawnRow.resolver).toBeNull();
   });
 
   it('returns a null resolver when resolved_by_user_id is unset (admin later SET NULL)', async () => {

@@ -74,8 +74,18 @@ export function JoinRequestsSection({
     }
   }, []);
 
-  const handleApprove = useCallback((id: string) => void resolve(id, 'approve'), [resolve]);
-  const handleDecline = useCallback((id: string) => void resolve(id, 'decline'), [resolve]);
+  const handleApprove = useCallback(
+    (id: string) => {
+      resolve(id, 'approve').catch(() => undefined);
+    },
+    [resolve]
+  );
+  const handleDecline = useCallback(
+    (id: string) => {
+      resolve(id, 'decline').catch(() => undefined);
+    },
+    [resolve]
+  );
 
   const showModeNote = mode !== 'request' && visiblePending.length > 0;
 

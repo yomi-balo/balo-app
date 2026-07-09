@@ -45,7 +45,7 @@ export function SectionCard({
 export function SectionSkeleton({ rows = 3 }: Readonly<{ rows?: number }>): React.JSX.Element {
   const keys = Array.from({ length: rows }, (_, i) => `skeleton-${i}`);
   return (
-    <div role="status" aria-label="Loading" className="flex flex-col gap-1">
+    <output aria-label="Loading" className="flex flex-col gap-1">
       {keys.map((key) => (
         <div key={key} className="flex items-center gap-3 py-3">
           <div className="bg-muted h-9 w-9 flex-none animate-pulse rounded-lg" />
@@ -57,7 +57,7 @@ export function SectionSkeleton({ rows = 3 }: Readonly<{ rows?: number }>): Reac
         </div>
       ))}
       <span className="sr-only">Loading…</span>
-    </div>
+    </output>
   );
 }
 
