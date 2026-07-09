@@ -329,6 +329,20 @@
   }
 }
 
+/* BAL-338 (D7): the completed-banner celebration — particles FALL from the top of
+   the banner and end at opacity 0 (a one-shot ~2.6s burst on the in-session accept
+   transition). Downward, unlike the upward confetti1-3 used on the dashboard. */
+@keyframes confettiFall {
+  0% {
+    transform: translateY(-10px) rotate(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(130px) rotate(320deg);
+    opacity: 0;
+  }
+}
+
 /* Expert public-profile hero — marketing-grade dark indigo, theme-stable in
    both light and dark mode (this is marketing chrome, NOT a --background
    surface). The only sanctioned hardcoded hex on the profile, scoped here. */

@@ -12,6 +12,8 @@ import type {
   EngagementCompletionRequestedPayload,
   EngagementCompletionWithdrawnPayload,
   EngagementCancelledPayload,
+  EngagementAcceptedPayload,
+  EngagementChangesRequestedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -220,6 +222,11 @@ export type NotificationEvent =
   | 'engagement.completion_requested'
   | 'engagement.completion_withdrawn'
   | 'engagement.cancelled'
+  // BAL-338 (D7) — web-published client review decisions. The auto-accept +
+  // review-reminder events are API-sweep-published only, so they are deliberately
+  // ABSENT from this web union (they have no `/notifications/publish` route arm).
+  | 'engagement.accepted'
+  | 'engagement.changes_requested'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
@@ -252,6 +259,8 @@ export interface EventPayloadMap {
   'engagement.completion_requested': EngagementCompletionRequestedPayload;
   'engagement.completion_withdrawn': EngagementCompletionWithdrawnPayload;
   'engagement.cancelled': EngagementCancelledPayload;
+  'engagement.accepted': EngagementAcceptedPayload;
+  'engagement.changes_requested': EngagementChangesRequestedPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;

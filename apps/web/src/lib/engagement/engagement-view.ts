@@ -1,8 +1,14 @@
+import 'server-only';
+
 import { AUTO_ACCEPT_DAYS, type EngagementWithMilestones } from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+// The single-source "start a new project" front door (BAL-274). Currently expert
+// discovery; when BAL-253's generic match front door lands, that ONE constant repoints
+// and this completed-banner CTA follows with no change here.
+import { NEW_REQUEST_HREF } from '@/app/(dashboard)/projects/_components/constants';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
@@ -137,11 +143,28 @@ export interface CountdownView {
   autoInLabel: string;
 }
 
+/**
+ * BAL-338 (D7) — the client's project-level decision copy, pre-derived server-side so
+ * the client action island stays a primitive-props surface (never value-imports
+ * `@balo/db` / recomputes `AUTO_ACCEPT_DAYS` or party names). Non-null ONLY on the
+ * client lens.
+ */
+export interface ReviewClientDecisionView {
+  /** Sticky accept-confirm modal body — invoice consequence + irreversibility. */
+  acceptModalBody: string;
+  /** Request-changes modal intro — window restarts + who's notified. */
+  requestChangesIntro: string;
+  /** The note-field hint, party-named ("…exactly what {expert} sees"). */
+  requestChangesFieldHint: string;
+}
+
 export interface ReviewBannerView {
   title: string;
   body: string;
   /** Null only if the request timestamp is somehow absent (guarded). */
   countdown: CountdownView | null;
+  /** Client-lens only: the accept / request-changes decision copy; null for expert/admin. */
+  clientDecision: ReviewClientDecisionView | null;
 }
 
 export interface ChangeRequestBannerView {
@@ -152,11 +175,29 @@ export interface ChangeRequestBannerView {
   expertNudge: string | null;
 }
 
+/**
+ * BAL-338 (D7) — the client's next-step CTAs on the completed banner. v1 ships only
+ * affordances whose destinations already exist (new request → the discovery front
+ * door; Message → the source request's conversation). The v2 marketplace hooks
+ * (review-request, rehire shortcut) slot into this same row. Non-null ONLY on the
+ * client lens.
+ */
+export interface CompletedBannerClientCtaView {
+  /** "Start your next project" — the discovery/new-request front door. */
+  nextProjectHref: string;
+  /** "Message {person}" — the source request's conversation; null for retainers (no request). */
+  messageHref: string | null;
+  /** Full person label for the Message CTA, e.g. "Priya Sharma". */
+  messagePersonLabel: string;
+}
+
 export interface CompletedBannerView {
   title: string;
   body: string;
   /** Admin-only "Ready to invoice" affordance flag. */
   readyToInvoice: boolean;
+  /** Client-lens only: next-step CTAs; null for expert/admin. */
+  clientCta: CompletedBannerClientCtaView | null;
 }
 
 export interface CancelledBannerView {
@@ -448,10 +489,16 @@ function deriveReviewBanner(
   }
 
   if (lens === 'client') {
+    const expertShort = parties.expertPersonShort;
     return {
       title: `${parties.expertRetroFirstMention} has marked the project complete`,
       body: `Review the delivery plan below, then accept the project or request changes. If no one responds, the project is accepted automatically on ${autoOnLabel} so delivery isn't left hanging.`,
       countdown,
+      clientDecision: {
+        acceptModalBody: `Accepting confirms ${expertShort} delivered the project as agreed — it can't be un-accepted afterwards, and Balo raises the final invoice from here. If something's not right, request changes instead. ${expertShort} and the Balo team are notified.`,
+        requestChangesIntro: `The project goes back to active with your note attached — ${expertShort} and the Balo team are notified, and the project is marked complete again once it's fixed. The ${AUTO_ACCEPT_DAYS}-day review window restarts then.`,
+        requestChangesFieldHint: `Be specific — this is exactly what ${expertShort} sees.`,
+      },
     };
   }
   if (lens === 'expert') {
@@ -459,12 +506,14 @@ function deriveReviewBanner(
       title: `Completion requested — awaiting ${parties.clientCompanyName}'s review`,
       body: `Requested ${requestedAtLabel}. ${parties.clientCompanyName} has ${AUTO_ACCEPT_DAYS} days to accept or request changes — after that the project is accepted automatically. The delivery plan is locked while the project is in review.`,
       countdown,
+      clientDecision: null,
     };
   }
   return {
     title: `Completion requested — awaiting ${parties.clientCompanyName}'s review`,
     body: `Requested ${requestedAtLabel} by ${parties.expertRetroFirstMention}. Auto-accepts ${autoOnLabel} unless ${parties.clientCompanyName} responds. Final invoice raises once accepted.`,
     countdown,
+    clientDecision: null,
   };
 }
 
@@ -520,6 +569,7 @@ function deriveCompletedBanner(
       title: 'Project delivered',
       body: `${completedDeliveredLead(total)} and the project ${acceptedLine}. Balo has been notified.`,
       readyToInvoice: false,
+      clientCta: null,
     };
   }
   if (lens === 'client') {
@@ -529,12 +579,19 @@ function deriveCompletedBanner(
         ? `The project was ${acceptedLine}. Balo will be in touch about the final invoice.`
         : `You accepted the project on ${acceptedAtLabel}. Balo will be in touch about the final invoice.`,
       readyToInvoice: false,
+      clientCta: {
+        nextProjectHref: NEW_REQUEST_HREF,
+        messageHref:
+          engagement.projectRequest === null ? null : `/projects/${engagement.projectRequest.id}`,
+        messagePersonLabel: parties.expertPerson,
+      },
     };
   }
   return {
     title: 'Project completed',
     body: `Project ${acceptedLine}${completedDeliveredSuffix(total)}.`,
     readyToInvoice: true,
+    clientCta: null,
   };
 }
 

@@ -3,26 +3,29 @@ import { Clock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { ReviewBannerView } from '@/lib/engagement/engagement-view';
 import type { EngagementLens } from '@/lib/engagement/resolve-engagement-lens';
-import { ReviewBannerActions } from './review-banner-actions';
+import { ReviewBannerActions, type ReviewInitialAction } from './review-banner-actions';
 
 interface ReviewBannerProps {
   banner: ReviewBannerView;
   lens: EngagementLens;
   engagementId: string;
   clientCompanyName: string;
+  /** Email deep-link intent — auto-opens the matching client modal once. */
+  initialAction: ReviewInitialAction | null;
 }
 
 /**
  * `pending_acceptance` state banner. Renders the per-lens completion-review copy
  * (pre-derived on the view) plus an INFORMATIONAL auto-accept countdown pill and the
- * per-lens {@link ReviewBannerActions} (D4: expert "Withdraw request"; the client
- * accept / request-changes decision is the D7 seam).
+ * per-lens {@link ReviewBannerActions} (D4: expert "Withdraw request"; D7: the client
+ * accept / request-changes decision).
  */
 export function ReviewBanner({
   banner,
   lens,
   engagementId,
   clientCompanyName,
+  initialAction,
 }: Readonly<ReviewBannerProps>): React.JSX.Element {
   return (
     <div className="border-warning/20 bg-warning/10 flex items-start gap-3 rounded-2xl border px-5 py-4">
@@ -46,6 +49,8 @@ export function ReviewBanner({
           lens={lens}
           engagementId={engagementId}
           clientCompanyName={clientCompanyName}
+          clientDecision={banner.clientDecision}
+          initialAction={initialAction}
         />
       </div>
     </div>

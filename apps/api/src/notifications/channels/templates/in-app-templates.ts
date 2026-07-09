@@ -356,6 +356,95 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-338 (D7) client accepted — EXPERT (congrats). Retrospective person naming.
+  'engagement-accepted-expert': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'the project';
+    return engagementNotice(
+      'Project accepted 🎉',
+      `${actor} accepted '${title}' — congratulations on the delivery. Balo takes care of the final invoice.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) client accepted — ADMIN (money signal).
+  'engagement-accepted-admin': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'A project';
+    return engagementNotice(
+      'Ready to invoice: final installment',
+      `${actor} accepted '${title}' — final installment is ready to invoice.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) client requested changes — EXPERT (act).
+  'engagement-changes-requested-expert': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'the project';
+    return engagementNotice(
+      'Changes requested',
+      `${actor} requested changes on '${title}' — the project is active again. Mark it complete when it's fixed.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) client requested changes — ADMIN ops signal (review cycle {n}).
+  'engagement-changes-requested-admin': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'A project';
+    const cycle = typeof data.reviewCycle === 'number' ? data.reviewCycle : undefined;
+    const cycleLabel = cycle ? ` (review cycle ${cycle})` : '';
+    return engagementNotice(
+      'Changes requested',
+      `${actor} requested changes on '${title}'${cycleLabel}.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) auto-accepted — CLIENT (wrapped up as delivered).
+  'engagement-auto-accepted-client': (data) => {
+    const title = (data.projectTitle as string) ?? 'Your project';
+    return engagementNotice(
+      'Project complete 🎉',
+      `'${title}' is complete — wrapped up as delivered after the review window. Balo will be in touch about the final invoice.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) auto-accepted — EXPERT (congrats).
+  'engagement-auto-accepted-expert': (data) => {
+    const title = (data.projectTitle as string) ?? 'The project';
+    const autoDate = (data.autoDate as string) ?? 'the review deadline';
+    return engagementNotice(
+      'Project complete 🎉',
+      `'${title}' closed out as delivered on ${autoDate} after the review window. Balo takes care of the final invoice.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) auto-accepted — ADMIN (money signal; auto path noted).
+  'engagement-auto-accepted-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const reviewDays = typeof data.reviewDays === 'number' ? data.reviewDays : 7;
+    return engagementNotice(
+      'Ready to invoice: final installment',
+      `'${title}' accepted automatically (${reviewDays}-day window) — final installment is ready to invoice.`,
+      data
+    );
+  },
+
+  // BAL-338 (D7) T-2 review reminder — CLIENT (one friendly nudge).
+  'engagement-review-reminder-client': (data) => {
+    const title = (data.projectTitle as string) ?? 'Your project';
+    const autoDate = (data.autoDate as string) ?? 'soon';
+    return engagementNotice(
+      'Your completed project is waiting 👋',
+      `'${title}' wraps up as delivered on ${autoDate} — take a look and make it official.`,
+      data
+    );
+  },
+
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {
     const companyName = (data.companyName as string) ?? 'a company';

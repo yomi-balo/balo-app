@@ -7,8 +7,17 @@ import type { EngagementActionResult } from '@/app/(dashboard)/engagements/[id]/
 
 interface UseEngagementLifecycleAction {
   isPending: boolean;
-  /** Run a lifecycle Server Action: toast the outcome, then reconcile via router.refresh(). */
-  run: (action: Promise<EngagementActionResult>, successMessage: string) => void;
+  /**
+   * Run a lifecycle Server Action: toast the outcome, then reconcile via
+   * router.refresh(). `onSuccess` (optional) fires on the success path BEFORE the
+   * refresh — the D7 accept flow uses it to arm the one-shot completed-banner
+   * celebration (a transition-only signal that survives the RSC refresh).
+   */
+  run: (
+    action: Promise<EngagementActionResult>,
+    successMessage: string,
+    onSuccess?: () => void
+  ) => void;
 }
 
 /**
@@ -24,11 +33,16 @@ export function useEngagementLifecycleAction(): UseEngagementLifecycleAction {
   const [isPending, startTransition] = useTransition();
 
   const run = useCallback(
-    (action: Promise<EngagementActionResult>, successMessage: string): void => {
+    (
+      action: Promise<EngagementActionResult>,
+      successMessage: string,
+      onSuccess?: () => void
+    ): void => {
       startTransition(async () => {
         const result = await action;
         if (result.success) {
           toast.success(successMessage);
+          onSuccess?.();
         } else {
           toast.error(result.error);
         }

@@ -12,10 +12,11 @@ import {
   type EngagementWorkspaceEntry,
 } from '@/lib/analytics/server';
 import { EngagementWorkspace } from '@/components/balo/engagement/engagement-workspace';
+import type { ReviewInitialAction } from '@/components/balo/engagement/review-banner-actions';
 
 interface EngagementWorkspacePageProps {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ from?: string }>;
+  searchParams: Promise<{ from?: string; action?: string }>;
 }
 
 /**
@@ -42,6 +43,15 @@ const GENERIC_METADATA: Metadata = {
  */
 function resolveEntry(from: string | undefined): EngagementWorkspaceEntry {
   return from === 'request_detail' || from === 'inbox' ? from : 'direct';
+}
+
+/**
+ * Whitelist the `?action` query (the email dual-CTA deep-link) into the review-modal
+ * intent. Anything else (absent / `?action=bogus`) → null (no auto-open). The client
+ * review banner only acts on it for a client-lens `pending_acceptance` engagement.
+ */
+function resolveInitialAction(action: string | undefined): ReviewInitialAction | null {
+  return action === 'accept' || action === 'request-changes' ? action : null;
 }
 
 export async function generateMetadata({
@@ -123,7 +133,7 @@ export default async function EngagementWorkspacePage({
   // Fire the server-side view event on the authorised path. `after()` is
   // registered here (before any later throw) so the flush lands even on
   // serverless. Entry is derived from the whitelisted `?from` query.
-  const { from } = await searchParams;
+  const { from, action } = await searchParams;
   trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.WORKSPACE_VIEWED, {
     engagement_id: engagement.id,
     lens: ctx.lens,
@@ -132,5 +142,5 @@ export default async function EngagementWorkspacePage({
     distinct_id: user.id,
   });
 
-  return <EngagementWorkspace view={view} />;
+  return <EngagementWorkspace view={view} initialAction={resolveInitialAction(action)} />;
 }

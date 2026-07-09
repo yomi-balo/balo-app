@@ -2,6 +2,7 @@ import type { EngagementWorkspaceView } from '@/lib/engagement/engagement-view';
 import { Reveal } from './reveal';
 import { EngagementHeader } from './engagement-header';
 import { ReviewBanner } from './review-banner';
+import type { ReviewInitialAction } from './review-banner-actions';
 import { ChangeRequestBanner } from './change-request-banner';
 import { CompletedBanner } from './completed-banner';
 import { CancelledBanner } from './cancelled-banner';
@@ -14,6 +15,8 @@ import { ExpertCompletionCard } from './expert-completion-card';
 
 interface EngagementWorkspaceProps {
   view: EngagementWorkspaceView;
+  /** Email dual-CTA deep-link intent (`?action=`) — auto-opens the client review modal. */
+  initialAction?: ReviewInitialAction | null;
 }
 
 /**
@@ -31,6 +34,7 @@ interface EngagementWorkspaceProps {
  */
 export function EngagementWorkspace({
   view,
+  initialAction = null,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
   // The delivering expert gets the INTERACTIVE rail only while the engagement is
   // active — the plan locks during client review / terminal states, where the
@@ -81,6 +85,7 @@ export function EngagementWorkspace({
             lens={view.lens}
             engagementId={view.engagementId}
             clientCompanyName={view.parties.clientCompanyName}
+            initialAction={initialAction}
           />
         </Reveal>
       )}
@@ -93,7 +98,7 @@ export function EngagementWorkspace({
 
       {view.completedBanner !== null && (
         <Reveal delay={0.05}>
-          <CompletedBanner banner={view.completedBanner} />
+          <CompletedBanner banner={view.completedBanner} engagementId={view.engagementId} />
         </Reveal>
       )}
 

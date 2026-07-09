@@ -80,6 +80,7 @@ export {
   type EngagementServerEventMap,
   type EngagementWorkspaceLens,
   type EngagementWorkspaceEntry,
+  type EngagementAcceptanceMethod,
   ENGAGEMENT_EVENTS,
   type EngagementEventMap,
 } from './engagement';

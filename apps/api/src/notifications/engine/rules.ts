@@ -436,6 +436,44 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp('client', 'engagement-cancelled'),
     ...emailAndInApp('expert', 'engagement-cancelled'),
   ],
+  // BAL-338 (D7): the client ACCEPTED the project (explicit). Fans out to the
+  // delivering EXPERT (recipient:'expert' via payload.expertProfileId → data.expert;
+  // email + in-app — congratulations, Balo handles the final invoice) and the Balo
+  // ADMINS (recipient:'admin_users' fan-out; email + in-app — THE MONEY TRIGGER,
+  // "Ready to invoice: final installment"). No client recipient (they just acted).
+  'engagement.accepted': [
+    ...emailAndInApp('expert', 'engagement-accepted-expert'),
+    ...emailAndInApp('admin_users', 'engagement-accepted-admin'),
+  ],
+  // BAL-338 (D7): the client requested changes instead of accepting — the project is
+  // active again. The delivering EXPERT (recipient:'expert'; email + in-app — the
+  // client's note verbatim + "the review window restarts when you re-request") must
+  // act; the Balo ADMINS (recipient:'admin_users' fan-out; IN-APP ONLY) get an ops
+  // signal.
+  'engagement.changes_requested': [
+    ...emailAndInApp('expert', 'engagement-changes-requested-expert'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-changes-requested-admin',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-338 (D7): the review window elapsed with no client decision — the D7 sweep
+  // auto-accepted (server-published). Fans out to the CLIENT company owner
+  // (recipient:'client' via payload.recipientId; email = VARIANT 3 AutoAcceptedEmail
+  // verbatim + in-app), the delivering EXPERT (recipient:'expert'; email + in-app), and
+  // the Balo ADMINS (recipient:'admin_users' fan-out; email + in-app — the money
+  // trigger). Client rules skip gracefully when recipientId is absent (retainer/no-owner).
+  'engagement.auto_accepted': [
+    ...emailAndInApp('client', 'engagement-auto-accepted-client'),
+    ...emailAndInApp('expert', 'engagement-auto-accepted-expert'),
+    ...emailAndInApp('admin_users', 'engagement-auto-accepted-admin'),
+  ],
+  // BAL-338 (D7): T-2 review reminder (server-published). Targets the CLIENT company
+  // owner only (recipient:'client' via payload.recipientId; email = VARIANT 2
+  // ReviewReminderEmail verbatim + in-app). Skips gracefully when recipientId is absent.
+  'engagement.review_reminder': emailAndInApp('client', 'engagement-review-reminder-client'),
   // BAL-345 domain auto-join. `party_admins` is a fan-out recipient (one delivery
   // per admin) resolved from data.partyAdminUserIds; `self` (approve/decline)
   // resolves to payload.userId (the requester). The base-member joiner/requester

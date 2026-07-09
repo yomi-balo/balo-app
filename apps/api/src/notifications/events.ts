@@ -12,6 +12,10 @@ import type {
   EngagementCompletionRequestedPayload,
   EngagementCompletionWithdrawnPayload,
   EngagementCancelledPayload,
+  EngagementAcceptedPayload,
+  EngagementChangesRequestedPayload,
+  EngagementAutoAcceptedPayload,
+  EngagementReviewReminderPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -218,20 +222,27 @@ export type NotificationEvent =
   | 'engagement.completion_requested'
   | 'engagement.completion_withdrawn'
   | 'engagement.cancelled'
+  | 'engagement.accepted'
+  | 'engagement.changes_requested'
+  | 'engagement.auto_accepted'
+  | 'engagement.review_reminder'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
   | 'party.join_request_declined';
 
 /**
- * Events published only from WITHIN the API (the calendar webhook and the Cronofy
- * token-refresh path) — never through the internal `/notifications/publish` route,
- * so they have no arm in `publishBodySchema` by design. Keep this list tight:
- * everything NOT listed here is treated as publishable from apps/web and MUST have
- * a schema arm — enforced at compile time in
- * apps/api/src/routes/notifications/schema.ts.
+ * Events published only from WITHIN the API (the calendar webhook / Cronofy
+ * token-refresh path, and the D7 auto-accept + review-reminder sweeps) — never
+ * through the internal `/notifications/publish` route, so they have no arm in
+ * `publishBodySchema` by design. Keep this list tight: everything NOT listed here is
+ * treated as publishable from apps/web and MUST have a schema arm — enforced at
+ * compile time in apps/api/src/routes/notifications/schema.ts.
  */
-export type ServerOnlyNotificationEvent = 'calendar.auth_error';
+export type ServerOnlyNotificationEvent =
+  | 'calendar.auth_error'
+  | 'engagement.auto_accepted'
+  | 'engagement.review_reminder';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -263,6 +274,10 @@ export interface EventPayloadMap {
   'engagement.completion_requested': EngagementCompletionRequestedPayload;
   'engagement.completion_withdrawn': EngagementCompletionWithdrawnPayload;
   'engagement.cancelled': EngagementCancelledPayload;
+  'engagement.accepted': EngagementAcceptedPayload;
+  'engagement.changes_requested': EngagementChangesRequestedPayload;
+  'engagement.auto_accepted': EngagementAutoAcceptedPayload;
+  'engagement.review_reminder': EngagementReviewReminderPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;

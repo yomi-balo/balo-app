@@ -316,6 +316,35 @@ const engagementCancelledPayload = z.object({
   reason: z.string().min(1).max(2000),
 });
 
+// BAL-338 (D7) client accepted the project (client → expert + admins). `correlationId`
+// = `${engagementId}:accepted` (one-shot terminal; z.string not z.uuid so the suffix
+// validates). `expertProfileId` → resolver hydrates data.expert (recipient:'expert').
+// Mirrors packages/shared/src/notifications/index.ts.
+const engagementAcceptedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  expertProfileId: z.uuid(),
+  actorClientLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  acceptedOn: z.string().min(1).max(40),
+  milestonesTotal: z.number().int().nonnegative(),
+});
+
+// BAL-338 (D7) client requested changes (client → expert + admins). `correlationId`
+// = `${engagementId}:changes_requested:${changeRequestedAtMs}` (re-requestable; z.string
+// not z.uuid so the epoch suffix validates). `note` is the client's verbatim change
+// note. Mirrors packages/shared/src/notifications/index.ts.
+const engagementChangesRequestedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  expertProfileId: z.uuid(),
+  actorClientLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  note: z.string().min(1).max(2000),
+  reviewDays: z.number().int().nonnegative(),
+  reviewCycle: z.number().int().positive(),
+});
+
 // BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the
 // subject (joiner/requester), `correlationId` the stable membership/request id.
 // One schema, reused for all four arms (DRY — the completeness guard still checks
@@ -421,6 +450,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.cancelled'),
     payload: engagementCancelledPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.accepted'),
+    payload: engagementAcceptedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.changes_requested'),
+    payload: engagementChangesRequestedPayload,
   }),
   z.object({
     event: z.literal('party.member_joined_via_domain'),
