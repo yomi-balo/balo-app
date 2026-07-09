@@ -71,6 +71,11 @@ export { PARTY_DOMAIN_SERVER_EVENTS, type PartyDomainServerEventMap } from './pa
 export { PARTY_JOIN_SERVER_EVENTS, type PartyJoinServerEventMap } from './party-join';
 export { DOMAIN_JOIN_EVENTS, type DomainJoinEventMap } from './domain-join';
 export {
+  EXPERT_AGENCY_EVENTS,
+  type ExpertAgencyEventMap,
+  type ExpertAgencyOutcome,
+} from './expert-agency';
+export {
   ENGAGEMENT_SERVER_EVENTS,
   type EngagementServerEventMap,
   type EngagementWorkspaceLens,

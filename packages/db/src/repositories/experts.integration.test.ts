@@ -22,6 +22,7 @@ import {
   expertDraftFactory,
   expertFactory,
   searchExpertFactory,
+  agencyFactory,
 } from '../test/factories';
 import { expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
@@ -150,6 +151,28 @@ describe('expertsRepository.updateProfile', () => {
     const updated = await expertsRepository.findProfileById(draft.id);
     expect(updated?.headline).toBe('New headline');
     expect(updated?.rateCents).toBe(150);
+  });
+});
+
+// ── linkAgency (BAL-356) ────────────────────────────────────────────
+
+describe('expertsRepository.linkAgency', () => {
+  it('sets agency_id on the profile', async () => {
+    const draft = await expertDraftFactory();
+    const agency = await agencyFactory();
+    expect(draft.agencyId).toBeNull();
+
+    await expertsRepository.linkAgency(draft.id, agency.id);
+
+    const linked = await expertsRepository.findProfileById(draft.id);
+    expect(linked?.agencyId).toBe(agency.id);
+  });
+
+  it('throws when the profile does not exist (no row updated)', async () => {
+    const agency = await agencyFactory();
+    await expect(expertsRepository.linkAgency(randomUUID(), agency.id)).rejects.toThrow(
+      /not found/i
+    );
   });
 });
 

@@ -10,6 +10,7 @@ import { WizardProgress } from './wizard-progress';
 import { WizardActionBar } from './wizard-action-bar';
 import { AutoSaveIndicator } from './auto-save-indicator';
 import { StepProfile } from './step-profile';
+import { StepAgency } from './step-agency';
 import { StepProducts } from './step-products';
 import { StepAssessment } from './step-assessment';
 import { StepCertifications } from './step-certifications';
@@ -59,6 +60,7 @@ function WizardContent(): React.JSX.Element {
 
   const STEP_COMPONENTS: Record<string, React.JSX.Element> = {
     profile: <StepProfile headingRef={headingRef} />,
+    agency: <StepAgency headingRef={headingRef} />,
     products: <StepProducts headingRef={headingRef} />,
     assessment: <StepAssessment headingRef={headingRef} />,
     certifications: <StepCertifications headingRef={headingRef} />,

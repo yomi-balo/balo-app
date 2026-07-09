@@ -127,7 +127,11 @@ export function WizardActionBar(): React.JSX.Element {
   const stepConfig = STEP_CONFIG[currentStep] ?? STEP_CONFIG[0];
   const isFirst = currentStep === 0;
   const isLast = currentStep === STEP_CONFIG.length - 1;
-  const isSkippable = !stepConfig.required;
+  // BAL-356: a self-advancing step (agency) owns its own in-card Continue — suppress
+  // the bar's Next/Skip so the in-card write is the sole forward path. Previous +
+  // Save & exit remain. `in` narrows the union (only the agency entry has the flag).
+  const isSelfAdvancing = 'selfAdvancing' in stepConfig && stepConfig.selfAdvancing === true;
+  const isSkippable = !stepConfig.required && !isSelfAdvancing;
   const nextLabel = NEXT_LABELS[stepConfig.key] ?? 'Next';
 
   return (
@@ -157,21 +161,22 @@ export function WizardActionBar(): React.JSX.Element {
               Skip
             </Button>
           )}
-          {isLast ? (
-            <SubmitButton />
-          ) : (
-            <Button
-              type="button"
-              size="lg"
-              onClick={() => void goNext()}
-              className="group from-primary shadow-primary/20 hover:shadow-primary/25 bg-gradient-to-r to-violet-600 text-white shadow-md hover:shadow-lg"
-            >
-              <motion.span className="inline-flex items-center gap-1.5" whileHover={{ x: 3 }}>
-                {nextLabel}
-                <ArrowRight className="h-4 w-4" />
-              </motion.span>
-            </Button>
-          )}
+          {!isSelfAdvancing &&
+            (isLast ? (
+              <SubmitButton />
+            ) : (
+              <Button
+                type="button"
+                size="lg"
+                onClick={() => void goNext()}
+                className="group from-primary shadow-primary/20 hover:shadow-primary/25 bg-gradient-to-r to-violet-600 text-white shadow-md hover:shadow-lg"
+              >
+                <motion.span className="inline-flex items-center gap-1.5" whileHover={{ x: 3 }}>
+                  {nextLabel}
+                  <ArrowRight className="h-4 w-4" />
+                </motion.span>
+              </Button>
+            ))}
         </div>
       </div>
 
@@ -199,18 +204,19 @@ export function WizardActionBar(): React.JSX.Element {
               Previous
             </Button>
           )}
-          {isLast ? (
-            <SubmitButton className="min-h-11 flex-1" />
-          ) : (
-            <Button
-              type="button"
-              className="from-primary min-h-11 flex-1 bg-gradient-to-r to-violet-600 text-white"
-              onClick={() => void goNext()}
-            >
-              {nextLabel}
-              <ArrowRight className="ml-1 h-4 w-4" />
-            </Button>
-          )}
+          {!isSelfAdvancing &&
+            (isLast ? (
+              <SubmitButton className="min-h-11 flex-1" />
+            ) : (
+              <Button
+                type="button"
+                className="from-primary min-h-11 flex-1 bg-gradient-to-r to-violet-600 text-white"
+                onClick={() => void goNext()}
+              >
+                {nextLabel}
+                <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            ))}
         </div>
         <SaveExitButton className="mt-2 min-h-11 w-full" />
       </div>

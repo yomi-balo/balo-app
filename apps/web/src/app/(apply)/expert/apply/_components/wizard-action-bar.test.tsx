@@ -80,14 +80,15 @@ const referenceData: ReferenceData = {
   vertical: { id: 'vertical-1' } as ReferenceData['vertical'],
 };
 
-// A fully-hydrated draft with non-empty work history so `findFirstIncompleteStep`
-// resolves the initial step to Terms (the last index).
+// A fully-hydrated draft with non-empty work history + a linked agency (BAL-356) so
+// `findFirstIncompleteStep` resolves the initial step to Terms (the last index).
 const termsDraft = {
   profile: {
     id: 'profile-1',
     userId: 'user-1',
     applicationStatus: 'draft',
     yearStartedSalesforce: 2018,
+    agencyId: '77777777-7777-7777-7777-777777777777',
     linkedinUrl: null,
     trailheadUrl: null,
     isSalesforceMvp: false,

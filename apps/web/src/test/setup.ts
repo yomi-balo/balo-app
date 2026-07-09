@@ -85,6 +85,7 @@ vi.mock('@/lib/analytics', async () => {
     ADMIN_ENGAGEMENTS_EVENTS: events.ADMIN_ENGAGEMENTS_EVENTS,
     ENGAGEMENT_EVENTS: events.ENGAGEMENT_EVENTS,
     DOMAIN_JOIN_EVENTS: events.DOMAIN_JOIN_EVENTS,
+    EXPERT_AGENCY_EVENTS: events.EXPERT_AGENCY_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

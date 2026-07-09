@@ -181,6 +181,19 @@ export type PartyJoinRequestCreatedPayload = PartyJoinEventBase; // correlationI
 export type PartyJoinRequestApprovedPayload = PartyJoinEventBase; // correlationId = joinRequestId
 export type PartyJoinRequestDeclinedPayload = PartyJoinEventBase; // correlationId = joinRequestId
 
+// BAL-356 / ADR-1034 — an expert PROVISIONED a new agency (signer became owner) at
+// the apply wizard's agency step. Published post-commit by the web write action ONLY
+// on the fresh-create branch (never on the idempotent `already_linked` resume, never
+// on SOLO). `correlationId` is the stable `agencyId` → BullMQ jobId dedup key, so a
+// retry after a partial failure never double-notifies. `ownerUserId` is the owner
+// (subject/recipient). The engine rule + template are deferred to BAL-348 — publishing
+// this event with no rule yet is a correct no-op (feature publishes, engine decides).
+export interface AgencyProvisionedPayload {
+  correlationId: string; // = agencyId
+  agencyId: string;
+  ownerUserId: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -210,7 +223,8 @@ export type NotificationEvent =
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
-  | 'party.join_request_declined';
+  | 'party.join_request_declined'
+  | 'agency.provisioned';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -242,4 +256,5 @@ export interface EventPayloadMap {
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
+  'agency.provisioned': AgencyProvisionedPayload;
 }

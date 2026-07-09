@@ -22,6 +22,7 @@ export {
   ADMIN_ENGAGEMENTS_EVENTS,
   ENGAGEMENT_EVENTS,
   DOMAIN_JOIN_EVENTS,
+  EXPERT_AGENCY_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
