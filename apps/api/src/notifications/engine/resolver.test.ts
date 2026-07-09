@@ -307,6 +307,45 @@ describe('resolveContext', () => {
     );
   });
 
+  // ── BAL-334 admin fan-out hydration for the completion events (NOT cancel) ──
+  describe('completion lifecycle events hydration', () => {
+    it.each(['engagement.completion_requested', 'engagement.completion_withdrawn'] as const)(
+      'hydrates adminUserIds for %s (no sibling proposal read)',
+      async (event) => {
+        mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+
+        const context = await resolveContext(event, {
+          correlationId: `550e8400-e29b-41d4-a716-446655440001:x:123`,
+          engagementId: '550e8400-e29b-41d4-a716-446655440001',
+        });
+
+        expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+        expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+        expect(mockListByRequest).not.toHaveBeenCalled();
+      }
+    );
+
+    it('does NOT fan out to admins for engagement.cancelled (recipient:expert via data.expert)', async () => {
+      const expert = { user: { id: 'expert-user-1' } };
+      mockFindUserIdByProfileId.mockResolvedValue(expert);
+
+      const context = await resolveContext('engagement.cancelled', {
+        correlationId: '550e8400-e29b-41d4-a716-446655440001:cancelled',
+        engagementId: '550e8400-e29b-41d4-a716-446655440001',
+        expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+      });
+
+      // No admin fan-out (the admin is the actor)...
+      expect(mockFindIdsByPlatformRoles).not.toHaveBeenCalled();
+      expect(context.data.adminUserIds).toBeUndefined();
+      // ...but the delivering expert IS hydrated for recipient:'expert'.
+      expect(mockFindUserIdByProfileId).toHaveBeenCalledWith(
+        '550e8400-e29b-41d4-a716-446655440004'
+      );
+      expect(context.data.expert).toEqual(expert);
+    });
+  });
+
   // ── BAL-323 admin fan-out hydration for billing.details_confirmed ──
   describe('billing.details_confirmed hydration', () => {
     it('hydrates adminUserIds for the admin in-app fan-out (no sibling read)', async () => {

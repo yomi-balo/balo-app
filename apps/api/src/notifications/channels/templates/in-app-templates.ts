@@ -310,6 +310,52 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return engagementNotice('Delivery plan updated', `${title}: ${actor} ${summary}.`, data);
   },
 
+  // BAL-334 (D4) completion requested — CLIENT owner ("review it and make it official").
+  'engagement-completion-requested-client': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    const title = (data.projectTitle as string) ?? 'your project';
+    const autoDate = (data.autoDate as string) ?? 'the review deadline';
+    return engagementNotice(
+      'Project complete — review it',
+      `${actor} marked '${title}' complete 🎉 — take a look and make it official. Closes out as delivered on ${autoDate} if no one responds.`,
+      data
+    );
+  },
+
+  // BAL-334 (D4) completion requested — ADMIN ops signal (project-scoped, auto-accept date).
+  'engagement-completion-requested-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const company = (data.clientCompanyName as string) ?? 'the client';
+    const autoDate = (data.autoDate as string) ?? 'the review deadline';
+    return engagementNotice(
+      'Sent for review',
+      `${title} sent for ${company} review — auto-accepts ${autoDate}.`,
+      data
+    );
+  },
+
+  // BAL-334 (D4) completion withdrawn — shared by the client-owner + admin rules.
+  'engagement-completion-withdrawn': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'The expert';
+    const title = (data.projectTitle as string) ?? 'the project';
+    return engagementNotice(
+      'Back to active',
+      `${actor} withdrew the completion request on ${title} — the project is active again.`,
+      data
+    );
+  },
+
+  // BAL-334 (D4) engagement cancelled — shared by the client-owner + expert rules.
+  'engagement-cancelled': (data) => {
+    const title = (data.projectTitle as string) ?? 'The project';
+    const cancelledOn = (data.cancelledOn as string) ?? 'an earlier date';
+    return engagementNotice(
+      'Engagement cancelled',
+      `${title} has been cancelled. Balo cancelled the engagement on ${cancelledOn}.`,
+      data
+    );
+  },
+
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {
     const companyName = (data.companyName as string) ?? 'a company';

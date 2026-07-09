@@ -21,7 +21,32 @@ export const ENGAGEMENT_SERVER_EVENTS = {
   MILESTONE_ADDED: 'engagement_milestone_added',
   MILESTONE_EDITED: 'engagement_milestone_edited',
   MILESTONE_REMOVED: 'engagement_milestone_removed',
+  // BAL-334 (D4) expert/admin lifecycle transitions.
+  COMPLETION_REQUESTED: 'engagement_completion_requested',
+  COMPLETION_WITHDRAWN: 'engagement_completion_withdrawn',
+  CANCELLED: 'engagement_cancelled',
 } as const;
+
+/**
+ * BAL-334 (D4) CLIENT-side friction signal — the FIRST client-side engagement event.
+ * `engagement_completion_blocked_view` fires ONCE on mount from the expert finish-card
+ * island when the "Mark project complete" card renders DISABLED (milestones remain),
+ * so we can see how often experts hit the blocked state before finishing. Impression
+ * semantics (ref-guarded, once per mount) — server-firing would over-count on every
+ * `router.refresh()`. This client constant MUST be added to the
+ * `apps/web/src/test/setup.ts` `vi.mock('@/lib/analytics')` export list.
+ */
+export const ENGAGEMENT_EVENTS = {
+  COMPLETION_BLOCKED_VIEW: 'engagement_completion_blocked_view',
+} as const;
+
+export interface EngagementEventMap {
+  [ENGAGEMENT_EVENTS.COMPLETION_BLOCKED_VIEW]: {
+    engagement_id: string;
+    /** Live milestones still to complete before the project can be sent for review. */
+    milestones_remaining: number;
+  };
+}
 
 /** Viewer lens on the delivery workspace (admin is the observer archetype). */
 export type EngagementWorkspaceLens = 'client' | 'expert' | 'admin';
@@ -85,6 +110,36 @@ export interface EngagementServerEventMap {
     milestone_id: string;
     was_completed: boolean;
     had_source_provenance: boolean;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.COMPLETION_REQUESTED]: {
+    engagement_id: string;
+    /** Whole days from kickoff (`activatedAt ?? createdAt`) to the request, int ≥0. */
+    days_since_kickoff: number;
+    /** The source proposal's `timeframeWeeks`; null for retainers / missing proposals. */
+    proposed_timeframe_weeks: number | null;
+    /** Live milestone count at request time. */
+    milestones_total: number;
+    /** Prior `engagement.completion_requested` audit rows incl. this one (1, 2 after a withdraw→re-request). */
+    review_cycle: number;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.COMPLETION_WITHDRAWN]: {
+    engagement_id: string;
+    /** Whole hours from the PRE-withdraw `completionRequestedAt` to now, int ≥0 (0 when absent). */
+    hours_in_review: number;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.CANCELLED]: {
+    engagement_id: string;
+    /** The engagement status at cancel time (only `active`/`pending_acceptance` are cancellable). */
+    status_at_cancel: 'active' | 'pending_acceptance';
+    /** Whole days from kickoff (`activatedAt ?? createdAt`) to cancel, int ≥0. */
+    days_since_kickoff: number;
+    /** Completed live milestones at cancel time. */
+    milestones_completed: number;
+    /** Total live milestones at cancel time. */
+    milestones_total: number;
     distinct_id: string;
   };
 }
