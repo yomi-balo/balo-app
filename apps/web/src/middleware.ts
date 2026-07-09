@@ -10,6 +10,7 @@ import {
   isPublicRoute,
   isAdminRoute,
   isApiRoute,
+  isOnboardingRoute,
   isValidReturnTo,
   ONBOARDING_PATH,
 } from '@/lib/auth/route-config';
@@ -98,10 +99,15 @@ function checkRouteGuards(
     return null;
   }
 
-  if (user.onboardingCompleted === false && pathname !== ONBOARDING_PATH) {
+  // BAL-348: exempt ALL onboarding routes (not just the wizard root) so a request-mode
+  // requester who never finished onboarding reaches the join-result landing screen.
+  if (user.onboardingCompleted === false && !isOnboardingRoute(pathname)) {
     return redirectWithCookies(new URL(ONBOARDING_PATH, baseUrl), activeResponse);
   }
 
+  // Keep the completed-user bounce on the EXACT wizard root — a completed user who
+  // opens /onboarding/join-result still sees the terminal screen; only the bare wizard
+  // bounces to /dashboard.
   if (user.onboardingCompleted === true && pathname === ONBOARDING_PATH) {
     return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
   }

@@ -34,7 +34,10 @@ export async function requestJoinCompanyAction(): Promise<AuthResult<RequestJoin
   }
 
   try {
-    const actionable = await resolveActionableCompanyForSession(session.user.email);
+    const actionable = await resolveActionableCompanyForSession(
+      session.user.id,
+      session.user.email
+    );
     // Fail CLOSED: no actionable company, or mode is not request.
     if (actionable === null || actionable.mode !== 'request') {
       return {

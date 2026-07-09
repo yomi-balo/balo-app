@@ -4,8 +4,47 @@ import {
   companiesRepository,
   proposalsRepository,
   partyMembershipsRepository,
+  agenciesRepository,
 } from '@balo/db';
 import type { RuleContext } from './rules.js';
+
+/**
+ * Events whose rules include an `admin_users` fan-out (dispatcher resolves it from
+ * `data.adminUserIds`): the BAL-289 "raise invoice" nudge, the BAL-323 "ready to
+ * invoice" nudge, the BAL-332 milestone signals, and the BAL-338 (D7) review-decision
+ * events. Data-driven so `resolveContext` stays under the cognitive-complexity gate.
+ * NB: engagement.cancelled + engagement.review_reminder are EXCLUDED (no admin
+ * recipient — the admin is the actor / the owner is the sole target).
+ */
+const ADMIN_FANOUT_EVENTS = new Set<string>([
+  'project.proposal_accepted',
+  'billing.details_confirmed',
+  'engagement.milestone_completed',
+  'engagement.milestone_reverted',
+  'engagement.scope_changed',
+  'engagement.completion_requested',
+  'engagement.completion_withdrawn',
+  'engagement.accepted',
+  'engagement.changes_requested',
+  'engagement.auto_accepted',
+]);
+
+/**
+ * BAL-348: hydrate the agency SUMMARY (projected `{ id, name, memberCount }` — no PII)
+ * for the owner-facing `agency.provisioned` template. Extracted so `resolveContext`
+ * stays under the cognitive-complexity gate. NB: `agency.provisioned` carries
+ * `ownerUserId` (NOT `userId`), so the shared `payload.userId → data.user` hydration
+ * never fires for it — the owner's name is resolved from `recipientId` by the adapter.
+ */
+async function hydrateAgencyProvisioned(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (event === 'agency.provisioned' && typeof payload.agencyId === 'string') {
+    data.agency = await agenciesRepository.getSummaryById(payload.agencyId);
+  }
+}
 
 export async function resolveContext(
   event: string,
@@ -32,27 +71,8 @@ export async function resolveContext(
   }
 
   // Admin fan-out recipients (dispatcher resolves recipient:'admin_users' from
-  // data.adminUserIds). project.proposal_accepted (BAL-289 ops "raise invoice"
-  // nudge), billing.details_confirmed (BAL-323 "ready to invoice" nudge), the
-  // BAL-332 milestone completed/reverted delivery signals, and the BAL-338 (D7)
-  // review-decision events (accepted / auto_accepted are the money triggers,
-  // changes_requested is the ops "review bounced" signal) all need it.
-  if (
-    event === 'project.proposal_accepted' ||
-    event === 'billing.details_confirmed' ||
-    event === 'engagement.milestone_completed' ||
-    event === 'engagement.milestone_reverted' ||
-    event === 'engagement.scope_changed' ||
-    event === 'engagement.completion_requested' ||
-    event === 'engagement.completion_withdrawn' ||
-    event === 'engagement.accepted' ||
-    event === 'engagement.changes_requested' ||
-    event === 'engagement.auto_accepted'
-  ) {
-    // NB: engagement.cancelled is intentionally EXCLUDED — the admin is the actor,
-    // there is no admin recipient (recipient:'expert' is served by the existing
-    // payload.expertProfileId → data.expert hydration below). engagement.review_reminder
-    // is EXCLUDED too — it targets the client owner only, no admin recipient.
+  // data.adminUserIds). See ADMIN_FANOUT_EVENTS above for the membership + exclusions.
+  if (ADMIN_FANOUT_EVENTS.has(event)) {
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
   }
 
@@ -71,6 +91,9 @@ export async function resolveContext(
       );
     }
   }
+
+  // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
+  await hydrateAgencyProvisioned(event, payload, data);
 
   // BAL-289: project.proposal_accepted ALSO fans out to the non-selected experts —
   // the OTHER live 'submitted' proposals on the same request, excluding the accepted

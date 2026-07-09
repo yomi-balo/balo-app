@@ -126,3 +126,100 @@ describe('getInAppTemplate — BAL-345 strings', () => {
     expect(out.body).toContain('organization');
   });
 });
+
+// BAL-348 — the approved/declined deep-links now land the requester on the
+// join-result terminal screen (the route re-validates the relationship server-side),
+// converging the in-app + approved-email CTAs.
+describe('BAL-348 join-result deep-links', () => {
+  const PARTY = '550e8400-e29b-41d4-a716-446655440000';
+
+  it('approved in-app deep-links to join-result when partyId is present', () => {
+    const out = getInAppTemplate('party-join-request-approved', {
+      partyType: 'company',
+      partyId: PARTY,
+    });
+    expect(out.actionUrl).toBe(`/onboarding/join-result?status=approved&party=${PARTY}`);
+  });
+
+  it('declined in-app deep-links to join-result when partyId is present', () => {
+    const out = getInAppTemplate('party-join-request-declined', {
+      partyType: 'company',
+      partyId: PARTY,
+    });
+    expect(out.actionUrl).toBe(`/onboarding/join-result?status=declined&party=${PARTY}`);
+  });
+
+  it('approved in-app falls back to /dashboard when partyId is absent', () => {
+    const out = getInAppTemplate('party-join-request-approved', { partyType: 'company' });
+    expect(out.actionUrl).toBe('/dashboard');
+  });
+
+  it('declined in-app omits the deep-link when partyId is absent', () => {
+    const out = getInAppTemplate('party-join-request-declined', { partyType: 'company' });
+    expect(out.actionUrl).toBeUndefined();
+  });
+
+  it('approved email CTA converges on the join-result landing when partyId is present', async () => {
+    const { component } = getEmailTemplate('party-join-request-approved', {
+      partyType: 'company',
+      partyId: PARTY,
+      recipientName: 'Jo',
+    });
+    const html = await render(component);
+    // Assert on the unambiguous path + status prefix (the `&` before `party` may render
+    // as `&amp;` in the serialized HTML attribute).
+    expect(html).toContain('/onboarding/join-result?status=approved');
+    expect(html).toContain(PARTY);
+  });
+
+  it('approved email CTA falls back to /dashboard when partyId is absent', async () => {
+    const { component } = getEmailTemplate('party-join-request-approved', {
+      partyType: 'company',
+      recipientName: 'Jo',
+    });
+    const html = await render(component);
+    expect(html).toContain('/dashboard');
+  });
+
+  // FIX 4 — the join-result landing surface is COMPANY-ONLY; an agency party must never
+  // receive the company-only landing link (in-app AND email), even with a partyId.
+  it('approved in-app for an AGENCY party falls back to /dashboard (no company-only landing link)', () => {
+    const out = getInAppTemplate('party-join-request-approved', {
+      partyType: 'agency',
+      partyId: PARTY,
+    });
+    expect(out.actionUrl).toBe('/dashboard');
+  });
+
+  it('declined in-app for an AGENCY party omits the landing link', () => {
+    const out = getInAppTemplate('party-join-request-declined', {
+      partyType: 'agency',
+      partyId: PARTY,
+    });
+    expect(out.actionUrl).toBeUndefined();
+  });
+
+  it('approved email for an AGENCY party omits the company-only landing link', async () => {
+    const { component } = getEmailTemplate('party-join-request-approved', {
+      partyType: 'agency',
+      partyId: PARTY,
+      recipientName: 'Jo',
+    });
+    const html = await render(component);
+    expect(html).not.toContain('/onboarding/join-result');
+    expect(html).toContain('/dashboard');
+  });
+
+  // FIX 5 — the approved email CTA label matches its destination (the "You're in"
+  // terminal screen / dashboard), not the stale "Go to your workspace".
+  it('approved email CTA label reads "Continue" (not the stale "Go to your workspace")', async () => {
+    const { component } = getEmailTemplate('party-join-request-approved', {
+      partyType: 'company',
+      partyId: PARTY,
+      recipientName: 'Jo',
+    });
+    const html = await render(component);
+    expect(html).toContain('Continue');
+    expect(html).not.toContain('Go to your workspace');
+  });
+});

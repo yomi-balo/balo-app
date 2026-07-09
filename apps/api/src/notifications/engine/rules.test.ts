@@ -397,6 +397,25 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-348 agency.provisioned', () => {
+    it('notifies the owner via email + in-app, template agency-provisioned', () => {
+      const rules = notificationRules['agency.provisioned'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('owner');
+        expect(rule.template).toBe('agency-provisioned');
+        expect(rule.timing).toBe('immediate');
+        // Single recipient — no gating condition.
+        expect(rule.condition).toBeUndefined();
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+  });
+
   describe('BAL-332 milestone delivery events', () => {
     it('milestone_completed: client owner email + in-app AND admins in-app', () => {
       const rules = notificationRules['engagement.milestone_completed'];

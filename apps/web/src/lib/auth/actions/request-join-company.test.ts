@@ -89,6 +89,11 @@ describe('requestJoinCompanyAction', () => {
   });
 
   describe('success path', () => {
+    it('re-derives the actionable company from (session.user.id, session.user.email) — BAL-348', async () => {
+      await requestJoinCompanyAction();
+      expect(mockResolveActionable).toHaveBeenCalledWith('user-1', 'founder@acme.io');
+    });
+
     it('files a pending request against the server-derived party and does NOT complete onboarding', async () => {
       const result = await requestJoinCompanyAction();
       expect(mockFindOrCreatePending).toHaveBeenCalledWith({

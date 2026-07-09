@@ -213,6 +213,23 @@ describe('middleware — onboarding', () => {
     await expectRedirectTo('/onboarding', '/dashboard');
   });
 
+  // BAL-348: a request-mode requester never finished onboarding but must reach the
+  // join-result landing route — the not-onboarded redirect exempts nested onboarding
+  // routes.
+  it('allows non-onboarded user to reach /onboarding/join-result (deep-link landing)', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: false });
+    const res = await middleware(createRequest('/onboarding/join-result?status=approved&party=c1'));
+    expect(res.status).toBe(200);
+  });
+
+  // BAL-348: only the EXACT wizard root bounces a completed user — the join-result
+  // terminal screen stays reachable so a completed (explored) requester still sees it.
+  it('does NOT bounce an onboarded user off /onboarding/join-result', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: true });
+    const res = await middleware(createRequest('/onboarding/join-result?status=approved&party=c1'));
+    expect(res.status).toBe(200);
+  });
+
   it('skips onboarding check for API routes', async () => {
     setupAuthenticatedSession({ onboardingCompleted: false });
     const res = await middleware(createRequest('/api/cases'));

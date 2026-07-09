@@ -254,6 +254,48 @@ describe('dispatch', () => {
     expect(new Set(jobIds).size).toBe(2);
   });
 
+  // ── BAL-348: owner resolves to a single payload id (NOT a fan-out) ──
+  describe('owner recipient (agency.provisioned)', () => {
+    const ownerRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'owner',
+      template: 'agency-provisioned',
+    };
+    const context: RuleContext = {
+      event: 'agency.provisioned',
+      payload: { correlationId: 'agency-1', agencyId: 'agency-1', ownerUserId: 'owner-1' },
+      data: { agency: { id: 'agency-1', name: 'CloudPeak' } },
+    };
+
+    it('resolves the owner recipient from payload.ownerUserId', async () => {
+      await dispatch(ownerRule, context);
+      const deliveryPayload = mockAdd.mock.calls[0][1];
+      expect(deliveryPayload.recipientId).toBe('owner-1');
+    });
+
+    it('mints the idempotency jobId {template}--{ownerUserId}--{agencyId}', async () => {
+      await dispatch(ownerRule, context);
+      const opts = mockAdd.mock.calls[0][2];
+      // correlationId === agencyId, so the jobId is stable per agency → a re-dispatch
+      // (BullMQ dedup) never double-delivers.
+      expect(opts.jobId).toBe('agency-provisioned--owner-1--agency-1');
+    });
+
+    it('enqueues exactly one job per dispatch (single recipient, not a fan-out)', async () => {
+      await dispatch(ownerRule, context);
+      expect(mockAdd).toHaveBeenCalledOnce();
+    });
+
+    it('skips dispatch when payload.ownerUserId is absent', async () => {
+      await dispatch(ownerRule, {
+        event: 'agency.provisioned',
+        payload: { correlationId: 'agency-1', agencyId: 'agency-1' },
+        data: {},
+      });
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+  });
+
   it('falls back to data.client.id when payload.recipientId is absent', async () => {
     const clientRule: NotificationRule = {
       ...baseRule,

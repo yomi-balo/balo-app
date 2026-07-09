@@ -38,6 +38,7 @@ import {
   PartyJoinRequestApprovedEmail,
   PartyJoinRequestDeclinedEmail,
 } from './party-domain-join.js';
+import { AgencyProvisionedEmail } from './agency-provisioned.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -603,14 +604,24 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
-  // BAL-345 domain auto-join — requester's request approved.
+  // BAL-345 domain auto-join — requester's request approved. BAL-348: the CTA
+  // converges with the in-app deep-link — it lands the requester on the approved
+  // terminal screen (`/onboarding/join-result`), which re-validates membership
+  // server-side, rather than straight to /dashboard. The landing surface is
+  // COMPANY-ONLY, so an agency party (or a payload with no partyId) falls back to
+  // /dashboard — the company-only landing link is never emitted for an agency.
   'party-join-request-approved': (data) => {
     const noun = partyNoun(data);
+    const partyId = typeof data.partyId === 'string' ? data.partyId : undefined;
+    const teamUrl =
+      data.partyType === 'company' && partyId
+        ? `${BASE_URL}/onboarding/join-result?status=approved&party=${partyId}`
+        : `${BASE_URL}/dashboard`;
     return {
       component: React.createElement(PartyJoinRequestApprovedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
         partyNoun: noun,
-        teamUrl: `${BASE_URL}/dashboard`,
+        teamUrl,
         baseUrl: BASE_URL,
       }),
       subject: `You're in — your request to join the ${noun} was approved`,
@@ -627,6 +638,23 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `An update on your request to join the ${noun}`,
+    };
+  },
+
+  // BAL-348 agency provisioned — owner milestone email. `data.agency` is the
+  // resolver-hydrated agency summary (name only used); the greeting comes from
+  // `recipientName` (= the owner). CTA points at the team/members settings surface.
+  'agency-provisioned': (data) => {
+    const agency = data.agency as { name?: string } | undefined;
+    const teamName = agency?.name ?? 'your team';
+    return {
+      component: React.createElement(AgencyProvisionedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        teamName,
+        teamUrl: `${BASE_URL}/settings/team`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(teamName)} is set up on Balo`,
     };
   },
 };
