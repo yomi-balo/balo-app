@@ -120,6 +120,7 @@ async function commitKickoff(
       approvingAdminUserId,
       pricingMethod: proposal.pricingMethod,
       priceCents: proposal.priceCents,
+      baloFeeBps: proposal.baloFeeBps,
       currency: proposal.currency,
       depositCents: proposal.depositCents ?? undefined,
       rateCents: proposal.rateCents ?? undefined,

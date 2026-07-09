@@ -81,6 +81,7 @@ const PROPOSAL = {
   depositCents: 100000,
   rateCents: null,
   cadence: null,
+  baloFeeBps: 3000,
 };
 
 function requestGraph(overrides: Record<string, unknown> = {}) {
@@ -232,6 +233,7 @@ describe('approveKickoffAction', () => {
       depositCents: 100000,
       rateCents: undefined,
       cadence: undefined,
+      baloFeeBps: 3000,
     });
 
     // Publishes the kickoff-approved notification with the exact payload.

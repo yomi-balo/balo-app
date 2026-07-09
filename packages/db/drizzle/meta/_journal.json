@@ -288,6 +288,13 @@
       "when": 1783563026741,
       "tag": "0040_nervous_valkyrie",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1783581984624,
+      "tag": "0041_lush_silver_sable",
+      "breakpoints": true
     }
   ]
 }

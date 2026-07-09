@@ -44,6 +44,9 @@ function makeEngagement(over: Partial<EngagementWithMilestones> = {}): Engagemen
     projectRequestId: 'req-1',
     pricingMethod: 'fixed',
     priceCents: 5_800_000,
+    // Fee-neutral by default so unrelated currency assertions read the raw quote;
+    // the three-lens gross-up tests override this to a non-zero bps.
+    baloFeeBps: 0,
     currency: 'aud',
     depositCents: null,
     rateCents: null,
@@ -177,6 +180,61 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
       NOW
     );
     expect(view.header.terms.find((t) => t.label === 'Timeframe')).toBeUndefined();
+  });
+});
+
+describe('mapEngagementToWorkspaceView — Balo fee gross-up (client lens only)', () => {
+  // priceCents 5_800_000 @ 2500 bps → applyBaloFee grosses UP by 25% = 7_250_000.
+  const withFee = makeEngagement({
+    baloFeeBps: 2500,
+    priceCents: 5_800_000,
+    milestones: [makeMilestone({ id: 'm1', valueCents: 1_450_000 })],
+  });
+
+  const pricingValue = (lens: EngagementLens): string | undefined =>
+    mapEngagementToWorkspaceView(withFee, ctxFor(lens), NOW).header.terms.find(
+      (t) => t.label === 'Pricing'
+    )?.value;
+
+  const milestoneValue = (lens: EngagementLens): string | null | undefined =>
+    mapEngagementToWorkspaceView(withFee, ctxFor(lens), NOW).milestones[0]?.valueLabel;
+
+  it('Pricing pill: client sees the grossed-up figure', () => {
+    // applyBaloFee(5_800_000, 2500) = 7_250_000 → A$72,500.
+    expect(pricingValue('client')).toBe('Fixed price · A$72,500');
+  });
+
+  it('Pricing pill: expert & admin see the raw payout quote', () => {
+    expect(pricingValue('expert')).toBe('Fixed price · A$58,000');
+    expect(pricingValue('admin')).toBe('Fixed price · A$58,000');
+  });
+
+  it('milestone value: client sees the grossed-up figure', () => {
+    // applyBaloFee(1_450_000, 2500) = 1_812_500 → A$18,125.
+    expect(milestoneValue('client')).toBe('A$18,125');
+  });
+
+  it('milestone value: expert & admin see the raw value', () => {
+    expect(milestoneValue('expert')).toBe('A$14,500');
+    expect(milestoneValue('admin')).toBe('A$14,500');
+  });
+
+  it('never emits baloFeeBps / a fee field on the view model for ANY lens', () => {
+    for (const lens of ['client', 'expert', 'admin'] as const) {
+      const view = mapEngagementToWorkspaceView(withFee, ctxFor(lens), NOW);
+      // Top-level, header, terms items, and milestone nodes carry formatted strings
+      // only — the raw fee/bps must never leak into the serialized contract.
+      expect(view).not.toHaveProperty('baloFeeBps');
+      expect(view).not.toHaveProperty('fee');
+      expect(view.header).not.toHaveProperty('baloFeeBps');
+      for (const item of view.header.terms) {
+        expect(item).not.toHaveProperty('baloFeeBps');
+        expect(item).not.toHaveProperty('fee');
+      }
+      const [node] = view.milestones;
+      expect(node).not.toHaveProperty('baloFeeBps');
+      expect(node).not.toHaveProperty('fee');
+    }
   });
 });
 

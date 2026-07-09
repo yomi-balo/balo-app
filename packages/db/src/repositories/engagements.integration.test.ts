@@ -117,6 +117,8 @@ describe('engagementsRepository.create — the seam proof', () => {
     expect(engagement.pricingMethod).toBe('fixed');
     expect(engagement.priceCents).toBe(500_000);
     expect(engagement.currency).toBe('aud');
+    // baloFeeBps falls through to the column default when the factory omits it.
+    expect(engagement.baloFeeBps).toBe(2500); // default
     expect(engagement.billingModel).toBe('proposal'); // default
     expect(engagement.approvalModel).toBe('admin_invoice'); // default
     expect(engagement.status).toBe('active'); // default
@@ -132,6 +134,7 @@ describe('engagementsRepository.create — the seam proof', () => {
       expertProfileId: expert.id,
       pricingMethod: 'tm',
       priceCents: 250_000,
+      baloFeeBps: 3000, // NON-default → proves create() snapshots the passed value
       depositCents: 50_000,
       rateCents: 18_000,
       cadence: 'monthly',
@@ -146,6 +149,7 @@ describe('engagementsRepository.create — the seam proof', () => {
     // Terms carried on the engagement itself.
     expect(engagement.pricingMethod).toBe('tm');
     expect(engagement.priceCents).toBe(250_000);
+    expect(engagement.baloFeeBps).toBe(3000); // snapshotted, not the default
     expect(engagement.depositCents).toBe(50_000);
     expect(engagement.rateCents).toBe(18_000);
     expect(engagement.cadence).toBe('monthly');
@@ -229,6 +233,30 @@ describe('engagementsRepository.create — FK / CHECK constraints', () => {
         rateCents: -1,
       })
     ).rejects.toThrow();
+  });
+});
+
+describe('engagements balo_fee_bps CHECK constraint (engagement_balo_fee_bps_range)', () => {
+  it('rejects a fee below the range (-1) with a 23514', async () => {
+    await expect(engagementFactory({ values: { baloFeeBps: -1 } })).rejects.toMatchObject({
+      code: '23514',
+    });
+  });
+
+  it('rejects a fee above the range (10001) with a 23514', async () => {
+    await expect(engagementFactory({ values: { baloFeeBps: 10_001 } })).rejects.toMatchObject({
+      code: '23514',
+    });
+  });
+
+  it('accepts the lower bound (0)', async () => {
+    const { engagement } = await engagementFactory({ values: { baloFeeBps: 0 } });
+    expect(engagement.baloFeeBps).toBe(0);
+  });
+
+  it('accepts the upper bound (10000)', async () => {
+    const { engagement } = await engagementFactory({ values: { baloFeeBps: 10_000 } });
+    expect(engagement.baloFeeBps).toBe(10_000);
   });
 });
 
@@ -425,6 +453,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
       approvingAdminUserId: adminId,
       pricingMethod: 'tm',
       priceCents: 250_000,
+      baloFeeBps: 3000, // NON-default → proves the fee is snapshotted, not defaulted
       currency: 'usd',
       depositCents: 50_000,
       rateCents: 18_000,
@@ -444,6 +473,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
     expect(engagement.projectRequestId).toBe(source.projectRequestId);
     expect(engagement.pricingMethod).toBe('tm');
     expect(engagement.priceCents).toBe(250_000);
+    expect(engagement.baloFeeBps).toBe(3000); // snapshotted from the passed value
     expect(engagement.currency).toBe('usd');
     expect(engagement.depositCents).toBe(50_000);
     expect(engagement.rateCents).toBe(18_000);
@@ -471,6 +501,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
       approvingAdminUserId: adminId,
       pricingMethod: 'fixed' as const,
       priceCents: 500_000,
+      baloFeeBps: 2500,
     };
 
     await engagementsRepository.materializeFromKickoff(args);
@@ -509,6 +540,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
         approvingAdminUserId: admin.id,
         pricingMethod: 'fixed',
         priceCents: 500_000,
+        baloFeeBps: 2500,
       })
     ).rejects.toBeInstanceOf(KickoffGatesIncompleteError);
 
@@ -548,6 +580,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
         approvingAdminUserId: admin.id,
         pricingMethod: 'fixed',
         priceCents: 500_000,
+        baloFeeBps: 2500,
       })
     ).rejects.toBeInstanceOf(InvalidStatusTransitionError);
 
@@ -630,6 +663,7 @@ describe('engagementsRepository.materializeFromKickoff — coherence guard (BAL-
         approvingAdminUserId: adminId,
         pricingMethod: 'tm',
         priceCents: 250_000,
+        baloFeeBps: 2500,
         // rateCents / cadence intentionally omitted → incoherent tm.
       })
       .catch((e: unknown) => e);
@@ -703,6 +737,7 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
       approvingAdminUserId: adminId,
       pricingMethod: 'fixed',
       priceCents: 300_000,
+      baloFeeBps: 2500,
     });
 
     const snapshot = await engagementsRepository.listMilestones(engagement.id);
@@ -746,6 +781,7 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
       approvingAdminUserId: adminId,
       pricingMethod: 'fixed',
       priceCents: 300_000,
+      baloFeeBps: 2500,
     });
 
     expect(await engagementsRepository.listMilestones(engagement.id)).toHaveLength(0);

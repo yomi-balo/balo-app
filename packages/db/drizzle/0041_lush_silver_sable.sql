@@ -1,0 +1,2 @@
+ALTER TABLE "engagements" ADD COLUMN "balo_fee_bps" integer DEFAULT 2500 NOT NULL;--> statement-breakpoint
+ALTER TABLE "engagements" ADD CONSTRAINT "engagement_balo_fee_bps_range" CHECK ("engagements"."balo_fee_bps" >= 0 AND "engagements"."balo_fee_bps" <= 10000);
