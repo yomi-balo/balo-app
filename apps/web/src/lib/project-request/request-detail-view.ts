@@ -71,6 +71,13 @@ export interface RequestDetailView {
   status: ProjectRequestStatus;
   /** Pre-formatted budget range, or `null` when no budget was captured. */
   budget: string | null;
+  /**
+   * The request's Balo fee, in basis points — populated ONLY for the observer
+   * (admin) lens; `null` for client/expert. The audience boundary (BAL-357): the
+   * raw request fee must never cross into a non-admin payload, so it is nulled here
+   * in the mapper rather than gated downstream.
+   */
+  baloFeeBps: number | null;
   /** Free-text timeline, or `null`. */
   timeline: string | null;
   /** Live relationships — populated ONLY for the observer (admin) lens. */
@@ -290,6 +297,8 @@ export function mapRequestToDetailView(
       request.budgetMaxCents,
       request.budgetCurrency
     ),
+    // Audience boundary: only the observer (admin) lens carries the raw fee.
+    baloFeeBps: ctx.archetype === 'observer' ? request.baloFeeBps : null,
     timeline: request.timeline,
     relationships:
       ctx.archetype === 'observer'

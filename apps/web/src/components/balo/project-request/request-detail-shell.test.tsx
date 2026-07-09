@@ -81,6 +81,11 @@ vi.mock(
   '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token',
   () => ({ createConversationRealtimeTokenAction: vi.fn() })
 );
+// AdminFeeOverridePanel (BAL-358) client island imports its server action — mock it
+// so the observer shell renders in JSDOM without touching @balo/db / auth.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/override-balo-fee', () => ({
+  overrideBaloFee: vi.fn(),
+}));
 
 // useIsMobile reads window.matchMedia (absent in jsdom) — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
@@ -140,6 +145,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     postedRelative: '3 days ago',
     status: 'requested',
     budget: null,
+    baloFeeBps: 2500,
     timeline: null,
     relationships: [],
     viewerEoi: null,
@@ -592,6 +598,38 @@ describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
   it('does NOT render the KickoffBoard when kickoff is null (default fixtures)', () => {
     render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
     expect(screen.queryByText("What's blocking kickoff")).not.toBeInTheDocument();
+  });
+});
+
+describe('RequestDetailShell — AdminFeeOverridePanel mounting (BAL-358)', () => {
+  it('renders the Balo fee override panel for the observer lens (even before any expert is invited)', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'requested', relationships: [] })}
+        ctx={ctx({ lens: 'admin', archetype: 'observer', isOwner: false, canSeeContact: true })}
+      />
+    );
+    expect(screen.getByRole('heading', { name: 'Balo fee' })).toBeInTheDocument();
+  });
+
+  it('does NOT render the fee panel for the client participant lens', () => {
+    render(<RequestDetailShell view={view({ status: 'requested' })} ctx={ctx()} />);
+    expect(screen.queryByRole('heading', { name: 'Balo fee' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the fee panel for the expert participant lens', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'experts_invited' })}
+        ctx={ctx({
+          lens: 'expert',
+          isInvitedExpert: true,
+          relationshipId: 'rel-1',
+          canSeeContact: true,
+        })}
+      />
+    );
+    expect(screen.queryByRole('heading', { name: 'Balo fee' })).not.toBeInTheDocument();
   });
 });
 

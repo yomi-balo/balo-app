@@ -8,6 +8,7 @@ import {
   type ProjectRequest,
   type NewProjectRequest,
 } from '../schema';
+import { auditEventsRepository } from './audit-events';
 
 export type ProjectRequestStatus = ProjectRequest['status'];
 
@@ -85,6 +86,18 @@ export interface CreateProjectRequestInput {
   documents: ProjectRequestDocumentInput[];
 }
 
+/**
+ * Outcome of an admin per-request Balo-fee override (BAL-358). `changed` is
+ * `false` when the requested `newBps` already equals the live value — a genuine
+ * no-op: NO update is issued and NO audit row is written. The `apps/web` caller
+ * uses `changed` to decide whether to emit its post-commit analytics / toast.
+ */
+export interface UpdateBaloFeeBpsResult {
+  previousBps: number;
+  newBps: number;
+  changed: boolean;
+}
+
 export const projectRequestsRepository = {
   /**
    * Insert a submitted (or draft) project request together with its tag,
@@ -158,6 +171,7 @@ export const projectRequestsRepository = {
         budgetMinCents: true,
         budgetMaxCents: true,
         budgetCurrency: true,
+        baloFeeBps: true,
         timeline: true,
         clientBillingConfirmedAt: true,
         expertTermsConfirmedAt: true,
@@ -325,6 +339,66 @@ export const projectRequestsRepository = {
       }
 
       return updated;
+    });
+  },
+
+  /**
+   * Admin per-request Balo-fee override (BAL-358). Atomically re-stamps
+   * `balo_fee_bps` and writes an immutable `project_request.balo_fee_overridden`
+   * audit row in the SAME transaction — the fee change and its "who overrode it,
+   * from what, to what" record commit or roll back together. Reads the current
+   * row FOR UPDATE (serialising concurrent admin overrides, exactly like
+   * `transitionStatus` / `confirmKickoffGate`), throws on a missing/soft-deleted
+   * request.
+   *
+   * No-op semantics: when `newBps` already equals the live value, NOTHING is
+   * written — no UPDATE, no audit row — and the result carries `changed: false`.
+   * The caller validates `newBps` is in-range; the
+   * `project_requests_balo_fee_bps_range` CHECK is the last-line guard, not
+   * re-validated here.
+   */
+  async updateBaloFeeBps(input: {
+    requestId: string;
+    newBps: number;
+    actorUserId: string;
+  }): Promise<UpdateBaloFeeBpsResult> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ baloFeeBps: projectRequests.baloFeeBps })
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, input.requestId), isNull(projectRequests.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Project request not found: ${input.requestId}`);
+      }
+
+      if (current.baloFeeBps === input.newBps) {
+        return { previousBps: current.baloFeeBps, newBps: input.newBps, changed: false };
+      }
+
+      const [updated] = await tx
+        .update(projectRequests)
+        .set({ baloFeeBps: input.newBps })
+        .where(eq(projectRequests.id, input.requestId))
+        .returning({ id: projectRequests.id });
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update project request: ${input.requestId}`);
+      }
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'project_request.balo_fee_overridden',
+          entityType: 'project_request',
+          entityId: input.requestId,
+          metadata: { previous_bps: current.baloFeeBps, new_bps: input.newBps },
+        },
+        tx
+      );
+
+      return { previousBps: current.baloFeeBps, newBps: input.newBps, changed: true };
     });
   },
 };

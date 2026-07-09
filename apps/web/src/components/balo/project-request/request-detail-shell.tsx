@@ -12,6 +12,7 @@ import { RequestCard } from './request-card';
 import { RequestContext } from './request-context';
 import { NudgeBar, nudgeFor, EXPERT_GATED_NUDGE } from './nudge-bar';
 import { AdminHealthPanel } from './admin-health-panel';
+import { AdminFeeOverridePanel } from './admin-fee-override-panel';
 import { RequestDetailAnalytics } from './request-detail-analytics';
 import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
@@ -253,6 +254,12 @@ export function RequestDetailShell({
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <RequestContext view={view} variant="full" />
             <div className="space-y-5">
+              {/* BAL-358: request-level Balo fee control — config-first, so it shows
+                  even before any expert is invited (the mapper populates baloFeeBps
+                  for the observer lens only; the guard is defensive). */}
+              {view.baloFeeBps !== null && (
+                <AdminFeeOverridePanel requestId={view.id} baloFeeBps={view.baloFeeBps} />
+              )}
               {/* Kickoff board is the admin's first CTA — above the health panel. */}
               {view.kickoff && (
                 <KickoffBoard

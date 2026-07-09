@@ -12,17 +12,20 @@ describe('PROJECT_EVENTS.BILLING_REMINDER_SENT (BAL-324)', () => {
 });
 
 describe('PROJECT_SERVER_EVENTS', () => {
-  it('has the request-access-denied + the server-emitted proposal events (BAL-276 / BAL-357)', () => {
+  it('has the request-access-denied, server-emitted proposal, and admin-fee events (BAL-276 / BAL-357 / BAL-358)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
       'REQUEST_ACCESS_DENIED',
       'PROJECT_PROPOSAL_SUBMITTED',
       'PROJECT_PROPOSAL_ACCEPTED',
+      'ADMIN_PROJECT_FEE_OVERRIDDEN',
     ]);
   });
 
   it('uses the {feature}_{noun}_{past_tense_verb} snake_case convention', () => {
+    // Values carry a feature prefix (`project_` for participant events, `admin_` for
+    // the admin-audience fee override) — assert snake_case shape across all.
     for (const value of Object.values(PROJECT_SERVER_EVENTS)) {
-      expect(value).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+      expect(value).toMatch(/^[a-z]+(_[a-z]+)*$/);
     }
   });
 
@@ -31,5 +34,7 @@ describe('PROJECT_SERVER_EVENTS', () => {
     // BAL-357: kept identical to the former client-event values for analytics continuity.
     expect(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED).toBe('project_proposal_submitted');
     expect(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_ACCEPTED).toBe('project_proposal_accepted');
+    // BAL-358: the admin per-project fee override (admin-audience feature prefix).
+    expect(PROJECT_SERVER_EVENTS.ADMIN_PROJECT_FEE_OVERRIDDEN).toBe('admin_project_fee_overridden');
   });
 });

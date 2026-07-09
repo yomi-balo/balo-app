@@ -49,6 +49,7 @@ function request(
     budgetMinCents: 4500000,
     budgetMaxCents: 7000000,
     budgetCurrency: 'aud',
+    baloFeeBps: 2500,
     timeline: 'Target go-live: end of Q3',
     clientBillingConfirmedAt: null,
     expertTermsConfirmedAt: null,
@@ -171,6 +172,36 @@ describe('mapRequestToDetailView', () => {
   it('omits the relationships projection for participants', () => {
     const view = mapRequestToDetailView(request(), ctx({ archetype: 'participant' }), NOW);
     expect(view.relationships).toEqual([]);
+  });
+});
+
+describe('mapRequestToDetailView — baloFeeBps audience boundary (BAL-358)', () => {
+  it('carries the raw fee for the observer (admin) lens', () => {
+    const view = mapRequestToDetailView(
+      request({ baloFeeBps: 1750 }),
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null }),
+      NOW
+    );
+    expect(view.baloFeeBps).toBe(1750);
+  });
+
+  it('is null for the client lens (raw fee never crosses to a non-admin payload)', () => {
+    const view = mapRequestToDetailView(
+      request({ baloFeeBps: 1750 }),
+      ctx({ lens: 'client', archetype: 'participant', relationshipId: null }),
+      NOW
+    );
+    expect(view.baloFeeBps).toBeNull();
+    expect(JSON.stringify(view)).not.toContain('1750');
+  });
+
+  it('is null for the expert lens', () => {
+    const view = mapRequestToDetailView(
+      request({ baloFeeBps: 1750 }),
+      ctx({ lens: 'expert', archetype: 'participant', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(view.baloFeeBps).toBeNull();
   });
 });
 

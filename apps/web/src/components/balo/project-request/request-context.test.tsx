@@ -21,6 +21,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     postedRelative: '3 days ago',
     status: 'eoi_submitted',
     budget: 'A$45,000 – A$70,000',
+    baloFeeBps: null,
     timeline: 'Target go-live: end of Q3',
     relationships: [],
     viewerEoi: null,
