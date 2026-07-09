@@ -337,3 +337,262 @@ describe('partyDomainsRepository.findActiveByDomain', () => {
     await expect(partyDomainsRepository.findActiveByDomain('gone.com')).resolves.toBeUndefined();
   });
 });
+
+// ── partyDomainsRepository.addDomain (BAL-347 admin add) ─────────────────
+
+describe('partyDomainsRepository.addDomain', () => {
+  it('captures with source admin_added and writes the party_domain.captured audit', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+
+    const result = await partyDomainsRepository.addDomain({
+      partyType: 'company',
+      partyId: companyId,
+      domain: 'ADMIN-ADDED.com',
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'captured', partyType: 'company', source: 'admin_added' });
+
+    const [row] = await liveRowsForDomain('admin-added.com');
+    if (row === undefined) throw new Error('expected the admin-added mapping');
+    expect(row.source).toBe('admin_added');
+    expect(row.createdByUserId).toBe(actor.id);
+
+    const audits = await auditRowsForEntity(row.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.action).toBe('party_domain.captured');
+    expect(audits[0]?.metadata).toMatchObject({ source: 'admin_added' });
+  });
+
+  it('returns already_owned when the same party already has the domain (no double audit)', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+    await partyDomainsRepository.addDomain({
+      partyType: 'company',
+      partyId: companyId,
+      domain: 'dupe.com',
+      actorUserId: actor.id,
+    });
+
+    const second = await partyDomainsRepository.addDomain({
+      partyType: 'company',
+      partyId: companyId,
+      domain: 'dupe.com',
+      actorUserId: actor.id,
+    });
+    expect(second).toEqual({ outcome: 'already_owned' });
+
+    const [row] = await liveRowsForDomain('dupe.com');
+    expect(await auditRowsForEntity(row?.id ?? '')).toHaveLength(1);
+  });
+
+  it('skips a blocked freemail domain (no mapping row)', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+    const result = await partyDomainsRepository.addDomain({
+      partyType: 'company',
+      partyId: companyId,
+      domain: 'gmail.com',
+      actorUserId: actor.id,
+    });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'blocked_domain' });
+    await expect(liveRowsForDomain('gmail.com')).resolves.toHaveLength(0);
+  });
+
+  it('skips already_claimed when a different party owns the live domain', async () => {
+    const actorA = await userFactory();
+    const actorB = await userFactory();
+    const companyA = await seedCompany('Company A');
+    const companyB = await seedCompany('Company B');
+    await partyDomainsRepository.addDomain({
+      partyType: 'company',
+      partyId: companyA,
+      domain: 'claimed.com',
+      actorUserId: actorA.id,
+    });
+
+    const result = await partyDomainsRepository.addDomain({
+      partyType: 'company',
+      partyId: companyB,
+      domain: 'claimed.com',
+      actorUserId: actorB.id,
+    });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'already_claimed' });
+  });
+});
+
+// ── partyDomainsRepository.removeDomain (BAL-347 admin remove) ────────────
+
+describe('partyDomainsRepository.removeDomain', () => {
+  it('soft-removes a party-scoped domain and writes the party_domain.removed audit', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'remove-me.com', actorUserId: actor.id },
+      db
+    );
+    const [row] = await liveRowsForDomain('remove-me.com');
+    if (row === undefined) throw new Error('expected the mapping');
+
+    const result = await partyDomainsRepository.removeDomain({
+      domainId: row.id,
+      partyType: 'company',
+      partyId: companyId,
+      actorUserId: actor.id,
+    });
+    expect(result).toEqual({ outcome: 'removed', domain: 'remove-me.com' });
+
+    // The live row is gone; the underlying row is soft-deleted + attributed.
+    await expect(liveRowsForDomain('remove-me.com')).resolves.toHaveLength(0);
+    const [rereadRow] = await db.select().from(partyDomains).where(eq(partyDomains.id, row.id));
+    expect(rereadRow?.deletedAt).not.toBeNull();
+    expect(rereadRow?.deletedByUserId).toBe(actor.id);
+
+    const actions = (await auditRowsForEntity(row.id)).map((a) => a.action);
+    expect(actions).toContain('party_domain.removed');
+  });
+
+  it('returns not_found when the domain was already removed (idempotent-safe)', async () => {
+    const actor = await userFactory();
+    const companyId = await seedCompany();
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'once.com', actorUserId: actor.id },
+      db
+    );
+    const [row] = await liveRowsForDomain('once.com');
+    if (row === undefined) throw new Error('expected the mapping');
+
+    await partyDomainsRepository.removeDomain({
+      domainId: row.id,
+      partyType: 'company',
+      partyId: companyId,
+      actorUserId: actor.id,
+    });
+    const second = await partyDomainsRepository.removeDomain({
+      domainId: row.id,
+      partyType: 'company',
+      partyId: companyId,
+      actorUserId: actor.id,
+    });
+    expect(second).toEqual({ outcome: 'not_found' });
+  });
+
+  it('does NOT remove a domain owned by a DIFFERENT party (cross-party scoping)', async () => {
+    const actor = await userFactory();
+    const companyA = await seedCompany('Company A');
+    const companyB = await seedCompany('Company B');
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyA, domain: 'scoped.com', actorUserId: actor.id },
+      db
+    );
+    const [row] = await liveRowsForDomain('scoped.com');
+    if (row === undefined) throw new Error('expected the mapping');
+
+    // Party B tries to remove party A's domain by guessing its id.
+    const result = await partyDomainsRepository.removeDomain({
+      domainId: row.id,
+      partyType: 'company',
+      partyId: companyB,
+      actorUserId: actor.id,
+    });
+    expect(result).toEqual({ outcome: 'not_found' });
+
+    // The domain is still live and still owned by party A.
+    const live = await liveRowsForDomain('scoped.com');
+    expect(live).toHaveLength(1);
+    expect(live[0]?.partyId).toBe(companyA);
+  });
+
+  it('frees the partial-unique slot so a different party can re-capture the domain', async () => {
+    const actorA = await userFactory();
+    const actorB = await userFactory();
+    const companyA = await seedCompany('Company A');
+    const companyB = await seedCompany('Company B');
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyA, domain: 'free.com', actorUserId: actorA.id },
+      db
+    );
+    const [row] = await liveRowsForDomain('free.com');
+    if (row === undefined) throw new Error('expected the mapping');
+
+    await partyDomainsRepository.removeDomain({
+      domainId: row.id,
+      partyType: 'company',
+      partyId: companyA,
+      actorUserId: actorA.id,
+    });
+
+    const reCaptured = await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyB, domain: 'free.com', actorUserId: actorB.id },
+      db
+    );
+    expect(reCaptured.outcome).toBe('captured');
+    const live = await liveRowsForDomain('free.com');
+    expect(live).toHaveLength(1);
+    expect(live[0]?.partyId).toBe(companyB);
+  });
+});
+
+// ── partyDomainsRepository.listByPartyWithCreator (BAL-347 admin list) ────
+
+describe('partyDomainsRepository.listByPartyWithCreator', () => {
+  it('projects creator NAME only (no PII), excludes soft-deleted, oldest-first, party-isolated', async () => {
+    const creator = await userFactory({ firstName: 'Ada', lastName: 'Lovelace' });
+    const companyId = await seedCompany();
+    const otherCompanyId = await seedCompany('Other Co');
+
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'first.com', actorUserId: creator.id },
+      db
+    );
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'second.com', actorUserId: creator.id },
+      db
+    );
+    // A different party's domain must not leak.
+    await partyDomainsRepository.capture(
+      {
+        partyType: 'company',
+        partyId: otherCompanyId,
+        domain: 'other.com',
+        actorUserId: creator.id,
+      },
+      db
+    );
+    // A soft-deleted domain must be excluded.
+    await partyDomainsRepository.capture(
+      { partyType: 'company', partyId: companyId, domain: 'gone.com', actorUserId: creator.id },
+      db
+    );
+    const [gone] = await liveRowsForDomain('gone.com');
+    if (gone === undefined) throw new Error('expected gone.com mapping');
+    await db
+      .update(partyDomains)
+      .set({ deletedAt: new Date(), deletedByUserId: creator.id })
+      .where(eq(partyDomains.id, gone.id));
+
+    const rows = await partyDomainsRepository.listByPartyWithCreator('company', companyId);
+
+    // Party isolation + soft-delete exclusion + oldest-first ordering.
+    expect(rows.map((r) => r.domain)).toEqual(['first.com', 'second.com']);
+
+    const [firstRow] = rows;
+    if (firstRow === undefined) throw new Error('expected a row');
+    expect(firstRow.source).toBe('auto_captured');
+    expect(firstRow.createdBy).toEqual({
+      id: creator.id,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+    });
+    // The projected creator carries NO PII columns.
+    expect(Object.keys(firstRow.createdBy ?? {})).toEqual(['id', 'firstName', 'lastName']);
+    expect('email' in (firstRow.createdBy ?? {})).toBe(false);
+  });
+
+  it('returns an empty array for a party with no domains', async () => {
+    await expect(
+      partyDomainsRepository.listByPartyWithCreator('company', randomUUID())
+    ).resolves.toEqual([]);
+  });
+});

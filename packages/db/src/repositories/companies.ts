@@ -1,6 +1,17 @@
 import { eq, and, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { companies, companyMembers, type Company, type User } from '../schema';
+import { auditEventsRepository } from './audit-events';
+
+/**
+ * Outcome of a join-mode write (BAL-347). `changed` is false when the requested mode
+ * already matches (no write, no audit, no analytics) — the caller skips the emit.
+ */
+export interface SetJoinModeResult {
+  previous: Company['domainJoinMode'];
+  next: Company['domainJoinMode'];
+  changed: boolean;
+}
 
 export const companiesRepository = {
   findById: async (id: string): Promise<Company | undefined> => {
@@ -111,5 +122,53 @@ export const companiesRepository = {
       throw new Error(`Company not found: ${id}`);
     }
     return company;
+  },
+
+  /**
+   * Set a company's domain join mode (BAL-347 admin surface), one tx: lock the row
+   * `FOR UPDATE`, no-op when the mode is unchanged (`changed: false` — no write, no
+   * audit), otherwise UPDATE + write the `company.join_mode_changed` audit row
+   * (metadata `{ from, to }`) in the SAME tx. Throws when the company is missing so
+   * the Server Action surfaces a retryable error (companies has NO `deleted_at`, so
+   * — like `updateName` — the not-found guard is the only liveness check).
+   */
+  setDomainJoinMode: async (
+    companyId: string,
+    next: Company['domainJoinMode'],
+    actorUserId: string
+  ): Promise<SetJoinModeResult> => {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ mode: companies.domainJoinMode })
+        .from(companies)
+        .where(eq(companies.id, companyId))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Company not found: ${companyId}`);
+      }
+
+      if (current.mode === next) {
+        return { previous: current.mode, next, changed: false };
+      }
+
+      await tx
+        .update(companies)
+        .set({ domainJoinMode: next, updatedAt: new Date() })
+        .where(eq(companies.id, companyId));
+
+      await auditEventsRepository.record(
+        {
+          actorUserId,
+          action: 'company.join_mode_changed',
+          entityType: 'company',
+          entityId: companyId,
+          metadata: { from: current.mode, to: next },
+        },
+        tx
+      );
+
+      return { previous: current.mode, next, changed: true };
+    });
   },
 };

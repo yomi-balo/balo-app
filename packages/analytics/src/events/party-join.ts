@@ -16,6 +16,8 @@ export const PARTY_JOIN_SERVER_EVENTS = {
   REQUEST_DECLINED: 'party_join_request_declined',
   /** A user used the escape hatch to leave a domain party (durable opt-out recorded). */
   DOMAIN_JOIN_OPTED_OUT: 'party_join_domain_opted_out',
+  /** BAL-347: an admin changed a company's domain join mode (company only). */
+  MODE_CHANGED: 'domain_join_mode_changed',
 } as const;
 
 export interface PartyJoinServerEventMap {
@@ -44,6 +46,11 @@ export interface PartyJoinServerEventMap {
   };
   [PARTY_JOIN_SERVER_EVENTS.DOMAIN_JOIN_OPTED_OUT]: {
     path: 'auto' | 'request';
+    distinct_id: string;
+  };
+  [PARTY_JOIN_SERVER_EVENTS.MODE_CHANGED]: {
+    from: 'auto' | 'request' | 'off';
+    to: 'auto' | 'request' | 'off';
     distinct_id: string;
   };
 }

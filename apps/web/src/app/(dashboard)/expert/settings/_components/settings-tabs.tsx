@@ -12,6 +12,7 @@ import {
   Shield,
   Briefcase,
   Award,
+  Globe,
 } from 'lucide-react';
 import { RateTab } from './rate-tab';
 import { PayoutsTab, type PayoutDetailsSummary } from './payouts-tab';
@@ -20,11 +21,13 @@ import { ExpertiseTab } from './expertise-tab';
 import { WorkHistoryTab } from './work-history-tab';
 import { CertificationsTab } from './certifications-tab';
 import { CalendarTab } from './calendar-tab';
+import { AgencyDomainsTab } from './agency-domains-tab';
 import { cn } from '@/lib/utils';
 import type {
   ProfileSettingsData,
   ApplicationCertWithRelations,
   CertificationsByCategory,
+  PartyDomainWithCreator,
 } from '@balo/db';
 
 // ── Main tabs (pill style) ──────────────────────────────────────
@@ -34,6 +37,16 @@ const MAIN_TABS = [
   { key: 'schedule', label: 'Schedule', icon: Calendar },
   { key: 'payouts', label: 'Payouts', icon: CreditCard },
 ] as const;
+
+// BAL-347: the agency Domains tab is appended only for agency owners/admins.
+const DOMAINS_TAB = { key: 'domains', label: 'Domains', icon: Globe } as const;
+
+/** Agency-domains payload threaded through only when the expert can manage an agency. */
+export interface AgencyDomainsTabData {
+  agencyId: string;
+  partyName: string;
+  domains: PartyDomainWithCreator[] | null;
+}
 
 // ── Sub tabs (underline style, under Profile main tab) ──────────
 const PROFILE_SUB_TABS = [
@@ -70,6 +83,9 @@ interface SettingsTabsProps {
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
   accessToken: string;
+  /** BAL-347: present + true only for agency owners/admins (adds the Domains tab). */
+  canManageAgency: boolean;
+  agencyDomains: AgencyDomainsTabData | null;
 }
 
 export function SettingsTabs({
@@ -83,9 +99,12 @@ export function SettingsTabs({
   initialPhone,
   phoneVerifiedAt,
   accessToken,
+  canManageAgency,
+  agencyDomains,
 }: SettingsTabsProps): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
+  const mainTabs = canManageAgency ? [...MAIN_TABS, DOMAINS_TAB] : MAIN_TABS;
 
   // Sync tab state when URL changes externally (browser back/forward, checklist click)
   useEffect(() => {
@@ -116,7 +135,7 @@ export function SettingsTabs({
         aria-label="Settings sections"
         className="bg-muted relative mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1"
       >
-        {MAIN_TABS.map((t) => {
+        {mainTabs.map((t) => {
           const Icon = t.icon;
           const isActive = mainTab === t.key;
           return (
@@ -196,57 +215,140 @@ export function SettingsTabs({
           exit={{ y: -8, opacity: 0 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
         >
-          {/* Profile sub tabs content */}
-          {tab === 'profile' && profileData && referenceData ? (
-            <ProfileTab
-              initialProfile={profileData}
-              referenceData={referenceData}
-              initialPhone={initialPhone}
-              phoneVerifiedAt={phoneVerifiedAt}
-              accessToken={accessToken}
-            />
-          ) : tab === 'profile' && (!profileData || !referenceData) ? (
-            <DataLoadError />
-          ) : tab === 'expertise' && profileData ? (
-            <div className="mx-auto max-w-[620px]">
-              <ExpertiseTab
-                competencies={profileData.competencies}
-                skillsLocked={profileData.skillsLocked}
-              />
-            </div>
-          ) : tab === 'workHistory' && profileData ? (
-            <div className="mx-auto max-w-[620px]">
-              <WorkHistoryTab initialEntries={profileData.workHistory} />
-            </div>
-          ) : tab === 'certifications' && profileData && certCategories ? (
-            <div className="mx-auto max-w-[620px]">
-              <CertificationsTab
-                initialCerts={profileData.certifications as ApplicationCertWithRelations[]}
-                certCategories={certCategories}
-                trailheadUrl={profileData.trailheadUrl}
-                skillsLocked={profileData.skillsLocked}
-              />
-            </div>
-          ) : PROFILE_SUB_TAB_KEYS.has(tab) && !profileData ? (
-            <DataLoadError />
-          ) : tab === 'rate' ? (
-            /* Main tabs content */
-            <div className="mx-auto max-w-[620px]">
-              <RateTab initialRateCents={initialRateCents} />
-            </div>
-          ) : tab === 'payouts' ? (
-            <div className="mx-auto max-w-[620px]">
-              <PayoutsTab initialPayoutDetails={initialPayoutDetails} />
-            </div>
-          ) : tab === 'schedule' ? (
-            <div className="mx-auto max-w-[620px]">
-              <CalendarTab />
-            </div>
-          ) : null}
+          <TabPanelContent
+            tab={tab}
+            profileData={profileData}
+            referenceData={referenceData}
+            certCategories={certCategories}
+            initialPhone={initialPhone}
+            phoneVerifiedAt={phoneVerifiedAt}
+            accessToken={accessToken}
+            initialRateCents={initialRateCents}
+            initialPayoutDetails={initialPayoutDetails}
+            agencyDomains={agencyDomains}
+          />
         </motion.div>
       </AnimatePresence>
     </div>
   );
+}
+
+interface TabPanelContentProps {
+  tab: string;
+  profileData: ProfileSettingsData | null;
+  referenceData: SettingsTabsProps['referenceData'];
+  certCategories: CertificationsByCategory[] | null;
+  initialPhone: string | null;
+  phoneVerifiedAt: string | null;
+  accessToken: string;
+  initialRateCents: number | null;
+  initialPayoutDetails: PayoutDetailsSummary | null;
+  agencyDomains: AgencyDomainsTabData | null;
+}
+
+/** Profile main-tab sub-content (profile / expertise / work-history / certifications). */
+function ProfileSubTabContent({
+  tab,
+  profileData,
+  referenceData,
+  certCategories,
+  initialPhone,
+  phoneVerifiedAt,
+  accessToken,
+}: Readonly<TabPanelContentProps>): React.JSX.Element | null {
+  if (tab === 'profile') {
+    if (profileData && referenceData) {
+      return (
+        <ProfileTab
+          initialProfile={profileData}
+          referenceData={referenceData}
+          initialPhone={initialPhone}
+          phoneVerifiedAt={phoneVerifiedAt}
+          accessToken={accessToken}
+        />
+      );
+    }
+    return <DataLoadError />;
+  }
+
+  // expertise / work-history / certifications all require the loaded profile.
+  if (!profileData) {
+    return <DataLoadError />;
+  }
+
+  if (tab === 'expertise') {
+    return (
+      <div className="mx-auto max-w-[620px]">
+        <ExpertiseTab
+          competencies={profileData.competencies}
+          skillsLocked={profileData.skillsLocked}
+        />
+      </div>
+    );
+  }
+  if (tab === 'workHistory') {
+    return (
+      <div className="mx-auto max-w-[620px]">
+        <WorkHistoryTab initialEntries={profileData.workHistory} />
+      </div>
+    );
+  }
+  if (tab === 'certifications' && certCategories) {
+    return (
+      <div className="mx-auto max-w-[620px]">
+        <CertificationsTab
+          initialCerts={profileData.certifications as ApplicationCertWithRelations[]}
+          certCategories={certCategories}
+          trailheadUrl={profileData.trailheadUrl}
+          skillsLocked={profileData.skillsLocked}
+        />
+      </div>
+    );
+  }
+  return null;
+}
+
+/** Resolves the active tab to its content — flat early returns (no nested ternaries). */
+function TabPanelContent(props: Readonly<TabPanelContentProps>): React.JSX.Element | null {
+  const { tab, agencyDomains, initialRateCents, initialPayoutDetails } = props;
+
+  if (tab === 'domains') {
+    if (!agencyDomains) return null;
+    return (
+      <AgencyDomainsTab
+        agencyId={agencyDomains.agencyId}
+        partyName={agencyDomains.partyName}
+        domains={agencyDomains.domains}
+      />
+    );
+  }
+
+  if (PROFILE_SUB_TAB_KEYS.has(tab)) {
+    return <ProfileSubTabContent {...props} />;
+  }
+
+  if (tab === 'rate') {
+    return (
+      <div className="mx-auto max-w-[620px]">
+        <RateTab initialRateCents={initialRateCents} />
+      </div>
+    );
+  }
+  if (tab === 'payouts') {
+    return (
+      <div className="mx-auto max-w-[620px]">
+        <PayoutsTab initialPayoutDetails={initialPayoutDetails} />
+      </div>
+    );
+  }
+  if (tab === 'schedule') {
+    return (
+      <div className="mx-auto max-w-[620px]">
+        <CalendarTab />
+      </div>
+    );
+  }
+  return null;
 }
 
 function DataLoadError(): React.JSX.Element {

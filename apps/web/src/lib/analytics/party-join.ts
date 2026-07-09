@@ -1,6 +1,10 @@
 import 'server-only';
 
-import { trackServerAndFlush, PARTY_JOIN_SERVER_EVENTS } from '@/lib/analytics/server';
+import {
+  trackServerAndFlush,
+  PARTY_JOIN_SERVER_EVENTS,
+  PARTY_DOMAIN_SERVER_EVENTS,
+} from '@/lib/analytics/server';
 
 /**
  * Domain auto-join analytics helpers (BAL-345 §7.3). All six events are SERVER
@@ -67,6 +71,44 @@ export function emitJoinRequestResolved(
 export function emitDomainJoinOptedOut(path: 'auto' | 'request', userId: string): void {
   trackServerAndFlush(PARTY_JOIN_SERVER_EVENTS.DOMAIN_JOIN_OPTED_OUT, {
     path,
+    distinct_id: userId,
+  });
+}
+
+/**
+ * BAL-347 admin settings surface. An admin explicitly ADDED a domain (source is
+ * always 'admin_added' — the signup auto path emits CAPTURED). Fired post-commit
+ * from the add-domain Server Action on a `captured` outcome only.
+ */
+export function emitPartyDomainAdded(
+  partyType: PartyType,
+  source: 'admin_added',
+  userId: string
+): void {
+  trackServerAndFlush(PARTY_DOMAIN_SERVER_EVENTS.ADDED, {
+    party_type: partyType,
+    source,
+    distinct_id: userId,
+  });
+}
+
+/** BAL-347. An admin soft-removed a domain (fired post-commit on a `removed` outcome). */
+export function emitPartyDomainRemoved(partyType: PartyType, userId: string): void {
+  trackServerAndFlush(PARTY_DOMAIN_SERVER_EVENTS.REMOVED, {
+    party_type: partyType,
+    distinct_id: userId,
+  });
+}
+
+/** BAL-347 (company only). An admin changed the domain join mode (fired only when it changed). */
+export function emitDomainJoinModeChanged(
+  from: 'auto' | 'request' | 'off',
+  to: 'auto' | 'request' | 'off',
+  userId: string
+): void {
+  trackServerAndFlush(PARTY_JOIN_SERVER_EVENTS.MODE_CHANGED, {
+    from,
+    to,
     distinct_id: userId,
   });
 }

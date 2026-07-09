@@ -1,5 +1,6 @@
 export { usersRepository } from './users';
 export { companiesRepository } from './companies';
+export type { SetJoinModeResult } from './companies';
 export { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
 export type {
   AgencySummary,
@@ -156,7 +157,14 @@ export type {
   FacetCount,
 } from './expert-search';
 export { partyDomainsRepository } from './party-domains';
-export type { DomainCaptureResult, CaptureDomainInput } from './party-domains';
+export type {
+  DomainCaptureResult,
+  CaptureDomainInput,
+  AddDomainInput,
+  RemoveDomainInput,
+  RemoveDomainResult,
+  PartyDomainWithCreator,
+} from './party-domains';
 export { auditEventsRepository } from './audit-events';
 export type { RecordAuditInput } from './audit-events';
 export { partyMembershipsRepository } from './party-memberships';
@@ -177,6 +185,8 @@ export type {
   FindOrCreatePendingResult,
   CreatePendingInput,
   ResolveRequestInput,
+  PendingJoinRequestRow,
+  ResolvedJoinRequestRow,
 } from './party-join-requests';
 export { partyJoinOptoutsRepository } from './party-join-optouts';
 export type { OptOutInput, OptOutResult } from './party-join-optouts';

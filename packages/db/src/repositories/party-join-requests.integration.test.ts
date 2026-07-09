@@ -264,3 +264,202 @@ describe('partyJoinRequestsRepository.findPendingByUserAndParty', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+// ── partyJoinRequestsRepository.listPendingByParty (BAL-347 admin queue) ──
+
+describe('partyJoinRequestsRepository.listPendingByParty', () => {
+  it('returns only live pending rows for the party, requester hydrated, oldest-first', async () => {
+    const company = await companyFactory();
+    const otherCompany = await companyFactory();
+    const early = await userFactory({ email: 'early@northwind.com', firstName: 'Early' });
+    const late = await userFactory({ email: 'late@northwind.com', firstName: 'Late' });
+    const declinedUser = await userFactory({ email: 'declined@northwind.com' });
+    const otherPartyUser = await userFactory({ email: 'other@acme.com' });
+    const admin = await userFactory();
+
+    const earlyReq = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: company.id,
+      userId: early.id,
+    });
+    const lateReq = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: company.id,
+      userId: late.id,
+    });
+    // Force a deterministic createdAt ordering (early before late).
+    await db
+      .update(partyJoinRequests)
+      .set({ createdAt: new Date('2020-01-01T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, earlyReq.request.id));
+    await db
+      .update(partyJoinRequests)
+      .set({ createdAt: new Date('2020-06-01T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, lateReq.request.id));
+
+    // A declined request on the same party must NOT appear.
+    const declinedReq = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: company.id,
+      userId: declinedUser.id,
+    });
+    await partyJoinRequestsRepository.decline({
+      requestId: declinedReq.request.id,
+      actorUserId: admin.id,
+    });
+
+    // A pending request on ANOTHER party must NOT appear.
+    await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: otherCompany.id,
+      userId: otherPartyUser.id,
+    });
+
+    const rows = await partyJoinRequestsRepository.listPendingByParty('company', company.id);
+
+    expect(rows.map((r) => r.requester.email)).toEqual([
+      'early@northwind.com',
+      'late@northwind.com',
+    ]);
+    const [firstRow] = rows;
+    if (firstRow === undefined) throw new Error('expected a pending row');
+    expect(firstRow.requester.firstName).toBe('Early');
+    expect(firstRow.requester.id).toBe(early.id);
+  });
+
+  it('excludes a soft-deleted pending row', async () => {
+    const { companyId, userId } = await seedCompanyAndRequester();
+    const created = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: companyId,
+      userId,
+    });
+    await db
+      .update(partyJoinRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(partyJoinRequests.id, created.request.id));
+
+    await expect(
+      partyJoinRequestsRepository.listPendingByParty('company', companyId)
+    ).resolves.toEqual([]);
+  });
+});
+
+// ── partyJoinRequestsRepository.listResolvedByParty (BAL-347 history) ─────
+
+describe('partyJoinRequestsRepository.listResolvedByParty', () => {
+  it('includes approved/declined/withdrawn, populates the resolver, orders resolved_at DESC', async () => {
+    const company = await companyFactory();
+    const admin = await userFactory({ firstName: 'Admin', lastName: 'Boss' });
+    const approvedUser = await userFactory({ email: 'appr@northwind.com' });
+    const declinedUser = await userFactory({ email: 'decl@northwind.com' });
+    const withdrawUser = await userFactory({ email: 'wd@northwind.com' });
+
+    const approvedReq = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: company.id,
+      userId: approvedUser.id,
+    });
+    await partyJoinRequestsRepository.approve({
+      requestId: approvedReq.request.id,
+      actorUserId: admin.id,
+    });
+
+    const declinedReq = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: company.id,
+      userId: declinedUser.id,
+    });
+    await partyJoinRequestsRepository.decline({
+      requestId: declinedReq.request.id,
+      actorUserId: admin.id,
+    });
+
+    const withdrawnReq = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: company.id,
+      userId: withdrawUser.id,
+    });
+    await partyJoinRequestsRepository.withdraw({
+      requestId: withdrawnReq.request.id,
+      actorUserId: withdrawUser.id,
+    });
+
+    // Deterministic resolved_at order: approved (newest) → declined → withdrawn.
+    await db
+      .update(partyJoinRequests)
+      .set({ resolvedAt: new Date('2020-03-03T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, approvedReq.request.id));
+    await db
+      .update(partyJoinRequests)
+      .set({ resolvedAt: new Date('2020-02-02T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, declinedReq.request.id));
+    await db
+      .update(partyJoinRequests)
+      .set({ resolvedAt: new Date('2020-01-01T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, withdrawnReq.request.id));
+
+    const rows = await partyJoinRequestsRepository.listResolvedByParty('company', company.id);
+
+    expect(rows.map((r) => r.status)).toEqual(['approved', 'declined', 'withdrawn']);
+    // The admin resolver is hydrated for the approved row.
+    const [approvedRow] = rows;
+    if (approvedRow === undefined) throw new Error('expected the approved row');
+    expect(approvedRow.requester.email).toBe('appr@northwind.com');
+    expect(approvedRow.resolver).toEqual({ firstName: 'Admin', lastName: 'Boss' });
+
+    // A self-withdrawal has no admin resolver: resolved_by_user_id is stamped with the
+    // requester (for audit), but the history must surface `resolver: null` — never the
+    // requester rendered as their own resolver. Regression guard for BAL-347.
+    const withdrawnRow = rows[2];
+    if (withdrawnRow === undefined) throw new Error('expected the withdrawn row');
+    expect(withdrawnRow.status).toBe('withdrawn');
+    expect(withdrawnRow.requester.email).toBe('wd@northwind.com');
+    expect(withdrawnRow.resolver).toBeNull();
+  });
+
+  it('returns a null resolver when resolved_by_user_id is unset (admin later SET NULL)', async () => {
+    const company = await companyFactory();
+    const requester = await userFactory({ email: 'orphan@northwind.com' });
+
+    // Directly seed a declined row with no resolver (the SET-NULL-after-delete shape).
+    const [row] = await db
+      .insert(partyJoinRequests)
+      .values({
+        partyType: 'company',
+        partyId: company.id,
+        userId: requester.id,
+        status: 'declined',
+        resolvedByUserId: null,
+        resolvedAt: new Date('2020-01-01T00:00:00Z'),
+      })
+      .returning();
+    if (row === undefined) throw new Error('failed to seed the declined row');
+
+    const rows = await partyJoinRequestsRepository.listResolvedByParty('company', company.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('declined');
+    expect(rows[0]?.resolver).toBeNull();
+  });
+
+  it('respects the limit', async () => {
+    const company = await companyFactory();
+    const admin = await userFactory();
+
+    for (const email of ['a@nw.com', 'b@nw.com', 'c@nw.com']) {
+      const user = await userFactory({ email });
+      const req = await partyJoinRequestsRepository.findOrCreatePending({
+        partyType: 'company',
+        partyId: company.id,
+        userId: user.id,
+      });
+      await partyJoinRequestsRepository.decline({
+        requestId: req.request.id,
+        actorUserId: admin.id,
+      });
+    }
+
+    const rows = await partyJoinRequestsRepository.listResolvedByParty('company', company.id, 2);
+    expect(rows).toHaveLength(2);
+  });
+});
