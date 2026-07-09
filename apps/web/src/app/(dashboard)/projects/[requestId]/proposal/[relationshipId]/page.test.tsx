@@ -404,8 +404,8 @@ describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
       pricingMethod: 'fixed',
       timeframeWeeks: 6,
     });
-    expect((initialState.milestones as unknown[]).length).toBe(1);
-    expect((initialState.installments as unknown[]).length).toBe(2);
+    expect(initialState.milestones as unknown[]).toHaveLength(1);
+    expect(initialState.installments as unknown[]).toHaveLength(2);
     expect((initialState.documents as Array<{ fileName: string }>)[0]?.fileName).toBe(
       'case-study.pdf'
     );
@@ -488,8 +488,8 @@ describe('ProposalSurfacePage (RSC) — expert submitted view branch', () => {
       headline: null,
       rating: null,
     });
-    expect((doc.milestones as unknown[]).length).toBe(1);
-    expect((doc.installments as unknown[]).length).toBe(2);
+    expect(doc.milestones as unknown[]).toHaveLength(1);
+    expect(doc.installments as unknown[]).toHaveLength(2);
     expect((doc.attachments as Array<{ fileName: string }>)[0]?.fileName).toBe('case-study.pdf');
   });
 
@@ -565,7 +565,7 @@ describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', (
     // Hydrated from the CURRENT (changes_requested) proposal + its children.
     const initialState = props.initialState as Record<string, unknown>;
     expect(initialState).toMatchObject({ proposalId: PROPOSAL_ID, pricingMethod: 'fixed' });
-    expect((initialState.milestones as unknown[]).length).toBe(1);
+    expect(initialState.milestones as unknown[]).toHaveLength(1);
   });
 
   it('passes no changeRequest (undefined) when the proposal has no change-request rows', async () => {
@@ -629,7 +629,7 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
       clientFirstName: 'Dana',
     });
     const proposals = props.proposals as Array<{ priceCents: number; adminPricing?: unknown }>;
-    expect(proposals.length).toBe(2);
+    expect(proposals).toHaveLength(2);
     // audience='client' → hydrateReviewDoc grosses up: 1_200_000 @ 2500 bps → 1_500_000.
     const [firstDoc] = proposals;
     expect(firstDoc?.priceCents).toBe(1_500_000);
