@@ -469,6 +469,21 @@ function deriveChangeRequestBanner(
   };
 }
 
+/** "1 milestone" / "N milestones" — pluralized milestone count for the completed banner. */
+function milestoneCountLabel(total: number): string {
+  return `${total} ${total === 1 ? 'milestone' : 'milestones'}`;
+}
+
+/** Expert completed-banner lead — zero-milestone-safe. */
+function completedDeliveredLead(total: number): string {
+  return total === 0 ? 'The project was delivered' : `All ${milestoneCountLabel(total)} delivered`;
+}
+
+/** Admin completed-banner milestone suffix — empty when there are no milestones. */
+function completedDeliveredSuffix(total: number): string {
+  return total === 0 ? '' : ` — ${milestoneCountLabel(total)} delivered`;
+}
+
 function deriveCompletedBanner(
   engagement: EngagementWithMilestones,
   lens: EngagementLens,
@@ -484,16 +499,9 @@ function deriveCompletedBanner(
     : `accepted by ${personAtCompany(engagement.acceptedBy, parties.clientCompanyName)} on ${acceptedAtLabel}`;
 
   if (lens === 'expert') {
-    let milestonesLead: string;
-    if (total === 0) {
-      milestonesLead = 'The project was delivered';
-    } else {
-      const noun = total === 1 ? 'milestone' : 'milestones';
-      milestonesLead = `All ${total} ${noun} delivered`;
-    }
     return {
       title: 'Project delivered',
-      body: `${milestonesLead} and the project ${acceptedLine}. Balo has been notified.`,
+      body: `${completedDeliveredLead(total)} and the project ${acceptedLine}. Balo has been notified.`,
       readyToInvoice: false,
     };
   }
@@ -506,14 +514,9 @@ function deriveCompletedBanner(
       readyToInvoice: false,
     };
   }
-  let milestoneSuffix = '';
-  if (total > 0) {
-    const noun = total === 1 ? 'milestone' : 'milestones';
-    milestoneSuffix = ` — ${total} ${noun} delivered`;
-  }
   return {
     title: 'Project completed',
-    body: `Project ${acceptedLine}${milestoneSuffix}.`,
+    body: `Project ${acceptedLine}${completedDeliveredSuffix(total)}.`,
     readyToInvoice: true,
   };
 }
