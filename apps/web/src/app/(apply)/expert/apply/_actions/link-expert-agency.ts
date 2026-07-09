@@ -44,7 +44,7 @@ export const linkExpertAgencyAction = withAuth(
 
       // Ownership guard — never link a profile the caller doesn't own.
       const owns = await expertsRepository.findProfileById(expertProfileId);
-      if (!owns || owns.userId !== session.user.id) {
+      if (owns?.userId !== session.user.id) {
         return { success: false, error: 'Unauthorized' };
       }
 

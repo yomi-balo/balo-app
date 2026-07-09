@@ -200,7 +200,9 @@ export function StepAgency({ headingRef }: Readonly<StepAgencyProps>): React.JSX
   }, [expertProfileId, goNext]);
 
   const onContinue = useCallback((): void => {
-    void handleContinue();
+    // handleContinue owns its errors (internal try/catch); the trailing catch only
+    // satisfies no-floating-promises without the void operator (Sonar S3735).
+    handleContinue().catch(() => undefined);
   }, [handleContinue]);
 
   // ── Loading ─────────────────────────────────────────────────────

@@ -559,7 +559,10 @@ export function ExpertApplicationProvider({
   }, []);
 
   const submit = useCallback((): void => {
-    void submitRef.current?.();
+    const result = submitRef.current?.();
+    if (result instanceof Promise) {
+      result.catch(() => undefined);
+    }
   }, []);
 
   const updateStepData = useCallback(
