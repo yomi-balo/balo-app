@@ -247,6 +247,27 @@ describe('runDeliveryReviewSweep — reminder pass', () => {
       expect.objectContaining({ expertPartyLabel: 'Priya Sharma' })
     );
   });
+
+  it('does NOT remind a lingering overdue row past the auto-accept deadline (lower-bounded window)', async () => {
+    // A row whose accept FAILED and now lingers well past T-7. The reminder query still
+    // returns it (<= now-5d), but the lower bound (> now-7d) excludes it, so it never
+    // gets a past-dated "1 day to go" reminder — it's retried by the accept pass instead.
+    const overdue = engRow({
+      id: 'eng-overdue',
+      completionRequestedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    mockListPending
+      .mockResolvedValueOnce([overdue]) // accept pass finds it (>= 7d)…
+      .mockResolvedValueOnce([overdue]); // …reminder query returns it too (<= now-5d)
+    mockAccept.mockRejectedValue(new Error('boom')); // …but the accept fails, so it lingers pending
+    mockFindWithMilestones.mockResolvedValue(hydrated({ id: 'eng-overdue' }));
+    mockFindOwner.mockResolvedValue({ id: 'owner-x' });
+
+    const result = await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
+
+    expect(result).toEqual({ accepted: 0, reminded: 0 });
+    expect(mockPublish).not.toHaveBeenCalledWith('engagement.review_reminder', expect.anything());
+  });
 });
 
 describe('config knobs', () => {

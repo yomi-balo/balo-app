@@ -129,6 +129,14 @@ function autoAcceptDate(requestedAt: Date): Date {
  * Auto-accept one engagement (status-guarded in the repo) and fan out the
  * `engagement.auto_accepted` notifications (client + expert + admins) plus the
  * `engagement_accepted` (method=auto) analytics.
+ *
+ * DURABILITY: this is a post-commit dual write — the DB commits `completed` (with the
+ * `engagement.accepted` audit event IN the same tx), THEN the notification publishes.
+ * A crash in between loses the admin "ready to invoice" money signal for that row (the
+ * next sweep won't re-pick it — it's already `completed`), matching the fire-and-forget
+ * precedent everywhere else in delivery (D1-D4). It is RECOVERABLE from the in-tx
+ * `audit_events` row; the eventual hardening is an audit-events reconciliation / outbox
+ * (deferred, tracked in the PR).
  */
 async function autoAcceptOne(engagement: Engagement, now: Date): Promise<void> {
   const requestedAt = engagement.completionRequestedAt;
@@ -234,9 +242,18 @@ export async function runDeliveryReviewSweep(
     }
   }
 
-  // 2) Remind the remaining pending rows within T-2 of auto-accept. The just-accepted
-  //    rows are now `completed` and no longer match this pending query.
-  const dueForReminder = await engagementsRepository.listPendingAutoAccept(reminderCutoff);
+  // 2) Remind the remaining pending rows within the T-2 window. The query gives the
+  //    UPPER edge (completion_requested_at <= reminderCutoff); we bound the LOWER edge
+  //    to `> autoAcceptCutoff` in code so the reminder window is exactly (T-7, T-2].
+  //    Without the lower bound, a row that FAILED to auto-accept this tick (repo error)
+  //    would linger past its deadline and get a reminder whose autoDate is already in
+  //    the past (daysLeft clamped to 1) — this makes the reminder robust regardless of
+  //    the accept pass, and such a row is simply retried by the accept pass next tick.
+  const dueForReminder = (await engagementsRepository.listPendingAutoAccept(reminderCutoff)).filter(
+    (engagement) =>
+      engagement.completionRequestedAt !== null &&
+      engagement.completionRequestedAt.getTime() > autoAcceptCutoff.getTime()
+  );
   let reminded = 0;
   for (const engagement of dueForReminder) {
     try {
