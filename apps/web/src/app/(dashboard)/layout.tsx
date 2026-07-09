@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
+import { companiesRepository } from '@balo/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
@@ -8,6 +9,30 @@ import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
 import { log } from '@/lib/logging';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
+
+/**
+ * BAL-347: whether to show the company "Team" nav item — owner/admin on a NON-personal
+ * company. The page still hard-gates via hasCapability + notFound, so this is UX-only.
+ * In v1 every company is personal, so this stays false (the surface is dormant).
+ * Extracted so the layout component stays flat.
+ */
+async function resolveCanManageCompany(
+  user: Awaited<ReturnType<typeof getCurrentUser>>
+): Promise<boolean> {
+  if (!user || (user.companyRole !== 'owner' && user.companyRole !== 'admin')) {
+    return false;
+  }
+  try {
+    const company = await companiesRepository.findById(user.companyId);
+    return company !== undefined && !company.isPersonal;
+  } catch (error) {
+    log.warn('Failed to resolve company for nav gating', {
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
 
 export default async function DashboardLayout({
   children,
@@ -43,6 +68,8 @@ export default async function DashboardLayout({
     }
   }
 
+  const canManageCompany = await resolveCanManageCompany(user);
+
   const userName = user
     ? [user.firstName, user.lastName].filter(Boolean).join(' ') ||
       user.email.split('@')[0] ||
@@ -60,6 +87,7 @@ export default async function DashboardLayout({
       userAvatarUrl={getAvatarUrl(user?.avatarUrl ?? null, 'thumbnail')}
       checklistCompletedCount={checklistCompletedCount}
       checklistAllComplete={checklistAllComplete}
+      canManageCompany={canManageCompany}
     >
       <div className="bg-background min-h-screen">
         <div className="flex">

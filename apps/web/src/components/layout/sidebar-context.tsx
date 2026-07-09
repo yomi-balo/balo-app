@@ -23,6 +23,8 @@ interface SidebarContextValue {
   userAvatarUrl: string | null;
   checklistCompletedCount: number;
   checklistAllComplete: boolean;
+  // BAL-347: gates the company "Team" nav item (owner/admin on a non-personal company).
+  canManageCompany: boolean;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -37,6 +39,7 @@ interface SidebarProviderProps {
   userAvatarUrl: string | null;
   checklistCompletedCount: number;
   checklistAllComplete: boolean;
+  canManageCompany: boolean;
 }
 
 export function SidebarProvider({
@@ -47,6 +50,7 @@ export function SidebarProvider({
   userAvatarUrl,
   checklistCompletedCount,
   checklistAllComplete,
+  canManageCompany,
 }: SidebarProviderProps): React.JSX.Element {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -81,6 +85,7 @@ export function SidebarProvider({
       userAvatarUrl,
       checklistCompletedCount,
       checklistAllComplete,
+      canManageCompany,
     }),
     [
       isCollapsed,
@@ -93,6 +98,7 @@ export function SidebarProvider({
       userAvatarUrl,
       checklistCompletedCount,
       checklistAllComplete,
+      canManageCompany,
     ]
   );
 

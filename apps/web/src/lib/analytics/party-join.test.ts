@@ -10,6 +10,13 @@ vi.mock('@/lib/analytics/server', () => ({
     REQUEST_APPROVED: 'party_join_request_approved',
     REQUEST_DECLINED: 'party_join_request_declined',
     DOMAIN_JOIN_OPTED_OUT: 'party_join_domain_opted_out',
+    MODE_CHANGED: 'domain_join_mode_changed',
+  },
+  PARTY_DOMAIN_SERVER_EVENTS: {
+    CAPTURED: 'party_domain_captured',
+    CAPTURE_SKIPPED: 'party_domain_capture_skipped',
+    ADDED: 'party_domain_added',
+    REMOVED: 'party_domain_removed',
   },
 }));
 
@@ -19,6 +26,9 @@ import {
   emitJoinRequestCreated,
   emitJoinRequestResolved,
   emitDomainJoinOptedOut,
+  emitPartyDomainAdded,
+  emitPartyDomainRemoved,
+  emitDomainJoinModeChanged,
 } from './party-join';
 
 beforeEach(() => vi.clearAllMocks());
@@ -80,6 +90,43 @@ describe('party-join analytics wrappers', () => {
     expect(mockTrack).toHaveBeenCalledWith('party_join_domain_opted_out', {
       path: 'request',
       distinct_id: 'u-9',
+    });
+  });
+
+  // BAL-347 admin-settings wrappers
+
+  it('emitPartyDomainAdded → party_domain_added with source admin_added', () => {
+    emitPartyDomainAdded('company', 'admin_added', 'admin-1');
+    expect(mockTrack).toHaveBeenCalledWith('party_domain_added', {
+      party_type: 'company',
+      source: 'admin_added',
+      distinct_id: 'admin-1',
+    });
+  });
+
+  it('emitPartyDomainAdded → carries the agency party_type', () => {
+    emitPartyDomainAdded('agency', 'admin_added', 'admin-2');
+    expect(mockTrack).toHaveBeenCalledWith('party_domain_added', {
+      party_type: 'agency',
+      source: 'admin_added',
+      distinct_id: 'admin-2',
+    });
+  });
+
+  it('emitPartyDomainRemoved → party_domain_removed + distinct_id', () => {
+    emitPartyDomainRemoved('agency', 'admin-3');
+    expect(mockTrack).toHaveBeenCalledWith('party_domain_removed', {
+      party_type: 'agency',
+      distinct_id: 'admin-3',
+    });
+  });
+
+  it('emitDomainJoinModeChanged → domain_join_mode_changed with from + to', () => {
+    emitDomainJoinModeChanged('auto', 'request', 'admin-4');
+    expect(mockTrack).toHaveBeenCalledWith('domain_join_mode_changed', {
+      from: 'auto',
+      to: 'request',
+      distinct_id: 'admin-4',
     });
   });
 });

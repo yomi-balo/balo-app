@@ -17,6 +17,7 @@ import {
   MessageSquare,
   Settings,
   User,
+  Users,
   PanelLeftClose,
   PanelLeft,
   Check,
@@ -37,13 +38,25 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-function getBottomNavItems(activeMode: 'client' | 'expert'): NavItem[] {
+export function getBottomNavItems(
+  activeMode: 'client' | 'expert',
+  canManageCompany: boolean
+): NavItem[] {
   const items: NavItem[] = [];
   if (activeMode === 'expert') {
     items.push({
       href: '/expert/settings',
       label: 'Expert Settings',
       icon: Settings,
+    });
+  }
+  // BAL-347: company "Team" surface — owner/admin on a non-personal company only.
+  // The page still hard-gates via hasCapability + notFound; this is UX defence-in-depth.
+  if (canManageCompany) {
+    items.push({
+      href: '/settings/team',
+      label: 'Team',
+      icon: Users,
     });
   }
   items.push({
@@ -87,9 +100,10 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
     userAvatarUrl,
     checklistCompletedCount,
     checklistAllComplete,
+    canManageCompany,
   } = useSidebar();
 
-  const bottomNavItems = getBottomNavItems(activeMode);
+  const bottomNavItems = getBottomNavItems(activeMode, canManageCompany);
 
   return (
     <div className="flex h-full flex-col pb-14">

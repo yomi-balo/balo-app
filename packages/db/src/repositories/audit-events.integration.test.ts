@@ -162,3 +162,71 @@ describe('auditEventsRepository.countByEntityAndAction', () => {
     expect(count).toBe(0);
   });
 });
+
+describe('auditEventsRepository.findLatestByEntityAndAction', () => {
+  it('returns the most-recent row by created_at for the entity + action', async () => {
+    const older = await userFactory();
+    const newer = await userFactory();
+    const companyId = randomUUID();
+
+    const first = await auditEventsRepository.record(
+      {
+        actorUserId: older.id,
+        action: 'company.join_mode_changed',
+        entityType: 'company',
+        entityId: companyId,
+        metadata: { from: 'auto', to: 'request' },
+      },
+      db
+    );
+    const second = await auditEventsRepository.record(
+      {
+        actorUserId: newer.id,
+        action: 'company.join_mode_changed',
+        entityType: 'company',
+        entityId: companyId,
+        metadata: { from: 'request', to: 'off' },
+      },
+      db
+    );
+    // Force a deterministic ordering (first older than second).
+    await db
+      .update(auditEvents)
+      .set({ createdAt: new Date('2020-01-01T00:00:00Z') })
+      .where(eq(auditEvents.id, first.id));
+    await db
+      .update(auditEvents)
+      .set({ createdAt: new Date('2021-01-01T00:00:00Z') })
+      .where(eq(auditEvents.id, second.id));
+
+    // A different action on the same entity must NOT win.
+    await auditEventsRepository.record(
+      {
+        actorUserId: older.id,
+        action: 'company.renamed',
+        entityType: 'company',
+        entityId: companyId,
+      },
+      db
+    );
+
+    const latest = await auditEventsRepository.findLatestByEntityAndAction({
+      entityType: 'company',
+      entityId: companyId,
+      action: 'company.join_mode_changed',
+    });
+
+    expect(latest?.actorUserId).toBe(newer.id);
+    expect(latest?.createdAt).toBeInstanceOf(Date);
+  });
+
+  it('returns undefined when the action has never occurred for the entity', async () => {
+    await expect(
+      auditEventsRepository.findLatestByEntityAndAction({
+        entityType: 'company',
+        entityId: randomUUID(),
+        action: 'company.join_mode_changed',
+      })
+    ).resolves.toBeUndefined();
+  });
+});

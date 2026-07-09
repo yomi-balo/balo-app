@@ -5,6 +5,12 @@
 export const PARTY_DOMAIN_SERVER_EVENTS = {
   CAPTURED: 'party_domain_captured',
   CAPTURE_SKIPPED: 'party_domain_capture_skipped',
+  // BAL-347 admin settings surface. ADDED is fired when an admin explicitly adds a
+  // domain (source is always 'admin_added' — the signup auto path emits CAPTURED);
+  // REMOVED when an admin soft-removes one. Both fire post-commit from the web
+  // Server Actions.
+  ADDED: 'party_domain_added',
+  REMOVED: 'party_domain_removed',
 } as const;
 
 export interface PartyDomainServerEventMap {
@@ -15,6 +21,15 @@ export interface PartyDomainServerEventMap {
   };
   [PARTY_DOMAIN_SERVER_EVENTS.CAPTURE_SKIPPED]: {
     reason: 'blocked_domain' | 'already_claimed';
+    distinct_id: string;
+  };
+  [PARTY_DOMAIN_SERVER_EVENTS.ADDED]: {
+    party_type: 'company' | 'agency';
+    source: 'admin_added';
+    distinct_id: string;
+  };
+  [PARTY_DOMAIN_SERVER_EVENTS.REMOVED]: {
+    party_type: 'company' | 'agency';
     distinct_id: string;
   };
 }

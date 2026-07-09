@@ -236,4 +236,21 @@ export const usersRepository = {
   touch: async (id: string): Promise<void> => {
     await db.update(users).set({ lastActiveAt: new Date() }).where(eq(users.id, id));
   },
+
+  /**
+   * Batch NAME hydration (BAL-347) — projects id/firstName/lastName ONLY for a set
+   * of user ids (never email/workosId/PII into a client-bound DTO). Excludes
+   * soft-deleted users; returns `[]` for empty input (no query). Ordering is
+   * unspecified — callers key by id. Batch-shaped for reuse (today: the join-mode
+   * last-changed-by actor, a batch of one).
+   */
+  findNamesByIds: async (
+    ids: string[]
+  ): Promise<Array<{ id: string; firstName: string | null; lastName: string | null }>> => {
+    if (ids.length === 0) return [];
+    return db
+      .select({ id: users.id, firstName: users.firstName, lastName: users.lastName })
+      .from(users)
+      .where(and(inArray(users.id, ids), isNull(users.deletedAt)));
+  },
 };

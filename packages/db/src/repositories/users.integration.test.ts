@@ -234,3 +234,37 @@ describe('usersRepository.createWithWorkspace domain capture (BAL-344)', () => {
     await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([]);
   });
 });
+
+describe('usersRepository.findNamesByIds', () => {
+  it('projects id/firstName/lastName only for the requested subset', async () => {
+    const ada = await userFactory({ firstName: 'Ada', lastName: 'Lovelace' });
+    const grace = await userFactory({ firstName: 'Grace', lastName: 'Hopper' });
+    const unrequested = await userFactory({ firstName: 'Not', lastName: 'Wanted' });
+
+    const rows = await usersRepository.findNamesByIds([ada.id, grace.id]);
+
+    expect(rows).toHaveLength(2);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(ada.id)).toEqual({ id: ada.id, firstName: 'Ada', lastName: 'Lovelace' });
+    expect(byId.get(grace.id)).toEqual({ id: grace.id, firstName: 'Grace', lastName: 'Hopper' });
+    expect(byId.has(unrequested.id)).toBe(false);
+
+    // The projection carries NO PII columns (email / workosId).
+    const [firstRow] = rows;
+    if (firstRow === undefined) throw new Error('expected a row');
+    expect(Object.keys(firstRow).sort()).toEqual(['firstName', 'id', 'lastName']);
+  });
+
+  it('excludes soft-deleted users', async () => {
+    const live = await userFactory();
+    const deleted = await userFactory();
+    await usersRepository.softDelete(deleted.id);
+
+    const rows = await usersRepository.findNamesByIds([live.id, deleted.id]);
+    expect(rows.map((r) => r.id)).toEqual([live.id]);
+  });
+
+  it('returns an empty array for empty input (no query)', async () => {
+    await expect(usersRepository.findNamesByIds([])).resolves.toEqual([]);
+  });
+});

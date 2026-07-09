@@ -1,7 +1,9 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../client';
 import {
   partyJoinRequests,
+  users,
   type PartyJoinRequest,
   type PartyJoinRequestStatus,
   type PartyType,
@@ -182,6 +184,30 @@ export interface ResolveRequestInput {
   actorUserId: string;
 }
 
+/**
+ * A pending join-request row hydrated with the requester's name + email (BAL-347
+ * admin queue). `email` is load-bearing (the admin identifies the requester by it);
+ * only requester fields are projected — no resolver, no other PII.
+ */
+export interface PendingJoinRequestRow {
+  id: string;
+  createdAt: Date;
+  requester: { id: string; firstName: string | null; lastName: string | null; email: string };
+}
+
+/**
+ * A resolved (approved/declined/withdrawn) join-request row for the collapsed
+ * history disclosure (BAL-347). `resolver` is the admin who resolved it (null for a
+ * self-withdraw, where `resolved_by_user_id` is unset); only names are projected.
+ */
+export interface ResolvedJoinRequestRow {
+  id: string;
+  status: 'approved' | 'declined' | 'withdrawn';
+  resolvedAt: Date | null;
+  requester: { firstName: string | null; lastName: string | null; email: string };
+  resolver: { firstName: string | null; lastName: string | null } | null;
+}
+
 // ── Public repository ─────────────────────────────────────────────────────
 
 export const partyJoinRequestsRepository = {
@@ -332,5 +358,95 @@ export const partyJoinRequestsRepository = {
     exec?: DbExecutor
   ): Promise<PartyJoinRequest | undefined> => {
     return findPendingRow(exec ?? db, partyType, partyId, userId);
+  },
+
+  /**
+   * Pending requests for a party, hydrated with the requester (name + email),
+   * oldest-first (BAL-347 admin queue). `party_join_requests` has NO relations block
+   * so this uses an explicit INNER JOIN on `users` with a PROJECTED select (no PII
+   * beyond the load-bearing email). Excludes soft-deleted / non-pending rows.
+   */
+  listPendingByParty: async (
+    partyType: PartyType,
+    partyId: string
+  ): Promise<PendingJoinRequestRow[]> => {
+    return db
+      .select({
+        id: partyJoinRequests.id,
+        createdAt: partyJoinRequests.createdAt,
+        requester: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+        },
+      })
+      .from(partyJoinRequests)
+      .innerJoin(users, eq(users.id, partyJoinRequests.userId))
+      .where(
+        and(
+          eq(partyJoinRequests.partyType, partyType),
+          eq(partyJoinRequests.partyId, partyId),
+          eq(partyJoinRequests.status, 'pending'),
+          isNull(partyJoinRequests.deletedAt)
+        )
+      )
+      .orderBy(asc(partyJoinRequests.createdAt));
+  },
+
+  /**
+   * Resolved (approved/declined/withdrawn) requests for a party, most-recently
+   * resolved first (BAL-347 collapsed history). INNER JOIN the requester + LEFT JOIN
+   * an ALIASED `users` for the resolver (null for a self-withdraw). Projected columns
+   * only; `resolver` collapses to `null` when `resolved_by_user_id` is unset.
+   */
+  listResolvedByParty: async (
+    partyType: PartyType,
+    partyId: string,
+    limit = 20
+  ): Promise<ResolvedJoinRequestRow[]> => {
+    const resolver = alias(users, 'resolver');
+    const rows = await db
+      .select({
+        id: partyJoinRequests.id,
+        status: partyJoinRequests.status,
+        resolvedAt: partyJoinRequests.resolvedAt,
+        requesterFirstName: users.firstName,
+        requesterLastName: users.lastName,
+        requesterEmail: users.email,
+        resolverId: resolver.id,
+        resolverFirstName: resolver.firstName,
+        resolverLastName: resolver.lastName,
+      })
+      .from(partyJoinRequests)
+      .innerJoin(users, eq(users.id, partyJoinRequests.userId))
+      .leftJoin(resolver, eq(resolver.id, partyJoinRequests.resolvedByUserId))
+      .where(
+        and(
+          eq(partyJoinRequests.partyType, partyType),
+          eq(partyJoinRequests.partyId, partyId),
+          inArray(partyJoinRequests.status, ['approved', 'declined', 'withdrawn']),
+          isNull(partyJoinRequests.deletedAt)
+        )
+      )
+      // resolvedAt is always set for a resolved row; NULLS LAST is defence-in-depth.
+      .orderBy(sql`${partyJoinRequests.resolvedAt} DESC NULLS LAST`)
+      .limit(limit);
+
+    return rows.map((row) => ({
+      id: row.id,
+      // The WHERE clause guarantees a non-pending status; narrow for the DTO.
+      status: row.status as 'approved' | 'declined' | 'withdrawn',
+      resolvedAt: row.resolvedAt,
+      requester: {
+        firstName: row.requesterFirstName,
+        lastName: row.requesterLastName,
+        email: row.requesterEmail,
+      },
+      resolver:
+        row.resolverId === null
+          ? null
+          : { firstName: row.resolverFirstName, lastName: row.resolverLastName },
+    }));
   },
 };

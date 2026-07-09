@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { auditEvents, type AuditEvent } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
@@ -60,5 +60,32 @@ export const auditEventsRepository = {
         )
       );
     return row?.count ?? 0;
+  },
+
+  /**
+   * The MOST-RECENT audit row for one entity + action (BAL-347) — powers the
+   * "Last changed by {Name} · {date}" header on the join-mode card. Returns just the
+   * actor id + timestamp (the caller batch-hydrates the name), or `undefined` when
+   * the action has never occurred. Rides `audit_events_entity_idx` (entity_type,
+   * entity_id) with the `action` filter + a `created_at DESC LIMIT 1`.
+   */
+  findLatestByEntityAndAction: async (input: {
+    entityType: string;
+    entityId: string;
+    action: string;
+  }): Promise<{ actorUserId: string | null; createdAt: Date } | undefined> => {
+    const [row] = await db
+      .select({ actorUserId: auditEvents.actorUserId, createdAt: auditEvents.createdAt })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityType, input.entityType),
+          eq(auditEvents.entityId, input.entityId),
+          eq(auditEvents.action, input.action)
+        )
+      )
+      .orderBy(desc(auditEvents.createdAt))
+      .limit(1);
+    return row;
   },
 };

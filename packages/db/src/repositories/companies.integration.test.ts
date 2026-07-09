@@ -1,9 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
-import { companies, companyMembers } from '../schema';
+import { companies, companyMembers, auditEvents } from '../schema';
 import { userFactory, companyFactory, companyMemberFactory } from '../test/factories';
 import { companiesRepository } from './companies';
+
+/** company.join_mode_changed audit rows for a company id (test-local helper). */
+async function joinModeAuditsFor(companyId: string): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'company'),
+        eq(auditEvents.entityId, companyId),
+        eq(auditEvents.action, 'company.join_mode_changed')
+      )
+    );
+}
 
 /** Inserts a bare company row and returns its id. */
 async function seedCompany(): Promise<string> {
@@ -185,5 +200,43 @@ describe('companiesRepository.updateName', () => {
 
     const otherAfter = await companiesRepository.findById(other.id);
     expect(otherAfter?.name).toBe('Bystander Co');
+  });
+});
+
+// ── companiesRepository.setDomainJoinMode (BAL-347 join-mode) ────────────
+
+describe('companiesRepository.setDomainJoinMode', () => {
+  it('changes the mode, bumps updatedAt, and writes a company.join_mode_changed audit', async () => {
+    const admin = await userFactory();
+    const company = await companyFactory({ domainJoinMode: 'auto' });
+
+    const result = await companiesRepository.setDomainJoinMode(company.id, 'request', admin.id);
+
+    expect(result).toEqual({ previous: 'auto', next: 'request', changed: true });
+
+    const reread = await companiesRepository.findById(company.id);
+    expect(reread?.domainJoinMode).toBe('request');
+
+    const audits = await joinModeAuditsFor(company.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(admin.id);
+    expect(audits[0]?.metadata).toEqual({ from: 'auto', to: 'request' });
+  });
+
+  it('is a no-op when the mode is unchanged — no write, no audit', async () => {
+    const admin = await userFactory();
+    const company = await companyFactory({ domainJoinMode: 'request' });
+
+    const result = await companiesRepository.setDomainJoinMode(company.id, 'request', admin.id);
+
+    expect(result).toEqual({ previous: 'request', next: 'request', changed: false });
+    await expect(joinModeAuditsFor(company.id)).resolves.toHaveLength(0);
+  });
+
+  it('throws for an unknown company id', async () => {
+    const admin = await userFactory();
+    await expect(
+      companiesRepository.setDomainJoinMode(randomUUID(), 'off', admin.id)
+    ).rejects.toThrow(/Company not found/);
   });
 });
