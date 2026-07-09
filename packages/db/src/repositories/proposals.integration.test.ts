@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { proposals, proposalChangeRequests } from '../schema';
-import { proposalFactory, requestExpertRelationshipFactory, userFactory } from '../test/factories';
+import { proposals, proposalChangeRequests, projectRequests } from '../schema';
+import {
+  proposalFactory,
+  projectRequestFactory,
+  requestExpertRelationshipFactory,
+  userFactory,
+} from '../test/factories';
 import {
   proposalsRepository,
   InvalidProposalTransitionError,
@@ -587,6 +592,58 @@ describe('proposalsRepository.resubmit', () => {
     expect(await proposalMilestonesRepository.listByProposal(v1.id)).toHaveLength(0);
     expect(await proposalPaymentInstallmentsRepository.listByProposal(v1.id)).toHaveLength(0);
   });
+
+  it("stamps v2 with the request's CURRENT baloFeeBps, not the prior proposal's", async () => {
+    // Seed a request at 3000 bps; hang a relationship off it.
+    const request = await projectRequestFactory({ baloFeeBps: 3000 });
+    if (request.expertProfileId === null) {
+      throw new Error('seeded direct request must have an expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { status: 'proposal_requested' },
+    });
+    const v1 = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
+    });
+    expect(v1.baloFeeBps).toBe(3000);
+
+    const client = await userFactory();
+    await proposalsRepository.requestChanges({
+      proposalId: v1.id,
+      requestedByUserId: client.id,
+      note: 'Revise pricing.',
+    });
+
+    // The request fee changes AFTER v1 — resubmit must pick up the request's
+    // CURRENT value (4000), NOT copy v1's stamped 3000.
+    await db
+      .update(projectRequests)
+      .set({ baloFeeBps: 4000 })
+      .where(eq(projectRequests.id, request.id));
+
+    const v2 = await proposalsRepository.resubmit({
+      relationshipId: relationship.id,
+      overview: '<p>v2.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 2000,
+      milestones: [{ title: 'Build', valueCents: 2000 }],
+      installments: [{ label: 'Upfront', pct: 100 }],
+    });
+
+    expect(v2.baloFeeBps).toBe(4000);
+
+    // v1's stamped fee is untouched by the resubmit.
+    const [oldRaw] = await db.select().from(proposals).where(eq(proposals.id, v1.id));
+    expect(oldRaw?.baloFeeBps).toBe(3000);
+  });
 });
 
 describe('proposalsRepository list / find', () => {
@@ -678,6 +735,30 @@ describe('proposals composite-FK backstop', () => {
   });
 });
 
+describe('proposals balo_fee_bps CHECK constraint (proposal_balo_fee_bps_range)', () => {
+  it('rejects a fee below the range (-1) with a 23514', async () => {
+    await expect(proposalFactory({ values: { baloFeeBps: -1 } })).rejects.toMatchObject({
+      code: '23514',
+    });
+  });
+
+  it('rejects a fee above the range (10001) with a 23514', async () => {
+    await expect(proposalFactory({ values: { baloFeeBps: 10_001 } })).rejects.toMatchObject({
+      code: '23514',
+    });
+  });
+
+  it('accepts the lower bound (0)', async () => {
+    const { proposal } = await proposalFactory({ values: { baloFeeBps: 0 } });
+    expect(proposal.baloFeeBps).toBe(0);
+  });
+
+  it('accepts the upper bound (10000)', async () => {
+    const { proposal } = await proposalFactory({ values: { baloFeeBps: 10_000 } });
+    expect(proposal.baloFeeBps).toBe(10_000);
+  });
+});
+
 describe('proposalsRepository.createDraft', () => {
   it('inserts the FIRST draft (draft, v1, current) WITHOUT advancing the relationship', async () => {
     const { relationship, projectRequestId, expertProfileId } =
@@ -732,6 +813,43 @@ describe('proposalsRepository.createDraft', () => {
     expect(draft.depositCents).toBe(50000);
     expect(draft.rateCents).toBe(20000);
     expect(draft.cadence).toBe('fortnightly');
+  });
+
+  it('snapshots the request baloFeeBps onto the draft (default 2500)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>Default-fee draft.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+
+    expect(draft.baloFeeBps).toBe(2500);
+  });
+
+  it('snapshots a NON-default request baloFeeBps onto the draft (proves it reads the request)', async () => {
+    // Seed a request carrying a non-default fee, then hang a relationship off it.
+    const request = await projectRequestFactory({ baloFeeBps: 3000 });
+    if (request.expertProfileId === null) {
+      throw new Error('seeded direct request must have an expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { status: 'proposal_requested' },
+    });
+
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>Non-default-fee draft.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+
+    expect(draft.baloFeeBps).toBe(3000);
   });
 
   it('throws a 23505 (one-current) when a current proposal already exists for the relationship', async () => {
@@ -813,6 +931,42 @@ describe('proposalsRepository.updateDraft', () => {
     expect(updated.rateCents).toBe(25000);
     expect(updated.cadence).toBe('monthly');
     expect(updated.updatedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
+  });
+
+  it('leaves baloFeeBps unchanged (fee is immutable within a version)', async () => {
+    // Seed a request with a non-default fee so the snapshot is observable.
+    const request = await projectRequestFactory({ baloFeeBps: 3000 });
+    if (request.expertProfileId === null) {
+      throw new Error('seeded direct request must have an expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { status: 'proposal_requested' },
+    });
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>v0.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+    expect(draft.baloFeeBps).toBe(3000);
+
+    // Mutate the request's fee AFTER the draft snapshot — updateDraft must NOT
+    // re-read or change the proposal's stamped fee.
+    await db
+      .update(projectRequests)
+      .set({ baloFeeBps: 4000 })
+      .where(eq(projectRequests.id, request.id));
+
+    const updated = await proposalsRepository.updateDraft({
+      proposalId: draft.id,
+      overview: '<p>Revised.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 5000,
+    });
+
+    expect(updated.baloFeeBps).toBe(3000);
   });
 
   it('rejects (ProposalNotDraftError) a non-draft (submitted) row and leaves it untouched', async () => {

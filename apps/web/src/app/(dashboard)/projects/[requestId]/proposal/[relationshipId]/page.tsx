@@ -31,6 +31,10 @@ import {
 import { ProposalReview } from '@/components/balo/project-request/proposal/proposal-review';
 import { SubmittedView } from '@/components/balo/project-request/proposal/submitted-view';
 import type { ProposalReviewDoc } from '@/components/balo/project-request/proposal/proposal-review-types';
+import {
+  hydrateReviewDoc,
+  type ProposalAudience,
+} from '@/lib/project-request/proposal-audience-view';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 
 interface ProposalComposerPageProps {
@@ -63,31 +67,6 @@ export const metadata: Metadata = {
 function firstNameOf(firstName: string | null, fallback: string): string {
   const trimmed = (firstName ?? '').trim();
   return trimmed.length > 0 ? trimmed : fallback;
-}
-
-/** Full display name from first/last, or the given fallback when both are blank. */
-function fullNameOf(
-  firstName: string | null | undefined,
-  lastName: string | null | undefined,
-  fallback: string
-): string {
-  const full = [firstName, lastName]
-    .map((part) => (part ?? '').trim())
-    .filter((part) => part.length > 0)
-    .join(' ');
-  return full.length > 0 ? full : fallback;
-}
-
-/** 1-2 char avatar fallback from first/last initials, or 'EX' when both blank. */
-function initialsOf(
-  firstName: string | null | undefined,
-  lastName: string | null | undefined
-): string {
-  const initials = [firstName, lastName]
-    .map((part) => (part ?? '').trim().charAt(0).toUpperCase())
-    .filter((char) => char.length > 0)
-    .join('');
-  return initials.length > 0 ? initials : 'EX';
 }
 
 function documentToView(document: ProposalDocument): ProposalDocumentView {
@@ -157,69 +136,16 @@ function hydrateDraftState(
 }
 
 /**
- * Map a persisted proposal (+ its children) into the serialisable, presentation-
- * only {@link ProposalReviewDoc} the read/submitted views render. Money stays in
- * integer cents; no dates cross the boundary (the review shows none).
- *
- * Expert identity is derived from the only fields `findByIdWithRelations`
- * hydrates on each relationship: `expertProfile.user.{firstName,lastName}`.
- * `company`, `headline`, and `rating` are NOT on that graph, so they degrade to
- * `null` — the read components hide those rows when null (no invented fields).
- */
-function hydrateReviewDoc(
-  proposal: Proposal,
-  milestones: ProposalMilestone[],
-  installments: ProposalPaymentInstallment[],
-  documents: ProposalDocument[],
-  relationship: Relationship
-): ProposalReviewDoc {
-  const expertUser = relationship.expertProfile.user;
-  return {
-    id: proposal.id,
-    relationshipId: proposal.relationshipId,
-    version: proposal.version,
-    status: proposal.status,
-    pricingMethod: proposal.pricingMethod,
-    overviewHtml: proposal.overview,
-    exclusionsHtml: proposal.exclusions,
-    priceCents: proposal.priceCents,
-    currency: proposal.currency,
-    timeframeWeeks: proposal.timeframeWeeks,
-    depositCents: proposal.depositCents,
-    rateCents: proposal.rateCents,
-    cadence: proposal.cadence,
-    milestones: milestones.map((m) => ({
-      id: m.id,
-      title: m.title,
-      descriptionHtml: m.descriptionHtml,
-      acceptanceCriteria: m.acceptanceCriteria,
-      valueCents: m.valueCents,
-    })),
-    installments: installments.map((i) => ({ id: i.id, label: i.label, pct: i.pct })),
-    attachments: documents.map((d) => ({
-      id: d.id,
-      fileName: d.fileName,
-      sizeBytes: d.sizeBytes,
-      kind: d.kind,
-    })),
-    expert: {
-      name: fullNameOf(expertUser.firstName, expertUser.lastName, 'Your expert'),
-      initials: initialsOf(expertUser.firstName, expertUser.lastName),
-      // Not hydrated by `findByIdWithRelations` — degrade gracefully (the read
-      // components omit these rows when null). Do NOT invent fields.
-      company: null,
-      headline: null,
-      rating: null,
-    },
-  };
-}
-
-/**
  * Load a relationship's current proposal (+ children, in parallel) and hydrate it
- * into a {@link ProposalReviewDoc}. Returns `null` when the relationship has no
- * current proposal, or its status isn't reviewable (e.g. `draft`/`withdrawn`).
+ * into an audience-resolved {@link ProposalReviewDoc} (BAL-357 — money is resolved
+ * for `audience`: raw for expert/admin-base, `applyBaloFee`'d for client). Returns
+ * `null` when the relationship has no current proposal, or its status isn't
+ * reviewable (e.g. `draft`/`withdrawn`).
  */
-async function loadReviewDoc(relationship: Relationship): Promise<ProposalReviewDoc | null> {
+async function loadReviewDoc(
+  relationship: Relationship,
+  audience: ProposalAudience
+): Promise<ProposalReviewDoc | null> {
   const proposal = await proposalsRepository.findCurrentByRelationship(relationship.id);
   if (proposal === undefined || !REVIEWABLE_PROPOSAL_STATUSES.has(proposal.status)) {
     return null;
@@ -229,7 +155,7 @@ async function loadReviewDoc(relationship: Relationship): Promise<ProposalReview
     proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
     proposalDocumentsRepository.listByProposal(proposal.id),
   ]);
-  return hydrateReviewDoc(proposal, milestones, installments, documents, relationship);
+  return hydrateReviewDoc(proposal, milestones, installments, documents, relationship, audience);
 }
 
 /**
@@ -424,7 +350,7 @@ async function renderExpertSurface(
   }
   // Submitted view: read-only "awaiting the client" once a proposal exists.
   if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
-    const doc = await loadReviewDoc(relationship);
+    const doc = await loadReviewDoc(relationship, 'expert');
     if (doc !== null) {
       return (
         <ReviewShell requestId={requestId} title={request.title}>
@@ -462,7 +388,7 @@ async function renderClientReview(
     return null;
   }
   // Every reviewable proposal on the request powers the switcher.
-  const docs = await Promise.all(request.relationships.map((r) => loadReviewDoc(r)));
+  const docs = await Promise.all(request.relationships.map((r) => loadReviewDoc(r, 'client')));
   const reviewableDocs = docs.filter((d): d is ProposalReviewDoc => d !== null);
   if (reviewableDocs.length > 0) {
     return (
@@ -495,7 +421,7 @@ async function renderAdminSurface(
   if (ctx.lens !== 'admin' || !SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
     return null;
   }
-  const doc = await loadReviewDoc(relationship);
+  const doc = await loadReviewDoc(relationship, 'admin');
   if (doc !== null) {
     return (
       <ReviewShell requestId={requestId} title={request.title}>

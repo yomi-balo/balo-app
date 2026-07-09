@@ -213,7 +213,7 @@ describe('AcceptConfirmModal', () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
-  it('on confirm calls acceptProposalAction with the doc identifiers, fires analytics, toasts, routes', async () => {
+  it('on confirm calls acceptProposalAction with the doc identifiers, fires the transition analytics, toasts, routes', async () => {
     const user = userEvent.setup();
     acceptProposalAction.mockResolvedValue(SUCCESS);
     const { onOpenChange } = renderModal();
@@ -228,12 +228,9 @@ describe('AcceptConfirmModal', () => {
         proposalId: PROPOSAL_ID,
       })
     );
-    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED, {
-      request_id: REQUEST_ID,
-      relationship_id: RELATIONSHIP_ID,
-      expert_id: 'exp-7',
-      proposal_id: PROPOSAL_ID,
-    });
+    // BAL-357: PROJECT_PROPOSAL_ACCEPTED is emitted SERVER-SIDE by the action — the
+    // client must NEVER fire it (the fee + client price would leak to the browser).
+    expect(mockTrack).not.toHaveBeenCalledWith('project_proposal_accepted', expect.anything());
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {
       request_id: REQUEST_ID,
       from: 'proposal_submitted',
@@ -253,12 +250,7 @@ describe('AcceptConfirmModal', () => {
     await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: /Confirm acceptance/ }));
 
-    await waitFor(() =>
-      expect(mockTrack).toHaveBeenCalledWith(
-        PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED,
-        expect.anything()
-      )
-    );
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Proposal accepted'));
     expect(mockTrack).not.toHaveBeenCalledWith(
       PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED,
       expect.anything()
@@ -328,8 +320,9 @@ describe('AcceptConfirmModal', () => {
         relationship_id: RELATIONSHIP_ID,
       })
     );
+    // No success events on a coherence failure (the accepted event is server-only).
     expect(mockTrack).not.toHaveBeenCalledWith(
-      PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED,
+      PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED,
       expect.anything()
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);

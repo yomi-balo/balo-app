@@ -1,9 +1,10 @@
 'use client';
 
-import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
+import { PayoutAssuranceNote } from './payout-assurance-note';
 import type { ProposalDraftState, ReadinessResult } from './proposal-composer-state';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -28,6 +29,8 @@ interface ProposalSummaryCardProps {
 interface SummaryRow {
   label: string;
   value: string;
+  /** Attach the "100% yours" payout-assurance pill (the total/estimate row). */
+  pill?: boolean;
 }
 
 const SAVE_LABEL: Record<SaveStatus, string | null> = {
@@ -62,6 +65,7 @@ export function ProposalSummaryCard({
     {
       label: isFixed ? 'Total' : 'Estimate',
       value: formatWholeCurrency(totalCents, state.currency),
+      pill: true,
     },
     { label: 'Milestones', value: String(state.milestones.length) },
     {
@@ -83,11 +87,21 @@ export function ProposalSummaryCard({
       <dl className="mt-3 space-y-2.5">
         {rows.map((row) => (
           <div key={row.label} className="flex items-center justify-between gap-3 text-[13px]">
-            <dt className="text-muted-foreground">{row.label}</dt>
+            <dt className="text-muted-foreground flex items-center gap-1.5">
+              {row.label}
+              {row.pill && (
+                <span className="border-success/30 bg-success/10 text-success inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold">
+                  <ShieldCheck className="h-2.5 w-2.5" aria-hidden="true" />
+                  100% yours
+                </span>
+              )}
+            </dt>
             <dd className="text-foreground font-medium tabular-nums">{row.value}</dd>
           </div>
         ))}
       </dl>
+
+      <PayoutAssuranceNote pricingMethod={state.pricingMethod} />
 
       <div
         className={cn(

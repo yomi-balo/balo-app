@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 import { withAuth } from '@/lib/auth/with-auth';
 import { projectRequestsRepository, referenceDataRepository } from '@balo/db';
+import { DEFAULT_BALO_FEE_BPS } from '@balo/shared/pricing';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
@@ -79,6 +80,9 @@ export const submitProjectRequestAction = withAuth(
           budgetMinCents: input.budgetMinCents,
           budgetMaxCents: input.budgetMaxCents,
           budgetCurrency: 'aud',
+          // Balo service margin, server-fixed at request creation (like
+          // budgetCurrency). Proposals snapshot this at create/resubmit.
+          baloFeeBps: DEFAULT_BALO_FEE_BPS,
           timeline: input.timeline,
         },
         tagIds: input.tagIds,

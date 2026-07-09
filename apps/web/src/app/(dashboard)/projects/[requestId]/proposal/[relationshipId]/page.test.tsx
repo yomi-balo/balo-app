@@ -216,6 +216,7 @@ function draft(overrides: Partial<Proposal> = {}): Proposal {
     exclusions: null,
     priceCents: 1_200_000,
     currency: 'aud',
+    baloFeeBps: 2500,
     timeframeWeeks: 6,
     depositCents: null,
     rateCents: null,
@@ -627,7 +628,13 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
       clientCompanyName: 'Northwind Industrial',
       clientFirstName: 'Dana',
     });
-    expect((props.proposals as unknown[]).length).toBe(2);
+    const proposals = props.proposals as Array<{ priceCents: number; adminPricing?: unknown }>;
+    expect(proposals.length).toBe(2);
+    // audience='client' → hydrateReviewDoc grosses up: 1_200_000 @ 2500 bps → 1_500_000.
+    const [firstDoc] = proposals;
+    expect(firstDoc?.priceCents).toBe(1_500_000);
+    // The fee/margin breakdown must NEVER reach the client audience.
+    expect(firstDoc?.adminPricing).toBeUndefined();
   });
 
   it('filters out relationships with no reviewable current proposal', async () => {
@@ -703,6 +710,12 @@ describe('ProposalSurfacePage (RSC) — admin observer branch', () => {
     expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
     const props = mockSubmitted.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(props).toMatchObject({ lens: 'admin', clientName: 'Dana' });
+    // audience='admin' → the fee/margin breakdown is attached and populated.
+    const doc = props.doc as { adminPricing?: { clientPriceCents: number; marginCents: number } };
+    expect(doc.adminPricing).toBeDefined();
+    // 1_200_000 @ 2500 bps → client 1_500_000; margin = 1_500_000 − 1_200_000.
+    expect(doc.adminPricing?.clientPriceCents).toBe(1_500_000);
+    expect(doc.adminPricing?.marginCents).toBe(300_000);
   });
 
   it('redirects an admin viewing a relationship not yet at proposal_submitted', async () => {

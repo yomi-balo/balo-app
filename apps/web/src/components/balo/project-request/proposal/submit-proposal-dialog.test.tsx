@@ -86,7 +86,7 @@ describe('SubmitProposalDialog', () => {
     expect(screen.getByRole('button', { name: 'Keep editing' })).toBeInTheDocument();
   });
 
-  it('confirm calls submitProposalAction, fires both analytics, toasts, and routes', async () => {
+  it('confirm calls submitProposalAction, fires the client analytics, toasts, and routes', async () => {
     const user = userEvent.setup();
     submitProposalAction.mockResolvedValue(SUCCESS);
     const { onOpenChange } = renderDialog();
@@ -100,15 +100,9 @@ describe('SubmitProposalDialog', () => {
         proposalId: PROPOSAL_ID,
       })
     );
-    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED, {
-      request_id: REQUEST_ID,
-      relationship_id: RELATIONSHIP_ID,
-      expert_id: 'exp-1',
-      price_cents: 5_800_000,
-      currency: 'aud',
-      total_estimated_minutes: 0,
-      pricing_method: 'fixed',
-    });
+    // BAL-357: PROJECT_PROPOSAL_SUBMITTED is emitted SERVER-SIDE by the action — the
+    // client must NEVER fire it (the fee + client price would leak to the browser).
+    expect(mockTrack).not.toHaveBeenCalledWith('project_proposal_submitted', expect.anything());
     // BAL-294: the effort-estimated event fires once at submit with the server totals.
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {
       proposal_id: PROPOSAL_ID,
@@ -127,7 +121,7 @@ describe('SubmitProposalDialog', () => {
     expect(push).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
   });
 
-  it('threads T&M total_estimated_minutes + pricing_method into both submit-time events', async () => {
+  it('threads T&M total_estimated_minutes + pricing_method into the client effort event', async () => {
     const user = userEvent.setup();
     submitProposalAction.mockResolvedValue({
       ...SUCCESS,
@@ -144,22 +138,15 @@ describe('SubmitProposalDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Submit proposal' }));
 
     await waitFor(() =>
-      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED, {
-        request_id: REQUEST_ID,
-        relationship_id: RELATIONSHIP_ID,
-        expert_id: 'exp-1',
-        price_cents: 125_000,
-        currency: 'aud',
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {
+        proposal_id: PROPOSAL_ID,
+        milestone_count: 2,
         total_estimated_minutes: 300,
         pricing_method: 'tm',
       })
     );
-    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {
-      proposal_id: PROPOSAL_ID,
-      milestone_count: 2,
-      total_estimated_minutes: 300,
-      pricing_method: 'tm',
-    });
+    // The submitted event is server-emitted (BAL-357) — never fired client-side.
+    expect(mockTrack).not.toHaveBeenCalledWith('project_proposal_submitted', expect.anything());
   });
 
   it('does NOT fire the transition event when result.transitioned is false', async () => {
@@ -171,7 +158,7 @@ describe('SubmitProposalDialog', () => {
 
     await waitFor(() =>
       expect(mockTrack).toHaveBeenCalledWith(
-        PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED,
+        PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED,
         expect.anything()
       )
     );
@@ -243,8 +230,9 @@ describe('SubmitProposalDialog', () => {
     expect(mockToast.error).toHaveBeenCalledWith(
       "This proposal's pricing is incomplete or inconsistent. Refresh and re-check the pricing details before submitting."
     );
+    // No success events on a coherence failure (the submitted event is server-only).
     expect(mockTrack).not.toHaveBeenCalledWith(
-      PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED,
+      PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED,
       expect.anything()
     );
     // Stays open to retry (generic failure copy, not the stale string).

@@ -281,6 +281,13 @@
       "when": 1783524669833,
       "tag": "0039_conscious_scream",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1783563026741,
+      "tag": "0040_nervous_valkyrie",
+      "breakpoints": true
     }
   ]
 }

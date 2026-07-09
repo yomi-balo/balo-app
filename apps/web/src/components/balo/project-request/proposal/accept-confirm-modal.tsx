@@ -87,8 +87,9 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
 /**
  * The accept-confirm beat (A6.4 / BAL-289) — the CLIENT mirror of the expert's
  * submit dialog. Owns its pending + acknowledgement state, blocks Escape while in
- * flight. On confirm it calls `acceptProposalAction`, fires analytics on success
- * (plus the request transition when the aggregate advanced), toasts, then routes
+ * flight. On confirm it calls `acceptProposalAction` (which emits
+ * `PROJECT_PROPOSAL_ACCEPTED` server-side — BAL-357), fires the request-transition
+ * analytics on success when the aggregate advanced, toasts, then routes
  * to the request detail and refreshes. Stays open on a generic failure so the
  * client can retry; closes on the stale-UI path (nothing to retry).
  */
@@ -150,12 +151,10 @@ export function AcceptConfirmModal({
           return;
         }
 
-        track(PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED, {
-          request_id: requestId,
-          relationship_id: doc.relationshipId,
-          expert_id: result.expertProfileId,
-          proposal_id: doc.id,
-        });
+        // BAL-357: PROJECT_PROPOSAL_ACCEPTED is emitted SERVER-SIDE by the action so
+        // the Balo fee + client-charged price never transit the browser (a client
+        // could otherwise back out the expert's payout). The client only fires the
+        // non-sensitive events below.
         if (result.transitioned) {
           track(PROJECT_EVENTS.PROJECT_REQUEST_STATUS_TRANSITIONED, {
             request_id: requestId,

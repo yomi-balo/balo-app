@@ -76,6 +76,11 @@ export const projectRequests = pgTable(
     budgetMaxCents: integer('budget_max_cents'),
     budgetCurrency: text('budget_currency').notNull().default('aud'),
 
+    // Balo service margin (basis points; 2500 = 25%), stamped at request creation.
+    // Proposals snapshot this value at create/resubmit; the marked-up client
+    // figures are derived on read (applyBaloFee), never stored.
+    baloFeeBps: integer('balo_fee_bps').notNull().default(2500),
+
     // Optional free-text timeline — genuinely unstructured business input
     // ("Target go-live: end of Q3"), not a date. NULLABLE.
     timeline: text('timeline'),
@@ -133,6 +138,10 @@ export const projectRequests = pgTable(
       'project_requests_budget_range',
       sql`${table.budgetMinCents} IS NULL OR ${table.budgetMaxCents} IS NULL
           OR ${table.budgetMaxCents} >= ${table.budgetMinCents}`
+    ),
+    check(
+      'project_requests_balo_fee_bps_range',
+      sql`${table.baloFeeBps} >= 0 AND ${table.baloFeeBps} <= 10000`
     ),
   ]
 );
