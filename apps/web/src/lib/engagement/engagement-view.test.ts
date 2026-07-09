@@ -405,6 +405,27 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
     const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
     expect(view.reviewBanner).toBeNull();
   });
+
+  it('client review banner carries the accept + request-changes decision copy (D7)', () => {
+    const pending = makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW });
+    const clientDecision = mapEngagementToWorkspaceView(pending, ctxFor('client'), NOW).reviewBanner
+      ?.clientDecision;
+    expect(clientDecision).not.toBeNull();
+    expect(clientDecision?.acceptModalBody).toContain("can't be un-accepted");
+    expect(clientDecision?.acceptModalBody).toContain('Balo raises the final invoice');
+    expect(clientDecision?.requestChangesIntro).toContain('7-day review window restarts');
+    expect(clientDecision?.requestChangesFieldHint).toContain('Priya');
+  });
+
+  it('expert/admin review banners carry no client decision copy', () => {
+    const pending = makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW });
+    expect(
+      mapEngagementToWorkspaceView(pending, ctxFor('expert'), NOW).reviewBanner?.clientDecision
+    ).toBeNull();
+    expect(
+      mapEngagementToWorkspaceView(pending, ctxFor('admin'), NOW).reviewBanner?.clientDecision
+    ).toBeNull();
+  });
 });
 
 describe('mapEngagementToWorkspaceView — change-request banner', () => {
@@ -512,6 +533,41 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
     expect(adminZero.completedBanner?.body).not.toContain('0 milestones');
     // The count clause is omitted → the body ends right after the acceptance clause.
     expect(adminZero.completedBanner?.body).toMatch(/review window\.$/);
+  });
+
+  it('client completed banner carries the next-step CTAs; expert/admin do not (D7)', () => {
+    const completed = makeEngagement({
+      status: 'completed',
+      acceptanceMethod: 'client',
+      acceptedBy: { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' },
+      acceptedAt: new Date('2026-08-30T00:00:00.000Z'),
+    });
+    const clientCta = mapEngagementToWorkspaceView(completed, ctxFor('client'), NOW).completedBanner
+      ?.clientCta;
+    expect(clientCta?.nextProjectHref).toBe('/experts');
+    expect(clientCta?.messageHref).toMatch(/^\/projects\//);
+    expect(clientCta?.messagePersonLabel).toContain('Priya');
+
+    expect(
+      mapEngagementToWorkspaceView(completed, ctxFor('expert'), NOW).completedBanner?.clientCta
+    ).toBeNull();
+    expect(
+      mapEngagementToWorkspaceView(completed, ctxFor('admin'), NOW).completedBanner?.clientCta
+    ).toBeNull();
+  });
+
+  it('client Message CTA is omitted for a retainer (no source request)', () => {
+    const retainer = makeEngagement({
+      status: 'completed',
+      acceptanceMethod: 'auto',
+      acceptedBy: null,
+      acceptedAt: new Date('2026-08-30T00:00:00.000Z'),
+      projectRequest: null,
+    });
+    const clientCta = mapEngagementToWorkspaceView(retainer, ctxFor('client'), NOW).completedBanner
+      ?.clientCta;
+    expect(clientCta?.messageHref).toBeNull();
+    expect(clientCta?.nextProjectHref).toBe('/experts');
   });
 });
 

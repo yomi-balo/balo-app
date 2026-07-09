@@ -29,6 +29,12 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/withdraw-completion-request
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/cancel-engagement', () => ({
   cancelEngagementAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/accept-project', () => ({
+  acceptProjectAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/request-changes', () => ({
+  requestProjectChangesAction: vi.fn(),
+}));
 
 import { EngagementWorkspace } from './engagement-workspace';
 
@@ -185,6 +191,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
               daysRemaining: 5,
               autoInLabel: 'Auto-accepts in 5 days',
             },
+            clientDecision: null,
           },
         })}
       />
@@ -225,6 +232,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
             title: 'Project delivered',
             body: 'All 2 milestones delivered and the project accepted.',
             readyToInvoice: false,
+            clientCta: null,
           },
         })}
       />

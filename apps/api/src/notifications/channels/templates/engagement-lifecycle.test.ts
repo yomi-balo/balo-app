@@ -77,12 +77,14 @@ describe('CompletionRequestEmail (BAL-334, VARIANT 1)', () => {
 });
 
 describe('milestonePhrases (zero-milestone / singular correctness)', () => {
-  it('zero → no count, warm project-level framing', () => {
+  it('zero → no count, warm project-level framing (incl. BAL-338 clauses)', () => {
     expect(milestonePhrases(0)).toEqual({
       previewLead: 'marked the project complete',
       subtextLead: 'wrapped up the work',
       bodyClause: '',
       planValue: 'No milestones',
+      doneClause: '',
+      deliveredAlongClause: '',
     });
   });
 
@@ -91,15 +93,19 @@ describe('milestonePhrases (zero-milestone / singular correctness)', () => {
     expect(p.previewLead).toBe('delivered the milestone');
     expect(p.bodyClause).toBe('the milestone delivered');
     expect(p.planValue).toBe('1 milestone delivered');
+    expect(p.doneClause).toBe('The milestone is done');
+    expect(p.deliveredAlongClause).toBe('the milestone was delivered along the way');
     expect(JSON.stringify(p)).not.toContain('1 milestones');
     expect(JSON.stringify(p)).not.toContain('All 1 milestone');
   });
 
-  it('many → plural with the count', () => {
+  it('many → plural with the count (incl. BAL-338 clauses)', () => {
     const p = milestonePhrases(3);
     expect(p.previewLead).toBe('delivered all 3 milestones');
     expect(p.bodyClause).toBe('all 3 milestones delivered');
     expect(p.planValue).toBe('All 3 milestones delivered');
+    expect(p.doneClause).toBe('All 3 milestones are done');
+    expect(p.deliveredAlongClause).toBe('all 3 milestones were delivered along the way');
   });
 });
 

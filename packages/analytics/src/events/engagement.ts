@@ -25,7 +25,18 @@ export const ENGAGEMENT_SERVER_EVENTS = {
   COMPLETION_REQUESTED: 'engagement_completion_requested',
   COMPLETION_WITHDRAWN: 'engagement_completion_withdrawn',
   CANCELLED: 'engagement_cancelled',
+  // BAL-338 (D7) client review decision + auto-accept + reminder.
+  ACCEPTED: 'engagement_accepted',
+  CHANGES_REQUESTED: 'engagement_changes_requested',
+  REVIEW_REMINDER_SENT: 'engagement_review_reminder_sent',
 } as const;
+
+/**
+ * How a `pending_acceptance` engagement reached `completed` — the same discriminated
+ * union the D0 repository uses (`acceptCompletion({method})`). `'client'` = an explicit
+ * client accept; `'auto'` = the D7 auto-accept sweep after the review window elapsed.
+ */
+export type EngagementAcceptanceMethod = 'client' | 'auto';
 
 /**
  * BAL-334 (D4) CLIENT-side friction signal — the FIRST client-side engagement event.
@@ -140,6 +151,33 @@ export interface EngagementServerEventMap {
     milestones_completed: number;
     /** Total live milestones at cancel time. */
     milestones_total: number;
+    distinct_id: string;
+  };
+  // BAL-338 (D7): does the client actually review, how often does auto fire, why do
+  // reviews bounce? `acceptance_method` splits explicit-client vs auto-accept; on the
+  // auto path there is no acting user, so `distinct_id` is a stable system id.
+  [ENGAGEMENT_SERVER_EVENTS.ACCEPTED]: {
+    engagement_id: string;
+    /** `'client'` (explicit accept) | `'auto'` (sweep after the review window). */
+    acceptance_method: EngagementAcceptanceMethod;
+    /** Whole days from `completionRequestedAt` to acceptance, int ≥0. */
+    days_in_review: number;
+    /** nth completion request for this engagement (1, 2 after a change-request→re-request). */
+    review_cycle: number;
+    /** Acceptor UUID on `'client'`; a stable system id (e.g. `system:auto-accept`) on `'auto'`. */
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.CHANGES_REQUESTED]: {
+    engagement_id: string;
+    /** Whole days from `completionRequestedAt` to the change request, int ≥0. */
+    days_in_review: number;
+    /** nth completion request for this engagement (the review cycle being bounced). */
+    review_cycle: number;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.REVIEW_REMINDER_SENT]: {
+    engagement_id: string;
+    /** The reminder recipient (client-company owner) UUID. */
     distinct_id: string;
   };
 }

@@ -162,3 +162,89 @@ export interface EngagementCancelledPayload {
   cancelledOn: string; // "9 Jul 2026" (pre-formatted, UTC)
   reason: string; // verbatim cancellation reason (email body block)
 }
+
+// BAL-338 (D7) client accepted the project (pending_acceptance → completed, method
+// 'client'). The CLIENT explicitly accepted — fans out to the delivering EXPERT
+// (recipient:'expert' via `expertProfileId`; email + in-app — congratulations, Balo
+// handles the final invoice) and the Balo ADMINS (recipient:'admin_users' fan-out;
+// email + in-app — THE MONEY TRIGGER: "Ready to invoice: final installment"). No client
+// recipient (they just acted). `correlationId = `${engagementId}:accepted`` — accept is
+// a one-shot terminal transition, so a single deterministic key deduplicates retries.
+// Copy uses BAL-329 conventions (RETROSPECTIVE names the PERSON "@ company" first
+// mention). Dates pre-formatted UTC.
+export interface EngagementAcceptedPayload {
+  correlationId: string; // `${engagementId}:accepted`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert' (+ admin fan-out)
+  actorClientLabel: string; // {actorClient} — retrospective person ("Dana @ Northwind Industrial")
+  projectTitle: string; // {title} — subject + body
+  acceptedOn: string; // "11 Jul 2026" (pre-formatted, UTC)
+  milestonesTotal: number; // {n} — total live milestones
+}
+
+// BAL-338 (D7) client requested changes instead of accepting (pending_acceptance →
+// active). Fans out to the delivering EXPERT (recipient:'expert' via `expertProfileId`;
+// email + in-app — the client's note verbatim + "the {days}-day review window restarts
+// when you re-request") and the Balo ADMINS (recipient:'admin_users' fan-out; in-app
+// only). `correlationId = `${engagementId}:changes_requested:${changeRequestedAtMs}``
+// so a subsequent review cycle legitimately re-notifies while a dispatcher retry of the
+// same request is deduped by jobId. Copy uses BAL-329 conventions (RETROSPECTIVE names
+// the PERSON "@ company" first mention).
+export interface EngagementChangesRequestedPayload {
+  correlationId: string; // `${engagementId}:changes_requested:${changeRequestedAtMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert' (+ admin fan-out)
+  actorClientLabel: string; // {actorClient} — retrospective person ("Dana @ Northwind Industrial")
+  projectTitle: string; // {title} — subject + body + admin in-app body
+  note: string; // the client's change note, verbatim — email body
+  reviewDays: number; // {days} = AUTO_ACCEPT_DAYS — "the {days}-day review window restarts"
+  reviewCycle: number; // {n} — admin in-app body ("review cycle {n}")
+}
+
+// BAL-338 (D7) auto-accept: the review window elapsed with no client decision, so the
+// D7 sweep closed the project out as delivered (pending_acceptance → completed, method
+// 'auto', `accepted_by` NULL). SERVER-ONLY (published from the API sweep, never the web
+// route). Fans out to the CLIENT company owner (recipient:'client' via `recipientId`;
+// email = VARIANT 3 `AutoAcceptedEmail` verbatim + in-app), the delivering EXPERT
+// (recipient:'expert' via `expertProfileId`; email + in-app), and the Balo ADMINS
+// (recipient:'admin_users' fan-out; email + in-app — the money trigger, "accepted
+// automatically ({days}-day window)"). `correlationId = `${engagementId}:auto_accepted``
+// — one-shot terminal. `recipientId` absent for a retainer / owner-miss (the client
+// rule skips; expert + admins still fire). Copy uses BAL-329 conventions (PROSPECTIVE
+// names the PARTY). Dates pre-formatted UTC.
+export interface EngagementAutoAcceptedPayload {
+  correlationId: string; // `${engagementId}:auto_accepted`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  recipientId?: string; // client company owner user id → recipient:'client'; absent → client rule skips
+  expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert' (+ admin fan-out)
+  clientCompanyName: string; // {Client} — prospective party (email/in-app body)
+  expertPartyLabel: string; // {Expert} — prospective party (email subject/body)
+  projectTitle: string; // {title} — subject + summary + in-app body
+  milestonesTotal: number; // {m} — total live milestones (email summary)
+  requestedDate: string; // "4 Jul" (pre-formatted, UTC) — when completion was requested
+  autoDate: string; // "11 Jul" (pre-formatted, UTC) — the auto-accept date
+  reviewDays: number; // AUTO_ACCEPT_DAYS — the review window length
+}
+
+// BAL-338 (D7) T-2 review reminder: a `pending_acceptance` engagement nears its
+// auto-accept date and the client hasn't decided — one friendly nudge. SERVER-ONLY
+// (published from the API reminder sweep). Targets the CLIENT company owner
+// (recipient:'client' via `recipientId`; email = VARIANT 2 `ReviewReminderEmail`
+// verbatim + in-app). `correlationId =
+// `${engagementId}:review_reminder:${completionRequestedAtMs}`` — the ticket's stated
+// idempotency key (engagement id + request timestamp): the daily sweep matching the same
+// engagement on both T-2 and T-1 mints the SAME key → one nudge; a genuine re-request
+// (fresh `completionRequestedAt`) re-reminds. `recipientId` absent → no-op
+// (retainer/no-owner). Copy uses BAL-329 conventions. Dates pre-formatted UTC.
+export interface EngagementReviewReminderPayload {
+  correlationId: string; // `${engagementId}:review_reminder:${completionRequestedAtMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  recipientId?: string; // client company owner user id → recipient:'client'; absent → no-op
+  clientCompanyName: string; // {clientCompany} — prospective party (email body)
+  expertPartyLabel: string; // {expertParty} — prospective party (email body)
+  projectTitle: string; // {title} — subject + summary + in-app body
+  milestonesTotal: number; // {m} — total live milestones (email summary)
+  requestedDate: string; // "4 Jul" (pre-formatted, UTC)
+  autoDate: string; // "11 Jul" (pre-formatted, UTC) — the auto-accept date
+  daysLeft: number; // {daysLeft} — whole days remaining until autoDate (email window block)
+}

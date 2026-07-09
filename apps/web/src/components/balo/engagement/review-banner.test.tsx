@@ -3,13 +3,18 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
 import type { ReviewBannerView } from '@/lib/engagement/engagement-view';
 
-// ReviewBanner now renders the client island ReviewBannerActions (hook +
-// withdraw Server Action). Mock the router/toast and the action module so this
-// test doesn't pull @balo/db.
+// ReviewBanner renders the client island ReviewBannerActions (hook + Server Actions).
+// Mock the router/toast and the action modules so this test doesn't pull @balo/db.
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/withdraw-completion-request', () => ({
   withdrawCompletionRequestAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/accept-project', () => ({
+  acceptProjectAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/request-changes', () => ({
+  requestProjectChangesAction: vi.fn(),
 }));
 
 import { ReviewBanner } from './review-banner';
@@ -18,12 +23,18 @@ const banner: ReviewBannerView = {
   title: 'Priya @ CloudPeak Consulting has marked the project complete',
   body: 'Review the delivery plan below, then accept the project or request changes.',
   countdown: { autoOnDate: '11 Jul 2026', daysRemaining: 5, autoInLabel: 'Auto-accepts in 5 days' },
+  clientDecision: {
+    acceptModalBody: 'Accepting confirms the delivery as agreed.',
+    requestChangesIntro: 'The project goes back to active with your note.',
+    requestChangesFieldHint: 'Be specific.',
+  },
 };
 
 const baseProps = {
   banner,
   engagementId: 'eng-1',
   clientCompanyName: 'Northwind Industrial',
+  initialAction: null,
 } as const;
 
 describe('ReviewBanner', () => {
@@ -46,9 +57,10 @@ describe('ReviewBanner', () => {
     expect(screen.getByRole('button', { name: /Withdraw request/i })).toBeInTheDocument();
   });
 
-  it('renders NO action buttons for the client lens (D7 seam)', () => {
+  it('renders the client accept / request-changes decision actions', () => {
     render(<ReviewBanner {...baseProps} lens="client" />);
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Accept project/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Request changes/i })).toBeInTheDocument();
   });
 
   it('renders NO action buttons for the admin lens', () => {

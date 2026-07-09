@@ -33,8 +33,10 @@ export async function resolveContext(
 
   // Admin fan-out recipients (dispatcher resolves recipient:'admin_users' from
   // data.adminUserIds). project.proposal_accepted (BAL-289 ops "raise invoice"
-  // nudge), billing.details_confirmed (BAL-323 "ready to invoice" nudge), and the
-  // BAL-332 milestone completed/reverted delivery signals all need it.
+  // nudge), billing.details_confirmed (BAL-323 "ready to invoice" nudge), the
+  // BAL-332 milestone completed/reverted delivery signals, and the BAL-338 (D7)
+  // review-decision events (accepted / auto_accepted are the money triggers,
+  // changes_requested is the ops "review bounced" signal) all need it.
   if (
     event === 'project.proposal_accepted' ||
     event === 'billing.details_confirmed' ||
@@ -42,11 +44,15 @@ export async function resolveContext(
     event === 'engagement.milestone_reverted' ||
     event === 'engagement.scope_changed' ||
     event === 'engagement.completion_requested' ||
-    event === 'engagement.completion_withdrawn'
+    event === 'engagement.completion_withdrawn' ||
+    event === 'engagement.accepted' ||
+    event === 'engagement.changes_requested' ||
+    event === 'engagement.auto_accepted'
   ) {
     // NB: engagement.cancelled is intentionally EXCLUDED — the admin is the actor,
     // there is no admin recipient (recipient:'expert' is served by the existing
-    // payload.expertProfileId → data.expert hydration below).
+    // payload.expertProfileId → data.expert hydration below). engagement.review_reminder
+    // is EXCLUDED too — it targets the client owner only, no admin recipient.
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
   }
 

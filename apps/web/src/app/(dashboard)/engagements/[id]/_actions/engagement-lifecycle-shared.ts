@@ -3,11 +3,13 @@ import 'server-only';
 import { revalidatePath } from 'next/cache';
 import {
   engagementsRepository,
+  auditEventsRepository,
   MilestonesIncompleteError,
   InvalidEngagementTransitionError,
   type EngagementWithMilestones,
 } from '@balo/db';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { DAY_MS, GENERIC_FAILURE, NOT_FOUND } from './milestone-action-shared';
@@ -34,6 +36,7 @@ export type EngagementActionResult = { success: true } | { success: false; error
 // ── Friendly, non-leaking copy (returned verbatim; the client toasts it) ─────
 export const ONLY_EXPERT = 'Only the delivering expert can do that.';
 export const ONLY_ADMIN = 'Only Balo can cancel an engagement.';
+export const ONLY_CLIENT = 'Only the client can do that.';
 export const NOT_ACTIVE = "This project isn't active.";
 export const NOT_UNDER_REVIEW = "This project isn't under review.";
 export const ENGAGEMENT_CLOSED = 'This engagement is already closed.';
@@ -75,6 +78,25 @@ export function formatLongUtc(date: Date): string {
 /** Whole days between `from` and `now` (never negative). */
 export function wholeDaysSince(from: Date, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - from.getTime()) / DAY_MS));
+}
+
+/**
+ * Best-effort `review_cycle` — the number of `engagement.completion_requested` audit
+ * rows for this engagement (1 on the first request, 2 after a change-request→re-request,
+ * …). Wrapped so a DB hiccup degrades the metric (→ 1) rather than failing the
+ * already-committed action. Shared by the completion-request, accept, and
+ * request-changes actions (single source; keeps the Sonar new-code duplication gate green).
+ */
+export async function readReviewCycle(engagementId: string): Promise<number> {
+  try {
+    return await auditEventsRepository.countByEntityAndAction({
+      entityType: 'engagement',
+      entityId: engagementId,
+      action: 'engagement.completion_requested',
+    });
+  } catch {
+    return 1;
+  }
 }
 
 /**
@@ -182,6 +204,55 @@ export async function gateAdminEngagement(
       reason: 'engagement_closed',
     });
     return { ok: false, error: ENGAGEMENT_CLOSED };
+  }
+  return { ok: true, engagement: loaded.engagement };
+}
+
+/**
+ * The CLIENT-lens gate for the D7 review decisions (accept / request-changes). Both
+ * act on a `pending_acceptance` engagement, so the required status is fixed. Requires
+ * `lens === 'client'` (the acting user's active company equals `engagement.companyId`)
+ * AND — defense-in-depth beyond the iron-session-cached `companyId` the lens trusts —
+ * re-checks the actor's LIVE company membership via `hasCapability(PARTICIPATE)`, which
+ * reads the current role (`deletedAt IS NULL`) so a stale cookie (membership removed
+ * after login) fails closed. `PARTICIPATE` is the minimal participant token (held by
+ * every role) — accept/request-changes are participant actions, not admin ones. The
+ * repo re-validates the legal `from` status under its FOR UPDATE lock.
+ */
+export async function gateClientEngagement(
+  user: SessionUser,
+  engagementId: string
+): Promise<GateResult> {
+  const loaded = await loadEngagementLens(user, engagementId);
+  if (!loaded.ok) {
+    return loaded;
+  }
+  if (loaded.lens !== 'client') {
+    log.warn('Engagement lifecycle denied', {
+      engagementId,
+      userId: user.id,
+      reason: 'wrong_lens',
+    });
+    return { ok: false, error: ONLY_CLIENT };
+  }
+  if (loaded.engagement.status !== 'pending_acceptance') {
+    log.warn('Engagement lifecycle denied', {
+      engagementId,
+      userId: user.id,
+      reason: 'wrong_status',
+    });
+    return { ok: false, error: NOT_UNDER_REVIEW };
+  }
+  const allowed = await hasCapability(user, CAPABILITIES.PARTICIPATE, {
+    companyId: loaded.engagement.companyId,
+  });
+  if (!allowed) {
+    log.warn('Engagement lifecycle denied', {
+      engagementId,
+      userId: user.id,
+      reason: 'no_capability',
+    });
+    return { ok: false, error: ONLY_CLIENT };
   }
   return { ok: true, engagement: loaded.engagement };
 }

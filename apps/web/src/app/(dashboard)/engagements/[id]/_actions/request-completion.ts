@@ -6,7 +6,6 @@ import { z } from 'zod';
 import {
   engagementsRepository,
   proposalsRepository,
-  auditEventsRepository,
   AUTO_ACCEPT_DAYS,
   type EngagementWithMilestones,
 } from '@balo/db';
@@ -24,28 +23,11 @@ import {
   runEngagementLifecycleAction,
   formatShortUtc,
   wholeDaysSince,
+  readReviewCycle,
   type EngagementActionResult,
 } from './engagement-lifecycle-shared';
 
 const requestCompletionSchema = z.object({ engagementId: z.uuid() }).strict();
-
-/**
- * Best-effort `review_cycle` — the number of prior `engagement.completion_requested`
- * audit rows for this engagement (incl. the one D0 just committed): 1 on the first
- * request, 2 after a withdraw→re-request, etc. Wrapped so a DB hiccup degrades the
- * metric (→ 1) rather than failing the already-committed action.
- */
-async function readReviewCycle(engagementId: string): Promise<number> {
-  try {
-    return await auditEventsRepository.countByEntityAndAction({
-      entityType: 'engagement',
-      entityId: engagementId,
-      action: 'engagement.completion_requested',
-    });
-  } catch {
-    return 1;
-  }
-}
 
 /**
  * Best-effort `proposed_timeframe_weeks` — the source proposal's `timeframeWeeks`

@@ -24,6 +24,14 @@ import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
+import { ReviewReminderEmail } from './engagement-review-reminder.js';
+import { AutoAcceptedEmail } from './engagement-auto-accepted.js';
+import {
+  EngagementAcceptedExpertEmail,
+  EngagementAutoAcceptedExpertEmail,
+  EngagementChangesRequestedExpertEmail,
+  EngagementReadyToInvoiceEmail,
+} from './engagement-review-decision-emails.js';
 import {
   PartyMemberJoinedViaDomainEmail,
   PartyJoinRequestCreatedEmail,
@@ -427,6 +435,138 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(projectTitle)} has been cancelled`,
+    };
+  },
+
+  // BAL-338 (D7) client accepted — EXPERT congrats email. Subject names the accepting
+  // PERSON (retrospective) + the project; the body congratulates and states Balo owns
+  // the invoice.
+  'engagement-accepted-expert': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const actorClientLabel = (data.actorClientLabel as string) ?? 'The client';
+    return {
+      component: React.createElement(EngagementAcceptedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorClientLabel,
+        projectTitle,
+        acceptedOn: (data.acceptedOn as string) ?? '',
+        milestonesTotal: numberCount(data.milestonesTotal),
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorClientLabel)} accepted ${sanitizeSubjectTitle(projectTitle)} 🎉`,
+    };
+  },
+
+  // BAL-338 (D7) client accepted — ADMIN "Ready to invoice" money email. THE SUBJECT
+  // FORMAT IS STABLE across the client-accept and auto-accept paths (it is the money
+  // trigger). The detail line names the accepting person (client-accept path).
+  'engagement-accepted-admin': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'the project';
+    const actorClientLabel = (data.actorClientLabel as string) ?? 'The client';
+    return {
+      component: React.createElement(EngagementReadyToInvoiceEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle,
+        detailLine: `${actorClientLabel} accepted the project. Final installment is ready to invoice.`,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `Ready to invoice: final installment — ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-338 (D7) client requested changes — EXPERT email. Subject names the person +
+  // project; the body carries the client's note verbatim (Callout) + the "window
+  // restarts when you re-request" line and a "view what needs to change" CTA.
+  'engagement-changes-requested-expert': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const actorClientLabel = (data.actorClientLabel as string) ?? 'The client';
+    return {
+      component: React.createElement(EngagementChangesRequestedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorClientLabel,
+        projectTitle,
+        note: (data.note as string) ?? '',
+        reviewDays: numberCount(data.reviewDays) || 7,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorClientLabel)} requested changes on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-338 (D7) auto-accepted — CLIENT email (VARIANT 3 AutoAcceptedEmail, verbatim).
+  // Congratulatory; the green window block confirms it closed out as delivered.
+  'engagement-auto-accepted-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(AutoAcceptedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'your team',
+        expertParty: (data.expertPartyLabel as string) ?? 'Your expert',
+        projectTitle,
+        milestonesTotal: numberCount(data.milestonesTotal),
+        requestedDate: (data.requestedDate as string) ?? '',
+        autoDate: (data.autoDate as string) ?? '',
+        reviewDays: numberCount(data.reviewDays),
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+      }),
+      subject: `${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
+    };
+  },
+
+  // BAL-338 (D7) auto-accepted — EXPERT congrats email.
+  'engagement-auto-accepted-expert': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(EngagementAutoAcceptedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'The client',
+        projectTitle,
+        autoDate: (data.autoDate as string) ?? '',
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
+    };
+  },
+
+  // BAL-338 (D7) auto-accepted — ADMIN "Ready to invoice" money email (SAME stable
+  // subject as the client-accept path). The detail line notes the auto path + window.
+  'engagement-auto-accepted-admin': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'the project';
+    const reviewDays = numberCount(data.reviewDays) || 7;
+    return {
+      component: React.createElement(EngagementReadyToInvoiceEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle,
+        detailLine: `The project was accepted automatically (${reviewDays}-day review window). Final installment is ready to invoice.`,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `Ready to invoice: final installment — ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-338 (D7) T-2 review reminder — CLIENT email (VARIANT 2 ReviewReminderEmail,
+  // verbatim). One friendly nudge; the amber window block keeps the auto-accept date
+  // unmissable. `daysLeft` is computed at send time by the reminder sweep.
+  'engagement-review-reminder-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(ReviewReminderEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'your team',
+        expertParty: (data.expertPartyLabel as string) ?? 'Your expert',
+        projectTitle,
+        milestonesTotal: numberCount(data.milestonesTotal),
+        requestedDate: (data.requestedDate as string) ?? '',
+        autoDate: (data.autoDate as string) ?? '',
+        daysLeft: numberCount(data.daysLeft),
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+      }),
+      subject: `Your completed project is waiting — ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
 
