@@ -14,6 +14,22 @@ vi.mock('./expert-milestone-rail', () => ({
   ExpertMilestoneRail: () => <div data-testid="expert-milestone-rail">Interactive rail</div>,
 }));
 
+// The D4 lifecycle islands (review-banner-actions, admin-cancel-button,
+// expert-completion-card) call the shared hook (useRouter + toast) and import the
+// lifecycle Server Actions. Mock the router/toast and the action modules so this
+// composition test never pulls @balo/db through them.
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/request-completion', () => ({
+  requestCompletionAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/withdraw-completion-request', () => ({
+  withdrawCompletionRequestAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/cancel-engagement', () => ({
+  cancelEngagementAction: vi.fn(),
+}));
+
 import { EngagementWorkspace } from './engagement-workspace';
 
 // `motion/react` renders its children synchronously in jsdom, so `<Reveal>`
@@ -78,6 +94,7 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
     cancelledBanner: null,
     emptyState: null,
     adminOversight: null,
+    completionCard: null,
     ...overrides,
   };
 }
@@ -163,7 +180,11 @@ describe('EngagementWorkspace — state × lens matrix', () => {
           reviewBanner: {
             title: 'Priya has marked the project complete',
             body: 'Review the delivery plan below, then accept or request changes.',
-            countdown: { autoOnDate: '11 Jul 2026', daysRemaining: 5, autoInLabel: '5 days' },
+            countdown: {
+              autoOnDate: '11 Jul 2026',
+              daysRemaining: 5,
+              autoInLabel: 'Auto-accepts in 5 days',
+            },
           },
         })}
       />
@@ -259,6 +280,29 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     expect(screen.queryByTestId('expert-milestone-rail')).not.toBeInTheDocument();
     expect(screen.getByText('Delivery plan')).toBeInTheDocument();
     expect(screen.getAllByText('Discovery workshop').length).toBeGreaterThan(0);
+  });
+
+  it('expert lens · active renders the "Finish the project" completion card when present', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          lens: 'expert',
+          archetype: 'participant',
+          isClientOwner: false,
+          isDeliveringExpert: true,
+          completionCard: {
+            hasMilestones: true,
+            milestonesRemaining: 0,
+            milestonesTotal: 2,
+            canRequest: true,
+            bodyCopy: 'Every milestone is delivered.',
+            modalBody: 'All 2 milestones are delivered.',
+          },
+        })}
+      />
+    );
+    expect(screen.getByText('Finish the project')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Mark project complete/i })).toBeEnabled();
   });
 
   it('admin lens renders the oversight strip above the progress/rail', () => {

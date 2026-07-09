@@ -16,7 +16,7 @@ import type { ProjectsInboxEventMap } from './events/projects-inbox';
 import type { BillingEventMap, BillingServerEventMap } from './events/billing';
 import type { PartyDomainServerEventMap } from './events/party-domains';
 import type { PartyJoinServerEventMap } from './events/party-join';
-import type { EngagementServerEventMap } from './events/engagement';
+import type { EngagementServerEventMap, EngagementEventMap } from './events/engagement';
 import type { AdminEngagementsEventMap } from './events/admin-engagements';
 import type { DomainJoinEventMap } from './events/domain-join';
 
@@ -37,6 +37,7 @@ export type AllEvents = AuthEventMap &
   ProjectsInboxEventMap &
   BillingEventMap &
   AdminEngagementsEventMap &
+  EngagementEventMap &
   DomainJoinEventMap;
 
 export type EventName = keyof AllEvents;

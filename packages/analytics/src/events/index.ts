@@ -75,6 +75,8 @@ export {
   type EngagementServerEventMap,
   type EngagementWorkspaceLens,
   type EngagementWorkspaceEntry,
+  ENGAGEMENT_EVENTS,
+  type EngagementEventMap,
 } from './engagement';
 export {
   ADMIN_ENGAGEMENTS_EVENTS,

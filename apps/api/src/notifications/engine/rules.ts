@@ -397,6 +397,45 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-334 (D4): the delivering expert marked the WHOLE project complete — it now
+  // sits under the client's review. The CLIENT company owner (recipient:'client' via
+  // payload.recipientId; email = VARIANT 1 CompletionRequestEmail + in-app) is ASKED
+  // to review; the Balo ADMINS (recipient:'admin_users' fan-out; in-app ops signal)
+  // are told it's under review. Owner rules skip gracefully when recipientId is absent.
+  'engagement.completion_requested': [
+    ...emailAndInApp('client', 'engagement-completion-requested-client'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-completion-requested-admin',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-334 (D4): the expert withdrew the completion request — the project is active
+  // again. IN-APP ONLY to BOTH the client owner and the admins (never silent, not
+  // email-worthy). One template shared by both rules.
+  'engagement.completion_withdrawn': [
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'engagement-completion-withdrawn',
+      timing: 'immediate',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-completion-withdrawn',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-334 (D4): Balo cancelled the engagement. Notifies BOTH parties (email + in-app
+  // each): the CLIENT company owner (recipient:'client' via payload.recipientId) and
+  // the delivering EXPERT (recipient:'expert' via payload.expertProfileId → data.expert).
+  // No admin recipient — the admin is the actor. One template serves both rules.
+  'engagement.cancelled': [
+    ...emailAndInApp('client', 'engagement-cancelled'),
+    ...emailAndInApp('expert', 'engagement-cancelled'),
+  ],
   // BAL-345 domain auto-join. `party_admins` is a fan-out recipient (one delivery
   // per admin) resolved from data.partyAdminUserIds; `self` (approve/decline)
   // resolves to payload.userId (the requester). The base-member joiner/requester

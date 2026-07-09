@@ -2,17 +2,28 @@ import { Clock } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import type { ReviewBannerView } from '@/lib/engagement/engagement-view';
+import type { EngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import { ReviewBannerActions } from './review-banner-actions';
 
 interface ReviewBannerProps {
   banner: ReviewBannerView;
+  lens: EngagementLens;
+  engagementId: string;
+  clientCompanyName: string;
 }
 
 /**
  * `pending_acceptance` state banner. Renders the per-lens completion-review copy
- * (pre-derived on the view) plus an INFORMATIONAL auto-accept countdown pill.
- * READ-ONLY: no accept / request-changes / withdraw affordances (D4/D7).
+ * (pre-derived on the view) plus an INFORMATIONAL auto-accept countdown pill and the
+ * per-lens {@link ReviewBannerActions} (D4: expert "Withdraw request"; the client
+ * accept / request-changes decision is the D7 seam).
  */
-export function ReviewBanner({ banner }: Readonly<ReviewBannerProps>): React.JSX.Element {
+export function ReviewBanner({
+  banner,
+  lens,
+  engagementId,
+  clientCompanyName,
+}: Readonly<ReviewBannerProps>): React.JSX.Element {
   return (
     <div className="border-warning/20 bg-warning/10 flex items-start gap-3 rounded-2xl border px-5 py-4">
       <div className="bg-warning flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]">
@@ -26,11 +37,16 @@ export function ReviewBanner({ banner }: Readonly<ReviewBannerProps>): React.JSX
           {banner.countdown !== null && (
             <Badge className="border-warning/20 bg-card text-warning">
               <Clock className="h-3 w-3" aria-hidden="true" />
-              Auto-accepts in {banner.countdown.autoInLabel}
+              {banner.countdown.autoInLabel}
             </Badge>
           )}
         </div>
         <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed">{banner.body}</p>
+        <ReviewBannerActions
+          lens={lens}
+          engagementId={engagementId}
+          clientCompanyName={clientCompanyName}
+        />
       </div>
     </div>
   );

@@ -3,19 +3,23 @@ import { AlertCircle, Clock, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import type { AdminOversightView } from '@/lib/engagement/engagement-view';
+import { AdminCancelButton } from './admin-cancel-button';
 
 interface AdminOversightStripProps {
   oversight: AdminOversightView;
+  engagementId: string;
 }
 
 /**
  * Admin-lens oversight strip. The view mapper returns `adminOversight === null`
- * for non-admin lenses, so the composer only mounts this for admins. Surfaces
- * last-activity and an INFORMATIONAL stalled pill + note. READ-ONLY: no cancel
- * affordance (D4).
+ * for non-admin lenses AND only on active | pending_acceptance engagements — i.e.
+ * exactly the cancellable states — so the composer only mounts this for admins and the
+ * {@link AdminCancelButton} can always render. Surfaces last-activity, an
+ * INFORMATIONAL stalled pill + note, and the "Cancel engagement" danger action (D4).
  */
 export function AdminOversightStrip({
   oversight,
+  engagementId,
 }: Readonly<AdminOversightStripProps>): React.JSX.Element {
   return (
     <Card className="border-border bg-card px-[18px] py-3.5">
@@ -34,6 +38,7 @@ export function AdminOversightStrip({
             Stalled
           </Badge>
         )}
+        <AdminCancelButton engagementId={engagementId} />
       </div>
       {oversight.stalled && oversight.stalledNote !== null && (
         <p className="text-muted-foreground mt-2.5 text-xs leading-relaxed">

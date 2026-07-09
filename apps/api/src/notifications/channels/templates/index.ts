@@ -22,6 +22,8 @@ import { ProjectBillingReminderOwnerEmail } from './project-billing-reminder-own
 import { ProjectBillingReminderCreatorEmail } from './project-billing-reminder-creator.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
+import { CompletionRequestEmail } from './engagement-completion-requested.js';
+import { EngagementCancelledEmail } from './engagement-cancelled.js';
 import {
   PartyMemberJoinedViaDomainEmail,
   PartyJoinRequestCreatedEmail,
@@ -385,6 +387,46 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `The delivery plan for ${sanitizeSubjectTitle(projectTitle)} was updated`,
+    };
+  },
+
+  // BAL-334 (D4) completion requested — CLIENT owner email (VARIANT 1
+  // CompletionRequestEmail). Subject celebrates first (BAL-329 warm tone); the body's
+  // window block keeps the auto-accept date unmissable. `recipientName` is the client
+  // owner's first name (hydrated per-recipient in the delivery worker).
+  'engagement-completion-requested-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(CompletionRequestEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'your team',
+        expertParty: (data.expertPartyLabel as string) ?? 'Your expert',
+        actorExpert: (data.actorExpertLabel as string) ?? 'Your expert',
+        projectTitle,
+        milestonesTotal: numberCount(data.milestonesTotal),
+        requestedDate: (data.requestedDate as string) ?? '',
+        autoDate: (data.autoDate as string) ?? '',
+        reviewDays: numberCount(data.reviewDays),
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+      }),
+      subject: `Great news — ${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
+    };
+  },
+
+  // BAL-334 (D4) engagement cancelled — one component serves BOTH the client and
+  // expert rules (the greeting differs via the per-recipient `recipientName`). Subject
+  // names the project; the body states the cancellation date + the recorded reason.
+  'engagement-cancelled': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(EngagementCancelledEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle,
+        cancelledOn: (data.cancelledOn as string) ?? '',
+        reason: (data.reason as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(projectTitle)} has been cancelled`,
     };
   },
 

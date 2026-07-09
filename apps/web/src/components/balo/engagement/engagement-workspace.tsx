@@ -10,6 +10,7 @@ import { EngagementProgress } from './engagement-progress';
 import { MilestoneRail } from './milestone-rail';
 import { ExpertMilestoneRail } from './expert-milestone-rail';
 import { MilestoneEmptyState } from './milestone-empty-state';
+import { ExpertCompletionCard } from './expert-completion-card';
 
 interface EngagementWorkspaceProps {
   view: EngagementWorkspaceView;
@@ -75,7 +76,12 @@ export function EngagementWorkspace({
 
       {view.reviewBanner !== null && (
         <Reveal delay={0.05}>
-          <ReviewBanner banner={view.reviewBanner} />
+          <ReviewBanner
+            banner={view.reviewBanner}
+            lens={view.lens}
+            engagementId={view.engagementId}
+            clientCompanyName={view.parties.clientCompanyName}
+          />
         </Reveal>
       )}
 
@@ -99,7 +105,7 @@ export function EngagementWorkspace({
 
       {view.adminOversight !== null && (
         <Reveal delay={0.1}>
-          <AdminOversightStrip oversight={view.adminOversight} />
+          <AdminOversightStrip oversight={view.adminOversight} engagementId={view.engagementId} />
         </Reveal>
       )}
 
@@ -110,6 +116,16 @@ export function EngagementWorkspace({
       )}
 
       {milestoneSection}
+
+      {view.completionCard !== null && (
+        <Reveal delay={0.25}>
+          <ExpertCompletionCard
+            engagementId={view.engagementId}
+            card={view.completionCard}
+            clientCompanyName={view.parties.clientCompanyName}
+          />
+        </Reveal>
+      )}
     </div>
   );
 }

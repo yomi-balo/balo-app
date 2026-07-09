@@ -20,6 +20,7 @@ export {
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,
+  ENGAGEMENT_EVENTS,
   DOMAIN_JOIN_EVENTS,
 } from '../events';
 
@@ -56,5 +57,6 @@ export type {
   BillingEventMap,
   AdminEngagementsEventMap,
   AdminEngagementsFilter,
+  EngagementEventMap,
   DomainJoinEventMap,
 } from '../events';

@@ -108,3 +108,57 @@ export interface EngagementScopeChangedPayload {
   changeKind: 'added' | 'edited' | 'removed';
   changeSummary: string; // "added 'Data migration dry-run'" | "removed 'X'" | "updated 'Y'"
 }
+
+// BAL-334 (D4) expert requested project completion (active → pending_acceptance).
+// The delivering EXPERT marked the whole project complete — it now sits under the
+// client's review. Fans out to the CLIENT company owner (recipient:'client' via
+// `recipientId`; email = VARIANT 1 `CompletionRequestEmail` + in-app — the client is
+// ASKED to review) and the Balo ADMINS (recipient:'admin_users' fan-out; in-app ops
+// signal). `correlationId = `${engagementId}:completion_requested:${requestedAtMs}``
+// so a withdraw→re-request legitimately re-notifies (fresh `requestedAt`), while a
+// dispatcher retry of the SAME request is deduped by jobId. `recipientId` is absent
+// for a retainer / owner-miss (the client rules skip; admins still fire). Copy uses
+// BAL-329 conventions (PROSPECTIVE names the PARTY; RETROSPECTIVE names the PERSON
+// "@ agency" first mention). All dates are pre-formatted UTC strings.
+export interface EngagementCompletionRequestedPayload {
+  correlationId: string; // `${engagementId}:completion_requested:${requestedAtMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  recipientId?: string; // client company owner user id → recipient:'client'; absent → client rules skip
+  clientCompanyName: string; // {clientCompany} — prospective party (email body)
+  expertPartyLabel: string; // {expertParty} — prospective party (email subject/body)
+  actorExpertLabel: string; // {actorExpert} — retrospective person (email/in-app body)
+  projectTitle: string; // {title} — subject + summary + admin in-app body
+  milestonesTotal: number; // {m} — total live milestones (email summary)
+  requestedDate: string; // "4 Jul" (pre-formatted, UTC)
+  autoDate: string; // "11 Jul" (pre-formatted, UTC) — the auto-accept date
+  reviewDays: number; // AUTO_ACCEPT_DAYS — the review window length
+}
+
+// BAL-334 (D4) expert withdrew the completion request (pending_acceptance → active).
+// IN-APP ONLY to the CLIENT company owner and the Balo ADMINS — a withdraw is never
+// silent, but it isn't email-worthy. `correlationId =
+// `${engagementId}:completion_withdrawn:${nowMs}``. `recipientId` absent → the client
+// rule skips; admins still fire.
+export interface EngagementCompletionWithdrawnPayload {
+  correlationId: string; // `${engagementId}:completion_withdrawn:${nowMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  recipientId?: string; // client company owner user id → recipient:'client'
+  actorExpertLabel: string; // {actorExpert} — retrospective person (in-app body)
+  projectTitle: string; // {title} — in-app body
+}
+
+// BAL-334 (D4) admin cancelled the engagement (active | pending_acceptance →
+// cancelled). Fans out to BOTH parties (email + in-app each): the CLIENT company owner
+// (recipient:'client' via `recipientId`) and the delivering EXPERT (recipient:'expert'
+// via `expertProfileId` → resolver hydrates data.expert). No admin recipient (the
+// admin is the actor). `correlationId = `${engagementId}:cancelled`` — a cancel is a
+// one-shot terminal transition, so a single deterministic key deduplicates retries.
+export interface EngagementCancelledPayload {
+  correlationId: string; // `${engagementId}:cancelled`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  recipientId?: string; // client company owner user id → recipient:'client'
+  expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert'
+  projectTitle: string; // {title} — email subject/body + in-app body
+  cancelledOn: string; // "9 Jul 2026" (pre-formatted, UTC)
+  reason: string; // verbatim cancellation reason (email body block)
+}

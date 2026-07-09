@@ -9,6 +9,9 @@ import type {
   EngagementMilestoneCompletedPayload,
   EngagementMilestoneRevertedPayload,
   EngagementScopeChangedPayload,
+  EngagementCompletionRequestedPayload,
+  EngagementCompletionWithdrawnPayload,
+  EngagementCancelledPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -201,6 +204,9 @@ export type NotificationEvent =
   | 'engagement.milestone_completed'
   | 'engagement.milestone_reverted'
   | 'engagement.scope_changed'
+  | 'engagement.completion_requested'
+  | 'engagement.completion_withdrawn'
+  | 'engagement.cancelled'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
@@ -229,6 +235,9 @@ export interface EventPayloadMap {
   'engagement.milestone_completed': EngagementMilestoneCompletedPayload;
   'engagement.milestone_reverted': EngagementMilestoneRevertedPayload;
   'engagement.scope_changed': EngagementScopeChangedPayload;
+  'engagement.completion_requested': EngagementCompletionRequestedPayload;
+  'engagement.completion_withdrawn': EngagementCompletionWithdrawnPayload;
+  'engagement.cancelled': EngagementCancelledPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;

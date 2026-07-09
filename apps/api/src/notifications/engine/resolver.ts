@@ -40,8 +40,13 @@ export async function resolveContext(
     event === 'billing.details_confirmed' ||
     event === 'engagement.milestone_completed' ||
     event === 'engagement.milestone_reverted' ||
-    event === 'engagement.scope_changed'
+    event === 'engagement.scope_changed' ||
+    event === 'engagement.completion_requested' ||
+    event === 'engagement.completion_withdrawn'
   ) {
+    // NB: engagement.cancelled is intentionally EXCLUDED — the admin is the actor,
+    // there is no admin recipient (recipient:'expert' is served by the existing
+    // payload.expertProfileId → data.expert hydration below).
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
   }
 

@@ -81,3 +81,84 @@ describe('auditEventsRepository.record', () => {
     expect(persisted).toHaveLength(0);
   });
 });
+
+describe('auditEventsRepository.countByEntityAndAction', () => {
+  it('counts only rows matching entityType + entityId + action (BAL-334 review_cycle)', async () => {
+    const actor = await userFactory();
+    const engagementId = randomUUID();
+    const otherEngagementId = randomUUID();
+
+    // Two completion-request rows for THIS engagement (a withdraw→re-request cycle).
+    await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.completion_requested',
+        entityType: 'engagement',
+        entityId: engagementId,
+        metadata: { from: 'active', to: 'pending_acceptance', engagementId },
+      },
+      db
+    );
+    await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.completion_requested',
+        entityType: 'engagement',
+        entityId: engagementId,
+        metadata: { from: 'active', to: 'pending_acceptance', engagementId },
+      },
+      db
+    );
+
+    // Negatives that must NOT be counted:
+    //  - a different action on the same engagement,
+    await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.completion_withdrawn',
+        entityType: 'engagement',
+        entityId: engagementId,
+        metadata: { engagementId },
+      },
+      db
+    );
+    //  - the same action on a DIFFERENT engagement,
+    await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.completion_requested',
+        entityType: 'engagement',
+        entityId: otherEngagementId,
+        metadata: { engagementId: otherEngagementId },
+      },
+      db
+    );
+    //  - the same action + id but a different entityType.
+    await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.completion_requested',
+        entityType: 'engagement_milestone',
+        entityId: engagementId,
+        metadata: { engagementId },
+      },
+      db
+    );
+
+    const count = await auditEventsRepository.countByEntityAndAction({
+      entityType: 'engagement',
+      entityId: engagementId,
+      action: 'engagement.completion_requested',
+    });
+    expect(count).toBe(2);
+  });
+
+  it('returns 0 when no matching rows exist', async () => {
+    const count = await auditEventsRepository.countByEntityAndAction({
+      entityType: 'engagement',
+      entityId: randomUUID(),
+      action: 'engagement.completion_requested',
+    });
+    expect(count).toBe(0);
+  });
+});
