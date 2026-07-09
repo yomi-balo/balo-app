@@ -484,9 +484,16 @@ function deriveCompletedBanner(
     : `accepted by ${personAtCompany(engagement.acceptedBy, parties.clientCompanyName)} on ${acceptedAtLabel}`;
 
   if (lens === 'expert') {
+    let milestonesLead: string;
+    if (total === 0) {
+      milestonesLead = 'The project was delivered';
+    } else {
+      const noun = total === 1 ? 'milestone' : 'milestones';
+      milestonesLead = `All ${total} ${noun} delivered`;
+    }
     return {
       title: 'Project delivered',
-      body: `${total === 0 ? 'The project was delivered' : `All ${total} milestone${total === 1 ? '' : 's'} delivered`} and the project ${acceptedLine}. Balo has been notified.`,
+      body: `${milestonesLead} and the project ${acceptedLine}. Balo has been notified.`,
       readyToInvoice: false,
     };
   }
@@ -499,9 +506,14 @@ function deriveCompletedBanner(
       readyToInvoice: false,
     };
   }
+  let milestoneSuffix = '';
+  if (total > 0) {
+    const noun = total === 1 ? 'milestone' : 'milestones';
+    milestoneSuffix = ` — ${total} ${noun} delivered`;
+  }
   return {
     title: 'Project completed',
-    body: `Project ${acceptedLine}${total === 0 ? '' : ` — ${total} milestone${total === 1 ? '' : 's'} delivered`}.`,
+    body: `Project ${acceptedLine}${milestoneSuffix}.`,
     readyToInvoice: true,
   };
 }

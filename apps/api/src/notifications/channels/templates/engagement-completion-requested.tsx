@@ -271,23 +271,9 @@ function ReviewEmailLayout({ preview, pill, heading, subtext, children }: Review
           <Section style={styles.hero}>
             <Row>
               <Column align="center">
-                <table
-                  role="presentation"
-                  cellPadding={0}
-                  cellSpacing={0}
-                  style={{ display: 'inline-table' }}
-                >
-                  <tbody>
-                    <tr>
-                      <td>
-                        <div style={styles.logoBadge}>B</div>
-                      </td>
-                      <td style={{ paddingLeft: 9 }}>
-                        <span style={styles.logoText}>Balo</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                {/* CSS inline-block layout (no table) — matches shared.tsx LogoRow */}
+                <div style={styles.logoBadge}>B</div>
+                <span style={{ ...styles.logoText, paddingLeft: '9px' }}>Balo</span>
               </Column>
             </Row>
             <Row style={{ marginTop: '20px' }}>
