@@ -43,7 +43,35 @@ export interface ProposalReviewAttachment {
   kind: 'terms' | 'ref';
 }
 
-/** The whole serialised proposal document the read view renders. */
+/**
+ * Admin-only pricing breakdown (BAL-357). Present ONLY on admin-audience docs.
+ * NEVER serialised for expert or client (the audience-boundary invariant — the
+ * fee rate and margin must not leak to either party). Carries both sides of every
+ * figure: the raw expert quote (100% payout basis) and the `applyBaloFee`'d client
+ * price, plus the fee rate and derived margin.
+ */
+export interface AdminProposalPricing {
+  baloFeeBps: number;
+  expertPriceCents: number; // raw expert quote (100% payout basis)
+  clientPriceCents: number; // applyBaloFee(expertPriceCents, baloFeeBps)
+  marginCents: number; // clientPriceCents - expertPriceCents
+  expertDepositCents: number | null;
+  clientDepositCents: number | null;
+  expertRateCents: number | null;
+  clientRateCents: number | null;
+}
+
+/**
+ * The whole serialised proposal document the read view renders.
+ *
+ * AUDIENCE-RESOLVED MONEY (BAL-357): `priceCents`, `depositCents`, `rateCents`, and
+ * each `milestones[].valueCents` are already resolved for the audience this doc was
+ * hydrated for — RAW (100% expert quote) for the expert and admin-base lenses,
+ * marked up via `applyBaloFee` for the client lens. Installments stay `pct`-only;
+ * their amounts derive downstream from the (already audience-correct) `priceCents`.
+ * The Balo fee rate is NEVER a field here for expert/client; admins get it inside
+ * {@link adminPricing} only.
+ */
 export interface ProposalReviewDoc {
   id: string;
   relationshipId: string;
@@ -62,4 +90,10 @@ export interface ProposalReviewDoc {
   installments: ProposalReviewInstallment[];
   attachments: ProposalReviewAttachment[];
   expert: ProposalExpertIdentity;
+  /**
+   * Admin lens only (BAL-357). Structurally UNDEFINED for expert/client docs
+   * (asserted absent in `proposal-audience-view.test.ts`) so the fee/margin can
+   * never leak to a non-admin surface.
+   */
+  adminPricing?: AdminProposalPricing;
 }

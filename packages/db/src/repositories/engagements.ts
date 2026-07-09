@@ -497,6 +497,13 @@ export const engagementsRepository = {
     projectRequestId?: string;
     pricingMethod: PricingMethod;
     priceCents: number;
+    /**
+     * Balo service margin snapshot (bps). OPTIONAL on this seam writer: a
+     * retainer/embedded engagement has no proposal to snapshot from, so an omitted
+     * value falls through to the column default (2500). `materializeFromKickoff`
+     * (which always has an accepted proposal) requires it.
+     */
+    baloFeeBps?: number;
     currency?: string;
     depositCents?: number;
     rateCents?: number;
@@ -514,6 +521,7 @@ export const engagementsRepository = {
         expertProfileId: input.expertProfileId,
         pricingMethod: input.pricingMethod,
         priceCents: input.priceCents,
+        baloFeeBps: input.baloFeeBps,
         activatedAt: input.activatedAt ?? new Date(),
         sourceProposalId: input.sourceProposalId,
         relationshipId: input.relationshipId,
@@ -563,6 +571,7 @@ export const engagementsRepository = {
     approvingAdminUserId: string;
     pricingMethod: PricingMethod;
     priceCents: number;
+    baloFeeBps: number;
     currency?: string;
     depositCents?: number;
     rateCents?: number;
@@ -615,6 +624,7 @@ export const engagementsRepository = {
           projectRequestId: input.requestId,
           pricingMethod: input.pricingMethod,
           priceCents: input.priceCents,
+          baloFeeBps: input.baloFeeBps,
           currency: input.currency,
           depositCents: input.depositCents,
           rateCents: input.rateCents,

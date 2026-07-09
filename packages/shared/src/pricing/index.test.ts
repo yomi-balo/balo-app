@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { deriveTmTotalCents, sumEstimatedMinutes } from './index';
+import {
+  applyBaloFee,
+  DEFAULT_BALO_FEE_BPS,
+  deriveTmTotalCents,
+  sumEstimatedMinutes,
+} from './index';
 
 /**
  * Unit tests for the pure T&M pricing helpers (BAL-294). Mocks nothing —
@@ -82,5 +87,34 @@ describe('sumEstimatedMinutes', () => {
     );
     // 90 min → 27_000c.
     expect(total).toBe(27_000);
+  });
+});
+
+describe('applyBaloFee', () => {
+  it('grosses A$10,000 (1_000_000c) up by 25% → A$12,500 (1_250_000c)', () => {
+    // 1_000_000 × (10_000 + 2_500) / 10_000 = 1_000_000 × 1.25 = 1_250_000 — exact.
+    expect(applyBaloFee(1_000_000, 2_500)).toBe(1_250_000);
+  });
+
+  it('rounds half away from zero (10 000c at 2 500 bps stays exact; 1c at 5 000 bps → 2c)', () => {
+    // 1 × 15_000 / 10_000 = 1.5 → rounds to 2 (half away from zero).
+    expect(applyBaloFee(1, 5_000)).toBe(2);
+  });
+
+  it('is the identity when feeBps = 0', () => {
+    expect(applyBaloFee(999_999, 0)).toBe(999_999);
+  });
+
+  it('doubles the amount when feeBps = 10_000 (100%)', () => {
+    expect(applyBaloFee(1_234_567, 10_000)).toBe(2_469_134);
+  });
+
+  it('handles large sums without precision loss', () => {
+    // 150_000_000 × 1.25 = 187_500_000 (A$1.875M).
+    expect(applyBaloFee(150_000_000, 2_500)).toBe(187_500_000);
+  });
+
+  it('exposes DEFAULT_BALO_FEE_BPS as 2500', () => {
+    expect(DEFAULT_BALO_FEE_BPS).toBe(2500);
   });
 });

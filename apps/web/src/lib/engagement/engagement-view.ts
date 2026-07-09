@@ -1,4 +1,5 @@
 import { AUTO_ACCEPT_DAYS, type EngagementWithMilestones } from '@balo/db';
+import { applyBaloFee } from '@balo/shared/pricing';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
@@ -307,13 +308,22 @@ function deriveTimeframeItem(engagement: EngagementWithMilestones): TermsStripIt
   return null;
 }
 
-function deriveTermsStrip(engagement: EngagementWithMilestones): TermsStripItem[] {
+function deriveTermsStrip(
+  engagement: EngagementWithMilestones,
+  lens: EngagementLens
+): TermsStripItem[] {
+  // Client sees the marked-up (grossed-up) figure, derived on read from the
+  // snapshotted `baloFeeBps`; expert & admin see the RAW payout quote (`priceCents`).
+  const priceCents =
+    lens === 'client'
+      ? applyBaloFee(engagement.priceCents, engagement.baloFeeBps)
+      : engagement.priceCents;
   const items: TermsStripItem[] = [
     {
       icon: 'DollarSign',
       label: 'Pricing',
       value: `${pricingLabel(engagement.pricingMethod)} · ${formatWholeCurrency(
-        engagement.priceCents,
+        priceCents,
         engagement.currency
       )}`,
     },
@@ -332,7 +342,8 @@ function deriveTermsStrip(engagement: EngagementWithMilestones): TermsStripItem[
 
 function deriveMilestones(
   engagement: EngagementWithMilestones,
-  parties: EngagementParties
+  parties: EngagementParties,
+  lens: EngagementLens
 ): MilestoneNodeView[] {
   const statusLabels: Record<MilestoneNodeVariant, string> = {
     pending: 'Not started',
@@ -341,9 +352,15 @@ function deriveMilestones(
   };
   return engagement.milestones.map((m) => {
     const isCompleted = m.status === 'completed';
+    // Gate on the RAW snapshotted value; client sees it grossed up by the Balo fee,
+    // expert & admin see the raw payout figure.
+    const rawValue = m.valueCents;
     const valueLabel =
-      m.valueCents !== null && m.valueCents > 0
-        ? formatWholeCurrency(m.valueCents, engagement.currency)
+      rawValue !== null && rawValue > 0
+        ? formatWholeCurrency(
+            lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue,
+            engagement.currency
+          )
         : null;
     // Plain-text of the raw description for the expert edit-form prefill — kept out
     // of the client's hands as HTML (the modal only sees text). Blank/tag-only → null.
@@ -688,7 +705,7 @@ export function mapEngagementToWorkspaceView(
     headerLine: engagementHeaderLine(ctx.lens, parties),
     statusChip: deriveStatusChip(status),
     provenance,
-    terms: deriveTermsStrip(engagement),
+    terms: deriveTermsStrip(engagement, ctx.lens),
     backHref: '/projects',
   };
 
@@ -702,7 +719,7 @@ export function mapEngagementToWorkspaceView(
     header,
     parties,
     progress: deriveProgress(engagement, ctx.lens, parties),
-    milestones: deriveMilestones(engagement, parties),
+    milestones: deriveMilestones(engagement, parties, ctx.lens),
     hasMilestones: engagement.milestones.length > 0,
     reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, now),
     changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties),

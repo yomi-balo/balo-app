@@ -12,9 +12,11 @@ import {
   ProposalCoherenceError,
   type Proposal,
 } from '@balo/db';
+import { applyBaloFee } from '@balo/shared/pricing';
 import { requireUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
+import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 
 const inputSchema = z.object({
@@ -227,6 +229,20 @@ export async function acceptProposalAction(
       proposalId,
       userId: user.id,
       transitioned,
+    });
+
+    // BAL-357: emit PROJECT_PROPOSAL_ACCEPTED SERVER-SIDE (audience boundary). The
+    // Balo fee + client-charged price are derived from the persisted proposal here
+    // and NEVER returned to the client's browser. `distinct_id` is the acting client.
+    const clientPriceCents = applyBaloFee(proposal.priceCents, proposal.baloFeeBps);
+    trackServerAndFlush(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_ACCEPTED, {
+      request_id: requestId,
+      relationship_id: relationshipId,
+      expert_id: access.relationship.expertProfileId,
+      proposal_id: proposalId,
+      balo_fee_bps: proposal.baloFeeBps,
+      client_price_cents: clientPriceCents,
+      distinct_id: user.id,
     });
 
     // Notify the winning EXPERT (fire-and-forget) — AFTER the commit.

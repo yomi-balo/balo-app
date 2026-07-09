@@ -86,6 +86,11 @@ export const engagements = pgTable(
     pricingMethod: pricingMethodEnum('pricing_method').notNull(),
     priceCents: integer('price_cents').notNull(),
     currency: text('currency').notNull().default('aud'),
+    // Balo service margin snapshot (basis points; 2500 = 25%). Snapshotted from
+    // the accepted proposal at kickoff and IMMUTABLE — the marked-up client
+    // figures are derived on read (applyBaloFee), never stored. `priceCents`
+    // above stays the 100%-payout quote (the expert's take).
+    baloFeeBps: integer('balo_fee_bps').notNull().default(2500),
     depositCents: integer('deposit_cents'),
     rateCents: integer('rate_cents'),
     cadence: proposalCadenceEnum('cadence'),
@@ -156,6 +161,7 @@ export const engagements = pgTable(
       .on(t.projectRequestId)
       .where(sql`${t.projectRequestId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
     check('engagement_price_cents_nonneg', sql`${t.priceCents} >= 0`),
+    check('engagement_balo_fee_bps_range', sql`${t.baloFeeBps} >= 0 AND ${t.baloFeeBps} <= 10000`),
     check(
       'engagement_deposit_cents_nonneg',
       sql`${t.depositCents} IS NULL OR ${t.depositCents} >= 0`

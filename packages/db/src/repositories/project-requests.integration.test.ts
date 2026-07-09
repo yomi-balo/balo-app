@@ -135,6 +135,25 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(docs).toHaveLength(0);
   });
 
+  it('stamps the default Balo fee (2500 bps) when none is supplied', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+
+    const row = await projectRequestsRepository.createProjectRequest({
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        title: 'Lead routing rebuild',
+        description: '<p>Rebuild lead routing in Flow with proper assignment rules.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
+    });
+
+    expect(row.baloFeeBps).toBe(2500);
+  });
+
   it('seeds no conversation thread or message on a direct submit (BAL-212: nothing auto-posts)', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
@@ -837,6 +856,32 @@ describe('project_requests budget CHECK constraints', () => {
 
   it('rejects a negative budget_max_cents (project_requests_budget_max_nonneg)', async () => {
     await expect(projectRequestFactory({ budgetMaxCents: -1 })).rejects.toThrow();
+  });
+});
+
+// ── balo_fee_bps CHECK constraint ─────────────────────────────────────
+
+describe('project_requests balo_fee_bps CHECK constraint (project_requests_balo_fee_bps_range)', () => {
+  it('rejects a fee below the range (-1) with a 23514', async () => {
+    await expect(projectRequestFactory({ baloFeeBps: -1 })).rejects.toMatchObject({
+      code: '23514',
+    });
+  });
+
+  it('rejects a fee above the range (10001) with a 23514', async () => {
+    await expect(projectRequestFactory({ baloFeeBps: 10_001 })).rejects.toMatchObject({
+      code: '23514',
+    });
+  });
+
+  it('accepts the lower bound (0)', async () => {
+    const request = await projectRequestFactory({ baloFeeBps: 0 });
+    expect(request.baloFeeBps).toBe(0);
+  });
+
+  it('accepts the upper bound (10000)', async () => {
+    const request = await projectRequestFactory({ baloFeeBps: 10_000 });
+    expect(request.baloFeeBps).toBe(10_000);
   });
 });
 

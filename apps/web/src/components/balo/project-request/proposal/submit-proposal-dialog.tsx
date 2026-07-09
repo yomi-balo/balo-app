@@ -57,8 +57,8 @@ const RESUBMIT_STALE_COPY = 'This proposal has already been resubmitted. Refresh
 /**
  * The submit/resubmit confirm beat (A6.2 / BAL-288 + A6.4 / BAL-290). Owns its
  * pending state, blocks Escape while in flight. In SUBMIT mode it flushes a final
- * autosave (`onBeforeSubmit`, Q2), calls `submitProposalAction`, and fires
- * `PROJECT_PROPOSAL_SUBMITTED`. In RESUBMIT mode (the `resubmit` prop) it calls
+ * autosave (`onBeforeSubmit`, Q2) and calls `submitProposalAction` (which emits
+ * `PROJECT_PROPOSAL_SUBMITTED` server-side — BAL-357). In RESUBMIT mode (the `resubmit` prop) it calls
  * `resubmitProposalAction` with the composer's full payload and fires
  * `PROPOSAL_RESUBMITTED`. On success it toasts, routes back to the request detail,
  * and refreshes; on a generic failure it stays open to retry; on the stale-UI path
@@ -131,15 +131,9 @@ export function SubmitProposalDialog({
       return;
     }
 
-    track(PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED, {
-      request_id: requestId,
-      relationship_id: relationshipId,
-      expert_id: result.expertProfileId,
-      price_cents: result.analytics.priceCents,
-      currency: result.analytics.currency,
-      total_estimated_minutes: result.analytics.totalEstimatedMinutes,
-      pricing_method: result.analytics.pricingMethod,
-    });
+    // BAL-357: PROJECT_PROPOSAL_SUBMITTED is emitted SERVER-SIDE by the action so
+    // the Balo fee + client-charged price never transit the browser. The client
+    // only fires the non-sensitive events below.
     // BAL-294: effort is committed at submit (not per keystroke) — fire ONCE here
     // with the server-computed totals (0 minutes for Fixed, where effort is nulled).
     track(PROJECT_EVENTS.MILESTONE_EFFORT_ESTIMATED, {

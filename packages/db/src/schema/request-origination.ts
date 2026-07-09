@@ -208,6 +208,11 @@ export const proposals = pgTable(
     timeframeWeeks: integer('timeframe_weeks'),
     priceCents: integer('price_cents').notNull(),
     currency: text('currency').notNull().default('aud'),
+    // Balo service margin snapshot (basis points; 2500 = 25%). Snapshotted from
+    // the request at proposal creation/resubmit and IMMUTABLE within a version —
+    // the marked-up client figures are derived on read (applyBaloFee), never
+    // stored. The expert's `priceCents` above stays the 100%-payout quote.
+    baloFeeBps: integer('balo_fee_bps').notNull().default(2500),
     // ── T&M-only commercial terms (NULLABLE; only populated for `tm`) ──
     depositCents: integer('deposit_cents'),
     rateCents: integer('rate_cents'),
@@ -229,6 +234,7 @@ export const proposals = pgTable(
       .on(t.relationshipId)
       .where(sql`${t.deletedAt} IS NULL AND ${t.isCurrent}`),
     check('proposal_price_cents_nonneg', sql`${t.priceCents} >= 0`),
+    check('proposal_balo_fee_bps_range', sql`${t.baloFeeBps} >= 0 AND ${t.baloFeeBps} <= 10000`),
     check('proposal_version_positive', sql`${t.version} >= 1`),
     check(
       'proposal_deposit_cents_nonneg',

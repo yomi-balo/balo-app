@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { render, screen, within } from '@/test/utils';
 import { SubmittedView } from './submitted-view';
-import type { ProposalReviewDoc } from './proposal-review-types';
+import type { AdminProposalPricing, ProposalReviewDoc } from './proposal-review-types';
 
 vi.mock('@/components/balo/rich-text-editor', () => ({
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
@@ -60,5 +60,101 @@ describe('SubmittedView', () => {
   it('renders the read-only proposal document', () => {
     render(<SubmittedView lens="expert" doc={doc()} clientName="Dana" otherProposalCount={0} />);
     expect(screen.getByText('Overview body text')).toBeInTheDocument();
+  });
+});
+
+/** A populated admin pricing breakdown; deposit/rate are FIXED-null unless overridden. */
+function adminPricing(overrides: Partial<AdminProposalPricing> = {}): AdminProposalPricing {
+  return {
+    baloFeeBps: 2500,
+    expertPriceCents: 100_000,
+    clientPriceCents: 125_000,
+    marginCents: 25_000,
+    expertDepositCents: null,
+    clientDepositCents: null,
+    expertRateCents: null,
+    clientRateCents: null,
+    ...overrides,
+  };
+}
+
+/** Scope queries to the AdminPricingCard (avoids collisions with the ProposalDoc body). */
+function pricingCard(): HTMLElement {
+  const heading = screen.getByText('Pricing breakdown');
+  const card = heading.closest('div');
+  if (card === null) throw new Error('Pricing breakdown card not found');
+  return card;
+}
+
+describe('SubmittedView — admin pricing breakdown (BAL-357)', () => {
+  it('renders the fee/margin breakdown for the admin lens (FIXED — no deposit/rate rows)', () => {
+    render(
+      <SubmittedView
+        lens="admin"
+        doc={doc({ adminPricing: adminPricing() })}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
+
+    const card = within(pricingCard());
+    // Core rows: expert quote (payout), Balo fee %, client price, margin.
+    expect(card.getByText('Expert quote (payout)')).toBeInTheDocument();
+    expect(card.getByText('A$1,000')).toBeInTheDocument();
+    expect(card.getByText('Balo fee')).toBeInTheDocument();
+    expect(card.getByText('25%')).toBeInTheDocument();
+    expect(card.getByText('Client price (charged)')).toBeInTheDocument();
+    expect(card.getByText('Balo margin')).toBeInTheDocument();
+
+    // Emphasis ternary: client → text-primary, margin → text-success.
+    expect(card.getByText('A$1,250')).toHaveClass('text-primary');
+    expect(card.getByText('A$250')).toHaveClass('text-success');
+
+    // FIXED case: both null-check branches skip → no deposit/rate lines.
+    expect(card.queryByText(/Deposit \(expert → client\)/)).not.toBeInTheDocument();
+    expect(card.queryByText(/Rate\/hr \(expert → client\)/)).not.toBeInTheDocument();
+  });
+
+  it('renders the deposit + rate "→" lines for the admin lens (T&M — non-null deposit/rate)', () => {
+    render(
+      <SubmittedView
+        lens="admin"
+        doc={doc({
+          pricingMethod: 'tm',
+          adminPricing: adminPricing({
+            expertDepositCents: 20_000,
+            clientDepositCents: 25_000,
+            expertRateCents: 30_000,
+            clientRateCents: 37_500,
+          }),
+        })}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
+
+    const card = within(pricingCard());
+    // Both null-check branches taken → the expert → client both-sides lines render.
+    expect(card.getByText('Deposit (expert → client)')).toBeInTheDocument();
+    expect(card.getByText('A$200 → A$250')).toBeInTheDocument();
+    expect(card.getByText('Rate/hr (expert → client)')).toBeInTheDocument();
+    expect(card.getByText('A$300 → A$375')).toBeInTheDocument();
+  });
+
+  it('omits the pricing breakdown for the expert lens even when adminPricing is present', () => {
+    render(
+      <SubmittedView
+        lens="expert"
+        doc={doc({ adminPricing: adminPricing() })}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
+    expect(screen.queryByText('Pricing breakdown')).not.toBeInTheDocument();
+  });
+
+  it('omits the pricing breakdown for the admin lens when adminPricing is undefined', () => {
+    render(<SubmittedView lens="admin" doc={doc()} clientName="Dana" otherProposalCount={0} />);
+    expect(screen.queryByText('Pricing breakdown')).not.toBeInTheDocument();
   });
 });

@@ -38,3 +38,16 @@ export function sumEstimatedMinutes(
 export function deriveTmTotalCents(totalMinutes: number, rateCents: number): number {
   return Math.round((totalMinutes / 60) * rateCents);
 }
+
+/** Default Balo service margin, in basis points (2500 bps = 25%). */
+export const DEFAULT_BALO_FEE_BPS = 2500;
+
+/**
+ * Gross a client-facing cents figure UP by the Balo fee.
+ * clientCents = round(baseCents * (10000 + feeBps) / 10000).
+ * Pure, integer-cents, Math.round (half-away-from-zero) — same convention as
+ * deriveTmTotalCents. Never mutates the expert's stored quote.
+ */
+export function applyBaloFee(cents: number, feeBps: number): number {
+  return Math.round((cents * (10_000 + feeBps)) / 10_000);
+}

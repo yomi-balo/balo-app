@@ -24,6 +24,16 @@ vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
 }));
 
+const mockTrackServer = vi.fn();
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: (...a: unknown[]) => mockTrackServer(...a),
+  PROJECT_SERVER_EVENTS: {
+    REQUEST_ACCESS_DENIED: 'project_request_access_denied',
+    PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
+    PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
+  },
+}));
+
 const mockSanitizeOverview = vi.fn();
 const mockSanitizeProject = vi.fn();
 vi.mock('@/lib/sanitize/project-html', () => ({
@@ -116,6 +126,7 @@ const DRAFT = {
   pricingMethod: 'fixed',
   priceCents: 500000,
   currency: 'aud',
+  baloFeeBps: 2500,
   timeframeWeeks: 6,
   exclusions: null,
   depositCents: null,
@@ -287,6 +298,8 @@ describe('submitProposalAction', () => {
       proposalId: PROPOSAL_ID,
       expertProfileId: EXPERT_PROFILE_ID,
       transitioned: true,
+      // BAL-357: the fee + client price are NOT returned to the browser — they are
+      // emitted server-side via trackServerAndFlush (asserted separately below).
       analytics: {
         priceCents: 500000,
         currency: 'aud',
@@ -441,5 +454,23 @@ describe('submitProposalAction', () => {
   it('logs the business event after promotion', async () => {
     await submitProposalAction(VALID_INPUT);
     expect(log.info).toHaveBeenCalledWith('Proposal submitted', expect.any(Object));
+  });
+
+  it('emits PROJECT_PROPOSAL_SUBMITTED SERVER-SIDE with the fee + client price + distinct_id (BAL-357)', async () => {
+    const result = await submitProposalAction(VALID_INPUT);
+    expect(result.success).toBe(true);
+    // The sensitive fee + client price transit the SERVER event, never the result.
+    expect(mockTrackServer).toHaveBeenCalledWith('project_proposal_submitted', {
+      request_id: REQUEST_ID,
+      relationship_id: REL_ID,
+      expert_id: EXPERT_PROFILE_ID,
+      price_cents: 500000,
+      currency: 'aud',
+      total_estimated_minutes: 0, // Fixed → effort nulled
+      pricing_method: 'fixed',
+      balo_fee_bps: 2500,
+      client_price_cents: 625000, // applyBaloFee(500000, 2500)
+      distinct_id: 'user-expert',
+    });
   });
 });

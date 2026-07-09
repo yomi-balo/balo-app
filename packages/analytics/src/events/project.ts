@@ -21,8 +21,10 @@ export const PROJECT_EVENTS = {
   PROJECT_EOI_SUBMITTED: 'project_eoi_submitted',
   PROJECT_EOI_WITHDRAWN: 'project_eoi_withdrawn',
   PROJECT_PROPOSAL_REQUESTED: 'project_proposal_requested',
-  PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
-  PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
+  // NOTE (BAL-357): PROJECT_PROPOSAL_SUBMITTED and PROJECT_PROPOSAL_ACCEPTED are
+  // NOT client events — they moved to PROJECT_SERVER_EVENTS (emitted via
+  // trackServer) so the Balo fee + client-charged price never transit the browser.
+  // Firing either via the client `track()` is now a compile error, by design.
   // BAL-290 (A6.4) changes-requested loop + proposal versioning. CHANGES_REQUESTED
   // fires when the client requests changes on a submitted proposal (actor:'client');
   // PROPOSAL_RESUBMITTED fires when the expert resubmits as v(n+1).
@@ -160,23 +162,6 @@ export interface ProjectEventMap {
      */
     thread_count?: number;
   };
-  [PROJECT_EVENTS.PROJECT_PROPOSAL_SUBMITTED]: {
-    request_id: string;
-    relationship_id: string;
-    expert_id: string;
-    price_cents: number;
-    currency: string;
-    /** Sum of milestone estimated_minutes (BAL-294). 0 for Fixed (effort is T&M-only). */
-    total_estimated_minutes: number;
-    /** The proposal's pricing method at submit (BAL-294). */
-    pricing_method: 'fixed' | 'tm';
-  };
-  [PROJECT_EVENTS.PROJECT_PROPOSAL_ACCEPTED]: {
-    request_id: string;
-    relationship_id: string;
-    expert_id: string;
-    proposal_id: string;
-  };
   [PROJECT_EVENTS.CHANGES_REQUESTED]: {
     request_id: string;
     relationship_id: string;
@@ -263,9 +248,17 @@ export interface ProjectEventMap {
  * can measure whether dropped/declined experts keep hitting the wall. NO PII:
  * only the request id, the denial reason, the attempted lens, and the distinct_id
  * (user UUID) — never the client's contact name/email.
+ *
+ * project_proposal_submitted / project_proposal_accepted are emitted SERVER-SIDE
+ * (BAL-357) so the Balo service fee (`balo_fee_bps`) and the client-charged price
+ * (`client_price_cents`) — from which the expert's exact payout could be backed out
+ * — never transit the browser. This is an audience-boundary invariant: a client
+ * must never be able to read the expert's fee/price in devtools, and vice versa.
  */
 export const PROJECT_SERVER_EVENTS = {
   REQUEST_ACCESS_DENIED: 'project_request_access_denied',
+  PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
+  PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -277,6 +270,39 @@ export interface ProjectServerEventMap {
     request_id: string;
     reason: ProjectRequestAccessDenialReason;
     lens_attempted: 'expert';
+    distinct_id: string;
+  };
+  // BAL-357: emitted server-side from the expert's submit action — the fee +
+  // client price never reach the browser. `distinct_id` is the acting expert.
+  [PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]: {
+    request_id: string;
+    relationship_id: string;
+    expert_id: string;
+    price_cents: number;
+    currency: string;
+    /** Sum of milestone estimated_minutes (BAL-294). 0 for Fixed (effort is T&M-only). */
+    total_estimated_minutes: number;
+    /** The proposal's pricing method at submit (BAL-294). */
+    pricing_method: 'fixed' | 'tm';
+    /** Snapshotted Balo service margin, in basis points (BAL-357). 2500 = 25%. */
+    balo_fee_bps: number;
+    /** Client-charged price = applyBaloFee(price_cents, balo_fee_bps), derived
+     *  SERVER-SIDE (BAL-357). `price_cents` above stays the expert's payout quote. */
+    client_price_cents: number;
+    distinct_id: string;
+  };
+  // BAL-357: emitted server-side from the client's accept action — the fee +
+  // client price never reach the browser. `distinct_id` is the acting client.
+  [PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_ACCEPTED]: {
+    request_id: string;
+    relationship_id: string;
+    expert_id: string;
+    proposal_id: string;
+    /** Snapshotted Balo service margin, in basis points (BAL-357). 2500 = 25%. */
+    balo_fee_bps: number;
+    /** Client-charged price = applyBaloFee(proposal.price_cents, balo_fee_bps),
+     *  derived SERVER-SIDE (BAL-357), never on the client. */
+    client_price_cents: number;
     distinct_id: string;
   };
 }

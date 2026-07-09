@@ -23,6 +23,16 @@ vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
 }));
 
+const mockTrackServer = vi.fn();
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: (...a: unknown[]) => mockTrackServer(...a),
+  PROJECT_SERVER_EVENTS: {
+    REQUEST_ACCESS_DENIED: 'project_request_access_denied',
+    PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
+    PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
+  },
+}));
+
 const {
   mockFindById,
   mockAccept,
@@ -82,6 +92,7 @@ const PROPOSAL = {
   pricingMethod: 'fixed',
   priceCents: 500000,
   currency: 'aud',
+  baloFeeBps: 2500,
 };
 
 function accessOk(overrides: Record<string, unknown> = {}) {
@@ -203,6 +214,18 @@ describe('acceptProposalAction', () => {
       proposalId: PROPOSAL_ID,
       expertProfileId: EXPERT_PROFILE_ID,
       transitioned: true,
+    });
+
+    // BAL-357: the fee + client price are emitted server-side, NOT returned to the
+    // client's browser.
+    expect(mockTrackServer).toHaveBeenCalledWith('project_proposal_accepted', {
+      request_id: REQUEST_ID,
+      relationship_id: REL_ID,
+      expert_id: EXPERT_PROFILE_ID,
+      proposal_id: PROPOSAL_ID,
+      balo_fee_bps: 2500,
+      client_price_cents: 625000, // applyBaloFee(500000, 2500)
+      distinct_id: 'user-client',
     });
 
     // Commits the accept via the EXISTING repo method.

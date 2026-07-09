@@ -19,12 +19,13 @@ import {
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
-import { sumEstimatedMinutes } from '@balo/shared/pricing';
+import { applyBaloFee, sumEstimatedMinutes } from '@balo/shared/pricing';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
 import { log } from '@/lib/logging';
+import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { validateProposalReadiness } from './proposal-readiness';
 
@@ -58,9 +59,12 @@ export type SubmitProposalResult =
       expertProfileId: string;
       /** Whether the REQUEST aggregate advanced `proposal_requested → proposal_submitted`. */
       transitioned: boolean;
-      /** Server-computed — the island attaches these to `PROJECT_PROPOSAL_SUBMITTED`.
-       *  `totalEstimatedMinutes` sums the persisted milestones' effort (0 for Fixed,
-       *  where effort is force-nulled); `pricingMethod` is the submitted method. */
+      /** Server-computed — the island attaches these to the OTHER client events it
+       *  still fires (e.g. `MILESTONE_EFFORT_ESTIMATED`). `PROJECT_PROPOSAL_SUBMITTED`
+       *  itself is now emitted server-side (BAL-357), so the fee + client price are
+       *  NOT included here — they must never reach the browser. `totalEstimatedMinutes`
+       *  sums the persisted milestones' effort (0 for Fixed, where effort is
+       *  force-nulled); `pricingMethod` is the submitted method. */
       analytics: {
         priceCents: number;
         currency: string;
@@ -352,6 +356,9 @@ async function runSubmit(
   //     advanced atomically inside promoteToSubmit (ADR-1025 / BAL-295).
   const transitioned = await didRequestAdvance(requestId, access.request.status);
 
+  const totalEstimatedMinutes = sumEstimatedMinutes(milestones);
+  const clientPriceCents = applyBaloFee(draft.priceCents, draft.baloFeeBps);
+
   // 12. Key business event (after promotion).
   log.info('Proposal submitted', {
     requestId,
@@ -359,6 +366,23 @@ async function runSubmit(
     proposalId,
     userId: user.id,
     transitioned,
+  });
+
+  // BAL-357: emit PROJECT_PROPOSAL_SUBMITTED SERVER-SIDE (audience boundary). The
+  // Balo fee + client-charged price are derived here and NEVER returned to the
+  // expert's browser, so a client can't back out the expert's payout. `distinct_id`
+  // is the acting expert.
+  trackServerAndFlush(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED, {
+    request_id: requestId,
+    relationship_id: relationshipId,
+    expert_id: access.relationship.expertProfileId,
+    price_cents: draft.priceCents,
+    currency: draft.currency,
+    total_estimated_minutes: totalEstimatedMinutes,
+    pricing_method: draft.pricingMethod,
+    balo_fee_bps: draft.baloFeeBps,
+    client_price_cents: clientPriceCents,
+    distinct_id: user.id,
   });
 
   // 11. Notify the CLIENT (fire-and-forget). `recipient` for the expert lens is
@@ -380,8 +404,10 @@ async function runSubmit(
   // 13. Revalidate the request-detail page.
   revalidatePath(`/projects/${requestId}`);
 
-  // 14. Return success + analytics for the client island. `totalEstimatedMinutes`
-  //     sums the persisted milestones' effort (Fixed force-nulls effort, so it is 0).
+  // 14. Return success + analytics for the OTHER client events the island still
+  //     fires. `totalEstimatedMinutes` sums the persisted milestones' effort (Fixed
+  //     force-nulls effort, so it is 0). The fee + client price are intentionally
+  //     absent — PROJECT_PROPOSAL_SUBMITTED is emitted server-side (BAL-357).
   return {
     success: true,
     proposalId,
@@ -390,7 +416,7 @@ async function runSubmit(
     analytics: {
       priceCents: draft.priceCents,
       currency: draft.currency,
-      totalEstimatedMinutes: sumEstimatedMinutes(milestones),
+      totalEstimatedMinutes,
       pricingMethod: draft.pricingMethod,
       milestoneCount: milestones.length,
     },

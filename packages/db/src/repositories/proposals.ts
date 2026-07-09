@@ -3,6 +3,7 @@ import { db } from '../client';
 import {
   proposals,
   proposalChangeRequests,
+  projectRequests,
   requestExpertRelationships,
   type Proposal,
   type ProposalChangeRequest,
@@ -172,6 +173,27 @@ function toCoherenceSnapshot(
   };
 }
 
+/**
+ * Read the request-level Balo fee (basis points) inside the active transaction.
+ * The fee is snapshotted onto each proposal version at create/resubmit — it is
+ * system-sourced from the request, NEVER trusted from the caller (same rule as
+ * the denormalised projectRequestId/expertProfileId). Shared by `submit`,
+ * `createDraft`, and `resubmit` so the read lives in exactly one place.
+ */
+async function readRequestBaloFeeBpsTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  projectRequestId: string
+): Promise<number> {
+  const [request] = await tx
+    .select({ baloFeeBps: projectRequests.baloFeeBps })
+    .from(projectRequests)
+    .where(eq(projectRequests.id, projectRequestId));
+  if (request === undefined) {
+    throw new Error(`Project request not found: ${projectRequestId}`);
+  }
+  return request.baloFeeBps;
+}
+
 export const proposalsRepository = {
   /**
    * Expert submits a proposal for a relationship. In ONE transaction: insert the
@@ -235,6 +257,9 @@ export const proposalsRepository = {
         expectedFrom: 'proposal_requested',
       });
 
+      // Snapshot the Balo fee from the request (system-sourced, never caller-trusted).
+      const baloFeeBps = await readRequestBaloFeeBpsTx(tx, relationship.projectRequestId);
+
       const [row] = await tx
         .insert(proposals)
         .values({
@@ -248,6 +273,7 @@ export const proposalsRepository = {
           pricingMethod: input.pricingMethod,
           priceCents: input.priceCents,
           currency: input.currency,
+          baloFeeBps,
           timeframeWeeks: input.timeframeWeeks,
           exclusions: input.exclusions,
           depositCents: input.depositCents,
@@ -308,6 +334,9 @@ export const proposalsRepository = {
         throw new Error(`Request expert relationship not found: ${input.relationshipId}`);
       }
 
+      // Snapshot the Balo fee from the request (system-sourced, never caller-trusted).
+      const baloFeeBps = await readRequestBaloFeeBpsTx(tx, relationship.projectRequestId);
+
       const [row] = await tx
         .insert(proposals)
         .values({
@@ -321,6 +350,7 @@ export const proposalsRepository = {
           pricingMethod: input.pricingMethod,
           priceCents: input.priceCents,
           currency: input.currency,
+          baloFeeBps,
           timeframeWeeks: input.timeframeWeeks,
           exclusions: input.exclusions,
           depositCents: input.depositCents,
@@ -700,6 +730,11 @@ export const proposalsRepository = {
         throw new InvalidProposalTransitionError(current.status, 'resubmitted');
       }
 
+      // Snapshot the Balo fee from the REQUEST's CURRENT value (NOT the prior
+      // proposal) — a fee change since v1 applies to the new version. Read via the
+      // locked row's projectRequestId.
+      const baloFeeBps = await readRequestBaloFeeBpsTx(tx, current.projectRequestId);
+
       // FLIP FIRST — vacate the partial-unique slot before the insert.
       await tx
         .update(proposals)
@@ -720,6 +755,7 @@ export const proposalsRepository = {
           pricingMethod: input.pricingMethod,
           priceCents: input.priceCents,
           currency: input.currency,
+          baloFeeBps,
           timeframeWeeks: input.timeframeWeeks,
           exclusions: input.exclusions,
           depositCents: input.depositCents,
