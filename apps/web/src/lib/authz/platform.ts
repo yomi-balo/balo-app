@@ -6,7 +6,7 @@ import {
 } from '@balo/shared/authz';
 
 /**
- * platform-capability web seam (BAL-358) — the client-safe gate for "does this
+ * platform-capability web seam (BAL-358 / ADR-1035) — the client-safe gate for "does this
  * viewer hold a platform-staff capability". PURE + synchronous: it reads
  * `SessionUser.platformRole` (already on the session — no DB round-trip) and
  * delegates to the pure `@balo/shared/authz` platform map, the single place a

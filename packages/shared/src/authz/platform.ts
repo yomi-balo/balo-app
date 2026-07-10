@@ -1,5 +1,5 @@
 /**
- * Platform-capability axis (BAL-358) — the SINGLE place in the codebase where a
+ * Platform-capability axis (BAL-358 / ADR-1035) — the SINGLE place in the codebase where a
  * platform-staff `platformRole` string is interpreted into platform-wide
  * capabilities. DISTINCT from the party-membership axis in `./index.ts`: that map
  * reads a company/agency membership role (`owner|admin|member|expert`); THIS map

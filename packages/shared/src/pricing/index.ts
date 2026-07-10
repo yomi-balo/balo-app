@@ -95,9 +95,10 @@ export function parseFeePercentToBps(input: string): ParseFeeResult {
     return { ok: false, reason: 'empty' };
   }
 
-  // Anchored, non-ambiguous numeric shape (linear — no ReDoS): optional sign,
-  // whole digits, optional single fractional group.
-  const match = /^-?(\d+)(?:\.(\d+))?$/.exec(withoutPercent);
+  // Anchored, non-ambiguous numeric shape (linear — no ReDoS): whole digits,
+  // optional single fractional group; a leading sign is rejected (a fee percent
+  // is never negative, so any leading minus fails to match → not_a_number).
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(withoutPercent);
   if (match === null) {
     return { ok: false, reason: 'not_a_number' };
   }

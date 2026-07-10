@@ -214,8 +214,15 @@ describe('parseFeePercentToBps', () => {
     expect(parseFeePercentToBps('17.533')).toEqual({ ok: false, reason: 'too_many_decimals' });
   });
 
+  it('rejects a leading minus sign as not a number (a fee percent is never negative)', () => {
+    // The leading `-?` was removed from the numeric regex, so any negative fails the
+    // shape check BEFORE the range check — `-0` no longer parses to an accepted 0%.
+    expect(parseFeePercentToBps('-0')).toEqual({ ok: false, reason: 'not_a_number' });
+    expect(parseFeePercentToBps('-1')).toEqual({ ok: false, reason: 'not_a_number' });
+    expect(parseFeePercentToBps('-5')).toEqual({ ok: false, reason: 'not_a_number' });
+  });
+
   it('rejects out-of-range percents', () => {
-    expect(parseFeePercentToBps('-1')).toEqual({ ok: false, reason: 'out_of_range' });
     expect(parseFeePercentToBps('150')).toEqual({ ok: false, reason: 'out_of_range' });
   });
 });
