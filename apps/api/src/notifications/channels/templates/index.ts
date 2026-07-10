@@ -646,7 +646,10 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // `recipientName` (= the owner). CTA points at the team/members settings surface.
   'agency-provisioned': (data) => {
     const agency = data.agency as { name?: string } | undefined;
-    const teamName = agency?.name ?? 'your team';
+    // Capitalized to match the in-app title fallback ('Your team is set up') and to
+    // read correctly at the start of the subject line. Defensive only — agency.provisioned
+    // always hydrates data.agency.name, so this fallback is effectively unreachable.
+    const teamName = agency?.name ?? 'Your team';
     return {
       component: React.createElement(AgencyProvisionedEmail, {
         firstName: (data.recipientName as string) ?? 'there',

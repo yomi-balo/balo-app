@@ -34,9 +34,9 @@ describe('getEmailTemplate — agency-provisioned factory (BAL-348)', () => {
     expect(result.component).toBeDefined();
   });
 
-  it('falls back to "your team" when the agency summary is absent', () => {
+  it('falls back to "Your team" when the agency summary is absent (matches the in-app title)', () => {
     const result = getEmailTemplate('agency-provisioned', { recipientName: 'Priya' });
-    expect(result.subject).toBe('your team is set up on Balo');
+    expect(result.subject).toBe('Your team is set up on Balo');
     expect(result.component).toBeDefined();
   });
 });
