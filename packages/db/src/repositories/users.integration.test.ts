@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { partyDomains } from '../schema';
+import { partyDomains, auditEvents } from '../schema';
 import { userFactory, companyFactory, companyMemberFactory } from '../test/factories';
 import { usersRepository } from './users';
 
@@ -266,5 +266,190 @@ describe('usersRepository.findNamesByIds', () => {
 
   it('returns an empty array for empty input (no query)', async () => {
     await expect(usersRepository.findNamesByIds([])).resolves.toEqual([]);
+  });
+});
+
+describe('usersRepository.relinkWorkosId (BAL-360)', () => {
+  /** Live audit rows recording a workos re-link for a given user id. */
+  async function relinkAuditRows(userId: string) {
+    return db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityType, 'user'),
+          eq(auditEvents.entityId, userId),
+          eq(auditEvents.action, 'user.workos_relinked')
+        )
+      );
+  }
+
+  it('re-links the workosId and writes the audit row atomically', async () => {
+    const user = await userFactory({ workosId: 'W1' });
+
+    const relinked = await usersRepository.relinkWorkosId(user.id, 'W2', {
+      actorUserId: user.id,
+      oldWorkosId: 'W1',
+      email: user.email,
+      emailVerified: true,
+    });
+
+    // The returned row carries the NEW identity.
+    expect(relinked.id).toBe(user.id);
+    expect(relinked.workosId).toBe('W2');
+
+    // The live lookup follows the new identity; the old one no longer resolves.
+    await expect(usersRepository.findByWorkosId('W2')).resolves.toMatchObject({ id: user.id });
+    await expect(usersRepository.findByWorkosId('W1')).resolves.toBeUndefined();
+
+    // Exactly one audit row, committed in the SAME unit as the update.
+    const rows = await relinkAuditRows(user.id);
+    expect(rows).toHaveLength(1);
+    const [auditRow] = rows;
+    if (auditRow === undefined) throw new Error('expected an audit row');
+    expect(auditRow.actorUserId).toBe(user.id);
+    expect(auditRow.action).toBe('user.workos_relinked');
+    expect(auditRow.entityType).toBe('user');
+    expect(auditRow.entityId).toBe(user.id);
+    expect(auditRow.metadata).toMatchObject({
+      oldWorkosId: 'W1',
+      newWorkosId: 'W2',
+      email: user.email,
+    });
+  });
+
+  it('throws and writes NO audit row when the target is soft-deleted', async () => {
+    const user = await userFactory({ workosId: 'W1' });
+    await usersRepository.softDelete(user.id);
+
+    await expect(
+      usersRepository.relinkWorkosId(user.id, 'W2', {
+        actorUserId: user.id,
+        oldWorkosId: 'W1',
+        email: user.email,
+        emailVerified: true,
+      })
+    ).rejects.toThrow('relinkWorkosId: user row not found');
+
+    // The guard fires before the audit write, and the failed tx rolls back —
+    // nothing was recorded for this entity.
+    await expect(relinkAuditRows(user.id)).resolves.toHaveLength(0);
+  });
+
+  it('throws for an unknown userId', async () => {
+    await expect(
+      usersRepository.relinkWorkosId(randomUUID(), 'W2', {
+        actorUserId: randomUUID(),
+        oldWorkosId: 'W1',
+        email: 'nobody@test.com',
+        emailVerified: true,
+      })
+    ).rejects.toThrow('relinkWorkosId: user row not found');
+  });
+
+  it('throws and writes NO audit row when emailVerified is not true', async () => {
+    const user = await userFactory({ workosId: 'W1' });
+
+    await expect(
+      usersRepository.relinkWorkosId(user.id, 'W2', {
+        actorUserId: user.id,
+        oldWorkosId: 'W1',
+        email: user.email,
+        emailVerified: false,
+      })
+    ).rejects.toThrow(/refusing to re-link an unverified identity/);
+
+    // Fail closed: the guard fires before the tx opens, so the identity is
+    // UNCHANGED (still resolves under the old workosId) and NOTHING is written.
+    await expect(usersRepository.findByWorkosId('W1')).resolves.toMatchObject({ id: user.id });
+    await expect(usersRepository.findByWorkosId('W2')).resolves.toBeUndefined();
+    await expect(relinkAuditRows(user.id)).resolves.toHaveLength(0);
+  });
+});
+
+describe('users partial unique indexes (BAL-360)', () => {
+  it('reuses an email freed by a soft-deleted user', async () => {
+    const email = `reuse-${randomUUID()}@test.com`;
+    const first = await usersRepository.create({
+      workosId: `wos-${randomUUID()}`,
+      email,
+      firstName: 'First',
+      lastName: 'Owner',
+    });
+    await usersRepository.softDelete(first.id);
+
+    // The email slot is freed because the unique index is partial on
+    // deleted_at IS NULL — a fresh live row may reuse it.
+    const second = await usersRepository.create({
+      workosId: `wos-${randomUUID()}`,
+      email,
+      firstName: 'Second',
+      lastName: 'Owner',
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.email).toBe(email);
+    expect(second.deletedAt).toBeNull();
+  });
+
+  it('reuses a workosId freed by a soft-deleted user', async () => {
+    const workosId = `wos-${randomUUID()}`;
+    const first = await usersRepository.create({
+      workosId,
+      email: `first-${randomUUID()}@test.com`,
+      firstName: 'First',
+      lastName: 'Identity',
+    });
+    await usersRepository.softDelete(first.id);
+
+    const second = await usersRepository.create({
+      workosId,
+      email: `second-${randomUUID()}@test.com`,
+      firstName: 'Second',
+      lastName: 'Identity',
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.workosId).toBe(workosId);
+    expect(second.deletedAt).toBeNull();
+  });
+
+  it('still rejects a duplicate email among LIVE users', async () => {
+    const email = `live-${randomUUID()}@test.com`;
+    await usersRepository.create({
+      workosId: `wos-${randomUUID()}`,
+      email,
+      firstName: 'Live',
+      lastName: 'One',
+    });
+
+    // Both rows live → the partial unique index still enforces uniqueness.
+    await expect(
+      usersRepository.create({
+        workosId: `wos-${randomUUID()}`,
+        email,
+        firstName: 'Live',
+        lastName: 'Two',
+      })
+    ).rejects.toThrow();
+  });
+
+  it('still rejects a duplicate workosId among LIVE users', async () => {
+    const workosId = `wos-${randomUUID()}`;
+    await usersRepository.create({
+      workosId,
+      email: `livea-${randomUUID()}@test.com`,
+      firstName: 'Live',
+      lastName: 'Alpha',
+    });
+
+    await expect(
+      usersRepository.create({
+        workosId,
+        email: `liveb-${randomUUID()}@test.com`,
+        firstName: 'Live',
+        lastName: 'Beta',
+      })
+    ).rejects.toThrow();
   });
 });

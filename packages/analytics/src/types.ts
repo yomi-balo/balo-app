@@ -1,4 +1,4 @@
-import type { AuthEventMap } from './events/auth';
+import type { AuthEventMap, AuthServerEventMap } from './events/auth';
 import type { OnboardingEventMap } from './events/onboarding';
 import type { ExpertEventMap, ExpertServerEventMap } from './events/expert';
 import type { ExpertSetupEventMap } from './events/expert-setup';
@@ -54,6 +54,7 @@ export type ServerEvents = ExpertServerEventMap &
   BillingServerEventMap &
   PartyDomainServerEventMap &
   PartyJoinServerEventMap &
-  EngagementServerEventMap;
+  EngagementServerEventMap &
+  AuthServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

@@ -104,3 +104,17 @@ export interface AuthEventMap {
     auth_method?: AuthMethodSignal;
   };
 }
+
+// BAL-360: SERVER-side auth events (the OAuth callback runs server-side and had no
+// analytics until now). Distinct from the CLIENT `AUTH_EVENTS`/`AuthEventMap` above.
+export const AUTH_SERVER_EVENTS = {
+  OAUTH_CALLBACK_RELINK: 'oauth_callback_relink',
+  OAUTH_CALLBACK_CONFLICT_409: 'oauth_callback_conflict_409',
+} as const;
+
+export interface AuthServerEventMap {
+  // Fired after a successful workosId re-link onto a live verified-email user.
+  [AUTH_SERVER_EVENTS.OAUTH_CALLBACK_RELINK]: { distinct_id: string };
+  // Fired on the conflict branch (live email, unverified profile → refused re-link).
+  [AUTH_SERVER_EVENTS.OAUTH_CALLBACK_CONFLICT_409]: { distinct_id: string };
+}
