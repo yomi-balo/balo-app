@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../client';
 import {
@@ -359,6 +359,36 @@ export const partyJoinRequestsRepository = {
     exec?: DbExecutor
   ): Promise<PartyJoinRequest | undefined> => {
     return findPendingRow(exec ?? db, partyType, partyId, userId);
+  },
+
+  /**
+   * The most-recent LIVE join request for (party, user) regardless of status, or
+   * undefined. Newest-first by `createdAt`, so a re-request filed after a prior
+   * terminal outcome wins. Used by the BAL-348 join-result landing surface to gate
+   * the `declined` phase on a REAL declined request state — the `status` query param
+   * is never trusted, and the default never-touched state (no row) must NOT pass
+   * (otherwise the landing is an existence/name oracle for any company id).
+   */
+  findLatestByUserAndParty: async (
+    partyType: PartyType,
+    partyId: string,
+    userId: string,
+    exec?: DbExecutor
+  ): Promise<PartyJoinRequest | undefined> => {
+    const [row] = await (exec ?? db)
+      .select()
+      .from(partyJoinRequests)
+      .where(
+        and(
+          eq(partyJoinRequests.partyType, partyType),
+          eq(partyJoinRequests.partyId, partyId),
+          eq(partyJoinRequests.userId, userId),
+          isNull(partyJoinRequests.deletedAt)
+        )
+      )
+      .orderBy(desc(partyJoinRequests.createdAt))
+      .limit(1);
+    return row;
   },
 
   /**

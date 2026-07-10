@@ -121,17 +121,21 @@ export function DomainJoinPending({
       </h1>
       <p className="text-muted-foreground mt-2 max-w-md text-sm leading-relaxed">{subcopy}</p>
 
+      {/* Hoisted so a completion failure surfaces for ALL three phases — the approved
+          "Continue" + declined "Create my own company" CTAs drive real async mutations
+          (via JoinResultView), not just the pending explore/escape-hatch. */}
+      {actionError !== null && (
+        <div
+          role="alert"
+          className="border-destructive/25 bg-destructive/10 text-destructive mt-4 w-full max-w-sm rounded-lg border px-3 py-2.5 text-left text-sm"
+        >
+          {actionError}
+        </div>
+      )}
+
       {phase === 'pending' && (
         <>
           <NextSteps companyName={companyName} />
-          {actionError !== null && (
-            <div
-              role="alert"
-              className="border-destructive/25 bg-destructive/10 text-destructive mt-4 w-full max-w-sm rounded-lg border px-3 py-2.5 text-left text-sm"
-            >
-              {actionError}
-            </div>
-          )}
           <div className="mt-7 flex w-full max-w-sm flex-col gap-3">
             <ShimmerButton
               type="button"
@@ -141,14 +145,7 @@ export function DomainJoinPending({
               shimmerColor="rgba(255, 255, 255, 0.15)"
               background="var(--primary)"
             >
-              {isBusy ? (
-                <span className="flex items-center" aria-live="polite">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-                  Working&hellip;
-                </span>
-              ) : (
-                'Explore Balo while you wait'
-              )}
+              <BusyButtonLabel isBusy={isBusy}>Explore Balo while you wait</BusyButtonLabel>
             </ShimmerButton>
             <Button
               variant="outline"
@@ -168,11 +165,12 @@ export function DomainJoinPending({
           <ShimmerButton
             type="button"
             onClick={handleContinue}
+            disabled={isBusy}
             className="h-11 w-full rounded-lg text-sm font-medium"
             shimmerColor="rgba(255, 255, 255, 0.15)"
             background="var(--primary)"
           >
-            Continue to {companyName}
+            <BusyButtonLabel isBusy={isBusy}>Continue to {companyName}</BusyButtonLabel>
           </ShimmerButton>
         </div>
       )}
@@ -182,16 +180,37 @@ export function DomainJoinPending({
           <ShimmerButton
             type="button"
             onClick={onCreateInstead}
+            disabled={isBusy}
             className="h-11 w-full rounded-lg text-sm font-medium"
             shimmerColor="rgba(255, 255, 255, 0.15)"
             background="var(--primary)"
           >
-            Create my own company
+            <BusyButtonLabel isBusy={isBusy}>Create my own company</BusyButtonLabel>
           </ShimmerButton>
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Terminal-CTA label that swaps to a "Working…" spinner while a completion mutation
+ * is in flight. Shared by all three phase buttons so the busy affordance is identical
+ * (and Sonar's new-code duplication gate stays green).
+ */
+function BusyButtonLabel({
+  isBusy,
+  children,
+}: Readonly<{ isBusy: boolean; children: ReactNode }>): React.JSX.Element {
+  if (isBusy) {
+    return (
+      <span className="flex items-center" aria-live="polite">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+        Working&hellip;
+      </span>
+    );
+  }
+  return <>{children}</>;
 }
 
 const NEXT_STEPS = (companyName: string): ReadonlyArray<{ key: string; text: ReactNode }> => [

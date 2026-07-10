@@ -30,6 +30,18 @@ const ADMIN_PREFIX = '/admin';
 
 export const ONBOARDING_PATH = '/onboarding';
 
+/**
+ * The onboarding wizard root OR any nested onboarding route (e.g. BAL-348's
+ * `/onboarding/join-result` deep-link landing). Used to EXEMPT the not-onboarded
+ * redirect: a request-mode requester who never finished onboarding must be able to
+ * reach the join-result terminal screen rather than being bounced to the wizard root.
+ * The completed-user bounce stays keyed on the exact wizard root (`=== ONBOARDING_PATH`),
+ * so a completed user still sees the terminal screen and only the bare wizard bounces.
+ */
+export function isOnboardingRoute(pathname: string): boolean {
+  return pathname === ONBOARDING_PATH || pathname.startsWith(ONBOARDING_PATH + '/');
+}
+
 export function isPublicRoute(pathname: string): boolean {
   return (
     PUBLIC_PATHS.has(pathname) || PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))

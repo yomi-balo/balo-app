@@ -92,6 +92,11 @@ describe('joinMatchedCompanyAction', () => {
   });
 
   describe('success path', () => {
+    it('re-derives the actionable company from (session.user.id, session.user.email) — BAL-348', async () => {
+      await joinMatchedCompanyAction();
+      expect(mockResolveActionable).toHaveBeenCalledWith('user-1', 'founder@acme.io');
+    });
+
     it('creates the membership with the server-derived party and self-actor (no client id path)', async () => {
       await joinMatchedCompanyAction();
       expect(mockFindOrCreateMembership).toHaveBeenCalledWith({

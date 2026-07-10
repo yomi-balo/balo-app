@@ -195,6 +195,22 @@ export type PartyJoinRequestCreatedPayload = PartyJoinEventBase; // correlationI
 export type PartyJoinRequestApprovedPayload = PartyJoinEventBase; // correlationId = joinRequestId
 export type PartyJoinRequestDeclinedPayload = PartyJoinEventBase; // correlationId = joinRequestId
 
+// BAL-348 / BAL-356 — a corporate expert PROVISIONED a new agency (signer became
+// owner). Published post-commit by the web write action ONLY on the fresh-create
+// (corporate) branch — never on SOLO / JOIN / already_linked (corporate-only gating
+// lives at the emit site; the engine adds none). `ownerUserId` is the new owner
+// (subject + recipient — the payload deliberately uses `ownerUserId`, NOT `userId`,
+// so neither the `self` recipient nor the auto `payload.userId → data.user`
+// hydration fires; a dedicated `owner` recipient + agency hydration branch handle
+// it). `correlationId` is the stable `agencyId` → BullMQ jobId dedup key, so a retry
+// after a partial failure never double-notifies. Mirror of
+// apps/web/src/lib/notifications/types.ts — keep the two in lockstep.
+export interface AgencyProvisionedPayload {
+  correlationId: string; // = agencyId → BullMQ jobId dedup
+  agencyId: string;
+  ownerUserId: string; // the new owner (subject + recipient)
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -229,7 +245,8 @@ export type NotificationEvent =
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
-  | 'party.join_request_declined';
+  | 'party.join_request_declined'
+  | 'agency.provisioned';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -282,4 +299,5 @@ export interface EventPayloadMap {
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
+  'agency.provisioned': AgencyProvisionedPayload;
 }

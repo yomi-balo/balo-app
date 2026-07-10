@@ -40,7 +40,10 @@ export async function joinMatchedCompanyAction(): Promise<AuthResult<JoinMatched
   }
 
   try {
-    const actionable = await resolveActionableCompanyForSession(session.user.email);
+    const actionable = await resolveActionableCompanyForSession(
+      session.user.id,
+      session.user.email
+    );
     // Fail CLOSED: no actionable company, or mode drifted to request since resolve.
     if (actionable === null || actionable.mode !== 'auto') {
       return {

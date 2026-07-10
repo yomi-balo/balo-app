@@ -356,6 +356,15 @@ const partyJoinEventPayload = z.object({
   userId: z.uuid(),
 });
 
+// BAL-348 agency provisioned (corporate expert → new agency owner). `correlationId`
+// = agencyId (stable → jobId dedup); `ownerUserId` is the new owner (subject +
+// recipient). All three are uuids. Mirrors apps/web/src/lib/notifications/types.ts.
+const agencyProvisionedPayload = z.object({
+  correlationId: z.uuid(),
+  agencyId: z.uuid(),
+  ownerUserId: z.uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -474,6 +483,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('party.join_request_declined'),
     payload: partyJoinEventPayload,
+  }),
+  z.object({
+    event: z.literal('agency.provisioned'),
+    payload: agencyProvisionedPayload,
   }),
 ]);
 

@@ -108,6 +108,19 @@ describe('DomainJoinPending', () => {
         expect.anything()
       );
     });
+
+    it('disables the continue CTA and shows the Working… spinner while busy', () => {
+      renderPending({ initialPhase: 'approved', isBusy: true });
+      expect(screen.getByRole('button', { name: /working/i })).toBeDisabled();
+    });
+
+    it('surfaces a completion error in an alert banner', () => {
+      renderPending({
+        initialPhase: 'approved',
+        actionError: 'We could not finish that just now.',
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not finish that just now/i);
+    });
   });
 
   describe('declined phase (dormant — testable via initialPhase)', () => {
@@ -123,6 +136,19 @@ describe('DomainJoinPending', () => {
 
       await user.click(screen.getByRole('button', { name: /create my own company/i }));
       expect(onCreateInstead).toHaveBeenCalledOnce();
+    });
+
+    it('disables the create CTA and shows the Working… spinner while busy', () => {
+      renderPending({ initialPhase: 'declined', isBusy: true });
+      expect(screen.getByRole('button', { name: /working/i })).toBeDisabled();
+    });
+
+    it('surfaces a completion error in an alert banner', () => {
+      renderPending({
+        initialPhase: 'declined',
+        actionError: 'We could not finish that just now.',
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not finish that just now/i);
     });
   });
 });

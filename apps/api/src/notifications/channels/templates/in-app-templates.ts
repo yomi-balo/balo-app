@@ -36,6 +36,29 @@ function partyTypeNoun(data: Record<string, unknown>): string {
   return 'organization';
 }
 
+/**
+ * BAL-348 — the approved/declined in-app deep-link. Lands the requester on the
+ * `/onboarding/join-result` terminal screen, which RE-VALIDATES the party
+ * relationship server-side (the `status`/`party` query params are never trusted).
+ *
+ * The landing surface is COMPANY-ONLY (it reads `companiesRepository.findById` and
+ * gates on `PARTY_TYPE = 'company'`), but `party.join_request_approved/declined` are
+ * defined for BOTH company and agency parties. So the landing link is emitted only for
+ * a company party; an agency party (or a payload with no `partyId`) falls back to
+ * `/dashboard` for approved and omits the link for declined (its terminal screen offers
+ * "create your own" — no dead-end).
+ */
+function joinResultActionUrl(
+  status: 'approved' | 'declined',
+  data: Record<string, unknown>
+): string | undefined {
+  const partyId = data.partyId;
+  if (data.partyType !== 'company' || typeof partyId !== 'string' || partyId.length === 0) {
+    return status === 'approved' ? '/dashboard' : undefined;
+  }
+  return `/onboarding/join-result?status=${status}&party=${partyId}`;
+}
+
 /** The common in-app shape: title + body linking to the project request. */
 function projectRequestNotice(
   title: string,
@@ -243,16 +266,34 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-348: the deep-link now lands the requester on the join-result terminal screen
+  // (was /dashboard) so a request-mode requester who never finished onboarding reaches
+  // the correct "you're in" screen. The route re-validates membership server-side.
   'party-join-request-approved': (data) => ({
     title: "You're in",
     body: `Your request to join the ${partyTypeNoun(data)} was approved`,
-    actionUrl: '/dashboard',
+    actionUrl: joinResultActionUrl('approved', data),
   }),
 
+  // BAL-348: adds a deep-link (was none) to the declined terminal screen, which offers
+  // the "create your own company" action.
   'party-join-request-declined': (data) => ({
     title: 'Request declined',
     body: `Your request to join the ${partyTypeNoun(data)} was not approved`,
+    actionUrl: joinResultActionUrl('declined', data),
   }),
+
+  // BAL-348 agency provisioned — owner in-app milestone. `data.agency` is the
+  // resolver-hydrated summary (name only). Deep-links to team/members settings.
+  'agency-provisioned': (data) => {
+    const agency = data.agency as { name?: string } | undefined;
+    const teamName = agency?.name ?? 'Your team';
+    return {
+      title: 'Your team is set up',
+      body: `${teamName} is on Balo — colleagues who sign up with your email domain will join automatically.`,
+      actionUrl: '/settings/team',
+    };
+  },
 
   // BAL-332 (D2) milestone completed — CLIENT owner ("your expert delivered").
   'engagement-milestone-completed-client': (data) => {

@@ -216,6 +216,13 @@ function resolveRecipient(
       const id = context.payload.creatorUserId;
       return typeof id === 'string' ? id : undefined;
     }
+    case 'owner': {
+      // BAL-348: the new agency owner (agency.provisioned), a single resolved id from
+      // payload.ownerUserId — NOT a fan-out (stays out of FANOUT_RECIPIENTS). Mirrors
+      // billing_creator's single-recipient shape. `undefined` when unset ⇒ skip.
+      const id = context.payload.ownerUserId;
+      return typeof id === 'string' ? id : undefined;
+    }
     case 'admin':
       // Future: resolve admin user IDs from config or DB
       return undefined;

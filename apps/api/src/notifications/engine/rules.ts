@@ -11,7 +11,8 @@ export interface NotificationRule {
     | 'admin_users'
     | 'email_address'
     | 'billing_creator'
-    | 'party_admins';
+    | 'party_admins'
+    | 'owner';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -493,4 +494,9 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   'party.join_request_created': emailAndInApp('party_admins', 'party-join-request-created'),
   'party.join_request_approved': emailAndInApp('self', 'party-join-request-approved'),
   'party.join_request_declined': emailAndInApp('self', 'party-join-request-declined'),
+  // BAL-348: a corporate expert provisioned a new agency. The new OWNER
+  // (recipient:'owner' → payload.ownerUserId; a single recipient, NOT a fan-out) gets
+  // an email + in-app milestone notice naming the team. Corporate-only gating lives at
+  // the emit site — SOLO / JOIN / already_linked never publish this event.
+  'agency.provisioned': emailAndInApp('owner', 'agency-provisioned'),
 };

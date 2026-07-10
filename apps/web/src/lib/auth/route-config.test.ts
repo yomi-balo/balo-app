@@ -3,6 +3,7 @@ import {
   isPublicRoute,
   isAdminRoute,
   isApiRoute,
+  isOnboardingRoute,
   isValidReturnTo,
   PUBLIC_PATHS,
   PUBLIC_PREFIXES,
@@ -56,6 +57,24 @@ describe('isAdminRoute', () => {
     expect(isAdminRoute('/administrator')).toBe(false);
     expect(isAdminRoute('/admin-panel')).toBe(false);
     expect(isAdminRoute('/dashboard/admin')).toBe(false);
+  });
+});
+
+describe('isOnboardingRoute (BAL-348)', () => {
+  it('matches the wizard root exactly', () => {
+    expect(isOnboardingRoute(ONBOARDING_PATH)).toBe(true);
+    expect(isOnboardingRoute('/onboarding')).toBe(true);
+  });
+
+  it('matches nested onboarding routes (the join-result landing)', () => {
+    expect(isOnboardingRoute('/onboarding/join-result')).toBe(true);
+    expect(isOnboardingRoute('/onboarding/anything/deeper')).toBe(true);
+  });
+
+  it('does not match similar-but-different paths (so the not-onboarded redirect still applies)', () => {
+    expect(isOnboardingRoute('/onboardingx')).toBe(false);
+    expect(isOnboardingRoute('/dashboard')).toBe(false);
+    expect(isOnboardingRoute('/onboard')).toBe(false);
   });
 });
 

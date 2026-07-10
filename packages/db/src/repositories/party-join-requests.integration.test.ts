@@ -265,6 +265,104 @@ describe('partyJoinRequestsRepository.findPendingByUserAndParty', () => {
   });
 });
 
+// ── partyJoinRequestsRepository.findLatestByUserAndParty (BAL-348 landing gate) ──
+
+describe('partyJoinRequestsRepository.findLatestByUserAndParty', () => {
+  it('returns the most-recent live request regardless of status (newest-first by createdAt)', async () => {
+    const { companyId, userId } = await seedCompanyAndRequester();
+    const admin = await userFactory();
+
+    // First request → declined (terminal is outside the partial index, so a re-request is allowed).
+    const first = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: companyId,
+      userId,
+    });
+    await partyJoinRequestsRepository.decline({
+      requestId: first.request.id,
+      actorUserId: admin.id,
+    });
+
+    // A fresh (newer) pending request.
+    const second = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: companyId,
+      userId,
+    });
+
+    // Deterministic createdAt ordering: first older, second newer.
+    await db
+      .update(partyJoinRequests)
+      .set({ createdAt: new Date('2020-01-01T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, first.request.id));
+    await db
+      .update(partyJoinRequests)
+      .set({ createdAt: new Date('2020-06-01T00:00:00Z') })
+      .where(eq(partyJoinRequests.id, second.request.id));
+
+    const latest = await partyJoinRequestsRepository.findLatestByUserAndParty(
+      'company',
+      companyId,
+      userId
+    );
+    expect(latest?.id).toBe(second.request.id);
+    expect(latest?.status).toBe('pending');
+  });
+
+  it('surfaces a declined row when it is the only (most-recent) request', async () => {
+    const { companyId, userId } = await seedCompanyAndRequester();
+    const admin = await userFactory();
+    const created = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: companyId,
+      userId,
+    });
+    await partyJoinRequestsRepository.decline({
+      requestId: created.request.id,
+      actorUserId: admin.id,
+    });
+
+    const latest = await partyJoinRequestsRepository.findLatestByUserAndParty(
+      'company',
+      companyId,
+      userId
+    );
+    expect(latest?.status).toBe('declined');
+  });
+
+  it('returns undefined for a user with no request, ignoring another user on the same party', async () => {
+    const { companyId, userId } = await seedCompanyAndRequester();
+    const other = await userFactory();
+    // Another user's request against the same party must not leak into this user's read.
+    await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: companyId,
+      userId: other.id,
+    });
+
+    await expect(
+      partyJoinRequestsRepository.findLatestByUserAndParty('company', companyId, userId)
+    ).resolves.toBeUndefined();
+  });
+
+  it('excludes a soft-deleted row', async () => {
+    const { companyId, userId } = await seedCompanyAndRequester();
+    const created = await partyJoinRequestsRepository.findOrCreatePending({
+      partyType: 'company',
+      partyId: companyId,
+      userId,
+    });
+    await db
+      .update(partyJoinRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(partyJoinRequests.id, created.request.id));
+
+    await expect(
+      partyJoinRequestsRepository.findLatestByUserAndParty('company', companyId, userId)
+    ).resolves.toBeUndefined();
+  });
+});
+
 // ── partyJoinRequestsRepository.listPendingByParty (BAL-347 admin queue) ──
 
 describe('partyJoinRequestsRepository.listPendingByParty', () => {

@@ -8,6 +8,7 @@ const {
   mockFindUserIdsByProfileIds,
   mockListByRequest,
   mockListAdminUserIds,
+  mockGetAgencySummaryById,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockFindUserIdsByProfileIds: vi.fn(),
   mockListByRequest: vi.fn(),
   mockListAdminUserIds: vi.fn(),
+  mockGetAgencySummaryById: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -30,6 +32,7 @@ vi.mock('@balo/db', () => ({
   companiesRepository: { findById: mockCompanyFindById },
   proposalsRepository: { listByRequest: mockListByRequest },
   partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
+  agenciesRepository: { getSummaryById: mockGetAgencySummaryById },
 }));
 
 import { resolveContext } from './resolver.js';
@@ -343,6 +346,48 @@ describe('resolveContext', () => {
         '550e8400-e29b-41d4-a716-446655440004'
       );
       expect(context.data.expert).toEqual(expert);
+    });
+  });
+
+  // ── BAL-348 agency.provisioned hydration ──
+  describe('agency.provisioned hydration', () => {
+    it('hydrates data.agency from the projected summary and does NOT hydrate data.user', async () => {
+      const summary = { id: 'agency-1', name: 'CloudPeak Consulting', memberCount: 3 };
+      mockGetAgencySummaryById.mockResolvedValue(summary);
+
+      const context = await resolveContext('agency.provisioned', {
+        correlationId: 'agency-1',
+        agencyId: 'agency-1',
+        ownerUserId: 'owner-1',
+      });
+
+      expect(mockGetAgencySummaryById).toHaveBeenCalledWith('agency-1');
+      expect(context.data.agency).toEqual(summary);
+      // The payload carries ownerUserId (NOT userId), so the shared user hydration
+      // never fires — the owner's name is resolved later from recipientId by the adapter.
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(context.data.user).toBeUndefined();
+    });
+
+    it('sets data.agency to undefined when the agency row is missing (template falls back)', async () => {
+      mockGetAgencySummaryById.mockResolvedValue(undefined);
+
+      const context = await resolveContext('agency.provisioned', {
+        correlationId: 'agency-missing',
+        agencyId: 'agency-missing',
+        ownerUserId: 'owner-1',
+      });
+
+      expect(mockGetAgencySummaryById).toHaveBeenCalledWith('agency-missing');
+      expect(context.data.agency).toBeUndefined();
+    });
+
+    it('skips agency hydration when agencyId is absent', async () => {
+      await resolveContext('agency.provisioned', {
+        correlationId: 'agency-1',
+        ownerUserId: 'owner-1',
+      });
+      expect(mockGetAgencySummaryById).not.toHaveBeenCalled();
     });
   });
 

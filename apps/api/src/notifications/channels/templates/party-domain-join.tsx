@@ -196,7 +196,7 @@ export function PartyJoinRequestApprovedEmail({
       calloutText="Head to your workspace to see shared projects and connect with your teammates."
       supportPrefix="Questions?"
       baseUrl={baseUrl}
-      ctaLabel="Go to your workspace →"
+      ctaLabel="Continue →"
       ctaHref={teamUrl}
     />
   );
