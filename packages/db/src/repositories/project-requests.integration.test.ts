@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
   companies,
@@ -13,6 +13,7 @@ import {
   expressionsOfInterest,
   conversationMessages,
   requestExpertRelationships,
+  auditEvents,
 } from '../schema';
 import {
   userFactory,
@@ -961,5 +962,99 @@ describe('projectRequestsRepository.confirmKickoffGate', () => {
     await expect(
       projectRequestsRepository.confirmKickoffGate({ id: created.id, gate: 'client_billing' })
     ).rejects.toThrow();
+  });
+});
+
+// ── updateBaloFeeBps ─────────────────────────────────────────────────
+
+/** The Balo-fee-override audit rows for one request (test-local). */
+async function feeOverrideAuditRows(
+  requestId: string
+): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityId, requestId),
+        eq(auditEvents.action, 'project_request.balo_fee_overridden')
+      )
+    );
+}
+
+describe('projectRequestsRepository.updateBaloFeeBps', () => {
+  it('re-stamps the fee, returns changed:true, and writes exactly one audit row in the same tx', async () => {
+    const actor = await userFactory();
+    const created = await projectRequestFactory({ baloFeeBps: 2500 });
+
+    const result = await projectRequestsRepository.updateBaloFeeBps({
+      requestId: created.id,
+      newBps: 1750,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ previousBps: 2500, newBps: 1750, changed: true });
+
+    // Persisted (not just returned).
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.baloFeeBps).toBe(1750);
+
+    // Exactly one audit row, committed in the SAME transaction as the update.
+    const audits = await feeOverrideAuditRows(created.id);
+    expect(audits).toHaveLength(1);
+    const [audit] = audits;
+    if (audit === undefined) throw new Error('expected an audit row');
+    expect(audit.action).toBe('project_request.balo_fee_overridden');
+    expect(audit.entityType).toBe('project_request');
+    expect(audit.entityId).toBe(created.id);
+    expect(audit.actorUserId).toBe(actor.id);
+    expect(audit.metadata).toEqual({ previous_bps: 2500, new_bps: 1750 });
+  });
+
+  it('is a no-op when newBps equals the current value — changed:false, no update, no audit row', async () => {
+    const actor = await userFactory();
+    const created = await projectRequestFactory({ baloFeeBps: 2500 });
+
+    const result = await projectRequestsRepository.updateBaloFeeBps({
+      requestId: created.id,
+      newBps: 2500,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ previousBps: 2500, newBps: 2500, changed: false });
+
+    // Row unchanged.
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.baloFeeBps).toBe(2500);
+
+    // No audit row written for the override action.
+    await expect(feeOverrideAuditRows(created.id)).resolves.toHaveLength(0);
+  });
+
+  it('throws for an unknown id', async () => {
+    const actor = await userFactory();
+
+    await expect(
+      projectRequestsRepository.updateBaloFeeBps({
+        requestId: randomUUID(),
+        newBps: 1750,
+        actorUserId: actor.id,
+      })
+    ).rejects.toThrow();
+  });
+
+  it('throws for a soft-deleted request, leaving nothing written', async () => {
+    const actor = await userFactory();
+    const created = await projectRequestFactory({ baloFeeBps: 2500, deletedAt: new Date() });
+
+    await expect(
+      projectRequestsRepository.updateBaloFeeBps({
+        requestId: created.id,
+        newBps: 1750,
+        actorUserId: actor.id,
+      })
+    ).rejects.toThrow();
+
+    await expect(feeOverrideAuditRows(created.id)).resolves.toHaveLength(0);
   });
 });

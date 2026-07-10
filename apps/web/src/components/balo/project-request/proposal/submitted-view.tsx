@@ -2,6 +2,7 @@
 
 import { Clock, Hourglass } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { formatFeePercent } from '@balo/shared/pricing';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { ProposalDoc } from './proposal-doc';
 import { PayoutAssuranceNote } from './payout-assurance-note';
@@ -42,11 +43,6 @@ function waitingCopy(props: Readonly<SubmittedViewProps>): WaitingCopy {
     headline: `${otherProposalCount + 1} proposals submitted — client reviewing`,
     sub: 'No action until the client accepts one or asks for changes.',
   };
-}
-
-/** Format a basis-point fee rate as a whole/partial percent, e.g. 2500 → "25%". */
-function formatFeePercent(bps: number): string {
-  return `${bps / 100}%`;
 }
 
 interface AdminPricingRow {

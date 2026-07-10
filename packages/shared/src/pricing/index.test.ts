@@ -3,6 +3,12 @@ import {
   applyBaloFee,
   DEFAULT_BALO_FEE_BPS,
   deriveTmTotalCents,
+  feeBpsToPercent,
+  formatFeePercent,
+  isValidBaloFeeBps,
+  MAX_BALO_FEE_BPS,
+  MIN_BALO_FEE_BPS,
+  parseFeePercentToBps,
   sumEstimatedMinutes,
 } from './index';
 
@@ -116,5 +122,107 @@ describe('applyBaloFee', () => {
 
   it('exposes DEFAULT_BALO_FEE_BPS as 2500', () => {
     expect(DEFAULT_BALO_FEE_BPS).toBe(2500);
+  });
+});
+
+describe('feeBpsToPercent', () => {
+  it('converts whole-percent bps (2500 → 25)', () => {
+    expect(feeBpsToPercent(2500)).toBe(25);
+  });
+
+  it('converts fractional-percent bps (1750 → 17.5)', () => {
+    expect(feeBpsToPercent(1750)).toBe(17.5);
+  });
+
+  it('maps the range bounds (0 → 0, 10000 → 100)', () => {
+    expect(feeBpsToPercent(MIN_BALO_FEE_BPS)).toBe(0);
+    expect(feeBpsToPercent(MAX_BALO_FEE_BPS)).toBe(100);
+  });
+});
+
+describe('formatFeePercent', () => {
+  it('renders whole percents (2500 → "25%")', () => {
+    expect(formatFeePercent(2500)).toBe('25%');
+  });
+
+  it('renders fractional percents (1750 → "17.5%")', () => {
+    expect(formatFeePercent(1750)).toBe('17.5%');
+  });
+
+  it('renders the bounds ("0%" and "100%")', () => {
+    expect(formatFeePercent(0)).toBe('0%');
+    expect(formatFeePercent(10_000)).toBe('100%');
+  });
+});
+
+describe('isValidBaloFeeBps', () => {
+  it('accepts the inclusive range bounds', () => {
+    expect(isValidBaloFeeBps(0)).toBe(true);
+    expect(isValidBaloFeeBps(2500)).toBe(true);
+    expect(isValidBaloFeeBps(10_000)).toBe(true);
+  });
+
+  it('rejects out-of-range values', () => {
+    expect(isValidBaloFeeBps(-1)).toBe(false);
+    expect(isValidBaloFeeBps(10_001)).toBe(false);
+  });
+
+  it('rejects non-integers', () => {
+    expect(isValidBaloFeeBps(1750.5)).toBe(false);
+    expect(isValidBaloFeeBps(Number.NaN)).toBe(false);
+  });
+});
+
+describe('parseFeePercentToBps', () => {
+  it('parses a fractional percent ("17.5" → 1750)', () => {
+    expect(parseFeePercentToBps('17.5')).toEqual({ ok: true, bps: 1750 });
+  });
+
+  it('parses a whole percent ("25" → 2500)', () => {
+    expect(parseFeePercentToBps('25')).toEqual({ ok: true, bps: 2500 });
+  });
+
+  it('strips a trailing percent sign ("25%" → 2500)', () => {
+    expect(parseFeePercentToBps('25%')).toEqual({ ok: true, bps: 2500 });
+  });
+
+  it('tolerates surrounding whitespace and a spaced percent ("  17.5 % " → 1750)', () => {
+    expect(parseFeePercentToBps('  17.5 % ')).toEqual({ ok: true, bps: 1750 });
+  });
+
+  it('parses the range bounds ("0" → 0, "100" → 10000)', () => {
+    expect(parseFeePercentToBps('0')).toEqual({ ok: true, bps: 0 });
+    expect(parseFeePercentToBps('100')).toEqual({ ok: true, bps: 10_000 });
+  });
+
+  it('rounds two-decimal percents to whole bps ("17.99" → 1799)', () => {
+    expect(parseFeePercentToBps('17.99')).toEqual({ ok: true, bps: 1799 });
+  });
+
+  it('rejects an empty / whitespace-only input', () => {
+    expect(parseFeePercentToBps('')).toEqual({ ok: false, reason: 'empty' });
+    expect(parseFeePercentToBps('   ')).toEqual({ ok: false, reason: 'empty' });
+    expect(parseFeePercentToBps('%')).toEqual({ ok: false, reason: 'empty' });
+  });
+
+  it('rejects a non-numeric input', () => {
+    expect(parseFeePercentToBps('abc')).toEqual({ ok: false, reason: 'not_a_number' });
+    expect(parseFeePercentToBps('1.2.3')).toEqual({ ok: false, reason: 'not_a_number' });
+  });
+
+  it('rejects more than two decimal places rather than silently rounding', () => {
+    expect(parseFeePercentToBps('17.533')).toEqual({ ok: false, reason: 'too_many_decimals' });
+  });
+
+  it('rejects a leading minus sign as not a number (a fee percent is never negative)', () => {
+    // The leading `-?` was removed from the numeric regex, so any negative fails the
+    // shape check BEFORE the range check — `-0` no longer parses to an accepted 0%.
+    expect(parseFeePercentToBps('-0')).toEqual({ ok: false, reason: 'not_a_number' });
+    expect(parseFeePercentToBps('-1')).toEqual({ ok: false, reason: 'not_a_number' });
+    expect(parseFeePercentToBps('-5')).toEqual({ ok: false, reason: 'not_a_number' });
+  });
+
+  it('rejects out-of-range percents', () => {
+    expect(parseFeePercentToBps('150')).toEqual({ ok: false, reason: 'out_of_range' });
   });
 });

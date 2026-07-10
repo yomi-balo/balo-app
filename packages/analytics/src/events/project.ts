@@ -259,6 +259,10 @@ export const PROJECT_SERVER_EVENTS = {
   REQUEST_ACCESS_DENIED: 'project_request_access_denied',
   PROJECT_PROPOSAL_SUBMITTED: 'project_proposal_submitted',
   PROJECT_PROPOSAL_ACCEPTED: 'project_proposal_accepted',
+  // BAL-358: an admin overrode a single request's Balo fee (basis points). Emitted
+  // SERVER-SIDE only — the fee is an admin-audience figure that must never transit
+  // the browser (same audience-boundary rationale as the proposal events above).
+  ADMIN_PROJECT_FEE_OVERRIDDEN: 'admin_project_fee_overridden',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -303,6 +307,14 @@ export interface ProjectServerEventMap {
     /** Client-charged price = applyBaloFee(proposal.price_cents, balo_fee_bps),
      *  derived SERVER-SIDE (BAL-357), never on the client. */
     client_price_cents: number;
+    distinct_id: string;
+  };
+  // BAL-358: emitted server-side from the admin fee-override action, ONLY on a real
+  // change (a no-op override emits nothing). `distinct_id` is the acting admin.
+  [PROJECT_SERVER_EVENTS.ADMIN_PROJECT_FEE_OVERRIDDEN]: {
+    project_request_id: string;
+    previous_bps: number;
+    new_bps: number;
     distinct_id: string;
   };
 }

@@ -81,6 +81,16 @@ export function roleHasCapability(role: string, capability: Capability): boolean
   return (ROLE_CAPABILITIES[role] ?? []).includes(capability);
 }
 
+// The DISTINCT platform-capability axis (BAL-358) — gates Balo-staff mutations by
+// `platformRole`, not membership role. Re-exported here so both axes are reachable
+// via the single `@balo/shared/authz` subpath. See `./platform.ts`.
+export {
+  PLATFORM_CAPABILITIES,
+  PLATFORM_ROLE_CAPABILITIES,
+  platformRoleHasCapability,
+} from './platform';
+export type { PlatformCapability } from './platform';
+
 /**
  * The set of roles whose bundle grants `capability` — the single source of truth
  * for admin-role fan-out queries (e.g. `listAdminUserIds`). Keeps "a role is only
