@@ -19,13 +19,19 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 const mockFindByWorkosId = vi.fn();
+const mockFindByEmail = vi.fn();
+const mockRelinkWorkosId = vi.fn();
 const mockFindWithCompany = vi.fn();
 const mockCreateWithWorkspace = vi.fn();
 const mockTouch = vi.fn();
 const mockExpertProfileFindFirst = vi.fn();
+// BAL-362: the real `resolveLinkedUser` runs against this mocked repository — so the
+// mock must expose findByEmail + relinkWorkosId (the resolver's re-link seam).
 vi.mock('@balo/db', () => ({
   usersRepository: {
     findByWorkosId: (...args: unknown[]) => mockFindByWorkosId(...args),
+    findByEmail: (...args: unknown[]) => mockFindByEmail(...args),
+    relinkWorkosId: (...args: unknown[]) => mockRelinkWorkosId(...args),
     findWithCompany: (...args: unknown[]) => mockFindWithCompany(...args),
     createWithWorkspace: (...args: unknown[]) => mockCreateWithWorkspace(...args),
     touch: (...args: unknown[]) => mockTouch(...args),
@@ -43,6 +49,14 @@ vi.mock('@balo/db', () => ({
 // tests sign-in logic, not emission; the emit is covered in verify-email.test.ts).
 vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
 
+// BAL-362: sign-in now emits method-agnostic server analytics on re-link / conflict.
+// Mock the seam so posthog-node / next/server `after()` stays out of the test.
+const mockTrackServerAndFlush = vi.fn();
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: (...args: unknown[]) => mockTrackServerAndFlush(...args),
+  AUTH_SERVER_EVENTS: { AUTH_RELINK: 'auth_relink', AUTH_CONFLICT: 'auth_conflict' },
+}));
+
 // BAL-345: the domain auto-join match engine, wired only in the orphan-recovery
 // (!user) create branch. Mocked to assert the WorkOS emailVerified flag is passed
 // through (never hardcoded) and that a throw never breaks sign-in.
@@ -52,6 +66,7 @@ vi.mock('@/lib/domain-join/run-domain-join', () => ({
 }));
 
 import { signInAction } from './sign-in';
+import { ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import type { SignInFormData } from '@/components/balo/auth/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -113,6 +128,9 @@ describe('signInAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { save: mockSave };
     mockTouch.mockResolvedValue(undefined);
+    // BAL-362: default the email fallback to a miss so the create / findByWorkosId
+    // paths are unaffected. Re-link / conflict tests override per-case.
+    mockFindByEmail.mockResolvedValue(null);
   });
 
   describe('input validation', () => {
@@ -446,6 +464,129 @@ describe('signInAction', () => {
       mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('engine boom'));
       const result = await signInAction(validInput());
       expect(result.success).toBe(true);
+    });
+  });
+
+  // BAL-362 — identity re-link + conflict via the shared resolveLinkedUser seam.
+  describe('identity re-link + conflict (BAL-362)', () => {
+    function setupRelink() {
+      mockAuthenticateWithPassword.mockResolvedValue(
+        mockWorkOSAuthResponse({ emailVerified: true })
+      );
+      mockFindByWorkosId.mockResolvedValue(undefined); // workosId miss
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-1',
+        workosId: 'W1',
+        email: 'user@example.com',
+        emailVerified: true, // live verified email → safe to re-link
+      });
+      mockRelinkWorkosId.mockResolvedValue(mockBaloUser()); // re-linked returning user
+      mockFindWithCompany.mockResolvedValue(mockCompanyData());
+      mockTouch.mockResolvedValue(undefined);
+      mockSave.mockResolvedValue(undefined);
+    }
+
+    it('(a) re-links a workosId miss onto a live verified-email user and takes the returning path', async () => {
+      setupRelink();
+
+      const result = await signInAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockRelinkWorkosId).toHaveBeenCalledWith('user-1', 'workos-1', {
+        actorUserId: 'user-1',
+        oldWorkosId: 'W1',
+        email: 'user@example.com',
+        emailVerified: true,
+      });
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
+      // A re-linked user is NOT new — no orphan-recovery domain-join runs.
+      expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_relink', {
+        distinct_id: 'user-1',
+        method: 'password',
+      });
+    });
+
+    it('(b) refuses to re-link when the incoming profile is unverified — account_exists conflict', async () => {
+      mockAuthenticateWithPassword.mockResolvedValue(
+        mockWorkOSAuthResponse({ emailVerified: false })
+      );
+      mockFindByWorkosId.mockResolvedValue(undefined);
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-9',
+        workosId: 'W1',
+        email: 'user@example.com',
+        emailVerified: true,
+      });
+
+      const result = await signInAction(validInput());
+
+      expect(result).toEqual({
+        success: false,
+        error: ACCOUNT_EXISTS_MESSAGE,
+        code: 'account_exists',
+      });
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_conflict', {
+        distinct_id: 'user-9',
+        method: 'password',
+      });
+    });
+
+    it('(c) refuses to re-link onto an unverified existing row (incoming verified) — account_exists conflict', async () => {
+      mockAuthenticateWithPassword.mockResolvedValue(
+        mockWorkOSAuthResponse({ emailVerified: true })
+      );
+      mockFindByWorkosId.mockResolvedValue(undefined);
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-9',
+        workosId: 'W1',
+        email: 'user@example.com',
+        emailVerified: false, // existing row unverified → resolver precheck refuses
+      });
+
+      const result = await signInAction(validInput());
+
+      expect(result).toEqual({
+        success: false,
+        error: ACCOUNT_EXISTS_MESSAGE,
+        code: 'account_exists',
+      });
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_conflict', {
+        distinct_id: 'user-9',
+        method: 'password',
+      });
+    });
+
+    it('(d) creates when neither workosId nor email match (orphan recovery, unchanged)', async () => {
+      mockAuthenticateWithPassword.mockResolvedValue(mockWorkOSAuthResponse());
+      mockFindByWorkosId.mockResolvedValue(undefined);
+      mockFindByEmail.mockResolvedValue(null);
+      mockCreateWithWorkspace.mockResolvedValue({
+        user: mockBaloUser(),
+        domainCapture: { outcome: 'not_applicable' },
+      });
+      mockFindWithCompany.mockResolvedValue(mockCompanyData());
+
+      const result = await signInAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateWithWorkspace).toHaveBeenCalled();
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+    });
+
+    it('(e) resolves an existing workosId hit without consulting the email fallback', async () => {
+      setupHappyPath();
+
+      const result = await signInAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
   });
 });

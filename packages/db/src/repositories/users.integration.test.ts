@@ -285,7 +285,9 @@ describe('usersRepository.relinkWorkosId (BAL-360)', () => {
   }
 
   it('re-links the workosId and writes the audit row atomically', async () => {
-    const user = await userFactory({ workosId: 'W1' });
+    // BAL-362: the existing row must be verified for the in-tx existing-row guard to
+    // pass (the factory default is emailVerified: false).
+    const user = await userFactory({ workosId: 'W1', emailVerified: true });
 
     const relinked = await usersRepository.relinkWorkosId(user.id, 'W2', {
       actorUserId: user.id,
@@ -347,8 +349,8 @@ describe('usersRepository.relinkWorkosId (BAL-360)', () => {
     ).rejects.toThrow('relinkWorkosId: user row not found');
   });
 
-  it('throws and writes NO audit row when emailVerified is not true', async () => {
-    const user = await userFactory({ workosId: 'W1' });
+  it('throws and writes NO audit row when the INCOMING emailVerified is not true', async () => {
+    const user = await userFactory({ workosId: 'W1', emailVerified: true });
 
     await expect(
       usersRepository.relinkWorkosId(user.id, 'W2', {
@@ -361,6 +363,29 @@ describe('usersRepository.relinkWorkosId (BAL-360)', () => {
 
     // Fail closed: the guard fires before the tx opens, so the identity is
     // UNCHANGED (still resolves under the old workosId) and NOTHING is written.
+    await expect(usersRepository.findByWorkosId('W1')).resolves.toMatchObject({ id: user.id });
+    await expect(usersRepository.findByWorkosId('W2')).resolves.toBeUndefined();
+    await expect(relinkAuditRows(user.id)).resolves.toHaveLength(0);
+  });
+
+  it('throws and writes NO audit row when the EXISTING row is unverified (BAL-362)', async () => {
+    // Incoming identity IS verified (pre-tx guard passes), but the existing row is
+    // NOT (factory default emailVerified: false) — the in-tx existing-row guard must
+    // fire and roll the whole tx back.
+    const user = await userFactory({ workosId: 'W1' });
+
+    await expect(
+      usersRepository.relinkWorkosId(user.id, 'W2', {
+        actorUserId: user.id,
+        oldWorkosId: 'W1',
+        email: user.email,
+        emailVerified: true,
+      })
+    ).rejects.toThrow(/refusing to re-link onto an unverified existing row/);
+
+    // Fail closed: the guard throws AFTER the update loads the row but BEFORE the
+    // audit write, so the tx rolls back — the workosId is UNCHANGED (still resolves
+    // under the old identity) and NO audit row is written.
     await expect(usersRepository.findByWorkosId('W1')).resolves.toMatchObject({ id: user.id });
     await expect(usersRepository.findByWorkosId('W2')).resolves.toBeUndefined();
     await expect(relinkAuditRows(user.id)).resolves.toHaveLength(0);

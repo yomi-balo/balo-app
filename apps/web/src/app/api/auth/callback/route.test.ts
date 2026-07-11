@@ -46,17 +46,17 @@ vi.mock('@balo/db', () => ({
   db: { query: { expertProfiles: { findFirst: mockExpertFindFirst } } },
 }));
 
-// BAL-360: the route now emits server analytics on re-link / conflict. Mocking the
-// seam keeps posthog-node / next/server `after()` out of the test.
+// BAL-360/BAL-362: the route now emits method-agnostic server analytics on re-link /
+// conflict. Mocking the seam keeps posthog-node / next/server `after()` out of the test.
 const AUTH_SERVER_EVENTS = {
-  OAUTH_CALLBACK_RELINK: 'oauth_callback_relink',
-  OAUTH_CALLBACK_CONFLICT_409: 'oauth_callback_conflict_409',
+  AUTH_RELINK: 'auth_relink',
+  AUTH_CONFLICT: 'auth_conflict',
 } as const;
 vi.mock('@/lib/analytics/server', () => ({
   trackServerAndFlush: (...a: unknown[]) => mockTrackServerAndFlush(...a),
   AUTH_SERVER_EVENTS: {
-    OAUTH_CALLBACK_RELINK: 'oauth_callback_relink',
-    OAUTH_CALLBACK_CONFLICT_409: 'oauth_callback_conflict_409',
+    AUTH_RELINK: 'auth_relink',
+    AUTH_CONFLICT: 'auth_conflict',
   },
 }));
 
@@ -222,7 +222,13 @@ describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', 
       refreshToken: 'rt',
     });
     mockFindByWorkosId.mockResolvedValue(null);
-    mockFindByEmail.mockResolvedValue({ id: 'user-1', workosId: 'W1', email: 'jane@corp.io' });
+    // BAL-362: the existing row must be verified for the re-link precheck to pass.
+    mockFindByEmail.mockResolvedValue({
+      id: 'user-1',
+      workosId: 'W1',
+      email: 'jane@corp.io',
+      emailVerified: true,
+    });
     mockRelinkWorkosId.mockResolvedValue({ ...returningUpdatedUser, workosId: 'workos-1' });
     mockUpdate.mockResolvedValue(returningUpdatedUser);
     mockFindWithCompany.mockResolvedValue(returningMembership);
@@ -237,8 +243,9 @@ describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', 
       emailVerified: true,
     });
     expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
-    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(AUTH_SERVER_EVENTS.OAUTH_CALLBACK_RELINK, {
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(AUTH_SERVER_EVENTS.AUTH_RELINK, {
       distinct_id: 'user-1',
+      method: 'oauth',
     });
     // Re-linked user is NOT a new user — no welcome email / domain-join.
     expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
@@ -262,10 +269,40 @@ describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', 
 
     expect(mockRelinkWorkosId).not.toHaveBeenCalled();
     expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
-    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
-      AUTH_SERVER_EVENTS.OAUTH_CALLBACK_CONFLICT_409,
-      { distinct_id: 'user-9' }
-    );
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(AUTH_SERVER_EVENTS.AUTH_CONFLICT, {
+      distinct_id: 'user-9',
+      method: 'oauth',
+    });
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('error=account_exists');
+    expect(redirectedTo).not.toContain('error=auth_failed');
+  });
+
+  it('(b2) refuses to re-link onto an UNVERIFIED existing row (verified incoming) — account_exists', async () => {
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser({ emailVerified: true }),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue(null);
+    // BAL-362 existing-row guard: the incoming profile is verified, but the live row
+    // that owns this email is NOT — the resolver precheck refuses the re-link.
+    mockFindByEmail.mockResolvedValue({
+      id: 'user-9',
+      workosId: 'W1',
+      email: 'jane@corp.io',
+      emailVerified: false,
+    });
+
+    await GET(makeReq('auth-code'));
+
+    expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+    expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(AUTH_SERVER_EVENTS.AUTH_CONFLICT, {
+      distinct_id: 'user-9',
+      method: 'oauth',
+    });
 
     const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
     expect(redirectedTo).toContain('error=account_exists');

@@ -4,12 +4,14 @@ import 'server-only';
 
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
-import { usersRepository, type DomainCaptureResult } from '@balo/db';
-import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
+import { usersRepository, type DomainCaptureResult, type User } from '@balo/db';
+import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
+import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { emitDomainCapture } from '@/lib/analytics/party-domains';
+import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
 export type VerifyEmailInput = VerifyEmailFormData;
@@ -43,14 +45,27 @@ export async function verifyEmailAction(
 
     const workosUser = authResponse.user;
 
-    // 3. Check if user already exists (handles double-submit / retry race conditions)
-    let existingUser = await usersRepository.findByWorkosId(workosUser.id);
+    // 3. Resolve the WorkOS identity to a LIVE Balo user (handles double-submit /
+    //    retry races AND a workosId churn re-link). BAL-362: build the identity with
+    //    emailVerified: true — OTP definitionally PROVES verification, matching the
+    //    create path's hardcoded flag. The only reachable conflict is therefore an
+    //    existing-row-unverified match → clean account_exists (handled in the catch).
+    const resolved = await resolveLinkedUser({
+      id: workosUser.id,
+      email: workosUser.email,
+      emailVerified: true,
+    });
+    let existingUser: User;
     let isNewUser = false;
+    let didRelink = false;
     // BAL-344: the domain auto-capture outcome from the create tx, emitted
     // post-commit below. Non-applicable unless a new user was created here.
     let domainCapture: DomainCaptureResult = { outcome: 'not_applicable' };
 
-    if (!existingUser) {
+    if (resolved) {
+      existingUser = resolved.user;
+      didRelink = resolved.didRelink;
+    } else {
       // Create Balo user + personal workspace in a single transaction.
       // Name is null -- will be collected in onboarding for email sign-ups.
       const created = await usersRepository.createWithWorkspace({
@@ -97,6 +112,16 @@ export async function verifyEmailAction(
     session.refreshToken = authResponse.refreshToken;
     await session.save();
 
+    // BAL-362: a returning user whose workosId was re-linked onto their live
+    // verified-email row (post-commit — the re-link tx already committed). Mutually
+    // exclusive with isNewUser below, so the welcome email / domain-join are skipped.
+    if (didRelink) {
+      trackServerAndFlush(AUTH_SERVER_EVENTS.AUTH_RELINK, {
+        distinct_id: user.id,
+        method: 'otp',
+      });
+    }
+
     if (isNewUser) {
       // role is always 'client' — experts sign up as clients first,
       // then apply separately (see expert.application_submitted event).
@@ -125,9 +150,12 @@ export async function verifyEmailAction(
       );
     }
 
-    log.info('Email verification completed, user created', {
+    // BAL-362: also reached on the re-link / double-submit path (no user created),
+    // so the message states only what always holds — verification completed.
+    log.info('Email verification completed', {
       userId: user.id,
       email: user.email,
+      isNewUser,
     });
 
     return {
@@ -141,6 +169,20 @@ export async function verifyEmailAction(
       },
     };
   } catch (error) {
+    // BAL-362: a live Balo user owns this email under a different identity and its
+    // existing row is unverified — refuse the re-link, surface a clean conflict (the
+    // incoming OTP identity is always verified, so this is the only conflict here).
+    // `distinct_id` is the internal user id only (never the email/PII).
+    if (error instanceof AccountExistsError) {
+      trackServerAndFlush(AUTH_SERVER_EVENTS.AUTH_CONFLICT, {
+        distinct_id: error.existingUserId,
+        method: 'otp',
+      });
+      log.warn('Email verification: email owned by a different identity — conflict', {
+        existingUserId: error.existingUserId,
+      });
+      return { success: false, error: ACCOUNT_EXISTS_MESSAGE, code: 'account_exists' };
+    }
     log.error('Email verification failed', {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
