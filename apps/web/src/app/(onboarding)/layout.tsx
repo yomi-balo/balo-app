@@ -1,3 +1,5 @@
+import { OnboardingSignOut } from './onboarding/_components/onboarding-sign-out';
+
 interface OnboardingLayoutProps {
   children: React.ReactNode;
 }
@@ -25,6 +27,12 @@ export default function OnboardingLayout({
         </div>
 
         {children}
+
+        {/* BAL-361: the fail-closed gate traps un-onboarded users here — keep a
+            subtle, always-reachable exit. */}
+        <div className="mt-10 flex justify-center">
+          <OnboardingSignOut />
+        </div>
       </div>
     </div>
   );

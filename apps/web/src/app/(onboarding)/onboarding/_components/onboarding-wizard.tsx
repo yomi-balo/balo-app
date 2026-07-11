@@ -10,6 +10,7 @@ import { IntentStep } from './intent-step';
 import { CompanyStep } from './company-step';
 import { ProgressDots } from './progress-dots';
 import { cn } from '@/lib/utils';
+import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
 
 interface OnboardingWizardProps {
@@ -29,6 +30,10 @@ export function OnboardingWizard({
 }: OnboardingWizardProps): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  // BAL-361: the fail-closed middleware gate appends ?forced=1 when it redirected an
+  // un-onboarded user here (e.g. from /experts). Used for the explanatory line + analytics.
+  const forced = searchParams.get('forced') === '1';
 
   const needsNameStep = firstName === null;
   // BAL-350: base + 1 for the new client-only company step (the client terminal).
@@ -55,6 +60,19 @@ export function OnboardingWizard({
     }, 350);
     return () => clearTimeout(timer);
   }, [currentStep]);
+
+  // BAL-361: emit landing analytics once per wizard mount. The middleware fail-closed
+  // gate tags a forced arrival with `?forced=1&from=<path>`; a fresh signup arrives via
+  // the auth step's router.push('/onboarding') with no marker. Step changes use
+  // router.replace (the component stays mounted), so this fires exactly once.
+  useEffect(() => {
+    const from = searchParams.get('from') ?? undefined;
+    track(ONBOARDING_EVENTS.LANDING_REACHED, { forced, from });
+    if (forced) {
+      track(ONBOARDING_EVENTS.FORCED_ON_LOGIN, { from });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const goToStep = useCallback(
     (step: number, dir: number) => {
@@ -176,6 +194,11 @@ export function OnboardingWizard({
 
   return (
     <div className="flex w-full flex-col items-center">
+      {forced && (
+        <p className="text-muted-foreground mb-6 text-center text-sm">
+          Finish setting up your account to continue.
+        </p>
+      )}
       <div
         className={cn('w-full', isIntentStep ? 'max-w-2xl' : 'max-w-lg')}
         aria-live="polite"
