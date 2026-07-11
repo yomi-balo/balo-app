@@ -8,7 +8,6 @@
     "CI",
     "CORS_ORIGIN",
     "DATABASE_URL",
-    "E2E_TEST_AUTH",
     "E2E_TEST_SECRET",
     "LOG_LEVEL",
     "NEXT_RUNTIME",

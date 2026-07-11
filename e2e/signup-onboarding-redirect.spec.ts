@@ -32,7 +32,8 @@ test.describe('signup/login dismiss returns home', () => {
  * settles on `/onboarding` and never bounces back to `/` (proving the timer is gone,
  * independent of `/onboarding` compile latency). Until then, the deterministic B1
  * guarantee is covered by the component tests (auth-modal-provider.test.tsx,
- * signup/page.test.tsx, login/page.test.tsx).
+ * signup/page.test.tsx, login/page.test.tsx). The server-side WorkOS stub is tracked in
+ * a follow-on ticket.
  */
 test.fixme('signup success lands on /onboarding and never bounces back to / (needs E2E_MOCK_WORKOS)', async ({
   page,
@@ -47,10 +48,11 @@ test.fixme('signup success lands on /onboarding and never bounces back to / (nee
  * route: each attempt lands on `/onboarding`. Uses the seeded session (no WorkOS).
  */
 test.describe('returning un-onboarded user is gated to /onboarding', () => {
-  // Seeded via /api/auth/test-login (seeded-E2E CI harness). Skip in CI until BAL-363
-  // lands; runs locally when E2E_TEST_SECRET is present. The dismiss describe above stays
-  // unconditional.
-  test.skip(!process.env.E2E_TEST_SECRET, 'needs seeded-E2E CI infra — BAL-363');
+  // Seeded via /api/auth/test-login (seeded-E2E harness: ephemeral Postgres +
+  // WORKOS_COOKIE_PASSWORD + E2E_TEST_SECRET). Runs green in CI, where E2E_TEST_SECRET is
+  // set; `E2E_TEST_SECRET` doubles as the un-skip switch, so a bare local `pnpm test:e2e`
+  // skips these instead of failing. The dismiss describe above stays unconditional.
+  test.skip(!process.env.E2E_TEST_SECRET, 'requires the seeded-E2E harness env (E2E_TEST_SECRET)');
 
   for (const target of ['/dashboard', '/experts', '/pricing']) {
     test(`cannot reach ${target}`, async ({ page, seedSession }) => {
