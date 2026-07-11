@@ -6,9 +6,11 @@ import userEvent from '@testing-library/user-event';
 
 const mockReplace = vi.fn();
 const mockPush = vi.fn();
+// BAL-361: mutable so tests can simulate a gate-forced arrival (?forced=1&from=…).
+let mockSearchParams = new URLSearchParams();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => mockSearchParams,
 }));
 
 vi.mock('@/lib/auth/actions/update-timezone', () => ({
@@ -78,6 +80,7 @@ vi.mock('motion/react', async () => {
 });
 
 import { OnboardingWizard } from './onboarding-wizard';
+import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -93,6 +96,7 @@ async function advanceToIntent(user: ReturnType<typeof userEvent.setup>): Promis
 describe('OnboardingWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
   });
 
   it('renders Step 1 (welcome) by default when firstName is provided', () => {
@@ -168,5 +172,40 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
     expect(mockNameWorkspace).not.toHaveBeenCalled();
     expect(screen.queryByRole('heading', { name: /name your workspace/i })).not.toBeInTheDocument();
+  });
+
+  // BAL-361: landing analytics on wizard mount.
+  it('emits LANDING_REACHED (forced:false) on a normal mount', () => {
+    render(<OnboardingWizard firstName="Sarah" />);
+    expect(track).toHaveBeenCalledWith(ONBOARDING_EVENTS.LANDING_REACHED, {
+      forced: false,
+      from: undefined,
+    });
+    expect(track).not.toHaveBeenCalledWith(ONBOARDING_EVENTS.FORCED_ON_LOGIN, expect.anything());
+  });
+
+  it('does NOT show the forced-arrival explanation on a normal mount', () => {
+    render(<OnboardingWizard firstName="Sarah" />);
+    expect(
+      screen.queryByText(/finish setting up your account to continue/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('emits LANDING_REACHED (forced:true) and FORCED_ON_LOGIN when redirected by the gate', () => {
+    mockSearchParams = new URLSearchParams('forced=1&from=/dashboard');
+    render(<OnboardingWizard firstName="Sarah" />);
+    expect(track).toHaveBeenCalledWith(ONBOARDING_EVENTS.LANDING_REACHED, {
+      forced: true,
+      from: '/dashboard',
+    });
+    expect(track).toHaveBeenCalledWith(ONBOARDING_EVENTS.FORCED_ON_LOGIN, {
+      from: '/dashboard',
+    });
+  });
+
+  it('shows the forced-arrival explanation when ?forced=1 is present', () => {
+    mockSearchParams = new URLSearchParams('forced=1&from=/experts');
+    render(<OnboardingWizard firstName="Sarah" />);
+    expect(screen.getByText(/finish setting up your account to continue/i)).toBeInTheDocument();
   });
 });

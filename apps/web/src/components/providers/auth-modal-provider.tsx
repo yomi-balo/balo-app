@@ -4,10 +4,20 @@ import { createContext, useState, useCallback, useMemo, useRef } from 'react';
 import { AuthModal } from '@/components/balo/auth/auth-modal';
 import type { AuthStep } from '@/components/balo/auth/unified-auth-form';
 
+/**
+ * BAL-361: why the modal last closed. `close()` (dismiss path) sets `'dismissed'`;
+ * `handleAuthSuccess()` (success path) sets `'success'`. The `/login` and `/signup`
+ * pages read this to decide whether to bounce home — a genuine dismiss returns to
+ * `/`, a success lets the auth step's own `router.push('/onboarding')` win (no timer).
+ */
+export type CloseReason = 'dismissed' | 'success';
+
 export interface AuthModalContextValue {
   isOpen: boolean;
   defaultStep: AuthStep;
   initialError: string | null;
+  /** Reason the modal last closed, or null while open / before any close. */
+  closeReason: CloseReason | null;
   open: (options?: {
     defaultStep?: AuthStep;
     onSuccess?: () => void;
@@ -33,6 +43,7 @@ export function AuthModalProvider({
   const [isOpen, setIsOpen] = useState(false);
   const [defaultStep, setDefaultStep] = useState<AuthStep>('email');
   const [initialError, setInitialError] = useState<string | null>(null);
+  const [closeReason, setCloseReason] = useState<CloseReason | null>(null);
   const onSuccessRef = useRef<(() => void) | undefined>(undefined);
 
   const open = useCallback(
@@ -40,6 +51,9 @@ export function AuthModalProvider({
       onSuccessRef.current = options?.onSuccess;
       setDefaultStep(options?.defaultStep ?? 'email');
       setInitialError(options?.initialError ?? null);
+      // Reset so a re-open starts clean — a prior 'dismissed'/'success' must not
+      // linger into the newly-opened modal's next close.
+      setCloseReason(null);
       setIsOpen(true);
     },
     []
@@ -60,11 +74,17 @@ export function AuthModalProvider({
   );
 
   const close = useCallback(() => {
+    // Dismiss path (wired to Dialog/Sheet onOpenChange). Both state writes batch,
+    // so the pages' effect observes the fresh reason alongside isOpen === false.
+    setCloseReason('dismissed');
     setIsOpen(false);
     onSuccessRef.current = undefined;
   }, []);
 
   const handleAuthSuccess = useCallback(() => {
+    // Success path (form onSuccess). Batches with isOpen so the pages never see a
+    // stale reason — the auth step's own /onboarding navigation wins.
+    setCloseReason('success');
     setIsOpen(false);
     onSuccessRef.current?.();
     onSuccessRef.current = undefined;
@@ -75,13 +95,24 @@ export function AuthModalProvider({
       isOpen,
       defaultStep,
       initialError,
+      closeReason,
       open,
       openLogin,
       openSignup,
       close,
       handleAuthSuccess,
     }),
-    [isOpen, defaultStep, initialError, open, openLogin, openSignup, close, handleAuthSuccess]
+    [
+      isOpen,
+      defaultStep,
+      initialError,
+      closeReason,
+      open,
+      openLogin,
+      openSignup,
+      close,
+      handleAuthSuccess,
+    ]
   );
 
   return (

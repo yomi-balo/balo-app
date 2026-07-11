@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
 import type { IronSession } from 'iron-session';
 import type { SessionData, SessionUser } from '@/lib/auth/session';
+import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { middleware } from './middleware';
 
 // ── Mocks ───────────────────────────────────────────────────────
@@ -22,6 +23,18 @@ const BASE_URL = 'http://localhost:3000';
 
 function createRequest(path: string, method = 'GET'): NextRequest {
   return new NextRequest(new URL(path, BASE_URL), { method });
+}
+
+/**
+ * BAL-361: a request carrying a `balo_session` cookie. This flips the middleware out
+ * of the anonymous fast path and into the sessioned branch — so the fail-closed
+ * onboarding gate runs even on PUBLIC routes.
+ */
+function createRequestWithCookie(path: string, method = 'GET'): NextRequest {
+  return new NextRequest(new URL(path, BASE_URL), {
+    method,
+    headers: { cookie: `${COOKIE_NAME}=test-session-value` },
+  });
 }
 
 function mockSessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
@@ -271,5 +284,89 @@ describe('middleware — session errors', () => {
 
     const res = await middleware(createRequest('/dashboard'));
     expect(res.headers.get('x-request-id')).toBeTruthy();
+  });
+
+  // BAL-361: a decode failure on a PUBLIC route (stale/garbage cookie) must serve the
+  // page anonymously — never trap the user or send them to /login.
+  it('serves a public route anonymously when session decode throws', async () => {
+    mockGetMiddlewareSession.mockRejectedValue(new Error('Decryption failed'));
+    const res = await middleware(createRequestWithCookie('/experts'));
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── BAL-361: fail-closed onboarding gate ─────────────────────────
+
+describe('middleware — fail-closed onboarding gate (BAL-361)', () => {
+  it('redirects an un-onboarded user (undefined flag) from /dashboard to /onboarding', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: undefined });
+    await expectRedirectTo('/dashboard', '/onboarding');
+  });
+
+  it('redirects an un-onboarded user (null flag) from /dashboard to /onboarding', async () => {
+    const user = mockSessionUser({ onboardingCompleted: null as unknown as boolean });
+    mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
+    mockRefreshSessionIfNeeded.mockResolvedValue(null);
+    await expectRedirectTo('/dashboard', '/onboarding');
+  });
+
+  it('redirects an un-onboarded user (false flag) from /dashboard to /onboarding', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: false });
+    await expectRedirectTo('/dashboard', '/onboarding');
+  });
+
+  it('lets an onboarded user (true flag) through /dashboard', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: true });
+    const res = await middleware(createRequest('/dashboard'));
+    expect(res.status).toBe(200);
+  });
+
+  it('tags the forced redirect with ?forced=1 and the origin path', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: false });
+    const res = await middleware(createRequest('/dashboard?tab=billing'));
+    expect(res.status).toBe(307);
+    const location = getRedirectUrl(res);
+    expect(location.pathname).toBe('/onboarding');
+    expect(location.searchParams.get('forced')).toBe('1');
+    expect(location.searchParams.get('from')).toBe('/dashboard');
+  });
+});
+
+describe('middleware — public-route gate for authenticated users (BAL-361)', () => {
+  it.each(['/experts', '/pricing', '/'])(
+    'redirects an un-onboarded user with a cookie from public %s to /onboarding',
+    async (path) => {
+      setupAuthenticatedSession({ onboardingCompleted: false });
+      const res = await middleware(createRequestWithCookie(path));
+      expect(res.status).toBe(307);
+      const location = getRedirectUrl(res);
+      expect(location.pathname).toBe('/onboarding');
+      expect(location.searchParams.get('forced')).toBe('1');
+      expect(location.searchParams.get('from')).toBe(path);
+    }
+  );
+
+  it('decodes the session for a public route WHEN a cookie is present', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: false });
+    await middleware(createRequestWithCookie('/experts'));
+    expect(mockGetMiddlewareSession).toHaveBeenCalled();
+  });
+
+  it('lets an onboarded user browse a public route (/experts) normally', async () => {
+    setupAuthenticatedSession({ onboardingCompleted: true });
+    const res = await middleware(createRequestWithCookie('/experts'));
+    expect(res.status).toBe(200);
+  });
+
+  it('serves a public route anonymously when the cookie holds no valid user', async () => {
+    mockGetMiddlewareSession.mockResolvedValue(mockSession(undefined));
+    const res = await middleware(createRequestWithCookie('/experts'));
+    expect(res.status).toBe(200);
+  });
+
+  it('never decodes the session for a public route with NO cookie (anonymous fast path)', async () => {
+    const res = await middleware(createRequest('/experts'));
+    expect(res.status).toBe(200);
+    expect(mockGetMiddlewareSession).not.toHaveBeenCalled();
   });
 });
