@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { projectRequestsRepository, InvalidKickoffStateError } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 
@@ -37,7 +37,7 @@ const GENERIC_FAILURE = 'Could not complete this step. Please try again.';
  * invoice, so the client lens is rejected. The third gate (admin "settle invoice +
  * approve") IS the approval action and lives in `approve-kickoff.ts`.
  *
- * Control flow: requireUser → validate input → `resolveConversationAccess`
+ * Control flow: requireOnboardedUser → validate input → `resolveConversationAccess`
  * (denies non-participants + foreign relationship ids, and denies admin
  * observers) → reject the client lens (billing form owns it) → verify the request
  * AND the relationship are both `accepted` (the kickoff exists only for the accepted
@@ -50,7 +50,7 @@ export async function completeKickoffTaskAction(
 ): Promise<CompleteKickoffTaskResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

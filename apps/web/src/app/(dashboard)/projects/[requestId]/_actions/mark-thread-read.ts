@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { conversationsRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 
@@ -28,7 +28,7 @@ export async function markThreadReadAction(
 ): Promise<MarkThreadReadResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You are not signed in.' };
   }

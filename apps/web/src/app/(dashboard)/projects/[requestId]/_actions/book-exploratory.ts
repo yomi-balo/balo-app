@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { projectRequestsRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 
 const inputSchema = z.object({ requestId: z.uuid() });
@@ -42,7 +42,7 @@ export async function bookExploratoryMeetingAction(
 ): Promise<BookExploratoryResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You must be signed in to book a call.' };
   }

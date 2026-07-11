@@ -3,7 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 
@@ -44,7 +44,7 @@ export async function requestConversationCallAction(
 ): Promise<RequestConversationCallResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You must be signed in to request a call.' };
   }

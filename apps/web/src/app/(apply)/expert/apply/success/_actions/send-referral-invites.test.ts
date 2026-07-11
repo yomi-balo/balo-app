@@ -51,7 +51,7 @@ import { sendReferralInvitesAction } from './send-referral-invites';
 
 function setSession(firstName: string | null, lastName: string | null): void {
   mockSessionObj = {
-    user: { id: USER_ID, email: 'me@example.com', firstName, lastName },
+    user: { id: USER_ID, onboardingCompleted: true, email: 'me@example.com', firstName, lastName },
     save: vi.fn(),
   };
 }

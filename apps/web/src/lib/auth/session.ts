@@ -53,6 +53,20 @@ export async function requireUser(): Promise<SessionUser> {
   return user;
 }
 
+/**
+ * Fail-closed sibling of requireUser(): asserts the user has completed onboarding.
+ * Throws 'Unauthorized' when no user (via requireUser), 'Onboarding not completed'
+ * when onboardingCompleted !== true. Use in privileged MUTATION Server Actions that
+ * call the session directly (not via withAuth). Reads/layouts keep using requireUser().
+ */
+export async function requireOnboardedUser(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (user.onboardingCompleted !== true) {
+    throw new Error('Onboarding not completed');
+  }
+  return user;
+}
+
 // Helper to check if user is in expert mode with active profile
 export async function requireExpert(): Promise<SessionUser & { expertProfileId: string }> {
   const user = await requireUser();

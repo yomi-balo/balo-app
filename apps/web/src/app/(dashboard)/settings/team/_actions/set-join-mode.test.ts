@@ -12,7 +12,7 @@ vi.mock('@balo/db', () => ({
 }));
 
 const mockRequireUser = vi.fn();
-vi.mock('@/lib/auth/session', () => ({ requireUser: () => mockRequireUser() }));
+vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: () => mockRequireUser() }));
 
 const mockEmitModeChanged = vi.fn();
 vi.mock('@/lib/analytics/party-join', () => ({

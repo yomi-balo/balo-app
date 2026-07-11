@@ -13,7 +13,7 @@ import {
   type Proposal,
 } from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
@@ -151,7 +151,7 @@ async function commitAccept(
  * flag from the stored column, then publishes the client→expert acceptance
  * notification (fire-and-forget).
  *
- * Control flow: requireUser → validate input → `resolveConversationAccess`
+ * Control flow: requireOnboardedUser → validate input → `resolveConversationAccess`
  * (denies non-participants and foreign relationship ids) → CLIENT-lens gate →
  * re-load + verify the proposal (live, `submitted`, current, belongs to this
  * relationship) → `accept` (typed transition errors → friendly stale copy) →
@@ -162,7 +162,7 @@ export async function acceptProposalAction(
 ): Promise<AcceptProposalResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

@@ -37,6 +37,7 @@ import { revalidatePath } from 'next/cache';
 
 const EXPERT_SESSION = {
   user: {
+    onboardingCompleted: true,
     id: 'user-1',
     email: 'expert@example.com',
     activeMode: 'expert',
@@ -68,7 +69,12 @@ describe('saveProfileAction', () => {
   describe('expert mode guard', () => {
     it('returns error when not in expert mode', async () => {
       mockSessionObj = {
-        user: { id: 'user-1', activeMode: 'client', expertProfileId: 'profile-1' },
+        user: {
+          id: 'user-1',
+          onboardingCompleted: true,
+          activeMode: 'client',
+          expertProfileId: 'profile-1',
+        },
         save: mockSave,
       };
       const result = await saveProfileAction({ headline: 'Test' });
@@ -78,7 +84,12 @@ describe('saveProfileAction', () => {
 
     it('returns error when no expertProfileId', async () => {
       mockSessionObj = {
-        user: { id: 'user-1', activeMode: 'expert', expertProfileId: null },
+        user: {
+          id: 'user-1',
+          onboardingCompleted: true,
+          activeMode: 'expert',
+          expertProfileId: null,
+        },
         save: mockSave,
       };
       const result = await saveProfileAction({ headline: 'Test' });

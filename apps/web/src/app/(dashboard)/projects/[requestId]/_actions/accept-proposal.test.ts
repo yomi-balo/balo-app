@@ -10,7 +10,7 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const mockRequireUser = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: () => mockRequireUser(),
+  requireOnboardedUser: () => mockRequireUser(),
 }));
 
 const mockResolveAccess = vi.fn();

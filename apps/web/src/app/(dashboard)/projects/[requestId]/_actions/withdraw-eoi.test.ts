@@ -22,7 +22,7 @@ vi.mock('@balo/db', () => ({
 
 const mockRequireUser = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: () => mockRequireUser(),
+  requireOnboardedUser: () => mockRequireUser(),
 }));
 
 const mockPublish = vi.fn().mockResolvedValue(undefined);
@@ -76,6 +76,15 @@ describe('withdrawEoiAction', () => {
     const result = await withdrawEoiAction({ requestId: REQUEST_ID });
     expect(result).toEqual({ success: false, error: 'You are not signed in.' });
     expect(mockWithdraw).not.toHaveBeenCalled();
+  });
+
+  it('rejects an un-onboarded caller and performs no write (BAL-365 gate)', async () => {
+    mockRequireUser.mockRejectedValue(new Error('Onboarding not completed'));
+    const result = await withdrawEoiAction({ requestId: REQUEST_ID });
+    expect(result).toEqual({ success: false, error: 'You are not signed in.' });
+    expect(mockWithdraw).not.toHaveBeenCalled();
+    expect(mockTransitionStatus).not.toHaveBeenCalled();
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid requestId', async () => {

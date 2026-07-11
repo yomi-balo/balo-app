@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import type * as Ably from 'ably';
 import { projectRequestsRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import { isThreadOpenStatus } from '@/lib/project-request/conversation-view-types';
@@ -40,7 +40,7 @@ export async function createConversationRealtimeTokenAction(
 ): Promise<CreateConversationRealtimeTokenResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You are not signed in.' };
   }

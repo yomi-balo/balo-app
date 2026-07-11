@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import { proposalsRepository, proposalDocumentsRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
 import {
@@ -173,7 +173,7 @@ export async function confirmProposalDocumentUploadAction(
 ): Promise<ConfirmProposalDocumentUploadResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

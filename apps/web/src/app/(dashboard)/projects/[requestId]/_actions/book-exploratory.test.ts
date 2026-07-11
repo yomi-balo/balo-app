@@ -22,7 +22,7 @@ vi.mock('@/lib/notifications/publish', () => ({
 
 const mockRequireUser = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: () => mockRequireUser(),
+  requireOnboardedUser: () => mockRequireUser(),
 }));
 
 import { bookExploratoryMeetingAction } from './book-exploratory';

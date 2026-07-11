@@ -26,6 +26,7 @@ import { fixCalendarPermissionsAction } from './fix-calendar-permissions';
 
 const EXPERT_SESSION = {
   user: {
+    onboardingCompleted: true,
     id: 'user-1',
     email: 'expert@example.com',
     activeMode: 'expert',
@@ -47,7 +48,7 @@ describe('fixCalendarPermissionsAction', () => {
 
   it('returns error when no expert profile', async () => {
     mockSessionObj = {
-      user: { id: 'user-1', email: 'e@e.com', activeMode: 'expert' },
+      user: { id: 'user-1', onboardingCompleted: true, email: 'e@e.com', activeMode: 'expert' },
       save: mockSave,
     };
     const result = await fixCalendarPermissionsAction();

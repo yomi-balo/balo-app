@@ -4,7 +4,7 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import { partyDomainsRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { emitPartyDomainAdded } from '@/lib/analytics/party-join';
 import {
@@ -32,7 +32,7 @@ export async function addPartyDomain(input: {
 }): Promise<ActionResult> {
   let session;
   try {
-    session = await requireUser();
+    session = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You must be signed in to do this.' };
   }

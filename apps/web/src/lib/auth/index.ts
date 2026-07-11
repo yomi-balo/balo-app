@@ -3,6 +3,7 @@ export {
   getSession,
   getCurrentUser,
   requireUser,
+  requireOnboardedUser,
   requireExpert,
   getCompanyContext,
 } from './session';

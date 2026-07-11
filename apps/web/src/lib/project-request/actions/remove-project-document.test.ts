@@ -23,7 +23,7 @@ const OWN_KEY = `project-documents/${COMPANY_ID}/${USER_ID}/doc-1`;
 describe('removeProjectDocumentAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionObj = { user: { id: USER_ID, companyId: COMPANY_ID } };
+    mockSessionObj = { user: { id: USER_ID, onboardingCompleted: true, companyId: COMPANY_ID } };
     mockDelete.mockResolvedValue(undefined);
   });
 

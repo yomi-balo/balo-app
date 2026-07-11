@@ -93,7 +93,14 @@ function createdRow(overrides: Record<string, unknown> = {}): Record<string, unk
 describe('submitProjectRequestAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionObj = { user: { id: USER_ID, companyId: COMPANY_ID, email: 'test@example.com' } };
+    mockSessionObj = {
+      user: {
+        id: USER_ID,
+        onboardingCompleted: true,
+        companyId: COMPANY_ID,
+        email: 'test@example.com',
+      },
+    };
     mockPublish.mockResolvedValue(undefined);
     mockSanitize.mockImplementation((html: string) => html);
     mockGetVertical.mockResolvedValue({ id: 'vert-sf', slug: 'salesforce' });

@@ -10,7 +10,7 @@ import {
   proposalsRepository,
   InvalidKickoffStateError,
 } from '@balo/db';
-import { requireUser, type SessionUser } from '@/lib/auth/session';
+import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { canManageBilling } from '@/lib/billing/billing-capture';
 import { trackServerAndFlush, BILLING_SERVER_EVENTS } from '@/lib/analytics/server';
@@ -161,7 +161,7 @@ export async function submitBillingDetailsAction(
 ): Promise<SubmitBillingDetailsResult> {
   let user: SessionUser;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

@@ -20,7 +20,7 @@ import {
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
 import { applyBaloFee, sumEstimatedMinutes } from '@balo/shared/pricing';
-import { requireUser, type SessionUser } from '@/lib/auth/session';
+import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
@@ -259,7 +259,7 @@ export async function submitProposalAction(
 ): Promise<SubmitProposalResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

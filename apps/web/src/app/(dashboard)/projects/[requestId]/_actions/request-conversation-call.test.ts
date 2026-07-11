@@ -12,7 +12,7 @@ vi.mock('@/lib/project-request/resolve-conversation-access', () => ({
 
 const mockRequireUser = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: () => mockRequireUser(),
+  requireOnboardedUser: () => mockRequireUser(),
 }));
 
 import { requestConversationCallAction } from './request-conversation-call';

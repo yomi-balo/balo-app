@@ -8,7 +8,7 @@ import {
   type PartyJoinRequest,
   type PartyType,
 } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { hasCapability, CAPABILITIES, type CapabilityScope } from '@/lib/authz';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -118,7 +118,7 @@ export async function runJoinRequestResolution(
 
   let session;
   try {
-    session = await requireUser();
+    session = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You must be signed in to do this.' };
   }
