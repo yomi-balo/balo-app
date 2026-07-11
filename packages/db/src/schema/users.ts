@@ -1,42 +1,58 @@
-import { pgTable, uuid, text, boolean, timestamp } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, uuid, text, boolean, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { userModeEnum, userStatusEnum, platformRoleEnum, signupIntentEnum } from './enums';
 import { companyMembers } from './companies';
 import { timestamps, softDelete } from './helpers';
 
-export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
 
-  // Auth (WorkOS)
-  workosId: text('workos_id').unique().notNull(),
-  email: text('email').unique().notNull(),
-  emailVerified: boolean('email_verified').default(false).notNull(),
+    // Auth (WorkOS)
+    workosId: text('workos_id').notNull(),
+    email: text('email').notNull(),
+    emailVerified: boolean('email_verified').default(false).notNull(),
 
-  // Profile
-  firstName: text('first_name'),
-  lastName: text('last_name'),
-  avatarUrl: text('avatar_url'),
-  platformRole: platformRoleEnum('platform_role').default('user').notNull(),
-  phone: text('phone'),
-  phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
+    // Profile
+    firstName: text('first_name'),
+    lastName: text('last_name'),
+    avatarUrl: text('avatar_url'),
+    platformRole: platformRoleEnum('platform_role').default('user').notNull(),
+    phone: text('phone'),
+    phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
 
-  // Preferences
-  activeMode: userModeEnum('active_mode').default('client').notNull(),
-  timezone: text('timezone').default('UTC'),
-  currency: text('currency').default('AUD'),
-  country: text('country'),
-  countryCode: text('country_code'),
-  onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
-  signupIntent: signupIntentEnum('signup_intent'), // nullable -- null for OAuth or pre-existing users
+    // Preferences
+    activeMode: userModeEnum('active_mode').default('client').notNull(),
+    timezone: text('timezone').default('UTC'),
+    currency: text('currency').default('AUD'),
+    country: text('country'),
+    countryCode: text('country_code'),
+    onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
+    signupIntent: signupIntentEnum('signup_intent'), // nullable -- null for OAuth or pre-existing users
 
-  // Status
-  status: userStatusEnum('status').default('active').notNull(),
+    // Status
+    status: userStatusEnum('status').default('active').notNull(),
 
-  // Timestamps
-  ...timestamps,
-  lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
-  ...softDelete,
-});
+    // Timestamps
+    ...timestamps,
+    lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
+    ...softDelete,
+  },
+  (t) => [
+    // BAL-360: PARTIAL unique on `deleted_at IS NULL` (mirrors
+    // `party_domains_domain_unique_idx`) so a soft-deleted user's email/identity
+    // slot is freed for re-use (WorkOS delete→recreate with same email). Live rows
+    // are still uniquely constrained. Reuses the former constraint names so the
+    // migration is a clean drop-constraint + create-index with no dangling objects.
+    uniqueIndex('users_workos_id_unique')
+      .on(t.workosId)
+      .where(sql`${t.deletedAt} IS NULL`),
+    uniqueIndex('users_email_unique')
+      .on(t.email)
+      .where(sql`${t.deletedAt} IS NULL`),
+  ]
+);
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({

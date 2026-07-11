@@ -43,6 +43,19 @@ const ERROR_MAP: Record<string, string> = {
 const DEFAULT_ERROR = 'Something went wrong. Please try again.';
 
 /**
+ * BAL-360: a live Balo user already owns this email under a different WorkOS
+ * identity and the incoming profile is NOT verified — we refuse to re-link
+ * (account-takeover guard). Carries the existing user's id for analytics only.
+ * The callback maps this to a /login?error=account_exists redirect (never a 500).
+ */
+export class AccountExistsError extends Error {
+  constructor(public readonly existingUserId: string) {
+    super('account_exists');
+    this.name = 'AccountExistsError';
+  }
+}
+
+/**
  * Extract a user-friendly error message from a WorkOS SDK error.
  * WorkOS errors have shape: { code: string, message: string, ... }
  */

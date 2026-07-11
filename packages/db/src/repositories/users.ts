@@ -12,6 +12,7 @@ import {
   type CompanyMember,
 } from '../schema';
 import { partyDomainsRepository, type DomainCaptureResult } from './party-domains';
+import { auditEventsRepository } from './audit-events';
 
 /**
  * Platform-role enum values, derived from the inferred `users.platformRole`
@@ -214,6 +215,50 @@ export const usersRepository = {
       .where(eq(users.id, id))
       .returning();
     return user!;
+  },
+
+  /**
+   * BAL-360: adopt a NEW workosId onto an existing LIVE user row (identity re-link),
+   * writing an immutable audit row in the SAME transaction (ADR-1030). Guards on
+   * deleted_at IS NULL — the caller resolved a live email match. Throws if the row
+   * is missing (returning() empty). The verified-email account-takeover guard is
+   * ENFORCED here (fail closed on `emailVerified !== true`) so any future caller of
+   * this reusable seam cannot re-link an unverified identity — defense-in-depth. The
+   * caller still owns the user-facing conflict surface (e.g. AccountExistsError).
+   */
+  relinkWorkosId: async (
+    userId: string,
+    newWorkosId: string,
+    opts: { actorUserId: string; oldWorkosId: string; email: string; emailVerified: boolean }
+  ): Promise<User> => {
+    // BAL-360 account-takeover guard (defense-in-depth): a re-link is only ever
+    // safe on a WorkOS-verified email. The OAuth callback already checks this, but
+    // enforce it here too so any future caller of this reusable seam cannot re-link
+    // an unverified identity. Fail closed — never assume, never coerce.
+    if (opts.emailVerified !== true) {
+      throw new Error('relinkWorkosId: refusing to re-link an unverified identity');
+    }
+    return db.transaction(async (tx) => {
+      const [user] = await tx
+        .update(users)
+        .set({ workosId: newWorkosId, updatedAt: new Date() })
+        .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+        .returning();
+      if (user === undefined) throw new Error('relinkWorkosId: user row not found');
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: opts.actorUserId,
+          action: 'user.workos_relinked',
+          entityType: 'user',
+          entityId: userId,
+          metadata: { oldWorkosId: opts.oldWorkosId, newWorkosId, email: opts.email },
+        },
+        tx
+      );
+
+      return user;
+    });
   },
 
   /**
