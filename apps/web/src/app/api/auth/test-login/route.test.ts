@@ -111,6 +111,14 @@ describe('POST /api/auth/test-login — production-inert guard', () => {
     expect(res.status).toBe(404);
     expect(mockSave).not.toHaveBeenCalled();
   });
+
+  it('returns 404 when NODE_ENV is an unexpected value (e.g. staging)', async () => {
+    vi.stubEnv('E2E_TEST_AUTH', '1');
+    vi.stubEnv('NODE_ENV', 'staging');
+    const res = await POST(makeRequest({ onboardingCompleted: false }));
+    expect(res.status).toBe(404);
+    expect(mockSave).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/auth/test-login — validation', () => {
