@@ -105,16 +105,22 @@ export interface AuthEventMap {
   };
 }
 
-// BAL-360: SERVER-side auth events (the OAuth callback runs server-side and had no
-// analytics until now). Distinct from the CLIENT `AUTH_EVENTS`/`AuthEventMap` above.
+// BAL-360/BAL-362: SERVER-side auth events (auth entry points run server-side and
+// had no analytics until BAL-360). Distinct from the CLIENT `AUTH_EVENTS`/
+// `AuthEventMap` above. BAL-362 generalised these from OAuth-specific names to
+// method-agnostic ones, carrying `method` so a single event covers all three entry
+// points (OAuth callback, password sign-in, OTP email verification).
 export const AUTH_SERVER_EVENTS = {
-  OAUTH_CALLBACK_RELINK: 'oauth_callback_relink',
-  OAUTH_CALLBACK_CONFLICT_409: 'oauth_callback_conflict_409',
+  AUTH_RELINK: 'auth_relink',
+  AUTH_CONFLICT: 'auth_conflict',
 } as const;
+
+/** Which auth entry point emitted the server event. */
+export type AuthMethodServer = 'oauth' | 'password' | 'otp';
 
 export interface AuthServerEventMap {
   // Fired after a successful workosId re-link onto a live verified-email user.
-  [AUTH_SERVER_EVENTS.OAUTH_CALLBACK_RELINK]: { distinct_id: string };
-  // Fired on the conflict branch (live email, unverified profile → refused re-link).
-  [AUTH_SERVER_EVENTS.OAUTH_CALLBACK_CONFLICT_409]: { distinct_id: string };
+  [AUTH_SERVER_EVENTS.AUTH_RELINK]: { distinct_id: string; method: AuthMethodServer };
+  // Fired when a live email is owned under a different identity → re-link refused.
+  [AUTH_SERVER_EVENTS.AUTH_CONFLICT]: { distinct_id: string; method: AuthMethodServer };
 }

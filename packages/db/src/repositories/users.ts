@@ -221,10 +221,18 @@ export const usersRepository = {
    * BAL-360: adopt a NEW workosId onto an existing LIVE user row (identity re-link),
    * writing an immutable audit row in the SAME transaction (ADR-1030). Guards on
    * deleted_at IS NULL — the caller resolved a live email match. Throws if the row
-   * is missing (returning() empty). The verified-email account-takeover guard is
-   * ENFORCED here (fail closed on `emailVerified !== true`) so any future caller of
-   * this reusable seam cannot re-link an unverified identity — defense-in-depth. The
-   * caller still owns the user-facing conflict surface (e.g. AccountExistsError).
+   * is missing (returning() empty).
+   *
+   * TWO account-takeover guards are ENFORCED here (fail closed, defense-in-depth) so
+   * any future caller of this reusable seam cannot re-link an unverified identity:
+   * - INCOMING profile (`opts.emailVerified !== true`) — checked before the tx opens.
+   * - EXISTING row (BAL-362, `user.emailVerified !== true`) — checked inside the tx,
+   *   after the update loads the current row, before the audit write. Reachable
+   *   because the password path can persist an unverified users row (sign-in
+   *   orphan-recovery). Throwing inside the tx rolls back the workosId write AND
+   *   prevents the audit row.
+   *
+   * The caller still owns the user-facing conflict surface (e.g. AccountExistsError).
    */
   relinkWorkosId: async (
     userId: string,
@@ -245,6 +253,15 @@ export const usersRepository = {
         .where(and(eq(users.id, userId), isNull(users.deletedAt)))
         .returning();
       if (user === undefined) throw new Error('relinkWorkosId: user row not found');
+
+      // BAL-362 existing-row account-takeover guard (fail-closed, defense-in-depth):
+      // the row being re-linked ONTO must also be verified. The update only sets
+      // workosId+updatedAt, so `user.emailVerified` here reflects the EXISTING row.
+      // Throwing inside the tx rolls back the workosId write AND prevents the audit
+      // row. Reachable because the password path can persist an unverified users row.
+      if (user.emailVerified !== true) {
+        throw new Error('relinkWorkosId: refusing to re-link onto an unverified existing row');
+      }
 
       await auditEventsRepository.record(
         {

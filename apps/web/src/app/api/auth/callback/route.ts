@@ -5,6 +5,7 @@ import { mapWorkosAuthMethod } from '@/lib/auth/auth-method';
 import { db, usersRepository, type DomainCaptureResult } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
 import { AccountExistsError } from '@/lib/auth/errors';
+import { resolveLinkedUser } from '@/lib/auth/resolve-identity';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { emitDomainCapture } from '@/lib/analytics/party-domains';
@@ -33,31 +34,12 @@ async function resolveOrCreateUser(workosUser: {
   profilePictureUrl: string | null;
   emailVerified: boolean;
 }): Promise<ResolvedUser> {
-  let existing = await usersRepository.findByWorkosId(workosUser.id);
-  let didRelink = false;
+  // BAL-362: single shared resolver — a findByWorkosId hit, a safe re-link onto a
+  // live verified-email row, or null (create). Throws AccountExistsError when a live
+  // email is owned under a different identity and either side is unverified.
+  const resolved = await resolveLinkedUser(workosUser);
 
-  if (!existing) {
-    // BAL-360: workosId miss. Before creating, look for a LIVE user with this email.
-    const emailMatch = await usersRepository.findByEmail(workosUser.email);
-    if (emailMatch) {
-      // A live Balo user owns this email under a DIFFERENT workosId. Re-link ONLY if
-      // WorkOS asserts the email is verified (account-takeover guard). WorkOS only
-      // returns verified profiles when verification is required, but assert it here
-      // explicitly — never assume/loosen.
-      if (workosUser.emailVerified !== true) {
-        throw new AccountExistsError(emailMatch.id);
-      }
-      existing = await usersRepository.relinkWorkosId(emailMatch.id, workosUser.id, {
-        actorUserId: emailMatch.id,
-        oldWorkosId: emailMatch.workosId,
-        email: workosUser.email,
-        emailVerified: workosUser.emailVerified,
-      });
-      didRelink = true;
-    }
-  }
-
-  if (!existing) {
+  if (!resolved) {
     // No live workosId AND no live email → genuine new user (create path unchanged).
     const result = await usersRepository.createWithWorkspace({
       workosId: workosUser.id,
@@ -80,6 +62,9 @@ async function resolveOrCreateUser(workosUser: {
   }
 
   // Shared returning-user tail (covers findByWorkosId hits AND re-linked users).
+  const existing = resolved.user;
+  const didRelink = resolved.didRelink;
+
   // Sync profile data from OAuth provider on every login.
   // Only use OAuth avatar if user hasn't uploaded a custom one (R2 key).
   // R2 keys don't start with 'http', so preserve them.
@@ -183,8 +168,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // BAL-360: a returning user whose workosId was re-linked onto their live
     // verified-email row (post-commit — the re-link tx already committed).
     if (resolved.didRelink) {
-      trackServerAndFlush(AUTH_SERVER_EVENTS.OAUTH_CALLBACK_RELINK, {
+      trackServerAndFlush(AUTH_SERVER_EVENTS.AUTH_RELINK, {
         distinct_id: resolved.user.id,
+        method: 'oauth',
       });
     }
 
@@ -235,8 +221,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // BAL-360: a live user owns this email under a different identity and the
     // incoming profile is unverified — surface a clean conflict (never a 500).
     if (error instanceof AccountExistsError) {
-      trackServerAndFlush(AUTH_SERVER_EVENTS.OAUTH_CALLBACK_CONFLICT_409, {
+      trackServerAndFlush(AUTH_SERVER_EVENTS.AUTH_CONFLICT, {
         distinct_id: error.existingUserId,
+        method: 'oauth',
       });
       log.warn('OAuth callback: email owned by a different identity — conflict', {
         existingUserId: error.existingUserId,

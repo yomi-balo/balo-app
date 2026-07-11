@@ -5,10 +5,12 @@ import 'server-only';
 import { signInSchema, type SignInFormData } from '@/components/balo/auth/schemas';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
-import { db, usersRepository } from '@balo/db';
-import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
+import { db, usersRepository, type User } from '@balo/db';
+import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
+import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import { log } from '@/lib/logging';
 import { emitDomainCapture } from '@/lib/analytics/party-domains';
+import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
 interface SignInResult {
@@ -38,12 +40,21 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       password,
     });
 
-    // 3. Find Balo user by WorkOS ID — or auto-create if orphaned.
-    //    An orphaned WorkOS user (exists in WorkOS but not Balo DB) can happen
-    //    if the DB transaction failed during signup. We recover by creating
-    //    the DB user now rather than leaving them permanently locked out.
-    let user = await usersRepository.findByWorkosId(authResponse.user.id);
-    if (!user) {
+    // 3. Resolve the WorkOS identity to a LIVE Balo user — or auto-create if orphaned.
+    //    BAL-362: the shared resolver returns a findByWorkosId hit, a safe re-link
+    //    onto a live verified-email row (workosId churned in WorkOS), or null. It
+    //    throws AccountExistsError when a live email is owned under a different
+    //    identity and either side is unverified (handled in the catch below).
+    //    An orphaned WorkOS user (exists in WorkOS but not Balo DB) can happen if
+    //    the DB transaction failed during signup — the null branch recovers by
+    //    creating the DB user now rather than leaving them permanently locked out.
+    const resolved = await resolveLinkedUser(authResponse.user);
+    let user: User;
+    let didRelink = false;
+    if (resolved) {
+      user = resolved.user;
+      didRelink = resolved.didRelink;
+    } else {
       const workosUser = authResponse.user;
       const result = await usersRepository.createWithWorkspace({
         workosId: workosUser.id,
@@ -115,6 +126,15 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
     session.refreshToken = authResponse.refreshToken;
     await session.save();
 
+    // BAL-362: a returning user whose workosId was re-linked onto their live
+    // verified-email row (post-commit — the re-link tx already committed).
+    if (didRelink) {
+      trackServerAndFlush(AUTH_SERVER_EVENTS.AUTH_RELINK, {
+        distinct_id: user.id,
+        method: 'password',
+      });
+    }
+
     // 7. Touch last active timestamp (fire-and-forget, don't block response)
     usersRepository.touch(user.id).catch((err) => {
       log.warn('Failed to update last active timestamp', {
@@ -137,6 +157,19 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       },
     };
   } catch (error) {
+    // BAL-362: a live Balo user owns this email under a different identity and a
+    // re-link was refused (either side unverified) — surface a clean conflict, not
+    // a 500. `distinct_id` is the internal user id only (never the email/PII).
+    if (error instanceof AccountExistsError) {
+      trackServerAndFlush(AUTH_SERVER_EVENTS.AUTH_CONFLICT, {
+        distinct_id: error.existingUserId,
+        method: 'password',
+      });
+      log.warn('Sign-in: email owned by a different identity — conflict', {
+        existingUserId: error.existingUserId,
+      });
+      return { success: false, error: ACCOUNT_EXISTS_MESSAGE, code: 'account_exists' };
+    }
     log.error('Sign-in failed', {
       email,
       error: error instanceof Error ? error.message : String(error),

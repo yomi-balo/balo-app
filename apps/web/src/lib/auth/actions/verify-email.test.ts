@@ -21,17 +21,24 @@ vi.mock('@/lib/auth/session', () => ({
 
 const mockCreateWithWorkspace = vi.fn();
 const mockFindByWorkosId = vi.fn();
+const mockFindByEmail = vi.fn();
+const mockRelinkWorkosId = vi.fn();
 const mockFindWithCompany = vi.fn();
+// BAL-362: the real `resolveLinkedUser` runs against this mocked repository — so the
+// mock must expose findByEmail + relinkWorkosId (the resolver's re-link seam).
 vi.mock('@balo/db', () => ({
   usersRepository: {
     createWithWorkspace: (...args: unknown[]) => mockCreateWithWorkspace(...args),
     findByWorkosId: (...args: unknown[]) => mockFindByWorkosId(...args),
+    findByEmail: (...args: unknown[]) => mockFindByEmail(...args),
+    relinkWorkosId: (...args: unknown[]) => mockRelinkWorkosId(...args),
     findWithCompany: (...args: unknown[]) => mockFindWithCompany(...args),
   },
 }));
 
 // The real `emitDomainCapture` helper runs against this mocked server seam, so we
 // can assert the exact PostHog event + props the primary capture path emits.
+// BAL-362: the same seam now also carries the auth_relink / auth_conflict events.
 const mockTrackServerAndFlush = vi.fn();
 vi.mock('@/lib/analytics/server', () => ({
   trackServerAndFlush: (...args: unknown[]) => mockTrackServerAndFlush(...args),
@@ -39,6 +46,7 @@ vi.mock('@/lib/analytics/server', () => ({
     CAPTURED: 'party_domain_captured',
     CAPTURE_SKIPPED: 'party_domain_capture_skipped',
   },
+  AUTH_SERVER_EVENTS: { AUTH_RELINK: 'auth_relink', AUTH_CONFLICT: 'auth_conflict' },
 }));
 
 // BAL-345: the domain auto-join match engine, wired post-commit in the isNewUser
@@ -51,6 +59,7 @@ vi.mock('@/lib/domain-join/run-domain-join', () => ({
 
 import { verifyEmailAction } from './verify-email';
 import type { VerifyEmailInput } from './verify-email';
+import { ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -123,6 +132,9 @@ describe('verifyEmailAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { save: mockSave };
+    // BAL-362: default the email fallback to a miss so the create path is
+    // unaffected. Re-link / conflict tests override per-case.
+    mockFindByEmail.mockResolvedValue(null);
   });
 
   describe('input validation', () => {
@@ -431,6 +443,106 @@ describe('verifyEmailAction', () => {
 
       const result = await verifyEmailAction(validInput());
       expect(result.success).toBe(true);
+    });
+  });
+
+  // BAL-362 — identity re-link + conflict via the shared resolveLinkedUser seam.
+  // The OTP identity is ALWAYS verified (built with emailVerified: true), so the
+  // only reachable conflict is an unverified EXISTING row.
+  describe('identity re-link + conflict (BAL-362)', () => {
+    it('re-links a workosId miss onto a live verified-email user (method: otp)', async () => {
+      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
+      mockFindByWorkosId.mockResolvedValue(null);
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-1',
+        workosId: 'W1',
+        email: 'jane@example.com',
+        emailVerified: true, // live verified email → safe to re-link
+      });
+      mockRelinkWorkosId.mockResolvedValue({
+        id: 'user-1',
+        email: 'jane@example.com',
+        firstName: null,
+        lastName: null,
+        activeMode: 'client',
+      });
+      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
+      mockSave.mockResolvedValue(undefined);
+
+      const result = await verifyEmailAction(validInput());
+
+      expect(result.success).toBe(true);
+      // OTP proves verification, so the incoming emailVerified is hardcoded true.
+      expect(mockRelinkWorkosId).toHaveBeenCalledWith('user-1', 'workos-user-1', {
+        actorUserId: 'user-1',
+        oldWorkosId: 'W1',
+        email: 'jane@example.com',
+        emailVerified: true,
+      });
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
+      // A re-linked user is NOT new — no welcome email / domain-join.
+      expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_relink', {
+        distinct_id: 'user-1',
+        method: 'otp',
+      });
+    });
+
+    it('refuses to re-link onto an unverified existing row — account_exists (method: otp)', async () => {
+      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
+      mockFindByWorkosId.mockResolvedValue(null);
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-9',
+        workosId: 'W1',
+        email: 'jane@example.com',
+        emailVerified: false, // existing row unverified → resolver precheck refuses
+      });
+
+      const result = await verifyEmailAction(validInput());
+
+      expect(result).toEqual({
+        success: false,
+        error: ACCOUNT_EXISTS_MESSAGE,
+        code: 'account_exists',
+      });
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_conflict', {
+        distinct_id: 'user-9',
+        method: 'otp',
+      });
+    });
+
+    it('creates a brand-new user when there is no live email match (unchanged)', async () => {
+      setupHappyPath(); // findByWorkosId null, findByEmail null → create path
+
+      const result = await verifyEmailAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockCreateWithWorkspace).toHaveBeenCalled();
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      // not_applicable capture + no relink → no server analytics on the create path.
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+    });
+
+    it('resolves an existing workosId hit without consulting the email fallback', async () => {
+      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
+      mockFindByWorkosId.mockResolvedValue({
+        id: 'user-1',
+        email: 'jane@example.com',
+        firstName: null,
+        lastName: null,
+        activeMode: 'client',
+      });
+      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
+      mockSave.mockResolvedValue(undefined);
+
+      const result = await verifyEmailAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+      expect(mockRelinkWorkosId).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
   });
 });
