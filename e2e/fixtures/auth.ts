@@ -3,8 +3,11 @@ import { test as base, expect } from '@playwright/test';
 /**
  * E2E auth fixture. Seeds an iron-session cookie for a deterministic test user in a
  * chosen onboarding state by POSTing to the env-guarded `/api/auth/test-login` route
- * (WorkOS is bypassed). The route is inert unless `E2E_TEST_AUTH=1` and
- * `NODE_ENV !== 'production'`, so this fixture only works against a test build.
+ * (WorkOS is bypassed). The route is inert unless `E2E_TEST_AUTH=1` AND
+ * `NODE_ENV !== 'production'`, so this fixture only works against a non-prod build. The
+ * seeded specs that use this fixture are skipped in CI until the seeded-E2E harness
+ * (ephemeral Postgres + session secret + flag) lands in BAL-363; they run locally when
+ * `E2E_TEST_SECRET` is set (and the server has `E2E_TEST_AUTH=1`).
  */
 type SeedOptions = { onboardingCompleted: boolean };
 
@@ -21,7 +24,8 @@ export const test = base.extend<AuthFixtures>({
       });
       if (!response.ok()) {
         throw new Error(
-          `test-login seeding failed (${response.status()}) — is E2E_TEST_AUTH=1 set on the server?`
+          `test-login seeding failed (${response.status()}) — is the seeded-E2E harness up ` +
+            `(E2E_TEST_AUTH=1 on a non-prod server, Postgres + session secret)? See BAL-363.`
         );
       }
     });

@@ -53,6 +53,7 @@ function makeRequest(body: unknown): NextRequest {
 
 function enableE2E(): void {
   vi.stubEnv('E2E_TEST_AUTH', '1');
+  // Non-production NODE_ENV → guard passes.
   vi.stubEnv('NODE_ENV', 'test');
 }
 

@@ -47,6 +47,11 @@ test.fixme('signup success lands on /onboarding and never bounces back to / (nee
  * route: each attempt lands on `/onboarding`. Uses the seeded session (no WorkOS).
  */
 test.describe('returning un-onboarded user is gated to /onboarding', () => {
+  // Seeded via /api/auth/test-login (seeded-E2E CI harness). Skip in CI until BAL-363
+  // lands; runs locally when E2E_TEST_SECRET is present. The dismiss describe above stays
+  // unconditional.
+  test.skip(!process.env.E2E_TEST_SECRET, 'needs seeded-E2E CI infra — BAL-363');
+
   for (const target of ['/dashboard', '/experts', '/pricing']) {
     test(`cannot reach ${target}`, async ({ page, seedSession }) => {
       await seedSession({ onboardingCompleted: false });

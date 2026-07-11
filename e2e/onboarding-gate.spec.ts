@@ -7,6 +7,11 @@ import { test, expect } from './fixtures/auth';
  * browse normally. No WorkOS is needed — the session is seeded via `/api/auth/test-login`.
  */
 test.describe('onboarding gate (fail-closed)', () => {
+  // These specs seed a session via /api/auth/test-login, which needs the seeded-E2E CI
+  // harness (ephemeral Postgres + session secret + flag). Skip in CI until BAL-363 lands;
+  // runs locally when the harness env (E2E_TEST_SECRET) is present.
+  test.skip(!process.env.E2E_TEST_SECRET, 'needs seeded-E2E CI infra — BAL-363');
+
   test('un-onboarded user is redirected from a protected route to /onboarding', async ({
     page,
     seedSession,

@@ -13,12 +13,16 @@ export const dynamic = 'force-dynamic';
  * provider.
  *
  * SECURITY: this route is INERT in production. It refuses every request unless
- * `E2E_TEST_AUTH === '1'` AND `NODE_ENV !== 'production'`. The guard is the first
- * statement in the handler — it can never mint a session in prod. The request body
+ * `E2E_TEST_AUTH === '1'` AND `NODE_ENV !== 'production'` — the guard is the first
+ * statement in the handler, so it can never mint a session in prod. The request body
  * cannot select an identity or a role: the email is DERIVED from the requested state
  * on a fixed `@balo.test` domain (never collides with a real account), and the minted
  * session's `platformRole` is HARDCODED to `'user'`. If the derived account somehow
  * resolves to an elevated row, we refuse rather than mint.
+ *
+ * NOTE: the deployment-agnostic, secret-gated redesign of this guard
+ * (`E2E_TEST_SECRET` → 404/401/200, timing-safe) plus the CI harness ship in BAL-363,
+ * not here. This interim `NODE_ENV` guard is intentionally left untouched by BAL-361.
  */
 function isE2ETestLoginEnabled(): boolean {
   return process.env.E2E_TEST_AUTH === '1' && process.env.NODE_ENV !== 'production';
