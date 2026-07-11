@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { proposalsRepository, InvalidProposalTransitionError, type Proposal } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -80,7 +80,7 @@ async function loadCurrentSubmittedProposal(
  * `submitted → changes_requested` (keeping it `is_current`) AND inserts the
  * change-request row in ONE atomic repo call, then notifies the EXPERT.
  *
- * Control flow: requireUser → validate input → `resolveConversationAccess` (denies
+ * Control flow: requireOnboardedUser → validate input → `resolveConversationAccess` (denies
  * non-participants and foreign relationship ids) → CLIENT-lens gate → re-load +
  * verify the proposal (live, `submitted`, current, belongs to this relationship) →
  * `proposalsRepository.requestChanges` (single tx — flip + insert; `InvalidProposal-
@@ -95,7 +95,7 @@ export async function requestProposalChangesAction(
 ): Promise<RequestProposalChangesResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

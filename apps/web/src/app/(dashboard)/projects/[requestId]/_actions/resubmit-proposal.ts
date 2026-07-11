@@ -14,7 +14,7 @@ import {
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
 import {
@@ -209,7 +209,7 @@ async function carryOverDocuments(fromProposalId: string, toProposalId: string):
  * re-parents milestones + installments, carries over documents (best-effort), and
  * notifies the CLIENT.
  *
- * Control flow: requireUser → validate input → `resolveConversationAccess` →
+ * Control flow: requireOnboardedUser → validate input → `resolveConversationAccess` →
  * EXPERT-lens gate → re-load + verify the current proposal (`changes_requested`,
  * current, == fromProposalId) → sanitise → readiness re-validation → `resubmit`
  * (typed transition errors → friendly stale copy) → re-parent children → document
@@ -224,7 +224,7 @@ export async function resubmitProposalAction(
 ): Promise<ResubmitProposalResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: NOT_SIGNED_IN };
   }

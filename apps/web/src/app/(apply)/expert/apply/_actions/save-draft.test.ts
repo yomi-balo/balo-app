@@ -94,7 +94,13 @@ describe('saveDraftAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = {
-      user: { id: USER_ID, email: 'test@example.com', firstName: 'John', lastName: 'Doe' },
+      user: {
+        id: USER_ID,
+        onboardingCompleted: true,
+        email: 'test@example.com',
+        firstName: 'John',
+        lastName: 'Doe',
+      },
       save: mockSave,
     };
     mockSaveProfileStep.mockResolvedValue({ id: PROFILE_ID });

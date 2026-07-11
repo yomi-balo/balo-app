@@ -77,7 +77,10 @@ function mockDraft() {
 describe('loadDraftAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionObj = { user: { id: USER_ID, email: 'test@example.com' }, save: mockSave };
+    mockSessionObj = {
+      user: { id: USER_ID, onboardingCompleted: true, email: 'test@example.com' },
+      save: mockSave,
+    };
     setupReferenceData();
   });
 

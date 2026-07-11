@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { partyJoinRequestsRepository, InvalidJoinRequestTransitionError } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import type { ActionResult } from './join-request-shared';
 
@@ -19,7 +19,7 @@ const inputSchema = z.object({ requestId: z.uuid() });
 export async function withdrawJoinRequest(input: { requestId: string }): Promise<ActionResult> {
   let session;
   try {
-    session = await requireUser();
+    session = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You must be signed in to do this.' };
   }

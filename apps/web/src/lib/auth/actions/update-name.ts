@@ -58,5 +58,6 @@ export const updateNameAction = withAuth(
       });
       return { success: false, error: 'Something went wrong. Please try again.' };
     }
-  }
+  },
+  { allowUnonboarded: true }
 );

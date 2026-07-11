@@ -26,6 +26,7 @@ import { getCalendarConnectionAction } from './get-calendar-connection';
 
 const EXPERT_SESSION = {
   user: {
+    onboardingCompleted: true,
     id: 'user-1',
     email: 'expert@example.com',
     activeMode: 'expert',
@@ -47,7 +48,7 @@ describe('getCalendarConnectionAction', () => {
 
   it('returns null when no expert profile', async () => {
     mockSessionObj = {
-      user: { id: 'user-1', email: 'e@e.com', activeMode: 'expert' },
+      user: { id: 'user-1', onboardingCompleted: true, email: 'e@e.com', activeMode: 'expert' },
       save: mockSave,
     };
     const result = await getCalendarConnectionAction();

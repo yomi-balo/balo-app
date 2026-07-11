@@ -9,7 +9,7 @@ import {
   expressionsOfInterestRepository,
   type ProjectRequestWithRelations,
 } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { isDescriptionEmpty } from '@/components/balo/rich-text-editor';
@@ -122,7 +122,7 @@ export async function submitEoiAction(
 ): Promise<SubmitEoiResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You are not signed in.' };
   }

@@ -43,7 +43,7 @@ vi.mock('@balo/db', () => ({
 
 const mockRequireUser = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: () => mockRequireUser(),
+  requireOnboardedUser: () => mockRequireUser(),
 }));
 
 const mockResolveAccess = vi.fn();

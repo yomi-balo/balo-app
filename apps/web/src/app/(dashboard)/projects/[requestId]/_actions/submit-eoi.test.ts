@@ -27,7 +27,7 @@ vi.mock('@balo/db', () => ({
 
 const mockRequireUser = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: () => mockRequireUser(),
+  requireOnboardedUser: () => mockRequireUser(),
 }));
 
 // Pass-through sanitiser (the real one is server-only). The action treats an empty

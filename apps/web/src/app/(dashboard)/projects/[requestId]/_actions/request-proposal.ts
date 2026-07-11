@@ -10,7 +10,7 @@ import {
   conversationsRepository,
   InvalidRelationshipTransitionError,
 } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -101,7 +101,7 @@ export async function requestProposalAction(
 ): Promise<RequestProposalResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You are not signed in.' };
   }

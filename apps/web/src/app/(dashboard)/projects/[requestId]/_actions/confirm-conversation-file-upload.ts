@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import { conversationsRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { publishConversationEvent } from '@/lib/realtime/ably-server';
@@ -129,7 +129,7 @@ export async function confirmConversationFileUploadAction(
 ): Promise<ConfirmConversationFileUploadResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You are not signed in.' };
   }

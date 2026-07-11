@@ -14,7 +14,7 @@ import {
   deriveEngagementParties,
   type EngagementParties,
 } from '@/lib/engagement/engagement-parties';
-import { requireUser, type SessionUser } from '@/lib/auth/session';
+import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { plainMessageToHtml } from '@/lib/sanitize/plain-message-html';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
@@ -230,7 +230,7 @@ export async function requireExpertUser(): Promise<
   { ok: true; user: SessionUser } | { ok: false; error: string }
 > {
   try {
-    return { ok: true, user: await requireUser() };
+    return { ok: true, user: await requireOnboardedUser() };
   } catch {
     return { ok: false, error: NOT_SIGNED_IN };
   }

@@ -27,6 +27,7 @@ import { revalidatePath } from 'next/cache';
 
 const EXPERT_SESSION = {
   user: {
+    onboardingCompleted: true,
     id: 'user-1',
     email: 'expert@example.com',
     activeMode: 'expert',

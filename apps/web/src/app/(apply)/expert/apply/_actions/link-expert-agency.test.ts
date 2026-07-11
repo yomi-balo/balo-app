@@ -57,7 +57,13 @@ const RETRYABLE =
 beforeEach(() => {
   vi.clearAllMocks();
   mockSessionObj = {
-    user: { id: USER_ID, email: 'session-copy@acme.io', firstName: 'Jane', lastName: 'Doe' },
+    user: {
+      id: USER_ID,
+      onboardingCompleted: true,
+      email: 'session-copy@acme.io',
+      firstName: 'Jane',
+      lastName: 'Doe',
+    },
   };
   mockFindProfileById.mockResolvedValue({ id: PROFILE_ID, userId: USER_ID, agencyId: null });
   // DB is authoritative for email + verification state (never the session copy).

@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { companiesRepository } from '@balo/db';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { emitDomainJoinModeChanged } from '@/lib/analytics/party-join';
@@ -29,7 +29,7 @@ export async function setCompanyJoinMode(input: {
 }): Promise<ActionResult> {
   let session;
   try {
-    session = await requireUser();
+    session = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You must be signed in to do this.' };
   }

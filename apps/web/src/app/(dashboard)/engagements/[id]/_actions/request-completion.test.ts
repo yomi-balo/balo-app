@@ -8,7 +8,7 @@ vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const mockRequireUser = vi.fn();
-vi.mock('@/lib/auth/session', () => ({ requireUser: () => mockRequireUser() }));
+vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: () => mockRequireUser() }));
 
 const mockResolveLens = vi.fn();
 vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({

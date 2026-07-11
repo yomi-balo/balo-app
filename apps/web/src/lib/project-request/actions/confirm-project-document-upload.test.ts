@@ -60,7 +60,7 @@ function input(overrides: Record<string, unknown> = {}): {
 describe('confirmProjectDocumentUploadAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionObj = { user: { id: USER_ID, companyId: COMPANY_ID } };
+    mockSessionObj = { user: { id: USER_ID, onboardingCompleted: true, companyId: COMPANY_ID } };
   });
 
   it('throws when unauthenticated', async () => {

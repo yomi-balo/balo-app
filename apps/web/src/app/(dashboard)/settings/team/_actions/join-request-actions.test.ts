@@ -33,7 +33,7 @@ vi.mock('@balo/db', () => ({
 }));
 
 const mockRequireUser = vi.fn();
-vi.mock('@/lib/auth/session', () => ({ requireUser: () => mockRequireUser() }));
+vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: () => mockRequireUser() }));
 
 const mockPublish = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
 vi.mock('@/lib/notifications/publish', () => ({

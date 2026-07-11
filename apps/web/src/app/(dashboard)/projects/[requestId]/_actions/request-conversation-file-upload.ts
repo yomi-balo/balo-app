@@ -3,7 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { requireUser } from '@/lib/auth/session';
+import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import {
@@ -33,7 +33,7 @@ export async function requestConversationFileUploadAction(
 ): Promise<RequestConversationFileUploadResult> {
   let user;
   try {
-    user = await requireUser();
+    user = await requireOnboardedUser();
   } catch {
     return { success: false, error: 'You are not signed in.' };
   }

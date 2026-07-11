@@ -67,7 +67,10 @@ function setupValidApplication(opts: MockAppOptions = {}): void {
 describe('submitApplicationAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionObj = { user: { id: USER_ID, email: 'test@example.com' }, save: mockSave };
+    mockSessionObj = {
+      user: { id: USER_ID, onboardingCompleted: true, email: 'test@example.com' },
+      save: mockSave,
+    };
   });
 
   describe('authentication', () => {
