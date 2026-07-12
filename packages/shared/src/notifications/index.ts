@@ -248,3 +248,18 @@ export interface EngagementReviewReminderPayload {
   autoDate: string; // "11 Jul" (pre-formatted, UTC) — the auto-accept date
   daysLeft: number; // {daysLeft} — whole days remaining until autoDate (email window block)
 }
+
+// BAL-369 / ADR-1038 — a corporate + verified owner PROMOTED their personal
+// workspace into a typed COMPANY organization at the onboarding Intent step.
+// Published post-commit by the web action ONLY on the fresh `promoted` outcome
+// (never on a domain-conflict personal-fallback). `correlationId` is the stable
+// `companyId` → BullMQ jobId dedup key, so a retry after a partial failure never
+// double-notifies. `ownerUserId` is the promoting owner (subject + recipient). The
+// engine rule + template are deferred to S3/BAL-371 — publishing with no rule yet
+// is a correct no-op (the `agency.provisioned` precedent). Lives here (not mirrored
+// across the api/web files) per this module's "migrate opportunistically" note.
+export interface CompanyProvisionedPayload {
+  correlationId: string; // = companyId → BullMQ jobId dedup
+  companyId: string;
+  ownerUserId: string; // the promoting owner (subject + recipient)
+}

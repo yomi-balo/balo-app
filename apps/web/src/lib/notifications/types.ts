@@ -14,6 +14,7 @@ import type {
   EngagementCancelledPayload,
   EngagementAcceptedPayload,
   EngagementChangesRequestedPayload,
+  CompanyProvisionedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -193,21 +194,6 @@ export type PartyJoinRequestDeclinedPayload = PartyJoinEventBase; // correlation
 export interface AgencyProvisionedPayload {
   correlationId: string; // = agencyId
   agencyId: string;
-  ownerUserId: string;
-}
-
-// BAL-369 / ADR-1038 — a corporate + verified owner PROMOTED their personal
-// workspace into a typed COMPANY organization at the onboarding Intent step.
-// Published post-commit, best-effort, ONLY on the fresh `promoted` outcome (never
-// on a domain-conflict fallback). `correlationId` is the stable `companyId` →
-// BullMQ jobId dedup, so a retry after a partial failure never double-notifies.
-// `ownerUserId` is the promoting owner (subject + recipient). The engine rule +
-// template are deferred to S3/BAL-371 — publishing with no rule yet is a correct
-// no-op (the exact `agency.provisioned` precedent). Mirror of
-// apps/api/src/notifications/events.ts — keep the two in lockstep.
-export interface CompanyProvisionedPayload {
-  correlationId: string; // = companyId
-  companyId: string;
   ownerUserId: string;
 }
 
