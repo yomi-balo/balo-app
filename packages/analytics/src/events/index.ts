@@ -75,6 +75,11 @@ export {
   type BillingServerEventMap,
 } from './billing';
 export { PARTY_DOMAIN_SERVER_EVENTS, type PartyDomainServerEventMap } from './party-domains';
+export {
+  SIGNUP_DOMAIN_SERVER_EVENTS,
+  type SignupDomainServerEventMap,
+  type SignupDomainClass,
+} from './signup-domain';
 export { PARTY_JOIN_SERVER_EVENTS, type PartyJoinServerEventMap } from './party-join';
 export { DOMAIN_JOIN_EVENTS, type DomainJoinEventMap } from './domain-join';
 export {

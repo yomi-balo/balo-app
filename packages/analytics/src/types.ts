@@ -15,6 +15,7 @@ import type { ConversationEventMap } from './events/conversation';
 import type { ProjectsInboxEventMap } from './events/projects-inbox';
 import type { BillingEventMap, BillingServerEventMap } from './events/billing';
 import type { PartyDomainServerEventMap } from './events/party-domains';
+import type { SignupDomainServerEventMap } from './events/signup-domain';
 import type { PartyJoinServerEventMap } from './events/party-join';
 import type { EngagementServerEventMap, EngagementEventMap } from './events/engagement';
 import type { AdminEngagementsEventMap } from './events/admin-engagements';
@@ -54,6 +55,7 @@ export type ServerEvents = ExpertServerEventMap &
   BillingServerEventMap &
   PartyDomainServerEventMap &
   PartyJoinServerEventMap &
+  SignupDomainServerEventMap &
   EngagementServerEventMap &
   AuthServerEventMap;
 

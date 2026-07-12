@@ -13,6 +13,7 @@ export { SEARCH_SERVER_EVENTS } from '../events/search';
 export { PROJECT_SERVER_EVENTS } from '../events/project';
 export { BILLING_SERVER_EVENTS } from '../events/billing';
 export { PARTY_DOMAIN_SERVER_EVENTS } from '../events/party-domains';
+export { SIGNUP_DOMAIN_SERVER_EVENTS } from '../events/signup-domain';
 export { PARTY_JOIN_SERVER_EVENTS } from '../events/party-join';
 export { ENGAGEMENT_SERVER_EVENTS } from '../events/engagement';
 export { AUTH_SERVER_EVENTS } from '../events/auth';

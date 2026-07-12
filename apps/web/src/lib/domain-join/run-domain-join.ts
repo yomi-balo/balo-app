@@ -6,7 +6,7 @@ import {
   partyJoinRequestsRepository,
   partyJoinOptoutsRepository,
 } from '@balo/db';
-import { extractEmailDomain, isBlockedDomain } from '@balo/shared/domains';
+import { extractEmailDomain, isBlockedDomain, classifyEmailDomain } from '@balo/shared/domains';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import {
@@ -14,6 +14,7 @@ import {
   emitAutoJoinCompleted,
   emitJoinRequestCreated,
 } from '@/lib/analytics/party-join';
+import { emitSignupDomainClassified } from '@/lib/analytics/signup-domain';
 
 /**
  * Domain auto-join match engine (BAL-345 §4). A PURE orchestrator: `runDomainJoin`
@@ -201,6 +202,13 @@ async function publishDomainJoinNotifications(
  */
 export async function runDomainJoinAndEmit(input: RunDomainJoinInput): Promise<void> {
   try {
+    // BAL-368 (S1 / ADR-1038): TYPE the signup domain (corporate vs freemail) and
+    // record it via analytics ONCE per signup. Independent of the join engine's
+    // emailVerified gate below — a freemail/unverified/no-match signup is still a
+    // classified signup. Pure classifier; no org is created and no domain is claimed
+    // here (claim happens at the Intent step, S2/BAL-369).
+    emitSignupDomainClassified(classifyEmailDomain(input.email), input.userId);
+
     const result = await runDomainJoin(input);
     emitDomainJoinAnalytics(result, input.userId);
     await publishDomainJoinNotifications(result, input.userId);
