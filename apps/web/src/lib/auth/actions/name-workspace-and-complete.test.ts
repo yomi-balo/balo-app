@@ -207,8 +207,21 @@ describe('nameWorkspaceAndCompleteAction', () => {
       expect(mockSave).toHaveBeenCalledOnce();
     });
 
-    it('same-type conflict → retryable error, nothing changed (no completion)', async () => {
+    it('same-type conflict (a live company owns the domain) → falls back to a personal rename (no error)', async () => {
       mockPromote.mockResolvedValue({ outcome: 'domain_conflict_same_type' });
+
+      const result = await nameWorkspaceAndCompleteAction('Acme');
+
+      // Retry is futile (the live owner never disappears), so onboarding completes
+      // NON-BLOCKED as a personal workspace — identical to the other-type branch.
+      expect(mockUpdateName).toHaveBeenCalledWith('company-1', 'Acme');
+      expect(mockEmitOrg).not.toHaveBeenCalled();
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
+    });
+
+    it('retryable conflict (transient release race) → retryable error, nothing changed (no completion)', async () => {
+      mockPromote.mockResolvedValue({ outcome: 'domain_conflict_retryable' });
 
       const result = await nameWorkspaceAndCompleteAction('Acme');
 

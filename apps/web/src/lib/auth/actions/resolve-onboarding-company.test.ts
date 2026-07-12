@@ -117,6 +117,48 @@ describe('resolveOnboardingCompanyAction', () => {
     expectNoWrites();
   });
 
+  it('stands down to new when an actionable match has a whitespace-only name (BAL-372 guard)', async () => {
+    mockFindActiveByDomain.mockResolvedValue({ partyType: 'company', partyId: 'company-1' });
+    mockGetPartyJoinSettings.mockResolvedValue(actionableSettings());
+    mockFindWithMembers.mockResolvedValue({ name: '   ', members: [{ id: 'm1' }, { id: 'm2' }] });
+
+    const result = await resolveOnboardingCompanyAction();
+
+    expect(result).toEqual({ status: 'new', suggestion: 'Acme' });
+    // The stand-down runs only AFTER the member load — it is the name guard, not the gate.
+    expect(mockFindWithMembers).toHaveBeenCalledWith('company-1');
+    expectNoWrites();
+  });
+
+  it('stands down to new when an actionable match has a missing name (BAL-372 guard)', async () => {
+    mockFindActiveByDomain.mockResolvedValue({ partyType: 'company', partyId: 'company-1' });
+    mockGetPartyJoinSettings.mockResolvedValue(actionableSettings());
+    mockFindWithMembers.mockResolvedValue(undefined);
+
+    const result = await resolveOnboardingCompanyAction();
+
+    expect(result).toEqual({ status: 'new', suggestion: 'Acme' });
+    expectNoWrites();
+  });
+
+  it('trims surrounding whitespace on a matched company name', async () => {
+    mockFindActiveByDomain.mockResolvedValue({ partyType: 'company', partyId: 'company-1' });
+    mockGetPartyJoinSettings.mockResolvedValue(actionableSettings());
+    mockFindWithMembers.mockResolvedValue({
+      name: '  Northwind  ',
+      members: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }],
+    });
+
+    const result = await resolveOnboardingCompanyAction();
+
+    expect(result).toEqual({
+      status: 'matched',
+      company: { name: 'Northwind', memberCount: 3, joinMode: 'auto' },
+      suggestion: 'Acme',
+    });
+    expectNoWrites();
+  });
+
   it('returns new for a company owner whose workspace is personal (dormant match stands down)', async () => {
     mockFindActiveByDomain.mockResolvedValue({ partyType: 'company', partyId: 'company-1' });
     mockGetPartyJoinSettings.mockResolvedValue(actionableSettings({ isPersonal: true }));

@@ -79,10 +79,18 @@ export async function resolveOnboardingCompanyAction(): Promise<ResolveOnboardin
     // engine reads.
     if (isActionableDomainMatch(owner.partyType, settings)) {
       const company = await companiesRepository.findWithMembers(owner.partyId);
+      const name = company?.name?.trim();
+      // BAL-372 defense-in-depth: under S2 the name + domain claim commit in ONE tx, so a
+      // domain-owning org structurally always has a non-empty name. If that invariant is
+      // ever violated, a blank name would render "Join ?" with a blank avatar — so treat a
+      // missing/empty/whitespace name as non-actionable and fall through to CREATE.
+      if (name === undefined || name === '') {
+        return { status: 'new', suggestion: suggestCompanyNameFromEmail(email) };
+      }
       return {
         status: 'matched',
         company: {
-          name: company?.name ?? '',
+          name, // trimmed
           // Primitive count only — no member rows cross to the client (no PII).
           memberCount: company?.members?.length ?? 0,
           joinMode: settings.domainJoinMode === 'request' ? 'request' : 'auto',

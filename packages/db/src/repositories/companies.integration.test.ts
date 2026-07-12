@@ -11,6 +11,7 @@ import {
 } from '../test/factories';
 import { companiesRepository } from './companies';
 import { auditEventsRepository } from './audit-events';
+import { partyDomainsRepository } from './party-domains';
 
 /** company.join_mode_changed audit rows for a company id (test-local helper). */
 async function joinModeAuditsFor(companyId: string): Promise<(typeof auditEvents.$inferSelect)[]> {
@@ -397,6 +398,87 @@ describe('companiesRepository.promoteToOrganization', () => {
     await expect(
       auditsFor('company', company.id, 'company.promoted_to_organization')
     ).resolves.toHaveLength(0);
+  });
+
+  it('transient race (owner freed mid-op) → domain_conflict_retryable, no write', async () => {
+    const actor = await userFactory();
+    const otherOwner = await userFactory();
+    const otherCompany = await companyFactory();
+    // A live competing claim makes capture() genuinely return skipped:already_claimed.
+    await seedClaim('company', otherCompany.id, 'acme.io', otherOwner.id);
+
+    const company = await companyFactory({ isPersonal: true, name: 'Personal WS' });
+
+    // Simulate the cross-tx TOCTOU: the owner-resolution SELECT sees the slot freed by a
+    // concurrent soft-delete → findActiveByDomain returns undefined exactly once. Same
+    // in-file vi.spyOn pattern the atomicity tests use on auditEventsRepository.record;
+    // documented so a future reader does not "fix" the spy — the branch is a real
+    // cross-transaction race, not deterministically reproducible by data alone.
+    const spy = vi
+      .spyOn(partyDomainsRepository, 'findActiveByDomain')
+      .mockResolvedValueOnce(undefined);
+
+    const result = await companiesRepository.promoteToOrganization({
+      companyId: company.id,
+      name: 'Acme',
+      domain: 'acme.io',
+      actorUserId: actor.id,
+    });
+
+    spy.mockRestore();
+
+    expect(result.outcome).toBe('domain_conflict_retryable');
+
+    // Our company is untouched (still personal, original name); nothing was written.
+    const reread = await companiesRepository.findById(company.id);
+    expect(reread?.isPersonal).toBe(true);
+    expect(reread?.name).toBe('Personal WS');
+    await expect(liveDomainsForCompany(company.id)).resolves.toHaveLength(0);
+    await expect(
+      auditsFor('company', company.id, 'company.promoted_to_organization')
+    ).resolves.toHaveLength(0);
+  });
+
+  it('standing release/re-claim: a soft-deleted competing claim frees the slot → promote SUCCEEDS', async () => {
+    const actor = await userFactory();
+    const otherOwner = await userFactory();
+    const otherCompany = await companyFactory();
+    // A competing company claims acme.io first, then the claim is RELEASED (admin
+    // removeDomain soft-deletes the mapping — modelled here by stamping deleted_at). The
+    // partial-unique index is partial on `deleted_at IS NULL`, so the slot is now free.
+    await seedClaim('company', otherCompany.id, 'acme.io', otherOwner.id);
+    await db
+      .update(partyDomains)
+      .set({ deletedAt: new Date(), deletedByUserId: otherOwner.id })
+      .where(eq(partyDomains.domain, 'acme.io'));
+
+    const company = await companyFactory({ isPersonal: true, name: 'Personal WS' });
+
+    const result = await companiesRepository.promoteToOrganization({
+      companyId: company.id,
+      name: 'Acme',
+      domain: 'acme.io',
+      actorUserId: actor.id,
+    });
+
+    // capture()'s onConflictDoNothing arbiter re-claims the freed slot automatically.
+    expect(result.outcome).toBe('promoted');
+    const reread = await companiesRepository.findById(company.id);
+    expect(reread?.isPersonal).toBe(false);
+    expect(reread?.name).toBe('Acme');
+
+    // Exactly ONE live claim now, owned by OUR company (the soft-deleted one stays dead).
+    const domains = await liveDomainsForCompany(company.id);
+    expect(domains).toHaveLength(1);
+    const [claim] = domains;
+    if (claim === undefined) throw new Error('expected a domain claim');
+    expect(claim.domain).toBe('acme.io');
+    expect(claim.createdByUserId).toBe(actor.id);
+
+    // The promote audit is written.
+    await expect(
+      auditsFor('company', company.id, 'company.promoted_to_organization')
+    ).resolves.toHaveLength(1);
   });
 
   it('rolls the whole tx back when the audit insert throws (atomicity)', async () => {
