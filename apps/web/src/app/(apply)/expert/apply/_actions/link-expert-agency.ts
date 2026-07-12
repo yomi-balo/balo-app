@@ -3,12 +3,14 @@ import 'server-only';
 
 import { z } from 'zod';
 import { expertsRepository, usersRepository, AgencyDomainCaptureConflictError } from '@balo/db';
+import { classifyEmailDomain } from '@balo/shared/domains';
 import { withAuth } from '@/lib/auth/with-auth';
 import {
   runLinkExpertAgency,
   publishAgencyResolutionNotifications,
 } from '@/lib/expert-agency/link-expert-agency';
 import type { LinkExpertAgencyActionResult } from '@/lib/expert-agency/types';
+import { emitOrgCreatedAtIntent } from '@/lib/analytics/org-intent';
 import { log } from '@/lib/logging';
 
 export type { LinkExpertAgencyActionResult } from '@/lib/expert-agency/types';
@@ -69,6 +71,13 @@ export const linkExpertAgencyAction = withAuth(
       // Post-commit, best-effort — only on the fresh create/join branch.
       if (result.fresh) {
         await publishAgencyResolutionNotifications(result, session.user.id);
+        // BAL-369 / ADR-1038 D5 — analytics only: a fresh typed agency was
+        // instantiated at Intent (provision ⇒ corporate; solo ⇒ usually freemail).
+        // NOT on JOIN / already_linked (no new typed org). `dbUser.email` is the
+        // authoritative DB copy read above.
+        if (result.outcome === 'provision' || result.outcome === 'solo') {
+          emitOrgCreatedAtIntent('agency', classifyEmailDomain(dbUser.email), session.user.id);
+        }
       }
 
       log.info('Expert agency resolved', {

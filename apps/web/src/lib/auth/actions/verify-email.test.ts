@@ -36,16 +36,10 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
-// The real `emitDomainCapture` helper runs against this mocked server seam, so we
-// can assert the exact PostHog event + props the primary capture path emits.
-// BAL-362: the same seam now also carries the auth_relink / auth_conflict events.
+// BAL-362: this mocked server seam carries the auth_relink / auth_conflict events.
 const mockTrackServerAndFlush = vi.fn();
 vi.mock('@/lib/analytics/server', () => ({
   trackServerAndFlush: (...args: unknown[]) => mockTrackServerAndFlush(...args),
-  PARTY_DOMAIN_SERVER_EVENTS: {
-    CAPTURED: 'party_domain_captured',
-    CAPTURE_SKIPPED: 'party_domain_capture_skipped',
-  },
   AUTH_SERVER_EVENTS: { AUTH_RELINK: 'auth_relink', AUTH_CONFLICT: 'auth_conflict' },
 }));
 
@@ -98,7 +92,6 @@ function mockDbResult() {
     },
     company: { id: 'co-1', name: 'My Workspace' },
     membership: { role: 'owner' },
-    domainCapture: { outcome: 'not_applicable' },
   };
 }
 
@@ -263,7 +256,6 @@ describe('verifyEmailAction', () => {
         user: { ...mockDbResult().user, firstName: 'Jane', lastName: 'Doe' },
         company: mockDbResult().company,
         membership: mockDbResult().membership,
-        domainCapture: { outcome: 'not_applicable' },
       });
       mockFindWithCompany.mockResolvedValue({
         ...mockFindWithCompanyResult(),
@@ -358,53 +350,6 @@ describe('verifyEmailAction', () => {
       expect(result).toEqual({
         success: false,
         error: 'Account setup incomplete. Please try signing in.',
-      });
-    });
-  });
-
-  describe('domain auto-capture emission (BAL-344)', () => {
-    it('emits party_domain_captured with company/auto_captured props on the primary path', async () => {
-      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
-      mockFindByWorkosId.mockResolvedValue(null);
-      mockCreateWithWorkspace.mockResolvedValue({
-        ...mockDbResult(),
-        domainCapture: { outcome: 'captured', partyType: 'company', source: 'auto_captured' },
-      });
-      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
-      mockSave.mockResolvedValue(undefined);
-
-      const result = await verifyEmailAction(validInput());
-
-      expect(result.success).toBe(true);
-      expect(mockTrackServerAndFlush).toHaveBeenCalledTimes(1);
-      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('party_domain_captured', {
-        party_type: 'company',
-        source: 'auto_captured',
-        distinct_id: 'user-1',
-      });
-    });
-
-    it('emits nothing when the capture outcome is not_applicable', async () => {
-      setupHappyPath(); // mockDbResult() → domainCapture: not_applicable
-      await verifyEmailAction(validInput());
-      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
-    });
-
-    it('emits party_domain_capture_skipped when a blocked domain is skipped', async () => {
-      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
-      mockFindByWorkosId.mockResolvedValue(null);
-      mockCreateWithWorkspace.mockResolvedValue({
-        ...mockDbResult(),
-        domainCapture: { outcome: 'skipped', reason: 'blocked_domain' },
-      });
-      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
-      mockSave.mockResolvedValue(undefined);
-
-      await verifyEmailAction(validInput());
-
-      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('party_domain_capture_skipped', {
-        reason: 'blocked_domain',
-        distinct_id: 'user-1',
       });
     });
   });

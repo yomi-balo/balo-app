@@ -14,6 +14,7 @@ import type {
   EngagementCancelledPayload,
   EngagementAcceptedPayload,
   EngagementChangesRequestedPayload,
+  CompanyProvisionedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -231,7 +232,8 @@ export type NotificationEvent =
   | 'party.join_request_created'
   | 'party.join_request_approved'
   | 'party.join_request_declined'
-  | 'agency.provisioned';
+  | 'agency.provisioned'
+  | 'company.provisioned';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -266,4 +268,5 @@ export interface EventPayloadMap {
   'party.join_request_approved': PartyJoinRequestApprovedPayload;
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
   'agency.provisioned': AgencyProvisionedPayload;
+  'company.provisioned': CompanyProvisionedPayload;
 }

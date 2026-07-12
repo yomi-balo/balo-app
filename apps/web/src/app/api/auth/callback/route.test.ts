@@ -65,7 +65,6 @@ vi.mock('@/lib/logging', () => ({ log: { error: vi.fn(), info: vi.fn(), warn: vi
 vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: () => Promise.resolve(),
 }));
-vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
 
 const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
 vi.mock('@/lib/domain-join/run-domain-join', () => ({
@@ -116,7 +115,6 @@ function newUserCreateResult() {
     },
     company: { id: 'co-1', name: 'Corp' },
     membership: { role: 'owner' },
-    domainCapture: { outcome: 'not_applicable' },
   };
 }
 

@@ -45,10 +45,6 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
-// BAL-344: the orphan-recovery branch emits domain capture — stub it (this suite
-// tests sign-in logic, not emission; the emit is covered in verify-email.test.ts).
-vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
-
 // BAL-362: sign-in now emits method-agnostic server analytics on re-link / conflict.
 // Mock the seam so posthog-node / next/server `after()` stays out of the test.
 const mockTrackServerAndFlush = vi.fn();
@@ -564,10 +560,7 @@ describe('signInAction', () => {
       mockAuthenticateWithPassword.mockResolvedValue(mockWorkOSAuthResponse());
       mockFindByWorkosId.mockResolvedValue(undefined);
       mockFindByEmail.mockResolvedValue(null);
-      mockCreateWithWorkspace.mockResolvedValue({
-        user: mockBaloUser(),
-        domainCapture: { outcome: 'not_applicable' },
-      });
+      mockCreateWithWorkspace.mockResolvedValue({ user: mockBaloUser() });
       mockFindWithCompany.mockResolvedValue(mockCompanyData());
 
       const result = await signInAction(validInput());

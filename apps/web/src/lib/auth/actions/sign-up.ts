@@ -6,7 +6,6 @@ import { unifiedSignUpSchema, type UnifiedSignUpFormData } from '@/components/ba
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
 import { log } from '@/lib/logging';
-import { emitDomainCapture } from '@/lib/analytics/party-domains';
 
 interface SignUpResult {
   pendingAuthToken?: string;
@@ -85,7 +84,7 @@ export async function signUpAction(
     const { usersRepository } = await import('@balo/db');
     const { getSession } = await import('@/lib/auth/session');
 
-    const { user, company, membership, domainCapture } = await usersRepository.createWithWorkspace({
+    const { user, company, membership } = await usersRepository.createWithWorkspace({
       workosId: workosUser.id,
       email: workosUser.email,
       firstName: null,
@@ -111,9 +110,6 @@ export async function signUpAction(
     session.accessToken = authResponse.accessToken;
     session.refreshToken = authResponse.refreshToken;
     await session.save();
-
-    // BAL-344: emit the domain auto-capture outcome (post-commit).
-    emitDomainCapture(domainCapture, user.id);
 
     // BAL-345: run the domain auto-join match engine (post-commit). Dynamically
     // imported (like @balo/db above) so it stays out of the primary bundle — this

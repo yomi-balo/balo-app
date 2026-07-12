@@ -1,6 +1,10 @@
 export { usersRepository } from './users';
 export { companiesRepository } from './companies';
-export type { SetJoinModeResult } from './companies';
+export type {
+  SetJoinModeResult,
+  PromoteToOrganizationInput,
+  PromoteToOrganizationResult,
+} from './companies';
 export { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
 export type {
   AgencySummary,

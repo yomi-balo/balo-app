@@ -365,6 +365,16 @@ const agencyProvisionedPayload = z.object({
   ownerUserId: z.uuid(),
 });
 
+// BAL-369 company provisioned (corporate + verified owner → personal workspace
+// promoted to a typed org). `correlationId` = companyId (stable → jobId dedup);
+// `ownerUserId` is the promoting owner (subject + recipient). All three are uuids.
+// Mirrors apps/web/src/lib/notifications/types.ts.
+const companyProvisionedPayload = z.object({
+  correlationId: z.uuid(),
+  companyId: z.uuid(),
+  ownerUserId: z.uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -487,6 +497,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('agency.provisioned'),
     payload: agencyProvisionedPayload,
+  }),
+  z.object({
+    event: z.literal('company.provisioned'),
+    payload: companyProvisionedPayload,
   }),
 ]);
 

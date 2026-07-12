@@ -80,6 +80,7 @@ export {
   type SignupDomainServerEventMap,
   type SignupDomainClass,
 } from './signup-domain';
+export { ORG_INTENT_SERVER_EVENTS, type OrgIntentServerEventMap } from './org-intent';
 export { PARTY_JOIN_SERVER_EVENTS, type PartyJoinServerEventMap } from './party-join';
 export { DOMAIN_JOIN_EVENTS, type DomainJoinEventMap } from './domain-join';
 export {

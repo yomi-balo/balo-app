@@ -9,7 +9,6 @@ import { db, usersRepository, type User } from '@balo/db';
 import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import { log } from '@/lib/logging';
-import { emitDomainCapture } from '@/lib/analytics/party-domains';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
@@ -66,9 +65,6 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
         activeMode: 'client',
       });
       user = result.user;
-      // BAL-344: emit the domain auto-capture outcome (post-commit). Usually
-      // not_applicable unless WorkOS reports the orphaned user's email verified.
-      emitDomainCapture(result.domainCapture, user.id);
 
       // BAL-345: run the domain auto-join match engine (post-commit). Pass the
       // SAME WorkOS emailVerified flag createWithWorkspace received — never

@@ -9,6 +9,7 @@ const {
   mockFindById,
   mockRun,
   mockPublishNotifs,
+  mockEmitOrg,
   MockAgencyDomainCaptureConflictError,
 } = vi.hoisted(() => {
   class MockAgencyDomainCaptureConflictError extends Error {
@@ -25,6 +26,7 @@ const {
     mockFindById: vi.fn(),
     mockRun: vi.fn(),
     mockPublishNotifs: vi.fn(() => Promise.resolve()),
+    mockEmitOrg: vi.fn(),
     MockAgencyDomainCaptureConflictError,
   };
 });
@@ -39,6 +41,10 @@ vi.mock('@/lib/expert-agency/link-expert-agency', () => ({
   runLinkExpertAgency: mockRun,
   publishAgencyResolutionNotifications: mockPublishNotifs,
 }));
+
+// BAL-369 / ADR-1038 D5 — the analytics-only org-intent emit. `@balo/shared/domains`
+// (classifyEmailDomain) runs for REAL: acme.io → corporate, gmail.com → freemail.
+vi.mock('@/lib/analytics/org-intent', () => ({ emitOrgCreatedAtIntent: mockEmitOrg }));
 
 let mockSessionObj: Record<string, unknown> | null;
 vi.mock('@/lib/auth/session', () => ({
@@ -109,13 +115,47 @@ describe('linkExpertAgencyAction', () => {
     );
   });
 
-  it('does NOT publish a notification on the idempotent already_linked resume', async () => {
+  it('emits org_created_at_intent(agency, corporate) on a fresh PROVISION (D5)', async () => {
+    // DB email is corporate (founder@acme.io) → classifyEmailDomain → 'corporate'.
+    mockRun.mockResolvedValue({ outcome: 'provision', agencyId: 'agency-new', fresh: true });
+
+    await linkExpertAgencyAction({ expertProfileId: PROFILE_ID });
+
+    expect(mockEmitOrg).toHaveBeenCalledWith('agency', 'corporate', USER_ID);
+  });
+
+  it('emits org_created_at_intent(agency, freemail) on a fresh SOLO (D5)', async () => {
+    mockFindById.mockResolvedValue({ id: USER_ID, email: 'jane@gmail.com', emailVerified: false });
+    mockRun.mockResolvedValue({ outcome: 'solo', agencyId: 'agency-solo', fresh: true });
+
+    await linkExpertAgencyAction({ expertProfileId: PROFILE_ID });
+
+    expect(mockEmitOrg).toHaveBeenCalledWith('agency', 'freemail', USER_ID);
+  });
+
+  it('does NOT emit org_created_at_intent on a fresh JOIN (only publishes the notification)', async () => {
+    mockRun.mockResolvedValue({
+      outcome: 'join',
+      agencyId: 'agency-7',
+      fresh: true,
+      membershipId: 'mem-1',
+    });
+
+    const result = await linkExpertAgencyAction({ expertProfileId: PROFILE_ID });
+
+    expect(result).toEqual({ success: true, outcome: 'join', agencyId: 'agency-7' });
+    expect(mockPublishNotifs).toHaveBeenCalled();
+    expect(mockEmitOrg).not.toHaveBeenCalled();
+  });
+
+  it('does NOT publish a notification OR emit org-intent on the idempotent already_linked resume', async () => {
     mockRun.mockResolvedValue({ outcome: 'already_linked', agencyId: 'agency-9', fresh: false });
 
     const result = await linkExpertAgencyAction({ expertProfileId: PROFILE_ID });
 
     expect(result).toEqual({ success: true, outcome: 'already_linked', agencyId: 'agency-9' });
     expect(mockPublishNotifs).not.toHaveBeenCalled();
+    expect(mockEmitOrg).not.toHaveBeenCalled();
   });
 
   it('never trusts a client-supplied kind — it passes only the session-derived inputs', async () => {

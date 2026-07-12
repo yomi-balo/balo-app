@@ -29,10 +29,6 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
-// BAL-344: the fallback create path emits domain capture — stub it (this suite
-// tests sign-up logic, not emission; the emit is covered in verify-email.test.ts).
-vi.mock('@/lib/analytics/party-domains', () => ({ emitDomainCapture: vi.fn() }));
-
 // BAL-345: the domain auto-join match engine, dynamically imported in the fallback
 // (verification-disabled) create path. vi.mock intercepts dynamic imports too.
 const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());

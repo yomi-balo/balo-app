@@ -13,8 +13,6 @@ vi.mock('@/lib/analytics/server', () => ({
     MODE_CHANGED: 'domain_join_mode_changed',
   },
   PARTY_DOMAIN_SERVER_EVENTS: {
-    CAPTURED: 'party_domain_captured',
-    CAPTURE_SKIPPED: 'party_domain_capture_skipped',
     ADDED: 'party_domain_added',
     REMOVED: 'party_domain_removed',
   },

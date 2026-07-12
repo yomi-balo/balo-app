@@ -16,6 +16,7 @@ import type {
   EngagementChangesRequestedPayload,
   EngagementAutoAcceptedPayload,
   EngagementReviewReminderPayload,
+  CompanyProvisionedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -246,7 +247,8 @@ export type NotificationEvent =
   | 'party.join_request_created'
   | 'party.join_request_approved'
   | 'party.join_request_declined'
-  | 'agency.provisioned';
+  | 'agency.provisioned'
+  | 'company.provisioned';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -300,4 +302,5 @@ export interface EventPayloadMap {
   'party.join_request_approved': PartyJoinRequestApprovedPayload;
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
   'agency.provisioned': AgencyProvisionedPayload;
+  'company.provisioned': CompanyProvisionedPayload;
 }
