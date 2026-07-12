@@ -21,6 +21,19 @@ vi.mock('@/lib/domain-join/resolve-actionable-company', () => ({
   resolveActionableCompanyForSession: mockResolveActionable,
 }));
 
+// Detect-only engine → the FRESH-request notification + analytics are owned by
+// THIS action (BAL-371 / S3). Both are mocked so the publish/count branches can be
+// asserted in isolation.
+const mockPublish = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
+vi.mock('@/lib/notifications/publish', () => ({
+  publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
+}));
+
+const { mockEmitJoinRequestCreated } = vi.hoisted(() => ({ mockEmitJoinRequestCreated: vi.fn() }));
+vi.mock('@/lib/analytics/party-join', () => ({
+  emitJoinRequestCreated: (...a: unknown[]) => mockEmitJoinRequestCreated(...a),
+}));
+
 const mockSave = vi.fn();
 let mockSessionObj: Record<string, unknown>;
 vi.mock('@/lib/auth/session', () => ({
@@ -117,6 +130,32 @@ describe('requestJoinCompanyAction', () => {
     });
   });
 
+  describe('notification + analytics', () => {
+    it('publishes join_request_created and counts it on a FRESH request', async () => {
+      const result = await requestJoinCompanyAction();
+      expect(result).toEqual({ success: true, data: { status: 'pending' } });
+      expect(mockPublish).toHaveBeenCalledWith('party.join_request_created', {
+        correlationId: 'req-1',
+        partyType: 'company',
+        partyId: 'company-1',
+        userId: 'user-1',
+      });
+      expect(mockEmitJoinRequestCreated).toHaveBeenCalledWith('company', 'user-1');
+    });
+
+    it('does NOT publish or count on an idempotent already_pending re-consent', async () => {
+      mockFindOrCreatePending.mockResolvedValue({
+        outcome: 'already_pending',
+        request: { id: 'req-1' },
+      });
+      const result = await requestJoinCompanyAction();
+      // Still success (pending), but no re-notify / re-count.
+      expect(result).toEqual({ success: true, data: { status: 'pending' } });
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockEmitJoinRequestCreated).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('returns a retryable error and logs when the request write throws', async () => {
       mockFindOrCreatePending.mockRejectedValue(new Error('DB error'));
@@ -126,6 +165,9 @@ describe('requestJoinCompanyAction', () => {
         error: "We couldn't send your request just now. Nothing was changed — please try again.",
       });
       expect(vi.mocked(log.error)).toHaveBeenCalled();
+      // A failed write must never publish or count a request.
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockEmitJoinRequestCreated).not.toHaveBeenCalled();
     });
   });
 });

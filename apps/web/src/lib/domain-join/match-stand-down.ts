@@ -11,12 +11,12 @@ import type { PartyType, PartyJoinSettings } from '@balo/db';
  * the onboarding resolve check derives the show/hide boolean from it. The two can
  * never diverge because both read this one function.
  *
- * ⚑ v1: every `party_domains` row currently maps to a PERSONAL workspace, so this
- * returns `'personal_owner'` for every company match ⇒ the resolve check returns
- * `new` (never `matched`) ⇒ the create branch is always shown for corporate
- * domains. `matched` is dormant, exactly like the inert join engine, and BOTH
- * light up together when the shared-org creation seam ships — because they read
- * the same predicate.
+ * Reachable as of BAL-369: a PERSONAL workspace still returns `'personal_owner'`
+ * (⇒ the resolve check returns `new`, the create branch is shown), but once the
+ * owning company is promoted to a shared organization at the onboarding Intent
+ * step its `isPersonal` flips false and a same-domain match returns `null` — so
+ * the onboarding resolve check and the detect engine both treat it as actionable,
+ * because they read this one predicate.
  */
 export type MatchStandDown = 'personal_owner' | 'directory_authority' | 'mode_off';
 

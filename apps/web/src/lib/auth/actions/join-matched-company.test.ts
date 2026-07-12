@@ -22,6 +22,19 @@ vi.mock('@/lib/domain-join/resolve-actionable-company', () => ({
   resolveActionableCompanyForSession: mockResolveActionable,
 }));
 
+// Detect-only engine → the FRESH-join notification + completion analytics are
+// owned by THIS action (BAL-371 / S3). Both are mocked so the publish/count
+// branches can be asserted in isolation.
+const mockPublish = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
+vi.mock('@/lib/notifications/publish', () => ({
+  publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
+}));
+
+const { mockEmitAutoJoinCompleted } = vi.hoisted(() => ({ mockEmitAutoJoinCompleted: vi.fn() }));
+vi.mock('@/lib/analytics/party-join', () => ({
+  emitAutoJoinCompleted: (...a: unknown[]) => mockEmitAutoJoinCompleted(...a),
+}));
+
 const mockSave = vi.fn();
 let mockSessionObj: Record<string, unknown>;
 vi.mock('@/lib/auth/session', () => ({
@@ -130,6 +143,32 @@ describe('joinMatchedCompanyAction', () => {
     });
   });
 
+  describe('notification + completion analytics', () => {
+    it('publishes member_joined_via_domain and counts the completion on a FRESH join', async () => {
+      const result = await joinMatchedCompanyAction();
+      expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
+      expect(mockPublish).toHaveBeenCalledWith('party.member_joined_via_domain', {
+        correlationId: 'mem-1',
+        partyType: 'company',
+        partyId: 'company-1',
+        userId: 'user-1',
+      });
+      expect(mockEmitAutoJoinCompleted).toHaveBeenCalledWith('company', 'user-1');
+    });
+
+    it('does NOT publish or count on an idempotent already_member (double-consent)', async () => {
+      mockFindOrCreateMembership.mockResolvedValue({
+        outcome: 'already_member',
+        membershipId: 'mem-1',
+      });
+      const result = await joinMatchedCompanyAction();
+      // Still success (the user proceeds), but no re-notify / re-count.
+      expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockEmitAutoJoinCompleted).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('returns a retryable error and logs when the membership write throws (no session save)', async () => {
       mockFindOrCreateMembership.mockRejectedValue(new Error('DB error'));
@@ -140,6 +179,9 @@ describe('joinMatchedCompanyAction', () => {
       });
       expect(mockSave).not.toHaveBeenCalled();
       expect(vi.mocked(log.error)).toHaveBeenCalled();
+      // A failed write must never publish or count a completion.
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockEmitAutoJoinCompleted).not.toHaveBeenCalled();
     });
   });
 });

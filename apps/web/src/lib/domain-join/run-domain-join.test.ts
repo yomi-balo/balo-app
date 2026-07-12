@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mocks ───────────────────────────────────────────────────────
 // The @balo/db repos are mocked; @balo/shared/domains is REAL (pure logic).
+// The engine is now DETECT-ONLY (BAL-371 / S3): it must NEVER write a membership
+// or a request and must NEVER publish a notification. The write repos + publish +
+// completion-analytics mocks are kept so the tests can assert they are NOT called.
 
 const {
   mockFindActiveByDomain,
@@ -67,6 +70,10 @@ function companyOwner() {
   return { partyType: 'company', partyId: 'party-1' };
 }
 
+function agencyOwner() {
+  return { partyType: 'agency', partyId: 'agency-1' };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockOptoutExists.mockResolvedValue(false);
@@ -108,6 +115,16 @@ describe('runDomainJoin — decision tree', () => {
     expect(mockFindActiveByDomain).toHaveBeenCalledWith('acme.io');
   });
 
+  it('agency-owned domain → no_match (company-only gate, no settings lookup, no writes)', async () => {
+    mockFindActiveByDomain.mockResolvedValue(agencyOwner());
+    const result = await runDomainJoin({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
+    expect(result).toEqual({ outcome: 'no_match' });
+    // The company-only gate short-circuits BEFORE the settings lookup.
+    expect(mockGetPartyJoinSettings).not.toHaveBeenCalled();
+    expect(mockFindOrCreateDomainMembership).not.toHaveBeenCalled();
+    expect(mockFindOrCreatePending).not.toHaveBeenCalled();
+  });
+
   it('undefined settings (party row absent) → no_match', async () => {
     mockFindActiveByDomain.mockResolvedValue(companyOwner());
     mockGetPartyJoinSettings.mockResolvedValue(undefined);
@@ -147,113 +164,75 @@ describe('runDomainJoin — decision tree', () => {
     expect(mockFindOrCreateDomainMembership).not.toHaveBeenCalled();
   });
 
-  it('auto mode joined → auto_joined + membershipId', async () => {
+  it('auto mode → detected(auto), engine writes NO membership', async () => {
     mockFindActiveByDomain.mockResolvedValue(companyOwner());
     mockGetPartyJoinSettings.mockResolvedValue(settings());
-    mockFindOrCreateDomainMembership.mockResolvedValue({ outcome: 'joined', membershipId: 'm-1' });
     const result = await runDomainJoin({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
     expect(result).toEqual({
-      outcome: 'auto_joined',
+      outcome: 'detected',
       partyType: 'company',
       partyId: 'party-1',
       mode: 'auto',
-      membershipId: 'm-1',
     });
-    expect(mockFindOrCreateDomainMembership).toHaveBeenCalledWith({
-      partyType: 'company',
-      partyId: 'party-1',
-      userId: USER_ID,
-      actorUserId: USER_ID,
-    });
+    // Detect-only: the membership write is deferred to the wizard consent action.
+    expect(mockFindOrCreateDomainMembership).not.toHaveBeenCalled();
+    expect(mockFindOrCreatePending).not.toHaveBeenCalled();
   });
 
-  it('auto mode already_member → auto_already_member (idempotent)', async () => {
-    mockFindActiveByDomain.mockResolvedValue(companyOwner());
-    mockGetPartyJoinSettings.mockResolvedValue(settings());
-    mockFindOrCreateDomainMembership.mockResolvedValue({
-      outcome: 'already_member',
-      membershipId: 'm-1',
-    });
-    const result = await runDomainJoin({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
-    expect(result.outcome).toBe('auto_already_member');
-  });
-
-  it('request mode created → request_created + joinRequestId', async () => {
+  it('request mode → detected(request), engine writes NO request', async () => {
     mockFindActiveByDomain.mockResolvedValue(companyOwner());
     mockGetPartyJoinSettings.mockResolvedValue(settings({ domainJoinMode: 'request' }));
-    mockFindOrCreatePending.mockResolvedValue({ outcome: 'created', request: { id: 'r-1' } });
     const result = await runDomainJoin({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
     expect(result).toEqual({
-      outcome: 'request_created',
+      outcome: 'detected',
       partyType: 'company',
       partyId: 'party-1',
       mode: 'request',
-      joinRequestId: 'r-1',
     });
-  });
-
-  it('request mode already_pending → request_already_pending', async () => {
-    mockFindActiveByDomain.mockResolvedValue(companyOwner());
-    mockGetPartyJoinSettings.mockResolvedValue(settings({ domainJoinMode: 'request' }));
-    mockFindOrCreatePending.mockResolvedValue({
-      outcome: 'already_pending',
-      request: { id: 'r-1' },
-    });
-    const result = await runDomainJoin({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
-    expect(result.outcome).toBe('request_already_pending');
+    // Detect-only: the request write is deferred to the wizard consent action.
+    expect(mockFindOrCreatePending).not.toHaveBeenCalled();
+    expect(mockFindOrCreateDomainMembership).not.toHaveBeenCalled();
   });
 });
 
 // ── Emit wiring (runDomainJoinAndEmit) ──────────────────────────
 
 describe('runDomainJoinAndEmit — analytics + notifications', () => {
-  it('auto_joined → matched + completion analytics + member_joined notification', async () => {
+  it('detected(auto) → SIGNUP_DOMAIN_MATCHED only (no completion event, no notification, no write)', async () => {
     mockFindActiveByDomain.mockResolvedValue(companyOwner());
     mockGetPartyJoinSettings.mockResolvedValue(settings());
-    mockFindOrCreateDomainMembership.mockResolvedValue({ outcome: 'joined', membershipId: 'm-1' });
 
     await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
 
     expect(mockEmitSignupDomainMatched).toHaveBeenCalledWith('company', 'auto', USER_ID);
-    expect(mockEmitAutoJoinCompleted).toHaveBeenCalledWith('company', USER_ID);
-    expect(mockPublish).toHaveBeenCalledWith('party.member_joined_via_domain', {
-      correlationId: 'm-1',
-      partyType: 'company',
-      partyId: 'party-1',
-      userId: USER_ID,
-    });
-  });
-
-  it('auto_already_member → matched analytics only (no completion, no notification)', async () => {
-    mockFindActiveByDomain.mockResolvedValue(companyOwner());
-    mockGetPartyJoinSettings.mockResolvedValue(settings());
-    mockFindOrCreateDomainMembership.mockResolvedValue({
-      outcome: 'already_member',
-      membershipId: 'm-1',
-    });
-
-    await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
-
-    expect(mockEmitSignupDomainMatched).toHaveBeenCalledWith('company', 'auto', USER_ID);
+    // The completion event + member_joined notification now fire from the wizard
+    // consent action (joinMatchedCompanyAction), never the engine.
     expect(mockEmitAutoJoinCompleted).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockFindOrCreateDomainMembership).not.toHaveBeenCalled();
   });
 
-  it('request_created → matched + request analytics + request_created notification', async () => {
+  it('detected(request) → SIGNUP_DOMAIN_MATCHED only (no request event, no notification, no write)', async () => {
     mockFindActiveByDomain.mockResolvedValue(companyOwner());
     mockGetPartyJoinSettings.mockResolvedValue(settings({ domainJoinMode: 'request' }));
-    mockFindOrCreatePending.mockResolvedValue({ outcome: 'created', request: { id: 'r-1' } });
 
     await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
 
     expect(mockEmitSignupDomainMatched).toHaveBeenCalledWith('company', 'request', USER_ID);
-    expect(mockEmitJoinRequestCreated).toHaveBeenCalledWith('company', USER_ID);
-    expect(mockPublish).toHaveBeenCalledWith('party.join_request_created', {
-      correlationId: 'r-1',
-      partyType: 'company',
-      partyId: 'party-1',
-      userId: USER_ID,
-    });
+    // request_created event + notification now fire from requestJoinCompanyAction.
+    expect(mockEmitJoinRequestCreated).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockFindOrCreatePending).not.toHaveBeenCalled();
+  });
+
+  it('agency-owned domain → emits nothing (company-only gate)', async () => {
+    mockFindActiveByDomain.mockResolvedValue(agencyOwner());
+
+    await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
+
+    expect(mockEmitSignupDomainMatched).not.toHaveBeenCalled();
+    expect(mockEmitAutoJoinCompleted).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
   });
 
   it('no_match (stand-down) → emits nothing', async () => {
@@ -289,10 +268,9 @@ describe('runDomainJoinAndEmit — analytics + notifications', () => {
 const FREEMAIL_EMAIL = 'someone@gmail.com';
 
 describe('runDomainJoinAndEmit — signup domain classification', () => {
-  it('classifies a corporate email as corporate exactly once (auto_joined path)', async () => {
+  it('classifies a corporate email as corporate exactly once (detected path)', async () => {
     mockFindActiveByDomain.mockResolvedValue(companyOwner());
     mockGetPartyJoinSettings.mockResolvedValue(settings());
-    mockFindOrCreateDomainMembership.mockResolvedValue({ outcome: 'joined', membershipId: 'm-1' });
 
     await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
 

@@ -16,8 +16,9 @@ import { log } from '@/lib/logging';
  * The effective workspace identity the onboarding company step needs:
  *  - `new`     → CREATE branch, prefill the field with `suggestion` (may be '')
  *  - `blocked` → CREATE branch, empty prefill (freemail/disposable domain)
- *  - `matched` → JOIN branch (DORMANT in v1 — unreachable until the shared-org
- *                creation seam ships; coded, not deleted)
+ *  - `matched` → JOIN branch (reachable: a same-domain company that was promoted
+ *                to a shared organization at the onboarding Intent step (BAL-369)
+ *                produces an actionable match here)
  */
 export type ResolveOnboardingCompanyResult =
   | { status: 'new'; suggestion: string }
@@ -71,10 +72,11 @@ export async function resolveOnboardingCompanyAction(): Promise<ResolveOnboardin
     }
 
     // Only an ACTIONABLE match (non-personal, non-directory, mode on) becomes a
-    // JOIN. v1: every party_domains row maps to a PERSONAL workspace ⇒ this is
-    // false ⇒ we return 'new'. The 'matched' branch below is DORMANT — coded, not
-    // deleted; it lights up with the shared-org seam (same predicate the engine
-    // reads).
+    // JOIN — a personal workspace stands down to 'new'. This is reachable: once
+    // the owning company is promoted to a shared organization (BAL-369, at the
+    // onboarding Intent step) its `isPersonal` flips false and a same-domain
+    // second signup resolves 'matched' here — the same predicate the detect
+    // engine reads.
     if (isActionableDomainMatch(owner.partyType, settings)) {
       const company = await companiesRepository.findWithMembers(owner.partyId);
       return {
