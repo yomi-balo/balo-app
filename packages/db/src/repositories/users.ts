@@ -1,4 +1,4 @@
-import { eq, and, isNull, inArray } from 'drizzle-orm';
+import { eq, and, isNull, inArray, gt, lte } from 'drizzle-orm';
 import { db } from '../client';
 import {
   users,
@@ -302,5 +302,32 @@ export const usersRepository = {
       .select({ id: users.id, firstName: users.firstName, lastName: users.lastName })
       .from(users)
       .where(and(inArray(users.id, ids), isNull(users.deletedAt)));
+  },
+
+  /**
+   * BAL-374 onboarding-reminder sweep: non-deleted users who have NOT completed
+   * onboarding and whose `created_at` falls in the HALF-OPEN window `(after, until]`
+   * (`created_at > after AND created_at <= until`). Projects `id` + `email` ONLY
+   * (email → domain-class recompute + engine recipient resolution; no PII beyond
+   * that). The half-open lower bound is deliberate: the hourly sweep uses a
+   * one-cron-period-wide band per cadence step, so a user whose `created_at` sits on
+   * a tick boundary is matched on exactly ONE tick per step (no double-send). Ordering
+   * is unspecified — the caller iterates per row.
+   */
+  findIncompleteOnboardingCreatedBetween: async (
+    after: Date,
+    until: Date
+  ): Promise<Array<{ id: string; email: string }>> => {
+    return db
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(
+        and(
+          eq(users.onboardingCompleted, false),
+          isNull(users.deletedAt),
+          gt(users.createdAt, after),
+          lte(users.createdAt, until)
+        )
+      );
   },
 };

@@ -39,6 +39,7 @@ import {
   PartyJoinRequestDeclinedEmail,
 } from './party-domain-join.js';
 import { AgencyProvisionedEmail } from './agency-provisioned.js';
+import { OnboardingReminderEmail } from './onboarding-reminder.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -55,6 +56,16 @@ function arrayLength(value: unknown): number {
 /** Coerce a payload field to a non-negative integer count; 0 when absent. */
 function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * BAL-374 — coerce a payload `cadenceStep` to a valid 1|2|3 for the reminder CTA's
+ * `?step=N` param; defaults to 1 for an absent / out-of-range value.
+ */
+function clampCadenceStep(value: unknown): 1 | 2 | 3 {
+  if (value === 2) return 2;
+  if (value === 3) return 3;
+  return 1;
 }
 
 /**
@@ -658,6 +669,23 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(teamName)} is set up on Balo`,
+    };
+  },
+
+  // BAL-374 onboarding-completion reminder — server-only, EMAIL ONLY to the
+  // un-onboarded user. The greeting uses `recipientName` (adapter = user.firstName,
+  // 'there' fallback for a name-less bouncer); `cadenceStep` only parameterises the
+  // CTA's `?step=N` (clamped to 1..3) + analytics — the copy never varies by step.
+  // Names nothing else (the user may have no org). Stable subject across steps.
+  'onboarding-reminder': (data) => {
+    const step = clampCadenceStep(data.cadenceStep);
+    return {
+      component: React.createElement(OnboardingReminderEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        ctaUrl: `${BASE_URL}/onboarding?src=onboarding_reminder&step=${step}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: 'Finish setting up your Balo account',
     };
   },
 };

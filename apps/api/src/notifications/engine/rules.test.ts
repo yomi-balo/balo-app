@@ -555,6 +555,25 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-374 onboarding.reminder', () => {
+    it('is a single email/self rule with the onboarding-reminder template (no in-app)', () => {
+      const rules = notificationRules['onboarding.reminder'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(1);
+      expect(rules![0]).toMatchObject({
+        channel: 'email',
+        recipient: 'self',
+        template: 'onboarding-reminder',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      // Email ONLY — the un-onboarded user has no in-app surface (no bell).
+      expect(rules!.some((r) => r.channel !== 'email')).toBe(false);
+      // Single unconditioned rule — fires for all three cadence steps.
+      expect(rules![0].condition).toBeUndefined();
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

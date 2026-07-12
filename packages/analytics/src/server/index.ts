@@ -18,4 +18,5 @@ export { ORG_INTENT_SERVER_EVENTS } from '../events/org-intent';
 export { PARTY_JOIN_SERVER_EVENTS } from '../events/party-join';
 export { ENGAGEMENT_SERVER_EVENTS } from '../events/engagement';
 export { AUTH_SERVER_EVENTS } from '../events/auth';
+export { ONBOARDING_REMINDER_SERVER_EVENTS } from '../events/onboarding-reminder';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';
