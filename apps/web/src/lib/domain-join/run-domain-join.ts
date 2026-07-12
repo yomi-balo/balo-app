@@ -3,32 +3,30 @@ import 'server-only';
 import {
   partyDomainsRepository,
   partyMembershipsRepository,
-  partyJoinRequestsRepository,
   partyJoinOptoutsRepository,
 } from '@balo/db';
 import { extractEmailDomain, isBlockedDomain, classifyEmailDomain } from '@balo/shared/domains';
 import { log } from '@/lib/logging';
-import { publishNotificationEvent } from '@/lib/notifications/publish';
-import {
-  emitSignupDomainMatched,
-  emitAutoJoinCompleted,
-  emitJoinRequestCreated,
-} from '@/lib/analytics/party-join';
+import { emitSignupDomainMatched } from '@/lib/analytics/party-join';
 import { emitSignupDomainClassified } from '@/lib/analytics/signup-domain';
 
 /**
- * Domain auto-join match engine (BAL-345 §4). A PURE orchestrator: `runDomainJoin`
- * looks up a NEW user's verified email domain and — governed by the owning party's
- * join settings — auto-joins, files a pending request, or does nothing, returning
- * a structured result and NO side-effects. `runDomainJoinAndEmit` (the shared
- * post-commit helper wired into all four `createWithWorkspace` seams) then fires
- * analytics + notifications, wrapped in a swallow-and-log so a domain-join failure
- * can NEVER break auth.
+ * Domain-join DETECT engine (BAL-345 §4, detect-only as of BAL-371 / S3). A PURE
+ * orchestrator: `runDomainJoin` looks up a NEW user's verified email domain and —
+ * governed by the owning company's join settings — reports whether an actionable
+ * company match exists (`detected` + `mode`) or stands down, returning a structured
+ * result and NO side-effects. It writes NOTHING: membership creation / request
+ * filing is DEFERRED to the onboarding JOIN interstitial's consent actions
+ * (`joinMatchedCompanyAction` / `requestJoinCompanyAction`), which own both the
+ * durable write AND the resulting notification. `runDomainJoinAndEmit` (the shared
+ * post-commit helper wired into all four `createWithWorkspace` seams) records the
+ * detection via the `SIGNUP_DOMAIN_MATCHED` analytics event only, wrapped in a
+ * swallow-and-log so a domain-join failure can NEVER break auth.
  *
- * ⚑ v1: the engine ships INERT behind the isPersonal STAND-DOWN (step 5a) — every
- * `party_domains` row currently maps a domain → someone's PERSONAL workspace, so a
- * company match stands down. The full engine is built; the guard makes it dormant
- * safely until a shared-org creation seam ships.
+ * One-party-per-domain contract: the engine is the CLIENT-join detection surface,
+ * so it acts only on COMPANY-owned domains (step 4a). An agency-owned domain is a
+ * no-match here — expert-agency resolution owns that path — which keeps the emitted
+ * `SIGNUP_DOMAIN_MATCHED` telemetry company-only.
  */
 
 export interface DomainJoinResult {
@@ -40,15 +38,10 @@ export interface DomainJoinResult {
     | 'mode_off'
     | 'directory_authority'
     | 'opted_out'
-    | 'auto_joined'
-    | 'auto_already_member'
-    | 'request_created'
-    | 'request_already_pending';
-  partyType?: 'company' | 'agency';
+    | 'detected';
+  partyType?: 'company';
   partyId?: string;
   mode?: 'auto' | 'request';
-  membershipId?: string;
-  joinRequestId?: string;
 }
 
 export interface RunDomainJoinInput {
@@ -58,15 +51,16 @@ export interface RunDomainJoinInput {
 }
 
 /**
- * The §4.3 decision tree. Does NO analytics/notifications — returns a structured
- * result the caller maps to side-effects post-commit. Every write is find-or-create
- * against a partial-unique arbiter, so a stray second call is a clean no-op.
+ * The §4.3 decision tree. Does NO writes and NO analytics/notifications — returns a
+ * structured result the caller records (detection) or the wizard consent action
+ * acts on (write). A `detected` outcome carries the matched company's id + the
+ * effective join mode; every other outcome is a stand-down carrying nothing.
  */
 export async function runDomainJoin(input: RunDomainJoinInput): Promise<DomainJoinResult> {
   // 1. Verified gate (HARD, defence-in-depth) — never match an unverified email.
   //    A dedicated 'unverified' stand-down (distinct from 'no_domain', which means
   //    a verified email had no usable/owned domain). Like every non-matched outcome
-  //    it carries no `mode`/`partyType`, so it fires NO analytics and NO notification.
+  //    it carries no `mode`/`partyType`, so it fires NO analytics.
   if (!input.emailVerified) return { outcome: 'unverified' };
 
   // 2. Extract + normalise the email domain.
@@ -80,6 +74,12 @@ export async function runDomainJoin(input: RunDomainJoinInput): Promise<DomainJo
   const owner = await partyDomainsRepository.findActiveByDomain(domain);
   if (!owner) return { outcome: 'no_match' };
 
+  // 4a. Company-only gate (one-party-per-domain contract). The client join surface
+  //     acts ONLY on company-owned domains; an agency-owned domain is a no-match
+  //     here — expert-agency resolution owns that path. This also scopes the
+  //     detection telemetry (SIGNUP_DOMAIN_MATCHED) to companies.
+  if (owner.partyType !== 'company') return { outcome: 'no_match' };
+
   // 5. The owning party's join settings. Undefined ⇒ party row absent ⇒ no match
   //    (MUST be guarded first — the type is `... | undefined`).
   const settings = await partyMembershipsRepository.getPartyJoinSettings(
@@ -89,9 +89,8 @@ export async function runDomainJoin(input: RunDomainJoinInput): Promise<DomainJo
   if (!settings) return { outcome: 'no_match' };
 
   // 5a. isPersonal STAND-DOWN — the matched company is someone's personal
-  //     workspace; the engine stands down entirely (no trace, no write). In v1
-  //     this fires for EVERY company match (all companies are personal).
-  if (owner.partyType === 'company' && settings.isPersonal) return { outcome: 'no_match' };
+  //     workspace; the engine stands down entirely (no trace).
+  if (settings.isPersonal) return { outcome: 'no_match' };
 
   // 5b. Directory-authoritative party — membership is managed externally.
   if (settings.membershipAuthority === 'directory') return { outcome: 'directory_authority' };
@@ -104,101 +103,38 @@ export async function runDomainJoin(input: RunDomainJoinInput): Promise<DomainJo
     return { outcome: 'opted_out' };
   }
 
-  // 7. Auto mode → find-or-create the membership (idempotent).
-  if (settings.domainJoinMode === 'auto') {
-    const result = await partyMembershipsRepository.findOrCreateDomainMembership({
-      partyType: owner.partyType,
-      partyId: owner.partyId,
-      userId: input.userId,
-      actorUserId: input.userId,
-    });
-    return {
-      outcome: result.outcome === 'joined' ? 'auto_joined' : 'auto_already_member',
-      partyType: owner.partyType,
-      partyId: owner.partyId,
-      mode: 'auto',
-      membershipId: result.membershipId,
-    };
-  }
-
-  // 8. Request mode → find-or-create the pending request (idempotent).
-  const result = await partyJoinRequestsRepository.findOrCreatePending({
-    partyType: owner.partyType,
-    partyId: owner.partyId,
-    userId: input.userId,
-  });
+  // 7. DETECT-ONLY — an actionable company match. The join mode tells the wizard
+  //    consent action whether to auto-join or file a request; the engine writes
+  //    NOTHING (membership / request creation is deferred to the interstitial).
   return {
-    outcome: result.outcome === 'created' ? 'request_created' : 'request_already_pending',
-    partyType: owner.partyType,
+    outcome: 'detected',
+    partyType: 'company',
     partyId: owner.partyId,
-    mode: 'request',
-    joinRequestId: result.request.id,
+    mode: settings.domainJoinMode === 'request' ? 'request' : 'auto',
   };
 }
 
 /**
- * Analytics for a match result (§7.3). `SIGNUP_DOMAIN_MATCHED` fires on the four
- * matched outcomes only (they alone carry a `mode`); the completion events fire
- * ONLY on the freshly-created outcomes (never the idempotent repeats). The
- * stand-down outcomes emit nothing.
+ * Detection analytics for a match result (§7.3). `SIGNUP_DOMAIN_MATCHED` fires on
+ * the `detected` outcome only (it alone carries a `mode`); the completion events
+ * (`emitAutoJoinCompleted` / `emitJoinRequestCreated`) now fire from the wizard
+ * consent actions on the fresh durable write, not here. The stand-down outcomes
+ * emit nothing.
  */
 function emitDomainJoinAnalytics(result: DomainJoinResult, userId: string): void {
   if (result.partyType !== undefined && result.mode !== undefined) {
     emitSignupDomainMatched(result.partyType, result.mode, userId);
   }
-  if (result.outcome === 'auto_joined' && result.partyType !== undefined) {
-    emitAutoJoinCompleted(result.partyType, userId);
-  } else if (result.outcome === 'request_created' && result.partyType !== undefined) {
-    emitJoinRequestCreated(result.partyType, userId);
-  }
-}
-
-/**
- * Notifications for a match result (§6). Published ONLY on the freshly-created
- * outcomes (`auto_joined` / `request_created`) — the idempotent repeats already
- * notified. `userId` is the joiner/requester subject (correlationId is the stable
- * membership/request id ⇒ BullMQ jobId dedup).
- */
-async function publishDomainJoinNotifications(
-  result: DomainJoinResult,
-  userId: string
-): Promise<void> {
-  if (
-    result.outcome === 'auto_joined' &&
-    result.membershipId !== undefined &&
-    result.partyType !== undefined &&
-    result.partyId !== undefined
-  ) {
-    await publishNotificationEvent('party.member_joined_via_domain', {
-      correlationId: result.membershipId,
-      partyType: result.partyType,
-      partyId: result.partyId,
-      userId,
-    });
-    return;
-  }
-  if (
-    result.outcome === 'request_created' &&
-    result.joinRequestId !== undefined &&
-    result.partyType !== undefined &&
-    result.partyId !== undefined
-  ) {
-    await publishNotificationEvent('party.join_request_created', {
-      correlationId: result.joinRequestId,
-      partyType: result.partyType,
-      partyId: result.partyId,
-      userId,
-    });
-  }
 }
 
 /**
  * The shared post-commit helper wired into all four `createWithWorkspace` seams.
- * Runs the engine, then emits analytics + publishes notifications. The WHOLE body
- * is wrapped in a try/catch that swallows + logs — a domain-join failure must
- * NEVER break auth (mirrors `publishNotificationEvent`'s fire-and-forget
- * contract). No side-effect ever runs inside a db.transaction (the
- * repos self-wrap + commit before returning; this helper runs after).
+ * Runs the DETECT engine and records the detection via analytics — it performs NO
+ * write and publishes NO notification (both are owned by the wizard consent
+ * actions). The WHOLE body is wrapped in a try/catch that swallows + logs — a
+ * domain-join failure must NEVER break auth. No side-effect ever runs inside a
+ * db.transaction (the repos self-wrap + commit before returning; this helper runs
+ * after).
  */
 export async function runDomainJoinAndEmit(input: RunDomainJoinInput): Promise<void> {
   try {
@@ -211,7 +147,6 @@ export async function runDomainJoinAndEmit(input: RunDomainJoinInput): Promise<v
 
     const result = await runDomainJoin(input);
     emitDomainJoinAnalytics(result, input.userId);
-    await publishDomainJoinNotifications(result, input.userId);
   } catch (error) {
     log.error('Domain join failed (auth unaffected)', {
       userId: input.userId,

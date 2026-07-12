@@ -24,9 +24,11 @@ export interface ActionableCompany {
  * AFTER the cheap email/domain/blocked guards (no needless read when there is
  * obviously no usable corporate domain) and BEFORE the owner lookup.
  *
- * DORMANT in v1: `isActionableDomainMatch` stands down for every party while the
- * `isPersonal` guard holds, so this returns `null` in production today. It lights
- * up together with the shared-org creation seam (same predicate the engine reads).
+ * Reachable as of BAL-369: `isActionableDomainMatch` stands down for a PERSONAL
+ * workspace, but once the owning company is promoted to a shared organization at
+ * the onboarding Intent step its `isPersonal` flips false, so a same-domain
+ * signup resolves to an actionable company here (same predicate the detect engine
+ * reads). Still fails CLOSED to `null` on any non-actionable match.
  */
 export async function resolveActionableCompanyForSession(
   userId: string,

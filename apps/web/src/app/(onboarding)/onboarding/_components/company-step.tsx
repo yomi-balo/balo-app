@@ -44,9 +44,9 @@ interface CompanyStepProps {
  * BAL-350 onboarding company step (client terminal). Resolves the workspace
  * identity on mount (fail-open) and either renames it (CREATE branch) or, when an
  * actionable domain match exists, offers to JOIN the existing company (JOIN
- * branch — DORMANT in v1, unreachable until the shared-org creation seam ships;
- * coded, not deleted). Email is read server-side by the resolve action, never
- * passed as a prop.
+ * branch — reachable once a same-domain company has been promoted to a shared
+ * organization at the onboarding Intent step, BAL-369). Email is read server-side
+ * by the resolve action, never passed as a prop.
  */
 export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(function CompanyStep(
   { authMethod, timezone, stepNumber, onBack },
@@ -191,11 +191,12 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
     setPhase('create');
   }, [form, joinCompany]);
 
-  // JOIN interstitial primary action (DORMANT in v1 — unreachable until
-  // `status: 'matched'` can occur). Branches on join mode: `auto` creates the
-  // membership + completes onboarding + navigates; `request` files a pending
-  // request + transitions to the waiting screen. Both fail CLOSED — a write
-  // failure surfaces an inline banner with NO navigation.
+  // JOIN interstitial primary action (reachable when `status: 'matched'` — a
+  // same-domain company promoted to a shared organization at the Intent step,
+  // BAL-369). Branches on join mode: `auto` creates the membership + completes
+  // onboarding + navigates; `request` files a pending request + transitions to the
+  // waiting screen. Both fail CLOSED — a write failure surfaces an inline banner
+  // with NO navigation.
   const handleInterstitialPrimary = useCallback((): void => {
     if (joinCompany === null) return;
     const mode = joinCompany.joinMode;
