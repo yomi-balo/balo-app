@@ -44,6 +44,11 @@ vi.mock('@/lib/analytics/party-join', () => ({
   emitJoinRequestCreated: (...a: unknown[]) => mockEmitJoinRequestCreated(...a),
 }));
 
+const { mockEmitClassified } = vi.hoisted(() => ({ mockEmitClassified: vi.fn() }));
+vi.mock('@/lib/analytics/signup-domain', () => ({
+  emitSignupDomainClassified: (...a: unknown[]) => mockEmitClassified(...a),
+}));
+
 const mockLogError = vi.fn();
 vi.mock('@/lib/logging', () => ({ log: { error: (...a: unknown[]) => mockLogError(...a) } }));
 
@@ -273,5 +278,56 @@ describe('runDomainJoinAndEmit — analytics + notifications', () => {
       'Domain join failed (auth unaffected)',
       expect.objectContaining({ userId: USER_ID, error: 'db down' })
     );
+  });
+});
+
+// ── Signup domain classification (BAL-368 / ADR-1038 S1) ─────────
+// The classification emit is DECOUPLED from the join engine's emailVerified gate
+// and from every stand-down: every signup is typed exactly once, regardless of
+// whether the join engine later matches, stands down, or is skipped as unverified.
+
+const FREEMAIL_EMAIL = 'someone@gmail.com';
+
+describe('runDomainJoinAndEmit — signup domain classification', () => {
+  it('classifies a corporate email as corporate exactly once (auto_joined path)', async () => {
+    mockFindActiveByDomain.mockResolvedValue(companyOwner());
+    mockGetPartyJoinSettings.mockResolvedValue(settings());
+    mockFindOrCreateDomainMembership.mockResolvedValue({ outcome: 'joined', membershipId: 'm-1' });
+
+    await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
+
+    expect(mockEmitClassified).toHaveBeenCalledTimes(1);
+    expect(mockEmitClassified).toHaveBeenCalledWith('corporate', USER_ID);
+  });
+
+  it('classifies a freemail email as freemail (join stands down as blocked)', async () => {
+    await runDomainJoinAndEmit({ userId: USER_ID, email: FREEMAIL_EMAIL, emailVerified: true });
+
+    expect(mockEmitClassified).toHaveBeenCalledTimes(1);
+    expect(mockEmitClassified).toHaveBeenCalledWith('freemail', USER_ID);
+    // Blocked freemail never reaches the owner lookup.
+    expect(mockFindActiveByDomain).not.toHaveBeenCalled();
+  });
+
+  it('still classifies on a join stand-down (isPersonal no_match)', async () => {
+    mockFindActiveByDomain.mockResolvedValue(companyOwner());
+    mockGetPartyJoinSettings.mockResolvedValue(settings({ isPersonal: true }));
+
+    await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: true });
+
+    expect(mockEmitClassified).toHaveBeenCalledTimes(1);
+    expect(mockEmitClassified).toHaveBeenCalledWith('corporate', USER_ID);
+    // Proof of decoupling: the join itself emitted nothing (stand-down).
+    expect(mockEmitSignupDomainMatched).not.toHaveBeenCalled();
+  });
+
+  it('still classifies when the email is unverified (join engine returns unverified)', async () => {
+    await runDomainJoinAndEmit({ userId: USER_ID, email: CORP_EMAIL, emailVerified: false });
+
+    expect(mockEmitClassified).toHaveBeenCalledTimes(1);
+    expect(mockEmitClassified).toHaveBeenCalledWith('corporate', USER_ID);
+    // The join engine short-circuits on the unverified gate — no lookup, no match emit.
+    expect(mockFindActiveByDomain).not.toHaveBeenCalled();
+    expect(mockEmitSignupDomainMatched).not.toHaveBeenCalled();
   });
 });

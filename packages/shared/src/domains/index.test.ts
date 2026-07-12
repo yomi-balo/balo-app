@@ -4,6 +4,7 @@ import {
   extractEmailDomain,
   isBlockedDomain,
   suggestCompanyNameFromEmail,
+  classifyEmailDomain,
   FREEMAIL_DOMAINS,
   DISPOSABLE_DOMAINS,
 } from './index';
@@ -165,5 +166,43 @@ describe('suggestCompanyNameFromEmail', () => {
   it('returns "" when the input has no usable domain', () => {
     expect(suggestCompanyNameFromEmail('foo')).toBe('');
     expect(suggestCompanyNameFromEmail('')).toBe('');
+  });
+});
+
+describe('classifyEmailDomain', () => {
+  // ADR-1038 (S1 / BAL-368) "type" primitive. A pure, total function of the email:
+  // CORPORATE = a valid, extractable, non-blocked domain; everything else collapses
+  // to FREEMAIL. S2 (BAL-369) recomputes with this same fn, so the truth-table is
+  // locked here.
+  const corporate = [
+    'founder@acme.com',
+    // Subdomained corporate resolves corporate — full-host membership test, no
+    // eTLD+1 reduction (mail.acme.co.uk is not in either blocklist).
+    'jane@mail.acme.co.uk',
+    'newhire@acme.io',
+  ];
+
+  it.each(corporate)('classifies %s as corporate', (email) => {
+    expect(classifyEmailDomain(email)).toBe('corporate');
+  });
+
+  it('normalises (uppercase + surrounding whitespace) before classifying', () => {
+    expect(classifyEmailDomain('  Founder@ACME.com ')).toBe('corporate');
+  });
+
+  const freemail = [
+    'x@gmail.com',
+    // A genuine DISPOSABLE_DOMAINS member.
+    'x@mailinator.com',
+  ];
+
+  it.each(freemail)('classifies freemail/disposable %s as freemail', (email) => {
+    expect(classifyEmailDomain(email)).toBe('freemail');
+  });
+
+  const degenerate = ['garbage', 'x@', '@acme.com', ''];
+
+  it.each(degenerate)('collapses degenerate input %p to freemail', (email) => {
+    expect(classifyEmailDomain(email)).toBe('freemail');
   });
 });

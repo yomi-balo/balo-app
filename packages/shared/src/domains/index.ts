@@ -79,3 +79,19 @@ export function suggestCompanyNameFromEmail(email: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 }
+
+/** ADR-1038 signup domain class. 2-way: corporate (org-eligible) vs freemail (individual). */
+export type DomainClass = 'corporate' | 'freemail';
+
+/**
+ * Classify an email's domain for ADR-1038 "Organizations by Default" (the "type"
+ * step). CORPORATE = a valid, extractable domain that is NOT freemail/disposable;
+ * everything else (no usable domain, empty, freemail, disposable) collapses to
+ * FREEMAIL (individual). Pure — reused by S2 (BAL-369) to recompute the class at the
+ * onboarding Intent step from the durable email, so no field is persisted at signup.
+ */
+export function classifyEmailDomain(email: string): DomainClass {
+  const domain = extractEmailDomain(email);
+  if (domain === null) return 'freemail';
+  return isBlockedDomain(domain) ? 'freemail' : 'corporate';
+}
