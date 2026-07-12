@@ -29,6 +29,12 @@ import { describe, expect, it } from 'vitest';
  * S2/BAL-369's job to relocate that capture to the Intent step (also outside this
  * scan set). This invariant governs only that the web signup **seams** stay claim-free.
  *
+ * SCOPE — this asserts the WEB seams add no claim; it does NOT (and in S1 cannot)
+ * assert the DB-layer `createWithWorkspace` is claim-free, because that capture is
+ * still present-by-design in S1. The epic's full "signup writes no `party_domains`"
+ * guarantee is two-layered: S2 must land the DB-layer counterpart (a standing invariant
+ * that `createWithWorkspace` no longer captures) when it relocates the claim to Intent.
+ *
  * If this test fails on a NEW claim in a scanned file: you added a pre-Intent domain
  * claim to the signup path. Move it to the onboarding Intent action (S2) instead —
  * signup classifies, Intent claims.
@@ -115,7 +121,7 @@ function scanSignupPath(): ClaimScan {
   return { scanned, claimers };
 }
 
-describe('signup path introduces no pre-Intent party_domains claim (BAL-368 / ADR-1038 S1)', () => {
+describe('web signup seams introduce no pre-Intent party_domains claim (BAL-368 / ADR-1038 S1)', () => {
   const { scanned, claimers } = scanSignupPath();
 
   // Non-vacuity guard: if the walk silently finds nothing (mis-resolved path), every
@@ -134,7 +140,7 @@ describe('signup path introduces no pre-Intent party_domains claim (BAL-368 / AD
     }
   });
 
-  it('no signup-path file claims a party_domains row (claim is deferred to the Intent step)', () => {
+  it('no web signup-seam file claims a party_domains row (claim is deferred to the Intent step)', () => {
     expect(
       claimers,
       `These web signup-path files reference a party_domains CLAIM ` +
