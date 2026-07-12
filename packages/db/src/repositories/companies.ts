@@ -31,13 +31,20 @@ export interface PromoteToOrganizationInput {
  * Discriminated result — no thrown control-flow error (deviates deliberately from the
  * agency axis's `AgencyDomainCaptureConflictError`, see the note on the method):
  *  - 'promoted'                    → company flipped to a typed org + domain claimed
- *  - 'domain_conflict_same_type'   → another live COMPANY owns the domain → RETRYABLE, no write
- *  - 'domain_conflict_other_type'  → a live AGENCY owns the domain → caller stays personal, no error
+ *  - 'domain_conflict_same_type'   → another live COMPANY owns the domain → caller stays
+ *                                    PERSONAL (non-blocked); the live owner keeps the domain.
+ *                                    Retry is futile (that owner never disappears), so this is
+ *                                    NOT retryable — the paths back are JOIN or admin
+ *                                    reassignment (BAL-347 removeDomain+addDomain).
+ *  - 'domain_conflict_other_type'  → a live AGENCY owns the domain → caller stays personal.
+ *  - 'domain_conflict_retryable'   → transient race: the slot was freed mid-op (concurrent
+ *                                    soft-delete), so a retry legitimately re-attempts the claim.
  */
 export type PromoteToOrganizationResult =
   | { outcome: 'promoted'; company: Company }
   | { outcome: 'domain_conflict_same_type' }
-  | { outcome: 'domain_conflict_other_type' };
+  | { outcome: 'domain_conflict_other_type' }
+  | { outcome: 'domain_conflict_retryable' };
 
 export const companiesRepository = {
   findById: async (id: string): Promise<Company | undefined> => {
@@ -241,9 +248,14 @@ export const companiesRepository = {
         // not_applicable are impossible — the caller only promotes for corporate +
         // verified, which is non-blocked and has a usable domain).
         const owner = await partyDomainsRepository.findActiveByDomain(input.domain);
-        // Race: a concurrent soft-delete freed the slot between our failed INSERT and
-        // this SELECT → treat as same-type retryable (retry re-attempts the claim).
-        if (owner === undefined || owner.partyType === 'company') {
+        // Transient race: a concurrent soft-delete freed the slot between our failed INSERT
+        // and this SELECT → retry legitimately re-attempts the now-free claim.
+        if (owner === undefined) {
+          return { outcome: 'domain_conflict_retryable' };
+        }
+        // A live COMPANY rightfully owns the domain → same-type. NOT retryable (the owner
+        // never disappears); the caller completes onboarding as a personal workspace.
+        if (owner.partyType === 'company') {
           return { outcome: 'domain_conflict_same_type' };
         }
         // owner.partyType === 'agency' → other-type: caller stays personal (no error).

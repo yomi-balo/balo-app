@@ -33,8 +33,8 @@ type ResolveWorkspaceNameOutcome = { ok: true; name: string } | { ok: false; err
  * (freemail / unverified / agency-owned domain), and perform the write. Extracted from
  * the Server Action so the action body stays within the cognitive-complexity budget;
  * throws propagate to the action's outer try/catch (a genuine DB failure still becomes
- * the retryable error). Returns the resolved company name, or a retryable error when a
- * same-type domain conflict means nothing was written.
+ * the retryable error). Returns the resolved company name, or a retryable error only on a
+ * transient release race (the domain slot was freed mid-op and nothing was written).
  */
 async function resolveWorkspaceName(
   input: ResolveWorkspaceNameInput
@@ -57,9 +57,9 @@ async function resolveWorkspaceName(
     actorUserId: input.userId,
   });
 
-  if (result.outcome === 'domain_conflict_same_type') {
-    // Another live company owns the domain → retryable, nothing changed. The user
-    // stays on the company step and can retry; S4/BAL-372 owns the release rule.
+  if (result.outcome === 'domain_conflict_retryable') {
+    // Transient race only: the domain slot was freed mid-op (concurrent soft-delete),
+    // so a retry legitimately re-attempts the claim. Nothing was written.
     return { ok: false, error: RETRYABLE_ERROR };
   }
 
@@ -78,7 +78,10 @@ async function resolveWorkspaceName(
     return { ok: true, name: result.company.name };
   }
 
-  // domain_conflict_other_type → an agency owns the domain → stay personal.
+  // domain_conflict_same_type (a live COMPANY owns the domain — retry is futile) OR
+  // domain_conflict_other_type (a live AGENCY owns it) → complete onboarding NON-BLOCKED
+  // as a personal workspace. The domain stays with its rightful live owner; the user
+  // reaches that org later via JOIN or admin reassignment (BAL-347). No new code here.
   const renamed = await companiesRepository.updateName(input.companyId, input.companyName);
   return { ok: true, name: renamed.name };
 }
