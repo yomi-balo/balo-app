@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { mapWorkosAuthMethod } from '@/lib/auth/auth-method';
-import { db, usersRepository, type DomainCaptureResult } from '@balo/db';
+import { db, usersRepository } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
 import { AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser } from '@/lib/auth/resolve-identity';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
-import { emitDomainCapture } from '@/lib/analytics/party-domains';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
@@ -20,8 +19,6 @@ interface ResolvedUser {
   companyName: string;
   companyRole: 'owner' | 'admin' | 'member';
   isNewUser: boolean;
-  // BAL-344: set only in the create branch; emitted post-commit for new users.
-  domainCapture?: DomainCaptureResult;
   // BAL-360: true when a workosId miss re-linked onto a live verified-email user.
   didRelink?: boolean;
 }
@@ -57,7 +54,6 @@ async function resolveOrCreateUser(workosUser: {
       companyName: result.company.name,
       companyRole: result.membership.role,
       isNewUser: true,
-      domainCapture: result.domainCapture,
     };
   }
 
@@ -186,12 +182,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       }).catch(() => {
         // publishNotificationEvent already logs internally
       });
-
-      // BAL-344: emit the domain auto-capture outcome (post-commit — the create
-      // tx has already committed inside createWithWorkspace).
-      if (resolved.domainCapture) {
-        emitDomainCapture(resolved.domainCapture, resolved.user.id);
-      }
 
       // BAL-345: run the domain auto-join match engine (post-commit). OAuth may
       // return an UNVERIFIED email — pass the real WorkOS flag, never assume true.

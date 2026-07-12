@@ -77,8 +77,9 @@ export function emitDomainJoinOptedOut(path: 'auto' | 'request', userId: string)
 
 /**
  * BAL-347 admin settings surface. An admin explicitly ADDED a domain (source is
- * always 'admin_added' — the signup auto path emits CAPTURED). Fired post-commit
- * from the add-domain Server Action on a `captured` outcome only.
+ * always 'admin_added'). Fired post-commit from the add-domain Server Action on a
+ * `captured` outcome only. (The former signup auto-capture CAPTURED event was
+ * retired in BAL-369 — the corporate domain claim now happens at onboarding Intent.)
  */
 export function emitPartyDomainAdded(
   partyType: PartyType,

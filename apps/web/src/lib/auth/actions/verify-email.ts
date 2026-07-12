@@ -4,13 +4,12 @@ import 'server-only';
 
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
-import { usersRepository, type DomainCaptureResult, type User } from '@balo/db';
+import { usersRepository, type User } from '@balo/db';
 import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
-import { emitDomainCapture } from '@/lib/analytics/party-domains';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 
@@ -58,9 +57,6 @@ export async function verifyEmailAction(
     let existingUser: User;
     let isNewUser = false;
     let didRelink = false;
-    // BAL-344: the domain auto-capture outcome from the create tx, emitted
-    // post-commit below. Non-applicable unless a new user was created here.
-    let domainCapture: DomainCaptureResult = { outcome: 'not_applicable' };
 
     if (resolved) {
       existingUser = resolved.user;
@@ -78,7 +74,6 @@ export async function verifyEmailAction(
       });
       existingUser = created.user;
       isNewUser = true;
-      domainCapture = created.domainCapture;
     }
 
     // 4. Load company membership (always exists — created at signup or recovery above)
@@ -134,10 +129,6 @@ export async function verifyEmailAction(
       }).catch(() => {
         // publishNotificationEvent logs internally
       });
-
-      // BAL-344: emit the domain auto-capture outcome (post-commit). Email
-      // verification is the primary capture path — the domain is now verified.
-      emitDomainCapture(domainCapture, user.id);
 
       // BAL-345: run the domain auto-join match engine (post-commit). `true` is
       // legitimately hardcoded here — the OTP flow PROVES the email is verified.

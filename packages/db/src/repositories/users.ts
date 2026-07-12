@@ -1,5 +1,4 @@
 import { eq, and, isNull, inArray } from 'drizzle-orm';
-import { extractEmailDomain } from '@balo/shared/domains';
 import { db } from '../client';
 import {
   users,
@@ -11,7 +10,6 @@ import {
   type Company,
   type CompanyMember,
 } from '../schema';
-import { partyDomainsRepository, type DomainCaptureResult } from './party-domains';
 import { auditEventsRepository } from './audit-events';
 
 /**
@@ -153,7 +151,6 @@ export const usersRepository = {
     user: User;
     company: Company;
     membership: CompanyMember;
-    domainCapture: DomainCaptureResult;
   }> => {
     return db.transaction(async (tx) => {
       // 1. Create user
@@ -187,21 +184,12 @@ export const usersRepository = {
         .returning();
       if (membership === undefined) throw new Error('company_members insert returned no row');
 
-      // 4. BAL-344: auto-capture the creator's VERIFIED corporate domain onto this
-      // workspace (personal or not — do NOT gate on isPersonal). Gate strictly on
-      // emailVerified === true; derive the domain from the email. Runs INSIDE this
-      // tx, so a capture failure rolls the whole workspace creation back; `capture`
-      // itself never throws on the conflict path (blocked/claimed are clean skips).
-      let domainCapture: DomainCaptureResult = { outcome: 'not_applicable' };
-      const domain = data.emailVerified === true ? extractEmailDomain(data.email) : null;
-      if (domain !== null) {
-        domainCapture = await partyDomainsRepository.capture(
-          { partyType: 'company', partyId: company.id, domain, actorUserId: user.id },
-          tx
-        );
-      }
-
-      return { user, company, membership, domainCapture };
+      // BAL-369 / ADR-1038: signup no longer claims a corporate domain. The domain
+      // claim + org promotion now happen at the onboarding Intent step
+      // (`companiesRepository.promoteToOrganization`), NOT here. A structural
+      // invariant test (invariants/createwithworkspace-no-domain-claim.test.ts)
+      // guards this seam against regression.
+      return { user, company, membership };
     });
   },
 

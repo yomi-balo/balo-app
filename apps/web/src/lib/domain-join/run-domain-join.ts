@@ -196,8 +196,8 @@ async function publishDomainJoinNotifications(
  * The shared post-commit helper wired into all four `createWithWorkspace` seams.
  * Runs the engine, then emits analytics + publishes notifications. The WHOLE body
  * is wrapped in a try/catch that swallows + logs — a domain-join failure must
- * NEVER break auth (mirrors `emitDomainCapture` / `publishNotificationEvent`'s
- * fire-and-forget contract). No side-effect ever runs inside a db.transaction (the
+ * NEVER break auth (mirrors `publishNotificationEvent`'s fire-and-forget
+ * contract). No side-effect ever runs inside a db.transaction (the
  * repos self-wrap + commit before returning; this helper runs after).
  */
 export async function runDomainJoinAndEmit(input: RunDomainJoinInput): Promise<void> {

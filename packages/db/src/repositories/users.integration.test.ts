@@ -175,7 +175,7 @@ describe('usersRepository.findWithCompany (BAL-345 deterministic session read)',
   });
 });
 
-describe('usersRepository.createWithWorkspace domain capture (BAL-344)', () => {
+describe('usersRepository.createWithWorkspace domain capture removed (BAL-369)', () => {
   /** Live party_domains rows for a company party. */
   async function liveDomainsForCompany(companyId: string): Promise<string[]> {
     const rows = await db
@@ -185,7 +185,10 @@ describe('usersRepository.createWithWorkspace domain capture (BAL-344)', () => {
     return rows.map((r) => r.domain);
   }
 
-  it('captures the verified corporate domain onto the new workspace', async () => {
+  it('writes NO party_domains row for a verified corporate email and returns no domainCapture field', async () => {
+    // BAL-369 / ADR-1038: the domain claim moved from signup to the onboarding Intent
+    // step (companiesRepository.promoteToOrganization). Even a VERIFIED corporate email
+    // — which under BAL-344 would have auto-captured — now claims nothing at signup.
     const suffix = randomUUID().slice(0, 8);
     const result = await usersRepository.createWithWorkspace({
       workosId: `wos-${suffix}`,
@@ -196,42 +199,12 @@ describe('usersRepository.createWithWorkspace domain capture (BAL-344)', () => {
       activeMode: 'client',
     });
 
-    expect(result.domainCapture).toEqual({
-      outcome: 'captured',
-      partyType: 'company',
-      source: 'auto_captured',
-    });
-    await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([`corp-${suffix}.com`]);
-  });
-
-  it('does not capture when the email is unverified (not_applicable, no row)', async () => {
-    const suffix = randomUUID().slice(0, 8);
-    const result = await usersRepository.createWithWorkspace({
-      workosId: `wos-${suffix}`,
-      email: `founder@corp-${suffix}.com`,
-      firstName: 'Founder',
-      lastName: 'Two',
-      emailVerified: false,
-      activeMode: 'client',
-    });
-
-    expect(result.domainCapture).toEqual({ outcome: 'not_applicable' });
+    // No party_domains row exists for the freshly-created workspace.
     await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([]);
-  });
 
-  it('skips a verified freemail domain (blocked_domain, no row)', async () => {
-    const suffix = randomUUID().slice(0, 8);
-    const result = await usersRepository.createWithWorkspace({
-      workosId: `wos-${suffix}`,
-      email: `person-${suffix}@gmail.com`,
-      firstName: 'Person',
-      lastName: 'Three',
-      emailVerified: true,
-      activeMode: 'client',
-    });
-
-    expect(result.domainCapture).toEqual({ outcome: 'skipped', reason: 'blocked_domain' });
-    await expect(liveDomainsForCompany(result.company.id)).resolves.toEqual([]);
+    // The return shape no longer carries a `domainCapture` field — exactly the three
+    // workspace-creation rows.
+    expect(Object.keys(result).sort()).toEqual(['company', 'membership', 'user']);
   });
 });
 

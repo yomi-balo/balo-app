@@ -971,6 +971,51 @@ describe('publishBodySchema', () => {
     );
   });
 
+  describe('company.provisioned (BAL-369)', () => {
+    // This is the EXACT shape apps/web publishes (name-workspace-and-complete.ts):
+    // { correlationId: companyId, companyId, ownerUserId }. Asserting it here doubles
+    // as the web ↔ API ↔ Zod three-way contract check across the string-keyed boundary.
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      companyId: '550e8400-e29b-41d4-a716-446655440000',
+      ownerUserId: '550e8400-e29b-41d4-a716-446655440001',
+    };
+
+    it('accepts the canonical { correlationId, companyId, ownerUserId } payload', () => {
+      const result = publishBodySchema.safeParse({ event: 'company.provisioned', payload: valid });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts correlationId === companyId (the stable dedup key the emit site uses)', () => {
+      const result = publishBodySchema.safeParse({ event: 'company.provisioned', payload: valid });
+      expect(result.success).toBe(true);
+      expect(valid.correlationId).toBe(valid.companyId);
+    });
+
+    it.each(['correlationId', 'companyId', 'ownerUserId'] as const)(
+      'rejects a non-UUID %s',
+      (field) => {
+        const result = publishBodySchema.safeParse({
+          event: 'company.provisioned',
+          payload: { ...valid, [field]: 'not-a-uuid' },
+        });
+        expect(result.success).toBe(false);
+      }
+    );
+
+    it.each(['correlationId', 'companyId', 'ownerUserId'] as const)(
+      'rejects a missing %s',
+      (field) => {
+        const { [field]: _omitted, ...rest } = valid;
+        const result = publishBodySchema.safeParse({
+          event: 'company.provisioned',
+          payload: rest,
+        });
+        expect(result.success).toBe(false);
+      }
+    );
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {
