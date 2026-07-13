@@ -34,8 +34,10 @@ import OnboardingPage from './page';
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
+// Next 15+/16 passes searchParams as a Promise — wrap so the test exercises the same
+// awaited contract as production (a sync object would mask a missing await).
 function runPage(searchParams: SearchParams = {}): Promise<React.JSX.Element> {
-  return OnboardingPage({ searchParams });
+  return OnboardingPage({ searchParams: Promise.resolve(searchParams) });
 }
 
 function buildUser(overrides: Partial<SessionUser> = {}): SessionUser {

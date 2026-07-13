@@ -6,7 +6,10 @@ import { OnboardingWizard } from './_components/onboarding-wizard';
 import { OnboardingReminderClickTracker } from './_components/onboarding-reminder-click-tracker';
 
 interface OnboardingPageProps {
-  searchParams: Record<string, string | string[] | undefined>;
+  // Next 15+/16: searchParams is a Promise and MUST be awaited (mirrors experts/
+  // reset-password pages). Reading it synchronously yields undefined at runtime, which
+  // would silently disable the reminder-click tracking below.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 /** Parse the reminder cadence step from the CTA (`?step=N`); clamp to 1|2|3, default 1. */
@@ -43,10 +46,11 @@ export default async function OnboardingPage({
   // (`?src=onboarding_reminder&step=N`). The domain class is recomputed SERVER-SIDE from
   // the real email (never trusted from the URL, no persisted column); the client island
   // fires `onboarding_reminder_clicked` once per mount.
-  const fromReminder = searchParams.src === 'onboarding_reminder';
+  const params = await searchParams;
+  const fromReminder = params.src === 'onboarding_reminder';
   const reminderClick = fromReminder
     ? {
-        cadenceStep: parseCadenceStep(searchParams.step),
+        cadenceStep: parseCadenceStep(params.step),
         domainClass: classifyEmailDomain(user.email),
       }
     : null;
