@@ -263,3 +263,18 @@ export interface CompanyProvisionedPayload {
   companyId: string;
   ownerUserId: string; // the promoting owner (subject + recipient)
 }
+
+// BAL-374 onboarding-completion reminder (server-only, published by the API
+// repeatable sweep). Recipient is the un-onboarded user (recipient 'self' via
+// `userId`; the resolver's existing `payload.userId → data.user` hydration names
+// the recipient in the template, falling back to 'there' when name-less).
+// SERVER-ONLY — no web-mirror entry, no publishBodySchema arm (mirrors
+// engagement.review_reminder). `correlationId = `${userId}:onboarding_reminder:${step}``
+// → per-(user, step) BullMQ jobId dedup, so a repeated publish for the same
+// (user, step) collapses to one delivery. Defined ONCE here (not inlined in the
+// api + web catalogs) per this module's shared-home convention.
+export interface OnboardingReminderPayload {
+  correlationId: string; // `${userId}:onboarding_reminder:${step}`
+  userId: string; // subject + recipient 'self'; resolver hydrates data.user
+  cadenceStep: 1 | 2 | 3; // drives the CTA `?step=N` + analytics; NOT shown as copy
+}

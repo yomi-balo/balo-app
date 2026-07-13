@@ -12,6 +12,8 @@ const mockStartStalenessCheck = vi.fn();
 const mockRegisterStalenessCron = vi.fn().mockResolvedValue(undefined);
 const mockStartDeliveryReviewSweep = vi.fn();
 const mockRegisterDeliveryReviewSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartOnboardingReminderSweep = vi.fn();
+const mockRegisterOnboardingReminderSweepCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -24,6 +26,10 @@ vi.mock('./availability-cache.js', () => ({
 vi.mock('./auto-accept-sweep.js', () => ({
   startDeliveryReviewSweepWorker: () => mockStartDeliveryReviewSweep(),
   registerDeliveryReviewSweepCron: () => mockRegisterDeliveryReviewSweepCron(),
+}));
+vi.mock('./onboarding-reminder-sweep.js', () => ({
+  startOnboardingReminderSweepWorker: () => mockStartOnboardingReminderSweep(),
+  registerOnboardingReminderSweepCron: () => mockRegisterOnboardingReminderSweepCron(),
 }));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
@@ -75,6 +81,8 @@ describe('startWorkers', () => {
     expect(mockRegisterStalenessCron).toHaveBeenCalled();
     expect(mockStartDeliveryReviewSweep).toHaveBeenCalled();
     expect(mockRegisterDeliveryReviewSweepCron).toHaveBeenCalled();
+    expect(mockStartOnboardingReminderSweep).toHaveBeenCalled();
+    expect(mockRegisterOnboardingReminderSweepCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

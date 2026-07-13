@@ -17,6 +17,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startInAppWorker },
     { startAvailabilityCacheWorker, startStalenessCheckWorker, registerStalenessCheckCron },
     { startDeliveryReviewSweepWorker, registerDeliveryReviewSweepCron },
+    { startOnboardingReminderSweepWorker, registerOnboardingReminderSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -25,6 +26,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('../notifications/channels/in-app.adapter.js'),
     import('./availability-cache.js'),
     import('./auto-accept-sweep.js'),
+    import('./onboarding-reminder-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -38,5 +40,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // BAL-338 (D7): auto-accept + T-2 review reminder sweep.
   startDeliveryReviewSweepWorker();
   await registerDeliveryReviewSweepCron();
+  // BAL-374: onboarding-completion reminder sweep (+24h / +72h / +7d).
+  startOnboardingReminderSweepWorker();
+  await registerOnboardingReminderSweepCron();
   logger?.info('BullMQ workers started');
 }

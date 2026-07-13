@@ -242,6 +242,83 @@ describe('usersRepository.findNamesByIds', () => {
   });
 });
 
+describe('usersRepository.findIncompleteOnboardingCreatedBetween (BAL-374)', () => {
+  // A one-hour half-open band `(after, until]`, mirroring one sweep tick.
+  const AFTER = new Date('2026-03-10T11:00:00Z');
+  const UNTIL = new Date('2026-03-10T12:00:00Z');
+  const IN_WINDOW = new Date('2026-03-10T11:30:00Z');
+
+  it('returns an incomplete, non-deleted, in-window user projecting exactly { id, email }', async () => {
+    const user = await userFactory({
+      onboardingCompleted: false,
+      createdAt: IN_WINDOW,
+    });
+
+    const rows = await usersRepository.findIncompleteOnboardingCreatedBetween(AFTER, UNTIL);
+
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    if (row === undefined) throw new Error('expected a row');
+    expect(row.id).toBe(user.id);
+    expect(row.email).toBe(user.email);
+    // Projection carries ONLY id + email — no PII/other columns leak.
+    expect(Object.keys(row).sort()).toEqual(['email', 'id']);
+  });
+
+  it('excludes a user who has completed onboarding', async () => {
+    await userFactory({ onboardingCompleted: true, createdAt: IN_WINDOW });
+
+    const rows = await usersRepository.findIncompleteOnboardingCreatedBetween(AFTER, UNTIL);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('excludes a soft-deleted user even when in-window and incomplete', async () => {
+    const user = await userFactory({ onboardingCompleted: false, createdAt: IN_WINDOW });
+    await usersRepository.softDelete(user.id);
+
+    const rows = await usersRepository.findIncompleteOnboardingCreatedBetween(AFTER, UNTIL);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('INCLUDES created_at === until (closed upper bound) and EXCLUDES created_at === after (open lower bound)', async () => {
+    const atUntil = await userFactory({ onboardingCompleted: false, createdAt: UNTIL });
+    await userFactory({ onboardingCompleted: false, createdAt: AFTER });
+
+    const rows = await usersRepository.findIncompleteOnboardingCreatedBetween(AFTER, UNTIL);
+
+    // Only the `created_at === until` row is returned; the `=== after` row is excluded.
+    expect(rows.map((r) => r.id)).toEqual([atUntil.id]);
+  });
+
+  it('excludes users created before or after the window', async () => {
+    await userFactory({
+      onboardingCompleted: false,
+      createdAt: new Date('2026-03-10T10:00:00Z'), // before `after`
+    });
+    await userFactory({
+      onboardingCompleted: false,
+      createdAt: new Date('2026-03-10T13:00:00Z'), // after `until`
+    });
+
+    const rows = await usersRepository.findIncompleteOnboardingCreatedBetween(AFTER, UNTIL);
+
+    expect(rows).toEqual([]);
+  });
+
+  it('returns [] when no user falls in the window', async () => {
+    await userFactory({
+      onboardingCompleted: false,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+
+    const rows = await usersRepository.findIncompleteOnboardingCreatedBetween(AFTER, UNTIL);
+
+    expect(rows).toEqual([]);
+  });
+});
+
 describe('usersRepository.relinkWorkosId (BAL-360)', () => {
   /** Live audit rows recording a workos re-link for a given user id. */
   async function relinkAuditRows(userId: string) {

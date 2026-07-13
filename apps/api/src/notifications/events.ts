@@ -17,6 +17,7 @@ import type {
   EngagementAutoAcceptedPayload,
   EngagementReviewReminderPayload,
   CompanyProvisionedPayload,
+  OnboardingReminderPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -248,20 +249,22 @@ export type NotificationEvent =
   | 'party.join_request_approved'
   | 'party.join_request_declined'
   | 'agency.provisioned'
-  | 'company.provisioned';
+  | 'company.provisioned'
+  | 'onboarding.reminder';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
- * token-refresh path, and the D7 auto-accept + review-reminder sweeps) — never
- * through the internal `/notifications/publish` route, so they have no arm in
- * `publishBodySchema` by design. Keep this list tight: everything NOT listed here is
- * treated as publishable from apps/web and MUST have a schema arm — enforced at
- * compile time in apps/api/src/routes/notifications/schema.ts.
+ * token-refresh path, the D7 auto-accept + review-reminder sweeps, and the BAL-374
+ * onboarding-reminder sweep) — never through the internal `/notifications/publish`
+ * route, so they have no arm in `publishBodySchema` by design. Keep this list tight:
+ * everything NOT listed here is treated as publishable from apps/web and MUST have a
+ * schema arm — enforced at compile time in apps/api/src/routes/notifications/schema.ts.
  */
 export type ServerOnlyNotificationEvent =
   | 'calendar.auth_error'
   | 'engagement.auto_accepted'
-  | 'engagement.review_reminder';
+  | 'engagement.review_reminder'
+  | 'onboarding.reminder';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -303,4 +306,5 @@ export interface EventPayloadMap {
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
   'agency.provisioned': AgencyProvisionedPayload;
   'company.provisioned': CompanyProvisionedPayload;
+  'onboarding.reminder': OnboardingReminderPayload;
 }

@@ -22,6 +22,10 @@ import type { EngagementServerEventMap, EngagementEventMap } from './events/enga
 import type { AdminEngagementsEventMap } from './events/admin-engagements';
 import type { DomainJoinEventMap } from './events/domain-join';
 import type { ExpertAgencyEventMap } from './events/expert-agency';
+import type {
+  OnboardingReminderEventMap,
+  OnboardingReminderServerEventMap,
+} from './events/onboarding-reminder';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -42,7 +46,8 @@ export type AllEvents = AuthEventMap &
   AdminEngagementsEventMap &
   EngagementEventMap &
   DomainJoinEventMap &
-  ExpertAgencyEventMap;
+  ExpertAgencyEventMap &
+  OnboardingReminderEventMap;
 
 export type EventName = keyof AllEvents;
 
@@ -59,6 +64,7 @@ export type ServerEvents = ExpertServerEventMap &
   SignupDomainServerEventMap &
   OrgIntentServerEventMap &
   EngagementServerEventMap &
-  AuthServerEventMap;
+  AuthServerEventMap &
+  OnboardingReminderServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

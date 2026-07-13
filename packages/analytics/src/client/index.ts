@@ -23,6 +23,7 @@ export {
   ENGAGEMENT_EVENTS,
   DOMAIN_JOIN_EVENTS,
   EXPERT_AGENCY_EVENTS,
+  ONBOARDING_REMINDER_EVENTS,
 } from '../events';
 
 export type {
@@ -62,4 +63,6 @@ export type {
   DomainJoinEventMap,
   ExpertAgencyEventMap,
   ExpertAgencyOutcome,
+  OnboardingReminderEventMap,
+  OnboardingReminderDomainClass,
 } from '../events';
