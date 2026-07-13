@@ -34,33 +34,37 @@ balo-app/                          Turborepo monorepo
 │   ├── ui/                        Shared UI primitives (future)
 │   ├── eslint-config/             Shared ESLint config
 │   └── typescript-config/         Shared tsconfig
-└── .claude/
-    ├── skills/                    Balo-specific patterns (READ THESE)
-├── .agents/
-│   └── skills/                    Vendor skills (installed via `npx skills`)
-    └── commands/                  Agent definitions + slash commands (design, architect, build, dba, review, secure, ux-review, implement)
+├── .claude/
+│   ├── skills/                    Balo-specific patterns (READ THESE)
+│   └── commands/                  Agent definitions + slash commands (design, architect, build, dba, review, secure, ux-review, implement)
+└── .agents/
+    └── skills/                    Vendor/third-party skills only (npx skills) — never put Balo skills here
 ```
 
 ## Tech Stack
 
-| Layer          | Technology                       | Notes                                                          |
-| -------------- | -------------------------------- | -------------------------------------------------------------- |
-| Frontend       | Next.js 14 (App Router)          | Server components by default                                   |
-| Backend API    | Fastify                          | Zod validation on all inputs                                   |
-| Database       | Supabase (Postgres)              | Drizzle ORM with postgres-js driver                            |
-| Auth           | WorkOS                           | Custom UI (not hosted AuthKit)                                 |
-| Payments       | Stripe (single account)          | Client payments only, 25% markup. Expert payouts via Airwallex |
-| Queue          | BullMQ on Redis (Railway)        | Background jobs, notifications                                 |
-| UI             | Shadcn/ui + shadcnspace + Motion | Monday.com-inspired density                                    |
-| Styling        | Tailwind CSS                     | CSS variables for theming                                      |
-| Real-time      | Ably                             | Case-centric chat                                              |
-| Search         | PostgreSQL FTS (pg_trgm + GIN)   | Expert discovery — no external service                         |
-| Analytics      | PostHog                          | Feature flags + product analytics                              |
-| Error tracking | SonarQube                        | CI quality gate                                                |
-| Email          | Brevo + React Email              | Via notification engine (BullMQ)                               |
-| Video          | Daily.co                         | Call Object SDK for custom UI                                  |
-| File storage   | Cloudflare R2                    | S3-compatible                                                  |
-| Deployment     | Vercel (web) + Railway (API)     | Auto-deploy from GitHub                                        |
+| Layer          | Technology                       | Notes                                                                             |
+| -------------- | -------------------------------- | --------------------------------------------------------------------------------- |
+| Frontend       | Next.js 14 (App Router)          | Server components by default                                                      |
+| Backend API    | Fastify                          | Zod validation on all inputs                                                      |
+| Database       | Supabase (Postgres)              | Drizzle ORM with postgres-js driver                                               |
+| Auth           | WorkOS                           | Custom UI (not hosted AuthKit)                                                    |
+| Payments       | Stripe (single account)          | Client payments only, 25% markup. Expert payouts via Airwallex                    |
+| Queue          | BullMQ on Redis (Railway)        | Background jobs, notifications                                                    |
+| UI             | Shadcn/ui + shadcnspace + Motion | Monday.com-inspired density                                                       |
+| Styling        | Tailwind CSS                     | CSS variables for theming                                                         |
+| Real-time      | Ably                             | Case-centric chat                                                                 |
+| Search         | PostgreSQL FTS (pg_trgm + GIN)   | Expert discovery — no external service                                            |
+| Analytics      | PostHog                          | Feature flags + product analytics                                                 |
+| Error tracking | Sentry                           | Errors, release health, tracing — web project `balo-web` (org `balo-tecnologies`) |
+| Logs           | Axiom + Pino                     | Structured operational logs (dataset `balo-logs`)                                 |
+| Code quality   | SonarQube / SonarCloud           | CI static-analysis quality gate (PR gate)                                         |
+| Email          | Brevo + React Email              | Via notification engine (BullMQ)                                                  |
+| Video          | Daily.co                         | Call Object SDK for custom UI                                                     |
+| File storage   | Cloudflare R2                    | S3-compatible                                                                     |
+| Deployment     | Vercel (web) + Railway (API)     | Auto-deploy from GitHub                                                           |
+
+> **Not used (deliberately):** No Algolia — Postgres FTS instead. Supabase is Postgres only — no Supabase Realtime (use Ably), Storage (use R2), or Auth (use WorkOS). No Stripe Connect — single Stripe account; expert payouts via Airwallex.
 
 ## Skills — READ BEFORE CODING
 
@@ -187,6 +191,7 @@ Do not add new repository files without integration tests. SonarQube will flag c
 - **Expert status:** Derived from `expert_profiles` existence + `approvedAt`
 - **Active view:** `users.activeMode` enum (`client`, `expert`)
 - WorkOS handles identity. Balo handles authorization and user data.
+- **Authorization is capability-based (ADR-1029).** Resolve `hasCapability(...)` at every call site — never gate on `platformRole ===`, `role ===`, or `activeMode ===`. Roles (`owner`/`admin`/`member`/`finance`), additive `member_capability_overrides`, and `representations` (AE / account-manager act-on-behalf) are capability bundles; `activeMode` is a view toggle, never an authorization input.
 - Custom UI modals (not hosted AuthKit redirect)
 - Session via iron-session with 7-day cookie (`balo_session`)
 
@@ -256,4 +261,17 @@ trackServer(EXPERT_PAYOUT_SERVER_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
 - Monday.com-level spacious density (not Linear-compact)
 - Dark mode from day one via `next-themes`
 - All four states on every async component: loading, empty, error, success
+- Design source of truth: interactive JSX prototypes in `.claude/design-references/` define layout, spacing, colour, Lucide icons, and animation. Implement from the referenced prototype; the Bubble app is workflow reference only, never a UI guide.
+- Empty states: hiding is the exception. If the user could act in an empty section, KEEP it with invitation copy ("Start a project with {name}"), never absence-framed ("No X yet"). Hide only purely retrospective data the user can't act on (reviews, completed history), with justification.
 - Toast (Sonner) on every user-initiated mutation
+
+## Copy & Microcopy
+
+All user-facing copy (UI, email, in-app, prototypes):
+
+- **Gender-neutral** — never gendered pronouns for clients or experts; use names, "they", or restructure.
+- **Tone** — warm and congratulatory at milestone moments (delivery, completion, acceptance); state deadlines and auto-accept as helpful facts ("take until {date} — no rush; if it slips by we close it out as delivered so nothing is left hanging"), never adversarial or countdown-led.
+- **Attribution (by tense, symmetric for both sides):**
+  - _Prospective_ copy (who can act, who's notified, whose review window) names the **party** — the client company ("Northwind has 7 days to review") and, for agency-based experts, the agency ("CloudPeak marks each milestone"; independent experts keep their own name).
+  - _Retrospective_ copy (who actually did something) names the **person** with "@ company/agency" on first mention, bare name after ("Accepted by Dana @ Northwind Industrial", then "Dana …").
+  - Rights sit on company/agency membership (ADR-1029) and survive individual departures; attribution columns record the individual actor.
