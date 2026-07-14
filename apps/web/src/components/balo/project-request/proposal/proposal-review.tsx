@@ -11,6 +11,7 @@ import { ReviewSummaryCard } from './review-summary-card';
 import { AcceptConfirmModal } from './accept-confirm-modal';
 import { ChangesModal } from './changes-modal';
 import { BackChannel } from './back-channel';
+import { ProposalPdfDownloadLink } from './proposal-pdf-download-link';
 import { firstName } from './proposal-name';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
@@ -174,6 +175,12 @@ export function ProposalReview({
         </div>
       ) : (
         <>
+          {/* Download stays with the visible doc — never offered while the doc is hidden
+              behind the awaiting-revision state above. */}
+          <div className="flex justify-end">
+            <ProposalPdfDownloadLink requestId={requestId} relationshipId={active.relationshipId} />
+          </div>
+
           {/* Desktop: 2-col doc + sticky summary card */}
           <div className="hidden items-start gap-5 lg:grid lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
             <div>

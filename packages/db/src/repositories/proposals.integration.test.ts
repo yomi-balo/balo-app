@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { proposals, proposalChangeRequests, projectRequests } from '../schema';
+import { proposals, proposalChangeRequests, projectRequests, expertProfiles } from '../schema';
 import {
   proposalFactory,
   projectRequestFactory,
   requestExpertRelationshipFactory,
   userFactory,
+  agencyFactory,
 } from '../test/factories';
 import {
   proposalsRepository,
@@ -1814,5 +1815,33 @@ describe('proposalsRepository.resubmit — T&M effort/total coherence (BAL-294)'
     expect(raw?.id).toBe(v1.id);
     expect(raw?.isCurrent).toBe(true);
     expect(raw?.status).toBe('changes_requested');
+  });
+});
+
+describe('proposalsRepository.findExpertOrgName', () => {
+  it("returns the expert's agency name when the author belongs to an agency", async () => {
+    const { proposal, expertProfileId } = await proposalFactory();
+    const agency = await agencyFactory({ name: 'CloudPeak Consulting' });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, expertProfileId));
+
+    const orgName = await proposalsRepository.findExpertOrgName(proposal.id);
+    expect(orgName).toBe('CloudPeak Consulting');
+  });
+
+  it('returns null when the author is an independent expert (no agency)', async () => {
+    const { proposal } = await proposalFactory();
+    const orgName = await proposalsRepository.findExpertOrgName(proposal.id);
+    expect(orgName).toBeNull();
+  });
+
+  it('returns null for a missing / soft-deleted proposal', async () => {
+    const { proposal } = await proposalFactory();
+    await db.update(proposals).set({ deletedAt: new Date() }).where(eq(proposals.id, proposal.id));
+
+    expect(await proposalsRepository.findExpertOrgName(proposal.id)).toBeNull();
+    expect(await proposalsRepository.findExpertOrgName(randomUUID())).toBeNull();
   });
 });

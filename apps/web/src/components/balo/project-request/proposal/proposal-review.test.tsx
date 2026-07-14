@@ -128,6 +128,16 @@ describe('ProposalReview', () => {
     expect(screen.queryByRole('button', { name: 'Accept this proposal' })).not.toBeInTheDocument();
   });
 
+  it('hides the Download PDF link while changes are requested (the doc it would hand over is hidden)', () => {
+    renderReview([doc({ status: 'changes_requested' })]);
+    expect(screen.queryByRole('link', { name: /Download PDF/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the Download PDF link alongside the visible doc (submitted)', () => {
+    renderReview([doc()]);
+    expect(screen.getByRole('link', { name: /Download PDF/ })).toBeInTheDocument();
+  });
+
   it('switches the active doc when a switcher chip is clicked', async () => {
     const user = userEvent.setup();
     renderReview([doc(), marcus()]);

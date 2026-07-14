@@ -356,6 +356,7 @@ async function renderExpertSurface(
         <ReviewShell requestId={requestId} title={request.title}>
           <SubmittedView
             lens="expert"
+            requestId={requestId}
             doc={doc}
             clientName={clientFirstName}
             otherProposalCount={otherSubmittedCount(request, relationshipId)}
@@ -427,6 +428,7 @@ async function renderAdminSurface(
       <ReviewShell requestId={requestId} title={request.title}>
         <SubmittedView
           lens="admin"
+          requestId={requestId}
           doc={doc}
           clientName={clientFirstName}
           otherProposalCount={otherSubmittedCount(request, relationshipId)}

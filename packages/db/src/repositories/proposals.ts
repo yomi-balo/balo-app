@@ -544,6 +544,36 @@ export const proposalsRepository = {
   },
 
   /**
+   * The name of the proposal author's payout AGENCY, or `null` when the expert is
+   * independent (no agency). Used by the client-facing proposal PDF (BAL-385) to
+   * render the retrospective "prepared by" attribution as "{person} @ {agency}" —
+   * the person display name already crosses the audience boundary via
+   * `hydrateReviewDoc` (doc.expert.name), so this read supplies ONLY the missing
+   * org name.
+   *
+   * The projection is the SECURITY BOUNDARY: columns are pinned to
+   * `expertProfile.agency.name` alone. A bare relational `with:` on `expertProfile`
+   * would hydrate the whole row (`stripeConnectId` and other payout/identity
+   * secrets), so we never spread the profile/agency rows — only the name crosses.
+   * `expert_profiles` has NO `deletedAt` (it spreads only `timestamps`), so the
+   * join deliberately does not filter one; the proposal row still guards
+   * `deleted_at IS NULL`.
+   */
+  async findExpertOrgName(proposalId: string): Promise<string | null> {
+    const row = await db.query.proposals.findFirst({
+      where: and(eq(proposals.id, proposalId), isNull(proposals.deletedAt)),
+      columns: { id: true },
+      with: {
+        expertProfile: {
+          columns: { id: true },
+          with: { agency: { columns: { name: true } } },
+        },
+      },
+    });
+    return row?.expertProfile?.agency?.name ?? null;
+  },
+
+  /**
    * Client accepts a proposal. In ONE transaction: proposal status→`accepted`
    * (routed through `advanceProposalStatus`, which validates submitted→accepted
    * and stamps `acceptedAt`) AND relationship `proposal_submitted`→`accepted`.
