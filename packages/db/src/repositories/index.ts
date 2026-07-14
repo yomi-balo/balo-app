@@ -209,3 +209,46 @@ export type {
   PartyJoinOptout,
   NewPartyJoinOptout,
 } from '../schema';
+
+// ── Client Credit System (BAL-376 / ADR-1040) ────────────────────────────
+export { creditWalletsRepository } from './credit-wallets';
+export {
+  creditLedgerRepository,
+  applyLedgerEntry,
+  WalletNotFoundError,
+  type ApplyLedgerEntryInput,
+  type ApplyLedgerEntryResult,
+} from './credit-ledger';
+export { creditHoldsRepository, InvalidHoldTransitionError } from './credit-holds';
+export { fxDisplayRatesRepository } from './fx-display-rates';
+export { deriveIdempotencyKey, type IdempotencyKeyInput } from './_shared/credit-idempotency';
+export { acquireWalletLock } from './_shared/wallet-lock';
+export {
+  recordCreditAudit,
+  type CreditAuditAction,
+  type CreditAuditEntityType,
+  type CreditAuditContext,
+  type RecordCreditAuditInput,
+} from './_shared/credit-audit';
+export {
+  CLIENT_WALLET_VIEW_COLUMNS,
+  toClientWalletView,
+  balanceContribution,
+  toLedgerActivityView,
+  type ClientWalletView,
+  type LedgerActivityView,
+} from './_shared/credit-views';
+export type {
+  CreditWallet,
+  NewCreditWallet,
+  CreditLedgerEntry,
+  NewCreditLedgerEntry,
+  CreditEntryType,
+  CreditLedgerReason,
+  CreditHold,
+  NewCreditHold,
+  CreditHoldStatus,
+  FxDisplayRate,
+  NewFxDisplayRate,
+  FxDisplayQuote,
+} from '../schema';

@@ -38,6 +38,15 @@ export const CAPABILITIES = {
    * decides who can manage billing (no coupling to member management).
    */
   MANAGE_BILLING: 'manage_billing',
+  /**
+   * Draw a company wallet's balance down during Cases (ADR-1040 Amendment 1).
+   * BASE member capability — every company member holds it; DISTINCT from
+   * `MANAGE_BILLING` (top-up / card / mandate / low-balance mode = owner/admin only).
+   * ALWAYS resolved with a COMPANY scope — the wallet is company-scoped, so an
+   * agency `expert` (who shares `MEMBER_BUNDLE`) can never exercise it (no company
+   * membership ⇒ `hasCapability` fails closed).
+   */
+  CONSUME_CREDITS: 'consume_credits',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -48,6 +57,9 @@ const MEMBER_BUNDLE: readonly Capability[] = [
   CAPABILITIES.PARTICIPATE,
   CAPABILITIES.MANAGE_REQUESTS,
   CAPABILITIES.APPROVE_OWN_PROPOSALS,
+  // Consume is a BASE member capability (company-scoped): every company member draws the
+  // wallet down. Manage (top-up/card/mandate) stays owner/admin-only via `ADMIN_BUNDLE`.
+  CAPABILITIES.CONSUME_CREDITS,
 ];
 
 // The admin bundle = everything a member has PLUS member management + billing

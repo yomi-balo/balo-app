@@ -50,6 +50,42 @@ describe('roleHasCapability — MANAGE_BILLING (the billing-management gate)', (
   });
 });
 
+describe('roleHasCapability — CONSUME_CREDITS (invariant #6: the manage/consume split)', () => {
+  // ADR-1040: CONSUME_CREDITS is a BASE member capability (draw the wallet down during
+  // Cases); MANAGE_BILLING (top-up/card/mandate) stays owner/admin-only. The whole point
+  // of the split is that a plain member can consume but CANNOT manage billing.
+  it('grants CONSUME_CREDITS to a company member but DENIES MANAGE_BILLING to them', () => {
+    expect(roleHasCapability('member', CAPABILITIES.CONSUME_CREDITS)).toBe(true);
+    expect(roleHasCapability('member', CAPABILITIES.MANAGE_BILLING)).toBe(false);
+  });
+
+  it('grants CONSUME_CREDITS to an agency expert (shares the member bundle)', () => {
+    expect(roleHasCapability('expert', CAPABILITIES.CONSUME_CREDITS)).toBe(true);
+    expect(roleHasCapability('expert', CAPABILITIES.MANAGE_BILLING)).toBe(false);
+  });
+
+  it('grants BOTH CONSUME_CREDITS and MANAGE_BILLING to owner and admin', () => {
+    for (const role of ['owner', 'admin'] as const) {
+      expect(roleHasCapability(role, CAPABILITIES.CONSUME_CREDITS)).toBe(true);
+      expect(roleHasCapability(role, CAPABILITIES.MANAGE_BILLING)).toBe(true);
+    }
+  });
+
+  it('denies CONSUME_CREDITS to unknown roles (fail closed)', () => {
+    expect(roleHasCapability('super_admin', CAPABILITIES.CONSUME_CREDITS)).toBe(false);
+    expect(roleHasCapability('', CAPABILITIES.CONSUME_CREDITS)).toBe(false);
+  });
+
+  it('rolesWithCapability(CONSUME_CREDITS) is exactly [owner, admin, member, expert]', () => {
+    expect(rolesWithCapability(CAPABILITIES.CONSUME_CREDITS)).toEqual([
+      'owner',
+      'admin',
+      'member',
+      'expert',
+    ]);
+  });
+});
+
 describe('roleHasCapability — the base member bundle', () => {
   it('grants the member bundle (participate/manage_requests/approve_own_proposals) to member', () => {
     expect(roleHasCapability('member', CAPABILITIES.PARTICIPATE)).toBe(true);

@@ -125,3 +125,29 @@ export function parseFeePercentToBps(input: string): ParseFeeResult {
 export function applyBaloFee(cents: number, feeBps: number): number {
   return Math.round((cents * (10_000 + feeBps)) / 10_000);
 }
+
+// ── Client Credit System platform-money constants (BAL-376 / ADR-1040) ────
+//
+// No platform-config table exists, so these live as code constants alongside
+// DEFAULT_BALO_FEE_BPS (pure, reachable everywhere — `@balo/db` `credit-ledger.ts`
+// imports WALLET_EXPIRY_MONTHS; the driving lanes read the top-up/overdraft defaults).
+
+/**
+ * Platform default overdraft ceiling (AUD 150 = 15000 minor). A wallet whose
+ * `overdraft_ceiling_minor` is NULL reads `?? DEFAULT_OVERDRAFT_CEILING_MINOR` at the
+ * (later-lane) overdraft check.
+ */
+export const DEFAULT_OVERDRAFT_CEILING_MINOR = 15000;
+
+/** Default auto-top-up threshold (AUD 20 = 2000 minor). Mirrors the wallet column default. */
+export const DEFAULT_TOPUP_THRESHOLD_MINOR = 2000;
+
+/** Default auto-top-up reload (AUD 100 = 10000 minor). Mirrors the wallet column default. */
+export const DEFAULT_TOPUP_RELOAD_MINOR = 10000;
+
+/**
+ * Rolling wallet expiry window, in months: expiry = last ledger-affecting interaction
+ * + this many months. Feeds `make_interval(months => WALLET_EXPIRY_MONTHS)` in
+ * `applyLedgerEntry`.
+ */
+export const WALLET_EXPIRY_MONTHS = 12;
