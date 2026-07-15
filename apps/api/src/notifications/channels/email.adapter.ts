@@ -3,11 +3,18 @@ import { usersRepository } from '@balo/db';
 import { render } from '@react-email/render';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../../lib/redis.js';
+import { getR2ObjectBytes } from '../../lib/storage/r2.js';
 import { getEmailTemplate } from './templates/index.js';
 import { logNotification } from './log.js';
 import type { DeliveryPayload } from './types.js';
 
 const log = createLogger('notification-email');
+
+/** A Brevo transactional-email attachment (base64 content + download name). */
+interface BrevoAttachment {
+  content: string;
+  name: string;
+}
 
 // Cached Brevo client — created lazily on first use
 interface BrevoEmailClient {
@@ -29,6 +36,42 @@ async function getBrevoClient(): Promise<BrevoEmailClient> {
   const { BrevoClient } = await import('@getbrevo/brevo');
   brevoClient = new BrevoClient({ apiKey }) as BrevoEmailClient;
   return brevoClient;
+}
+
+/**
+ * BAL-386: resolve each attachment spec's bytes from R2 and base64-encode them for
+ * Brevo's `attachment` field. On any R2 read failure we log then THROW so the whole
+ * job re-throws and BullMQ retries (the bytes are guaranteed present by apps/web's
+ * force-generate at share time, so a miss is transient). Returns `undefined` when
+ * there are no attachments so the non-attachment path is unchanged.
+ */
+async function resolveAttachments(
+  payload: DeliveryPayload
+): Promise<BrevoAttachment[] | undefined> {
+  const specs = payload.attachments;
+  if (!specs || specs.length === 0) return undefined;
+
+  const resolved: BrevoAttachment[] = [];
+  for (const spec of specs) {
+    try {
+      const bytes = await getR2ObjectBytes(spec.key);
+      resolved.push({
+        content: Buffer.from(bytes).toString('base64'),
+        name: spec.filename,
+      });
+    } catch (error) {
+      log.warn(
+        {
+          key: spec.key,
+          template: payload.template,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Proposal PDF attachment read failed'
+      );
+      throw error; // Re-throw so the job fails and BullMQ retries.
+    }
+  }
+  return resolved;
 }
 
 /** Exported for testability — called by the BullMQ worker. */
@@ -67,6 +110,11 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
   try {
     const client = await getBrevoClient();
 
+    // BAL-386: resolve any R2-backed attachments to base64 BEFORE sending. A read
+    // failure throws here → BullMQ retries; the non-attachment path passes undefined
+    // and is unchanged.
+    const attachment = await resolveAttachments(payload);
+
     const result = await client.transactionalEmails.sendTransacEmail({
       htmlContent: html,
       sender: {
@@ -75,6 +123,7 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
       },
       subject,
       to: [{ email: toEmail, name: recipientName }],
+      ...(attachment ? { attachment } : {}),
     });
     const messageId = result?.messageId;
 

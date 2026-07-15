@@ -96,6 +96,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+  // BAL-386: a client member shared a submitted proposal with an EXTERNAL colleague.
+  // The 'email_address' recipient reads the address straight from the event payload
+  // in the dispatcher — there is no user row to hydrate. Email channel ONLY, external
+  // recipient, NO expert notification (mirrors expert.referral_invited).
+  'proposal.shared': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'proposal-shared',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   'project.request_submitted': [
     {
       channel: 'email',
