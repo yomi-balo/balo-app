@@ -12,12 +12,13 @@ describe('PROJECT_EVENTS.BILLING_REMINDER_SENT (BAL-324)', () => {
 });
 
 describe('PROJECT_SERVER_EVENTS', () => {
-  it('has the request-access-denied, server-emitted proposal, and admin-fee events (BAL-276 / BAL-357 / BAL-358)', () => {
+  it('has the request-access-denied, server-emitted proposal, admin-fee, and PDF-download events (BAL-276 / BAL-357 / BAL-358 / BAL-385)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
       'REQUEST_ACCESS_DENIED',
       'PROJECT_PROPOSAL_SUBMITTED',
       'PROJECT_PROPOSAL_ACCEPTED',
       'ADMIN_PROJECT_FEE_OVERRIDDEN',
+      'PROJECT_PROPOSAL_PDF_DOWNLOADED',
     ]);
   });
 
@@ -36,5 +37,9 @@ describe('PROJECT_SERVER_EVENTS', () => {
     expect(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_ACCEPTED).toBe('project_proposal_accepted');
     // BAL-358: the admin per-project fee override (admin-audience feature prefix).
     expect(PROJECT_SERVER_EVENTS.ADMIN_PROJECT_FEE_OVERRIDDEN).toBe('admin_project_fee_overridden');
+    // BAL-385: server-side client-facing proposal PDF download.
+    expect(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_PDF_DOWNLOADED).toBe(
+      'project_proposal_pdf_downloaded'
+    );
   });
 });
