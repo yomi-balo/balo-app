@@ -214,31 +214,6 @@ const projectBillingReminderPayload = z.object({
   creatorUserId: z.uuid().optional(),
 });
 
-// BAL-386 proposal shared (client member → EXTERNAL colleague). `correlationId` is
-// the proposal_share_links row id — dedup per link. `recipientEmail` is the external
-// target (delivery + dedup identity); `shareToken` is the RAW magic-link token
-// (URL-only). Both are the deliberate PII-in-queue exception for a non-user
-// recipient. Mirrors packages/shared/src/notifications/index.ts.
-const proposalSharedPayload = z.object({
-  correlationId: z.uuid(),
-  recipientEmail: z.string().email().max(254),
-  shareToken: z.string().min(20).max(200),
-  sharerName: z.string().min(1).max(160),
-  sharerOrgLabel: z.string().min(1).max(200),
-  proposalTitle: z.string().min(1).max(300),
-  note: z.string().max(1000).optional(),
-  expiresOn: z.string().min(1).max(40),
-  attachments: z
-    .array(
-      z.object({
-        source: z.literal('r2'),
-        key: z.string().min(1).max(300),
-        filename: z.string().min(1).max(200),
-      })
-    )
-    .max(3),
-});
-
 // BAL-323 billing details confirmed (client → admins). `correlationId` = companyId
 // (once-ever-per-company dedup). Mirrors apps/web/src/lib/notifications/types.ts.
 const billingDetailsConfirmedPayload = z.object({
@@ -466,10 +441,6 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.billing_reminder'),
     payload: projectBillingReminderPayload,
-  }),
-  z.object({
-    event: z.literal('proposal.shared'),
-    payload: proposalSharedPayload,
   }),
   z.object({
     event: z.literal('billing.details_confirmed'),

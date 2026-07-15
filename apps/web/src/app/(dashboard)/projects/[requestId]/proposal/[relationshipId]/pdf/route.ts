@@ -2,21 +2,22 @@ import { z } from 'zod';
 import {
   projectRequestsRepository,
   proposalsRepository,
+  proposalMilestonesRepository,
+  proposalPaymentInstallmentsRepository,
+  proposalDocumentsRepository,
   type Proposal,
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
+import { hydrateReviewDoc } from '@/lib/project-request/proposal-audience-view';
 import {
   getProposalPdfFromR2,
   putProposalPdfToR2,
   proposalPdfKey,
 } from '@/lib/storage/proposal-pdf';
-import {
-  generateClientProposalPdf,
-  proposalPdfFileName,
-} from '@/lib/project-request/proposal/pdf/ensure-client-pdf';
+import { renderProposalPdfToBuffer } from '@/lib/project-request/proposal/pdf/proposal-pdf-document';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 
 // react-pdf + the R2 (S3) client need Node, not Edge.
@@ -84,6 +85,36 @@ async function loadAuthorizedProposal(
 }
 
 /**
+ * Generate the PDF bytes on a cache miss. The serializer audience is ALWAYS
+ * `client` — an admin downloads the exact client-safe document, so the Balo fee /
+ * raw expert quote (which live only on the `admin` audience doc) never reach it.
+ */
+async function generatePdf(target: AuthorizedProposal): Promise<Uint8Array> {
+  const { request, relationship, proposal } = target;
+  const [milestones, installments, documents, orgName] = await Promise.all([
+    proposalMilestonesRepository.listByProposal(proposal.id),
+    proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
+    proposalDocumentsRepository.listByProposal(proposal.id),
+    proposalsRepository.findExpertOrgName(proposal.id),
+  ]);
+  const doc = hydrateReviewDoc(
+    proposal,
+    milestones,
+    installments,
+    documents,
+    relationship,
+    'client'
+  );
+  return renderProposalPdfToBuffer({
+    doc,
+    title: request.title,
+    clientCompanyName: request.company?.name ?? 'your company',
+    preparedByOrgName: orgName,
+    generatedAtIso: new Date().toISOString(),
+  });
+}
+
+/**
  * Read-through cache: return the stored bytes on a hit; otherwise generate,
  * best-effort upload (failure is logged, never blocks the response), and return
  * the freshly-rendered bytes. A non-not-found cache READ error is a transient
@@ -109,7 +140,7 @@ async function resolveBytes(
     return cached;
   }
 
-  const generated = await generateClientProposalPdf(target);
+  const generated = await generatePdf(target);
   log.info('Proposal client PDF generated', {
     proposalId: proposal.id,
     relationshipId: relationship.id,
@@ -127,6 +158,23 @@ async function resolveBytes(
     });
   }
   return generated;
+}
+
+/**
+ * Header-safe download filename: collapse every non-alphanumeric run to a single
+ * hyphen (linear regex — no backtracking alternation), then trim the at-most-one
+ * leading/trailing hyphen with plain string ops (avoids the super-linear `/-+$/`).
+ */
+function proposalPdfFileName(title: string, version: number): string {
+  let slug = title.replaceAll(/[^a-zA-Z0-9]+/g, '-').slice(0, 60);
+  if (slug.startsWith('-')) {
+    slug = slug.slice(1);
+  }
+  if (slug.endsWith('-')) {
+    slug = slug.slice(0, -1);
+  }
+  const base = slug.length > 0 ? slug : 'proposal';
+  return `Balo-Proposal-${base}-v${version}.pdf`;
 }
 
 function pdfResponse(body: Uint8Array, title: string, version: number): Response {

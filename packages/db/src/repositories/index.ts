@@ -253,12 +253,3 @@ export type {
   NewFxDisplayRate,
   FxDisplayQuote,
 } from '../schema';
-
-// ── Proposal Share Links (BAL-386) ────────────────────────────────────────
-export { proposalShareLinksRepository } from './proposal-share-links';
-export type {
-  CreateShareLinkInput,
-  CreateShareLinkResult,
-  RevokeShareLinkInput,
-} from './proposal-share-links';
-export type { ProposalShareLink, NewProposalShareLink } from '../schema';

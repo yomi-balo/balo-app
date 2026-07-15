@@ -1,5 +1,3 @@
-import type { EmailAttachmentSpec } from '@balo/shared/notifications';
-
 export interface DeliveryPayload {
   recipientId: string;
   /**
@@ -12,12 +10,6 @@ export interface DeliveryPayload {
   event: string;
   data: Record<string, unknown>;
   payload: Record<string, unknown>;
-  /**
-   * BAL-386: optional email attachments carried from the event payload. The email
-   * adapter resolves each spec's bytes (from R2) at send time — the BullMQ payload
-   * stays light. Forwarded by the dispatcher from `context.payload.attachments`.
-   */
-  attachments?: EmailAttachmentSpec[];
 }
 
 export interface DeliveryResult {

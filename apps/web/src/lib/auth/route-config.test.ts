@@ -23,8 +23,6 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('/api/health')).toBe(true);
     expect(isPublicRoute('/experts/abc-123')).toBe(true);
     expect(isPublicRoute('/blog/some-post')).toBe(true);
-    // BAL-386 — public email-bound magic-link proposal view.
-    expect(isPublicRoute('/shared/proposals/some-token')).toBe(true);
   });
 
   it('rejects protected routes', () => {

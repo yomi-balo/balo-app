@@ -40,29 +40,3 @@ export function formatUtcShortDate(iso: string): string {
   const date = new Date(iso);
   return `${date.getUTCDate()} ${SHORT_MONTHS[date.getUTCMonth()] ?? ''}`;
 }
-
-const LONG_MONTHS = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-] as const;
-
-/**
- * "13 August 2026" in UTC — the helpful-fact expiry label for shared proposal
- * links (BAL-386). Hand-rolled (not `Intl`) so it never drifts by shell locale,
- * and read in UTC so the server-formatted email value and the SSR-rendered footer
- * agree regardless of the viewer's timezone. Accepts a `Date` or an ISO string.
- */
-export function formatUtcLongDate(value: Date | string): string {
-  const date = value instanceof Date ? value : new Date(value);
-  return `${date.getUTCDate()} ${LONG_MONTHS[date.getUTCMonth()] ?? ''} ${date.getUTCFullYear()}`;
-}
