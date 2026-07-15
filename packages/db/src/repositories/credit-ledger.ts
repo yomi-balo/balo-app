@@ -24,6 +24,26 @@ export class WalletNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when a replayed `idempotency_key` resolves to a stored ledger entry whose payload
+ * — wallet, signed amount, reason, or entry-type — differs from the current input. A
+ * state-derived key must ALWAYS map to the same logical write; a mismatch means an upstream
+ * key-derivation bug, or reuse of a shared token across wallets (the `idempotency_key`
+ * unique is global — e.g. an `adjustment` token). Rather than silently no-op onto the wrong
+ * money row, the primitive surfaces the conflict.
+ */
+export class LedgerIdempotencyConflictError extends Error {
+  constructor(
+    public readonly idempotencyKey: string,
+    public readonly existingEntryId: string
+  ) {
+    super(
+      `Idempotency key '${idempotencyKey}' was already applied with a different payload (existing entry ${existingEntryId})`
+    );
+    this.name = 'LedgerIdempotencyConflictError';
+  }
+}
+
 export interface ApplyLedgerEntryInput {
   walletId: string;
   entryType: CreditEntryType;
@@ -84,6 +104,25 @@ async function findLedgerByKey(tx: DbTx, key: string): Promise<CreditLedgerEntry
 }
 
 /**
+ * Guard a dedup hit: a replayed key MUST resolve to the same logical write. Compares the
+ * identity + balance-affecting fields (wallet, signed amount, reason, entry-type); a
+ * mismatch throws `LedgerIdempotencyConflictError` rather than deduping onto a different
+ * operation (also catches cross-wallet reuse of a shared idempotency token — the unique is
+ * global). Display/record-only fields (charged_*, fx_rate, session, stripe PI) are NOT
+ * compared: they never move money and can legitimately vary between derivations.
+ */
+function assertIdempotentMatch(existing: CreditLedgerEntry, input: ApplyLedgerEntryInput): void {
+  if (
+    existing.walletId !== input.walletId ||
+    existing.amountMinor !== input.amountMinor ||
+    existing.reason !== input.reason ||
+    existing.entryType !== input.entryType
+  ) {
+    throw new LedgerIdempotencyConflictError(input.idempotencyKey, existing.id);
+  }
+}
+
+/**
  * The single atomic ledger-write primitive (BAL-376 / ADR-1040) — mirrors the exported
  * `advanceEngagementStatus` module-function pattern. Runs INSIDE the caller's `tx`
  * (the advisory lock in step 1 only holds for a transaction). Standalone callers use
@@ -91,8 +130,10 @@ async function findLedgerByKey(tx: DbTx, key: string): Promise<CreditLedgerEntry
  *
  * Algorithm (single txn):
  *  1. Advisory lock the wallet — serialize all concurrent same-wallet writes.
- *  2. Idempotency no-op check — an existing key returns `{ deduped: true }` WITHOUT
- *     inserting or touching the balance (the advisory lock serializes duplicates).
+ *  2. Idempotency no-op check — an existing key with a MATCHING payload returns
+ *     `{ deduped: true }` WITHOUT inserting or touching the balance (the advisory lock
+ *     serializes duplicates). An existing key with a DIFFERENT payload throws
+ *     `LedgerIdempotencyConflictError` — never no-op onto the wrong money row.
  *  3. Read the wallet (throw `WalletNotFoundError`). balanceAfter = balance + amount.
  *     NO overdraft/insufficiency gate here — mechanism, not policy; balance may
  *     legitimately go negative (overdraft grace).
@@ -124,9 +165,11 @@ export async function applyLedgerEntry(
   // 1. Advisory lock — single-in-flight per wallet.
   await acquireWalletLock(tx, input.walletId);
 
-  // 2. Idempotency no-op check.
+  // 2. Idempotency no-op check — a matching prior entry is a true no-op; the SAME key
+  //    derived for a DIFFERENT payload is a conflict, not a silent dedup.
   const existing = await findLedgerByKey(tx, input.idempotencyKey);
   if (existing !== undefined) {
+    assertIdempotentMatch(existing, input);
     const wallet = await readWalletOrThrow(tx, input.walletId);
     return { entry: existing, wallet, deduped: true };
   }
@@ -171,6 +214,7 @@ export async function applyLedgerEntry(
     if (raced === undefined) {
       throw new Error('credit_ledger insert conflicted but the conflicting row was not found');
     }
+    assertIdempotentMatch(raced, input);
     const currentWallet = await readWalletOrThrow(tx, input.walletId);
     return { entry: raced, wallet: currentWallet, deduped: true };
   }

@@ -216,6 +216,7 @@ export {
   creditLedgerRepository,
   applyLedgerEntry,
   WalletNotFoundError,
+  LedgerIdempotencyConflictError,
   type ApplyLedgerEntryInput,
   type ApplyLedgerEntryResult,
 } from './credit-ledger';

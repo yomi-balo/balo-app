@@ -8,6 +8,7 @@ import {
   applyLedgerEntry,
   creditLedgerRepository,
   WalletNotFoundError,
+  LedgerIdempotencyConflictError,
   type ApplyLedgerEntryInput,
 } from './credit-ledger';
 import { deriveIdempotencyKey } from './_shared/credit-idempotency';
@@ -174,6 +175,65 @@ describe('applyLedgerEntry — invariant #4 (idempotent replay is a no-op)', () 
     expect(a.deduped).toBe(false);
     expect(b.deduped).toBe(true);
     expect(await creditLedgerRepository.sumAmountByWallet(wallet.id)).toBe(10_000); // one reload only
+  });
+
+  it('rejects a replayed key with a DIFFERENT payload (no silent dedup onto the wrong write)', async () => {
+    const { wallet } = await creditWalletFactory();
+
+    const first = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'adjustment',
+      reason: 'adjustment',
+      amountMinor: 5000,
+      idempotencyKey: 'adj_conflict',
+    });
+    expect(first.deduped).toBe(false);
+
+    // Same key, DIFFERENT amount ⇒ conflict, not a silent no-op.
+    await expect(
+      creditLedgerRepository.postEntry({
+        walletId: wallet.id,
+        entryType: 'adjustment',
+        reason: 'adjustment',
+        amountMinor: -9999,
+        idempotencyKey: 'adj_conflict',
+      })
+    ).rejects.toBeInstanceOf(LedgerIdempotencyConflictError);
+
+    // The original write is untouched: one row, balance still 5000.
+    const rows = await creditLedgerRepository.listByWallet(wallet.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.amountMinor).toBe(5000);
+    const w = await db.query.creditWallets.findFirst({ where: eq(creditWallets.id, wallet.id) });
+    expect(w?.balanceMinor).toBe(5000);
+  });
+
+  it('rejects the same key reused across a DIFFERENT wallet (global-unique token collision)', async () => {
+    const a = await creditWalletFactory();
+    const b = await creditWalletFactory();
+
+    await creditLedgerRepository.postEntry({
+      walletId: a.wallet.id,
+      entryType: 'adjustment',
+      reason: 'adjustment',
+      amountMinor: 3000,
+      idempotencyKey: 'adj_shared_token',
+    });
+
+    // The same token on wallet B would otherwise dedup onto A's row and credit B nothing —
+    // now surfaced as a conflict (security review L-2).
+    await expect(
+      creditLedgerRepository.postEntry({
+        walletId: b.wallet.id,
+        entryType: 'adjustment',
+        reason: 'adjustment',
+        amountMinor: 3000,
+        idempotencyKey: 'adj_shared_token',
+      })
+    ).rejects.toBeInstanceOf(LedgerIdempotencyConflictError);
+
+    expect(await creditLedgerRepository.sumAmountByWallet(b.wallet.id)).toBe(0);
+    expect(await creditLedgerRepository.sumAmountByWallet(a.wallet.id)).toBe(3000);
   });
 });
 
