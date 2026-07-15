@@ -10,6 +10,8 @@ export { requestExpertRelationshipFactory } from './request-expert-relationship.
 export type { RequestExpertRelationshipFactoryResult } from './request-expert-relationship.factory';
 export { proposalFactory } from './proposal.factory';
 export type { ProposalFactoryResult } from './proposal.factory';
+export { proposalShareLinkFactory } from './proposal-share-link.factory';
+export type { ProposalShareLinkFactoryResult } from './proposal-share-link.factory';
 export { proposalPaymentInstallmentFactory } from './proposal-payment-installment.factory';
 export type { ProposalPaymentInstallmentFactoryResult } from './proposal-payment-installment.factory';
 export { engagementFactory } from './engagement.factory';
