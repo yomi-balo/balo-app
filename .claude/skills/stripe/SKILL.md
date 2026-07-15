@@ -20,10 +20,11 @@ description: >
 
 Stripe is Balo's **sole processor for charging clients** (ADR-1041). It powers the
 prepaid AUD credit wallet (ADR-1040). This module is the **thin, shared provider layer**
-(BAL-382) that the credit lanes call — it owns the *mechanism*, never the *business logic
-of when to charge*.
+(BAL-382) that the credit lanes call — it owns the _mechanism_, never the _business logic
+of when to charge_.
 
 It handles:
+
 - **Client wiring** — keys + env topology per ADR-1026 (dev/staging/prod, test-mode below prod)
 - **Mandate ops** — create/retrieve Customer, attach PaymentMethod, capture reusable mandate via `off_session` SetupIntent; expose store/reuse of `stripe_customer_id` + `stripe_payment_method_id` + mandate ref on the wallet
 - **Charge ops (on-session)** — purchase/top-up charge; local-currency presentment → AUD credit amount + captured `charged_currency / charged_amount_minor / fx_rate`
@@ -44,7 +45,7 @@ session consume & overdraft settlement, BAL-379 auto-top-up, BAL-383 promo-conti
 
 ## Hard Invariants (do not violate)
 
-1. **This layer never decides *when* to charge.** It exposes primitives; the consumer lanes call them. No wallet-balance logic, no dunning schedule, no top-up thresholds here.
+1. **This layer never decides _when_ to charge.** It exposes primitives; the consumer lanes call them. No wallet-balance logic, no dunning schedule, no top-up thresholds here.
 2. **Every money-moving call is idempotent.** BullMQ retries must not double-charge (Stripe idempotency key) or double-apply (state-derived ledger key). See Idempotency below.
 3. **Every ledger money-entry carries its Stripe reference** (`payment_intent_id` + `charge_id` + `balance_transaction_id`). Reconciliation depends on it.
 4. **Ledger effect + `audit_events` write in the same `db.transaction`** (ADR-1030). Webhook processing is no exception.
@@ -91,11 +92,12 @@ import Stripe from 'stripe';
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-xx-xx', // pin explicitly — do not float with the SDK default
   typescript: true,
-  maxNetworkRetries: 2,     // Stripe-side retries are idempotency-safe
+  maxNetworkRetries: 2, // Stripe-side retries are idempotency-safe
 });
 ```
 
 **Environment variables (per ADR-1026 topology — test-mode keys below prod):**
+
 ```
 STRIPE_SECRET_KEY=            # sk_test_… in dev/staging, sk_live_… in prod
 STRIPE_PUBLISHABLE_KEY=       # pk_test_… / pk_live_…
@@ -119,11 +121,11 @@ endpoint has a distinct signing secret. PR-preview envs point at the test-mode a
 
 // Idempotency ledger for webhook events — append-only, event-id keyed
 export const stripeWebhookEvents = pgTable('stripe_webhook_events', {
-  eventId: text('event_id').primaryKey(),        // Stripe event.id
+  eventId: text('event_id').primaryKey(), // Stripe event.id
   type: text('type').notNull(),
   receivedAt: timestamp('received_at').notNull().defaultNow(),
-  processedAt: timestamp('processed_at'),         // null until effect applied
-  payloadHash: text('payload_hash'),              // optional integrity check
+  processedAt: timestamp('processed_at'), // null until effect applied
+  payloadHash: text('payload_hash'), // optional integrity check
 });
 
 // Reconciliation reference carried on every money-moving ledger entry (BAL-376 ledger)
@@ -152,7 +154,7 @@ const customer = wallet.stripeCustomerId
 // 2. SetupIntent for a REUSABLE off-session mandate
 const setupIntent = await stripe.setupIntents.create({
   customer: customer.id,
-  usage: 'off_session',                 // critical — enables later off-session charges
+  usage: 'off_session', // critical — enables later off-session charges
   payment_method_types: ['card'],
   metadata: { walletId: wallet.id },
 });
@@ -172,13 +174,13 @@ const setupIntent = await stripe.setupIntents.create({
 ```typescript
 const pi = await stripe.paymentIntents.create(
   {
-    amount: presentmentAmountMinor,     // minor units in the client's currency
-    currency: presentmentCurrency,      // e.g. 'usd'
+    amount: presentmentAmountMinor, // minor units in the client's currency
+    currency: presentmentCurrency, // e.g. 'usd'
     customer: wallet.stripeCustomerId!,
-    setup_future_usage: 'off_session',  // also lands a reusable mandate on first buy
+    setup_future_usage: 'off_session', // also lands a reusable mandate on first buy
     metadata: { walletId: wallet.id, purpose: 'topup', ledgerKey },
   },
-  { idempotencyKey: ledgerKey },        // stable business key — see Idempotency
+  { idempotencyKey: ledgerKey } // stable business key — see Idempotency
 );
 // frontend confirms → webhook payment_intent.succeeded → capture settlement (below)
 ```
@@ -203,14 +205,15 @@ const bt = charge.balance_transaction as Stripe.BalanceTransaction;
 try {
   const pi = await stripe.paymentIntents.create(
     {
-      amount, currency,
+      amount,
+      currency,
       customer: wallet.stripeCustomerId!,
       payment_method: wallet.stripePaymentMethodId!,
       off_session: true,
       confirm: true,
       metadata: { walletId: wallet.id, purpose, ledgerKey },
     },
-    { idempotencyKey: ledgerKey },
+    { idempotencyKey: ledgerKey }
   );
   // success arrives via webhook — do NOT apply the ledger effect from this return value
 } catch (err) {
@@ -234,7 +237,7 @@ in **`requires_payment_method`** (not `requires_action`). You cannot authenticat
 on-session: re-confirm the **same** PaymentIntent with `off_session: false`, which moves
 it to `requires_action`, then hand the `client_secret` to the frontend to complete 3DS.
 This layer's job is only to detect the condition and surface `{ requiresAction,
-paymentIntentId, clientSecret }` — the *when/how to re-prompt* is the consumer lane's
+paymentIntentId, clientSecret }` — the _when/how to re-prompt_ is the consumer lane's
 (BAL-378 settlement / BAL-379 auto-top-up). Ref: docs.stripe.com/payments/payment-intents
 and the SCA off-session guide.
 
@@ -273,8 +276,9 @@ app.post('/webhooks/stripe', { config: { rawBody: true } }, async (req, reply) =
   if (inserted.length === 0) return reply.code(200).send({ received: true }); // already processed
 
   await db.transaction(async (tx) => {
-    await dispatchLedgerEffect(tx, event);            // + audit_events in the SAME txn (ADR-1030)
-    await tx.update(stripeWebhookEvents)
+    await dispatchLedgerEffect(tx, event); // + audit_events in the SAME txn (ADR-1030)
+    await tx
+      .update(stripeWebhookEvents)
       .set({ processedAt: new Date() })
       .where(eq(stripeWebhookEvents.eventId, event.id));
   });
@@ -285,13 +289,13 @@ app.post('/webhooks/stripe', { config: { rawBody: true } }, async (req, reply) =
 
 ### Events to handle (v1)
 
-| Event | Effect |
-|-------|--------|
-| `payment_intent.succeeded` | Credit AUD to wallet; capture settlement fields; write reconciliation refs |
-| `payment_intent.payment_failed` | Mark attempt failed; hand to consumer lane's dunning path (no ledger credit) |
-| `setup_intent.succeeded` | Store customer/PM/mandate ref; set `mandateStatus = active` |
-| `setup_intent.setup_failed` | Set `mandateStatus = failed`; surface to consumer lane |
-| `charge.dispute.created` | **Recognise + log** (minimum): flag wallet, write audit event, alert admin. No auto-clawback in v1 |
+| Event                           | Effect                                                                                             |
+| ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `payment_intent.succeeded`      | Credit AUD to wallet; capture settlement fields; write reconciliation refs                         |
+| `payment_intent.payment_failed` | Mark attempt failed; hand to consumer lane's dunning path (no ledger credit)                       |
+| `setup_intent.succeeded`        | Store customer/PM/mandate ref; set `mandateStatus = active`                                        |
+| `setup_intent.setup_failed`     | Set `mandateStatus = failed`; surface to consumer lane                                             |
+| `charge.dispute.created`        | **Recognise + log** (minimum): flag wallet, write audit event, alert admin. No auto-clawback in v1 |
 
 Keep the switch exhaustive-with-default: unknown event types are ack'd 200 and logged,
 never 500'd (Stripe retries on non-2xx and will flood the endpoint).
@@ -319,16 +323,16 @@ don't hardcode here. Revisit rule tuning post-launch once real charge volume exi
 
 Both are required — they protect different failure modes:
 
-1. **Stripe idempotency key** on `create()` — a stable *business* key (e.g.
+1. **Stripe idempotency key** on `create()` — a stable _business_ key (e.g.
    `topup:{walletId}:{requestId}` or `settlement:{sessionId}`). BullMQ retries reuse the
    same key, so Stripe returns the original PaymentIntent instead of creating a second charge.
 2. **State-derived ledger key** — the webhook's `event.id` gate (above) plus a
-   deterministic ledger-entry key, so even a Stripe event *replay* can't double-apply the
+   deterministic ledger-entry key, so even a Stripe event _replay_ can't double-apply the
    ledger effect. `ON CONFLICT DO NOTHING` on the ledger key is the belt to the event-id
    suspenders.
 
 Never derive the idempotency key from a timestamp or random value — it must be stable
-across retries of the *same* logical operation.
+across retries of the _same_ logical operation.
 
 ---
 
@@ -366,24 +370,24 @@ across retries of the *same* logical operation.
 
 **Live authority: the official `stripe-best-practices` skill** (from the Stripe agent
 plugin, `stripe@claude-plugins-official`). It auto-updates and is the source of truth for
-*current* Stripe API detail — API selection, payments, webhooks, security, and migrating
+_current_ Stripe API detail — API selection, payments, webhooks, security, and migrating
 off deprecated APIs. Consult it (and its `references/*.md`) for field-level specifics
 rather than pasting from memory. The doc URLs below are the fallback when the skill isn't
 installed:
 
-| Flow | Official page |
-|------|---------------|
-| SetupIntent `usage: 'off_session'` mandate | docs.stripe.com/payments/setup-intents |
-| Save + reuse a payment method | docs.stripe.com/payments/save-and-reuse |
-| `setup_future_usage` on first charge | docs.stripe.com/payments/payment-intents |
-| Off-session charge + SCA failure/recovery | docs.stripe.com/payments/save-during-payment (+ SCA off-session support article) |
-| Webhook signatures (`constructEvent`) | docs.stripe.com/webhooks + docs.stripe.com/webhooks/signatures |
-| Idempotent requests | docs.stripe.com/api/idempotent_requests |
-| Stripe CLI (listen/trigger) | docs.stripe.com/stripe-cli |
+| Flow                                       | Official page                                                                    |
+| ------------------------------------------ | -------------------------------------------------------------------------------- |
+| SetupIntent `usage: 'off_session'` mandate | docs.stripe.com/payments/setup-intents                                           |
+| Save + reuse a payment method              | docs.stripe.com/payments/save-and-reuse                                          |
+| `setup_future_usage` on first charge       | docs.stripe.com/payments/payment-intents                                         |
+| Off-session charge + SCA failure/recovery  | docs.stripe.com/payments/save-during-payment (+ SCA off-session support article) |
+| Webhook signatures (`constructEvent`)      | docs.stripe.com/webhooks + docs.stripe.com/webhooks/signatures                   |
+| Idempotent requests                        | docs.stripe.com/api/idempotent_requests                                          |
+| Stripe CLI (listen/trigger)                | docs.stripe.com/stripe-cli                                                       |
 
 **This skill overrides the official Stripe skill on Balo-specific choices.** The two are
-complementary — the Stripe skill is the *generic* current-best-practice layer; this file is
-the *Balo* layer (ADR invariants, fee-concealment, audit/ledger, AUD-minor-units,
+complementary — the Stripe skill is the _generic_ current-best-practice layer; this file is
+the _Balo_ layer (ADR invariants, fee-concealment, audit/ledger, AUD-minor-units,
 provider-vs-consumer split). Where they conflict, this file wins. The one that will
 actually bite:
 
@@ -393,10 +397,11 @@ actually bite:
   the official skill onto that surface.
 
 **What to pin here vs. let the Stripe skill supply:**
-- **Pin (in this file):** the flow *skeletons* adapted to the Balo stack, the Balo-specific glue (ledger reconciliation refs, AUD-minor-units, ADR-1030 same-transaction rule), and the non-obvious traps — SCA recovery status, Fastify raw body, two-key idempotency, apiVersion pinning, Customer-not-Accounts-v2. These are where CC-from-memory goes wrong, and they're stable.
+
+- **Pin (in this file):** the flow _skeletons_ adapted to the Balo stack, the Balo-specific glue (ledger reconciliation refs, AUD-minor-units, ADR-1030 same-transaction rule), and the non-obvious traps — SCA recovery status, Fastify raw body, two-key idempotency, apiVersion pinning, Customer-not-Accounts-v2. These are where CC-from-memory goes wrong, and they're stable.
 - **Let the Stripe skill supply:** exact current field names for the pinned `apiVersion`, precise webhook payload shapes, current test-card matrix, any param renames. These change often enough that a copied snippet rots; the installed skill (or the doc links above) is the source of truth at implement time.
 
-Rule of thumb: this skill encodes *what's specific to Balo and what's easy to get wrong*; the official Stripe skill stays the authority for *what's current* — except where Balo has explicitly chosen otherwise.
+Rule of thumb: this skill encodes _what's specific to Balo and what's easy to get wrong_; the official Stripe skill stays the authority for _what's current_ — except where Balo has explicitly chosen otherwise.
 
 ---
 
@@ -405,10 +410,10 @@ Rule of thumb: this skill encodes *what's specific to Balo and what's easy to ge
 If this grows, mirror the cronofy layout — move deep detail into `references/` and keep
 this file as the index:
 
-| Task | Reference File |
-|------|---------------|
-| Mandate capture — SetupIntent + storage | `references/mandate.md` |
-| On/off-session charges + fx settlement capture | `references/charges.md` |
-| Webhook handler — raw body, signature, dispatch | `references/webhooks.md` |
-| Idempotency keys — Stripe + ledger | `references/idempotency.md` |
-| Errors — SCA recovery, declines, dispute handling | `references/errors.md` |
+| Task                                              | Reference File              |
+| ------------------------------------------------- | --------------------------- |
+| Mandate capture — SetupIntent + storage           | `references/mandate.md`     |
+| On/off-session charges + fx settlement capture    | `references/charges.md`     |
+| Webhook handler — raw body, signature, dispatch   | `references/webhooks.md`    |
+| Idempotency keys — Stripe + ledger                | `references/idempotency.md` |
+| Errors — SCA recovery, declines, dispute handling | `references/errors.md`      |
