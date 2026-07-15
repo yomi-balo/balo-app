@@ -207,3 +207,67 @@ export const partyJoinRequestStatusEnum = pgEnum('party_join_request_status', [
   'declined',
   'withdrawn',
 ]);
+
+// ── Client Credit System (BAL-376 / ADR-1040) ────────────────────────────
+//
+// All FIVE enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
+// VALUE`), so every value commits atomically with the type. Using a value as a
+// column DEFAULT (`'notify_only'`, `'active'`) or as a partial-index predicate
+// literal (`credit_holds` active-holds index) is SAFE in the SAME migration — the
+// enum-default-same-txn hazard (memory `reference_enum_default_same_tx_migration_hazard`)
+// applies ONLY to ADD-VALUE, which none of these are (plan Decision 5).
+
+/**
+ * A wallet's behaviour when its balance crosses the low-balance threshold.
+ * `auto_topup` = reload off the stored mandate; `keep_going` = allow overdraft
+ * grace, no reload; `notify_only` = neither (the safe default — a brand-new wallet
+ * has no card/mandate and therefore cannot auto-top-up).
+ */
+export const lowBalanceModeEnum = pgEnum('low_balance_mode', [
+  'auto_topup',
+  'keep_going',
+  'notify_only',
+]);
+
+/**
+ * The coarse ledger bucket. `entry_type` is the category; `reason` (below) is the
+ * granular sub-type. Both are stated explicitly by the driver — no column default.
+ */
+export const creditEntryTypeEnum = pgEnum('credit_entry_type', [
+  'purchase',
+  'consume',
+  'refund',
+  'expiry',
+  'adjustment',
+]);
+
+/**
+ * The granular ledger "why" (full set per ADR-1040, incl. promo). Maps onto
+ * `credit_entry_type` (documented in the reason→entry_type table in the plan):
+ * manual_purchase/auto_topup/overdraft_settlement → purchase; session_consume →
+ * consume; dormancy_expiry → expiry; promo/adjustment → adjustment. Only
+ * session_consume + overdraft_settlement write a member-attributed audit row.
+ */
+export const creditLedgerReasonEnum = pgEnum('credit_ledger_reason', [
+  'manual_purchase',
+  'auto_topup',
+  'overdraft_settlement',
+  'session_consume',
+  'dormancy_expiry',
+  'promo',
+  'adjustment',
+]);
+
+/**
+ * Hold (reservation) lifecycle. `active` (default) reserves available balance;
+ * `settled`/`released` are terminal. Standalone `CREATE TYPE` → the `'active'`
+ * literal is safe in the `credit_holds` partial-index predicate.
+ */
+export const creditHoldStatusEnum = pgEnum('credit_hold_status', ['active', 'settled', 'released']);
+
+/**
+ * FX display-quote currencies (presentation only). NEVER referenced by any
+ * balance/settlement path — display rates are last-write-wins per pair and never
+ * enter balance math (invariant #8).
+ */
+export const fxDisplayQuoteEnum = pgEnum('fx_display_quote', ['GBP', 'EUR', 'USD']);

@@ -16,6 +16,8 @@ export { engagementFactory } from './engagement.factory';
 export type { EngagementFactoryResult } from './engagement.factory';
 export { engagementMilestoneFactory } from './engagement-milestone.factory';
 export type { EngagementMilestoneFactoryResult } from './engagement-milestone.factory';
+export { creditWalletFactory } from './credit-wallet.factory';
+export type { CreditWalletFactoryResult } from './credit-wallet.factory';
 export type {
   SearchExpertOverrides,
   SearchExpertCompetencyInput,

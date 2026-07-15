@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   applyBaloFee,
   DEFAULT_BALO_FEE_BPS,
+  DEFAULT_OVERDRAFT_CEILING_MINOR,
+  DEFAULT_TOPUP_RELOAD_MINOR,
+  DEFAULT_TOPUP_THRESHOLD_MINOR,
   deriveTmTotalCents,
   feeBpsToPercent,
   formatFeePercent,
@@ -10,6 +13,7 @@ import {
   MIN_BALO_FEE_BPS,
   parseFeePercentToBps,
   sumEstimatedMinutes,
+  WALLET_EXPIRY_MONTHS,
 } from './index';
 
 /**
@@ -224,5 +228,23 @@ describe('parseFeePercentToBps', () => {
 
   it('rejects out-of-range percents', () => {
     expect(parseFeePercentToBps('150')).toEqual({ ok: false, reason: 'out_of_range' });
+  });
+});
+
+describe('Client Credit System platform-money constants (BAL-376)', () => {
+  it('exposes DEFAULT_OVERDRAFT_CEILING_MINOR as 15000 (AUD 150)', () => {
+    expect(DEFAULT_OVERDRAFT_CEILING_MINOR).toBe(15000);
+  });
+
+  it('exposes DEFAULT_TOPUP_THRESHOLD_MINOR as 2000 (AUD 20)', () => {
+    expect(DEFAULT_TOPUP_THRESHOLD_MINOR).toBe(2000);
+  });
+
+  it('exposes DEFAULT_TOPUP_RELOAD_MINOR as 10000 (AUD 100)', () => {
+    expect(DEFAULT_TOPUP_RELOAD_MINOR).toBe(10000);
+  });
+
+  it('exposes WALLET_EXPIRY_MONTHS as 12', () => {
+    expect(WALLET_EXPIRY_MONTHS).toBe(12);
   });
 });
