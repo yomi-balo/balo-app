@@ -12,13 +12,16 @@ describe('PROJECT_EVENTS.BILLING_REMINDER_SENT (BAL-324)', () => {
 });
 
 describe('PROJECT_SERVER_EVENTS', () => {
-  it('has the request-access-denied, server-emitted proposal, admin-fee, and PDF-download events (BAL-276 / BAL-357 / BAL-358 / BAL-385)', () => {
+  it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
       'REQUEST_ACCESS_DENIED',
       'PROJECT_PROPOSAL_SUBMITTED',
       'PROJECT_PROPOSAL_ACCEPTED',
       'ADMIN_PROJECT_FEE_OVERRIDDEN',
       'PROJECT_PROPOSAL_PDF_DOWNLOADED',
+      'PROPOSAL_SHARE_CREATED',
+      'PROPOSAL_SHARE_OPENED',
+      'PROPOSAL_SHARE_REVOKED',
     ]);
   });
 
@@ -41,5 +44,9 @@ describe('PROJECT_SERVER_EVENTS', () => {
     expect(PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_PDF_DOWNLOADED).toBe(
       'project_proposal_pdf_downloaded'
     );
+    // BAL-386: server-side proposal share create/open/revoke.
+    expect(PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_CREATED).toBe('project_proposal_share_created');
+    expect(PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_OPENED).toBe('project_proposal_share_opened');
+    expect(PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_REVOKED).toBe('project_proposal_share_revoked');
   });
 });

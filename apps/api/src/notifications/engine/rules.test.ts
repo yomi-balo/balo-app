@@ -574,6 +574,24 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-386 proposal.shared', () => {
+    it('resolves to exactly one email / email_address / proposal-shared rule (no expert notification)', () => {
+      const rules = notificationRules['proposal.shared'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(1);
+      expect(rules![0]).toMatchObject({
+        channel: 'email',
+        recipient: 'email_address',
+        template: 'proposal-shared',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      // Email ONLY to the external colleague — never in-app/SMS, never the expert.
+      expect(rules!.some((r) => r.channel !== 'email')).toBe(false);
+      expect(rules![0].condition).toBeUndefined();
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

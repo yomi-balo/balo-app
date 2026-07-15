@@ -4,6 +4,36 @@
  * migrate opportunistically.
  */
 
+// BAL-386 — a file attachment carried by a notification email. The engine resolves
+// the bytes at delivery time (the worker reads from R2 by key), keeping the BullMQ
+// payload light. `source: 'r2'` is the only backend today; the discriminant leaves
+// room for others without breaking existing carriers.
+export interface EmailAttachmentSpec {
+  source: 'r2';
+  key: string; // R2 object key, e.g. proposals/{proposalId}/client.pdf
+  filename: string; // download filename shown to the recipient
+}
+
+// BAL-386 — a client member shared a submitted proposal with an external colleague.
+// External `email_address` path (the BAL-341 / expert.referral_invited precedent):
+// there is no Balo user row to hydrate, so the address rides in the payload.
+// `correlationId` = the proposal_share_links row id (dedup + external dispatch key).
+// `recipientEmail` + `shareToken` are the deliberate PII-in-queue exception —
+// `shareToken` is the RAW ≥256-bit magic-link token and appears ONLY inside the
+// emailed URL (never stored, never logged). The attached PDF is already
+// client-priced, so the email carries NO expert-facing figures.
+export interface ProposalSharedPayload {
+  correlationId: string; // = proposal_share_links.id → BullMQ jobId dedup
+  recipientEmail: string; // external target (delivery + dedup identity)
+  shareToken: string; // raw ≥256-bit token → `${APP_URL}/shared/proposals/{shareToken}`
+  sharerName: string; // retrospective person ("Dana Okafor")
+  sharerOrgLabel: string; // client company name ("Acme Industrial")
+  proposalTitle: string; // email subject/body
+  note?: string; // optional sharer note (plain text)
+  expiresOn: string; // pre-formatted UTC date ("13 August 2026") — helpful-fact expiry
+  attachments: EmailAttachmentSpec[]; // current client PDF
+}
+
 // BAL-290 (A6.4) changes-requested loop. The CLIENT requested changes on the
 // expert's submitted proposal — targets the EXPERT (via `expertProfileId`, the
 // resolver hydrates data.expert exactly like project.proposal_accepted), carrying
