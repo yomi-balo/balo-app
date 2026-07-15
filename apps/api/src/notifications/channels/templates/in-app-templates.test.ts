@@ -396,6 +396,56 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('credit-dormancy-reminder (BAL-380)', () => {
+    it('renders the 60-day copy with the formatted balance + short date', () => {
+      const result = getInAppTemplate('credit-dormancy-reminder', {
+        window: 60,
+        balanceMinor: 34700,
+        expiresAt: '2027-07-12T00:00:00.000Z',
+      });
+      expect(result).toEqual({
+        title: 'Your balance is still here',
+        body: 'A$347.00, available until 12 Jul 2027. Any activity keeps it going.',
+        actionUrl: '/experts',
+      });
+    });
+
+    it('renders the 30-day copy with the date in the title', () => {
+      const result = getInAppTemplate('credit-dormancy-reminder', {
+        window: 30,
+        balanceMinor: 34700,
+        expiresAt: '2027-07-12T00:00:00.000Z',
+      });
+      expect(result).toEqual({
+        title: 'Your balance stays available until 12 Jul 2027',
+        body: 'A$347.00 is still here. A good time to put it to use.',
+        actionUrl: '/experts',
+      });
+    });
+
+    it('defaults to the 60-day variant and degrades a missing balance to A$0.00', () => {
+      const result = getInAppTemplate('credit-dormancy-reminder', {
+        expiresAt: '2027-07-12T00:00:00.000Z',
+      });
+      expect(result.title).toBe('Your balance is still here');
+      expect(result.body).toContain('A$0.00');
+    });
+  });
+
+  describe('credit-balance-expired (BAL-380)', () => {
+    it('renders the soft, provisional copy with no balance figure', () => {
+      const result = getInAppTemplate('credit-balance-expired', {
+        expiresAt: '2027-07-12T00:00:00.000Z',
+      });
+      expect(result).toEqual({
+        title: 'About your balance',
+        body: 'Your balance reached its expiry date. Add credit to pick back up anytime.',
+        actionUrl: '/settings/billing',
+      });
+      expect(result.body).not.toMatch(/A\$\d/);
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

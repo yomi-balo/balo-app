@@ -11,6 +11,7 @@ import {
   LedgerIdempotencyConflictError,
   type ApplyLedgerEntryInput,
 } from './credit-ledger';
+import { creditWalletsRepository } from './credit-wallets';
 import { deriveIdempotencyKey } from './_shared/credit-idempotency';
 
 /**
@@ -457,5 +458,109 @@ describe('creditLedgerRepository reads', () => {
   it('sumAmountByWallet returns 0 for a wallet with no entries', async () => {
     const { wallet } = await creditWalletFactory();
     expect(await creditLedgerRepository.sumAmountByWallet(wallet.id)).toBe(0);
+  });
+});
+
+describe('creditLedgerRepository.expireDormantBalance (BAL-380 dormancy expiry)', () => {
+  const now = new Date('2027-06-01T00:00:00.000Z');
+  const pastExpiry = new Date('2027-05-01T00:00:00.000Z');
+
+  it('expires a positive balance to 0 via one expiry entry, leaving expires_at unrolled', async () => {
+    const { wallet, companyId } = await creditWalletFactory({
+      values: { balanceMinor: 5000, expiresAt: pastExpiry },
+    });
+
+    const result = await creditLedgerRepository.expireDormantBalance({ walletId: wallet.id, now });
+
+    expect(result.outcome).toBe('expired');
+    if (result.outcome !== 'expired') throw new Error('expected expired');
+    expect(result.expiredMinor).toBe(5000);
+    expect(result.companyId).toBe(companyId);
+    expect(result.expiresAt.getTime()).toBe(pastExpiry.getTime());
+    // The posted entry is a system dormancy-expiry entry that zeroes the balance.
+    expect(result.entry.entryType).toBe('expiry');
+    expect(result.entry.reason).toBe('dormancy_expiry');
+    expect(result.entry.amountMinor).toBe(-5000);
+    expect(result.entry.balanceAfterMinor).toBe(0);
+    expect(result.entry.memberId).toBeNull();
+    expect(result.entry.idempotencyKey).toBe(`dormancy_expiry:${wallet.id}:2027-06-01`);
+
+    // Wallet cache is 0 and expires_at was NOT rolled forward (an expiry entry must not
+    // extend the wallet's own life — the `entry_type='expiry'` arm of applyLedgerEntry).
+    const after = await creditWalletsRepository.findById(wallet.id);
+    expect(after?.balanceMinor).toBe(0);
+    expect(after?.expiresAt?.getTime()).toBe(pastExpiry.getTime());
+
+    // Non-consumable: it drops out of the eligibility set even though expires_at stays <= now.
+    const expirable = await creditWalletsRepository.findExpirableWallets(now);
+    expect(expirable.map((w) => w.id)).not.toContain(wallet.id);
+  });
+
+  it('a retry is already_expired — no double debit, balance stays 0, one entry only', async () => {
+    const { wallet } = await creditWalletFactory({
+      values: { balanceMinor: 4000, expiresAt: pastExpiry },
+    });
+
+    const first = await creditLedgerRepository.expireDormantBalance({ walletId: wallet.id, now });
+    expect(first.outcome).toBe('expired');
+    if (first.outcome !== 'expired') throw new Error('expected expired');
+
+    const second = await creditLedgerRepository.expireDormantBalance({ walletId: wallet.id, now });
+    expect(second.outcome).toBe('already_expired');
+    if (second.outcome !== 'already_expired') throw new Error('expected already_expired');
+    // The SAME ledger entry is surfaced so the sweep re-publishes the notice idempotently.
+    expect(second.entry.id).toBe(first.entry.id);
+    expect(second.companyId).toBe(first.companyId);
+    expect(second.expiresAt.getTime()).toBe(pastExpiry.getTime());
+
+    // No double-debit: exactly one expiry entry (a second post would add another row and
+    // drive the balance to -4000), balance still 0. (Note: the factory seeds balanceMinor
+    // directly without a matching credit entry, so SUM(amount_minor) intentionally does NOT
+    // reconcile to the cache here — invariant #3 is asserted elsewhere with real entries.)
+    const rows = await creditLedgerRepository.listByWallet(wallet.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entryType).toBe('expiry');
+    const w = await creditWalletsRepository.findById(wallet.id);
+    expect(w?.balanceMinor).toBe(0);
+  });
+
+  it('skips not_expired when the re-read expiry is in the future (top-up race guard, D5)', async () => {
+    const { wallet } = await creditWalletFactory({
+      values: { balanceMinor: 5000, expiresAt: new Date('2027-07-01T00:00:00.000Z') },
+    });
+
+    const result = await creditLedgerRepository.expireDormantBalance({ walletId: wallet.id, now });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'not_expired' });
+    // Nothing posted; balance untouched.
+    expect(await creditLedgerRepository.listByWallet(wallet.id)).toHaveLength(0);
+    const w = await creditWalletsRepository.findById(wallet.id);
+    expect(w?.balanceMinor).toBe(5000);
+  });
+
+  it('skips not_expired when expires_at is null (never transacted)', async () => {
+    const { wallet } = await creditWalletFactory({
+      values: { balanceMinor: 5000, expiresAt: null },
+    });
+
+    const result = await creditLedgerRepository.expireDormantBalance({ walletId: wallet.id, now });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'not_expired' });
+  });
+
+  it('skips no_balance for a past-expiry wallet with no positive balance and no expiry entry', async () => {
+    const { wallet } = await creditWalletFactory({
+      values: { balanceMinor: 0, expiresAt: pastExpiry },
+    });
+
+    const result = await creditLedgerRepository.expireDormantBalance({ walletId: wallet.id, now });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'no_balance' });
+    expect(await creditLedgerRepository.listByWallet(wallet.id)).toHaveLength(0);
+  });
+
+  it('skips not_found for an unknown wallet', async () => {
+    const result = await creditLedgerRepository.expireDormantBalance({
+      walletId: '00000000-0000-0000-0000-000000000000',
+      now,
+    });
+    expect(result).toEqual({ outcome: 'skipped', reason: 'not_found' });
   });
 });

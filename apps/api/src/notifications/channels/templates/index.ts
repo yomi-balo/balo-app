@@ -40,6 +40,9 @@ import {
 } from './party-domain-join.js';
 import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
+import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
+import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
+import { formatAudMinor, formatExpiryDateLong } from './credit-format.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -686,6 +689,48 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'Finish setting up your Balo account',
+    };
+  },
+
+  // BAL-380 (ADR-1040 Lane 3) dormancy reminder — server-only, EMAIL to the company's
+  // billing admins. `window` (60|30 in the merged payload) selects the copy + subject;
+  // `balanceMinor`/`expiresAt` are formatted here for display. Warm, non-countdown. CTA
+  // points at expert search (find-an-expert / start-a-consultation both land on /experts).
+  'credit-dormancy-reminder': (data) => {
+    const window = data.window === 30 ? 30 : 60;
+    const balance = formatAudMinor(numberCount(data.balanceMinor));
+    const expiryDate = formatExpiryDateLong((data.expiresAt as string) ?? '');
+    const subject =
+      window === 30
+        ? 'A good time to put your Balo balance to use'
+        : 'Your Balo balance is here whenever you need it';
+    return {
+      component: React.createElement(CreditDormancyReminderEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        window,
+        balance,
+        expiryDate,
+        ctaUrl: `${BASE_URL}/experts`,
+        baseUrl: BASE_URL,
+      }),
+      subject,
+    };
+  },
+
+  // BAL-380 (ADR-1040 Lane 3) balance expired — server-only, EMAIL to the billing
+  // admins. Soft-toned, provisional (no balance figure — 0 post-expiry). Stable subject.
+  // "Add credit" points at the wallet/billing panel (delivered by a later credit-system
+  // lane; the canonical /settings/billing route per the billing-settings design ref).
+  'credit-balance-expired': (data) => {
+    const expiryDate = formatExpiryDateLong((data.expiresAt as string) ?? '');
+    return {
+      component: React.createElement(CreditBalanceExpiredEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expiryDate,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject: 'About your Balo balance',
     };
   },
 };

@@ -12,6 +12,7 @@ export interface NotificationRule {
     | 'email_address'
     | 'billing_creator'
     | 'party_admins'
+    | 'company_billing_admins'
     | 'owner';
   template: string;
   timing: 'immediate'; // No scheduling yet
@@ -512,4 +513,10 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+  // BAL-380 (ADR-1040 Lane 3): dormancy reminder + balance expired. Both fan out to
+  // the company's MANAGE_BILLING holders (recipient 'company_billing_admins', resolved
+  // from data.billingUserIds) via email + in-app. Warm, non-countdown copy; the
+  // template switches on payload.window (60|30). Server-only (published by the sweep).
+  'credit.dormancy_reminder': emailAndInApp('company_billing_admins', 'credit-dormancy-reminder'),
+  'credit.balance_expired': emailAndInApp('company_billing_admins', 'credit-balance-expired'),
 };

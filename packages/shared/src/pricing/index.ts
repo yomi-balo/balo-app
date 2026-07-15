@@ -151,3 +151,27 @@ export const DEFAULT_TOPUP_RELOAD_MINOR = 10000;
  * `applyLedgerEntry`.
  */
 export const WALLET_EXPIRY_MONTHS = 12;
+
+/**
+ * Rolling-expiry dormancy reminder bands, in days pre-expiry (widest → nearest). The
+ * daily dormancy sweep (BAL-380) matches a wallet's absolute `expires_at` against each
+ * band's 1-day window; the cron cadence equals the band width so every wallet crosses
+ * each band on ~one tick. Order matters only for consistent emit ordering.
+ */
+export const DORMANCY_REMINDER_WINDOWS_DAYS = [60, 30] as const;
+
+/**
+ * Indicative display-FX is hidden by consumer surfaces once the served quote is older
+ * than this (48h, in milliseconds). Presentation-only — the real AUD figure never
+ * depends on the feed (ADR-1040 invariant #8).
+ */
+export const FX_DISPLAY_STALENESS_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Pure: is a display-FX quote older than the 48h staleness threshold? The SINGLE
+ * decision function — the FX sweep uses it to emit `credit_fx_cache_stale`, and consumer
+ * surfaces (later lanes) use it to hide the indicative secondary and render AUD only.
+ */
+export function isFxRateStale(asOf: Date, now: Date): boolean {
+  return now.getTime() - asOf.getTime() > FX_DISPLAY_STALENESS_MS;
+}

@@ -275,3 +275,52 @@ describe('partyMembershipsRepository.listAdminUserIds', () => {
     expect(adminIds).toEqual([owner.id]);
   });
 });
+
+describe('partyMembershipsRepository.listBillingUserIds (BAL-380 — MANAGE_BILLING fan-out)', () => {
+  it('returns only owner/admin (MANAGE_BILLING) live company members, excluding member + soft-removed', async () => {
+    const company = await companyFactory();
+    const owner = await userFactory();
+    const adminUser = await userFactory();
+    const memberUser = await userFactory();
+    const removedAdmin = await userFactory();
+
+    await companyMemberFactory({ companyId: company.id, userId: owner.id, role: 'owner' });
+    await companyMemberFactory({ companyId: company.id, userId: adminUser.id, role: 'admin' });
+    await companyMemberFactory({
+      companyId: company.id,
+      userId: memberUser.id,
+      role: 'member',
+      joinMethod: 'domain_match',
+    });
+    await companyMemberFactory({
+      companyId: company.id,
+      userId: removedAdmin.id,
+      role: 'admin',
+      deletedAt: new Date(),
+      deletedByUserId: owner.id,
+    });
+
+    const billingIds = await partyMembershipsRepository.listBillingUserIds(company.id);
+    expect(billingIds.slice().sort()).toEqual([owner.id, adminUser.id].sort());
+    expect(billingIds).not.toContain(memberUser.id);
+    expect(billingIds).not.toContain(removedAdmin.id);
+  });
+
+  it('returns [] for a company whose only member holds the base (member) role', async () => {
+    const company = await companyFactory();
+    const memberUser = await userFactory();
+    await companyMemberFactory({
+      companyId: company.id,
+      userId: memberUser.id,
+      role: 'member',
+      joinMethod: 'domain_match',
+    });
+
+    await expect(partyMembershipsRepository.listBillingUserIds(company.id)).resolves.toEqual([]);
+  });
+
+  it('returns [] for an empty company (no members at all → dispatcher skips the fan-out)', async () => {
+    const company = await companyFactory();
+    await expect(partyMembershipsRepository.listBillingUserIds(company.id)).resolves.toEqual([]);
+  });
+});
