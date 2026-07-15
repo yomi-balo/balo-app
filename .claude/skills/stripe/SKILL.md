@@ -362,10 +362,14 @@ across retries of the *same* logical operation.
 
 ---
 
-## Canonical references (official docs)
+## Canonical references (official Stripe skill + docs)
 
-Pin the **shape** from these; fetch **field-level current detail** from the live page at
-implement time (the API drifts — don't let this file try to mirror the reference):
+**Live authority: the official `stripe-best-practices` skill** (from the Stripe agent
+plugin, `stripe@claude-plugins-official`). It auto-updates and is the source of truth for
+*current* Stripe API detail — API selection, payments, webhooks, security, and migrating
+off deprecated APIs. Consult it (and its `references/*.md`) for field-level specifics
+rather than pasting from memory. The doc URLs below are the fallback when the skill isn't
+installed:
 
 | Flow | Official page |
 |------|---------------|
@@ -377,11 +381,22 @@ implement time (the API drifts — don't let this file try to mirror the referen
 | Idempotent requests | docs.stripe.com/api/idempotent_requests |
 | Stripe CLI (listen/trigger) | docs.stripe.com/stripe-cli |
 
-**What to pin here vs. let CC derive:**
-- **Pin (in this file):** the flow *skeletons* adapted to the Balo stack, the Balo-specific glue (ledger reconciliation refs, AUD-minor-units, ADR-1030 same-transaction rule), and the non-obvious traps — SCA recovery status, Fastify raw body, two-key idempotency, apiVersion pinning, Customer-not-Accounts-v2. These are where CC-from-memory goes wrong, and they're stable.
-- **Let CC fetch live:** exact current field names for the pinned `apiVersion`, precise webhook payload shapes, current test-card matrix, any param renames. These change often enough that a copied snippet rots; the doc links above are the source of truth at implement time.
+**This skill overrides the official Stripe skill on Balo-specific choices.** The two are
+complementary — the Stripe skill is the *generic* current-best-practice layer; this file is
+the *Balo* layer (ADR invariants, fee-concealment, audit/ledger, AUD-minor-units,
+provider-vs-consumer split). Where they conflict, this file wins. The one that will
+actually bite:
 
-Rule of thumb: this skill encodes *what's specific to Balo and what's easy to get wrong*; the docs stay the authority for *what's current*.
+- **Accounts v2 / `customer_account`** — the official skill covers Connect Accounts v2 and
+  will nudge toward `customer_account`. Balo has **not** opted in: use the classic
+  `Customer` API and the `customer` param (see Key Constraints #5, ADR-1041). Do not follow
+  the official skill onto that surface.
+
+**What to pin here vs. let the Stripe skill supply:**
+- **Pin (in this file):** the flow *skeletons* adapted to the Balo stack, the Balo-specific glue (ledger reconciliation refs, AUD-minor-units, ADR-1030 same-transaction rule), and the non-obvious traps — SCA recovery status, Fastify raw body, two-key idempotency, apiVersion pinning, Customer-not-Accounts-v2. These are where CC-from-memory goes wrong, and they're stable.
+- **Let the Stripe skill supply:** exact current field names for the pinned `apiVersion`, precise webhook payload shapes, current test-card matrix, any param renames. These change often enough that a copied snippet rots; the installed skill (or the doc links above) is the source of truth at implement time.
+
+Rule of thumb: this skill encodes *what's specific to Balo and what's easy to get wrong*; the official Stripe skill stays the authority for *what's current* — except where Balo has explicitly chosen otherwise.
 
 ---
 
