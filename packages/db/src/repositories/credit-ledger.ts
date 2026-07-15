@@ -11,6 +11,7 @@ import {
 } from '../schema';
 import { acquireWalletLock } from './_shared/wallet-lock';
 import { recordCreditAudit, type CreditAuditAction } from './_shared/credit-audit';
+import { balanceContribution } from './_shared/credit-views';
 
 /** Active transaction handle (matches `advanceEngagementStatus` in engagements.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -130,9 +131,19 @@ export async function applyLedgerEntry(
     return { entry: existing, wallet, deduped: true };
   }
 
-  // 3. Read the wallet + compute the new balance (no policy gate).
+  // 3. Read the wallet + compute the new balance (no policy gate). Balance math routes
+  //    through `balanceContribution` so the "only amount_minor moves the balance"
+  //    invariant (#8) is enforced BY CONSTRUCTION in the production path — charged_*/
+  //    fx_rate are structurally excluded, and the helper's unit test guards this code.
   const wallet = await readWalletOrThrow(tx, input.walletId);
-  const balanceAfter = wallet.balanceMinor + input.amountMinor;
+  const balanceAfter =
+    wallet.balanceMinor +
+    balanceContribution({
+      amountMinor: input.amountMinor,
+      chargedCurrency: input.chargedCurrency ?? null,
+      chargedAmountMinor: input.chargedAmountMinor ?? null,
+      fxRate: input.fxRate ?? null,
+    });
 
   // 4. Insert the ledger row (UNIQUE + onConflictDoNothing is the backstop).
   const [inserted] = await tx
