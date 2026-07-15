@@ -7,11 +7,14 @@ import { formatWholeCurrency } from '@/lib/utils/currency';
 import { ProposalDoc } from './proposal-doc';
 import { PayoutAssuranceNote } from './payout-assurance-note';
 import { BackChannel } from './back-channel';
+import { ProposalPdfDownloadLink } from './proposal-pdf-download-link';
 import type { AdminProposalPricing, ProposalReviewDoc } from './proposal-review-types';
 
 interface SubmittedViewProps {
   /** Whose waiting framing to show — the submitting expert, or an observing admin. */
   lens: 'expert' | 'admin';
+  /** The request id — the admin download link targets `/projects/{id}/proposal/…/pdf`. */
+  requestId: string;
   doc: ProposalReviewDoc;
   /** The client (display name) reviewing the proposal. */
   clientName: string;
@@ -140,11 +143,17 @@ function AdminPricingCard({
  * only surface where the Balo fee is exposed — BAL-357).
  */
 export function SubmittedView(props: Readonly<SubmittedViewProps>): React.JSX.Element {
-  const { lens, doc, clientName } = props;
+  const { lens, requestId, doc, clientName } = props;
   const { icon: Icon, headline, sub } = waitingCopy(props);
 
   return (
     <div className="flex flex-col gap-4">
+      {lens === 'admin' && (
+        <div className="flex justify-end">
+          <ProposalPdfDownloadLink requestId={requestId} relationshipId={doc.relationshipId} />
+        </div>
+      )}
+
       <div className="border-warning/30 bg-warning/10 flex items-start gap-3 rounded-2xl border p-4">
         <span className="bg-warning/15 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl">
           <Icon className="text-warning h-[18px] w-[18px]" aria-hidden="true" />

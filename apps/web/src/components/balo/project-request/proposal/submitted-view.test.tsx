@@ -33,7 +33,15 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
 
 describe('SubmittedView', () => {
   it('frames the wait for the expert lens and shows the back-channel', () => {
-    render(<SubmittedView lens="expert" doc={doc()} clientName="Dana" otherProposalCount={2} />);
+    render(
+      <SubmittedView
+        lens="expert"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={2}
+      />
+    );
     expect(screen.getByText('Proposal sent to Dana')).toBeInTheDocument();
     expect(screen.getByText(/reviewing it alongside 2 others/)).toBeInTheDocument();
     // Expert lens gets the demoted back-channel.
@@ -41,24 +49,56 @@ describe('SubmittedView', () => {
   });
 
   it('omits the "alongside" clause when no other proposals exist (expert lens)', () => {
-    render(<SubmittedView lens="expert" doc={doc()} clientName="Dana" otherProposalCount={0} />);
+    render(
+      <SubmittedView
+        lens="expert"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
     expect(screen.getByText(/reviewing it\./)).toBeInTheDocument();
   });
 
   it('uses singular "other" for exactly one other proposal (expert lens)', () => {
-    render(<SubmittedView lens="expert" doc={doc()} clientName="Dana" otherProposalCount={1} />);
+    render(
+      <SubmittedView
+        lens="expert"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={1}
+      />
+    );
     expect(screen.getByText(/reviewing it alongside 1 other\./)).toBeInTheDocument();
   });
 
   it('frames the wait for the admin lens and hides the back-channel', () => {
-    render(<SubmittedView lens="admin" doc={doc()} clientName="Dana" otherProposalCount={1} />);
+    render(
+      <SubmittedView
+        lens="admin"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={1}
+      />
+    );
     // otherProposalCount + 1 total submitted.
     expect(screen.getByText('2 proposals submitted — client reviewing')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Message Dana/ })).not.toBeInTheDocument();
   });
 
   it('renders the read-only proposal document', () => {
-    render(<SubmittedView lens="expert" doc={doc()} clientName="Dana" otherProposalCount={0} />);
+    render(
+      <SubmittedView
+        lens="expert"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
     expect(screen.getByText('Overview body text')).toBeInTheDocument();
   });
 });
@@ -91,6 +131,7 @@ describe('SubmittedView — admin pricing breakdown (BAL-357)', () => {
     render(
       <SubmittedView
         lens="admin"
+        requestId="req-1"
         doc={doc({ adminPricing: adminPricing() })}
         clientName="Dana"
         otherProposalCount={0}
@@ -119,6 +160,7 @@ describe('SubmittedView — admin pricing breakdown (BAL-357)', () => {
     render(
       <SubmittedView
         lens="admin"
+        requestId="req-1"
         doc={doc({
           pricingMethod: 'tm',
           adminPricing: adminPricing({
@@ -145,6 +187,7 @@ describe('SubmittedView — admin pricing breakdown (BAL-357)', () => {
     render(
       <SubmittedView
         lens="expert"
+        requestId="req-1"
         doc={doc({ adminPricing: adminPricing() })}
         clientName="Dana"
         otherProposalCount={0}
@@ -154,7 +197,15 @@ describe('SubmittedView — admin pricing breakdown (BAL-357)', () => {
   });
 
   it('omits the pricing breakdown for the admin lens when adminPricing is undefined', () => {
-    render(<SubmittedView lens="admin" doc={doc()} clientName="Dana" otherProposalCount={0} />);
+    render(
+      <SubmittedView
+        lens="admin"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
     expect(screen.queryByText('Pricing breakdown')).not.toBeInTheDocument();
   });
 });

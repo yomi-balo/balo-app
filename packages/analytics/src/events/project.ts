@@ -263,6 +263,13 @@ export const PROJECT_SERVER_EVENTS = {
   // SERVER-SIDE only — the fee is an admin-audience figure that must never transit
   // the browser (same audience-boundary rationale as the proposal events above).
   ADMIN_PROJECT_FEE_OVERRIDDEN: 'admin_project_fee_overridden',
+  // BAL-385: a client or admin downloaded the Balo-branded, client-facing proposal
+  // PDF. Emitted SERVER-SIDE from the download Route Handler — proposal telemetry
+  // stays off the browser (same audience-boundary rationale as the events above).
+  // `audience` records WHO downloaded (client|admin); the PDF's serializer audience
+  // is ALWAYS `client`, so the marked-up client figures are the only money it ever
+  // carries — the fee/margin never reach this surface.
+  PROJECT_PROPOSAL_PDF_DOWNLOADED: 'project_proposal_pdf_downloaded',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -315,6 +322,18 @@ export interface ProjectServerEventMap {
     project_request_id: string;
     previous_bps: number;
     new_bps: number;
+    distinct_id: string;
+  };
+  // BAL-385: emitted server-side from the client-facing proposal PDF Route Handler
+  // on a successful download (cache hit or miss). `audience` is the DOWNLOADER's
+  // lens (client|admin); the serializer that builds the PDF always runs with the
+  // `client` audience, so no fee/margin/expert-quote figure is ever in the document.
+  // `version` is the proposal version stamped on the PDF; `distinct_id` is the
+  // downloader's user id.
+  [PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_PDF_DOWNLOADED]: {
+    proposal_id: string;
+    version: number;
+    audience: 'client' | 'admin';
     distinct_id: string;
   };
 }
