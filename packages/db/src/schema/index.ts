@@ -31,3 +31,4 @@ export * from './credit-wallets';
 export * from './credit-ledger';
 export * from './credit-holds';
 export * from './fx-display-rates';
+export * from './proposal-share-links';

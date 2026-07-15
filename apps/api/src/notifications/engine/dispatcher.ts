@@ -1,4 +1,5 @@
 import { createLogger } from '@balo/shared/logging';
+import type { EmailAttachmentSpec } from '@balo/shared/notifications';
 import { getQueue } from '../../lib/queue.js';
 import type { NotificationChannel, NotificationRule, RuleContext } from './rules.js';
 
@@ -23,6 +24,25 @@ const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
 ]);
 
 /**
+ * BAL-386: narrow an untyped `payload.attachments` value to a well-formed
+ * `EmailAttachmentSpec[]`. Returns `undefined` when absent/empty so the
+ * non-attachment path is byte-for-byte unchanged. Non-conforming entries are
+ * filtered out defensively (the publish-route Zod schema is the real gate).
+ */
+function extractAttachments(value: unknown): EmailAttachmentSpec[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const specs = value.filter(
+    (item): item is EmailAttachmentSpec =>
+      typeof item === 'object' &&
+      item !== null &&
+      (item as { source?: unknown }).source === 'r2' &&
+      typeof (item as { key?: unknown }).key === 'string' &&
+      typeof (item as { filename?: unknown }).filename === 'string'
+  );
+  return specs.length > 0 ? specs : undefined;
+}
+
+/**
  * Build the delivery payload + job options and enqueue one channel job for a
  * single resolved recipient. Shared by both the single-recipient path and the
  * fan-out branch so dedup keys, retry policy, and logging stay identical.
@@ -40,6 +60,9 @@ async function enqueueDelivery(
     event: context.event,
     data: context.data,
     payload: context.payload,
+    // BAL-386: forward any email attachments carried on the event payload so the
+    // email adapter can resolve their bytes (from R2) at send time.
+    attachments: extractAttachments(context.payload.attachments),
   };
 
   const queueName = CHANNEL_QUEUES[rule.channel];

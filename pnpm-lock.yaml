@@ -49,6 +49,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1009.0
+        version: 3.1009.0
       '@axiomhq/pino':
         specifier: ^1.0.0
         version: 1.3.1
@@ -370,6 +373,9 @@ importers:
 
   packages/analytics:
     dependencies:
+      '@balo/shared':
+        specifier: workspace:*
+        version: link:../shared
       posthog-js:
         specifier: ^1.335.3
         version: 1.335.3

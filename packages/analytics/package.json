@@ -11,6 +11,7 @@
     "./events": "./src/events/index.ts"
   },
   "dependencies": {
+    "@balo/shared": "workspace:*",
     "posthog-js": "^1.335.3",
     "posthog-node": "^4.0.0",
     "server-only": "^0.0.1"
