@@ -203,6 +203,18 @@ describe('SharedProposalPage', () => {
     expect(mockTrack).not.toHaveBeenCalled();
   });
 
+  it('does NOT stamp access or emit the opened event when a post-guard lookup is anomalous', async () => {
+    // The proposal is renderable, but a data anomaly makes the relationship lookup
+    // return undefined → LinkNotActive. Access must NOT be stamped and the opened
+    // event must NOT fire, so a later real open still reports first_open truthfully.
+    primeHappyPath();
+    mockFindRelationship.mockResolvedValue(undefined);
+    await renderPage();
+    expect(screen.getByText("This link isn't active")).toBeInTheDocument();
+    expect(mockRecordAccess).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+  });
+
   it('rate-limits to the inactive card WITHOUT looking up the token', async () => {
     primeHappyPath();
     mockCheckLimit.mockReturnValue(false);

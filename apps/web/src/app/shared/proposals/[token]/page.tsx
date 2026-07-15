@@ -98,14 +98,6 @@ export default async function SharedProposalPage({
     return <LinkNotActive />;
   }
 
-  // Stamp the access ONLY once we know the proposal is renderable — otherwise a
-  // draft/absent proposal would consume `firstOpen` and inflate `access_count` while
-  // PROPOSAL_SHARE_OPENED never fires, so a later real open falsely reports
-  // first_open:false. Compute first-open BEFORE stamping (access_count === 0
-  // pre-increment).
-  const firstOpen = row.accessCount === 0;
-  await proposalShareLinksRepository.recordAccess(row.id);
-
   const relationshipRow = await requestExpertRelationshipsRepository.findById(row.relationshipId);
   if (relationshipRow === undefined) {
     return <LinkNotActive />;
@@ -120,6 +112,15 @@ export default async function SharedProposalPage({
   if (relationship === undefined) {
     return <LinkNotActive />;
   }
+
+  // Stamp the access ONLY after every render-required lookup has resolved — all the
+  // LinkNotActive bail-outs above are now behind us, so a data anomaly on an
+  // otherwise-renderable proposal can no longer inflate `access_count` / consume
+  // `firstOpen` while PROPOSAL_SHARE_OPENED never fires (which would make a later real
+  // open falsely report first_open:false). Compute first-open BEFORE stamping
+  // (access_count === 0 pre-increment); the emit below always pairs with this stamp.
+  const firstOpen = row.accessCount === 0;
+  await proposalShareLinksRepository.recordAccess(row.id);
 
   const [milestones, installments, documents, sharer, expertOrgName] = await Promise.all([
     proposalMilestonesRepository.listByProposal(proposal.id),
