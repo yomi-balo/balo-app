@@ -14,8 +14,7 @@
     "./pricing": "./src/pricing/index.ts",
     "./domains": "./src/domains/index.ts",
     "./parties": "./src/parties/index.ts",
-    "./authz": "./src/authz/index.ts",
-    "./redaction": "./src/redaction/index.ts"
+    "./authz": "./src/authz/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

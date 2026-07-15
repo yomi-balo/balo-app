@@ -40,7 +40,6 @@ import {
 } from './party-domain-join.js';
 import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
-import { ProposalSharedEmail } from './proposal-shared.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -687,26 +686,6 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'Finish setting up your Balo account',
-    };
-  },
-
-  // BAL-386 — a client member shared a submitted proposal with an EXTERNAL colleague
-  // (external `email_address` path — no user row to hydrate). The magic-link CTA is
-  // the ONLY link; the raw token is never rendered as copyable text. The subject
-  // names the sharer (retrospective), sanitized against header injection.
-  'proposal-shared': (data) => {
-    const sharerName = (data.sharerName as string) ?? 'A colleague';
-    const shareToken = (data.shareToken as string) ?? '';
-    return {
-      component: React.createElement(ProposalSharedEmail, {
-        sharerName,
-        sharerOrgLabel: (data.sharerOrgLabel as string) ?? 'their team',
-        proposalTitle: (data.proposalTitle as string) ?? 'a proposal',
-        note: data.note as string | undefined,
-        expiresOn: (data.expiresOn as string) ?? '',
-        viewUrl: `${BASE_URL}/shared/proposals/${shareToken}`,
-      }),
-      subject: `${sanitizeSubjectTitle(sharerName)} shared a proposal with you`,
     };
   },
 };

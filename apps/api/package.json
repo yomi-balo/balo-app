@@ -14,7 +14,6 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1009.0",
     "@axiomhq/pino": "^1.0.0",
     "@balo/analytics": "workspace:*",
     "@balo/db": "workspace:*",

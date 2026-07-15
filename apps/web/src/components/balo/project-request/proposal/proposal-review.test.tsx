@@ -23,12 +23,6 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/accept-proposal', () =>
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-changes', () => ({
   requestProposalChangesAction: vi.fn(),
 }));
-// The share menu + shared-with card import BAL-386 server actions (which pull
-// @balo/db + server-only) — stub the module so the review surface mounts client-side.
-vi.mock('@/app/(dashboard)/projects/[requestId]/proposal/[relationshipId]/_actions/share', () => ({
-  shareProposalWithColleague: vi.fn(),
-  revokeProposalShareLink: vi.fn(),
-}));
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
@@ -134,14 +128,14 @@ describe('ProposalReview', () => {
     expect(screen.queryByRole('button', { name: 'Accept this proposal' })).not.toBeInTheDocument();
   });
 
-  it('hides the Share menu while changes are requested (the doc it would hand over is hidden)', () => {
+  it('hides the Download PDF link while changes are requested (the doc it would hand over is hidden)', () => {
     renderReview([doc({ status: 'changes_requested' })]);
-    expect(screen.queryByRole('button', { name: /Share/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Download PDF/ })).not.toBeInTheDocument();
   });
 
-  it('shows the Share menu alongside the visible doc (submitted)', () => {
+  it('shows the Download PDF link alongside the visible doc (submitted)', () => {
     renderReview([doc()]);
-    expect(screen.getByRole('button', { name: /Share/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Download PDF/ })).toBeInTheDocument();
   });
 
   it('switches the active doc when a switcher chip is clicked', async () => {

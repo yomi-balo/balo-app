@@ -9,12 +9,10 @@ import {
   proposalPaymentInstallmentsRepository,
   proposalDocumentsRepository,
   proposalChangeRequestsRepository,
-  proposalShareLinksRepository,
   type Proposal,
   type ProposalMilestone,
   type ProposalPaymentInstallment,
   type ProposalDocument,
-  type ProposalShareLink,
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import { log } from '@/lib/logging';
@@ -38,7 +36,6 @@ import {
   type ProposalAudience,
 } from '@/lib/project-request/proposal-audience-view';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
-import type { SharedLinkView } from '@/lib/project-request/proposal/share-view-types';
 
 interface ProposalComposerPageProps {
   params: Promise<{ requestId: string; relationshipId: string }>;
@@ -70,17 +67,6 @@ export const metadata: Metadata = {
 function firstNameOf(firstName: string | null, fallback: string): string {
   const trimmed = (firstName ?? '').trim();
   return trimmed.length > 0 ? trimmed : fallback;
-}
-
-/** Map a share-link row to the client-safe view (BAL-386) — token/hash never cross. */
-function toSharedLinkView(link: ProposalShareLink): SharedLinkView {
-  return {
-    id: link.id,
-    recipientEmail: link.recipientEmail,
-    sharedOnIso: link.createdAt.toISOString(),
-    lastAccessedIso: link.lastAccessedAt === null ? null : link.lastAccessedAt.toISOString(),
-    expiresAtIso: link.expiresAt.toISOString(),
-  };
 }
 
 function documentToView(document: ProposalDocument): ProposalDocumentView {
@@ -405,47 +391,20 @@ async function renderClientReview(
   // Every reviewable proposal on the request powers the switcher.
   const docs = await Promise.all(request.relationships.map((r) => loadReviewDoc(r, 'client')));
   const reviewableDocs = docs.filter((d): d is ProposalReviewDoc => d !== null);
-  if (reviewableDocs.length === 0) {
-    return null;
-  }
-
-  // Active share links per reviewable relationship (BAL-386). A fetch failure
-  // degrades to the card's error state rather than failing the whole page.
-  let sharedLinksByRelationship: Record<string, SharedLinkView[]> = {};
-  let shareLinksErrored = false;
-  try {
-    const entries = await Promise.all(
-      reviewableDocs.map(async (doc) => {
-        const rows = await proposalShareLinksRepository.listActiveByRelationship(
-          doc.relationshipId
-        );
-        return [doc.relationshipId, rows.map(toSharedLinkView)] as const;
-      })
+  if (reviewableDocs.length > 0) {
+    return (
+      <ReviewShell requestId={requestId} title={request.title}>
+        <ProposalReview
+          requestId={requestId}
+          proposals={reviewableDocs}
+          activeRelationshipId={relationshipId}
+          clientCompanyName={request.company?.name ?? 'your company'}
+          clientFirstName={clientFirstName}
+        />
+      </ReviewShell>
     );
-    sharedLinksByRelationship = Object.fromEntries(entries);
-  } catch (error) {
-    shareLinksErrored = true;
-    log.error('Failed to load proposal share links', {
-      requestId,
-      relationshipId,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
   }
-
-  return (
-    <ReviewShell requestId={requestId} title={request.title}>
-      <ProposalReview
-        requestId={requestId}
-        proposals={reviewableDocs}
-        activeRelationshipId={relationshipId}
-        clientCompanyName={request.company?.name ?? 'your company'}
-        clientFirstName={clientFirstName}
-        sharedLinksByRelationship={sharedLinksByRelationship}
-        shareLinksErrored={shareLinksErrored}
-      />
-    </ReviewShell>
-  );
+  return null;
 }
 
 /**

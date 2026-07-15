@@ -23,8 +23,6 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   '/api/health',
   '/experts/',
   '/blog/',
-  // BAL-386 — public, no-auth, email-bound magic-link proposal view.
-  '/shared/proposals/',
 ];
 
 /** Admin path prefix (requires platformRole admin or super_admin) */

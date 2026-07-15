@@ -270,14 +270,6 @@ export const PROJECT_SERVER_EVENTS = {
   // is ALWAYS `client`, so the marked-up client figures are the only money it ever
   // carries — the fee/margin never reach this surface.
   PROJECT_PROPOSAL_PDF_DOWNLOADED: 'project_proposal_pdf_downloaded',
-  // BAL-386: proposal sharing with an external colleague. All three are emitted
-  // SERVER-SIDE (created/revoked in Server Actions, opened on the public server
-  // page) — proposal telemetry stays off the browser (same audience-boundary
-  // rationale as the events above). NEVER carry the full recipient email — the
-  // create event records only the email DOMAIN.
-  PROPOSAL_SHARE_CREATED: 'project_proposal_share_created',
-  PROPOSAL_SHARE_OPENED: 'project_proposal_share_opened',
-  PROPOSAL_SHARE_REVOKED: 'project_proposal_share_revoked',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -342,28 +334,6 @@ export interface ProjectServerEventMap {
     proposal_id: string;
     version: number;
     audience: 'client' | 'admin';
-    distinct_id: string;
-  };
-  // BAL-386: a client member minted a share link for an external colleague. Emitted
-  // server-side from the share Server Action. `recipient_email_domain` is the DOMAIN
-  // only (never the full address); `distinct_id` is the sharing user.
-  [PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_CREATED]: {
-    relationship_id: string;
-    recipient_email_domain: string;
-    distinct_id: string;
-  };
-  // BAL-386: an external colleague opened a valid share link. Emitted server-side
-  // from the public shared-proposal page. `first_open` is true only on the first
-  // valid hit; `distinct_id` is a synthetic per-link id (`share_{id}`) — no user.
-  [PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_OPENED]: {
-    share_link_id: string;
-    first_open: boolean;
-    distinct_id: string;
-  };
-  // BAL-386: the sharer revoked a share link. Emitted server-side from the revoke
-  // Server Action. `distinct_id` is the revoking user.
-  [PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_REVOKED]: {
-    share_link_id: string;
     distinct_id: string;
   };
 }

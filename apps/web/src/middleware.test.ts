@@ -139,18 +139,6 @@ describe('middleware — public routes', () => {
     const res = await middleware(createRequest('/'));
     expect(res.headers.get('x-request-id')).toBeTruthy();
   });
-
-  it('redacts the magic-link token from the request log (BAL-386)', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    try {
-      await middleware(createRequest('/shared/proposals/superSecretToken123'));
-      const logged = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
-      expect(logged).toContain('/shared/proposals/[redacted]');
-      expect(logged).not.toContain('superSecretToken123');
-    } finally {
-      logSpy.mockRestore();
-    }
-  });
 });
 
 describe('middleware — unauthenticated access', () => {
