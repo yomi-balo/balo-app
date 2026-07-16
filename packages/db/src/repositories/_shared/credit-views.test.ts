@@ -14,8 +14,14 @@ import {
  * FAILS here. Mocks nothing (no `db`, no I/O).
  */
 
-// The mandate secrets that must NEVER appear on a client lens (invariant #1).
-const WALLET_SECRET_KEYS = ['stripePaymentMethodId', 'mandateRef'] as const;
+// The mandate secrets / off-lens columns that must NEVER appear on a client lens
+// (invariant #1). Includes the BAL-382 mandate customer + lifecycle columns.
+const WALLET_SECRET_KEYS = [
+  'stripePaymentMethodId',
+  'mandateRef',
+  'stripeCustomerId',
+  'mandateStatus',
+] as const;
 // Fee/margin/quote keys that must NEVER appear on a client activity row (invariant #2).
 const FEE_KEYS = ['baloFeeBps', 'margin', 'markup', 'expertQuote', 'priceCents', 'rateCents'];
 
@@ -33,6 +39,8 @@ function fullWallet(overrides: Partial<CreditWallet> = {}): CreditWallet {
     // Secrets deliberately POPULATED — the mapper must still never surface them.
     stripePaymentMethodId: 'pm_secret_123',
     mandateRef: 'mandate_secret_abc',
+    stripeCustomerId: 'cus_secret_123',
+    mandateStatus: 'active',
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-06-01T00:00:00Z'),
     ...overrides,
@@ -54,6 +62,8 @@ function ledgerEntry(overrides: Partial<CreditLedgerEntry> = {}): CreditLedgerEn
     chargedAmountMinor: null,
     fxRate: null,
     stripePaymentIntentId: null,
+    stripeChargeId: null,
+    stripeBalanceTransactionId: null,
     idempotencyKey: 'manual_purchase:pi_1',
     createdAt: new Date('2026-06-01T00:00:00Z'),
     ...overrides,
@@ -96,6 +106,7 @@ describe('toClientWalletView (invariant #1 — secrets never leak even from a fu
     const serialized = JSON.stringify(view);
     expect(serialized).not.toContain('pm_secret_123');
     expect(serialized).not.toContain('mandate_secret_abc');
+    expect(serialized).not.toContain('cus_secret_123');
   });
 
   it('carries the available balance and the projected safe fields through', () => {
@@ -161,9 +172,14 @@ describe('toLedgerActivityView (invariant #2 — no margin/markup/fee/quote on a
         chargedCurrency: 'GBP',
         chargedAmountMinor: 1560,
         fxRate: '0.52000000',
-        stripePaymentIntentId: 'pi_settle_1',
+        // Sentinel Stripe reconciliation triplet — populated (not null) so the "never in a client
+        // view" guarantee for these record-only columns is actually exercised, not vacuous.
+        stripePaymentIntentId: 'pi_secret_settle_1',
+        stripeChargeId: 'ch_secret_settle_1',
+        stripeBalanceTransactionId: 'txn_secret_settle_1',
       })
     );
+    const serialized = JSON.stringify(view);
     for (const feeKey of FEE_KEYS) {
       expect(Object.keys(view)).not.toContain(feeKey);
     }
@@ -173,9 +189,15 @@ describe('toLedgerActivityView (invariant #2 — no margin/markup/fee/quote on a
       chargedAmountMinor: 1560,
       fxRate: '0.52000000',
     });
-    // …and never as top-level keys, and Stripe intent id is not exposed.
+    // …and never as top-level keys, and the Stripe reconciliation triplet is not exposed —
+    // neither as keys nor by value anywhere in the serialized client row (invariant #6).
     expect(Object.keys(view)).not.toContain('stripePaymentIntentId');
+    expect(Object.keys(view)).not.toContain('stripeChargeId');
+    expect(Object.keys(view)).not.toContain('stripeBalanceTransactionId');
     expect(Object.keys(view)).not.toContain('chargedCurrency');
+    expect(serialized).not.toContain('pi_secret_settle_1');
+    expect(serialized).not.toContain('ch_secret_settle_1');
+    expect(serialized).not.toContain('txn_secret_settle_1');
   });
 
   it('sets display to null when there is no charged record (a pure AUD entry)', () => {

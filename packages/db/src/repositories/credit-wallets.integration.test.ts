@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CreditWallet } from '../schema';
+import { db } from '../client';
 import { creditWalletFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
 import { creditWalletsRepository } from './credit-wallets';
@@ -30,6 +31,9 @@ describe('creditWalletsRepository.create', () => {
     expect(wallet.expiresAt).toBeNull();
     expect(wallet.stripePaymentMethodId).toBeNull();
     expect(wallet.mandateRef).toBeNull();
+    // BAL-382 mandate columns default to null (no default; no mandate ever attempted).
+    expect(wallet.stripeCustomerId).toBeNull();
+    expect(wallet.mandateStatus).toBeNull();
   });
 
   it('returns balanceMinor as a JS number (bigint accumulator, mode:number)', async () => {
@@ -207,5 +211,81 @@ describe('creditWalletsRepository.findWalletsExpiringBetween (BAL-380 dormancy b
 
     const result = await creditWalletsRepository.findWalletsExpiringBetween(after, until);
     expect(ids(result)).toEqual([inBand.id]);
+  });
+});
+
+describe('creditWalletsRepository.applyMandate / applyMandateStatus (BAL-382)', () => {
+  it('applyMandate writes customer + payment method + mandate ref + mandate_status=active', async () => {
+    const { wallet } = await creditWalletFactory();
+
+    const updated = await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_123',
+      stripePaymentMethodId: 'pm_123',
+      mandateRef: 'seti_123',
+      mandateStatus: 'active',
+    });
+
+    expect(updated.stripeCustomerId).toBe('cus_123');
+    expect(updated.stripePaymentMethodId).toBe('pm_123');
+    expect(updated.mandateRef).toBe('seti_123');
+    expect(updated.mandateStatus).toBe('active');
+
+    // Persisted (re-read from the DB).
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.stripeCustomerId).toBe('cus_123');
+    expect(persisted?.stripePaymentMethodId).toBe('pm_123');
+    expect(persisted?.mandateRef).toBe('seti_123');
+    expect(persisted?.mandateStatus).toBe('active');
+  });
+
+  it('applyMandateStatus flips only the status (active → failed), leaving mandate columns intact', async () => {
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_abc',
+      stripePaymentMethodId: 'pm_abc',
+      mandateRef: 'seti_abc',
+      mandateStatus: 'active',
+    });
+
+    const failed = await creditWalletsRepository.applyMandateStatus(db, wallet.id, 'failed');
+    expect(failed.mandateStatus).toBe('failed');
+    // The customer / payment-method / mandate-ref columns are untouched.
+    expect(failed.stripeCustomerId).toBe('cus_abc');
+    expect(failed.stripePaymentMethodId).toBe('pm_abc');
+    expect(failed.mandateRef).toBe('seti_abc');
+  });
+
+  it('applyMandateStatus sets pending on a brand-new wallet (null → pending)', async () => {
+    const { wallet } = await creditWalletFactory();
+    expect(wallet.mandateStatus).toBeNull();
+
+    const pending = await creditWalletsRepository.applyMandateStatus(db, wallet.id, 'pending');
+    expect(pending.mandateStatus).toBe('pending');
+    // No customer attached yet.
+    expect(pending.stripeCustomerId).toBeNull();
+  });
+
+  it('applyMandate throws for an unknown wallet id', async () => {
+    await expect(
+      creditWalletsRepository.applyMandate(db, {
+        walletId: '00000000-0000-0000-0000-000000000000',
+        stripeCustomerId: 'cus_x',
+        stripePaymentMethodId: 'pm_x',
+        mandateRef: 'seti_x',
+        mandateStatus: 'active',
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('applyMandateStatus throws for an unknown wallet id', async () => {
+    await expect(
+      creditWalletsRepository.applyMandateStatus(
+        db,
+        '00000000-0000-0000-0000-000000000000',
+        'failed'
+      )
+    ).rejects.toThrow(/not found/i);
   });
 });

@@ -61,6 +61,13 @@ export interface ApplyLedgerEntryInput {
   chargedAmountMinor?: number | null;
   fxRate?: string | null;
   stripePaymentIntentId?: string | null;
+  /**
+   * Reconciliation triplet passthrough (BAL-382 / Decision A) — record only. Threaded
+   * into the ledger insert like `stripePaymentIntentId`; NOT compared in
+   * `assertIdempotentMatch` and NOT in `balanceContribution` (they never move money).
+   */
+  stripeChargeId?: string | null;
+  stripeBalanceTransactionId?: string | null;
 }
 
 export interface ApplyLedgerEntryResult {
@@ -75,8 +82,16 @@ export interface ApplyLedgerEntryResult {
  * The reasons whose ledger entry ALSO writes a member-attributed `audit_events` row,
  * in the SAME txn as the ledger insert + balance update (invariant #7). System entries
  * (auto_topup / dormancy_expiry / promo / adjustment) write no audit row.
+ *
+ * `manual_purchase` is member-attributed (BAL-382 / Decision C): an on-session buy is
+ * member-initiated, so the provider's purchase function requires an `initiatingMemberId`
+ * and threads it back here, satisfying the memberId guard below by construction. This
+ * keeps the "ledger effect + audit row atomic" guarantee inside the primitive rather than
+ * hand-rolling a second `recordCreditAudit` in the webhook. `auto_topup` stays a system
+ * entry with NO audit row (its ledger row + Stripe reference triplet is the record).
  */
 const AUDIT_ACTION_BY_REASON: Partial<Record<CreditLedgerReason, CreditAuditAction>> = {
+  manual_purchase: 'credit_wallet.purchased',
   session_consume: 'credit_wallet.consumed',
   overdraft_settlement: 'credit_wallet.settled',
 };
@@ -204,6 +219,8 @@ export async function applyLedgerEntry(
       chargedAmountMinor: input.chargedAmountMinor ?? null,
       fxRate: input.fxRate ?? null,
       stripePaymentIntentId: input.stripePaymentIntentId ?? null,
+      stripeChargeId: input.stripeChargeId ?? null,
+      stripeBalanceTransactionId: input.stripeBalanceTransactionId ?? null,
       idempotencyKey: input.idempotencyKey,
     })
     .onConflictDoNothing({ target: creditLedger.idempotencyKey })

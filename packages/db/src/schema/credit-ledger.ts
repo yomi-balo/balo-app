@@ -81,6 +81,16 @@ export const creditLedger = pgTable(
 
     stripePaymentIntentId: text('stripe_payment_intent_id'),
 
+    // Reconciliation triplet (invariant #3 / BAL-382 Decision A). The PaymentIntent can
+    // own multiple charges (retries); the charge id + balance_transaction id pin the exact
+    // settled money movement this row reconciles to (balance_transaction is where the
+    // settled AUD amount + fx rate come from). DISPLAY / record only — NEVER in balance
+    // math (excluded from `balanceContribution`), NEVER compared in `assertIdempotentMatch`
+    // (like the existing charged_* / stripe PI fields). Nullable — system / AUD-only
+    // entries legitimately null. Append-only table ⇒ new rows only ⇒ no backfill.
+    stripeChargeId: text('stripe_charge_id'),
+    stripeBalanceTransactionId: text('stripe_balance_transaction_id'),
+
     // State-derived (via `deriveIdempotencyKey`), NEVER a random UUID — Stripe replays
     // and BullMQ retries collapse to the same key. UNIQUE is the hard backstop behind
     // the advisory lock (invariant #4 / no double-credit).

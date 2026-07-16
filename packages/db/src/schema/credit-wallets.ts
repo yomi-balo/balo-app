@@ -10,7 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { companies } from './companies';
-import { lowBalanceModeEnum } from './enums';
+import { lowBalanceModeEnum, mandateStatusEnum } from './enums';
 import { creditLedger } from './credit-ledger';
 import { creditHolds } from './credit-holds';
 import { timestamps } from './helpers';
@@ -77,6 +77,20 @@ export const creditWallets = pgTable(
     stripePaymentMethodId: text('stripe_payment_method_id'),
     mandateRef: text('mandate_ref'),
 
+    // Off-session mandate CUSTOMER (BAL-382 / Decision B) — DISTINCT from the legacy,
+    // unused `companies.stripe_customer_id` column. The wallet mandate customer is
+    // deliberately separate (see the mandate header note above). Nullable (no customer
+    // until the first SetupIntent); persisted on `setup_intent.succeeded` via `applyMandate`
+    // (alongside the payment method + mandate ref). `ensureCustomer` does NOT write it — it
+    // only prevents duplicate Stripe customers on retry via a stable idempotency key. Kept
+    // off client surfaces alongside the mandate secrets (invariant #1).
+    stripeCustomerId: text('stripe_customer_id'),
+
+    // Mandate lifecycle (BAL-382 / Decision B). pg enum, NULLABLE with NO default —
+    // null = no mandate ever attempted (the natural state for existing wallets and a
+    // brand-new wallet before any SetupIntent). Also off client surfaces (invariant #1).
+    mandateStatus: mandateStatusEnum('mandate_status'),
+
     // Mutable projection ⇒ `updated_at` is correct. NO `...softDelete` (see header).
     ...timestamps,
   },
@@ -108,6 +122,9 @@ export const creditWalletsRelations = relations(creditWallets, ({ one, many }) =
 
 export type CreditWallet = typeof creditWallets.$inferSelect;
 export type NewCreditWallet = typeof creditWallets.$inferInsert;
+
+/** Off-session mandate lifecycle (schema-derived — single source of truth, BAL-382). */
+export type MandateStatus = (typeof mandateStatusEnum.enumValues)[number];
 
 // NOTE: no `createInsertSchema` / `createSelectSchema` Zod exports here. `drizzle-zod`
 // is NOT a dependency of `@balo/db` and NO existing schema file uses it (see the same
