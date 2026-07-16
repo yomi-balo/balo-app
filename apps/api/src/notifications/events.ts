@@ -20,6 +20,7 @@ import type {
   OnboardingReminderPayload,
   CreditDormancyReminderPayload,
   CreditBalanceExpiredPayload,
+  PromoRedeemedPayload,
   ProposalSharedPayload,
 } from '@balo/shared/notifications';
 
@@ -256,7 +257,8 @@ export type NotificationEvent =
   | 'company.provisioned'
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
-  | 'credit.balance_expired';
+  | 'credit.balance_expired'
+  | 'promo.redeemed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -319,4 +321,5 @@ export interface EventPayloadMap {
   'onboarding.reminder': OnboardingReminderPayload;
   'credit.dormancy_reminder': CreditDormancyReminderPayload;
   'credit.balance_expired': CreditBalanceExpiredPayload;
+  'promo.redeemed': PromoRedeemedPayload;
 }

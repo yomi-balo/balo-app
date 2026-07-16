@@ -273,6 +273,8 @@ export {
   type CreatePromoCodeInput,
   type UpdatePromoCapInput,
   type PromoRedemptionRecord,
+  type RedeemPromoInput,
+  type RedeemPromoResult,
 } from './promo-codes';
 export type {
   PromoCode,
