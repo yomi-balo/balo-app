@@ -172,9 +172,14 @@ describe('toLedgerActivityView (invariant #2 — no margin/markup/fee/quote on a
         chargedCurrency: 'GBP',
         chargedAmountMinor: 1560,
         fxRate: '0.52000000',
-        stripePaymentIntentId: 'pi_settle_1',
+        // Sentinel Stripe reconciliation triplet — populated (not null) so the "never in a client
+        // view" guarantee for these record-only columns is actually exercised, not vacuous.
+        stripePaymentIntentId: 'pi_secret_settle_1',
+        stripeChargeId: 'ch_secret_settle_1',
+        stripeBalanceTransactionId: 'txn_secret_settle_1',
       })
     );
+    const serialized = JSON.stringify(view);
     for (const feeKey of FEE_KEYS) {
       expect(Object.keys(view)).not.toContain(feeKey);
     }
@@ -184,9 +189,15 @@ describe('toLedgerActivityView (invariant #2 — no margin/markup/fee/quote on a
       chargedAmountMinor: 1560,
       fxRate: '0.52000000',
     });
-    // …and never as top-level keys, and Stripe intent id is not exposed.
+    // …and never as top-level keys, and the Stripe reconciliation triplet is not exposed —
+    // neither as keys nor by value anywhere in the serialized client row (invariant #6).
     expect(Object.keys(view)).not.toContain('stripePaymentIntentId');
+    expect(Object.keys(view)).not.toContain('stripeChargeId');
+    expect(Object.keys(view)).not.toContain('stripeBalanceTransactionId');
     expect(Object.keys(view)).not.toContain('chargedCurrency');
+    expect(serialized).not.toContain('pi_secret_settle_1');
+    expect(serialized).not.toContain('ch_secret_settle_1');
+    expect(serialized).not.toContain('txn_secret_settle_1');
   });
 
   it('sets display to null when there is no charged record (a pure AUD entry)', () => {

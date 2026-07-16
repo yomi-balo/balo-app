@@ -60,9 +60,15 @@ async function resolvePaymentIntentSucceeded(
   const walletId = pi.metadata.walletId;
   const reason = pi.metadata.reason;
   if (!walletId || !isCreditReason(reason)) {
-    log.warn(
+    // A succeeded PaymentIntent = money already moved, but we can't attribute it to a wallet
+    // (no walletId / unknown credit reason). We ack 200 without effect — a retry can't help,
+    // the metadata will still be missing — but this is a money-without-credit discrepancy, so
+    // it must surface to Sentry/Axiom for a human, NOT be buried in a warn (same posture as an
+    // unattributable dispute below). Every PI this module creates always stamps the metadata,
+    // so reaching here implies a charge created outside our flow or a contract drift.
+    log.error(
       { op: 'resolveStripeEffect', eventType: 'payment_intent.succeeded', stripeId: pi.id },
-      'payment_intent.succeeded missing walletId / credit reason metadata — acking without effect'
+      'payment_intent.succeeded missing walletId / credit reason metadata — money charged but not credited'
     );
     return null;
   }
