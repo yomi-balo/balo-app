@@ -13,6 +13,7 @@ export {
   ORG_INTENT_SERVER_EVENTS,
   ENGAGEMENT_SERVER_EVENTS,
   AUTH_SERVER_EVENTS,
+  PROMO_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

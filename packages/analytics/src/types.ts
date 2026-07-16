@@ -27,6 +27,7 @@ import type {
   OnboardingReminderServerEventMap,
 } from './events/onboarding-reminder';
 import type { CreditServerEventMap } from './events/credit';
+import type { PromoServerEventMap } from './events/promo';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -67,6 +68,7 @@ export type ServerEvents = ExpertServerEventMap &
   EngagementServerEventMap &
   AuthServerEventMap &
   OnboardingReminderServerEventMap &
-  CreditServerEventMap;
+  CreditServerEventMap &
+  PromoServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

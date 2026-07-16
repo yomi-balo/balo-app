@@ -17,6 +17,8 @@
 export const PLATFORM_CAPABILITIES = {
   /** Set a per-project Balo fee override (and future platform fee/pricing config). */
   MANAGE_PLATFORM_FEES: 'manage_platform_fees',
+  /** Mint / deactivate / cap-edit promo codes on the credit system (BAL-384). */
+  MANAGE_PROMO_CODES: 'manage_promo_codes',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -25,6 +27,7 @@ export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLA
 // `user` (or any unknown role) is NOT staff and holds nothing.
 const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
+  PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
 ];
 
 /**

@@ -271,3 +271,17 @@ export const creditHoldStatusEnum = pgEnum('credit_hold_status', ['active', 'set
  * enter balance math (invariant #8).
  */
 export const fxDisplayQuoteEnum = pgEnum('fx_display_quote', ['GBP', 'EUR', 'USD']);
+
+// ── Promo codes (BAL-384 / ADR-1042) ──────────────────────────────────────
+
+/**
+ * Promo-code admin lifecycle (BAL-384). ONLY the admin-controlled state:
+ * `active` (mintable/redeemable, subject to window + cap) vs `deactivated`
+ * (admin turned it off). `expired` / `exhausted` / `scheduled` are DERIVED at
+ * read time from valid_until / redeemed_count / valid_from — never stored (a
+ * stored `expired` would need a sweep job, out of scope, and duplicate
+ * valid_until). Standalone CREATE TYPE → the `default('active')` in the same
+ * migration is SAFE (the enum-default-same-txn hazard applies ONLY to ALTER TYPE
+ * ADD VALUE, memory reference_enum_default_same_tx_migration_hazard).
+ */
+export const promoCodeStatusEnum = pgEnum('promo_code_status', ['active', 'deactivated']);
