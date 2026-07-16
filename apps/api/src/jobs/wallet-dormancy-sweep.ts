@@ -27,8 +27,11 @@ import { notificationEvents } from '../notifications/publisher.js';
  * dedup via the BullMQ jobId, and a new dormancy cycle a year later (activity rolled
  * `expires_at`) re-reminds because `expiresAtDate` changed. Expiry is idempotent in the
  * DB primitive: once expired the balance is 0, so the wallet drops out of the eligibility
- * query forever; a replay returns `already_expired` (notice re-published idempotently, NO
- * analytics double-count). Per-row try/catch — one bad wallet never aborts the batch.
+ * query forever; a CONCURRENT same-tick sweep returns `already_expired` (notice re-published
+ * idempotently by correlationId, NO analytics double-count). The expired notice is
+ * best-effort, NOT crash-durable — a publish failure after the ledger commit is not retried
+ * next tick (the zeroed wallet is no longer selected); the money is still correct. Per-row
+ * try/catch — one bad wallet never aborts the batch.
  *
  * No money moves in the reminder pass (read-only + publish), so it takes no lock; the
  * captured `balanceMinor`/`expiresAt` are as-of the sweep (payload precedent). All wallet
@@ -79,9 +82,12 @@ async function publishDormancyReminder(
 /**
  * Expire ONE wallet (guarded, locked, idempotent in `@balo/db`) and publish the "expired"
  * notice on `expired | already_expired` (idempotent by the ledger correlationId). Analytics
- * fires ONLY on `expired` — the real money event; `already_expired` is a replay and must
- * never double-count. Returns `true` iff this wallet actually expired this tick. Throws on
- * failure so the caller's per-row try/catch isolates it.
+ * fires ONLY on `expired` — the real money event; `already_expired` is a concurrent-sweep
+ * replay and must never double-count. The publish is best-effort: it runs after the ledger
+ * commit, and a failure here is not retried on a later tick (the zeroed wallet is no longer
+ * eligible), so the notice can be lost while the money stays correct. Returns `true` iff
+ * this wallet actually expired this tick. Throws on failure so the caller's per-row
+ * try/catch isolates it.
  */
 async function expireAndNotify(walletId: string, now: Date): Promise<boolean> {
   const result = await creditLedgerRepository.expireDormantBalance({ walletId, now });

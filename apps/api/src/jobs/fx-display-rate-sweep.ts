@@ -137,16 +137,20 @@ async function emitStaleness(now: Date): Promise<FxDisplayQuote[]> {
 
 /**
  * The sweep body (exported for unit testing without a Redis-backed Worker). Guards the
- * API key (absent → warn + return, never throw — a missing key must not crash the cron),
- * fetches/upserts (last-good on failure), then emits staleness. Returns the counts.
+ * API key (absent → warn + surface staleness against last-good, no fetch/upsert — a
+ * missing key must not crash the cron), fetches/upserts (last-good on failure), then emits
+ * staleness. Returns the counts.
  */
 export async function runFxDisplayRateSweep(
   now: Date
 ): Promise<{ upserted: number; stale: FxDisplayQuote[] }> {
   const apiKey = process.env.EXCHANGERATE_API_KEY;
   if (!apiKey) {
-    log.warn('EXCHANGERATE_API_KEY not set — skipping FX display-rate sweep (last-good retained)');
-    return { upserted: 0, stale: [] };
+    log.warn('EXCHANGERATE_API_KEY not set — skipping FX fetch (last-good retained)');
+    // A missing key is exactly when the cache silently ages past 48h, so STILL surface
+    // staleness against the retained last-good rows before returning (no fetch/upsert).
+    const stale = await emitStaleness(now);
+    return { upserted: 0, stale };
   }
 
   const baseUrl = process.env.EXCHANGERATE_API_URL ?? DEFAULT_EXCHANGERATE_API_URL;

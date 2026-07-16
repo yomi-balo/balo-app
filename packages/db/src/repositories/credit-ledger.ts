@@ -300,12 +300,17 @@ export const creditLedgerRepository = {
    *     `dormancy_expiry` is a system reason (excluded from `AUDIT_ACTION_BY_REASON`), so
    *     `memberId: null` is correct and the dev attribution guard does not fire.
    *  6. Balance ≤ 0 under the lock → look up the key: found ⇒ `already_expired` (a
-   *     crash-after-post replay; the notice re-publishes idempotently); not found ⇒
-   *     `skipped:'no_balance'` (the balance was consumed to 0, not expired).
+   *     CONCURRENT same-tick sweep already posted this expiry; the caller re-publishes the
+   *     notice, idempotent by correlationId); not found ⇒ `skipped:'no_balance'` (the
+   *     balance was consumed to 0, not expired).
    *
-   * Idempotency: once expired the balance is 0, so the wallet drops out of
-   * `findExpirableWallets` on every future tick even though `expires_at` stays `<= now`.
-   * A same-tick replay hits `applyLedgerEntry`'s idempotency backstop (no double-debit).
+   * Idempotency & durability: once expired the balance is 0, so the wallet drops out of
+   * `findExpirableWallets` on every future tick (even though `expires_at` stays `<= now`) —
+   * money is written exactly once, no double-debit. That also means `already_expired` only
+   * guards concurrent same-tick runs, NOT cross-tick crash recovery: if the process dies (or
+   * the notify fails) between this commit and the caller's publish, the zeroed wallet is
+   * never re-selected, so the courtesy "expired" notice is lost. The money stays correct —
+   * only the notification is best-effort.
    */
   async expireDormantBalance({
     walletId,

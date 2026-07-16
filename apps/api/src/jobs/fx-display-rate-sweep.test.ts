@@ -129,7 +129,7 @@ describe('runFxDisplayRateSweep — success path', () => {
 });
 
 describe('runFxDisplayRateSweep — last-good fallback', () => {
-  it('does NOT upsert when the API key is absent (warn + return, never throw)', async () => {
+  it('does NOT fetch/upsert when the API key is absent (warn + return, never throw)', async () => {
     delete process.env.EXCHANGERATE_API_KEY;
 
     const result = await runFxDisplayRateSweep(NOW);
@@ -137,6 +137,28 @@ describe('runFxDisplayRateSweep — last-good fallback', () => {
     expect(result).toEqual({ upserted: 0, stale: [] });
     expect(mockFetch).not.toHaveBeenCalled();
     expect(mockUpsert).not.toHaveBeenCalled();
+    // Staleness is still checked against last-good even with no key (here: nothing served).
+    expect(mockGetLatest).toHaveBeenCalled();
+  });
+
+  it('emits credit_fx_cache_stale from last-good when the API key is absent (broken feed)', async () => {
+    // A missing key means the cache can never refresh — the >48h ops signal must still fire.
+    delete process.env.EXCHANGERATE_API_KEY;
+    const staleAsOf = new Date(NOW.getTime() - 72 * HOUR_MS);
+    mockGetLatest.mockImplementation(async (quote: string) =>
+      quote === 'EUR' ? { quote, asOf: staleAsOf } : undefined
+    );
+
+    const result = await runFxDisplayRateSweep(NOW);
+
+    expect(result).toEqual({ upserted: 0, stale: ['EUR'] });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith('credit_fx_cache_stale', {
+      quote: 'EUR',
+      as_of_age_hours: 72,
+      distinct_id: 'system:fx-display',
+    });
   });
 
   it('does NOT upsert when result !== "success" (last-good retained)', async () => {
