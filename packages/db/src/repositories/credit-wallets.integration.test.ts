@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { CreditWallet } from '../schema';
 import { creditWalletFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
 import { creditWalletsRepository } from './credit-wallets';
@@ -7,6 +8,11 @@ import { creditWalletsRepository } from './credit-wallets';
  * Integration tests for `creditWalletsRepository` (BAL-376). Uses the in-harness `db`
  * (per-test transaction, auto-rolled-back). Factories only — never raw inserts.
  */
+
+/** The wallet ids of a result list, in the returned order. */
+function ids(wallets: CreditWallet[]): string[] {
+  return wallets.map((w) => w.id);
+}
 
 describe('creditWalletsRepository.create', () => {
   it('creates one wallet per company with the schema defaults', async () => {
@@ -100,5 +106,106 @@ describe('creditWalletsRepository.updateConfig', () => {
         lowBalanceMode: 'keep_going',
       })
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('creditWalletsRepository.findExpirableWallets (BAL-380 expiry sweep eligibility)', () => {
+  const now = new Date('2027-06-01T00:00:00.000Z');
+
+  it('returns wallets past expiry with a positive balance, oldest expiry first', async () => {
+    // Two eligible wallets — expiry BEFORE now, positive balance. Seeded newest-first to
+    // prove the ORDER BY expires_at ASC (not insertion order).
+    const { wallet: newer } = await creditWalletFactory({
+      values: { balanceMinor: 3000, expiresAt: new Date('2027-05-20T00:00:00.000Z') },
+    });
+    const { wallet: older } = await creditWalletFactory({
+      values: { balanceMinor: 5000, expiresAt: new Date('2027-05-01T00:00:00.000Z') },
+    });
+
+    const result = await creditWalletsRepository.findExpirableWallets(now);
+    expect(ids(result)).toEqual([older.id, newer.id]);
+  });
+
+  it('includes a wallet whose expiry is exactly now (inclusive `<= now` boundary)', async () => {
+    const { wallet } = await creditWalletFactory({
+      values: { balanceMinor: 1000, expiresAt: now },
+    });
+    const result = await creditWalletsRepository.findExpirableWallets(now);
+    expect(ids(result)).toEqual([wallet.id]);
+  });
+
+  it('excludes future-dated, zero/negative-balance, and null-expiry wallets', async () => {
+    const { wallet: eligible } = await creditWalletFactory({
+      values: { balanceMinor: 4000, expiresAt: new Date('2027-05-15T00:00:00.000Z') },
+    });
+    // Out of band: expiry is in the future.
+    await creditWalletFactory({
+      values: { balanceMinor: 4000, expiresAt: new Date('2027-07-01T00:00:00.000Z') },
+    });
+    // Past expiry but nothing to expire (balance == 0).
+    await creditWalletFactory({
+      values: { balanceMinor: 0, expiresAt: new Date('2027-05-01T00:00:00.000Z') },
+    });
+    // Past expiry but a negative (overdraft) balance — excluded by `balance_minor > 0`.
+    await creditWalletFactory({
+      values: { balanceMinor: -200, expiresAt: new Date('2027-05-01T00:00:00.000Z') },
+    });
+    // Never transacted — expires_at IS NULL.
+    await creditWalletFactory({ values: { balanceMinor: 9000, expiresAt: null } });
+
+    const result = await creditWalletsRepository.findExpirableWallets(now);
+    expect(ids(result)).toEqual([eligible.id]);
+  });
+});
+
+describe('creditWalletsRepository.findWalletsExpiringBetween (BAL-380 dormancy bands)', () => {
+  const after = new Date('2027-07-30T00:00:00.000Z');
+  const until = new Date('2027-07-31T00:00:00.000Z');
+
+  it('returns wallets in the half-open (after, until] band, oldest expiry first', async () => {
+    const { wallet: later } = await creditWalletFactory({
+      values: { balanceMinor: 2000, expiresAt: new Date('2027-07-30T18:00:00.000Z') },
+    });
+    const { wallet: earlier } = await creditWalletFactory({
+      values: { balanceMinor: 2000, expiresAt: new Date('2027-07-30T06:00:00.000Z') },
+    });
+
+    const result = await creditWalletsRepository.findWalletsExpiringBetween(after, until);
+    expect(ids(result)).toEqual([earlier.id, later.id]);
+  });
+
+  it('excludes the open lower bound (== after) but includes the closed upper bound (== until)', async () => {
+    // expires_at == after → excluded (strictly `> after`).
+    await creditWalletFactory({ values: { balanceMinor: 2000, expiresAt: after } });
+    // expires_at == until → included (`<= until`).
+    const { wallet: onUpper } = await creditWalletFactory({
+      values: { balanceMinor: 2000, expiresAt: until },
+    });
+
+    const result = await creditWalletsRepository.findWalletsExpiringBetween(after, until);
+    expect(ids(result)).toEqual([onUpper.id]);
+  });
+
+  it('excludes wallets outside the band, zero-balance, and null-expiry wallets', async () => {
+    const { wallet: inBand } = await creditWalletFactory({
+      values: { balanceMinor: 2000, expiresAt: new Date('2027-07-30T12:00:00.000Z') },
+    });
+    // Before the band (at/under `after`).
+    await creditWalletFactory({
+      values: { balanceMinor: 2000, expiresAt: new Date('2027-07-29T12:00:00.000Z') },
+    });
+    // After the band (past `until`).
+    await creditWalletFactory({
+      values: { balanceMinor: 2000, expiresAt: new Date('2027-08-01T12:00:00.000Z') },
+    });
+    // In band but no balance.
+    await creditWalletFactory({
+      values: { balanceMinor: 0, expiresAt: new Date('2027-07-30T09:00:00.000Z') },
+    });
+    // Never transacted.
+    await creditWalletFactory({ values: { balanceMinor: 2000, expiresAt: null } });
+
+    const result = await creditWalletsRepository.findWalletsExpiringBetween(after, until);
+    expect(ids(result)).toEqual([inBand.id]);
   });
 });

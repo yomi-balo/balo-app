@@ -21,6 +21,7 @@ const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
   'non_selected_experts',
   'admin_users',
   'party_admins',
+  'company_billing_admins',
 ]);
 
 /**
@@ -205,6 +206,11 @@ function resolveRecipientIds(
       // BAL-345: the party's admin (MANAGE_MEMBERS) member ids, hydrated by the
       // resolver from partyMembershipsRepository.listAdminUserIds.
       source = context.data.partyAdminUserIds;
+      break;
+    case 'company_billing_admins':
+      // BAL-380: the company's MANAGE_BILLING holders (owner/admin), hydrated by the
+      // resolver from partyMembershipsRepository.listBillingUserIds.
+      source = context.data.billingUserIds;
       break;
     default:
       return [];

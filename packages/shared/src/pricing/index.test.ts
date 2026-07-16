@@ -6,8 +6,11 @@ import {
   DEFAULT_TOPUP_RELOAD_MINOR,
   DEFAULT_TOPUP_THRESHOLD_MINOR,
   deriveTmTotalCents,
+  DORMANCY_REMINDER_WINDOWS_DAYS,
   feeBpsToPercent,
   formatFeePercent,
+  FX_DISPLAY_STALENESS_MS,
+  isFxRateStale,
   isValidBaloFeeBps,
   MAX_BALO_FEE_BPS,
   MIN_BALO_FEE_BPS,
@@ -246,5 +249,38 @@ describe('Client Credit System platform-money constants (BAL-376)', () => {
 
   it('exposes WALLET_EXPIRY_MONTHS as 12', () => {
     expect(WALLET_EXPIRY_MONTHS).toBe(12);
+  });
+});
+
+describe('Dormancy / display-FX constants (BAL-380)', () => {
+  it('exposes the 60d + 30d reminder bands, widest → nearest', () => {
+    expect(DORMANCY_REMINDER_WINDOWS_DAYS).toEqual([60, 30]);
+  });
+
+  it('exposes FX_DISPLAY_STALENESS_MS as 48 hours in milliseconds', () => {
+    expect(FX_DISPLAY_STALENESS_MS).toBe(48 * 60 * 60 * 1000);
+  });
+});
+
+describe('isFxRateStale', () => {
+  const now = new Date('2026-07-16T12:00:00Z');
+
+  it('is not stale at exactly 48h old (strict >, boundary excluded)', () => {
+    const asOf = new Date(now.getTime() - FX_DISPLAY_STALENESS_MS);
+    expect(isFxRateStale(asOf, now)).toBe(false);
+  });
+
+  it('is stale one millisecond past 48h', () => {
+    const asOf = new Date(now.getTime() - FX_DISPLAY_STALENESS_MS - 1);
+    expect(isFxRateStale(asOf, now)).toBe(true);
+  });
+
+  it('is not stale for a fresh (just-now) quote', () => {
+    expect(isFxRateStale(now, now)).toBe(false);
+  });
+
+  it('is stale for a quote days old', () => {
+    const asOf = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+    expect(isFxRateStale(asOf, now)).toBe(true);
   });
 });

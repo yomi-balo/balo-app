@@ -1,7 +1,14 @@
+import { formatAudMinor, formatExpiryDateShort } from './credit-format.js';
+
 interface InAppOutput {
   title: string;
   body: string;
   actionUrl?: string;
+}
+
+/** Coerce a merged-payload numeric field to a number; 0 when absent/non-numeric. */
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /**
@@ -538,6 +545,35 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       data
     );
   },
+
+  // BAL-380 (ADR-1040 Lane 3) dormancy reminder — company billing admins. Switches on
+  // the merged-payload `window` (60|30). Warm, non-countdown: "still here", the date as
+  // a plain fact, and a note that any activity keeps it going. Deep-links to expert search.
+  'credit-dormancy-reminder': (data) => {
+    const balance = formatAudMinor(numberOrZero(data.balanceMinor));
+    const shortDate = formatExpiryDateShort((data.expiresAt as string) ?? '');
+    if (data.window === 30) {
+      return {
+        title: `Your balance stays available until ${shortDate}`,
+        body: `${balance} is still here. A good time to put it to use.`,
+        actionUrl: '/experts',
+      };
+    }
+    return {
+      title: 'Your balance is still here',
+      body: `${balance}, available until ${shortDate}. Any activity keeps it going.`,
+      actionUrl: '/experts',
+    };
+  },
+
+  // BAL-380 (ADR-1040 Lane 3) balance expired — company billing admins. Soft-toned,
+  // provisional, no balance figure (0 post-expiry). Deep-links to the wallet/billing
+  // panel (delivered by a later credit-system lane).
+  'credit-balance-expired': () => ({
+    title: 'About your balance',
+    body: 'Your balance reached its expiry date. Add credit to pick back up anytime.',
+    actionUrl: '/settings/billing',
+  }),
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

@@ -30,6 +30,17 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
 ]);
 
 /**
+ * BAL-380: the credit dormancy/expiry notices fan out to the company's MANAGE_BILLING
+ * holders (owner/admin). The dispatcher resolves recipient:'company_billing_admins' from
+ * `data.billingUserIds`, hydrated here from `payload.companyId`. Company-only (wallets
+ * are one-per-company); a company with zero owner/admin → `[]` → the dispatcher skips.
+ */
+const BILLING_FANOUT_EVENTS = new Set<string>([
+  'credit.dormancy_reminder',
+  'credit.balance_expired',
+]);
+
+/**
  * BAL-348: hydrate the agency SUMMARY (projected `{ id, name, memberCount }` — no PII)
  * for the owner-facing `agency.provisioned` template. Extracted so `resolveContext`
  * stays under the cognitive-complexity gate. NB: `agency.provisioned` carries
@@ -43,6 +54,25 @@ async function hydrateAgencyProvisioned(
 ): Promise<void> {
   if (event === 'agency.provisioned' && typeof payload.agencyId === 'string') {
     data.agency = await agenciesRepository.getSummaryById(payload.agencyId);
+  }
+}
+
+/**
+ * BAL-380: hydrate the company's MANAGE_BILLING holders for the credit dormancy/expiry
+ * fan-out (dispatcher resolves recipient:'company_billing_admins' from
+ * `data.billingUserIds`). Extracted so `resolveContext` stays under the
+ * cognitive-complexity gate. Company-only (wallets are one-per-company);
+ * `listBillingUserIds` derives the billing-role set from the pure authz map (never a
+ * hardcoded role IN (...)) and excludes soft-removed members, so a company with zero
+ * owner/admin → `[]` → the dispatcher skips the fan-out.
+ */
+async function hydrateBillingFanout(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (BILLING_FANOUT_EVENTS.has(event) && typeof payload.companyId === 'string') {
+    data.billingUserIds = await partyMembershipsRepository.listBillingUserIds(payload.companyId);
   }
 }
 
@@ -91,6 +121,10 @@ export async function resolveContext(
       );
     }
   }
+
+  // BAL-380: credit dormancy/expiry billing fan-out (extracted — see hydrateBillingFanout).
+  // data.company is already hydrated above from payload.companyId (context only).
+  await hydrateBillingFanout(event, payload, data);
 
   // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
   await hydrateAgencyProvisioned(event, payload, data);

@@ -12,6 +12,7 @@ import {
 import { acquireWalletLock } from './_shared/wallet-lock';
 import { recordCreditAudit, type CreditAuditAction } from './_shared/credit-audit';
 import { balanceContribution } from './_shared/credit-views';
+import { deriveIdempotencyKey } from './_shared/credit-idempotency';
 
 /** Active transaction handle (matches `advanceEngagementStatus` in engagements.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -256,10 +257,125 @@ export async function applyLedgerEntry(
   return { entry: inserted, wallet: updatedWallet, deduped: false };
 }
 
+/**
+ * Outcome of a single guarded dormancy-expiry attempt (BAL-380). The sweep publishes the
+ * "balance expired" notice on `expired | already_expired` (idempotent by the ledger key)
+ * and emits the money-event analytic ONLY on `expired`. `skipped` carries the reason a
+ * candidate did not expire under the lock.
+ */
+export type ExpireDormantResult =
+  | {
+      outcome: 'expired';
+      entry: CreditLedgerEntry;
+      expiredMinor: number;
+      companyId: string;
+      expiresAt: Date;
+    }
+  | { outcome: 'already_expired'; entry: CreditLedgerEntry; companyId: string; expiresAt: Date }
+  | { outcome: 'skipped'; reason: 'not_expired' | 'no_balance' | 'not_found' };
+
 export const creditLedgerRepository = {
   /** Standalone convenience wrapper — self-wraps `applyLedgerEntry` in a transaction. */
   async postEntry(input: ApplyLedgerEntryInput): Promise<ApplyLedgerEntryResult> {
     return db.transaction((tx) => applyLedgerEntry(tx, input));
+  },
+
+  /**
+   * The guarded, locked, idempotent dormancy-expiry write (BAL-380 / ADR-1040 Lane 3).
+   * Zeroes a dormant wallet's positive balance by posting a single
+   * `entry_type='expiry' / reason='dormancy_expiry'` ledger entry keyed on the
+   * deterministic `dormancy_expiry:${walletId}:${asOf}` idempotency key.
+   *
+   * Algorithm (single txn):
+   *  1. `acquireWalletLock` — serialise against every other same-wallet writer (a consume
+   *     or top-up must not interleave between the eligibility read and the decision).
+   *  2. Re-read the wallet UNDER the lock; absent → `skipped:'not_found'`.
+   *  3. Derive the key from `asOf = now` (UTC `YYYY-MM-DD`).
+   *  4. Not-expired guard (D5, the top-up race): a top-up that landed after the sweep's
+   *     eligibility read rolled `expires_at` forward + added balance → `expiresAt === null
+   *     || expiresAt > now` → `skipped:'not_expired'`. We must NOT expire it.
+   *  5. `balanceMinor > 0` → post `amountMinor = -balanceMinor` (zeroes the cache; the
+   *     `entry_type='expiry'` arm of `applyLedgerEntry` deliberately does NOT roll
+   *     `expires_at`, so an expiry entry can never extend the wallet's own life).
+   *     `dormancy_expiry` is a system reason (excluded from `AUDIT_ACTION_BY_REASON`), so
+   *     `memberId: null` is correct and the dev attribution guard does not fire.
+   *  6. Balance ≤ 0 under the lock → look up the key: found ⇒ `already_expired` (a
+   *     CONCURRENT same-tick sweep already posted this expiry; the caller re-publishes the
+   *     notice, idempotent by correlationId); not found ⇒ `skipped:'no_balance'` (the
+   *     balance was consumed to 0, not expired).
+   *
+   * Idempotency & durability: once expired the balance is 0, so the wallet drops out of
+   * `findExpirableWallets` on every future tick (even though `expires_at` stays `<= now`) —
+   * money is written exactly once, no double-debit. That also means `already_expired` only
+   * guards concurrent same-tick runs, NOT cross-tick crash recovery: if the process dies (or
+   * the notify fails) between this commit and the caller's publish, the zeroed wallet is
+   * never re-selected, so the courtesy "expired" notice is lost. The money stays correct —
+   * only the notification is best-effort.
+   */
+  async expireDormantBalance({
+    walletId,
+    now,
+  }: {
+    walletId: string;
+    now: Date;
+  }): Promise<ExpireDormantResult> {
+    return db.transaction(async (tx) => {
+      // 1. Advisory lock — serialise against consume / top-up on this wallet.
+      await acquireWalletLock(tx, walletId);
+
+      // 2. Re-read UNDER the lock (non-throwing — an absent wallet is a skip, not an error).
+      const [wallet] = await tx
+        .select()
+        .from(creditWallets)
+        .where(eq(creditWallets.id, walletId))
+        .limit(1);
+      if (wallet === undefined) {
+        return { outcome: 'skipped', reason: 'not_found' };
+      }
+
+      // 3. Deterministic key — one expiry per wallet per UTC sweep date.
+      const asOf = now.toISOString().slice(0, 10);
+      const key = deriveIdempotencyKey({ reason: 'dormancy_expiry', walletId, asOf });
+
+      // 4. Not-expired guard (D5): a top-up rolled expires_at forward after the eligibility
+      //    read — never expire a wallet whose (re-read) expiry is null or still in the future.
+      const { expiresAt } = wallet;
+      if (expiresAt === null || expiresAt > now) {
+        return { outcome: 'skipped', reason: 'not_expired' };
+      }
+
+      // 5. Positive balance → post the zeroing expiry entry.
+      if (wallet.balanceMinor > 0) {
+        const result = await applyLedgerEntry(tx, {
+          walletId,
+          entryType: 'expiry',
+          reason: 'dormancy_expiry',
+          amountMinor: -wallet.balanceMinor,
+          idempotencyKey: key,
+          memberId: null,
+        });
+        return {
+          outcome: 'expired',
+          entry: result.entry,
+          expiredMinor: wallet.balanceMinor,
+          companyId: wallet.companyId,
+          expiresAt,
+        };
+      }
+
+      // 6. Balance ≤ 0 under the lock: distinguish an already-posted expiry (replay) from a
+      //    balance consumed to 0.
+      const existing = await findLedgerByKey(tx, key);
+      if (existing !== undefined) {
+        return {
+          outcome: 'already_expired',
+          entry: existing,
+          companyId: wallet.companyId,
+          expiresAt,
+        };
+      }
+      return { outcome: 'skipped', reason: 'no_balance' };
+    });
   },
 
   /** The ledger row for an idempotency key, if any. */

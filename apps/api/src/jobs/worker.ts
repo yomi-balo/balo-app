@@ -18,6 +18,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startAvailabilityCacheWorker, startStalenessCheckWorker, registerStalenessCheckCron },
     { startDeliveryReviewSweepWorker, registerDeliveryReviewSweepCron },
     { startOnboardingReminderSweepWorker, registerOnboardingReminderSweepCron },
+    { startWalletDormancySweepWorker, registerWalletDormancySweepCron },
+    { startFxDisplayRateSweepWorker, registerFxDisplayRateSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -27,6 +29,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./availability-cache.js'),
     import('./auto-accept-sweep.js'),
     import('./onboarding-reminder-sweep.js'),
+    import('./wallet-dormancy-sweep.js'),
+    import('./fx-display-rate-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -43,5 +47,10 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // BAL-374: onboarding-completion reminder sweep (+24h / +72h / +7d).
   startOnboardingReminderSweepWorker();
   await registerOnboardingReminderSweepCron();
+  // BAL-380 (ADR-1040 Lane 3): daily wallet dormancy/expiry sweep + display-FX sweep.
+  startWalletDormancySweepWorker();
+  await registerWalletDormancySweepCron();
+  startFxDisplayRateSweepWorker();
+  await registerFxDisplayRateSweepCron();
   logger?.info('BullMQ workers started');
 }

@@ -308,3 +308,40 @@ export interface OnboardingReminderPayload {
   userId: string; // subject + recipient 'self'; resolver hydrates data.user
   cadenceStep: 1 | 2 | 3; // drives the CTA `?step=N` + analytics; NOT shown as copy
 }
+
+// BAL-380 (ADR-1040 Lane 3) — credit dormancy reminder. The daily dormancy sweep
+// matched a wallet whose rolling `expires_at` sits in the 60d or 30d pre-expiry band —
+// a warm, non-countdown nudge that the balance is still there. SERVER-ONLY (published
+// by the API sweep). Fans out to the company's MANAGE_BILLING holders (recipient
+// 'company_billing_admins' → the resolver hydrates `data.billingUserIds` from
+// `companyId`). `window` selects the copy + analytics; `balanceMinor`/`expiresAt` are
+// display facts CAPTURED AT SWEEP TIME (carried in the payload, not re-hydrated) so the
+// figure is as-of the sweep — matching the engagement-payload precedent. `correlationId
+// = `${walletId}:dormancy_reminder:${window}:${expiresAtDate}`` → per-(wallet, window,
+// expiry-date) BullMQ jobId dedup; a new dormancy cycle a year later (activity rolled
+// `expires_at`) re-reminds because `expiresAtDate` changed. Defined ONCE here to avoid
+// Sonar new-code duplication across the api + web catalogs.
+export interface CreditDormancyReminderPayload {
+  correlationId: string; // `${walletId}:dormancy_reminder:${window}:${expiresAtDate}`
+  walletId: string;
+  companyId: string; // → resolver hydrates data.billingUserIds (fan-out) + data.company
+  window: 60 | 30; // selects copy + analytics
+  balanceMinor: number; // display fact, captured at sweep time — "A$347.00"
+  expiresAt: string; // ISO — display "12 July 2027"
+}
+
+// BAL-380 (ADR-1040 Lane 3) — credit balance expired. The expiry sweep posted the
+// zeroing `entry_type='expiry' / reason='dormancy_expiry'` ledger entry, so the wallet
+// reached its rolling expiry date. SERVER-ONLY (published by the API sweep). Fans out to
+// the company's MANAGE_BILLING holders (recipient 'company_billing_admins'). Soft-toned,
+// provisional copy (no balance figure — it is 0 post-expiry). `correlationId` IS the
+// ledger idempotency key `dormancy_expiry:${walletId}:${asOf}` — one entry, one notice,
+// re-published idempotently on a crash-after-post replay. `expiredMinor` is analytics
+// only (never shown in the expired copy). Defined ONCE here (shared-home convention).
+export interface CreditBalanceExpiredPayload {
+  correlationId: string; // = dormancy_expiry:${walletId}:${asOf} (the ledger idempotency key)
+  walletId: string;
+  companyId: string; // → fan-out
+  expiresAt: string; // ISO — the expiry date reached
+  expiredMinor: number; // analytics only; NOT shown in the expired copy
+}

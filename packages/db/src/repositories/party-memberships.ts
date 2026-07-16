@@ -406,4 +406,18 @@ export const partyMembershipsRepository = {
     const adminRoles = rolesWithCapability(CAPABILITIES.MANAGE_MEMBERS);
     return selectAdminUserIds(partyType, partyId, adminRoles);
   },
+
+  /**
+   * Live company member user ids whose role grants `MANAGE_BILLING` (owner/admin) — the
+   * notification fan-out for credit dormancy-reminder / balance-expired notices (BAL-380).
+   * Company-only: wallets are one-per-company. The billing-role set is derived from the
+   * pure `@balo/shared/authz` map (NOT a hardcoded `role IN ('owner','admin')`), so the
+   * role→capability map stays the single place a role is interpreted; `selectAdminUserIds`
+   * filters `isNull(deletedAt)`, so a soft-removed owner/admin is excluded. A company with
+   * zero owner/admin → `[]` → the dispatcher skips the fan-out.
+   */
+  listBillingUserIds: async (companyId: string): Promise<string[]> => {
+    const billingRoles = rolesWithCapability(CAPABILITIES.MANAGE_BILLING);
+    return selectAdminUserIds('company', companyId, billingRoles);
+  },
 };

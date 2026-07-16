@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, lte } from 'drizzle-orm';
 import { db } from '../client';
 import { creditWallets, type CreditWallet, type NewCreditWallet } from '../schema';
 
@@ -39,6 +39,51 @@ export const creditWalletsRepository = {
     return db.query.creditWallets.findFirst({
       where: eq(creditWallets.companyId, companyId),
     });
+  },
+
+  /**
+   * Wallets whose rolling dormancy expiry has been reached and still hold a positive
+   * balance — the eligibility set for the daily expiry sweep (BAL-380). Filters
+   * `expires_at IS NOT NULL AND expires_at <= now AND balance_minor > 0`, oldest expiry
+   * first. Returns FULL rows (server-side job use only — the sweep needs `id`,
+   * `companyId`, `balanceMinor`, `expiresAt`). Each returned wallet is then re-read under
+   * the advisory lock in `expireDormantBalance` before any write (the top-up race guard).
+   * `credit_wallets` has NO `deleted_at`, so there is no soft-delete filter.
+   */
+  async findExpirableWallets(now: Date): Promise<CreditWallet[]> {
+    return db
+      .select()
+      .from(creditWallets)
+      .where(
+        and(
+          isNotNull(creditWallets.expiresAt),
+          lte(creditWallets.expiresAt, now),
+          gt(creditWallets.balanceMinor, 0)
+        )
+      )
+      .orderBy(asc(creditWallets.expiresAt));
+  },
+
+  /**
+   * Wallets whose rolling dormancy expiry falls in the half-open band `(after, until]`
+   * and still hold a positive balance — the pre-expiry reminder set for the daily sweep
+   * (BAL-380). The 60d/30d reminder bands map to `(now+59d, now+60d]` / `(now+29d, now+30d]`;
+   * the half-open interval (strictly `> after`, `<= until`) makes adjacent daily bands
+   * partition cleanly so a wallet crosses each band on exactly one tick. `NULL` expiries
+   * are excluded by construction (`NULL > after` is unknown). Oldest expiry first.
+   */
+  async findWalletsExpiringBetween(after: Date, until: Date): Promise<CreditWallet[]> {
+    return db
+      .select()
+      .from(creditWallets)
+      .where(
+        and(
+          gt(creditWallets.expiresAt, after),
+          lte(creditWallets.expiresAt, until),
+          gt(creditWallets.balanceMinor, 0)
+        )
+      )
+      .orderBy(asc(creditWallets.expiresAt));
   },
 
   /**

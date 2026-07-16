@@ -109,3 +109,4 @@ export {
   type OnboardingReminderEventMap,
   type OnboardingReminderDomainClass,
 } from './onboarding-reminder';
+export { CREDIT_SERVER_EVENTS, type CreditServerEventMap, type FxDisplayQuoteCode } from './credit';
