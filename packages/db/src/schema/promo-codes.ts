@@ -16,7 +16,7 @@ import { promoCodeStatusEnum } from './enums';
 import { timestamps, softDelete } from './helpers';
 
 /**
- * promo_codes (BAL-384 / ADR-1040) — the mintable, mutable promo-code entity. An
+ * promo_codes (BAL-384 / ADR-1042) — the mintable, mutable promo-code entity. An
  * admin mints a code that grants a fixed slice of AUD credit per redemption, bounded
  * by a total redemption cap and a validity window. BAL-383 (the redeem path) is the
  * ONLY writer of `redeemed_count` and the ONLY inserter of `promo_redemptions`; this
@@ -87,7 +87,7 @@ export const promoCodes = pgTable(
 );
 
 /**
- * promo_redemptions (BAL-384 / ADR-1040) — a DORMANT, append-only redemption ledger.
+ * promo_redemptions (BAL-384 / ADR-1042) — a DORMANT, append-only redemption ledger.
  * Additive, ZERO rows, and NO insert path this ticket: every redemption WRITE, the
  * `redeemed_count` increment, and runtime cap/single-use enforcement belong to
  * BAL-383 + BAL-378. The read tracking-view (BAL-384) reads it (empty until BAL-383).

@@ -272,7 +272,7 @@ export const creditHoldStatusEnum = pgEnum('credit_hold_status', ['active', 'set
  */
 export const fxDisplayQuoteEnum = pgEnum('fx_display_quote', ['GBP', 'EUR', 'USD']);
 
-// ── Promo codes (BAL-384 / ADR-1040) ──────────────────────────────────────
+// ── Promo codes (BAL-384 / ADR-1042) ──────────────────────────────────────
 
 /**
  * Promo-code admin lifecycle (BAL-384). ONLY the admin-controlled state:
