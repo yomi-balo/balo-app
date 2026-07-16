@@ -262,3 +262,21 @@ export type {
   RevokeShareLinkInput,
 } from './proposal-share-links';
 export type { ProposalShareLink, NewProposalShareLink } from '../schema';
+// ── Promo codes (BAL-384) ─────────────────────────────────────────────────
+export {
+  promoCodesRepository,
+  normalizePromoCode,
+  DuplicatePromoCodeError,
+  PromoCodeNotFoundError,
+  CapBelowRedeemedCountError,
+  type CreatePromoCodeInput,
+  type UpdatePromoCapInput,
+  type PromoRedemptionRecord,
+} from './promo-codes';
+export type {
+  PromoCode,
+  NewPromoCode,
+  PromoRedemption,
+  NewPromoRedemption,
+  PromoCodeStatus,
+} from '../schema';

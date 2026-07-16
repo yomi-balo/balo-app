@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { AlertCircle, ArrowRight, Briefcase, Clock, Zap } from 'lucide-react';
+import { AlertCircle, ArrowRight, Briefcase, Clock, Ticket, Zap } from 'lucide-react';
 import type { AdminPortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
 import { StatTiles, type StatTileDescriptor } from './stat-tiles';
 import { AdminTriageCard } from './admin-triage-card';
@@ -84,15 +84,25 @@ export function AdminDash({ dto }: Readonly<AdminDashProps>): React.JSX.Element 
               Pipeline by stage
             </span>
           </div>
-          {/* Cross-link to the delivery oversight list — the pipeline ends at
-              kickoff; the engagements list begins there ("after the board"). */}
-          <Link
-            href="/engagements"
-            className="text-primary focus-visible:ring-ring inline-flex shrink-0 items-center gap-1 rounded text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
-          >
-            Delivery oversight
-            <ArrowRight className="h-3 w-3" aria-hidden="true" />
-          </Link>
+          {/* Cross-links to the admin-only surfaces: the delivery oversight list (the
+              pipeline ends at kickoff; the engagements list begins there) and promo-code
+              management (BAL-384). */}
+          <div className="flex shrink-0 items-center gap-4">
+            <Link
+              href="/promo-codes"
+              className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <Ticket className="h-3 w-3" aria-hidden="true" />
+              Promo codes
+            </Link>
+            <Link
+              href="/engagements"
+              className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+            >
+              Delivery oversight
+              <ArrowRight className="h-3 w-3" aria-hidden="true" />
+            </Link>
+          </div>
         </div>
         <PipelineKanban columns={dto.kanban} />
       </section>
