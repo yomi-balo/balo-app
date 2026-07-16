@@ -49,6 +49,7 @@ describe('applyLedgerEntry — invariant #3 (cache == ledger sum)', () => {
         reason: 'manual_purchase',
         amountMinor: 5000,
         idempotencyKey: 'k1',
+        memberId: member.id, // manual_purchase is member-attributed (BAL-382 / Decision C)
       },
       {
         walletId: wallet.id,
@@ -118,6 +119,7 @@ describe('applyLedgerEntry — invariant #3 (cache == ledger sum)', () => {
 describe('applyLedgerEntry — invariant #4 (idempotent replay is a no-op)', () => {
   it('a replayed idempotency key returns deduped:true, one row, balance unchanged', async () => {
     const { wallet } = await creditWalletFactory();
+    const member = await userFactory();
     const key = deriveIdempotencyKey({ reason: 'manual_purchase', paymentIntentId: 'pi_dup' });
 
     const first = await creditLedgerRepository.postEntry({
@@ -126,6 +128,7 @@ describe('applyLedgerEntry — invariant #4 (idempotent replay is a no-op)', () 
       reason: 'manual_purchase',
       amountMinor: 9000,
       idempotencyKey: key,
+      memberId: member.id,
       stripePaymentIntentId: 'pi_dup',
     });
     expect(first.deduped).toBe(false);
@@ -137,6 +140,7 @@ describe('applyLedgerEntry — invariant #4 (idempotent replay is a no-op)', () 
       reason: 'manual_purchase',
       amountMinor: 9000,
       idempotencyKey: key,
+      memberId: member.id,
       stripePaymentIntentId: 'pi_dup',
     });
     expect(second.deduped).toBe(true);
@@ -382,9 +386,113 @@ describe('applyLedgerEntry — invariant #8 (only amount_minor moves the balance
   });
 });
 
+describe('applyLedgerEntry — BAL-382 reconciliation columns + manual_purchase audit', () => {
+  it('round-trips stripe_charge_id + stripe_balance_transaction_id on an insert (Decision A)', async () => {
+    const { wallet } = await creditWalletFactory();
+    const member = await userFactory();
+
+    const { entry } = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 5000,
+      idempotencyKey: 'recon_1',
+      memberId: member.id,
+      stripePaymentIntentId: 'pi_recon',
+      stripeChargeId: 'ch_recon',
+      stripeBalanceTransactionId: 'txn_recon',
+    });
+
+    expect(entry.stripePaymentIntentId).toBe('pi_recon');
+    expect(entry.stripeChargeId).toBe('ch_recon');
+    expect(entry.stripeBalanceTransactionId).toBe('txn_recon');
+
+    // Re-read from the DB — confirms real persistence, not just the returning() row.
+    const persisted = await creditLedgerRepository.findByIdempotencyKey('recon_1');
+    expect(persisted?.stripeChargeId).toBe('ch_recon');
+    expect(persisted?.stripeBalanceTransactionId).toBe('txn_recon');
+  });
+
+  it('leaves the reconciliation columns null when omitted', async () => {
+    const { wallet } = await creditWalletFactory();
+    const { entry } = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'auto_topup',
+      amountMinor: 4000,
+      idempotencyKey: 'recon_null',
+    });
+    expect(entry.stripeChargeId).toBeNull();
+    expect(entry.stripeBalanceTransactionId).toBeNull();
+  });
+
+  it('a manual_purchase (with memberId) writes exactly one credit_wallet.purchased audit row', async () => {
+    const { wallet, companyId } = await creditWalletFactory();
+    const member = await userFactory();
+
+    const { entry } = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 12_000,
+      idempotencyKey: 'purchase_audit_1',
+      memberId: member.id,
+      stripePaymentIntentId: 'pi_audit',
+      stripeChargeId: 'ch_audit',
+      stripeBalanceTransactionId: 'txn_audit',
+    });
+
+    const rows = await auditRowsFor(wallet.id, 'credit_wallet.purchased');
+    expect(rows).toHaveLength(1);
+    const [audit] = rows;
+    expect(audit?.actorUserId).toBe(member.id);
+    expect(audit?.entityType).toBe('credit_wallet');
+    expect(audit?.entityId).toBe(wallet.id);
+    expect(audit?.metadata).toMatchObject({
+      companyId,
+      ledgerEntryId: entry.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 12_000,
+      balanceAfterMinor: 12_000,
+    });
+    // The Stripe reference ids live on the ledger row, NOT in the audit metadata.
+    expect(JSON.stringify(audit?.metadata)).not.toContain('ch_audit');
+  });
+
+  it('an auto_topup writes NO audit row (system entry — Decision C)', async () => {
+    const { wallet } = await creditWalletFactory();
+    await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'auto_topup',
+      amountMinor: 10_000,
+      idempotencyKey: 'topup_no_audit',
+    });
+    expect(await auditRowsFor(wallet.id, 'credit_wallet.purchased')).toHaveLength(0);
+    expect(await auditRowsFor(wallet.id, 'credit_wallet.consumed')).toHaveLength(0);
+    expect(await auditRowsFor(wallet.id, 'credit_wallet.settled')).toHaveLength(0);
+  });
+
+  it('throws (before any write) when a manual_purchase arrives without a memberId', async () => {
+    const { wallet } = await creditWalletFactory();
+    await expect(
+      creditLedgerRepository.postEntry({
+        walletId: wallet.id,
+        entryType: 'purchase',
+        reason: 'manual_purchase',
+        amountMinor: 100,
+        idempotencyKey: 'purchase_missing_member',
+      })
+    ).rejects.toThrow(/requires a memberId/i);
+    expect(await creditLedgerRepository.listByWallet(wallet.id)).toHaveLength(0);
+  });
+});
+
 describe('applyLedgerEntry — expiry & missing wallet', () => {
   it('rolls expires_at forward on a normal entry but NOT on a dormancy-expiry entry', async () => {
     const { wallet } = await creditWalletFactory();
+    const member = await userFactory();
 
     // A normal purchase stamps expires_at ~ now + 12 months.
     const { wallet: afterPurchase } = await creditLedgerRepository.postEntry({
@@ -393,6 +501,7 @@ describe('applyLedgerEntry — expiry & missing wallet', () => {
       reason: 'manual_purchase',
       amountMinor: 10_000,
       idempotencyKey: 'exp_purchase',
+      memberId: member.id,
     });
     expect(afterPurchase.expiresAt).not.toBeNull();
     const stamped = afterPurchase.expiresAt as Date;
@@ -413,6 +522,7 @@ describe('applyLedgerEntry — expiry & missing wallet', () => {
   });
 
   it('throws WalletNotFoundError for an unknown wallet (whole txn rolls back)', async () => {
+    const member = await userFactory();
     await expect(
       creditLedgerRepository.postEntry({
         walletId: '00000000-0000-0000-0000-000000000000',
@@ -420,6 +530,7 @@ describe('applyLedgerEntry — expiry & missing wallet', () => {
         reason: 'manual_purchase',
         amountMinor: 100,
         idempotencyKey: 'ghost',
+        memberId: member.id, // manual_purchase requires attribution (Decision C); wallet lookup still throws
       })
     ).rejects.toBeInstanceOf(WalletNotFoundError);
   });
@@ -441,12 +552,14 @@ describe('applyLedgerEntry — expiry & missing wallet', () => {
 describe('creditLedgerRepository reads', () => {
   it('findByIdempotencyKey returns the entry; listByWallet is created_at asc', async () => {
     const { wallet } = await creditWalletFactory();
+    const member = await userFactory();
     await creditLedgerRepository.postEntry({
       walletId: wallet.id,
       entryType: 'purchase',
       reason: 'manual_purchase',
       amountMinor: 100,
       idempotencyKey: 'read_1',
+      memberId: member.id,
     });
     const found = await creditLedgerRepository.findByIdempotencyKey('read_1');
     expect(found?.amountMinor).toBe(100);

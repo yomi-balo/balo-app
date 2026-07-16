@@ -242,6 +242,7 @@ export {
 export type {
   CreditWallet,
   NewCreditWallet,
+  MandateStatus,
   CreditLedgerEntry,
   NewCreditLedgerEntry,
   CreditEntryType,
@@ -280,3 +281,6 @@ export type {
   NewPromoRedemption,
   PromoCodeStatus,
 } from '../schema';
+// ── Stripe provider (BAL-382) ─────────────────────────────────────────────
+export { stripeWebhookEventsRepository } from './stripe-webhook-events';
+export type { StripeWebhookEvent, NewStripeWebhookEvent } from '../schema';

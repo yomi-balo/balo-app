@@ -1,6 +1,12 @@
 import { and, asc, eq, gt, isNotNull, lte } from 'drizzle-orm';
 import { db } from '../client';
-import { creditWallets, type CreditWallet, type NewCreditWallet } from '../schema';
+import {
+  creditWallets,
+  type CreditWallet,
+  type MandateStatus,
+  type NewCreditWallet,
+} from '../schema';
+import type { DbExecutor } from './_shared/db-executor';
 
 /** Config fields a MANAGE_BILLING-gated action may write (gating lives at the caller). */
 interface UpdateWalletConfigInput {
@@ -120,6 +126,61 @@ export const creditWalletsRepository = {
       .returning();
     if (row === undefined) {
       throw new Error(`Credit wallet not found: ${id}`);
+    }
+    return row;
+  },
+
+  /**
+   * Persist an ACTIVE off-session mandate on the wallet (BAL-382) — customer +
+   * payment-method + mandate ref + `mandate_status='active'`, in ONE write. Tx-composable
+   * via `DbExecutor` (pass the webhook's `tx` so it commits with the marker + effect;
+   * mirrors `auditEventsRepository.record`). Written on `setup_intent.succeeded`. Throws
+   * if the wallet is missing.
+   */
+  async applyMandate(
+    exec: DbExecutor,
+    input: {
+      walletId: string;
+      stripeCustomerId: string;
+      stripePaymentMethodId: string;
+      mandateRef: string;
+      mandateStatus: 'active';
+    }
+  ): Promise<CreditWallet> {
+    const [row] = await exec
+      .update(creditWallets)
+      .set({
+        stripeCustomerId: input.stripeCustomerId,
+        stripePaymentMethodId: input.stripePaymentMethodId,
+        mandateRef: input.mandateRef,
+        mandateStatus: input.mandateStatus,
+      })
+      .where(eq(creditWallets.id, input.walletId))
+      .returning();
+    if (row === undefined) {
+      throw new Error(`Credit wallet not found: ${input.walletId}`);
+    }
+    return row;
+  },
+
+  /**
+   * Flip only the mandate lifecycle status (BAL-382) — e.g. `pending` on
+   * `createSetupIntent`, `failed` on `setup_intent.setup_failed`. Tx-composable via
+   * `DbExecutor`. Does NOT touch the customer / payment-method / mandate-ref columns.
+   * Throws if the wallet is missing.
+   */
+  async applyMandateStatus(
+    exec: DbExecutor,
+    walletId: string,
+    status: MandateStatus
+  ): Promise<CreditWallet> {
+    const [row] = await exec
+      .update(creditWallets)
+      .set({ mandateStatus: status })
+      .where(eq(creditWallets.id, walletId))
+      .returning();
+    if (row === undefined) {
+      throw new Error(`Credit wallet not found: ${walletId}`);
     }
     return row;
   },

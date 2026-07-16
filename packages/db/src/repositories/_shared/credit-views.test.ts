@@ -14,8 +14,14 @@ import {
  * FAILS here. Mocks nothing (no `db`, no I/O).
  */
 
-// The mandate secrets that must NEVER appear on a client lens (invariant #1).
-const WALLET_SECRET_KEYS = ['stripePaymentMethodId', 'mandateRef'] as const;
+// The mandate secrets / off-lens columns that must NEVER appear on a client lens
+// (invariant #1). Includes the BAL-382 mandate customer + lifecycle columns.
+const WALLET_SECRET_KEYS = [
+  'stripePaymentMethodId',
+  'mandateRef',
+  'stripeCustomerId',
+  'mandateStatus',
+] as const;
 // Fee/margin/quote keys that must NEVER appear on a client activity row (invariant #2).
 const FEE_KEYS = ['baloFeeBps', 'margin', 'markup', 'expertQuote', 'priceCents', 'rateCents'];
 
@@ -33,6 +39,8 @@ function fullWallet(overrides: Partial<CreditWallet> = {}): CreditWallet {
     // Secrets deliberately POPULATED — the mapper must still never surface them.
     stripePaymentMethodId: 'pm_secret_123',
     mandateRef: 'mandate_secret_abc',
+    stripeCustomerId: 'cus_secret_123',
+    mandateStatus: 'active',
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-06-01T00:00:00Z'),
     ...overrides,
@@ -54,6 +62,8 @@ function ledgerEntry(overrides: Partial<CreditLedgerEntry> = {}): CreditLedgerEn
     chargedAmountMinor: null,
     fxRate: null,
     stripePaymentIntentId: null,
+    stripeChargeId: null,
+    stripeBalanceTransactionId: null,
     idempotencyKey: 'manual_purchase:pi_1',
     createdAt: new Date('2026-06-01T00:00:00Z'),
     ...overrides,
@@ -96,6 +106,7 @@ describe('toClientWalletView (invariant #1 — secrets never leak even from a fu
     const serialized = JSON.stringify(view);
     expect(serialized).not.toContain('pm_secret_123');
     expect(serialized).not.toContain('mandate_secret_abc');
+    expect(serialized).not.toContain('cus_secret_123');
   });
 
   it('carries the available balance and the projected safe fields through', () => {

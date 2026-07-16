@@ -285,3 +285,23 @@ export const fxDisplayQuoteEnum = pgEnum('fx_display_quote', ['GBP', 'EUR', 'USD
  * ADD VALUE, memory reference_enum_default_same_tx_migration_hazard).
  */
 export const promoCodeStatusEnum = pgEnum('promo_code_status', ['active', 'deactivated']);
+
+// ── Stripe provider layer (BAL-382) ──────────────────────────────────────
+
+/**
+ * Off-session mandate lifecycle (BAL-382 / Decision B). Standalone `CREATE TYPE`, but
+ * the column that uses it (`credit_wallets.mandate_status`) is NULLABLE with NO default,
+ * so no enum literal ever appears inside a `DEFAULT` in the same migration txn as the
+ * `CREATE TYPE` — this deliberately sidesteps the enum-default-same-txn migration hazard
+ * (memory `reference_enum_default_same_tx_migration_hazard`), so no `::text::enum` cast
+ * fix is needed. Lifecycle: `null` (no mandate ever attempted) → `pending` (createSetupIntent)
+ * → `active` (setup_intent.succeeded) or `failed` (setup_intent.setup_failed);
+ * `requires_action` is reserved for a future SCA-during-setup surface. Ordering carries no
+ * semantics.
+ */
+export const mandateStatusEnum = pgEnum('mandate_status', [
+  'pending',
+  'active',
+  'requires_action',
+  'failed',
+]);

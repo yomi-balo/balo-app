@@ -100,6 +100,9 @@ importers:
       fastify:
         specifier: ^5.7.1
         version: 5.7.1
+      fastify-raw-body:
+        specifier: ^5.0.0
+        version: 5.0.0
       ioredis:
         specifier: ^5.9.3
         version: 5.9.3
@@ -118,6 +121,9 @@ importers:
       react:
         specifier: ^19.2.0
         version: 19.2.0
+      stripe:
+        specifier: ^22.3.1
+        version: 22.3.1(@types/node@22.15.3)
       zod:
         specifier: ^4.3.5
         version: 4.3.5
@@ -8276,6 +8282,13 @@ packages:
         integrity: sha512-FAIDA8eovSt5qcDgcBvDuX/v0Cjz0ohGhENZ/wpc3y+oZCY2afZ9Baqql3g/lC+OHRnciQol4ww7tuthOb9idw==,
       }
 
+  fastify-raw-body@5.0.0:
+    resolution:
+      {
+        integrity: sha512-2qfoaQ3BQDhZ1gtbkKZd6n0kKxJISJGM6u/skD9ljdWItAscjXrtZ1lnjr7PavmXX9j4EyCPmBDiIsLn07d5vA==,
+      }
+    engines: { node: '>= 10' }
+
   fastify@5.7.1:
     resolution:
       {
@@ -8813,6 +8826,13 @@ packages:
       {
         integrity: sha512-kvL8xYl5QMTh+LwohVN72ciOxC0OEV79IPdJSTwEXok9y9QHebXGdFgrED4sWfiax/ODx++CAMk3hMy4XPJPOw==,
       }
+
+  iconv-lite@0.7.3:
+    resolution:
+      {
+        integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==,
+      }
+    engines: { node: '>=0.10.0' }
 
   ieee754@1.2.1:
     resolution:
@@ -10943,6 +10963,13 @@ packages:
         integrity: sha512-vYl3iOX+4CKUWuxGi9Ukhie6fsqXqS9FE2Zaic4tNFD2N2QQaXOMFbuKK4QmDHC0JO6B1Zp41J0LpT0oR68amQ==,
       }
 
+  raw-body@3.0.2:
+    resolution:
+      {
+        integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==,
+      }
+    engines: { node: '>= 0.10' }
+
   react-dom@19.2.0:
     resolution:
       {
@@ -11821,6 +11848,18 @@ packages:
       }
     engines: { node: '>=8' }
 
+  stripe@22.3.1:
+    resolution:
+      {
+        integrity: sha512-6XSLN0KK0IdfXqDHqMg6CDoO3eO62ye9dhzw0fZp55AUOzHR1YRJOqYHTsuCi4QJ4Ni/usEmXtq69c9ghKDmYw==,
+      }
+    engines: { node: '>=18' }
+    peerDependencies:
+      '@types/node': '>=18'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
+
   strnum@2.2.0:
     resolution:
       {
@@ -12410,6 +12449,13 @@ packages:
       {
         integrity: sha512-x7bc76x0bm4prf1VLg79uhAzKw8DVboClSN5VxJuQ+LKDOVEW9CdH+VY7SP+vX7xCYQqzzgQpFqz15zeLvAtZQ==,
       }
+
+  unpipe@1.0.0:
+    resolution:
+      {
+        integrity: sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==,
+      }
+    engines: { node: '>= 0.8' }
 
   unplugin@1.0.1:
     resolution:
@@ -18268,6 +18314,12 @@ snapshots:
 
   fastify-plugin@5.1.0: {}
 
+  fastify-raw-body@5.0.0:
+    dependencies:
+      fastify-plugin: 5.1.0
+      raw-body: 3.0.2
+      secure-json-parse: 2.7.0
+
   fastify@5.7.1:
     dependencies:
       '@fastify/ajv-compiler': 4.0.5
@@ -18614,6 +18666,10 @@ snapshots:
   husky@9.1.7: {}
 
   hyphen@1.14.1: {}
+
+  iconv-lite@0.7.3:
+    dependencies:
+      safer-buffer: 2.1.2
 
   ieee754@1.2.1: {}
 
@@ -19903,6 +19959,13 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
+  raw-body@3.0.2:
+    dependencies:
+      bytes: 3.1.2
+      http-errors: 2.0.1
+      iconv-lite: 0.7.3
+      unpipe: 1.0.0
+
   react-dom@19.2.0(react@19.2.0):
     dependencies:
       react: 19.2.0
@@ -20499,6 +20562,10 @@ snapshots:
 
   strip-json-comments@3.1.1: {}
 
+  stripe@22.3.1(@types/node@22.15.3):
+    optionalDependencies:
+      '@types/node': 22.15.3
+
   strnum@2.2.0: {}
 
   styled-jsx@5.1.6(@babel/core@7.28.6)(react@19.2.0):
@@ -20887,6 +20954,8 @@ snapshots:
     dependencies:
       pako: 0.2.9
       tiny-inflate: 1.0.3
+
+  unpipe@1.0.0: {}
 
   unplugin@1.0.1:
     dependencies:

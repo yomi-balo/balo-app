@@ -7,9 +7,10 @@ import type { DbExecutor } from './db-executor';
  * `action`/`entityType` as open `text`, so this union keeps OUR emitted taxonomy
  * typo-safe at compile time WITHOUT the generic repo needing to know it — the same
  * discipline as `DeliveryAuditAction`. Only member-attributed money events (a
- * `session_consume` or `overdraft_settlement` ledger entry) write a row.
+ * `manual_purchase`, `session_consume`, or `overdraft_settlement` ledger entry) write a row.
  */
 export type CreditAuditAction =
+  | 'credit_wallet.purchased' // a manual_purchase ledger entry, member-attributed (BAL-382)
   | 'credit_wallet.consumed' // a session_consume ledger entry, member-attributed
   | 'credit_wallet.settled'; // an overdraft_settlement ledger entry, member-attributed
 
