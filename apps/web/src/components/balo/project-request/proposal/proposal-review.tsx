@@ -11,9 +11,11 @@ import { ReviewSummaryCard } from './review-summary-card';
 import { AcceptConfirmModal } from './accept-confirm-modal';
 import { ChangesModal } from './changes-modal';
 import { BackChannel } from './back-channel';
-import { ProposalPdfDownloadLink } from './proposal-pdf-download-link';
+import { ShareMenu } from './share/share-menu';
+import { SharedWithCard } from './share/shared-with-card';
 import { firstName } from './proposal-name';
 import type { ProposalReviewDoc } from './proposal-review-types';
+import type { SharedLinkView } from '@/lib/project-request/proposal/share-view-types';
 
 interface ProposalReviewProps {
   requestId: string;
@@ -25,6 +27,13 @@ interface ProposalReviewProps {
   clientCompanyName: string;
   /** The client's own first name (reserved for future framing; kept for parity). */
   clientFirstName: string;
+  /**
+   * Active share links per relationship id (BAL-386), token/hash stripped. Empty
+   * for a relationship with no shares; missing keys default to no shares.
+   */
+  sharedLinksByRelationship?: Record<string, SharedLinkView[]>;
+  /** True when the server-side share-link fetch failed — drives the card's error state. */
+  shareLinksErrored?: boolean;
 }
 
 /**
@@ -59,6 +68,8 @@ export function ProposalReview({
   proposals,
   activeRelationshipId,
   clientCompanyName,
+  sharedLinksByRelationship,
+  shareLinksErrored = false,
 }: Readonly<ProposalReviewProps>): React.JSX.Element {
   const initialId = useMemo(() => {
     const matched = proposals.find((proposal) => proposal.relationshipId === activeRelationshipId);
@@ -175,10 +186,15 @@ export function ProposalReview({
         </div>
       ) : (
         <>
-          {/* Download stays with the visible doc — never offered while the doc is hidden
-              behind the awaiting-revision state above. */}
+          {/* Share menu (Download PDF + Share with a colleague) stays with the visible
+              doc — never offered while the doc is hidden behind the awaiting-revision
+              state above. */}
           <div className="flex justify-end">
-            <ProposalPdfDownloadLink requestId={requestId} relationshipId={active.relationshipId} />
+            <ShareMenu
+              requestId={requestId}
+              relationshipId={active.relationshipId}
+              version={active.version}
+            />
           </div>
 
           {/* Desktop: 2-col doc + sticky summary card */}
@@ -231,6 +247,16 @@ export function ProposalReview({
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Who this proposal is shared with, outside the client's team (BAL-386). */}
+          <div className="max-w-xl">
+            <SharedWithCard
+              requestId={requestId}
+              relationshipId={active.relationshipId}
+              links={sharedLinksByRelationship?.[active.relationshipId] ?? []}
+              status={shareLinksErrored ? 'error' : 'loaded'}
+            />
           </div>
         </>
       )}

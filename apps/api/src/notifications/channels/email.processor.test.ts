@@ -3,15 +3,20 @@ import type { Job } from 'bullmq';
 import type { DeliveryPayload } from './types.js';
 
 // Mock dependencies
-const { mockFindById, mockInsert, mockSendTransacEmail } = vi.hoisted(() => ({
+const { mockFindById, mockInsert, mockSendTransacEmail, mockGetR2ObjectBytes } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockInsert: vi.fn().mockResolvedValue({}),
   mockSendTransacEmail: vi.fn().mockResolvedValue({ messageId: 'brevo-msg-1' }),
+  mockGetR2ObjectBytes: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockFindById },
   notificationLogRepository: { insert: mockInsert },
+}));
+
+vi.mock('../../lib/storage/r2.js', () => ({
+  getR2ObjectBytes: mockGetR2ObjectBytes,
 }));
 
 vi.mock('@react-email/render', () => ({
@@ -160,5 +165,63 @@ describe('processEmailJob', () => {
         to: [{ email: 'ops@balo.expert', name: 'team' }],
       })
     );
+  });
+
+  // -- BAL-386 attachment path -----------------------------------------------
+
+  const sharePayload: DeliveryPayload = {
+    recipientId: 'share-link-1',
+    recipientEmail: 'colleague@northwind.com',
+    template: 'proposal-shared',
+    event: 'proposal.shared',
+    data: {},
+    payload: {
+      correlationId: 'share-link-1',
+      sharerName: 'Dana Okafor',
+      sharerOrgLabel: 'Acme Industrial',
+      proposalTitle: 'CPQ implementation',
+      expiresOn: '13 August 2026',
+      shareToken: 'raw-token-abcdef0123456789',
+    },
+    attachments: [{ source: 'r2', key: 'proposals/p1/client.pdf', filename: 'proposal.pdf' }],
+  };
+
+  it('resolves an R2 attachment to base64 and passes Brevo attachment: [{ content, name }]', async () => {
+    mockGetR2ObjectBytes.mockResolvedValueOnce(new Uint8Array([1, 2, 3, 4]));
+
+    await processEmailJob(makeJob(sharePayload));
+
+    expect(mockGetR2ObjectBytes).toHaveBeenCalledWith('proposals/p1/client.pdf');
+    expect(mockSendTransacEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachment: [
+          {
+            content: Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64'),
+            name: 'proposal.pdf',
+          },
+        ],
+      })
+    );
+  });
+
+  it('throws (for BullMQ retry) when the R2 read misses, and does not send', async () => {
+    mockGetR2ObjectBytes.mockRejectedValueOnce(new Error('NoSuchKey'));
+
+    await expect(processEmailJob(makeJob(sharePayload))).rejects.toThrow('NoSuchKey');
+    expect(mockSendTransacEmail).not.toHaveBeenCalled();
+  });
+
+  it('leaves the non-attachment path untouched (no R2 read, no attachment field)', async () => {
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'alice@example.com',
+      firstName: 'Alice',
+    });
+
+    await processEmailJob(makeJob(basePayload));
+
+    expect(mockGetR2ObjectBytes).not.toHaveBeenCalled();
+    const sentArgs = mockSendTransacEmail.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(sentArgs).not.toHaveProperty('attachment');
   });
 });

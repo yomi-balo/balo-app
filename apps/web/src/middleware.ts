@@ -15,10 +15,15 @@ import {
   ONBOARDING_PATH,
 } from '@/lib/auth/route-config';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
+import { redactSensitivePath } from '@balo/shared/redaction';
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
   const requestId = crypto.randomUUID();
+
+  // A secret-bearing path (e.g. the `/shared/proposals/{token}` magic link) must never
+  // be logged verbatim — redact the token segment before it reaches Axiom (BAL-386).
+  const safePath = redactSensitivePath(pathname);
 
   // Structured JSON log compatible with Axiom ingestion.
   // Pino is not available in Edge Runtime, so we use console.log with JSON.
@@ -28,7 +33,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
       msg: 'Request',
       requestId,
       method: request.method,
-      path: pathname,
+      path: safePath,
       timestamp: new Date().toISOString(),
     })
   );
@@ -61,7 +66,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
         level: 'error',
         msg: 'Middleware session error',
         requestId,
-        path: pathname,
+        path: safePath,
         error: error instanceof Error ? error.message : 'Unknown',
         timestamp: new Date().toISOString(),
       })
