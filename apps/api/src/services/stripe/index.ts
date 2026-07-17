@@ -9,6 +9,8 @@ export {
   createOnSessionPurchaseIntent,
   createOffSessionCharge,
   retrieveSettlement,
+  retrievePaymentIntentStatus,
+  type PaymentIntentStatusResult,
 } from './charges.js';
 export { resolveStripeEffect, applyStripeEffect } from './dispatch.js';
 export { StripeConfigError } from './errors.js';

@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { creditWallets } from './credit-wallets';
+import { creditSessions } from './credit-sessions';
 import { users } from './users';
 import { creditEntryTypeEnum, creditLedgerReasonEnum } from './enums';
 
@@ -68,10 +69,12 @@ export const creditLedger = pgTable(
     // orphan) — reconciled with `audit_events.actor_user_id` (also nullable + restrict).
     memberId: uuid('member_id').references(() => users.id, { onDelete: 'restrict' }),
 
-    // Links a Case's entries. NO FK this ticket — no `sessions`/`cases` table is in
-    // scope; a bare uuid mirroring `audit_events.entity_id`. A later migration adds the
-    // FK when the Case table lands (plan Open Q 5).
-    sessionId: uuid('session_id'),
+    // Links a Case's entries. FK added in BAL-378 → `credit_sessions.id` ON DELETE
+    // RESTRICT. Kept NULLABLE — non-session entries (manual_purchase / auto_topup /
+    // dormancy_expiry / promo / adjustment) legitimately have no session. All existing
+    // rows are NULL (BAL-378 is the first lane to write a session_id), so ADD CONSTRAINT
+    // is safe against seeded data. Lazy `.references` thunk breaks the import cycle.
+    sessionId: uuid('session_id').references(() => creditSessions.id, { onDelete: 'restrict' }),
 
     // Immutable record of what the CARD was billed (e.g. 'GBP', 52000, 0.52). DISPLAY /
     // record only — NEVER in balance math (only `amount_minor` moves the balance).

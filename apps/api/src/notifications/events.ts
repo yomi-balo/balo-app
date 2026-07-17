@@ -21,6 +21,12 @@ import type {
   CreditDormancyReminderPayload,
   CreditBalanceExpiredPayload,
   ProposalSharedPayload,
+  SessionLowBalancePayload,
+  SessionGraceEnteredPayload,
+  SessionNearWrapPayload,
+  SessionSettledPayload,
+  SessionSettlementFailedPayload,
+  SessionTopupNudgePayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -256,7 +262,13 @@ export type NotificationEvent =
   | 'company.provisioned'
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
-  | 'credit.balance_expired';
+  | 'credit.balance_expired'
+  | 'session.low_balance'
+  | 'session.grace_entered'
+  | 'session.near_wrap'
+  | 'session.settled'
+  | 'session.settlement_failed'
+  | 'session.topup_nudge';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -273,7 +285,13 @@ export type ServerOnlyNotificationEvent =
   | 'engagement.review_reminder'
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
-  | 'credit.balance_expired';
+  | 'credit.balance_expired'
+  | 'session.low_balance'
+  | 'session.grace_entered'
+  | 'session.near_wrap'
+  | 'session.settled'
+  | 'session.settlement_failed'
+  | 'session.topup_nudge';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -319,4 +337,10 @@ export interface EventPayloadMap {
   'onboarding.reminder': OnboardingReminderPayload;
   'credit.dormancy_reminder': CreditDormancyReminderPayload;
   'credit.balance_expired': CreditBalanceExpiredPayload;
+  'session.low_balance': SessionLowBalancePayload;
+  'session.grace_entered': SessionGraceEnteredPayload;
+  'session.near_wrap': SessionNearWrapPayload;
+  'session.settled': SessionSettledPayload;
+  'session.settlement_failed': SessionSettlementFailedPayload;
+  'session.topup_nudge': SessionTopupNudgePayload;
 }

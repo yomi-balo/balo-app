@@ -8,6 +8,7 @@ vi.mock('@balo/shared/logging', () => ({
 import {
   createOffSessionCharge,
   createOnSessionPurchaseIntent,
+  retrievePaymentIntentStatus,
   retrieveSettlement,
 } from './charges.js';
 import { StripeSettlementError } from './errors.js';
@@ -250,6 +251,41 @@ describe('charges', () => {
         balance_transaction: { id: 'txn_9', amount: 5000, currency: 'usd', exchange_rate: null },
       });
       await expect(retrieveSettlement('pi_9')).rejects.toBeInstanceOf(StripeSettlementError);
+    });
+  });
+
+  describe('retrievePaymentIntentStatus (reconcile pre-recharge check, FIX 6)', () => {
+    it('returns the PI status with hardDeclined=false when there is no last_payment_error', async () => {
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_r1', status: 'succeeded' });
+      const result = await retrievePaymentIntentStatus('pi_r1');
+      expect(result).toEqual({ status: 'succeeded', hardDeclined: false });
+      // READ-ONLY — it only retrieves; it never creates a charge.
+      expect(mockStripe.paymentIntents.create).not.toHaveBeenCalled();
+    });
+
+    it('flags a hard decline (a non-SCA last_payment_error)', async () => {
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r2',
+        status: 'requires_payment_method',
+        last_payment_error: { code: 'card_declined' },
+      });
+      const result = await retrievePaymentIntentStatus('pi_r2');
+      expect(result).toEqual({ status: 'requires_payment_method', hardDeclined: true });
+    });
+
+    it('does NOT flag an SCA (authentication_required) prompt as a hard decline', async () => {
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r3',
+        status: 'requires_action',
+        last_payment_error: { code: 'authentication_required' },
+      });
+      const result = await retrievePaymentIntentStatus('pi_r3');
+      expect(result).toEqual({ status: 'requires_action', hardDeclined: false });
+    });
+
+    it('returns null when the PaymentIntent cannot be retrieved', async () => {
+      mockStripe.paymentIntents.retrieve.mockRejectedValue(new Error('stripe unavailable'));
+      expect(await retrievePaymentIntentStatus('pi_r4')).toBeNull();
     });
   });
 });

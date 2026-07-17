@@ -111,3 +111,9 @@ export {
 } from './onboarding-reminder';
 export { CREDIT_SERVER_EVENTS, type CreditServerEventMap, type FxDisplayQuoteCode } from './credit';
 export { PROMO_SERVER_EVENTS, type PromoServerEventMap } from './promo';
+export {
+  SESSION_EVENTS,
+  type SessionEventMap,
+  SESSION_SERVER_EVENTS,
+  type SessionServerEventMap,
+} from './session';

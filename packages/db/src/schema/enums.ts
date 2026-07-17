@@ -305,3 +305,67 @@ export const mandateStatusEnum = pgEnum('mandate_status', [
   'requires_action',
   'failed',
 ]);
+
+// ── Session consume & overdraft (BAL-378 / ADR-1040 Lane 2) ────────────────
+//
+// All FOUR enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
+// VALUE`), so every value commits atomically with the type. Using a value as a
+// column DEFAULT (`'pending'`, `'not_required'`, `'open'`) or as a partial-index
+// predicate literal (`credit_sessions` meter/settling indexes; `credit_receivables`
+// company-open index) is SAFE in the SAME migration — the enum-default-same-txn
+// hazard (memory `reference_enum_default_same_tx_migration_hazard`) applies ONLY to
+// ADD-VALUE, which none of these are (plan §4 / Decision 5).
+
+/**
+ * The credit-session (billing envelope) lifecycle. Default `pending` (opened + hold
+ * placed, not yet connected). `active` = metering; `grace` = card-backed overdraft
+ * after the balance hit zero WITH a mandate; `wrapped` = the ONE warm pause (ceiling
+ * hit, 30-min grace bound, or no-mandate balance-used); `ended` = terminated (→ settle);
+ * `cancelled` = a pending session that never connected. Ordering carries no semantics —
+ * `repositories/credit-sessions.ts` holds the legal-transition source of truth.
+ */
+export const creditSessionStatusEnum = pgEnum('credit_session_status', [
+  'pending',
+  'active',
+  'grace',
+  'wrapped',
+  'ended',
+  'cancelled',
+]);
+
+/**
+ * Settlement outcome for a session's terminal overdraft. Default `not_required` (no
+ * overdraft, or not yet ended). `processing` = an off-session charge is in flight;
+ * `settled` = the overdraft credit landed (webhook); `failed` = hard decline / async
+ * payment_failed (→ receivable + soft hold); `requires_action` = SCA could not complete
+ * off-session (→ receivable, recovery). Set at `end` / by the settlement webhook.
+ */
+export const creditSettlementStatusEnum = pgEnum('credit_settlement_status', [
+  'not_required',
+  'processing',
+  'settled',
+  'failed',
+  'requires_action',
+]);
+
+/**
+ * Receivable lifecycle. Default `open` (an unrecovered overdraft; the company is
+ * soft-held while ANY open receivable exists — derived, not a column). `cleared` = the
+ * overdraft was later settled (webhook) or written down by ops; `written_off` = a future
+ * ops write-off. Ordering carries no semantics.
+ */
+export const creditReceivableStatusEnum = pgEnum('credit_receivable_status', [
+  'open',
+  'cleared',
+  'written_off',
+]);
+
+/**
+ * Why a receivable was opened. No column default — the writer states it: a hard/async
+ * decline (`settlement_declined`) vs an SCA that could not complete off-session
+ * (`settlement_requires_action`, which carries a recoverable PaymentIntent).
+ */
+export const creditReceivableReasonEnum = pgEnum('credit_receivable_reason', [
+  'settlement_declined',
+  'settlement_requires_action',
+]);

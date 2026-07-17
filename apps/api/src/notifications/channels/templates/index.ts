@@ -42,6 +42,8 @@ import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
 import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
+import { SessionSettledEmail } from './session-settled.js';
+import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
 import { formatAudMinor, formatExpiryDateLong } from './credit-format.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 
@@ -732,6 +734,49 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'About your Balo balance',
+    };
+  },
+
+  // BAL-378 (ADR-1040 Lane 2) session settled — billing-admin receipt. `overdraftSettledMinor`
+  // switches the "extra time settled" receipt vs the "wrapped up within your balance" note;
+  // `expertName` + `settledOn` come from the payload. No "overdraft" anywhere.
+  'session-settled': (data) => {
+    const overdraft = numberCount(data.overdraftSettledMinor);
+    const expertName = (data.expertName as string) ?? 'your expert';
+    const hadOverdraft = overdraft > 0;
+    return {
+      component: React.createElement(SessionSettledEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expertName,
+        amount: formatAudMinor(overdraft),
+        settledOn: (data.settledOn as string) ?? '',
+        hadOverdraft,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject: hadOverdraft
+        ? `Settled: your session with ${sanitizeSubjectTitle(expertName)}`
+        : `Your session with ${sanitizeSubjectTitle(expertName)} wrapped up`,
+    };
+  },
+
+  // BAL-378 (ADR-1040 Lane 2) settlement failed — billing-admin dunning. `reason` switches the
+  // SCA "confirm your card" recovery vs the hard-decline "update your card" copy. Warm, no
+  // "overdraft". The expert has already been paid — this is only about clearing the card.
+  'session-settlement-failed': (data) => {
+    const reason = data.reason === 'requires_action' ? 'requires_action' : 'declined';
+    return {
+      component: React.createElement(SessionSettlementFailedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        amount: formatAudMinor(numberCount(data.amountMinor)),
+        reason,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject:
+        reason === 'requires_action'
+          ? 'Confirm your card to settle your recent session'
+          : 'A payment on your recent session needs attention',
     };
   },
 

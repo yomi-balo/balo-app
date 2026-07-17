@@ -5,6 +5,7 @@ import {
   DEFAULT_OVERDRAFT_CEILING_MINOR,
   DEFAULT_TOPUP_RELOAD_MINOR,
   DEFAULT_TOPUP_THRESHOLD_MINOR,
+  deriveMinuteRateCents,
   deriveTmTotalCents,
   DORMANCY_REMINDER_WINDOWS_DAYS,
   feeBpsToPercent,
@@ -12,11 +13,17 @@ import {
   FX_DISPLAY_STALENESS_MS,
   isFxRateStale,
   isValidBaloFeeBps,
+  LOW_BALANCE_WARNING_MINUTES,
   MAX_BALO_FEE_BPS,
+  MAX_SESSION_MINUTES,
   MIN_BALO_FEE_BPS,
+  NEAR_WRAP_MINUTES,
+  OVERDRAFT_GRACE_MINUTES,
   parseFeePercentToBps,
+  PENDING_STALE_CANCEL_MINUTES,
   sumEstimatedMinutes,
   WALLET_EXPIRY_MONTHS,
+  WRAPPED_IDLE_END_MINUTES,
 } from './index';
 
 /**
@@ -249,6 +256,52 @@ describe('Client Credit System platform-money constants (BAL-376)', () => {
 
   it('exposes WALLET_EXPIRY_MONTHS as 12', () => {
     expect(WALLET_EXPIRY_MONTHS).toBe(12);
+  });
+});
+
+describe('deriveMinuteRateCents (BAL-378)', () => {
+  it('derives A$180/hr (18_000c) → A$3.00/min (300c) — exact', () => {
+    // 18_000 / 60 = 300 exactly.
+    expect(deriveMinuteRateCents(18_000)).toBe(300);
+  });
+
+  it('rounds half away from zero (10_000c/hr → round(166.66…) = 167c/min)', () => {
+    // 10_000 / 60 = 166.66… → 167.
+    expect(deriveMinuteRateCents(10_000)).toBe(167);
+  });
+
+  it('rounds a half-way case up (15_030c/hr → round(250.5) = 251c/min)', () => {
+    // 15_030 / 60 = 250.5 → 251 (half away from zero).
+    expect(deriveMinuteRateCents(15_030)).toBe(251);
+  });
+
+  it('returns 0 for a zero rate', () => {
+    expect(deriveMinuteRateCents(0)).toBe(0);
+  });
+
+  it('composes with applyBaloFee (expert A$120/hr @25% → client A$150/hr → 250c/min)', () => {
+    // 12_000 × 1.25 = 15_000/hr → 15_000/60 = 250c/min.
+    expect(deriveMinuteRateCents(applyBaloFee(12_000, DEFAULT_BALO_FEE_BPS))).toBe(250);
+  });
+});
+
+describe('Session drawdown / overdraft constants (BAL-378)', () => {
+  it('exposes OVERDRAFT_GRACE_MINUTES as 30', () => {
+    expect(OVERDRAFT_GRACE_MINUTES).toBe(30);
+  });
+
+  it('exposes LOW_BALANCE_WARNING_MINUTES as 8', () => {
+    expect(LOW_BALANCE_WARNING_MINUTES).toBe(8);
+  });
+
+  it('exposes NEAR_WRAP_MINUTES as 10', () => {
+    expect(NEAR_WRAP_MINUTES).toBe(10);
+  });
+
+  it('exposes the reaper safety/idle/stale caps (240 / 15 / 30)', () => {
+    expect(MAX_SESSION_MINUTES).toBe(240);
+    expect(WRAPPED_IDLE_END_MINUTES).toBe(15);
+    expect(PENDING_STALE_CANCEL_MINUTES).toBe(30);
   });
 });
 

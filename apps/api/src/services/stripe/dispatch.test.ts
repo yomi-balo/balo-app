@@ -19,6 +19,12 @@ const {
   mockRetrieveSettlement,
   mockPaymentIntentsRetrieve,
   mockChargesRetrieve,
+  mockSessionFindById,
+  mockMarkSettlementResult,
+  mockReceivableOpen,
+  mockReceivableClear,
+  mockPublishSessionSettled,
+  mockPublishSettlementFailure,
 } = vi.hoisted(() => ({
   mockApplyLedgerEntry: vi.fn(),
   mockAuditRecord: vi.fn(),
@@ -39,6 +45,12 @@ const {
   mockRetrieveSettlement: vi.fn(),
   mockPaymentIntentsRetrieve: vi.fn(),
   mockChargesRetrieve: vi.fn(),
+  mockSessionFindById: vi.fn(),
+  mockMarkSettlementResult: vi.fn(),
+  mockReceivableOpen: vi.fn(),
+  mockReceivableClear: vi.fn(),
+  mockPublishSessionSettled: vi.fn(),
+  mockPublishSettlementFailure: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -51,8 +63,20 @@ vi.mock('@balo/db', () => ({
     applyMandate: mockApplyMandate,
     applyMandateStatus: mockApplyMandateStatus,
   },
+  creditSessionsRepository: {
+    findById: mockSessionFindById,
+    markSettlementResult: mockMarkSettlementResult,
+  },
+  creditReceivablesRepository: {
+    open: mockReceivableOpen,
+    clear: mockReceivableClear,
+  },
   deriveIdempotencyKey: mockDeriveIdempotencyKey,
   db: {},
+}));
+vi.mock('../credit-session/notify.js', () => ({
+  publishSessionSettled: mockPublishSessionSettled,
+  publishSettlementFailure: mockPublishSettlementFailure,
 }));
 vi.mock('../../lib/stripe.js', () => ({
   getStripeClient: () => ({
@@ -134,6 +158,25 @@ describe('resolveStripeEffect', () => {
       paymentIntentId: 'pi_2',
       code: 'card_declined',
       outcome: { type: 'blocked', reason: 'highest_risk_level' },
+      reason: null,
+      sessionId: null,
+    });
+  });
+
+  it('maps payment_intent.payment_failed → charge_failed carrying overdraft reason + sessionId', async () => {
+    mockChargesRetrieve.mockResolvedValue({ outcome: { type: 'issuer_declined' } });
+    const effect = await resolveStripeEffect(
+      event('payment_intent.payment_failed', {
+        id: 'pi_ov',
+        latest_charge: 'ch_ov',
+        metadata: { walletId: 'wallet_1', reason: 'overdraft_settlement', sessionId: 'session_9' },
+        last_payment_error: { code: 'card_declined' },
+      })
+    );
+    expect(effect).toMatchObject({
+      kind: 'charge_failed',
+      reason: 'overdraft_settlement',
+      sessionId: 'session_9',
     });
   });
 
@@ -207,6 +250,8 @@ describe('resolveStripeEffect', () => {
       paymentIntentId: 'pi_3',
       code: 'card_declined',
       outcome: { code: 'card_declined', decline_code: 'generic_decline' },
+      reason: null,
+      sessionId: null,
     });
     expect(mockChargesRetrieve).not.toHaveBeenCalled();
   });
@@ -227,6 +272,8 @@ describe('resolveStripeEffect', () => {
       paymentIntentId: 'pi_4',
       code: 'processing_error',
       outcome: { code: 'processing_error' },
+      reason: null,
+      sessionId: null,
     });
   });
 
@@ -295,6 +342,9 @@ describe('resolveStripeEffect', () => {
 describe('applyStripeEffect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Ledger writes report a fresh (non-deduped) apply by default; receivable opens are fresh.
+    mockApplyLedgerEntry.mockResolvedValue({ deduped: false });
+    mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_1' }, created: true });
   });
 
   it('applies a manual_purchase credit via applyLedgerEntry with the PI-keyed idempotency key', async () => {
@@ -368,16 +418,20 @@ describe('applyStripeEffect', () => {
     expect(mockApplyMandateStatus).toHaveBeenCalledWith(tx, 'wallet_1', 'failed');
   });
 
-  it('logs charge_failed without any DB write', async () => {
-    await applyStripeEffect(tx, {
+  it('logs a non-overdraft charge_failed without any DB write or post-commit effect', async () => {
+    const postCommit = await applyStripeEffect(tx, {
       kind: 'charge_failed',
       walletId: 'wallet_1',
       paymentIntentId: 'pi_2',
       code: 'card_declined',
       outcome: { type: 'blocked', reason: 'highest_risk_level' },
+      reason: 'auto_topup',
+      sessionId: null,
     });
     expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
-    expect(mockAuditRecord).not.toHaveBeenCalled();
+    expect(mockMarkSettlementResult).not.toHaveBeenCalled();
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(postCommit).toEqual([]);
   });
 
   it('records a dispute audit row', async () => {
@@ -403,8 +457,15 @@ describe('applyStripeEffect', () => {
     );
   });
 
-  it('applies an overdraft_settlement credit with the session-keyed idempotency key (BAL-378 path)', async () => {
-    await applyStripeEffect(tx, {
+  it('applies an overdraft_settlement credit, marks the session settled, clears the receivable + publishes (BAL-378)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      expertProfileId: 'expert_1',
+      overdraftSettledMinor: 7600,
+    });
+    const postCommit = await applyStripeEffect(tx, {
       kind: 'credit',
       reason: 'overdraft_settlement',
       walletId: 'wallet_1',
@@ -422,6 +483,130 @@ describe('applyStripeEffect', () => {
         sessionId: 'session_1',
       })
     );
+    expect(mockMarkSettlementResult).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        sessionId: 'session_1',
+        status: 'settled',
+        stripePaymentIntentId: 'pi_7',
+      })
+    );
+    expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, tx);
+
+    // The settled publish is DEFERRED to post-commit.
+    expect(mockPublishSessionSettled).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockPublishSessionSettled).toHaveBeenCalled();
+  });
+
+  it('a REPLAYED overdraft_settlement credit re-marks idempotently but never re-publishes (FIX 9)', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({ deduped: true });
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      expertProfileId: 'expert_1',
+      overdraftSettledMinor: 7600,
+    });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'overdraft_settlement',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: 'session_1',
+      triggeringEntryId: null,
+      settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_7' },
+    });
+    // The mark + clear stay (idempotent), but no post-commit receipt fires on the replay.
+    expect(mockMarkSettlementResult).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ sessionId: 'session_1', status: 'settled' })
+    );
+    expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, tx);
+    expect(postCommit).toEqual([]);
+  });
+
+  it('routes an async overdraft_settlement payment_failed → mark failed + open receivable + dun (BAL-378)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_2',
+      companyId: 'company_2',
+      walletId: 'wallet_2',
+      expertProfileId: 'expert_2',
+      overdraftSettledMinor: 5000,
+    });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_2',
+      paymentIntentId: 'pi_8',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_2',
+    });
+    expect(mockMarkSettlementResult).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        sessionId: 'session_2',
+        status: 'failed',
+        stripePaymentIntentId: 'pi_8',
+      })
+    );
+    expect(mockReceivableOpen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'company_2',
+        walletId: 'wallet_2',
+        sessionId: 'session_2',
+        amountMinor: 5000,
+        reason: 'settlement_declined',
+      }),
+      tx
+    );
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'declined', amountMinor: 5000 })
+    );
+  });
+
+  it('does NOT re-dun when the async payment_failed opens onto an already-open receivable (FIX 5)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_2',
+      companyId: 'company_2',
+      walletId: 'wallet_2',
+      expertProfileId: 'expert_2',
+      overdraftSettledMinor: 5000,
+    });
+    // The sync end-session hard-decline path already opened this session's receivable.
+    mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_2' }, created: false });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_2',
+      paymentIntentId: 'pi_8',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_2',
+    });
+    expect(mockReceivableOpen).toHaveBeenCalled();
+    expect(postCommit).toEqual([]);
+  });
+
+  it('no-ops (no receivable) when the overdraft charge_failed session is missing', async () => {
+    mockSessionFindById.mockResolvedValue(undefined);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_3',
+      paymentIntentId: 'pi_9',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_missing',
+    });
+    expect(mockMarkSettlementResult).not.toHaveBeenCalled();
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(postCommit).toEqual([]);
   });
 
   it('throws (no ledger write) when an auto_topup credit is missing triggeringEntryId', async () => {

@@ -330,6 +330,13 @@
       "when": 1784201141575,
       "tag": "0046_next_thanos",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1784208743044,
+      "tag": "0047_redundant_hulk",
+      "breakpoints": true
     }
   ]
 }

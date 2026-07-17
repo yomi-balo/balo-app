@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../client';
-import { auditEvents, creditLedger, creditWallets, type AuditEvent } from '../schema';
-import { creditWalletFactory, userFactory } from '../test/factories';
+import {
+  auditEvents,
+  creditLedger,
+  creditSessions,
+  creditWallets,
+  type AuditEvent,
+} from '../schema';
+import { creditWalletFactory, expertFactory, userFactory } from '../test/factories';
 import {
   applyLedgerEntry,
   creditLedgerRepository,
@@ -27,6 +32,36 @@ import { deriveIdempotencyKey } from './_shared/credit-idempotency';
  * the advisory lock + idempotency backstop (see the auto-top-up test).
  */
 
+/**
+ * Seed a minimal real `credit_sessions` row for a wallet — the `credit_ledger.session_id`
+ * FK (BAL-378) now RESTRICTs to a live session, so `session_consume` / `overdraft_settlement`
+ * entries can no longer point at a bare random uuid. Returns the new session id.
+ */
+async function seedSessionId(
+  wallet: { id: string; companyId: string },
+  memberId: string
+): Promise<string> {
+  const expert = await expertFactory();
+  const [session] = await db
+    .insert(creditSessions)
+    .values({
+      walletId: wallet.id,
+      companyId: wallet.companyId,
+      expertProfileId: expert.id,
+      initiatingMemberId: memberId,
+      estimatedMinutes: 10,
+      expertRateMinorPerHour: 12_000,
+      clientRateMinorPerMinute: 250,
+      expertRateMinorPerMinute: 200,
+      effectiveCeilingMinor: 15_000,
+    })
+    .returning();
+  if (session === undefined) {
+    throw new Error('failed to seed credit session');
+  }
+  return session.id;
+}
+
 /** Read credit audit rows for a wallet + action, oldest first. */
 async function auditRowsFor(walletId: string, action: string): Promise<AuditEvent[]> {
   return db
@@ -40,7 +75,7 @@ describe('applyLedgerEntry — invariant #3 (cache == ledger sum)', () => {
   it('keeps balance_minor == SUM(amount_minor) and each balance_after_minor on the running sum', async () => {
     const { wallet } = await creditWalletFactory();
     const member = await userFactory();
-    const sessionId = randomUUID();
+    const sessionId = await seedSessionId(wallet, member.id);
 
     const posts: ApplyLedgerEntryInput[] = [
       {
@@ -110,7 +145,7 @@ describe('applyLedgerEntry — invariant #3 (cache == ledger sum)', () => {
       amountMinor: -4200,
       idempotencyKey: 'overdraft_1',
       memberId: member.id,
-      sessionId: randomUUID(),
+      sessionId: await seedSessionId(wallet, member.id),
     });
     expect(after.balanceMinor).toBe(-4200);
   });
@@ -246,7 +281,7 @@ describe('applyLedgerEntry — invariant #7 (attribution + same-txn audit)', () 
   it('a session_consume writes member_id AND exactly one credit_wallet.consumed audit row', async () => {
     const { wallet, companyId } = await creditWalletFactory();
     const member = await userFactory();
-    const sessionId = randomUUID();
+    const sessionId = await seedSessionId(wallet, member.id);
 
     const { entry } = await creditLedgerRepository.postEntry({
       walletId: wallet.id,
@@ -283,7 +318,7 @@ describe('applyLedgerEntry — invariant #7 (attribution + same-txn audit)', () 
   it('an overdraft_settlement writes a credit_wallet.settled audit row attributed to the member', async () => {
     const { wallet } = await creditWalletFactory();
     const member = await userFactory();
-    const sessionId = randomUUID();
+    const sessionId = await seedSessionId(wallet, member.id);
 
     await creditLedgerRepository.postEntry({
       walletId: wallet.id,
@@ -318,6 +353,8 @@ describe('applyLedgerEntry — invariant #7 (attribution + same-txn audit)', () 
   it('rolls back BOTH the ledger row and the audit row when the txn throws AFTER the write', async () => {
     const { wallet } = await creditWalletFactory();
     const member = await userFactory();
+    // Seed the session OUTSIDE the rolled-back txn (the FK must resolve to a live row).
+    const sessionId = await seedSessionId(wallet, member.id);
 
     await expect(
       db.transaction(async (tx) => {
@@ -328,7 +365,7 @@ describe('applyLedgerEntry — invariant #7 (attribution + same-txn audit)', () 
           amountMinor: -500,
           idempotencyKey: 'rollback_1',
           memberId: member.id,
-          sessionId: randomUUID(),
+          sessionId,
         });
         throw new Error('force rollback');
       })
@@ -373,7 +410,7 @@ describe('applyLedgerEntry — invariant #8 (only amount_minor moves the balance
       fxRate: '0.52000000',
       idempotencyKey: 'fx_1',
       memberId: member.id,
-      sessionId: randomUUID(),
+      sessionId: await seedSessionId(wallet, member.id),
     });
 
     // The charged fields are recorded…

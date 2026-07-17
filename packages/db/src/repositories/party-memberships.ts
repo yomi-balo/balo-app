@@ -11,6 +11,7 @@ import {
 } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
 import { auditEventsRepository } from './audit-events';
+import { usersRepository } from './users';
 
 /**
  * party-memberships (BAL-345) — the membership-creation/removal helper that
@@ -239,6 +240,11 @@ async function selectAdminUserIds(
   return rows.map((r) => r.userId);
 }
 
+/** Live company member user ids whose role grants MANAGE_BILLING (the wallet billing admins). */
+async function selectBillingUserIds(companyId: string): Promise<string[]> {
+  return selectAdminUserIds('company', companyId, rolesWithCapability(CAPABILITIES.MANAGE_BILLING));
+}
+
 async function selectPartyJoinSettings(
   partyType: PartyType,
   partyId: string
@@ -417,7 +423,23 @@ export const partyMembershipsRepository = {
    * zero owner/admin → `[]` → the dispatcher skips the fan-out.
    */
   listBillingUserIds: async (companyId: string): Promise<string[]> => {
-    const billingRoles = rolesWithCapability(CAPABILITIES.MANAGE_BILLING);
-    return selectAdminUserIds('company', companyId, billingRoles);
+    return selectBillingUserIds(companyId);
+  },
+
+  /**
+   * Best-effort display name of a company's FIRST billing admin (MANAGE_BILLING holder) —
+   * the "Ask {name} to top up" copy in the member-lens drawdown notice (BAL-378). The single
+   * home for both the apps/api service (`getSessionDrawdownState`) and the apps/web read
+   * action, so the resolution never drifts (Sonar new-code duplication gate). Returns
+   * `undefined` when the company has no billing admin or the admin has no set name.
+   */
+  resolveBillingAdminName: async (companyId: string): Promise<string | undefined> => {
+    const [adminUserId] = await selectBillingUserIds(companyId);
+    if (adminUserId === undefined) {
+      return undefined;
+    }
+    const user = await usersRepository.findById(adminUserId);
+    const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+    return name.length > 0 ? name : undefined;
   },
 };

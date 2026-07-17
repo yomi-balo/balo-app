@@ -20,6 +20,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startOnboardingReminderSweepWorker, registerOnboardingReminderSweepCron },
     { startWalletDormancySweepWorker, registerWalletDormancySweepCron },
     { startFxDisplayRateSweepWorker, registerFxDisplayRateSweepCron },
+    { startCreditSessionMeterSweepWorker, registerCreditSessionMeterSweepCron },
+    { startReceivableDunningSweepWorker, registerReceivableDunningSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -31,6 +33,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./onboarding-reminder-sweep.js'),
     import('./wallet-dormancy-sweep.js'),
     import('./fx-display-rate-sweep.js'),
+    import('./credit-session-meter-sweep.js'),
+    import('./receivable-dunning-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -52,5 +56,10 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   await registerWalletDormancySweepCron();
   startFxDisplayRateSweepWorker();
   await registerFxDisplayRateSweepCron();
+  // BAL-378 (ADR-1040 Lane 2): per-minute credit-session meter reaper + daily receivable dunning.
+  startCreditSessionMeterSweepWorker();
+  await registerCreditSessionMeterSweepCron();
+  startReceivableDunningSweepWorker();
+  await registerReceivableDunningSweepCron();
   logger?.info('BullMQ workers started');
 }

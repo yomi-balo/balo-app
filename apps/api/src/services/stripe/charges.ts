@@ -181,6 +181,46 @@ export async function createOffSessionCharge(
   }
 }
 
+/** The live status of a settlement PaymentIntent — the reaper's pre-recharge safety check. */
+export interface PaymentIntentStatusResult {
+  /** Stripe PI status (`succeeded` / `processing` / `canceled` / `requires_payment_method` / …). */
+  status: Stripe.PaymentIntent.Status;
+  /** A recorded `last_payment_error` that is NOT an SCA prompt — i.e. a hard decline. */
+  hardDeclined: boolean;
+}
+
+/**
+ * Retrieve the current status of a settlement PaymentIntent (BAL-378 FIX 6). READ-ONLY — it
+ * NEVER confirms or re-charges. The stuck-settlement reaper calls this BEFORE ever re-invoking
+ * the off-session charge: a PI that already `succeeded` (or was `canceled` / hard-declined)
+ * must short-circuit rather than risk a second PaymentIntent once Stripe's ~24h idempotency
+ * key has expired. Returns `null` when the PI cannot be retrieved (the caller then falls back
+ * to its age-bounded decision rather than acting on a phantom status).
+ */
+export async function retrievePaymentIntentStatus(
+  paymentIntentId: string
+): Promise<PaymentIntentStatusResult | null> {
+  const stripe = getStripeClient();
+  try {
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const lastError = pi.last_payment_error;
+    const hardDeclined =
+      lastError !== null && lastError !== undefined && lastError.code !== 'authentication_required';
+    return { status: pi.status, hardDeclined };
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'retrievePaymentIntentStatus',
+        stripeId: paymentIntentId,
+        ...stripeErrorLogFields(err),
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to retrieve PaymentIntent status for settlement reconcile'
+    );
+    return null;
+  }
+}
+
 /**
  * Retrieve the settlement fields for a succeeded PaymentIntent (Decision D). Reads the PI
  * to find its `latest_charge`, then the charge with an expanded `balance_transaction`. The

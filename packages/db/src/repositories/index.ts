@@ -221,6 +221,27 @@ export {
   type ApplyLedgerEntryResult,
 } from './credit-ledger';
 export { creditHoldsRepository, InvalidHoldTransitionError } from './credit-holds';
+export {
+  creditSessionsRepository,
+  SessionNotFoundError,
+  InvalidSessionTransitionError,
+  ExpertProfileNotFoundError,
+  SESSION_EXPERT_ACCRUED_ACTION,
+  SESSION_AUDIT_ENTITY_TYPE,
+  CLIENT_SESSION_VIEW_COLUMNS,
+  type OpenSessionInput,
+  type OpenSessionResult,
+  type MeterTransitions,
+  type MeterSessionResult,
+  type EndSessionResult,
+  type MarkSettlementResultInput,
+  type ClientSessionView,
+} from './credit-sessions';
+export {
+  creditReceivablesRepository,
+  type OpenReceivableInput,
+  type OpenReceivableResult,
+} from './credit-receivables';
 export { fxDisplayRatesRepository } from './fx-display-rates';
 export { deriveIdempotencyKey, type IdempotencyKeyInput } from './_shared/credit-idempotency';
 export { acquireWalletLock } from './_shared/wallet-lock';
@@ -250,6 +271,14 @@ export type {
   CreditHold,
   NewCreditHold,
   CreditHoldStatus,
+  CreditSession,
+  NewCreditSession,
+  CreditSessionStatus,
+  CreditSettlementStatus,
+  CreditReceivable,
+  NewCreditReceivable,
+  CreditReceivableStatus,
+  CreditReceivableReason,
   FxDisplayRate,
   NewFxDisplayRate,
   FxDisplayQuote,

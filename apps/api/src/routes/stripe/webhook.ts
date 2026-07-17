@@ -48,6 +48,10 @@ export async function stripeWebhookRoutes(fastify: FastifyInstance): Promise<voi
     // propagates to the app error handler → 500 → Stripe retries. null = unhandled type.
     const effect = await resolveStripeEffect(event);
 
+    // BAL-378: publishes + analytics an effect defers run AFTER the txn commits (never inside
+    // it — enqueuing to BullMQ / PostHog must not be undone by a rollback).
+    let postCommit: Array<() => Promise<void>> = [];
+
     await db.transaction(async (tx) => {
       const marker = await stripeWebhookEventsRepository.insertReceived(
         { eventId: event.id, type: event.type },
@@ -61,10 +65,15 @@ export async function stripeWebhookRoutes(fastify: FastifyInstance): Promise<voi
         }
       }
       if (effect) {
-        await applyStripeEffect(tx, effect);
+        postCommit = await applyStripeEffect(tx, effect);
       }
       await stripeWebhookEventsRepository.markProcessed(event.id, tx);
     });
+
+    // Post-commit side-effects (session settled / settlement-failed notices + analytics).
+    for (const run of postCommit) {
+      await run();
+    }
 
     request.log.info(
       { eventId: event.id, eventType: event.type, handled: effect !== null },

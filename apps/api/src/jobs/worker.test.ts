@@ -18,6 +18,10 @@ const mockStartWalletDormancySweep = vi.fn();
 const mockRegisterWalletDormancySweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartFxDisplayRateSweep = vi.fn();
 const mockRegisterFxDisplayRateSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartCreditSessionMeterSweep = vi.fn();
+const mockRegisterCreditSessionMeterSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartReceivableDunningSweep = vi.fn();
+const mockRegisterReceivableDunningSweepCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -44,6 +48,16 @@ vi.mock('./wallet-dormancy-sweep.js', () => ({
 vi.mock('./fx-display-rate-sweep.js', () => ({
   startFxDisplayRateSweepWorker: () => mockStartFxDisplayRateSweep(),
   registerFxDisplayRateSweepCron: () => mockRegisterFxDisplayRateSweepCron(),
+}));
+// BAL-378: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real
+// modules, which construct a Worker on a live Redis connection and hang (5s CI timeout).
+vi.mock('./credit-session-meter-sweep.js', () => ({
+  startCreditSessionMeterSweepWorker: () => mockStartCreditSessionMeterSweep(),
+  registerCreditSessionMeterSweepCron: () => mockRegisterCreditSessionMeterSweepCron(),
+}));
+vi.mock('./receivable-dunning-sweep.js', () => ({
+  startReceivableDunningSweepWorker: () => mockStartReceivableDunningSweep(),
+  registerReceivableDunningSweepCron: () => mockRegisterReceivableDunningSweepCron(),
 }));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
@@ -101,6 +115,10 @@ describe('startWorkers', () => {
     expect(mockRegisterWalletDormancySweepCron).toHaveBeenCalled();
     expect(mockStartFxDisplayRateSweep).toHaveBeenCalled();
     expect(mockRegisterFxDisplayRateSweepCron).toHaveBeenCalled();
+    expect(mockStartCreditSessionMeterSweep).toHaveBeenCalled();
+    expect(mockRegisterCreditSessionMeterSweepCron).toHaveBeenCalled();
+    expect(mockStartReceivableDunningSweep).toHaveBeenCalled();
+    expect(mockRegisterReceivableDunningSweepCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;
