@@ -400,6 +400,17 @@ const companyProvisionedPayload = z.object({
   ownerUserId: z.uuid(),
 });
 
+// BAL-377 / BAL-381 credit top-up requested (member → billing admins). `correlationId`
+// is minted per click (uuid) so a re-nudge is a fresh dispatch, not a jobId no-op.
+// `companyId` drives the MANAGE_BILLING fan-out; `requestedByUserId` is the nudging
+// member (context/audit only). Mirrors apps/web/src/lib/notifications/types.ts +
+// packages/shared/src/notifications/index.ts.
+const creditTopupRequestedPayload = z.object({
+  correlationId: z.uuid(),
+  companyId: z.uuid(),
+  requestedByUserId: z.uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -530,6 +541,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('company.provisioned'),
     payload: companyProvisionedPayload,
+  }),
+  z.object({
+    event: z.literal('credit.topup.requested'),
+    payload: creditTopupRequestedPayload,
   }),
 ]);
 

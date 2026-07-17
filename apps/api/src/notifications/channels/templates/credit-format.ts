@@ -22,6 +22,23 @@ export function formatAudMinor(minor: number): string {
 }
 
 /**
+ * BAL-377 — presentment (card) minor units + a lowercase ISO-4217 code → a display string
+ * for the receipt, e.g. `formatPresentmentMinor(4200, 'usd')` → `'USD 42.00'`. Two fraction
+ * digits, thousands-grouped (en-GB), the code upper-cased. Presentation only — this is the
+ * amount the client's CARD was billed (captured from Stripe), never a balance figure. A
+ * non-finite amount degrades to `'0.00'` with the code.
+ */
+export function formatPresentmentMinor(minor: number, currency: string): string {
+  const safe = Number.isFinite(minor) ? minor : 0;
+  const amount = (safe / 100).toLocaleString('en-GB', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const code = currency.length > 0 ? currency.toUpperCase() : '';
+  return code ? `${code} ${amount}` : amount;
+}
+
+/**
  * ISO instant → long UTC date for email copy, e.g. `'2027-07-12T…'` → `'12 July 2027'`
  * (en-GB, UTC). An unparseable input degrades to `'the expiry date'`.
  */

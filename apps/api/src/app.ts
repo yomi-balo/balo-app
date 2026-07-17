@@ -7,6 +7,7 @@ import { phoneRoutes } from './routes/phone/index.js';
 import { calendarRoutes } from './routes/calendar/index.js';
 import { expertsRoutes } from './routes/experts/index.js';
 import { stripeRoutes } from './routes/stripe/index.js';
+import { creditRoutes } from './routes/credit/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   // `trustProxy: 1` trusts exactly one proxy hop (the Railway edge), so
@@ -40,6 +41,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await fastify.register(expertsRoutes);
   // Stripe client-charging webhook (BAL-382) — raw-body scoped inside this plugin.
   await fastify.register(stripeRoutes);
+  // Internal credit intent-creation routes (BAL-377) — secret-gated (requireInternalAuth).
+  await fastify.register(creditRoutes);
 
   // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
   // and @faker-js/faker never load in production.

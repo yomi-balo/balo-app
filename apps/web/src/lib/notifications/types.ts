@@ -15,6 +15,7 @@ import type {
   EngagementAcceptedPayload,
   EngagementChangesRequestedPayload,
   CompanyProvisionedPayload,
+  CreditTopupRequestedPayload,
   ProposalSharedPayload,
 } from '@balo/shared/notifications';
 
@@ -235,7 +236,11 @@ export type NotificationEvent =
   | 'party.join_request_approved'
   | 'party.join_request_declined'
   | 'agency.provisioned'
-  | 'company.provisioned';
+  | 'company.provisioned'
+  // BAL-377 / BAL-381 — a member without MANAGE_BILLING nudged the billing holder(s).
+  // Published from nudgeBillingAdminAction (the top-up receipt is API-webhook-published
+  // only, so credit.topup.completed is deliberately ABSENT from this web union).
+  | 'credit.topup.requested';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -272,4 +277,5 @@ export interface EventPayloadMap {
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
   'agency.provisioned': AgencyProvisionedPayload;
   'company.provisioned': CompanyProvisionedPayload;
+  'credit.topup.requested': CreditTopupRequestedPayload;
 }

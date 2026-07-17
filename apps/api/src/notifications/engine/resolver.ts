@@ -38,6 +38,9 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
 const BILLING_FANOUT_EVENTS = new Set<string>([
   'credit.dormancy_reminder',
   'credit.balance_expired',
+  // BAL-377 / BAL-381: a member's "nudge {Admin} to top up" fans out to the company's
+  // MANAGE_BILLING holders (the nudging member lacks MANAGE_BILLING → naturally excluded).
+  'credit.topup.requested',
 ]);
 
 /**
@@ -73,6 +76,25 @@ async function hydrateBillingFanout(
 ): Promise<void> {
   if (BILLING_FANOUT_EVENTS.has(event) && typeof payload.companyId === 'string') {
     data.billingUserIds = await partyMembershipsRepository.listBillingUserIds(payload.companyId);
+  }
+}
+
+/**
+ * BAL-377 / BAL-381: name the nudging member for the `credit.topup.requested` templates.
+ * The payload carries `requestedByUserId` (NOT `userId`), so the shared `payload.userId →
+ * data.user` hydration never fires for it — hydrate the requester's display name into
+ * `data.requesterName` here. Degrades to 'A teammate' when name-less (email signups collect
+ * the name in onboarding). Server-side email/in-app only — no client bundle, no PII leak.
+ */
+async function hydrateTopupRequester(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (event === 'credit.topup.requested' && typeof payload.requestedByUserId === 'string') {
+    const user = await usersRepository.findById(payload.requestedByUserId);
+    const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+    data.requesterName = name.length > 0 ? name : 'A teammate';
   }
 }
 
@@ -125,6 +147,9 @@ export async function resolveContext(
   // BAL-380: credit dormancy/expiry billing fan-out (extracted — see hydrateBillingFanout).
   // data.company is already hydrated above from payload.companyId (context only).
   await hydrateBillingFanout(event, payload, data);
+
+  // BAL-377/BAL-381: name the nudging member for the credit.topup.requested templates.
+  await hydrateTopupRequester(event, payload, data);
 
   // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
   await hydrateAgencyProvisioned(event, payload, data);

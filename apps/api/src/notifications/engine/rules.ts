@@ -532,4 +532,12 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // template switches on payload.window (60|30). Server-only (published by the sweep).
   'credit.dormancy_reminder': emailAndInApp('company_billing_admins', 'credit-dormancy-reminder'),
   'credit.balance_expired': emailAndInApp('company_billing_admins', 'credit-balance-expired'),
+  // BAL-377 (ADR-1040 Lane 1). A top-up charged successfully → a warm receipt to the
+  // PURCHASER (recipient 'self' via payload.userId; email + in-app). Server-published from
+  // the Stripe webhook post-commit.
+  'credit.topup.completed': emailAndInApp('self', 'credit-topup-completed'),
+  // BAL-377 / BAL-381. A member without MANAGE_BILLING nudged the billing holder(s) →
+  // fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins',
+  // resolved from data.billingUserIds) via email + in-app. Publishable from apps/web.
+  'credit.topup.requested': emailAndInApp('company_billing_admins', 'credit-topup-requested'),
 };

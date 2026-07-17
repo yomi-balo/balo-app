@@ -16,6 +16,8 @@ const {
   mockAuditRecord,
   mockApplyMandate,
   mockApplyMandateStatus,
+  mockRedeem,
+  mockPublish,
 } = vi.hoisted(() => {
   const store = new Map<string, StoredEvent>();
   return {
@@ -31,10 +33,16 @@ const {
       const row = store.get(id);
       if (row) row.processedAt = new Date();
     }),
-    mockApplyLedgerEntry: vi.fn(async () => ({ deduped: false })),
+    mockApplyLedgerEntry: vi.fn(async () => ({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 10000, expiresAt: new Date('2027-01-01') },
+    })),
     mockAuditRecord: vi.fn(async () => ({})),
     mockApplyMandate: vi.fn(async () => ({})),
     mockApplyMandateStatus: vi.fn(async () => ({})),
+    mockRedeem: vi.fn(),
+    mockPublish: vi.fn(async () => undefined),
   };
 });
 
@@ -56,7 +64,11 @@ vi.mock('@balo/db', () => ({
     applyMandate: mockApplyMandate,
     applyMandateStatus: mockApplyMandateStatus,
   },
+  promoRedemptionsRepository: { redeem: mockRedeem },
   deriveIdempotencyKey: (input: { reason: string }) => `${input.reason}:key`,
+}));
+vi.mock('../../notifications/publisher.js', () => ({
+  notificationEvents: { publish: mockPublish },
 }));
 
 import { buildApp } from '../../app.js';
@@ -107,6 +119,8 @@ describe('POST /webhooks/stripe', () => {
     mockMarkProcessed.mockClear();
     mockApplyLedgerEntry.mockClear();
     mockAuditRecord.mockClear();
+    mockRedeem.mockClear();
+    mockPublish.mockClear();
     // Default settlement retrieval for payment_intent.succeeded.
     mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_1', latest_charge: 'ch_1' });
     mockStripe.charges.retrieve.mockResolvedValue({
@@ -141,12 +155,32 @@ describe('POST /webhooks/stripe', () => {
     expect(mockMarkProcessed).toHaveBeenCalledWith('evt_pi_succeeded', expect.anything());
   });
 
+  it('publishes the credit.topup.completed receipt POST-COMMIT for a manual purchase', async () => {
+    const res = await inject(app, succeededEvent);
+    expect(res.statusCode).toBe(200);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'credit.topup.completed',
+      expect.objectContaining({
+        correlationId: 'manual_purchase:key',
+        userId: 'member_1',
+        companyId: 'company_1',
+        creditedMinor: 10000,
+        chargedCurrency: 'aud',
+        chargedAmountMinor: 10000,
+        promoGrantedMinor: 0,
+        balanceAfterMinor: 10000,
+      })
+    );
+  });
+
   it('is idempotent: a replayed event id applies the effect exactly once', async () => {
     const first = await inject(app, succeededEvent);
     const second = await inject(app, succeededEvent);
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(mockApplyLedgerEntry).toHaveBeenCalledTimes(1);
+    // The replay short-circuits before the effect → only ONE receipt is ever published.
+    expect(mockPublish).toHaveBeenCalledTimes(1);
   });
 
   it('acks 200 for an unknown event type with no ledger effect (marker still recorded)', async () => {

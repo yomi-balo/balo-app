@@ -61,6 +61,55 @@ describe('charges', () => {
       );
     });
 
+    it('stamps an optional promoCode into the PI metadata when present', async () => {
+      mockStripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_1',
+        client_secret: 'pi_1_secret',
+      });
+
+      await createOnSessionPurchaseIntent({
+        walletId: 'wallet_1',
+        customerId: 'cus_1',
+        presentmentCurrency: 'usd',
+        presentmentAmountMinor: 5000,
+        initiatingMemberId: 'member_1',
+        idempotencyKey: 'purchase:wallet_1:req_1',
+        promoCode: 'WELCOME50',
+      });
+
+      expect(mockStripe.paymentIntents.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: {
+            walletId: 'wallet_1',
+            reason: 'manual_purchase',
+            memberId: 'member_1',
+            promoCode: 'WELCOME50',
+          },
+        }),
+        { idempotencyKey: 'purchase:wallet_1:req_1' }
+      );
+    });
+
+    it('omits promoCode from metadata when absent', async () => {
+      mockStripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_1',
+        client_secret: 'pi_1_secret',
+      });
+
+      await createOnSessionPurchaseIntent({
+        walletId: 'wallet_1',
+        customerId: 'cus_1',
+        presentmentCurrency: 'usd',
+        presentmentAmountMinor: 5000,
+        initiatingMemberId: 'member_1',
+        idempotencyKey: 'purchase:wallet_1:req_1',
+      });
+
+      expect(mockStripe.paymentIntents.create.mock.calls[0]?.[0]?.metadata).not.toHaveProperty(
+        'promoCode'
+      );
+    });
+
     it('throws when Stripe returns a PI without a client_secret', async () => {
       mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_1', client_secret: null });
       await expect(
