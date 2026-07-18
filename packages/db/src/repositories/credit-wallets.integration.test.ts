@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { CreditWallet } from '../schema';
+import { eq } from 'drizzle-orm';
+import { creditWallets, type CreditWallet } from '../schema';
 import { db } from '../client';
 import { creditWalletFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
@@ -45,6 +46,62 @@ describe('creditWalletsRepository.create', () => {
     const company = await companyFactory();
     await creditWalletsRepository.create({ companyId: company.id });
     await expect(creditWalletsRepository.create({ companyId: company.id })).rejects.toThrow();
+  });
+});
+
+describe('creditWalletsRepository.ensureForCompany (BAL-383 find-or-create)', () => {
+  it('creates the wallet with schema defaults when none exists', async () => {
+    const company = await companyFactory();
+    // Nothing there yet.
+    expect(await creditWalletsRepository.findByCompanyId(company.id)).toBeUndefined();
+
+    const wallet = await creditWalletsRepository.ensureForCompany(db, company.id);
+
+    expect(wallet.companyId).toBe(company.id);
+    expect(wallet.balanceMinor).toBe(0);
+    expect(wallet.currency).toBe('AUD');
+    expect(wallet.mandateStatus).toBeNull();
+
+    // Persisted — a subsequent read finds the same row.
+    const persisted = await creditWalletsRepository.findByCompanyId(company.id);
+    expect(persisted?.id).toBe(wallet.id);
+  });
+
+  it('returns the existing wallet when one is already present (no duplicate)', async () => {
+    const company = await companyFactory();
+    const existing = await creditWalletsRepository.create({ companyId: company.id });
+
+    const wallet = await creditWalletsRepository.ensureForCompany(db, company.id);
+    expect(wallet.id).toBe(existing.id);
+  });
+
+  it('is idempotent — a second call returns the same wallet id and creates no duplicate', async () => {
+    const company = await companyFactory();
+    const first = await creditWalletsRepository.ensureForCompany(db, company.id);
+    const second = await creditWalletsRepository.ensureForCompany(db, company.id);
+
+    expect(second.id).toBe(first.id);
+
+    // Exactly one wallet exists for the company (the one-per-company unique holds).
+    const rows = await db
+      .select()
+      .from(creditWallets)
+      .where(eq(creditWallets.companyId, company.id));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('composes under a passed transaction handle (tx)', async () => {
+    const company = await companyFactory();
+
+    // A nested db.transaction produces a SAVEPOINT on the max:1 pool; ensureForCompany
+    // runs on the passed tx and commits into the surrounding per-test transaction.
+    const wallet = await db.transaction((tx) =>
+      creditWalletsRepository.ensureForCompany(tx, company.id)
+    );
+
+    expect(wallet.companyId).toBe(company.id);
+    const persisted = await creditWalletsRepository.findByCompanyId(company.id);
+    expect(persisted?.id).toBe(wallet.id);
   });
 });
 

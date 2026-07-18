@@ -2,13 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { promoCodes } from '../schema';
+import { promoCodes, promoRedemptions } from '../schema';
 import {
   companyFactory,
   promoCodeFactory,
   promoRedemptionFactory,
   userFactory,
 } from '../test/factories';
+import { creditWalletsRepository } from './credit-wallets';
+import { creditLedgerRepository } from './credit-ledger';
 import {
   promoCodesRepository,
   normalizePromoCode,
@@ -273,5 +275,419 @@ describe('promoCodesRepository.listAllRedemptions', () => {
     expect(byId.get(r1.redemption.id)?.promoCodeId).toBe(codeA.id);
     expect(byId.get(r2.redemption.id)?.promoCodeId).toBe(codeA.id);
     expect(byId.get(r3.redemption.id)?.promoCodeId).toBe(codeB.id);
+  });
+});
+
+/**
+ * BAL-383 redeem write-path. Deterministic windows + an injected `now` so validity is
+ * exact regardless of the wall clock. Each test runs in the auto-rolled-back per-test
+ * transaction; `redeem`'s own `db.transaction` nests as a SAVEPOINT.
+ */
+const WINDOW_FROM = new Date('2026-01-01T00:00:00.000Z');
+const WINDOW_UNTIL = new Date('2026-12-31T00:00:00.000Z');
+const WITHIN_WINDOW = new Date('2026-06-01T00:00:00.000Z');
+
+/** All redemption rows for a code (direct read — not the admin projection). */
+async function redemptionRowsFor(promoCodeId: string) {
+  return db.select().from(promoRedemptions).where(eq(promoRedemptions.promoCodeId, promoCodeId));
+}
+
+describe('promoCodesRepository.redeem — happy path', () => {
+  it('grants credit, inserts a redemption, bumps redeemed_count, and auto-creates the wallet', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'WELCOME50',
+        grantMinor: 5000,
+        perCodeRedemptionCap: 100,
+        redeemedCount: 0,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    // First-ever credit event: no wallet exists yet.
+    expect(await creditWalletsRepository.findByCompanyId(company.id)).toBeUndefined();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'WELCOME50',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+
+    expect(result.outcome).toBe('redeemed');
+    if (result.outcome !== 'redeemed') throw new Error(`expected redeemed, got ${result.outcome}`);
+    expect(result.grantedMinor).toBe(5000);
+    expect(result.balanceAfterMinor).toBe(5000);
+    expect(result.redeemedCount).toBe(1);
+    expect(result.perCodeRedemptionCap).toBe(100);
+    expect(result.redemption.companyId).toBe(company.id);
+    expect(result.redemption.redeemedByUserId).toBe(actor.id);
+    expect(result.redemption.grantedMinor).toBe(5000);
+
+    // Wallet auto-created and credited by the grant.
+    const wallet = await creditWalletsRepository.findByCompanyId(company.id);
+    expect(wallet).toBeDefined();
+    if (wallet === undefined) throw new Error('wallet was not created');
+    expect(wallet.balanceMinor).toBe(5000);
+
+    // redeemed_count persisted.
+    const afterPromo = await promoCodesRepository.getById(promo.id);
+    expect(afterPromo?.redeemedCount).toBe(1);
+
+    // Exactly one ledger entry — a `promo` / `adjustment` system grant, no attributed member.
+    const ledger = await creditLedgerRepository.listByWallet(wallet.id);
+    expect(ledger).toHaveLength(1);
+    const [entry] = ledger;
+    expect(entry?.reason).toBe('promo');
+    expect(entry?.entryType).toBe('adjustment');
+    expect(entry?.amountMinor).toBe(5000);
+    expect(entry?.memberId).toBeNull();
+    expect(entry?.id).toBe(result.redemption.ledgerEntryId);
+
+    // One redemption row for the code.
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(1);
+  });
+});
+
+describe('promoCodesRepository.redeem — idempotency & single-use', () => {
+  it('idempotent retry: a second redeem for the same (company, code) is already_redeemed with no new writes', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'RETRY50',
+        grantMinor: 5000,
+        perCodeRedemptionCap: 100,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const first = await promoCodesRepository.redeem({
+      rawCode: 'RETRY50',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(first.outcome).toBe('redeemed');
+
+    const second = await promoCodesRepository.redeem({
+      rawCode: 'RETRY50',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(second.outcome).toBe('already_redeemed');
+    if (second.outcome !== 'already_redeemed') throw new Error('expected already_redeemed');
+    expect(second.grantedMinor).toBe(5000);
+
+    // No double-count.
+    const afterPromo = await promoCodesRepository.getById(promo.id);
+    expect(afterPromo?.redeemedCount).toBe(1);
+
+    // Exactly ONE ledger entry and ONE redemption row; balance credited once.
+    const wallet = await creditWalletsRepository.findByCompanyId(company.id);
+    expect(wallet).toBeDefined();
+    if (wallet === undefined) throw new Error('wallet missing');
+    expect(wallet.balanceMinor).toBe(5000);
+    expect(await creditLedgerRepository.listByWallet(wallet.id)).toHaveLength(1);
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(1);
+  });
+
+  it('single-use per company: a second, distinct member redeeming the same code is already_redeemed', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'ONEPER',
+        grantMinor: 5000,
+        perCodeRedemptionCap: 100,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const memberA = await userFactory();
+    const memberB = await userFactory();
+
+    const first = await promoCodesRepository.redeem({
+      rawCode: 'ONEPER',
+      companyId: company.id,
+      redeemedByUserId: memberA.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(first.outcome).toBe('redeemed');
+
+    // A different individual, same PARTY — dedup is by (promoCodeId, companyId).
+    const second = await promoCodesRepository.redeem({
+      rawCode: 'ONEPER',
+      companyId: company.id,
+      redeemedByUserId: memberB.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(second.outcome).toBe('already_redeemed');
+
+    const afterPromo = await promoCodesRepository.getById(promo.id);
+    expect(afterPromo?.redeemedCount).toBe(1);
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(1);
+  });
+
+  it('different companies redeeming the same code each succeed (redeemed_count == 2)', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'TWOCO',
+        grantMinor: 5000,
+        perCodeRedemptionCap: 100,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const companyA = await companyFactory();
+    const companyB = await companyFactory();
+    const actorA = await userFactory();
+    const actorB = await userFactory();
+
+    const a = await promoCodesRepository.redeem({
+      rawCode: 'TWOCO',
+      companyId: companyA.id,
+      redeemedByUserId: actorA.id,
+      now: WITHIN_WINDOW,
+    });
+    const b = await promoCodesRepository.redeem({
+      rawCode: 'TWOCO',
+      companyId: companyB.id,
+      redeemedByUserId: actorB.id,
+      now: WITHIN_WINDOW,
+    });
+
+    expect(a.outcome).toBe('redeemed');
+    expect(b.outcome).toBe('redeemed');
+
+    const afterPromo = await promoCodesRepository.getById(promo.id);
+    expect(afterPromo?.redeemedCount).toBe(2);
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(2);
+
+    // Each company got its own wallet + grant.
+    const walletA = await creditWalletsRepository.findByCompanyId(companyA.id);
+    const walletB = await creditWalletsRepository.findByCompanyId(companyB.id);
+    expect(walletA?.balanceMinor).toBe(5000);
+    expect(walletB?.balanceMinor).toBe(5000);
+    expect(walletA?.id).not.toBe(walletB?.id);
+  });
+});
+
+describe('promoCodesRepository.redeem — warm refusals (no writes)', () => {
+  it('expired: now >= valid_until', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'EXPIRED',
+        validFrom: WINDOW_FROM,
+        validUntil: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'EXPIRED',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    expect(result.outcome).toBe('expired');
+    if (result.outcome !== 'expired') throw new Error('expected expired');
+    expect(result.validUntil.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+
+    // No side effects.
+    expect((await promoCodesRepository.getById(promo.id))?.redeemedCount).toBe(0);
+    expect(await creditWalletsRepository.findByCompanyId(company.id)).toBeUndefined();
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(0);
+  });
+
+  it('scheduled: now < valid_from', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'SCHEDULED',
+        validFrom: new Date('2026-06-01T00:00:00.000Z'),
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'SCHEDULED',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: new Date('2026-01-15T00:00:00.000Z'),
+    });
+
+    expect(result.outcome).toBe('scheduled');
+    if (result.outcome !== 'scheduled') throw new Error('expected scheduled');
+    expect(result.validFrom.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+
+    expect((await promoCodesRepository.getById(promo.id))?.redeemedCount).toBe(0);
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(0);
+  });
+
+  it('deactivated: status is deactivated (precedence over the validity window)', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'DEACT',
+        status: 'deactivated',
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'DEACT',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+
+    expect(result.outcome).toBe('deactivated');
+    expect((await promoCodesRepository.getById(promo.id))?.redeemedCount).toBe(0);
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(0);
+  });
+
+  it('exhausted: redeemed_count already at the cap', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'FULL',
+        perCodeRedemptionCap: 1,
+        redeemedCount: 1,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'FULL',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+
+    expect(result.outcome).toBe('exhausted');
+    // Count unchanged; no wallet or redemption created.
+    expect((await promoCodesRepository.getById(promo.id))?.redeemedCount).toBe(1);
+    expect(await creditWalletsRepository.findByCompanyId(company.id)).toBeUndefined();
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(0);
+  });
+
+  it('not_found: an unknown code', async () => {
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'NOSUCHCODE',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(result.outcome).toBe('not_found');
+  });
+
+  it('not_found: a soft-deleted code (the FOR UPDATE lookup filters deleted_at IS NULL)', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'GONE50',
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+        deletedAt: new Date('2026-02-01T00:00:00.000Z'),
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: 'GONE50',
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(result.outcome).toBe('not_found');
+    // Untouched.
+    expect(await promoCodesRepository.getById(promo.id)).toBeUndefined();
+  });
+});
+
+describe('promoCodesRepository.redeem — cap boundary & normalization', () => {
+  it('cap boundary: the last unit redeems (reaching the cap); the next company is exhausted', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'LASTONE',
+        grantMinor: 5000,
+        perCodeRedemptionCap: 1,
+        redeemedCount: 0,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const companyA = await companyFactory();
+    const companyB = await companyFactory();
+    const actorA = await userFactory();
+    const actorB = await userFactory();
+
+    const first = await promoCodesRepository.redeem({
+      rawCode: 'LASTONE',
+      companyId: companyA.id,
+      redeemedByUserId: actorA.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(first.outcome).toBe('redeemed');
+    if (first.outcome !== 'redeemed') throw new Error('expected redeemed');
+    expect(first.redeemedCount).toBe(1);
+    expect(first.perCodeRedemptionCap).toBe(1);
+
+    // The cap is now reached — the next distinct company is refused.
+    const second = await promoCodesRepository.redeem({
+      rawCode: 'LASTONE',
+      companyId: companyB.id,
+      redeemedByUserId: actorB.id,
+      now: WITHIN_WINDOW,
+    });
+    expect(second.outcome).toBe('exhausted');
+
+    expect((await promoCodesRepository.getById(promo.id))?.redeemedCount).toBe(1);
+    expect(await redemptionRowsFor(promo.id)).toHaveLength(1);
+  });
+
+  it('normalizes the entered code: a lower-case padded entry redeems the upper-cased stored code, and the ledger key is the promo id', async () => {
+    const promo = await promoCodeFactory({
+      values: {
+        code: 'WELCOME50', // stored uppercase
+        grantMinor: 5000,
+        validFrom: WINDOW_FROM,
+        validUntil: WINDOW_UNTIL,
+      },
+    });
+    const company = await companyFactory();
+    const actor = await userFactory();
+
+    const result = await promoCodesRepository.redeem({
+      rawCode: '  welcome50  ', // raw, lower-case, padded
+      companyId: company.id,
+      redeemedByUserId: actor.id,
+      now: WITHIN_WINDOW,
+    });
+
+    expect(result.outcome).toBe('redeemed');
+    expect((await promoCodesRepository.getById(promo.id))?.redeemedCount).toBe(1);
+
+    const wallet = await creditWalletsRepository.findByCompanyId(company.id);
+    expect(wallet).toBeDefined();
+    if (wallet === undefined) throw new Error('wallet missing');
+    const ledger = await creditLedgerRepository.listByWallet(wallet.id);
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]?.idempotencyKey).toBe(`promo:${wallet.id}:${promo.id}`);
   });
 });

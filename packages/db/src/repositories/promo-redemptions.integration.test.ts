@@ -319,7 +319,7 @@ describe('promoRedemptionsRepository.redeem — idempotent replay', () => {
       idempotencyKey: deriveIdempotencyKey({
         reason: 'promo',
         walletId: wallet.id,
-        promoCode: 'REPLAY',
+        promoCodeId: code.id,
       }),
     });
 

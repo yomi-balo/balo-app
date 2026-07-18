@@ -6,7 +6,7 @@ import {
   promoRedemptionsRepository,
   type PromoValidationReason,
 } from '@balo/db';
-import { requireUser, getCompanyContext } from '@/lib/auth/session';
+import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -50,10 +50,17 @@ const configSchema = z
     path: ['topupReloadMinor'],
   });
 
+/**
+ * Promo-code input bound — 1..64 chars. Applied at BOTH entry points (validate + purchase) so
+ * an over-long or empty code is rejected structurally before it ever reaches the repo/DB lookup;
+ * mirrors the API's `promoRedeemedPayload.code` bound.
+ */
+const promoCodeSchema = z.string().min(1).max(64);
+
 const startPurchaseSchema = z.object({
   amountMinor: z.number().int().min(MIN_AMOUNT_MINOR).max(MAX_AMOUNT_MINOR),
   clientRequestId: z.uuid(),
-  promoCode: z.string().min(1).max(64).optional(),
+  promoCode: promoCodeSchema.optional(),
   config: configSchema,
 });
 
@@ -96,10 +103,12 @@ export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
 /**
  * Resolve the acting MANAGE_BILLING holder + their company scope, or `null` when the actor
  * lacks the capability. Shared by the three billing-gated actions (capability-based, ADR-1029
- * — never role/activeMode). Throws propagate to each action's own catch boundary.
+ * — never role/activeMode). Fail-closed on onboarding (requireOnboardedUser, BAL-365): these
+ * are privileged mutations, so an un-onboarded session must not pass. Throws propagate to each
+ * action's own catch boundary.
  */
 async function requireBillingActor(): Promise<{ userId: string; companyId: string } | null> {
-  const user = await requireUser();
+  const user = await requireOnboardedUser();
   const { companyId } = await getCompanyContext();
   if (!(await hasCapability(user, CAPABILITIES.MANAGE_BILLING, { companyId }))) {
     return null;
@@ -201,8 +210,15 @@ export async function validatePromoAction(code: string): Promise<ValidatePromoRe
       return { ok: false, reason: 'unauthorized' };
     }
 
+    // Bound the raw string before the repo lookup (an over-long/empty code is structurally
+    // invalid, not a DB miss) — same 1..64 bound the purchase schema applies.
+    const parsedCode = promoCodeSchema.safeParse(code);
+    if (!parsedCode.success) {
+      return { ok: false, reason: 'invalid' };
+    }
+
     const validation = await promoRedemptionsRepository.validate({
-      code,
+      code: parsedCode.data,
       companyId: actor.companyId,
       now: new Date(),
     });
@@ -259,9 +275,16 @@ const NUDGE_WINDOW_MS = 60 * 60 * 1000;
 
 /**
  * The MEMBER path (BAL-381): a company member WITHOUT MANAGE_BILLING nudges the billing
- * holder(s) to top up. NOT gated on MANAGE_BILLING — any company member may nudge; the
- * session's company scope is the membership proof. Publishes `credit.topup.requested`, which
- * fans out to the company's MANAGE_BILLING holders (the nudging member is naturally excluded).
+ * holder(s) to top up. NOT gated on MANAGE_BILLING — any onboarded company member may nudge;
+ * the session's company scope is the membership proof. Publishes `credit.topup.requested`,
+ * which fans out to the company's MANAGE_BILLING holders.
+ *
+ * SELF-INCLUSION EDGE: the fan-out targets ALL MANAGE_BILLING holders, so it excludes the
+ * caller only when the caller LACKS the capability — which is the sole case the UI surfaces
+ * this action (the member-variant nudge renders only for non-billing members; a holder sees
+ * the composer, not the nudge). Were a holder to invoke it directly they'd receive their own
+ * nudge — harmless (a single self-notification, hour-bucketed below), never a leak or a loop —
+ * so this is left as a UI-reliance rather than a redundant capability check.
  *
  * ABUSE GUARD: the `correlationId` is WINDOW-BUCKETED per (company, requester, hour) rather than
  * a fresh UUID per click. The notification engine's BullMQ jobId embeds the correlationId
@@ -272,7 +295,7 @@ const NUDGE_WINDOW_MS = 60 * 60 * 1000;
  */
 export async function nudgeBillingAdminAction(): Promise<NudgeResult> {
   try {
-    const user = await requireUser();
+    const user = await requireOnboardedUser();
     const { companyId } = await getCompanyContext();
 
     const hourBucket = Math.floor(Date.now() / NUDGE_WINDOW_MS);

@@ -21,8 +21,10 @@ export type IdempotencyKeyInput =
   | { reason: 'session_consume'; sessionId: string; tickSeq: number }
   // One expiry per wallet per sweep date (asOf = YYYY-MM-DD).
   | { reason: 'dormancy_expiry'; walletId: string; asOf: string }
-  // One grant per promo per wallet.
-  | { reason: 'promo'; walletId: string; promoCode: string }
+  // One grant per promo per wallet. Keyed on the promo's UUID (NOT the code string): a
+  // soft-deleted + re-minted code is a new row with a new id but the same string, so a
+  // string key would collide with the old grant — the id key never does.
+  | { reason: 'promo'; walletId: string; promoCodeId: string }
   // Admin supplies an explicit idempotency token.
   | { reason: 'adjustment'; token: string };
 
@@ -43,7 +45,7 @@ export function deriveIdempotencyKey(input: IdempotencyKeyInput): string {
     case 'dormancy_expiry':
       return `dormancy_expiry:${input.walletId}:${input.asOf}`;
     case 'promo':
-      return `promo:${input.walletId}:${input.promoCode}`;
+      return `promo:${input.walletId}:${input.promoCodeId}`;
     case 'adjustment':
       return `adjustment:${input.token}`;
   }

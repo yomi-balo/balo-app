@@ -540,4 +540,9 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins',
   // resolved from data.billingUserIds) via email + in-app. Publishable from apps/web.
   'credit.topup.requested': emailAndInApp('company_billing_admins', 'credit-topup-requested'),
+  // BAL-383 (ADR-1040): promo code redeemed — a warm, retrospective milestone
+  // confirmation to the ACTOR who redeemed (recipient 'self' via payload.userId; the
+  // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state
+  // notice, so NOT the company_billing_admins fan-out. Email + in-app, no SMS.
+  'promo.redeemed': emailAndInApp('self', 'promo-redeemed'),
 };

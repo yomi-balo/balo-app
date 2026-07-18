@@ -273,6 +273,8 @@ export {
   type CreatePromoCodeInput,
   type UpdatePromoCapInput,
   type PromoRedemptionRecord,
+  type RedeemPromoInput,
+  type RedeemPromoResult,
 } from './promo-codes';
 export type {
   PromoCode,
@@ -293,7 +295,7 @@ export {
   type PromoValidationReason,
   type RedeemResult,
   type ValidatePromoInput,
-  type RedeemPromoInput,
+  type RedeemPromoGrantInput,
 } from './promo-redemptions';
 // ── Stripe provider (BAL-382) ─────────────────────────────────────────────
 export { stripeWebhookEventsRepository } from './stripe-webhook-events';

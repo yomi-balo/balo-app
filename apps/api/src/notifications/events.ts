@@ -22,6 +22,7 @@ import type {
   CreditBalanceExpiredPayload,
   CreditTopupCompletedPayload,
   CreditTopupRequestedPayload,
+  PromoRedeemedPayload,
   ProposalSharedPayload,
 } from '@balo/shared/notifications';
 
@@ -260,7 +261,8 @@ export type NotificationEvent =
   | 'credit.dormancy_reminder'
   | 'credit.balance_expired'
   | 'credit.topup.completed'
-  | 'credit.topup.requested';
+  | 'credit.topup.requested'
+  | 'promo.redeemed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -328,4 +330,5 @@ export interface EventPayloadMap {
   'credit.balance_expired': CreditBalanceExpiredPayload;
   'credit.topup.completed': CreditTopupCompletedPayload;
   'credit.topup.requested': CreditTopupRequestedPayload;
+  'promo.redeemed': PromoRedeemedPayload;
 }

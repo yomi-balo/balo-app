@@ -116,4 +116,9 @@ export {
   type CreditServerEventMap,
   type FxDisplayQuoteCode,
 } from './credit';
-export { PROMO_SERVER_EVENTS, type PromoServerEventMap } from './promo';
+export {
+  PROMO_SERVER_EVENTS,
+  type PromoServerEventMap,
+  PROMO_EVENTS,
+  type PromoEventMap,
+} from './promo';

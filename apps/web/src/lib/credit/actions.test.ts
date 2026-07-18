@@ -18,7 +18,10 @@ vi.mock('@balo/db', () => ({
 const mockRequireUser = vi.fn();
 const mockGetCompanyContext = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
+  // The actions authenticate via requireOnboardedUser() (BAL-365 fail-closed gate); both
+  // resolve the same session user, so one mock drives both.
   requireUser: (...a: unknown[]) => mockRequireUser(...a),
+  requireOnboardedUser: (...a: unknown[]) => mockRequireUser(...a),
   getCompanyContext: (...a: unknown[]) => mockGetCompanyContext(...a),
 }));
 
@@ -175,6 +178,12 @@ describe('credit actions', () => {
     it('passes through the specific failure reason', async () => {
       mockValidate.mockResolvedValue({ ok: false, reason: 'expired' });
       expect(await validatePromoAction('OLD')).toEqual({ ok: false, reason: 'expired' });
+    });
+
+    it('rejects an over-long code as invalid without hitting the repo', async () => {
+      const result = await validatePromoAction('X'.repeat(65));
+      expect(result).toEqual({ ok: false, reason: 'invalid' });
+      expect(mockValidate).not.toHaveBeenCalled();
     });
 
     it('logs and returns error on an unexpected throw', async () => {

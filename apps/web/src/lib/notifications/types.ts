@@ -16,6 +16,7 @@ import type {
   EngagementChangesRequestedPayload,
   CompanyProvisionedPayload,
   CreditTopupRequestedPayload,
+  PromoRedeemedPayload,
   ProposalSharedPayload,
 } from '@balo/shared/notifications';
 
@@ -240,7 +241,8 @@ export type NotificationEvent =
   // BAL-377 / BAL-381 — a member without MANAGE_BILLING nudged the billing holder(s).
   // Published from nudgeBillingAdminAction (the top-up receipt is API-webhook-published
   // only, so credit.topup.completed is deliberately ABSENT from this web union).
-  | 'credit.topup.requested';
+  | 'credit.topup.requested'
+  | 'promo.redeemed';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -278,4 +280,5 @@ export interface EventPayloadMap {
   'agency.provisioned': AgencyProvisionedPayload;
   'company.provisioned': CompanyProvisionedPayload;
   'credit.topup.requested': CreditTopupRequestedPayload;
+  'promo.redeemed': PromoRedeemedPayload;
 }

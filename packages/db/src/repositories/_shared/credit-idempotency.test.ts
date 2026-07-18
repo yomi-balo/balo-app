@@ -44,10 +44,10 @@ describe('deriveIdempotencyKey — per-reason shape', () => {
     ).toBe('dormancy_expiry:wal_1:2026-07-15');
   });
 
-  it('keys a promo grant on wallet + promo code (one grant per promo per wallet)', () => {
-    expect(deriveIdempotencyKey({ reason: 'promo', walletId: 'wal_1', promoCode: 'SUMMER' })).toBe(
-      'promo:wal_1:SUMMER'
-    );
+  it('keys a promo grant on wallet + promo id (the id, not the code string, survives a re-mint)', () => {
+    expect(
+      deriveIdempotencyKey({ reason: 'promo', walletId: 'wal_1', promoCodeId: 'promo_1' })
+    ).toBe('promo:wal_1:promo_1');
   });
 
   it('keys an adjustment on the admin-supplied token', () => {

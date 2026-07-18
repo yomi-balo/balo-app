@@ -600,6 +600,19 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: '/billing/top-up',
     };
   },
+
+  // BAL-383 (ADR-1040) promo redeemed — the ACTOR who redeemed (recipient 'self'). Warm,
+  // congratulatory, no countdown. `grantedLabel` / `companyName` come from the payload;
+  // deep-links to expert search (the natural next step once credit lands).
+  'promo-redeemed': (data) => {
+    const grantedLabel = (data.grantedLabel as string) ?? 'Your credit';
+    const companyName = (data.companyName as string) ?? 'your team';
+    return {
+      title: 'Credit added 🎉',
+      body: `${grantedLabel} is ready for ${companyName} — find an expert whenever you are.`,
+      actionUrl: '/experts',
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

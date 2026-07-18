@@ -401,14 +401,27 @@ const companyProvisionedPayload = z.object({
 });
 
 // BAL-377 / BAL-381 credit top-up requested (member → billing admins). `correlationId`
-// is minted per click (uuid) so a re-nudge is a fresh dispatch, not a jobId no-op.
+// is minted per hour-bucket (topup-nudge:{companyId}:{userId}:{hourBucket}) so a burst of
+// re-nudges dedups to one dispatch per hour, but a genuine later nudge still fans out.
 // `companyId` drives the MANAGE_BILLING fan-out; `requestedByUserId` is the nudging
 // member (context/audit only). Mirrors apps/web/src/lib/notifications/types.ts +
 // packages/shared/src/notifications/index.ts.
 const creditTopupRequestedPayload = z.object({
-  correlationId: z.uuid(),
+  correlationId: z.string().min(1).max(200),
   companyId: z.uuid(),
   requestedByUserId: z.uuid(),
+});
+
+// BAL-383 promo redeemed (client → self, web-published). `correlationId` =
+// promo_redemptions.id (dedup); `userId` = the redeeming actor (recipient:'self').
+// `grantedLabel` is pre-formatted (formatMinorAud) — no minor units in the payload.
+// Mirrors packages/shared/src/notifications/index.ts.
+const promoRedeemedPayload = z.object({
+  correlationId: z.uuid(),
+  userId: z.uuid(),
+  code: z.string().min(1).max(64),
+  grantedLabel: z.string().min(1).max(40),
+  companyName: z.string().min(1).max(200),
 });
 
 export const publishBodySchema = z.discriminatedUnion('event', [
@@ -545,6 +558,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('credit.topup.requested'),
     payload: creditTopupRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('promo.redeemed'),
+    payload: promoRedeemedPayload,
   }),
 ]);
 

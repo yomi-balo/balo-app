@@ -1,3 +1,5 @@
+import Link from 'next/link';
+import { Gift } from 'lucide-react';
 import { getCurrentUser } from '@/lib/auth/session';
 import { getChecklistStatus, type ChecklistStatus } from '@/lib/actions/expert-checklist';
 import { ExpertDashboard } from './_components/expert-dashboard';
@@ -30,6 +32,21 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
           Welcome back. Here is an overview of your activity.
         </p>
       </div>
+      {/* BAL-383: a lightweight entry point to the standalone /redeem surface. */}
+      <Link
+        href="/redeem"
+        className="border-border bg-card hover:border-primary/40 focus-visible:ring-ring mb-6 flex items-center gap-3 rounded-xl border p-4 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <span className="bg-primary/10 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg">
+          <Gift className="text-primary h-4 w-4" aria-hidden="true" />
+        </span>
+        <span>
+          <span className="text-foreground block text-sm font-medium">Have a promo code?</span>
+          <span className="text-muted-foreground block text-xs">
+            Redeem it to add credit — no card needed.
+          </span>
+        </span>
+      </Link>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="border-border bg-card text-card-foreground rounded-xl border p-6">

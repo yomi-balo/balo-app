@@ -109,7 +109,7 @@ export interface ValidatePromoInput {
   now: Date;
 }
 
-export interface RedeemPromoInput {
+export interface RedeemPromoGrantInput {
   code: string;
   companyId: string;
   walletId: string;
@@ -193,7 +193,7 @@ export const promoRedemptionsRepository = {
    * A throw in any step rolls the whole thing back with the caller's transaction. The
    * increment (7) fires ONLY on a fresh grant, so a replay never double-counts.
    */
-  async redeem(tx: DbTx, input: RedeemPromoInput): Promise<RedeemResult> {
+  async redeem(tx: DbTx, input: RedeemPromoGrantInput): Promise<RedeemResult> {
     const normalized = normalizePromoCode(input.code);
 
     // 1. Lock the active code row (serialises with updateCap + concurrent redeems).
@@ -247,7 +247,10 @@ export const promoRedemptionsRepository = {
       idempotencyKey: deriveIdempotencyKey({
         reason: 'promo',
         walletId: input.walletId,
-        promoCode: normalized,
+        // Key on the promo's UUID, not the code string (the shared helper's contract): a
+        // re-minted code reuses the string but gets a fresh id, so the id key never collides
+        // with an old grant.
+        promoCodeId: promo.id,
       }),
       memberId: null,
     });

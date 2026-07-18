@@ -25,6 +25,7 @@ export {
   EXPERT_AGENCY_EVENTS,
   ONBOARDING_REMINDER_EVENTS,
   CREDIT_EVENTS,
+  PROMO_EVENTS,
 } from '../events';
 
 export type {
@@ -67,4 +68,5 @@ export type {
   OnboardingReminderEventMap,
   OnboardingReminderDomainClass,
   CreditEventMap,
+  PromoEventMap,
 } from '../events';
