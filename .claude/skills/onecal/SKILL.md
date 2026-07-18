@@ -281,7 +281,7 @@ The SDK maps HTTP status → typed error (all extend `UnifiedCalendarApiError`):
 - `ValidationError` is exported but **never thrown** in v1.2.2 — input validation is ours
   (zod). Don't write a catch branch for it on API calls.
 - **Reconnect trigger = `EndUserAccountCredentialStatus`** (`ACTIVE | EXPIRED |
-  REVOKED`), read via `endUserAccounts.get(id)` / `.getCredentials(id)`. On
+REVOKED`), read via `endUserAccounts.get(id)` / `.getCredentials(id)`. On
   `EXPIRED`/`REVOKED`, set `calendar_connections.credential_status` and surface the
   reconnect-calendar UX. Do not gate this on error-code strings.
 
