@@ -26,6 +26,7 @@ description: >
 ## Balo-Specific Context
 
 OneCal is Balo's calendar infrastructure. It handles:
+
 - **Connection** — expert connects Google / Microsoft via OneCal hosted OAuth (BYOC:
   the consent screen shows Balo's branding), and iCloud via Basic Auth (app-specific
   password).
@@ -111,15 +112,15 @@ Consultation cancelled
 > still need porting to OneCal. Update each before relying on it. Table renamed to the
 > OneCal surface.
 
-| Task | Reference File |
-|------|---------------|
-| OAuth connect (Google/MS) + iCloud Basic Auth + endUserAccount pointer | `references/connect.md` |
-| List calendars + conflict-check toggle logic | `references/calendars.md` |
-| Webhook subscription + signature verify + syncToken delta read | `references/webhooks.md` |
-| Free/busy fetch + slot calculator + Redis cache pattern | `references/free-busy.md` |
-| Write / delete / tag consultation events | `references/events.md` |
-| Availability rules (BAL-195 weekly schedule) — Balo-side computation | `references/availability-rules.md` |
-| Error handling + credential-status reconnect recovery | `references/errors.md` |
+| Task                                                                   | Reference File                     |
+| ---------------------------------------------------------------------- | ---------------------------------- |
+| OAuth connect (Google/MS) + iCloud Basic Auth + endUserAccount pointer | `references/connect.md`            |
+| List calendars + conflict-check toggle logic                           | `references/calendars.md`          |
+| Webhook subscription + signature verify + syncToken delta read         | `references/webhooks.md`           |
+| Free/busy fetch + slot calculator + Redis cache pattern                | `references/free-busy.md`          |
+| Write / delete / tag consultation events                               | `references/events.md`             |
+| Availability rules (BAL-195 weekly schedule) — Balo-side computation   | `references/availability-rules.md` |
+| Error handling + credential-status reconnect recovery                  | `references/errors.md`             |
 
 ---
 
@@ -153,6 +154,7 @@ export function connectUrl(provider: 'GOOGLE' | 'MICROSOFT', state: string) {
 `onecal.calendarSubscriptions` · `onecal.basicAuth`.
 
 **Key method signatures:**
+
 ```typescript
 calendars.list(endUserAccountId, params?)
 events.list(endUserAccountId, calendarId, params?)   // params: startDateTime, endDateTime,
@@ -172,6 +174,7 @@ basicAuth.connect(appId, 'apple', { email, password })   // iCloud app-specific 
 ```
 
 **Environment variables required:**
+
 ```
 ONECAL_API_KEY=
 ONECAL_APP_ID=
@@ -188,13 +191,15 @@ ONECAL_REDIRECT_URI=https://api.balo.expert/auth/onecal/callback
 // calendar_connections — pointer + status, NOT tokens
 export const calendarConnections = pgTable('calendar_connections', {
   id: uuid('id').primaryKey().defaultRandom(),
-  expertId: uuid('expert_id').notNull().references(() => experts.id),
-  endUserAccountId: text('end_user_account_id').notNull(),   // OneCal account id (pointer)
-  provider: text('provider').notNull(),                      // google | microsoft | apple
+  expertId: uuid('expert_id')
+    .notNull()
+    .references(() => experts.id),
+  endUserAccountId: text('end_user_account_id').notNull(), // OneCal account id (pointer)
+  provider: text('provider').notNull(), // google | microsoft | apple
   credentialStatus: text('credential_status').notNull().default('ACTIVE'), // ACTIVE | EXPIRED | REVOKED
   webhookSubscriptionId: text('webhook_subscription_id'),
-  endpointSecret: text('endpoint_secret'),                   // encrypted at rest; signature verify
-  syncToken: text('sync_token'),                             // last nextSyncToken for delta reads
+  endpointSecret: text('endpoint_secret'), // encrypted at rest; signature verify
+  syncToken: text('sync_token'), // last nextSyncToken for delta reads
   lastSyncedAt: timestamp('last_synced_at'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -203,8 +208,10 @@ export const calendarConnections = pgTable('calendar_connections', {
 // calendar_calendars — one row per calendar surfaced by calendars.list
 export const calendarCalendars = pgTable('calendar_calendars', {
   id: uuid('id').primaryKey().defaultRandom(),
-  connectionId: uuid('connection_id').notNull().references(() => calendarConnections.id),
-  calendarId: text('calendar_id').notNull(),                 // OneCal calendar id
+  connectionId: uuid('connection_id')
+    .notNull()
+    .references(() => calendarConnections.id),
+  calendarId: text('calendar_id').notNull(), // OneCal calendar id
   name: text('name').notNull(),
   isPrimary: boolean('is_primary').notNull().default(false),
   conflictCheck: boolean('conflict_check').notNull().default(true),
@@ -213,7 +220,9 @@ export const calendarCalendars = pgTable('calendar_calendars', {
 
 // availability_cache — one row per expert (NOT a full event mirror)
 export const availabilityCache = pgTable('availability_cache', {
-  expertId: uuid('expert_id').primaryKey().references(() => experts.id),
+  expertId: uuid('expert_id')
+    .primaryKey()
+    .references(() => experts.id),
   earliestAvailableAt: timestamp('earliest_available_at'),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -233,8 +242,8 @@ stored by Balo.
    `webhookSubscriptionId` + `endpointSecret`.
 3. **`syncToken` is the delta key.** Store `nextSyncToken` from each sync-enabled read;
    pass it on the next `events.list`. Handle a "full resync required" response by
-   clearing the stored token and doing a full window read. *(Exact invalidation
-   semantics: PENDING VENDOR.)*
+   clearing the stored token and doing a full window read. _(Exact invalidation
+   semantics: PENDING VENDOR.)_
 4. **Free/busy only for availability.** Use `freeBusy.get` (busy slots, no titles) for
    the slot picker — privacy by design, consistent with fee/detail concealment posture.
    Only read full events when we need our own tagged consultation events (filter via
@@ -257,18 +266,18 @@ stored by Balo.
 
 The SDK maps HTTP status → typed error (all extend `UnifiedCalendarApiError`):
 
-| Status | Error class | Retry? | Notes |
-|--------|-------------|--------|-------|
-| 401 | `AuthenticationError` | No | Bad API key / auth |
-| 403 | `AuthorizationError` | No | |
-| 404 | `NotFoundError` | No | |
-| 429 | `RateLimitError` | Yes | `retryAfter` seconds (from `Retry-After` header) — feed BullMQ backoff |
-| other (400/409/5xx) | `APIRequestError` | 5xx yes; 4xx no | carries `status`, optional opaque `code`, `details` |
-| no HTTP response | `UnifiedCalendarApiError` | Yes | network/timeout |
+| Status              | Error class               | Retry?          | Notes                                                                  |
+| ------------------- | ------------------------- | --------------- | ---------------------------------------------------------------------- |
+| 401                 | `AuthenticationError`     | No              | Bad API key / auth                                                     |
+| 403                 | `AuthorizationError`      | No              |                                                                        |
+| 404                 | `NotFoundError`           | No              |                                                                        |
+| 429                 | `RateLimitError`          | Yes             | `retryAfter` seconds (from `Retry-After` header) — feed BullMQ backoff |
+| other (400/409/5xx) | `APIRequestError`         | 5xx yes; 4xx no | carries `status`, optional opaque `code`, `details`                    |
+| no HTTP response    | `UnifiedCalendarApiError` | Yes             | network/timeout                                                        |
 
 - The fine-grained string `code` (e.g. `InvalidRefreshToken`) is **opaque and
   unenumerated** — passed through from the API body, only on generic `APIRequestError`.
-  Use it for telemetry/logging, not control flow. *(Full code list: PENDING VENDOR.)*
+  Use it for telemetry/logging, not control flow. _(Full code list: PENDING VENDOR.)_
 - `ValidationError` is exported but **never thrown** in v1.2.2 — input validation is ours
   (zod). Don't write a catch branch for it on API calls.
 - **Reconnect trigger = `EndUserAccountCredentialStatus`** (`ACTIVE | EXPIRED |
