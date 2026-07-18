@@ -532,4 +532,9 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // template switches on payload.window (60|30). Server-only (published by the sweep).
   'credit.dormancy_reminder': emailAndInApp('company_billing_admins', 'credit-dormancy-reminder'),
   'credit.balance_expired': emailAndInApp('company_billing_admins', 'credit-balance-expired'),
+  // BAL-383 (ADR-1040): promo code redeemed — a warm, retrospective milestone
+  // confirmation to the ACTOR who redeemed (recipient 'self' via payload.userId; the
+  // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state
+  // notice, so NOT the company_billing_admins fan-out. Email + in-app, no SMS.
+  'promo.redeemed': emailAndInApp('self', 'promo-redeemed'),
 };

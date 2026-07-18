@@ -35,6 +35,52 @@ export const creditWalletsRepository = {
     return row;
   },
 
+  /**
+   * Find-or-create the single wallet for a company — TX-COMPOSABLE (pass a `tx` to run
+   * inside a parent transaction, or the base `db` standalone) and RACE-SAFE. This is the
+   * wallet-provisioning primitive `promoCodesRepository.redeem` calls to materialise a
+   * wallet on a client's first-ever credit event (a promo grant with no prior purchase).
+   *
+   * Unlike `create` (which raw-throws 23505 when two concurrent first-redeems collide on
+   * the `credit_wallets_company_idx` unique), this: SELECTs by `companyId` → returns an
+   * existing wallet; else INSERTs with `onConflictDoNothing` on that same unique arbiter →
+   * returns the freshly-created row; else (the insert returned nothing because a concurrent
+   * first-redeem committed between our SELECT and INSERT) re-SELECTs and returns the winner.
+   * The only throw is a true fault (the wallet vanished after a conflict — impossible under
+   * the CASCADE-only FK, so it signals corruption).
+   */
+  async ensureForCompany(exec: DbExecutor, companyId: string): Promise<CreditWallet> {
+    const [existing] = await exec
+      .select()
+      .from(creditWallets)
+      .where(eq(creditWallets.companyId, companyId))
+      .limit(1);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const [created] = await exec
+      .insert(creditWallets)
+      .values({ companyId })
+      // Arbiter = `credit_wallets_company_idx` (the one-wallet-per-company unique).
+      .onConflictDoNothing({ target: creditWallets.companyId })
+      .returning();
+    if (created !== undefined) {
+      return created;
+    }
+
+    // A concurrent first-redeem inserted between our SELECT and INSERT → re-select the winner.
+    const [raced] = await exec
+      .select()
+      .from(creditWallets)
+      .where(eq(creditWallets.companyId, companyId))
+      .limit(1);
+    if (raced === undefined) {
+      throw new Error(`ensureForCompany: wallet vanished for company ${companyId}`);
+    }
+    return raced;
+  },
+
   /** Wallet by id (no soft-delete on this table). */
   async findById(id: string): Promise<CreditWallet | undefined> {
     return db.query.creditWallets.findFirst({ where: eq(creditWallets.id, id) });

@@ -110,4 +110,9 @@ export {
   type OnboardingReminderDomainClass,
 } from './onboarding-reminder';
 export { CREDIT_SERVER_EVENTS, type CreditServerEventMap, type FxDisplayQuoteCode } from './credit';
-export { PROMO_SERVER_EVENTS, type PromoServerEventMap } from './promo';
+export {
+  PROMO_SERVER_EVENTS,
+  type PromoServerEventMap,
+  PROMO_EVENTS,
+  type PromoEventMap,
+} from './promo';

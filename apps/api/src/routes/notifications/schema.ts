@@ -400,6 +400,18 @@ const companyProvisionedPayload = z.object({
   ownerUserId: z.uuid(),
 });
 
+// BAL-383 promo redeemed (client → self, web-published). `correlationId` =
+// promo_redemptions.id (dedup); `userId` = the redeeming actor (recipient:'self').
+// `grantedLabel` is pre-formatted (formatMinorAud) — no minor units in the payload.
+// Mirrors packages/shared/src/notifications/index.ts.
+const promoRedeemedPayload = z.object({
+  correlationId: z.uuid(),
+  userId: z.uuid(),
+  code: z.string().min(1).max(64),
+  grantedLabel: z.string().min(1).max(40),
+  companyName: z.string().min(1).max(200),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -530,6 +542,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('company.provisioned'),
     payload: companyProvisionedPayload,
+  }),
+  z.object({
+    event: z.literal('promo.redeemed'),
+    payload: promoRedeemedPayload,
   }),
 ]);
 

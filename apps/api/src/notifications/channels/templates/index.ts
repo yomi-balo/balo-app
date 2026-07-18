@@ -43,6 +43,7 @@ import { OnboardingReminderEmail } from './onboarding-reminder.js';
 import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
 import { formatAudMinor, formatExpiryDateLong } from './credit-format.js';
+import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 
 interface TemplateOutput {
@@ -732,6 +733,26 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'About your Balo balance',
+    };
+  },
+
+  // BAL-383 (ADR-1040) promo redeemed — warm milestone confirmation to the ACTOR who
+  // redeemed (recipient 'self'). `recipientName` greets the actor; `code` / `grantedLabel`
+  // / `companyName` come straight from the payload (spread into `data`). The CTA points at
+  // expert search — the natural next step once credit lands.
+  'promo-redeemed': (data) => {
+    const grantedLabel = (data.grantedLabel as string) ?? 'your credit';
+    const companyName = (data.companyName as string) ?? 'your team';
+    return {
+      component: React.createElement(PromoRedeemedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        code: (data.code as string) ?? 'your code',
+        grantedLabel,
+        companyName,
+        ctaUrl: `${BASE_URL}/experts`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${grantedLabel} in Balo credit is ready`,
     };
   },
 
