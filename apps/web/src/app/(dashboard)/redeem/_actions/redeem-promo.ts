@@ -138,7 +138,18 @@ export async function redeemPromoCode(
         code,
         grantedLabel,
         companyName: user.companyName,
-      }).catch(() => undefined);
+      }).catch((error) => {
+        // Fire-and-forget: a broken queue/Brevo path must NOT fail the redeem — the credit
+        // has already landed. But a silently-lost notification must leave a trace so the
+        // path is diagnosable.
+        log.error('promo.redeemed notification publish failed', {
+          correlationId: result.redemption.id,
+          companyId: user.companyId,
+          actorUserId: user.id,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      });
 
       trackServerAndFlush(PROMO_SERVER_EVENTS.PROMO_REDEEMED, {
         promo_code_id: result.redemption.promoCodeId,

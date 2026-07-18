@@ -46,12 +46,12 @@ beforeEach(() => {
 });
 
 describe('ContinueToMandate', () => {
-  it('renders the Model-C prompt and fires promo_balance_exhausted on mount', () => {
+  it('renders the Model-C prompt and fires promo_continue_prompt_shown on mount', () => {
     render(<ContinueToMandate companyId={COMPANY_ID} />);
     expect(
       screen.getByText(/add a card to keep going — no charge until then/i)
     ).toBeInTheDocument();
-    expect(track).toHaveBeenCalledWith(PROMO_EVENTS.PROMO_BALANCE_EXHAUSTED, {
+    expect(track).toHaveBeenCalledWith(PROMO_EVENTS.PROMO_CONTINUE_PROMPT_SHOWN, {
       company_id: COMPANY_ID,
     });
   });
@@ -145,8 +145,8 @@ describe('ContinueToMandate', () => {
         company_id: COMPANY_ID,
       });
       expect(mockToastSuccess).toHaveBeenCalled();
-      // The prompt-render exhausted event must NOT fire on a confirmation return.
-      expect(track).not.toHaveBeenCalledWith(PROMO_EVENTS.PROMO_BALANCE_EXHAUSTED, {
+      // The prompt-shown event must NOT fire on a confirmation return.
+      expect(track).not.toHaveBeenCalledWith(PROMO_EVENTS.PROMO_CONTINUE_PROMPT_SHOWN, {
         company_id: COMPANY_ID,
       });
       // The setup-intent params are stripped so a refresh doesn't re-confirm.

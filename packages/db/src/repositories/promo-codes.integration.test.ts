@@ -661,7 +661,7 @@ describe('promoCodesRepository.redeem — cap boundary & normalization', () => {
     expect(await redemptionRowsFor(promo.id)).toHaveLength(1);
   });
 
-  it('normalizes the entered code: a lower-case entry redeems the upper-cased stored code, and the ledger key uses the normalized form', async () => {
+  it('normalizes the entered code: a lower-case padded entry redeems the upper-cased stored code, and the ledger key is the promo id', async () => {
     const promo = await promoCodeFactory({
       values: {
         code: 'WELCOME50', // stored uppercase
@@ -688,6 +688,6 @@ describe('promoCodesRepository.redeem — cap boundary & normalization', () => {
     if (wallet === undefined) throw new Error('wallet missing');
     const ledger = await creditLedgerRepository.listByWallet(wallet.id);
     expect(ledger).toHaveLength(1);
-    expect(ledger[0]?.idempotencyKey).toBe(`promo:${wallet.id}:WELCOME50`);
+    expect(ledger[0]?.idempotencyKey).toBe(`promo:${wallet.id}:${promo.id}`);
   });
 });

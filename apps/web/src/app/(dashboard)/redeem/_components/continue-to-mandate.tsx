@@ -12,7 +12,7 @@ import { startContinueToMandate } from '../_actions/start-continue-to-mandate';
 /**
  * ContinueToMandate — the Model-C hand-off (BAL-383). Rendered on the redeem success
  * screen: "when your promo balance runs out, add a card to keep going — no charge until
- * then." `promo_balance_exhausted` fires when this prompt renders (locked decision #3).
+ * then." `promo_continue_prompt_shown` fires when this prompt renders (locked decision #3).
  *
  * On "Add a card" it calls `startContinueToMandate()` (internal seam →
  * `createSetupIntent`), mounts Stripe Elements with the returned client secret, and
@@ -130,17 +130,17 @@ export function ContinueToMandate({
   const [phase, setPhase] = useState<Phase>({ kind: 'prompt' });
   const [isPending, startTransition] = useTransition();
 
-  // Locked decision #3: fire when the continue prompt renders (BAL-378 owns the
-  // consume-time trigger).
+  // Locked decision #3: fire when the continue prompt renders (BAL-378 owns the true
+  // consume-time "balance exhausted" trigger).
   useEffect(() => {
     // A 3DS/SCA redirect return re-mounts this component with `setup_intent_client_secret`
-    // in the URL — that is a card confirmation, not a fresh prompt render, so the exhausted
-    // event must not fire again for it.
+    // in the URL — that is a card confirmation, not a fresh prompt render, so the
+    // prompt-shown event must not fire again for it.
     const params = new URLSearchParams(globalThis.location.search);
     if (params.get('setup_intent_client_secret') !== null) {
       return;
     }
-    track(PROMO_EVENTS.PROMO_BALANCE_EXHAUSTED, { company_id: companyId });
+    track(PROMO_EVENTS.PROMO_CONTINUE_PROMPT_SHOWN, { company_id: companyId });
   }, [companyId]);
 
   const handleAddCard = useCallback(() => {

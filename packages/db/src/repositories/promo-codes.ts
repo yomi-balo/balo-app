@@ -250,7 +250,7 @@ export const promoCodesRepository = {
    *     exhausted): return the matching typed refusal.
    *  4. `ensureForCompany(tx, companyId)` — find-or-create the wallet inside the txn.
    *  5. `applyLedgerEntry(tx, { reason:'promo', entryType:'adjustment', amountMinor:
-   *     grantMinor, idempotencyKey: promo:${walletId}:${CODE}, memberId:null })`. `promo` is
+   *     grantMinor, idempotencyKey: promo:${walletId}:${promoId}, memberId:null })`. `promo` is
    *     a SYSTEM reason (excluded from `AUDIT_ACTION_BY_REASON`) so `memberId:null` is
    *     correct and NO `audit_events` row is written — the `promo_redemptions` row IS the
    *     ADR-1030 attribution record. A `deduped:true` return (a prior grant already posted
@@ -322,11 +322,13 @@ export const promoCodesRepository = {
       const wallet = await creditWalletsRepository.ensureForCompany(tx, input.companyId);
 
       // 5. Post the promo grant. System reason → memberId null, no audit row. The deterministic
-      //    key makes a re-run collapse onto the SAME ledger entry (idempotent).
+      //    key (wallet + promo UUID, NOT the code string — so a soft-delete + re-mint of the
+      //    same string can't collide with the old grant) makes a re-run collapse onto the SAME
+      //    ledger entry (idempotent).
       const idempotencyKey = deriveIdempotencyKey({
         reason: 'promo',
         walletId: wallet.id,
-        promoCode: code,
+        promoCodeId: promo.id,
       });
       const result = await applyLedgerEntry(tx, {
         walletId: wallet.id,

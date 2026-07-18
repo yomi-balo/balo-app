@@ -24,15 +24,15 @@ describe('PROMO_SERVER_EVENTS (BAL-384 + BAL-383)', () => {
 });
 
 describe('PROMO_EVENTS (BAL-383 client events)', () => {
-  it('has exactly the two client events (balance-exhausted + continue-card-captured)', () => {
+  it('has exactly the two client events (continue-prompt-shown + continue-card-captured)', () => {
     expect(Object.keys(PROMO_EVENTS)).toEqual([
-      'PROMO_BALANCE_EXHAUSTED',
+      'PROMO_CONTINUE_PROMPT_SHOWN',
       'PROMO_CONTINUE_CARD_CAPTURED',
     ]);
   });
 
   it('maps each client constant to its exact event name', () => {
-    expect(PROMO_EVENTS.PROMO_BALANCE_EXHAUSTED).toBe('promo_balance_exhausted');
+    expect(PROMO_EVENTS.PROMO_CONTINUE_PROMPT_SHOWN).toBe('promo_continue_prompt_shown');
     expect(PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED).toBe('promo_continue_card_captured');
   });
 

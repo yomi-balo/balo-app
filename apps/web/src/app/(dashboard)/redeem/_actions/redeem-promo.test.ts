@@ -121,6 +121,25 @@ describe('redeemPromoCode', () => {
     );
   });
 
+  it('logs and swallows a notification publish failure — the redeem still succeeds', async () => {
+    mockPublish.mockRejectedValueOnce(new Error('queue down'));
+    const result = await redeemPromoCode({ code: 'WELCOME50' });
+    // Credit already landed → the redeem outcome is unaffected by the publish failure.
+    expect(result).toEqual({
+      status: 'redeemed',
+      grantedLabel: 'A$50.00',
+      balanceLabel: 'A$50.00',
+      alreadyRedeemed: false,
+    });
+    // The `.catch` runs as a microtask after the action returns — wait for it.
+    await vi.waitFor(() =>
+      expect(log.error).toHaveBeenCalledWith(
+        'promo.redeemed notification publish failed',
+        expect.objectContaining({ error: 'queue down', correlationId: 'redemption-1' })
+      )
+    );
+  });
+
   it('already_redeemed: maps to redeemed with no balance, and does NOT publish or track', async () => {
     mockRedeem.mockResolvedValue({
       outcome: 'already_redeemed',

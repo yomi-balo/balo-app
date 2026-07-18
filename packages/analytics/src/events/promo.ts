@@ -55,16 +55,19 @@ export interface PromoServerEventMap {
  * bundle (unlike the server events above).
  */
 export const PROMO_EVENTS = {
-  // Fired when the hard-stop / continue-to-mandate prompt renders (the client has hit
-  // the promo balance wall). The consume-time trigger is BAL-378's job; BAL-383 defines
-  // the constant + fires it on prompt render.
-  PROMO_BALANCE_EXHAUSTED: 'promo_balance_exhausted',
+  // Fired when the continue-to-mandate prompt RENDERS on the redeem-success screen — the
+  // offer to add a card is shown; it does NOT mean the balance is spent (at grant time the
+  // balance is full). Named for what it measures: the `prompt_shown → card_captured`
+  // funnel. The true consume-time "balance exhausted" signal is BAL-378's to add, and this
+  // name deliberately leaves `promo_balance_exhausted` free for it — no two sources for one
+  // event name.
+  PROMO_CONTINUE_PROMPT_SHOWN: 'promo_continue_prompt_shown',
   // Fired when the Stripe Elements `confirmSetup` succeeds on the continue path.
   PROMO_CONTINUE_CARD_CAPTURED: 'promo_continue_card_captured',
 } as const;
 
 export interface PromoEventMap {
-  [PROMO_EVENTS.PROMO_BALANCE_EXHAUSTED]: {
+  [PROMO_EVENTS.PROMO_CONTINUE_PROMPT_SHOWN]: {
     company_id: string;
   };
   [PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED]: {
