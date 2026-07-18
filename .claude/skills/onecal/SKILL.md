@@ -20,8 +20,7 @@ description: >
 > `@onecal/unified-calendar-api-node-sdk` (verified against **v1.2.2**).
 > Default API base: `https://api.onecalunified.com`. Docs at `docs.apiroc.com`; dashboard
 > at `app.onecalunified.com`. OneCal's naming is mid-transition (nav says OneCal, docs say
-> Apiroc) — don't hard-code a single docs domain. Webhook verification also needs the
-> `svix` package (`pnpm add svix`).
+> Apiroc) — don't hard-code a single docs domain.
 
 ## Balo-Specific Context
 
@@ -297,45 +296,36 @@ REVOKED`), read via `endUserAccounts.get(id)` / `.getCredentials(id)`. On
 - **Proactive reconnect:** subscribe to the `enduseraccount.credential.updated` (and
   `enduseraccount.updated`) webhook event to flip `credential_status` and prompt reconnect
   without waiting for the next failed API call.
+- **Rate limits.** Per API key: 300 req/s production (20 sandbox; raisable via support).
+  Per end-user-account (calendar/event endpoints): Google 600/min, Microsoft 1000/min
+  (fixed). Provider-side limits also apply — size BullMQ concurrency/backoff accordingly.
 
 ---
 
-## Vendor-Confirmed (OneCal, 18 Jul 2026)
+## Webhooks (Google/Microsoft)
 
-The six previously-open items are resolved (answers confirmed against the Apiroc + Svix
-docs):
+Delivered via **Svix** as a thin `{ eventType, timestamp }` payload — it signals _that_ a
+calendar changed, not what; fetch the delta with `events.list({ syncToken })`. Event types:
+`calendar.event.changed`, `calendar.event.unknown`, and `enduseraccount.created` /
+`updated` / `deleted` / `credential.updated`.
 
-1. **Webhook payload + signatures.** Thin payload — `{ eventType, timestamp }`, no change
-   detail; fetch changes with `syncToken`. Event types: `calendar.event.changed`,
-   `calendar.event.unknown`, and `enduseraccount.created` / `updated` / `deleted` /
-   `credential.updated`. Signed via **Svix** — verify with the `svix` lib over the
-   `svix-id` / `svix-timestamp` / `svix-signature` headers using the per-subscription
-   `endpointSecret` (HMAC + timestamp/replay built in); dedupe on `svix-id`. Retry is Svix
-   exponential backoff (immediately, 5s, 5m, 30m, 2h, 5h, 10h, 10h); ack 2xx within ~15s;
-   an endpoint failing ~5 days is auto-disabled.
-2. **Subscriptions don't expire** — OneCal auto-renews the Google/Microsoft channels; no
-   cron on our side.
-3. **syncToken invalidation** — a `fullSyncRequired` / `SyncStateNotFound` error means
-   clear the token and full-resync.
-4. **Free/busy on iCloud — yes.** But **iCloud has no change webhooks** (Google/Microsoft
-   only) — poll / on-demand refresh for iCloud availability.
-5. **Rate limits.** App-level per API key: 20 req/s sandbox, 300 req/s production (raisable
-   via support). Per-end-user-account (calendar/event endpoints): Google 600/min,
-   Microsoft 1000/min (fixed). Provider-side limits also apply.
-6. **Reconnect signal.** `EndUserAccountCredentialStatus` (`ACTIVE | EXPIRED | REVOKED`) is
-   authoritative and set promptly on provider revoke/expire; plus the
-   `enduseraccount.credential.updated` webhook for proactive prompts.
-
-Webhook verification (Fastify raw body):
+Verify every request with the `svix` library (`pnpm add svix`) over the `svix-id` /
+`svix-timestamp` / `svix-signature` headers using the per-subscription `endpointSecret`
+(HMAC + timestamp/replay protection built in). Ack with a 2xx within ~15s and dedupe on
+`svix-id`. Svix retries failed deliveries with exponential backoff (immediately, 5s, 5m,
+30m, 2h, 5h, 10h, 10h) and disables an endpoint that keeps failing for ~5 days.
 
 ```typescript
-import { Webhook } from 'svix'; // pnpm add svix
+import { Webhook } from 'svix';
 
-const wh = new Webhook(endpointSecret); // the per-subscription secret, decrypted
+const wh = new Webhook(endpointSecret); // per-subscription secret, decrypted
 const payload = wh.verify(rawBody, {
   'svix-id': req.headers['svix-id'],
   'svix-timestamp': req.headers['svix-timestamp'],
   'svix-signature': req.headers['svix-signature'],
-}); // throws on bad signature → respond 400, no retry
-// payload = { eventType, timestamp } — then enqueue a BullMQ delta-sync job (dedupe on svix-id)
+}); // throws on bad signature → 400, no retry
+// then enqueue a BullMQ delta-sync job
 ```
+
+iCloud has no change webhooks — refresh its availability with polling / on-demand
+`freeBusy.get` at profile view instead (see Constraint 8).
