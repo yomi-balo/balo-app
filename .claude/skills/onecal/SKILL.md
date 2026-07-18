@@ -18,10 +18,9 @@ description: >
 
 > Vendor: **OneCal** / Apiroc Unified Calendar API (ADR-1021). SDK
 > `@onecal/unified-calendar-api-node-sdk` (verified against **v1.2.2**).
-> Default API base: `https://api.onecalunified.com`. Docs: OneCal still shows some
-> naming inconsistency (docs have appeared at both `docs.apiroc.com` and
-> `docs.onecalunified.com`) — do not hard-code a docs domain; treat both as live until
-> the vendor settles it.
+> Default API base: `https://api.onecalunified.com`. Docs at `docs.apiroc.com`; dashboard
+> at `app.onecalunified.com`. OneCal's naming is mid-transition (nav says OneCal, docs say
+> Apiroc) — don't hard-code a single docs domain.
 
 ## Balo-Specific Context
 
@@ -32,8 +31,9 @@ OneCal is Balo's calendar infrastructure. It handles:
   password).
 - **Calendar listing** — surfaces all calendars (Work, Personal, etc.) for the
   conflict-check toggle UI.
-- **Change webhooks** — OneCal POSTs to Balo's webhook when an expert's calendar
-  changes; Balo does a `syncToken` delta read and recalculates availability.
+- **Change webhooks (Google/Microsoft)** — OneCal POSTs to Balo's webhook when an expert's
+  calendar changes; Balo does a `syncToken` delta read and recalculates availability.
+  iCloud has no change webhooks yet — see the iCloud note under Constraints.
 - **Availability cache update** — on webhook, Balo recomputes and stores
   `earliest_available_at` per expert (one DB row, not a full event mirror).
 - **Free/busy fetch** — when a client views an expert's profile, Balo calls OneCal
@@ -80,14 +80,19 @@ Expert connects calendar
     → returns EndUserAccount
   → persist endUserAccountId + credentialStatus (NOT tokens)
   → calendars.list(endUserAccountId) → save calendar list + primary
-  → calendarSubscriptions.create(endUserAccountId, { webhookUrl, subscriptionType })
-      → store webhookSubscriptionId + endpointSecret (per expert)
+  → calendarSubscriptions.create(endUserAccountId, { calendarId, webhookUrl, rateLimit? })
+      → store webhookSubscriptionId + endpointSecret (per SUBSCRIBED CALENDAR)
+      → Google/Microsoft only — iCloud has no change webhooks yet (see below)
 
-Calendar changes externally
-  → OneCal POSTs to /webhooks/onecal  [payload/signature scheme: PENDING VENDOR]
-  → verify signature with stored endpointSecret
+Calendar changes externally (Google/Microsoft)
+  → OneCal POSTs a thin { eventType, timestamp } via Svix to /webhooks/onecal
+  → verify with svix lib over svix-id / svix-timestamp / svix-signature + endpointSecret
+  → dedupe on svix-id; ack 2xx within ~15s
   → BullMQ job: events.list(..., { syncToken }) delta read → persist nextSyncToken
   → recompute earliest_available_at → update availability_cache
+
+iCloud (no change webhooks)
+  → refresh availability by polling / on-demand freeBusy.get at profile view
 
 Client views expert profile
   → render page immediately (bio, rate, etc.)
@@ -166,7 +171,7 @@ events.delete(endUserAccountId, calendarId, eventId)
 events.getOccurrences(endUserAccountId, calendarId, eventId, params?)  // recurring series
 events.rsvp(endUserAccountId, calendarId, eventId, data)
 freeBusy.get(endUserAccountId, { startDateTime, endDateTime, timeZone, calendarIds })
-calendarSubscriptions.create(endUserAccountId, { webhookUrl, subscriptionType, calendarId?, rateLimit? })
+calendarSubscriptions.create(endUserAccountId, { calendarId, webhookUrl, rateLimit? }) // per calendar; Google/MS only
   // → { webhookSubscriptionId, endpointSecret }
 calendarSubscriptions.list(endUserAccountId, params?) / .delete(endUserAccountId, subscriptionId)
 endUserAccounts.get(id) / .list(params?) / .delete(id) / .getCredentials(id)
@@ -237,13 +242,14 @@ stored by Balo.
 
 1. **Vendor holds tokens.** Never store provider access/refresh tokens. Persist the
    `endUserAccountId` and drive reconnect off `credentialStatus`.
-2. **One webhook subscription per expert.** On reconnect, `calendarSubscriptions.delete`
-   the old subscription before creating a new one; store the fresh
-   `webhookSubscriptionId` + `endpointSecret`.
+2. **Subscriptions are per-calendar** (`calendarId` required), not per-expert — subscribe
+   each conflict-check calendar you need change-push for; Google/Microsoft only.
+   Subscriptions **don't expire** — OneCal auto-renews the underlying provider channels, so
+   no scheduled re-create. On reconnect, `calendarSubscriptions.delete` the old ones and
+   re-create; store the fresh `webhookSubscriptionId` + `endpointSecret` per calendar.
 3. **`syncToken` is the delta key.** Store `nextSyncToken` from each sync-enabled read;
-   pass it on the next `events.list`. Handle a "full resync required" response by
-   clearing the stored token and doing a full window read. _(Exact invalidation
-   semantics: PENDING VENDOR.)_
+   pass it on the next `events.list`. On a `fullSyncRequired` / `SyncStateNotFound` error,
+   clear the stored token and do a full-window resync.
 4. **Free/busy only for availability.** Use `freeBusy.get` (busy slots, no titles) for
    the slot picker — privacy by design, consistent with fee/detail concealment posture.
    Only read full events when we need our own tagged consultation events (filter via
@@ -255,8 +261,10 @@ stored by Balo.
    (carry the 60-day convention unless changed).
 7. **Primary calendar for writes.** Write consultation events to the calendar where
    `is_primary = true`; tag with `privateExtendedProperties.balo_consultation_id`.
-8. **iCloud is Basic Auth.** The connect UX must instruct the expert to generate an
-   Apple app-specific password; there is no OAuth redirect for Apple.
+8. **iCloud is Basic Auth AND has no change webhooks yet.** Connect UX instructs the expert
+   to generate an Apple app-specific password (no OAuth redirect). Free/busy works for
+   iCloud, but there are no calendar-change webhooks — keep iCloud availability fresh with
+   on-demand `freeBusy.get` at profile view plus a low-frequency poll, not push.
 9. **Paginate.** OneCal's own reference app reads only the first page — do not copy that.
    Follow `nextPageToken` on large calendars.
 
@@ -277,26 +285,47 @@ The SDK maps HTTP status → typed error (all extend `UnifiedCalendarApiError`):
 
 - The fine-grained string `code` (e.g. `InvalidRefreshToken`) is **opaque and
   unenumerated** — passed through from the API body, only on generic `APIRequestError`.
-  Use it for telemetry/logging, not control flow. _(Full code list: PENDING VENDOR.)_
+  Use it for telemetry/logging, not control flow. _(No full enumeration published; not
+  needed — the credential-status enum below is the control signal.)_
 - `ValidationError` is exported but **never thrown** in v1.2.2 — input validation is ours
   (zod). Don't write a catch branch for it on API calls.
 - **Reconnect trigger = `EndUserAccountCredentialStatus`** (`ACTIVE | EXPIRED |
 REVOKED`), read via `endUserAccounts.get(id)` / `.getCredentials(id)`. On
   `EXPIRED`/`REVOKED`, set `calendar_connections.credential_status` and surface the
   reconnect-calendar UX. Do not gate this on error-code strings.
+- **Proactive reconnect:** subscribe to the `enduseraccount.credential.updated` (and
+  `enduseraccount.updated`) webhook event to flip `credential_status` and prompt reconnect
+  without waiting for the next failed API call.
+- **Rate limits.** Per API key: 300 req/s production (20 sandbox; raisable via support).
+  Per end-user-account (calendar/event endpoints): Google 600/min, Microsoft 1000/min
+  (fixed). Provider-side limits also apply — size BullMQ concurrency/backoff accordingly.
 
 ---
 
-## Pending Vendor Confirmation
+## Webhooks (Google/Microsoft)
 
-These are unresolved from the SDK/reference app (questions sent to OneCal 17 Jul 2026).
-Do **not** implement blind — flag to Yomi if a ticket depends on one:
+Delivered via **Svix** as a thin `{ eventType, timestamp }` payload — it signals _that_ a
+calendar changed, not what; fetch the delta with `events.list({ syncToken })`. Event types:
+`calendar.event.changed`, `calendar.event.unknown`, and `enduseraccount.created` /
+`updated` / `deleted` / `credential.updated`.
 
-1. **Webhook payload shape + signature scheme** for `endpointSecret` (HMAC of raw body?
-   which header? replay protection?) and delivery-retry behaviour on non-2xx.
-2. **Subscription lifecycle** — do subscriptions expire (provider TTLs) and does OneCal
-   auto-renew, or must we re-create on a schedule?
-3. **`syncToken` invalidation** — the "full resync required" response contract.
-4. **Free/busy on iCloud** — does `freeBusy.get` return busy slots for Apple accounts?
-5. **Rate-limit numbers** — per-account / per-endpoint limits.
-6. **Error-code enumeration** — full set of `code` values, esp. credential/auth failures.
+Verify every request with the `svix` library (`pnpm add svix`) over the `svix-id` /
+`svix-timestamp` / `svix-signature` headers using the per-subscription `endpointSecret`
+(HMAC + timestamp/replay protection built in). Ack with a 2xx within ~15s and dedupe on
+`svix-id`. Svix retries failed deliveries with exponential backoff (immediately, 5s, 5m,
+30m, 2h, 5h, 10h, 10h) and disables an endpoint that keeps failing for ~5 days.
+
+```typescript
+import { Webhook } from 'svix';
+
+const wh = new Webhook(endpointSecret); // per-subscription secret, decrypted
+const payload = wh.verify(rawBody, {
+  'svix-id': req.headers['svix-id'],
+  'svix-timestamp': req.headers['svix-timestamp'],
+  'svix-signature': req.headers['svix-signature'],
+}); // throws on bad signature → 400, no retry
+// then enqueue a BullMQ delta-sync job
+```
+
+iCloud has no change webhooks — refresh its availability with polling / on-demand
+`freeBusy.get` at profile view instead (see Constraint 8).
