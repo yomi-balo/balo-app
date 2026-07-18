@@ -1,6 +1,6 @@
 import React from 'react';
 
-// ─────────────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
 // Balo — Client-facing proposal PDF — VISUAL REFERENCE (BAL-385 / BAL-392)
 //
 // This is an eyeball-only mockup of the approved A4 layout, rendered in
@@ -28,7 +28,7 @@ import React from 'react';
 // HARD RULE: every money figure is the CLIENT price (through applyBaloFee).
 // The Balo fee %, raw expert quote, and admin pricing never appear here —
 // the document consumes only a `client`-audience ProposalReviewDoc.
-// ─────────────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
 
 const c = {
   page: '#FFFFFF',
