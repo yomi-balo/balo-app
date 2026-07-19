@@ -364,3 +364,42 @@ export interface CreditBalanceExpiredPayload {
   expiresAt: string; // ISO — the expiry date reached
   expiredMinor: number; // analytics only; NOT shown in the expired copy
 }
+
+// BAL-377 (ADR-1040 Lane 1) — a manual top-up charged successfully and was credited.
+// SERVER-ONLY (published from the API Stripe webhook, post-commit — the shipped BAL-382
+// webhook is the single authoritative crediting path; this notice is a courtesy receipt).
+// Recipient is the PURCHASER (recipient 'self' via `userId`; the resolver's existing
+// `payload.userId → data.user` hydration names + targets them). Email + in-app. All
+// figures are display facts CAPTURED AT WEBHOOK TIME (carried in the payload, not
+// re-hydrated) — matching the dormancy-payload precedent. `correlationId` IS the ledger
+// idempotency key `manual_purchase:${piId}` → per-purchase BullMQ jobId dedup, so a
+// webhook replay collapses to one receipt. NO fee field (BAL-357): a top-up buys AUD at
+// FACE VALUE — the Balo fee lives in the per-minute consume rate, never here; `creditedMinor`
+// is the GROSS settled AUD (`balance_transaction.amount`), never a fee-net figure. Defined
+// ONCE here to avoid Sonar new-code duplication across the api + web catalogs.
+export interface CreditTopupCompletedPayload {
+  correlationId: string; // = manual_purchase:${piId} → BullMQ jobId dedup
+  userId: string; // the purchaser → recipient 'self'; resolver hydrates data.user
+  companyId: string; // context (the wallet's company)
+  creditedMinor: number; // GROSS settled AUD credited (balance_transaction.amount)
+  chargedCurrency: string; // presentment currency, lowercase (e.g. 'usd', 'aud')
+  chargedAmountMinor: number; // presentment minor units (what the card was billed)
+  promoGrantedMinor: number; // 0 when no promo redeemed at settlement
+  balanceAfterMinor: number; // wallet balance after the credit (+ any promo grant)
+  expiresAt: string; // ISO — rolled expiry (rolling-expiry reassurance line)
+}
+
+// BAL-377 / BAL-381 — a company member WITHOUT MANAGE_BILLING nudged the billing
+// holder(s) to top up. Published from the web `nudgeBillingAdminAction` (publishable).
+// Fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins' →
+// the resolver hydrates `data.billingUserIds` from `companyId`). `correlationId` is an
+// HOUR-BUCKETED anti-abuse key `topup-nudge:${companyId}:${userId}:${hourBucket}` (NOT a uuid,
+// NOT a stable domain id) — a burst of re-nudges inside one hour collapses to a single BullMQ
+// jobId (no email-bomb), while a genuine nudge in a later hour still fans out. `requestedByUserId`
+// names the nudging member (context/audit; never a recipient — they lack MANAGE_BILLING, so the
+// billing fan-out naturally excludes them). Defined ONCE here (shared-home convention).
+export interface CreditTopupRequestedPayload {
+  correlationId: string; // topup-nudge:{companyId}:{userId}:{hourBucket} — one dispatch/hour
+  companyId: string; // → resolver hydrates data.billingUserIds (fan-out) + data.company
+  requestedByUserId: string; // the nudging member (context/audit only)
+}

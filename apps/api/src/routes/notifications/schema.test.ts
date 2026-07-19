@@ -1085,6 +1085,56 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('credit.topup.requested (BAL-377 / BAL-381)', () => {
+    const valid = {
+      // Hour-bucketed anti-abuse key — NOT a uuid. The schema MUST accept this exact shape
+      // (the web nudge action mints it); a `z.uuid()` bound here would 400 every real nudge.
+      correlationId:
+        'topup-nudge:550e8400-e29b-41d4-a716-446655440000:550e8400-e29b-41d4-a716-446655440001:471234',
+      companyId: '550e8400-e29b-41d4-a716-446655440000',
+      requestedByUserId: '550e8400-e29b-41d4-a716-446655440001',
+    };
+
+    it('accepts the hour-bucketed (non-uuid) correlationId the nudge action mints', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'credit.topup.requested',
+        payload: valid,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('also accepts a bare uuid correlationId (backward compatible)', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'credit.topup.requested',
+        payload: { ...valid, correlationId: '550e8400-e29b-41d4-a716-446655440099' },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an empty or over-long (>200) correlationId', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'credit.topup.requested',
+          payload: { ...valid, correlationId: '' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'credit.topup.requested',
+          payload: { ...valid, correlationId: 'a'.repeat(201) },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a non-UUID companyId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'credit.topup.requested',
+        payload: { ...valid, companyId: 'not-a-uuid' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

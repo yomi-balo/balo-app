@@ -25,11 +25,14 @@ function stripeErrorLogFields(err: unknown): { code: string | null; requestId: s
  * yield two distinct PI-id ledger keys and double-credit the wallet (invariant #2). It must
  * NOT depend on the PI id.
  *
- * Stamps webhook metadata `{ walletId, reason: 'manual_purchase', memberId }`; the credit is
- * applied on `payment_intent.succeeded`, keyed on the resulting PI id (`manual_purchase:
- * {piId}`), so the lane never applies the ledger effect itself. `initiatingMemberId` is
- * REQUIRED — a manual purchase is member-attributed (Decision C), threaded into the ledger's
- * audit row.
+ * Stamps webhook metadata `{ walletId, reason: 'manual_purchase', memberId, promoCode? }`; the
+ * credit is applied on `payment_intent.succeeded`, keyed on the resulting PI id
+ * (`manual_purchase:{piId}`), so the lane never applies the ledger effect itself.
+ * `initiatingMemberId` is REQUIRED — a manual purchase is member-attributed (Decision C),
+ * threaded into the ledger's audit row. `promoCode` (BAL-377) is OPTIONAL: when present it
+ * rides in metadata so the webhook grants the unadvertised promo bonus BEST-EFFORT in the
+ * SAME transaction as the base purchase credit — the promo is granted ONLY on successful
+ * payment, never at Apply-time (no free credit to users who never pay).
  *
  * NOTE: this path only saves the payment method with Stripe; it does NOT populate the
  * wallet's mandate columns (that happens on `setup_intent.succeeded` → `applyMandate`). An
@@ -43,20 +46,26 @@ export async function createOnSessionPurchaseIntent(input: {
   presentmentAmountMinor: number;
   initiatingMemberId: string;
   idempotencyKey: string;
+  /** BAL-377 — an unadvertised promo code to grant on successful payment (webhook). */
+  promoCode?: string;
 }): Promise<{ clientSecret: string; paymentIntentId: string }> {
   const stripe = getStripeClient();
   try {
+    // Stripe metadata values must be strings — include `promoCode` only when present.
+    const metadata: Record<string, string> = {
+      walletId: input.walletId,
+      reason: 'manual_purchase',
+      memberId: input.initiatingMemberId,
+    };
+    if (input.promoCode) metadata.promoCode = input.promoCode;
+
     const pi = await stripe.paymentIntents.create(
       {
         amount: input.presentmentAmountMinor,
         currency: input.presentmentCurrency,
         customer: input.customerId,
         setup_future_usage: 'off_session',
-        metadata: {
-          walletId: input.walletId,
-          reason: 'manual_purchase',
-          memberId: input.initiatingMemberId,
-        },
+        metadata,
       },
       { idempotencyKey: input.idempotencyKey }
     );

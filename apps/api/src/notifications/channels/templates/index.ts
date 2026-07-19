@@ -42,7 +42,9 @@ import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
 import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
-import { formatAudMinor, formatExpiryDateLong } from './credit-format.js';
+import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
+import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
+import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 
@@ -733,6 +735,49 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'About your Balo balance',
+    };
+  },
+
+  // BAL-377 (ADR-1040 Lane 1) top-up receipt — server-only, EMAIL to the PURCHASER
+  // (recipient 'self'). All figures are display facts captured at webhook time
+  // (creditedMinor / chargedCurrency / chargedAmountMinor / promoGrantedMinor /
+  // balanceAfterMinor / expiresAt in the merged payload), formatted here. The presentment
+  // "charged as" line shows ONLY on a non-AUD card (chargedCurrency !== 'aud'); an AUD buyer
+  // isn't shown "A$X → A$X". NO fee figure (BAL-357). Warm, congratulatory; rolling expiry
+  // framed as reassurance.
+  'credit-topup-completed': (data) => {
+    const chargedCurrency = ((data.chargedCurrency as string) ?? 'aud').toLowerCase();
+    const promoGrantedMinor = numberCount(data.promoGrantedMinor);
+    return {
+      component: React.createElement(CreditTopupCompletedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        credited: formatAudMinor(numberCount(data.creditedMinor)),
+        charged: formatPresentmentMinor(numberCount(data.chargedAmountMinor), chargedCurrency),
+        showCharged: chargedCurrency !== 'aud',
+        promoBonus: promoGrantedMinor > 0 ? formatAudMinor(promoGrantedMinor) : null,
+        balanceAfter: formatAudMinor(numberCount(data.balanceAfterMinor)),
+        expiryDate: formatExpiryDateLong((data.expiresAt as string) ?? ''),
+        ctaUrl: `${BASE_URL}/experts`,
+        baseUrl: BASE_URL,
+      }),
+      subject: "You're topped up — your balance is ready",
+    };
+  },
+
+  // BAL-377 / BAL-381 top-up nudge — EMAIL to each fanned-out MANAGE_BILLING holder. The
+  // nudging member's name arrives as `data.requesterName` (resolver hydrates it from
+  // payload.requestedByUserId); the recipient's own first name is `recipientName`. CTA lands
+  // on the top-up composer.
+  'credit-topup-requested': (data) => {
+    const memberName = (data.requesterName as string) ?? 'A teammate';
+    return {
+      component: React.createElement(CreditTopupRequestedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        memberName,
+        ctaUrl: `${BASE_URL}/billing/top-up`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(memberName)} asked you to top up your team's balance`,
     };
   },
 

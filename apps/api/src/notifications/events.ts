@@ -20,6 +20,8 @@ import type {
   OnboardingReminderPayload,
   CreditDormancyReminderPayload,
   CreditBalanceExpiredPayload,
+  CreditTopupCompletedPayload,
+  CreditTopupRequestedPayload,
   PromoRedeemedPayload,
   ProposalSharedPayload,
 } from '@balo/shared/notifications';
@@ -258,6 +260,8 @@ export type NotificationEvent =
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
   | 'credit.balance_expired'
+  | 'credit.topup.completed'
+  | 'credit.topup.requested'
   | 'promo.redeemed';
 
 /**
@@ -275,7 +279,10 @@ export type ServerOnlyNotificationEvent =
   | 'engagement.review_reminder'
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
-  | 'credit.balance_expired';
+  | 'credit.balance_expired'
+  // BAL-377: the top-up receipt is published from the API Stripe webhook post-commit —
+  // never through the internal /notifications/publish route (no publishBodySchema arm).
+  | 'credit.topup.completed';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -321,5 +328,7 @@ export interface EventPayloadMap {
   'onboarding.reminder': OnboardingReminderPayload;
   'credit.dormancy_reminder': CreditDormancyReminderPayload;
   'credit.balance_expired': CreditBalanceExpiredPayload;
+  'credit.topup.completed': CreditTopupCompletedPayload;
+  'credit.topup.requested': CreditTopupRequestedPayload;
   'promo.redeemed': PromoRedeemedPayload;
 }

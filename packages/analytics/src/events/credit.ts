@@ -1,8 +1,43 @@
-// BAL-380 (ADR-1040 Lane 3) credit dormancy / expiry / display-FX server events.
-// Snake_case values, feature-prefixed `credit_` (matches `credit_wallets`,
-// `creditLedgerRepository`, the `CREDIT_*` enums). ALL server-emitted (`trackServer`) —
-// there are no client events, so this feature adds NOTHING to `AllEvents`.
+// BAL-377 (ADR-1040 Lane 1) credit purchase / top-up CLIENT funnel events, plus
+// BAL-380 (Lane 3) dormancy / expiry / display-FX SERVER events. Snake_case values,
+// feature-prefixed `credit_` (matches `credit_wallets`, `creditLedgerRepository`, the
+// `CREDIT_*` enums); `promo_redeemed` / `mandate_captured` keep the noun they describe.
 //
+// -- Client events (fire from the browser via `track()`) ---------------------------
+// BAL-377: the four top-up funnel events. These are CLIENT-OBSERVED signals — the
+// authoritative money source of truth is the shipped BAL-382 Stripe webhook (which
+// credits the wallet), NOT these events. PURCHASE_STARTED fires on the Pay press;
+// PURCHASE_COMPLETED / PROMO_REDEEMED / MANDATE_CAPTURED fire on the receipt (Step 2)
+// once the client-side confirmation succeeds. No `identify`/`reset` (no session change).
+export const CREDIT_EVENTS = {
+  /** Pay pressed — a top-up attempt started (client-observed funnel entry). */
+  PURCHASE_STARTED: 'credit_purchase_started',
+  /** Receipt shown — the client-side confirmation succeeded (money via the webhook). */
+  PURCHASE_COMPLETED: 'credit_purchase_completed',
+  /** Receipt shown with a promo applied — the shown bonus grant (webhook grants it). */
+  PROMO_REDEEMED: 'promo_redeemed',
+  /** SetupIntent confirmed — a reusable off-session card mandate was captured. */
+  MANDATE_CAPTURED: 'mandate_captured',
+} as const;
+
+export interface CreditEventMap {
+  [CREDIT_EVENTS.PURCHASE_STARTED]: {
+    amount_minor: number;
+    promo_applied: boolean;
+    funding_method: 'card' | 'invoice';
+    low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+  };
+  [CREDIT_EVENTS.PURCHASE_COMPLETED]: {
+    amount_minor: number;
+    promo_applied: boolean;
+    funding_method: 'card' | 'invoice';
+    low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+  };
+  [CREDIT_EVENTS.PROMO_REDEEMED]: { code: string; bonus_minor: number };
+  [CREDIT_EVENTS.MANDATE_CAPTURED]: { low_balance_mode: 'auto_topup' | 'keep_going' };
+}
+
+// -- Server events (fire from workers/sweeps via `trackServer`) --------------------
 // `_dormancy_reminder_sent` fires per (wallet, band) when the sweep publishes a reminder;
 // `_balance_expired` fires ONLY when the sweep posts the expiry entry (outcome 'expired',
 // never on an idempotent replay — no double-count of the money event); `_fx_cache_stale`
