@@ -7,6 +7,7 @@ import { phoneRoutes } from './routes/phone/index.js';
 import { calendarRoutes } from './routes/calendar/index.js';
 import { expertsRoutes } from './routes/experts/index.js';
 import { stripeRoutes } from './routes/stripe/index.js';
+import { sessionsRoutes } from './routes/sessions/index.js';
 import { creditRoutes } from './routes/credit/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
@@ -41,6 +42,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await fastify.register(expertsRoutes);
   // Stripe client-charging webhook (BAL-382) — raw-body scoped inside this plugin.
   await fastify.register(stripeRoutes);
+  // Credit-session drawdown / overdraft routes (BAL-378).
+  await fastify.register(sessionsRoutes);
   // Internal credit intent-creation routes (BAL-377) — secret-gated (requireInternalAuth).
   await fastify.register(creditRoutes);
 

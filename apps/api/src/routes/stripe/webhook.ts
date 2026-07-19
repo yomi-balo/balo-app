@@ -2,55 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type Stripe from 'stripe';
 import { db, stripeWebhookEventsRepository } from '@balo/db';
 import { getStripeClient, getWebhookSecret } from '../../lib/stripe.js';
-import {
-  applyStripeEffect,
-  resolveStripeEffect,
-  type CreditTopupReceipt,
-} from '../../services/stripe/index.js';
-import { notificationEvents } from '../../notifications/publisher.js';
-
-/**
- * BAL-377 — publish the `credit.topup.completed` receipt AFTER the webhook transaction
- * commits (a persisted marker always implies a committed credit). Best-effort: a publish
- * failure is logged, never thrown — the money is already committed, and re-throwing would
- * make Stripe retry the whole idempotent webhook for a mere notification hiccup. Idempotent
- * by `correlationId` (`manual_purchase:{piId}` → BullMQ jobId dedup), so even a genuine
- * Stripe replay collapses to one receipt. A receipt with no purchaser (defensive — a
- * manual_purchase always stamps `memberId`) is skipped: `self` has no user to resolve.
- */
-async function publishTopupReceipt(
-  fastify: FastifyInstance,
-  receipt: CreditTopupReceipt
-): Promise<void> {
-  if (receipt.purchaserUserId === null) {
-    fastify.log.warn(
-      { correlationId: receipt.correlationId },
-      'credit.topup.completed skipped — manual purchase has no purchaser to notify'
-    );
-    return;
-  }
-  try {
-    await notificationEvents.publish('credit.topup.completed', {
-      correlationId: receipt.correlationId,
-      userId: receipt.purchaserUserId,
-      companyId: receipt.companyId,
-      creditedMinor: receipt.creditedMinor,
-      chargedCurrency: receipt.chargedCurrency,
-      chargedAmountMinor: receipt.chargedAmountMinor,
-      promoGrantedMinor: receipt.promoGrantedMinor,
-      balanceAfterMinor: receipt.balanceAfterMinor,
-      expiresAt: receipt.expiresAt ?? '',
-    });
-  } catch (err: unknown) {
-    fastify.log.error(
-      {
-        correlationId: receipt.correlationId,
-        error: err instanceof Error ? err.message : String(err),
-      },
-      'Failed to publish credit.topup.completed receipt (money committed; notification best-effort)'
-    );
-  }
-}
+import { applyStripeEffect, resolveStripeEffect } from '../../services/stripe/index.js';
 
 /**
  * The single idempotent Stripe webhook endpoint (BAL-382).
@@ -96,9 +48,11 @@ export async function stripeWebhookRoutes(fastify: FastifyInstance): Promise<voi
     // propagates to the app error handler → 500 → Stripe retries. null = unhandled type.
     const effect = await resolveStripeEffect(event);
 
-    // BAL-377 — a fresh manual_purchase credit surfaces the receipt facts to publish AFTER
-    // the txn commits (hoisted out of the callback; null for every other effect / a replay).
-    let topupReceipt: CreditTopupReceipt | null = null;
+    // Deferred POST-COMMIT effects (BAL-378 session settled / settlement-failed notices, the
+    // BAL-377 top-up receipt, + analytics) run AFTER the txn commits — never inside it, since
+    // enqueuing to BullMQ / PostHog must not be undone by a rollback. Empty for an unhandled
+    // type or a deduped replay.
+    let postCommit: Array<() => Promise<void>> = [];
 
     await db.transaction(async (tx) => {
       const marker = await stripeWebhookEventsRepository.insertReceived(
@@ -113,17 +67,15 @@ export async function stripeWebhookRoutes(fastify: FastifyInstance): Promise<voi
         }
       }
       if (effect) {
-        const applied = await applyStripeEffect(tx, effect);
-        if (applied?.kind === 'credit_topup_receipt') {
-          topupReceipt = applied.receipt;
-        }
+        postCommit = await applyStripeEffect(tx, effect);
       }
       await stripeWebhookEventsRepository.markProcessed(event.id, tx);
     });
 
-    // POST-COMMIT: publish the top-up receipt notification (best-effort, idempotent).
-    if (topupReceipt !== null) {
-      await publishTopupReceipt(fastify, topupReceipt);
+    // Post-commit side-effects. Each publish is best-effort + idempotent by `correlationId`
+    // (BullMQ jobId dedup), so even a genuine Stripe replay collapses to one delivery.
+    for (const run of postCommit) {
+      await run();
     }
 
     request.log.info(

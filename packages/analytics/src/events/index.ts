@@ -122,3 +122,9 @@ export {
   PROMO_EVENTS,
   type PromoEventMap,
 } from './promo';
+export {
+  SESSION_EVENTS,
+  type SessionEventMap,
+  SESSION_SERVER_EVENTS,
+  type SessionServerEventMap,
+} from './session';

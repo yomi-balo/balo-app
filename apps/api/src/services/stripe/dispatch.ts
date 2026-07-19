@@ -2,15 +2,20 @@ import type Stripe from 'stripe';
 import {
   applyLedgerEntry,
   auditEventsRepository,
+  creditReceivablesRepository,
+  creditSessionsRepository,
   creditWalletsRepository,
   promoRedemptionsRepository,
   db,
   deriveIdempotencyKey,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { toSettleableSession } from '@balo/shared/credit';
 import { getStripeClient } from '../../lib/stripe.js';
+import { publishSessionSettled, publishSettlementFailure } from '../credit-session/notify.js';
+import { notificationEvents } from '../../notifications/publisher.js';
 import { retrieveSettlement } from './charges.js';
-import type { AppliedEffectResult, CreditTopupReceipt, StripeEffect } from './types.js';
+import type { CreditTopupReceipt, PostCommitEffect, StripeEffect } from './types.js';
 
 const log = createLogger('stripe');
 
@@ -97,6 +102,9 @@ async function resolvePaymentIntentFailed(pi: Stripe.PaymentIntent): Promise<Str
     paymentIntentId: pi.id,
     code,
     outcome,
+    // BAL-378: route an ASYNC overdraft-settlement failure to the receivable/dunning path.
+    reason: pi.metadata.reason ?? null,
+    sessionId: pi.metadata.sessionId ?? null,
   };
 }
 
@@ -219,6 +227,41 @@ function ledgerKeyForCredit(effect: Extract<StripeEffect, { kind: 'credit' }>): 
 }
 
 /**
+ * BAL-378 (§3b.c / §14 Q2) — an `overdraft_settlement` credit succeeded: mark the session
+ * `settled` + auto-clear any open receivable (releasing the soft hold), in the SAME webhook
+ * txn. The mark + clear are idempotent, so they run on a replay too; but the post-commit
+ * receipt publish + analytics fire ONLY on the FIRST (non-deduped) credit application (FIX 9),
+ * so a replayed `payment_intent.succeeded` never re-sends the receipt or double-counts. No-op
+ * (logs) if the session is gone.
+ */
+async function markSettlementSettled(
+  tx: DbTx,
+  sessionId: string,
+  paymentIntentId: string,
+  deduped: boolean
+): Promise<PostCommitEffect[]> {
+  const session = await creditSessionsRepository.findById(sessionId);
+  if (session === undefined) {
+    log.error(
+      { op: 'applyStripeEffect', reason: 'overdraft_settlement', sessionId },
+      'overdraft_settlement succeeded but the session is missing — cannot mark settled'
+    );
+    return [];
+  }
+  await creditSessionsRepository.markSettlementResult(tx, {
+    sessionId,
+    status: 'settled',
+    stripePaymentIntentId: paymentIntentId,
+  });
+  await creditReceivablesRepository.clear({ sessionId }, tx);
+  if (deduped) {
+    return [];
+  }
+  const settleable = toSettleableSession(session);
+  return [() => publishSessionSettled(settleable, new Date())];
+}
+
+/**
  * BAL-377 — grant an unadvertised promo BEST-EFFORT in the SAME transaction as the base
  * purchase credit (only on `manual_purchase`). Returns the newly-granted minor units (0 when
  * no code, an idempotent replay, or a re-validation failure). The redeem RE-VALIDATES the
@@ -276,10 +319,51 @@ async function grantPromoBestEffort(
   }
 }
 
+/**
+ * BAL-377 — publish the `credit.topup.completed` receipt POST-COMMIT (a persisted marker always
+ * implies a committed credit). Relocated from the webhook route so it composes as a
+ * `PostCommitEffect` thunk alongside the BAL-378 session publishes (no `fastify` needed — uses
+ * the module `log`). Best-effort + idempotent by `correlationId` (`manual_purchase:{piId}` →
+ * BullMQ jobId dedup): a publish failure is logged, never thrown (the money is already
+ * committed; re-throwing would make Stripe retry the whole webhook for a notification hiccup). A
+ * receipt with no purchaser (defensive — a manual_purchase always stamps `memberId`) is skipped.
+ */
+async function publishTopupReceipt(receipt: CreditTopupReceipt): Promise<void> {
+  if (receipt.purchaserUserId === null) {
+    log.warn(
+      { op: 'publishTopupReceipt', correlationId: receipt.correlationId },
+      'credit.topup.completed skipped — manual purchase has no purchaser to notify'
+    );
+    return;
+  }
+  try {
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: receipt.correlationId,
+      userId: receipt.purchaserUserId,
+      companyId: receipt.companyId,
+      creditedMinor: receipt.creditedMinor,
+      chargedCurrency: receipt.chargedCurrency,
+      chargedAmountMinor: receipt.chargedAmountMinor,
+      promoGrantedMinor: receipt.promoGrantedMinor,
+      balanceAfterMinor: receipt.balanceAfterMinor,
+      expiresAt: receipt.expiresAt ?? '',
+    });
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'publishTopupReceipt',
+        correlationId: receipt.correlationId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to publish credit.topup.completed receipt (money committed; notification best-effort)'
+    );
+  }
+}
+
 async function applyCredit(
   tx: DbTx,
   effect: Extract<StripeEffect, { kind: 'credit' }>
-): Promise<AppliedEffectResult | null> {
+): Promise<PostCommitEffect[]> {
   const idempotencyKey = ledgerKeyForCredit(effect);
   const base = await applyLedgerEntry(tx, {
     walletId: effect.walletId,
@@ -309,12 +393,25 @@ async function applyCredit(
     'Applied credit ledger effect'
   );
 
-  // Only a FRESH manual_purchase surfaces a receipt (+ grants any promo). A deduped replay
-  // never re-grants or re-publishes; auto_topup / overdraft_settlement have their own lanes.
-  if (effect.reason !== 'manual_purchase' || base.deduped) {
-    return null;
+  // BAL-378: an overdraft settlement credit ALSO marks the session settled + clears the
+  // receivable (single webhook source of truth). ledgerKeyForCredit guarantees a non-null
+  // sessionId for this reason. A replayed (deduped) credit still idempotently re-marks, but
+  // never re-publishes the receipt / re-counts analytics (FIX 9).
+  if (effect.reason === 'overdraft_settlement' && effect.sessionId !== null) {
+    return markSettlementSettled(
+      tx,
+      effect.sessionId,
+      effect.settlement.stripePaymentIntentId,
+      base.deduped
+    );
   }
 
+  // BAL-377: only a FRESH manual_purchase surfaces a receipt (+ grants any promo) as a
+  // post-commit publish. A deduped replay never re-grants or re-publishes; auto_topup has its
+  // own lane and overdraft_settlement is handled above.
+  if (effect.reason !== 'manual_purchase' || base.deduped) {
+    return [];
+  }
   const promoGrantedMinor = await grantPromoBestEffort(tx, effect, base.wallet.companyId);
   const receipt: CreditTopupReceipt = {
     correlationId: idempotencyKey, // = manual_purchase:{piId}
@@ -329,7 +426,91 @@ async function applyCredit(
     balanceAfterMinor: base.wallet.balanceMinor + promoGrantedMinor,
     expiresAt: base.wallet.expiresAt ? base.wallet.expiresAt.toISOString() : null,
   };
-  return { kind: 'credit_topup_receipt', receipt };
+  return [() => publishTopupReceipt(receipt)];
+}
+
+/**
+ * BAL-378 (§3b.b) — an ASYNC `overdraft_settlement` charge failed (after a `processing`
+ * accept): mark the session `failed` + open the receivable (soft hold), in the SAME webhook
+ * txn. Returns the post-commit dunning publish ONLY when THIS path opened the receivable
+ * (`created`) — the sync end-session hard-decline path opens the SAME session receivable, so
+ * gating on `created` means exactly one dunning + one analytics fire per failed session,
+ * whichever path lands first (FIX 5). No-op (logs) if the session is gone.
+ */
+async function handleOverdraftChargeFailed(
+  tx: DbTx,
+  sessionId: string,
+  paymentIntentId: string
+): Promise<PostCommitEffect[]> {
+  const session = await creditSessionsRepository.findById(sessionId);
+  if (session === undefined) {
+    log.error(
+      { op: 'applyStripeEffect', kind: 'charge_failed', reason: 'overdraft_settlement', sessionId },
+      'overdraft_settlement failed but the session is missing — cannot open receivable'
+    );
+    return [];
+  }
+  await creditSessionsRepository.markSettlementResult(tx, {
+    sessionId,
+    status: 'failed',
+    stripePaymentIntentId: paymentIntentId,
+  });
+  const amountMinor = session.overdraftSettledMinor ?? 0;
+  if (amountMinor <= 0) {
+    return [];
+  }
+  const { created } = await creditReceivablesRepository.open(
+    {
+      companyId: session.companyId,
+      walletId: session.walletId,
+      sessionId,
+      amountMinor,
+      reason: 'settlement_declined',
+      stripePaymentIntentId: paymentIntentId,
+    },
+    tx
+  );
+  if (!created) {
+    return [];
+  }
+  const settleable = toSettleableSession(session);
+  return [
+    () =>
+      publishSettlementFailure({
+        session: settleable,
+        reason: 'declined',
+        amountMinor,
+        attemptEpochMs: Date.now(),
+      }),
+  ];
+}
+
+/** Recognise + log a charge failure, routing an overdraft settlement to receivable/dunning. */
+async function applyChargeFailed(
+  tx: DbTx,
+  effect: Extract<StripeEffect, { kind: 'charge_failed' }>
+): Promise<PostCommitEffect[]> {
+  const outcome = (effect.outcome ?? null) as { type?: string; reason?: string } | null;
+  log.warn(
+    {
+      op: 'applyStripeEffect',
+      kind: 'charge_failed',
+      walletId: effect.walletId,
+      stripeId: effect.paymentIntentId,
+      code: effect.code,
+      reason: effect.reason,
+      sessionId: effect.sessionId,
+      outcomeType: outcome?.type ?? null,
+      outcomeReason: outcome?.reason ?? null,
+    },
+    'Charge failed — recognised'
+  );
+  // BAL-378: an async overdraft-settlement failure opens the receivable + dunning; other
+  // reasons keep the log-only behaviour (their consumer lane owns any follow-up).
+  if (effect.reason === 'overdraft_settlement' && effect.sessionId !== null) {
+    return handleOverdraftChargeFailed(tx, effect.sessionId, effect.paymentIntentId);
+  }
+  return [];
 }
 
 /**
@@ -338,14 +519,15 @@ async function applyCredit(
  * paths are last-writer-wins column updates; `dispute` appends an audit row. All writes go
  * through the shipped `@balo/db` repos so they commit or roll back with the event marker.
  *
- * Returns an `AppliedEffectResult` ONLY for a fresh manual_purchase credit (BAL-377) — the
- * display facts the webhook publishes as the `credit.topup.completed` receipt POST-COMMIT —
- * else `null`. It NEVER publishes here (the notification must fire after the txn commits).
+ * Returns the deferred POST-COMMIT effects (notification publishes + analytics) the webhook
+ * runs AFTER the txn commits — never inside it. These include the BAL-378 session settled /
+ * settlement-failed notices AND the BAL-377 `credit.topup.completed` receipt (a fresh
+ * manual_purchase), all modelled uniformly as post-commit thunks.
  */
 export async function applyStripeEffect(
   tx: DbTx,
   effect: StripeEffect
-): Promise<AppliedEffectResult | null> {
+): Promise<PostCommitEffect[]> {
   switch (effect.kind) {
     case 'credit':
       return applyCredit(tx, effect);
@@ -361,30 +543,16 @@ export async function applyStripeEffect(
         { op: 'applyStripeEffect', kind: 'mandate_active', walletId: effect.walletId },
         'Mandate activated'
       );
-      return null;
+      return [];
     case 'mandate_failed':
       await creditWalletsRepository.applyMandateStatus(tx, effect.walletId, 'failed');
       log.warn(
         { op: 'applyStripeEffect', kind: 'mandate_failed', walletId: effect.walletId },
         'Mandate setup failed'
       );
-      return null;
-    case 'charge_failed': {
-      const outcome = (effect.outcome ?? null) as { type?: string; reason?: string } | null;
-      log.warn(
-        {
-          op: 'applyStripeEffect',
-          kind: 'charge_failed',
-          walletId: effect.walletId,
-          stripeId: effect.paymentIntentId,
-          code: effect.code,
-          outcomeType: outcome?.type ?? null,
-          outcomeReason: outcome?.reason ?? null,
-        },
-        'Charge failed — recognised (consumer lane owns dunning; no ledger effect)'
-      );
-      return null;
-    }
+      return [];
+    case 'charge_failed':
+      return applyChargeFailed(tx, effect);
     case 'dispute':
       await auditEventsRepository.record(
         {
@@ -416,7 +584,7 @@ export async function applyStripeEffect(
         },
         'Dispute opened — recognised + audited (no auto-clawback in v1)'
       );
-      return null;
+      return [];
     default: {
       const exhaustive: never = effect;
       throw new Error(`Unhandled Stripe effect: ${JSON.stringify(exhaustive)}`);

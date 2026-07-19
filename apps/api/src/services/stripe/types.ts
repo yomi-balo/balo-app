@@ -58,6 +58,13 @@ export type OffSessionChargeResult =
   | { status: 'requires_action'; paymentIntentId: string; clientSecret: string };
 
 /**
+ * A deferred side-effect an `applyStripeEffect` branch returns for the webhook to run AFTER the
+ * transaction commits (BAL-378). Notification publishes (BullMQ) + `trackServer` (PostHog) are
+ * external I/O that must never run inside — or be undone by a rollback of — the webhook txn.
+ */
+export type PostCommitEffect = () => Promise<void>;
+
+/**
  * A resolved, side-effect-free description of what a Stripe webhook event should DO to the
  * ledger/wallet. `resolveStripeEffect` builds it (may call Stripe, no DB writes);
  * `applyStripeEffect` applies it inside the webhook transaction (DB writes, no Stripe calls).
@@ -93,6 +100,13 @@ export type StripeEffect =
       code: string | null;
       /** `charge.outcome` (Radar-aware) when retrievable, else `last_payment_error`. */
       outcome: unknown;
+      /**
+       * BAL-378: PI metadata `reason` + `sessionId` — an ASYNC `overdraft_settlement` failure
+       * (after a `processing` accept) routes to the receivable/dunning path; other reasons
+       * (auto_topup / manual_purchase) keep the log-only behaviour.
+       */
+      reason: string | null;
+      sessionId: string | null;
     }
   | {
       kind: 'dispute';
@@ -127,11 +141,3 @@ export interface CreditTopupReceipt {
   balanceAfterMinor: number; // wallet balance after the credit (+ any promo grant)
   expiresAt: string | null; // ISO rolled expiry (rolling-expiry reassurance)
 }
-
-/**
- * The result of applying a resolved Stripe effect (BAL-377). Only a FRESH manual_purchase
- * credit yields a `credit_topup_receipt`; every other effect (and a deduped replay) yields
- * `null`. The webhook uses this to publish the top-up receipt notification AFTER the
- * transaction commits (a persisted marker always implies a committed effect).
- */
-export type AppliedEffectResult = { kind: 'credit_topup_receipt'; receipt: CreditTopupReceipt };

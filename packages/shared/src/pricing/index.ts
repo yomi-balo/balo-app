@@ -152,6 +152,71 @@ export const DEFAULT_TOPUP_RELOAD_MINOR = 10000;
  */
 export const WALLET_EXPIRY_MONTHS = 12;
 
+// ── Session drawdown / overdraft (BAL-378 / ADR-1040 Lane 2) ──────────────
+//
+// Pure code constants (no platform-config table). Snapshotted onto a
+// `credit_sessions` row at `open` so a live session's economics never drift
+// mid-call, and read by the metering primitive / drawdown projection / reaper.
+
+/**
+ * The overdraft grace window, in minutes: once a wallet drains to zero WITH an active
+ * mandate, metering continues on card-backed grace for at most this long before the
+ * session is warmly wrapped (Model C). Snapshotted onto `credit_sessions.graceBoundMinutes`.
+ */
+export const OVERDRAFT_GRACE_MINUTES = 30;
+
+/**
+ * Runway threshold (in projected minutes remaining) that fires the one-shot low-balance
+ * warning while a session is still funded (`credit_sessions.lowWarnedAt`). Presentational
+ * nudge only — it never gates money.
+ */
+export const LOW_BALANCE_WARNING_MINUTES = 8;
+
+/**
+ * Grace-remaining threshold (in minutes) that fires the one-shot near-wrap warning while a
+ * session is in grace (`credit_sessions.nearWrapWarnedAt`). Presentational nudge only.
+ */
+export const NEAR_WRAP_MINUTES = 10;
+
+/**
+ * Hard safety cap on a single session's connected duration (AUD-agnostic). A connected
+ * session with no explicit `end` and no balance/ceiling stop is force-ended by the reaper
+ * once it exceeds this many minutes (bounds an abandoned call). BAL-378 Decision Q3.
+ */
+export const MAX_SESSION_MINUTES = 240;
+
+/**
+ * How long a `wrapped` (warmly-paused) session may sit idle before the reaper auto-`end`s it
+ * → single settlement. BAL-378 Decision Q3.
+ */
+export const WRAPPED_IDLE_END_MINUTES = 15;
+
+/**
+ * How long a `pending` (opened-but-never-connected) session may sit before the reaper
+ * auto-`cancel`s it and releases its hold. BAL-378 Decision Q3.
+ */
+export const PENDING_STALE_CANCEL_MINUTES = 30;
+
+/**
+ * Upper age bound (minutes since `endedAt`) past which the reaper STOPS auto-re-charging a
+ * settlement stuck in `processing`. Stripe expires an idempotency key after ~24h, so a
+ * re-charge past that window would mint a SECOND PaymentIntent → double-charge the card
+ * (the ledger credit dedups, the card does not). Set to 20h < 24h to leave headroom; past
+ * it the reaper raises a Sentry-visible `log.error` for manual handling instead of
+ * re-charging. BAL-378 FIX 6.
+ */
+export const SETTLEMENT_RECONCILE_MAX_AGE_MINUTES = 20 * 60;
+
+/**
+ * A per-HOUR minor-unit rate → the per-MINUTE minor-unit drawdown rate:
+ * `round(hourlyRateCents / 60)` (half-away-from-zero, integer minor units). Applied to the
+ * marked-up client hourly (→ `clientRateMinorPerMinute`) AND the raw expert hourly (→
+ * `expertRateMinorPerMinute`) at `open`. Round hourly-then-divide (BAL-378 Decision Q4).
+ */
+export function deriveMinuteRateCents(hourlyRateCents: number): number {
+  return Math.round(hourlyRateCents / 60);
+}
+
 /**
  * Rolling-expiry dormancy reminder bands, in days pre-expiry (widest → nearest). The
  * daily dormancy sweep (BAL-380) matches a wallet's absolute `expires_at` against each

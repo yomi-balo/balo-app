@@ -1,6 +1,15 @@
-import { pgTable, uuid, integer, timestamp, index, check } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  integer,
+  timestamp,
+  index,
+  check,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { creditWallets } from './credit-wallets';
+import { creditSessions } from './credit-sessions';
 import { users } from './users';
 import { creditHoldStatusEnum } from './enums';
 import { timestamps, softDelete } from './helpers';
@@ -26,8 +35,14 @@ export const creditHolds = pgTable(
       .notNull()
       .references(() => creditWallets.id, { onDelete: 'restrict' }),
 
-    // Bare uuid — no `sessions`/`cases` table in scope (see credit_ledger.session_id).
-    sessionId: uuid('session_id'),
+    // FK added in BAL-378 → `credit_sessions.id` ON DELETE RESTRICT. Kept NULLABLE (a hold
+    // is placed with a null session at `open`, then linked to the freshly-inserted session
+    // in the same txn). All existing rows are NULL (BAL-378 is the first lane to write a
+    // hold session_id), so ADD CONSTRAINT is safe. The `: AnyPgColumn` return annotation on
+    // the thunk breaks the credit_holds ⇄ credit_sessions circular TYPE inference (TS7022).
+    sessionId: uuid('session_id').references((): AnyPgColumn => creditSessions.id, {
+      onDelete: 'restrict',
+    }),
 
     // Attribution: the acting member. RESTRICT (never orphan attribution). Nullable.
     memberId: uuid('member_id').references(() => users.id, { onDelete: 'restrict' }),

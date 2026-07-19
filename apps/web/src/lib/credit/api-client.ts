@@ -1,23 +1,36 @@
 import 'server-only';
+
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
+import { getSession } from '@/lib/auth/session';
 
 /**
- * Server-only client for the apps/api internal credit routes (BAL-377). The Stripe provider
- * layer + `STRIPE_SECRET_KEY` live on apps/api (Railway); apps/web cannot import them, so
- * intent-creation is delegated over the established internal-secret hop — mirrors
- * `publishNotificationEvent`, but AWAITED (we need the `clientSecret` back). apps/web owns
- * authz + wallet resolution + config + analytics; apps/api owns the Stripe SDK call.
+ * Server-only web→api clients for the credit surface. TWO distinct hops share this module,
+ * both mirroring the internal `loggedFetch` mechanics of `../notifications/publish.ts` but
+ * AWAITED (each needs the response back):
+ *
+ *  1. BAL-377 credit INTENT-creation (`createPurchaseIntent` / `createMandateSetupIntent`).
+ *     The Stripe provider layer + `STRIPE_SECRET_KEY` live on apps/api (Railway); apps/web
+ *     cannot import them, so intent-creation is delegated over the internal-secret hop
+ *     (`x-internal-api-key`). apps/web owns authz + wallet resolution + config + analytics;
+ *     apps/api owns the Stripe SDK call.
+ *  2. BAL-378 credit-SESSION drawdown (`callSessionApi`). Those routes are WorkOS-authed
+ *     (`requireAuth` → `request.userId`), NOT the internal secret — so this client forwards the
+ *     viewer's WorkOS access token as `Authorization: Bearer …`, resolved SERVER-SIDE from the
+ *     iron-session (the browser never supplies it and no company / wallet id is ever trusted
+ *     from the client). These are user-initiated mutations that toast their outcome.
  */
 
 function getApiUrl(): string {
   const url = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
-  if (!url) {
+  if (url === undefined || url.length === 0) {
     log.warn('API_URL not configured — falling back to localhost:3002');
     return 'http://localhost:3002';
   }
   return url;
 }
+
+// ── BAL-377: internal-secret credit intent-creation hop ─────────────────────────────────
 
 /** Thrown when a credit intent-creation call to apps/api fails (caught at the action boundary). */
 export class CreditApiError extends Error {
@@ -81,4 +94,101 @@ export async function createPurchaseIntent(
 /** Create the off-session mandate SetupIntent → its `clientSecret` (card-backed modes). */
 export async function createMandateSetupIntent(walletId: string): Promise<SetupIntentResult> {
   return postInternal<SetupIntentResult>('/credit/setup-intent', { walletId });
+}
+
+// ── BAL-378: WorkOS-Bearer credit-session drawdown hop ──────────────────────────────────
+
+/** The authed principal for a credit-session api call (resolved from the iron-session). */
+interface SessionApiAuth {
+  userId: string;
+  accessToken: string;
+}
+
+/** A typed result of a credit-session api call — success carries the parsed body. */
+export type ApiCallResult<T> =
+  | { ok: true; status: number; data: T }
+  | { ok: false; status: number; code?: string; error: string };
+
+/**
+ * Resolve the viewer's authenticated principal from the iron-session. Fails closed
+ * (`null`) for a missing user, a missing access token, or an un-onboarded session —
+ * the api re-verifies the token, so this is a first, cheap gate.
+ */
+async function resolveSessionApiAuth(): Promise<SessionApiAuth | null> {
+  const session = await getSession();
+  const userId = session.user?.id;
+  const accessToken = session.accessToken;
+  if (userId === undefined || accessToken === undefined || accessToken.length === 0) {
+    return null;
+  }
+  if (session.user?.onboardingCompleted !== true) {
+    return null;
+  }
+  return { userId, accessToken };
+}
+
+/** Parse a response body as JSON, tolerating an empty body (→ `{}`). */
+function safeParse(text: string): Record<string, unknown> {
+  if (text.length === 0) {
+    return {};
+  }
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function readString(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * Call a credit-session api route with the viewer's Bearer token. Never throws — a
+ * transport error, a non-2xx, or an unauthenticated session all resolve to a typed
+ * `{ ok: false }` the action layer maps to a friendly, non-leaking message.
+ */
+export async function callSessionApi<T>(
+  path: string,
+  method: 'GET' | 'POST',
+  body?: unknown
+): Promise<ApiCallResult<T>> {
+  const auth = await resolveSessionApiAuth();
+  if (auth === null) {
+    return { ok: false, status: 401, error: 'Please sign in and try again.' };
+  }
+
+  try {
+    const response = await loggedFetch(`${getApiUrl()}${path}`, {
+      service: 'balo-api',
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${auth.accessToken}`,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+    const parsed = safeParse(await response.text());
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        code: readString(parsed, 'code'),
+        error: readString(parsed, 'error') ?? readString(parsed, 'code') ?? 'Request failed.',
+      };
+    }
+
+    return { ok: true, status: response.status, data: parsed as T };
+  } catch (error) {
+    log.error('Credit-session api call failed', {
+      path,
+      method,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { ok: false, status: 0, error: 'Something went wrong. Please try again.' };
+  }
 }

@@ -24,6 +24,12 @@ import type {
   CreditTopupRequestedPayload,
   PromoRedeemedPayload,
   ProposalSharedPayload,
+  SessionLowBalancePayload,
+  SessionGraceEnteredPayload,
+  SessionNearWrapPayload,
+  SessionSettledPayload,
+  SessionSettlementFailedPayload,
+  SessionTopupNudgePayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -260,6 +266,12 @@ export type NotificationEvent =
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
   | 'credit.balance_expired'
+  | 'session.low_balance'
+  | 'session.grace_entered'
+  | 'session.near_wrap'
+  | 'session.settled'
+  | 'session.settlement_failed'
+  | 'session.topup_nudge'
   | 'credit.topup.completed'
   | 'credit.topup.requested'
   | 'promo.redeemed';
@@ -280,6 +292,12 @@ export type ServerOnlyNotificationEvent =
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
   | 'credit.balance_expired'
+  | 'session.low_balance'
+  | 'session.grace_entered'
+  | 'session.near_wrap'
+  | 'session.settled'
+  | 'session.settlement_failed'
+  | 'session.topup_nudge'
   // BAL-377: the top-up receipt is published from the API Stripe webhook post-commit —
   // never through the internal /notifications/publish route (no publishBodySchema arm).
   | 'credit.topup.completed';
@@ -328,6 +346,12 @@ export interface EventPayloadMap {
   'onboarding.reminder': OnboardingReminderPayload;
   'credit.dormancy_reminder': CreditDormancyReminderPayload;
   'credit.balance_expired': CreditBalanceExpiredPayload;
+  'session.low_balance': SessionLowBalancePayload;
+  'session.grace_entered': SessionGraceEnteredPayload;
+  'session.near_wrap': SessionNearWrapPayload;
+  'session.settled': SessionSettledPayload;
+  'session.settlement_failed': SessionSettlementFailedPayload;
+  'session.topup_nudge': SessionTopupNudgePayload;
   'credit.topup.completed': CreditTopupCompletedPayload;
   'credit.topup.requested': CreditTopupRequestedPayload;
   'promo.redeemed': PromoRedeemedPayload;

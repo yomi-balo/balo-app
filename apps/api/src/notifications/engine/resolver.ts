@@ -38,6 +38,12 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
 const BILLING_FANOUT_EVENTS = new Set<string>([
   'credit.dormancy_reminder',
   'credit.balance_expired',
+  // BAL-378: session settlement / grace notices carry `companyId` → the billing admins.
+  // (`session.low_balance` / `session.near_wrap` are `self`-only — no fan-out entry.)
+  'session.grace_entered',
+  'session.settled',
+  'session.settlement_failed',
+  'session.topup_nudge',
   // BAL-377 / BAL-381: a member's "nudge {Admin} to top up" fans out to the company's
   // MANAGE_BILLING holders (the nudging member lacks MANAGE_BILLING → naturally excluded).
   'credit.topup.requested',

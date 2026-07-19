@@ -575,6 +575,83 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     actionUrl: '/settings/billing',
   }),
 
+  // BAL-378 (ADR-1040 Lane 2) in-session drawdown / settlement in-app notices. Warm,
+  // non-countdown; "extra time" is the client name for what was drawn past the balance — the
+  // word "overdraft" NEVER appears. Money via `formatAudMinor` (no inline formatting).
+
+  // Low balance — the in-session member (self).
+  'session-low-balance': (data) => ({
+    title: 'Balance running low',
+    body: `About ${numberOrZero(data.minutesRemaining)} minutes of balance left — top up so nothing interrupts you.`,
+    actionUrl: '/settings/billing',
+  }),
+
+  // Entered grace — the in-session member (self). Lens-neutral (self may be client or member).
+  'session-grace-entered': () => ({
+    title: "We're keeping you going",
+    body: "You've used your balance — no interruption. Extra time from here settles afterward.",
+    actionUrl: '/settings/billing',
+  }),
+
+  // Entered grace — the billing admins' async ping.
+  'session-grace-entered-admin': () => ({
+    title: 'A session is running on grace',
+    body: "A teammate's session continued past the balance — the extra time will settle to your card.",
+    actionUrl: '/settings/billing',
+  }),
+
+  // Nearing the wrap — the in-session member (self).
+  'session-near-wrap': (data) => ({
+    title: 'Coming up on a good place to wrap',
+    body: `About ${numberOrZero(data.graceRemainingMinutes)} more minutes before we pause to settle up.`,
+    actionUrl: '/settings/billing',
+  }),
+
+  // Settled receipt — billing admins.
+  'session-settled': (data) => {
+    const overdraft = numberOrZero(data.overdraftSettledMinor);
+    const expertName = (data.expertName as string) ?? 'your expert';
+    if (overdraft > 0) {
+      return {
+        title: 'Extra time settled',
+        body: `We settled ${formatAudMinor(overdraft)} of extra time from your session with ${expertName} to your card.`,
+        actionUrl: '/settings/billing',
+      };
+    }
+    return {
+      title: 'Session wrapped up',
+      body: `Your session with ${expertName} stayed within your balance — nothing extra to settle.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // Settlement failed — billing admins (dunning).
+  'session-settlement-failed': (data) => {
+    const amount = formatAudMinor(numberOrZero(data.amountMinor));
+    if (data.reason === 'requires_action') {
+      return {
+        title: 'Confirm your card to finish up',
+        body: `Settling ${amount} of extra time from a recent session needs a quick confirmation on your card.`,
+        actionUrl: '/settings/billing',
+      };
+    }
+    return {
+      title: "Let's sort the extra time",
+      body: `We couldn't settle ${amount} of extra time from a recent session — a quick card update sorts it.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // Member top-up nudge — billing admins.
+  'session-topup-nudge': (data) => {
+    const requestedByName = (data.requestedByName as string) ?? 'A teammate';
+    return {
+      title: `${requestedByName} asked for a top-up`,
+      body: `${requestedByName} is in a session and asked you to top up the team balance.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
   // BAL-377 (ADR-1040 Lane 1) top-up receipt — the purchaser. Warm + factual: the credit
   // landed and the balance is ready. Mentions a promo bonus when one was granted. NO fee
   // figure (BAL-357). Deep-links to expert search (put the balance to use).

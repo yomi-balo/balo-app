@@ -30,6 +30,8 @@ export * from './party-join-optouts';
 export * from './credit-wallets';
 export * from './credit-ledger';
 export * from './credit-holds';
+export * from './credit-sessions';
+export * from './credit-receivables';
 export * from './fx-display-rates';
 export * from './proposal-share-links';
 export * from './promo-codes';

@@ -365,6 +365,95 @@ export interface CreditBalanceExpiredPayload {
   expiredMinor: number; // analytics only; NOT shown in the expired copy
 }
 
+// BAL-378 (ADR-1040 Lane 2) — in-session drawdown / settlement notification payloads.
+// ALL published SERVER-SIDE (meter driver / endSession service / settlement webhook / nudge
+// route) — none has a web mirror or a `publishBodySchema` arm. Defined ONCE here (never
+// inlined in the api + web catalogs) to avoid the SonarCloud new-code duplication gate. Each
+// carries `correlationId` first (the BullMQ jobId dedup key). `self`/SMS events carry
+// `userId` → the resolver's `payload.userId → data.user` hydration makes the `phoneVerifiedAt`
+// SMS condition work exactly like `booking-confirmed-sms`; fan-out events carry `companyId` →
+// `data.billingUserIds`. The word "overdraft" NEVER appears in any rendered copy (billing
+// admins are client-side too) — "extra time" is its warm name.
+
+/**
+ * A funded session dropped below the low-runway threshold (meter set `lowWarnedAt` newly).
+ * Self-only, in-app. One-shot per session via the deterministic `correlationId`.
+ */
+export interface SessionLowBalancePayload {
+  correlationId: string; // `${sessionId}:low_balance`
+  sessionId: string;
+  userId: string; // the in-session member (recipient 'self')
+  companyId: string;
+  minutesRemaining: number;
+  balanceMinor: number;
+  ratePerMinuteMinor: number;
+}
+
+/**
+ * A session entered card-backed grace (meter moved active → grace). Self (in-app + SMS) plus
+ * an async in-app ping to the company billing admins. One-shot per session.
+ */
+export interface SessionGraceEnteredPayload {
+  correlationId: string; // `${sessionId}:grace_entered`
+  sessionId: string;
+  userId: string; // the in-session member (recipient 'self' + SMS)
+  companyId: string; // → data.billingUserIds (admin ping)
+  graceRemainingMinutes: number;
+  ceilingRoomMinor: number;
+}
+
+/**
+ * A session in grace is approaching the wrap (meter set `nearWrapWarnedAt` newly). Self-only,
+ * in-app + SMS. One-shot per session.
+ */
+export interface SessionNearWrapPayload {
+  correlationId: string; // `${sessionId}:near_wrap`
+  sessionId: string;
+  userId: string; // the in-session member (recipient 'self' + SMS)
+  companyId: string;
+  graceRemainingMinutes: number;
+}
+
+/**
+ * A session settled — either in-credit at `end` (no charge) OR the `overdraft_settlement`
+ * webhook succeeded. Fans out to the company billing admins (email + in-app) as a receipt.
+ */
+export interface SessionSettledPayload {
+  correlationId: string; // `${sessionId}:settled`
+  sessionId: string;
+  companyId: string; // → data.billingUserIds
+  walletId: string;
+  overdraftSettledMinor: number; // 0 when in-credit
+  expertName: string;
+  settledOn: string; // pre-formatted UTC date
+}
+
+/**
+ * A settlement could not complete — sync hard decline / SCA `requires_action` / an async
+ * `payment_failed` after a `processing` accept. Fans out to the billing admins (email +
+ * in-app) as dunning. Re-notifiable (the daily dunning sweep) via the attempt-stamped key.
+ */
+export interface SessionSettlementFailedPayload {
+  correlationId: string; // `${sessionId}:settlement_failed:${attemptEpochMs}`
+  sessionId: string;
+  companyId: string; // → data.billingUserIds
+  walletId: string;
+  amountMinor: number;
+  reason: 'declined' | 'requires_action';
+}
+
+/**
+ * A member clicked the in-session nudge asking the billing admins to top up. In-app fan-out
+ * to the company billing admins. Re-notifiable per click via the now-stamped key.
+ */
+export interface SessionTopupNudgePayload {
+  correlationId: string; // `${sessionId}:topup_nudge:${nowMs}`
+  sessionId: string;
+  companyId: string; // → data.billingUserIds
+  requestedByUserId: string;
+  requestedByName: string;
+}
+
 // BAL-377 (ADR-1040 Lane 1) — a manual top-up charged successfully and was credited.
 // SERVER-ONLY (published from the API Stripe webhook, post-commit — the shipped BAL-382
 // webhook is the single authoritative crediting path; this notice is a courtesy receipt).

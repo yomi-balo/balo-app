@@ -56,6 +56,12 @@ const creatorIsDistinctMember: NonNullable<NotificationRule['condition']> = (ctx
   typeof ctx.payload.creatorUserId === 'string' &&
   ctx.payload.creatorUserId !== ctx.payload.recipientId;
 
+/** SMS gate: the recipient has a verified phone (mirrors `booking-confirmed-sms`). */
+const recipientPhoneVerified: NonNullable<NotificationRule['condition']> = (ctx) => {
+  const user = ctx.data.user as { phoneVerifiedAt?: string | Date } | undefined;
+  return !!user?.phoneVerifiedAt;
+};
+
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
     {
@@ -532,6 +538,75 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // template switches on payload.window (60|30). Server-only (published by the sweep).
   'credit.dormancy_reminder': emailAndInApp('company_billing_admins', 'credit-dormancy-reminder'),
   'credit.balance_expired': emailAndInApp('company_billing_admins', 'credit-balance-expired'),
+  // BAL-378 (ADR-1040 Lane 2): in-session drawdown / settlement notices. Warm, no
+  // "overdraft" anywhere (billing admins are client-side too). Self events carry `userId`
+  // (resolver hydrates data.user → the SMS `phoneVerifiedAt` gate); fan-out events carry
+  // `companyId` → data.billingUserIds. Server-published (meter driver / endSession / webhook /
+  // nudge) — every rule's email/sms template MUST exist (getEmailTemplate/getSmsTemplate throw
+  // on a missing template → dead job).
+  //
+  // Low balance: self, in-app only (routine).
+  'session.low_balance': [
+    {
+      channel: 'in-app',
+      recipient: 'self',
+      template: 'session-low-balance',
+      timing: 'immediate',
+    },
+  ],
+  // Grace entered: self in-app + SMS (urgent, verified-phone gated) + an async in-app ping to
+  // the billing admins.
+  'session.grace_entered': [
+    {
+      channel: 'in-app',
+      recipient: 'self',
+      template: 'session-grace-entered',
+      timing: 'immediate',
+    },
+    {
+      channel: 'sms',
+      recipient: 'self',
+      template: 'session-grace-entered-sms',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: recipientPhoneVerified,
+    },
+    {
+      channel: 'in-app',
+      recipient: 'company_billing_admins',
+      template: 'session-grace-entered-admin',
+      timing: 'immediate',
+    },
+  ],
+  // Near wrap: self in-app + SMS (urgent, verified-phone gated).
+  'session.near_wrap': [
+    {
+      channel: 'in-app',
+      recipient: 'self',
+      template: 'session-near-wrap',
+      timing: 'immediate',
+    },
+    {
+      channel: 'sms',
+      recipient: 'self',
+      template: 'session-near-wrap-sms',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: recipientPhoneVerified,
+    },
+  ],
+  // Settled receipt + settlement-failed dunning: billing admins, email + in-app.
+  'session.settled': emailAndInApp('company_billing_admins', 'session-settled'),
+  'session.settlement_failed': emailAndInApp('company_billing_admins', 'session-settlement-failed'),
+  // Member top-up nudge: billing admins, in-app.
+  'session.topup_nudge': [
+    {
+      channel: 'in-app',
+      recipient: 'company_billing_admins',
+      template: 'session-topup-nudge',
+      timing: 'immediate',
+    },
+  ],
   // BAL-377 (ADR-1040 Lane 1). A top-up charged successfully → a warm receipt to the
   // PURCHASER (recipient 'self' via payload.userId; email + in-app). Server-published from
   // the Stripe webhook post-commit.

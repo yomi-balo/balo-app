@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import { db } from '../client';
+import { creditHolds } from '../schema';
 import { creditWalletFactory, userFactory } from '../test/factories';
 import { creditHoldsRepository, InvalidHoldTransitionError } from './credit-holds';
 import { creditWalletsRepository } from './credit-wallets';
@@ -16,7 +18,8 @@ describe('creditHoldsRepository.place', () => {
     const member = await userFactory();
     const hold = await creditHoldsRepository.place({
       walletId: wallet.id,
-      sessionId: randomUUID(),
+      // sessionId omitted (nullable): the session_id FK (BAL-378) rejects an unlinked uuid;
+      // an open-gate hold is placed null and linked to its session afterwards.
       memberId: member.id,
       amountMinor: 8000,
     });
@@ -66,6 +69,52 @@ describe('creditHoldsRepository — invariant #5 (available = balance − Σ act
     const w = await creditWalletsRepository.findById(wallet.id);
     expect(w?.balanceMinor).toBe(10_000);
     expect(await creditHoldsRepository.getAvailableBalance(wallet.id)).toBe(7000);
+  });
+});
+
+describe('creditHoldsRepository — tx-composable place / release (BAL-378)', () => {
+  it('places a hold inside the caller transaction and commits with it', async () => {
+    const { wallet } = await creditWalletFactory({ values: { balanceMinor: 30_000 } });
+    const member = await userFactory();
+
+    const hold = await db.transaction((tx) =>
+      creditHoldsRepository.place(
+        { walletId: wallet.id, memberId: member.id, amountMinor: 4000 },
+        tx
+      )
+    );
+
+    // Committed with the txn → visible on the base client afterwards.
+    const [persisted] = await db.select().from(creditHolds).where(eq(creditHolds.id, hold.id));
+    expect(persisted?.status).toBe('active');
+    expect(persisted?.amountMinor).toBe(4000);
+    expect(await creditHoldsRepository.sumActiveByWallet(wallet.id)).toBe(4000);
+  });
+
+  it('rolls back a tx-composed place when the surrounding transaction throws', async () => {
+    const { wallet } = await creditWalletFactory({ values: { balanceMinor: 30_000 } });
+
+    await expect(
+      db.transaction(async (tx) => {
+        await creditHoldsRepository.place({ walletId: wallet.id, amountMinor: 5000 }, tx);
+        throw new Error('force rollback');
+      })
+    ).rejects.toThrow('force rollback');
+
+    // The hold rolled back with the txn.
+    expect(await creditHoldsRepository.sumActiveByWallet(wallet.id)).toBe(0);
+  });
+
+  it('releases a hold inside the caller transaction (exec-composed)', async () => {
+    const { wallet } = await creditWalletFactory({ values: { balanceMinor: 30_000 } });
+    const placed = await creditHoldsRepository.place({ walletId: wallet.id, amountMinor: 6000 });
+
+    const released = await db.transaction((tx) =>
+      creditHoldsRepository.release(placed.id, { exec: tx })
+    );
+    expect(released.status).toBe('released');
+    expect(released.resolvedAt).toBeInstanceOf(Date);
+    expect(await creditHoldsRepository.sumActiveByWallet(wallet.id)).toBe(0);
   });
 });
 
