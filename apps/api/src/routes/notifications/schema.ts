@@ -424,6 +424,24 @@ const promoRedeemedPayload = z.object({
   companyName: z.string().min(1).max(200),
 });
 
+// BAL-391 (ADR-1043) action item assigned (client → assigned side, web-published).
+// `correlationId` = `${actionItemId}:assigned:${assignedAtMs}` (z.string not z.uuid so
+// the epoch suffix validates). `assigneeParty` routes the two conditioned rules;
+// `recipientId` (client owner) / `expertProfileId` are set on their respective party
+// branches. Mirrors packages/shared/src/notifications/index.ts.
+const actionItemAssignedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  actionItemId: z.uuid(),
+  assigneeParty: z.enum(['client', 'expert']),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid().optional(),
+  actorLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  actionItemBody: z.string().min(1).max(2000),
+  dueOn: z.string().min(1).max(40).optional(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -562,6 +580,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('promo.redeemed'),
     payload: promoRedeemedPayload,
+  }),
+  z.object({
+    event: z.literal('action_item.assigned'),
+    payload: actionItemAssignedPayload,
   }),
 ]);
 

@@ -1,11 +1,12 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { engagementsRepository } from '@balo/db';
+import { engagementsRepository, actionItemsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { mapEngagementToWorkspaceView } from '@/lib/engagement/engagement-view';
+import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
 import {
   trackServerAndFlush,
   ENGAGEMENT_SERVER_EVENTS,
@@ -130,6 +131,12 @@ export default async function EngagementWorkspacePage({
 
   const view = mapEngagementToWorkspaceView(engagement, ctx);
 
+  // Load the engagement's LIVE action items (BAL-391) as a separate read — they are not
+  // on the hydrated engagement graph, so the workspace loader stays a single query — and
+  // map them into the serialisable panel view for the client island.
+  const actionItems = await actionItemsRepository.listByEngagement(engagement.id);
+  const actionItemsView = mapActionItemsToView(engagement, actionItems, ctx);
+
   // Fire the server-side view event on the authorised path. `after()` is
   // registered here (before any later throw) so the flush lands even on
   // serverless. Entry is derived from the whitelisted `?from` query.
@@ -142,5 +149,11 @@ export default async function EngagementWorkspacePage({
     distinct_id: user.id,
   });
 
-  return <EngagementWorkspace view={view} initialAction={resolveInitialAction(action)} />;
+  return (
+    <EngagementWorkspace
+      view={view}
+      initialAction={resolveInitialAction(action)}
+      actionItems={actionItemsView}
+    />
+  );
 }

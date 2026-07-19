@@ -128,3 +128,9 @@ export {
   SESSION_SERVER_EVENTS,
   type SessionServerEventMap,
 } from './session';
+export {
+  ACTION_ITEM_SERVER_EVENTS,
+  type ActionItemServerEventMap,
+  type ActionItemAssigneeRole,
+  type ActionItemActorRole,
+} from './action-item';

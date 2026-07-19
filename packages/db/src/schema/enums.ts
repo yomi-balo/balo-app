@@ -369,3 +369,26 @@ export const creditReceivableReasonEnum = pgEnum('credit_receivable_reason', [
   'settlement_declined',
   'settlement_requires_action',
 ]);
+
+// ── Action items — first-class model (BAL-391 / ADR-1043) ──────────────────
+//
+// All THREE enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
+// VALUE`), so every value commits atomically with the type. Using a value as a
+// column DEFAULT (`'open'`) in the SAME migration is SAFE — the enum-default-same-txn
+// hazard (memory `reference_enum_default_same_tx_migration_hazard`) applies ONLY to
+// ADD-VALUE, which none of these are.
+
+/** BAL-391 (ADR-1043) — action-item status. Standalone CREATE TYPE → default('open') safe. */
+export const actionItemStatusEnum = pgEnum('action_item_status', ['open', 'done']);
+
+/** BAL-391 — how the item was produced. 'ai_extracted' = pipeline (BAL-387); 'manual' = user add. */
+export const actionItemSourceEnum = pgEnum('action_item_source', ['ai_extracted', 'manual']);
+
+/**
+ * BAL-391 — which SIDE of the engagement owns the item. null column value = unassigned.
+ * Maps 1:1 to the engagement's concrete companyId (client) / expertProfileId (expert).
+ */
+export const actionItemAssigneePartyEnum = pgEnum('action_item_assignee_party', [
+  'client',
+  'expert',
+]);
