@@ -105,48 +105,20 @@ describe('sessions routes', () => {
       expect(mockOpenSession).not.toHaveBeenCalled();
     });
 
-    it('403s on the forbidden capability gate', async () => {
-      mockOpenSession.mockResolvedValue({ ok: false, code: 'forbidden' });
+    it.each([
+      { code: 'forbidden', status: 403 },
+      { code: 'insufficient_no_mandate', status: 409 },
+      { code: 'session_in_progress', status: 409 },
+      { code: 'settlement_pending', status: 409 },
+    ] as const)('$status on the openSession "$code" rejection', async ({ code, status }) => {
+      mockOpenSession.mockResolvedValue({ ok: false, code });
       const res = await app.inject({
         method: 'POST',
         url: '/sessions',
         payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
       });
-      expect(res.statusCode).toBe(403);
-      expect(res.json()).toEqual({ code: 'forbidden' });
-    });
-
-    it('409s on a money gate rejection', async () => {
-      mockOpenSession.mockResolvedValue({ ok: false, code: 'insufficient_no_mandate' });
-      const res = await app.inject({
-        method: 'POST',
-        url: '/sessions',
-        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
-      });
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual({ code: 'insufficient_no_mandate' });
-    });
-
-    it('409s when a session is already in progress on the wallet', async () => {
-      mockOpenSession.mockResolvedValue({ ok: false, code: 'session_in_progress' });
-      const res = await app.inject({
-        method: 'POST',
-        url: '/sessions',
-        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
-      });
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual({ code: 'session_in_progress' });
-    });
-
-    it('409s when a prior session settlement is still pending (balance < 0)', async () => {
-      mockOpenSession.mockResolvedValue({ ok: false, code: 'settlement_pending' });
-      const res = await app.inject({
-        method: 'POST',
-        url: '/sessions',
-        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
-      });
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual({ code: 'settlement_pending' });
+      expect(res.statusCode).toBe(status);
+      expect(res.json()).toEqual({ code });
     });
   });
 

@@ -70,7 +70,7 @@ function useLiveBalance(active: boolean, balanceMinor: number, ratePerMinuteMino
       return;
     }
     const id = setInterval(() => {
-      setLive((current) => (current - perSecond > 0 ? current - perSecond : 0));
+      setLive((current) => Math.max(0, current - perSecond));
     }, 1000);
     return () => clearInterval(id);
   }, [active, balanceMinor, perSecond]);

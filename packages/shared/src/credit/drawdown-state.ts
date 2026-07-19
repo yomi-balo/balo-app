@@ -115,7 +115,7 @@ const MIN_METER_PCT = 3;
  */
 export function derivePromoRemainingMinor(sums: PromoLedgerSums): number {
   const remaining = sums.promoGrantedMinor - sums.consumedSincePromoMinor;
-  const clampedLow = remaining > 0 ? remaining : 0;
+  const clampedLow = Math.max(0, remaining);
   return Math.min(clampedLow, Math.max(0, sums.currentBalanceMinor));
 }
 
@@ -207,7 +207,7 @@ function clampPct(pct: number): number {
   if (pct < MIN_METER_PCT) {
     return MIN_METER_PCT;
   }
-  return pct > 100 ? 100 : pct;
+  return Math.min(100, pct);
 }
 
 // ── Structural (lens-independent) per-key descriptor ──────────────────────
