@@ -1,5 +1,5 @@
 {
-  "id": "f962f351-4f05-46cc-be6f-f0b9cfa9ce1a",
+  "id": "0dbc1f8d-8315-41b9-8655-32babf234375",
   "prevId": "42eaa717-db43-49ff-b208-fcaca59bfe5c",
   "version": "7",
   "dialect": "postgresql",
@@ -8034,15 +8034,6 @@
           "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
-        },
-        "credit_ledger_session_id_credit_sessions_id_fk": {
-          "name": "credit_ledger_session_id_credit_sessions_id_fk",
-          "tableFrom": "credit_ledger",
-          "tableTo": "credit_sessions",
-          "columnsFrom": ["session_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -8173,15 +8164,6 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "credit_holds_session_id_credit_sessions_id_fk": {
-          "name": "credit_holds_session_id_credit_sessions_id_fk",
-          "tableFrom": "credit_holds",
-          "tableTo": "credit_sessions",
-          "columnsFrom": ["session_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
         "credit_holds_member_id_users_id_fk": {
           "name": "credit_holds_member_id_users_id_fk",
           "tableFrom": "credit_holds",
@@ -8199,519 +8181,6 @@
         "credit_holds_amount_pos": {
           "name": "credit_holds_amount_pos",
           "value": "\"credit_holds\".\"amount_minor\" > 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.credit_sessions": {
-      "name": "credit_sessions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "wallet_id": {
-          "name": "wallet_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "company_id": {
-          "name": "company_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expert_profile_id": {
-          "name": "expert_profile_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "initiating_member_id": {
-          "name": "initiating_member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "hold_id": {
-          "name": "hold_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "credit_session_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "settlement_status": {
-          "name": "settlement_status",
-          "type": "credit_settlement_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'not_required'"
-        },
-        "estimated_minutes": {
-          "name": "estimated_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expert_rate_minor_per_hour": {
-          "name": "expert_rate_minor_per_hour",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "balo_fee_bps": {
-          "name": "balo_fee_bps",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 2500
-        },
-        "client_rate_minor_per_minute": {
-          "name": "client_rate_minor_per_minute",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expert_rate_minor_per_minute": {
-          "name": "expert_rate_minor_per_minute",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "effective_ceiling_minor": {
-          "name": "effective_ceiling_minor",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "grace_bound_minutes": {
-          "name": "grace_bound_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 30
-        },
-        "connected_at": {
-          "name": "connected_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_tick_seq": {
-          "name": "last_tick_seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "connected_minutes": {
-          "name": "connected_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "expert_accrued_minor": {
-          "name": "expert_accrued_minor",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "low_warned_at": {
-          "name": "low_warned_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "grace_entered_at": {
-          "name": "grace_entered_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "near_wrap_warned_at": {
-          "name": "near_wrap_warned_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "wrapped_at": {
-          "name": "wrapped_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ended_at": {
-          "name": "ended_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "settled_at": {
-          "name": "settled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "overdraft_settled_minor": {
-          "name": "overdraft_settled_minor",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stripe_payment_intent_id": {
-          "name": "stripe_payment_intent_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "credit_sessions_wallet_idx": {
-          "name": "credit_sessions_wallet_idx",
-          "columns": [
-            {
-              "expression": "wallet_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "credit_sessions_company_idx": {
-          "name": "credit_sessions_company_idx",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "credit_sessions_meter_idx": {
-          "name": "credit_sessions_meter_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"credit_sessions\".\"status\" IN ('active', 'grace') AND \"credit_sessions\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "credit_sessions_settling_idx": {
-          "name": "credit_sessions_settling_idx",
-          "columns": [
-            {
-              "expression": "settlement_status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"credit_sessions\".\"settlement_status\" = 'processing'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "credit_sessions_wallet_id_credit_wallets_id_fk": {
-          "name": "credit_sessions_wallet_id_credit_wallets_id_fk",
-          "tableFrom": "credit_sessions",
-          "tableTo": "credit_wallets",
-          "columnsFrom": ["wallet_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "credit_sessions_company_id_companies_id_fk": {
-          "name": "credit_sessions_company_id_companies_id_fk",
-          "tableFrom": "credit_sessions",
-          "tableTo": "companies",
-          "columnsFrom": ["company_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "credit_sessions_expert_profile_id_expert_profiles_id_fk": {
-          "name": "credit_sessions_expert_profile_id_expert_profiles_id_fk",
-          "tableFrom": "credit_sessions",
-          "tableTo": "expert_profiles",
-          "columnsFrom": ["expert_profile_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "credit_sessions_initiating_member_id_users_id_fk": {
-          "name": "credit_sessions_initiating_member_id_users_id_fk",
-          "tableFrom": "credit_sessions",
-          "tableTo": "users",
-          "columnsFrom": ["initiating_member_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "credit_sessions_hold_id_credit_holds_id_fk": {
-          "name": "credit_sessions_hold_id_credit_holds_id_fk",
-          "tableFrom": "credit_sessions",
-          "tableTo": "credit_holds",
-          "columnsFrom": ["hold_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "credit_sessions_estimated_minutes_pos": {
-          "name": "credit_sessions_estimated_minutes_pos",
-          "value": "\"credit_sessions\".\"estimated_minutes\" > 0"
-        },
-        "credit_sessions_expert_hourly_pos": {
-          "name": "credit_sessions_expert_hourly_pos",
-          "value": "\"credit_sessions\".\"expert_rate_minor_per_hour\" > 0"
-        },
-        "credit_sessions_client_minute_pos": {
-          "name": "credit_sessions_client_minute_pos",
-          "value": "\"credit_sessions\".\"client_rate_minor_per_minute\" > 0"
-        },
-        "credit_sessions_expert_minute_pos": {
-          "name": "credit_sessions_expert_minute_pos",
-          "value": "\"credit_sessions\".\"expert_rate_minor_per_minute\" > 0"
-        },
-        "credit_sessions_ceiling_nonneg": {
-          "name": "credit_sessions_ceiling_nonneg",
-          "value": "\"credit_sessions\".\"effective_ceiling_minor\" >= 0"
-        },
-        "credit_sessions_balo_fee_bps_range": {
-          "name": "credit_sessions_balo_fee_bps_range",
-          "value": "\"credit_sessions\".\"balo_fee_bps\" >= 0 AND \"credit_sessions\".\"balo_fee_bps\" <= 10000"
-        },
-        "credit_sessions_overdraft_settled_nonneg": {
-          "name": "credit_sessions_overdraft_settled_nonneg",
-          "value": "\"credit_sessions\".\"overdraft_settled_minor\" IS NULL OR \"credit_sessions\".\"overdraft_settled_minor\" >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.credit_receivables": {
-      "name": "credit_receivables",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "company_id": {
-          "name": "company_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "wallet_id": {
-          "name": "wallet_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "amount_minor": {
-          "name": "amount_minor",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "credit_receivable_reason",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "credit_receivable_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'open'"
-        },
-        "stripe_payment_intent_id": {
-          "name": "stripe_payment_intent_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "opened_at": {
-          "name": "opened_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "cleared_at": {
-          "name": "cleared_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_dunning_at": {
-          "name": "last_dunning_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "credit_receivables_company_open_idx": {
-          "name": "credit_receivables_company_open_idx",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"credit_receivables\".\"status\" = 'open' AND \"credit_receivables\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "credit_receivables_session_uidx": {
-          "name": "credit_receivables_session_uidx",
-          "columns": [
-            {
-              "expression": "session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"credit_receivables\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "credit_receivables_company_id_companies_id_fk": {
-          "name": "credit_receivables_company_id_companies_id_fk",
-          "tableFrom": "credit_receivables",
-          "tableTo": "companies",
-          "columnsFrom": ["company_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "credit_receivables_wallet_id_credit_wallets_id_fk": {
-          "name": "credit_receivables_wallet_id_credit_wallets_id_fk",
-          "tableFrom": "credit_receivables",
-          "tableTo": "credit_wallets",
-          "columnsFrom": ["wallet_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "credit_receivables_session_id_credit_sessions_id_fk": {
-          "name": "credit_receivables_session_id_credit_sessions_id_fk",
-          "tableFrom": "credit_receivables",
-          "tableTo": "credit_sessions",
-          "columnsFrom": ["session_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "credit_receivables_amount_pos": {
-          "name": "credit_receivables_amount_pos",
-          "value": "\"credit_receivables\".\"amount_minor\" > 0"
         }
       },
       "isRLSEnabled": false
@@ -9269,6 +8738,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "promo_redemptions_company_code_idx": {
+          "name": "promo_redemptions_company_code_idx",
+          "columns": [
+            {
+              "expression": "promo_code_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -9431,26 +8921,6 @@
         "promo",
         "adjustment"
       ]
-    },
-    "public.credit_receivable_reason": {
-      "name": "credit_receivable_reason",
-      "schema": "public",
-      "values": ["settlement_declined", "settlement_requires_action"]
-    },
-    "public.credit_receivable_status": {
-      "name": "credit_receivable_status",
-      "schema": "public",
-      "values": ["open", "cleared", "written_off"]
-    },
-    "public.credit_session_status": {
-      "name": "credit_session_status",
-      "schema": "public",
-      "values": ["pending", "active", "grace", "wrapped", "ended", "cancelled"]
-    },
-    "public.credit_settlement_status": {
-      "name": "credit_settlement_status",
-      "schema": "public",
-      "values": ["not_required", "processing", "settled", "failed", "requires_action"]
     },
     "public.domain_join_mode": {
       "name": "domain_join_mode",

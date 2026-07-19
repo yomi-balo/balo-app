@@ -5,6 +5,7 @@ import {
   creditReceivablesRepository,
   creditSessionsRepository,
   creditWalletsRepository,
+  promoRedemptionsRepository,
   db,
   deriveIdempotencyKey,
 } from '@balo/db';
@@ -12,8 +13,9 @@ import { createLogger } from '@balo/shared/logging';
 import { toSettleableSession } from '@balo/shared/credit';
 import { getStripeClient } from '../../lib/stripe.js';
 import { publishSessionSettled, publishSettlementFailure } from '../credit-session/notify.js';
+import { notificationEvents } from '../../notifications/publisher.js';
 import { retrieveSettlement } from './charges.js';
-import type { PostCommitEffect, StripeEffect } from './types.js';
+import type { CreditTopupReceipt, PostCommitEffect, StripeEffect } from './types.js';
 
 const log = createLogger('stripe');
 
@@ -84,6 +86,9 @@ async function resolvePaymentIntentSucceeded(
     memberId: pi.metadata.memberId ?? null,
     sessionId: pi.metadata.sessionId ?? null,
     triggeringEntryId: pi.metadata.triggeringEntryId ?? null,
+    // BAL-377 — only a manual_purchase carries an (optional) promo code; auto_topup /
+    // overdraft_settlement never stamp it, so they resolve to null by construction.
+    promoCode: reason === 'manual_purchase' ? (pi.metadata.promoCode ?? null) : null,
     settlement,
   };
 }
@@ -256,12 +261,111 @@ async function markSettlementSettled(
   return [() => publishSessionSettled(settleable, new Date())];
 }
 
+/**
+ * BAL-377 — grant an unadvertised promo BEST-EFFORT in the SAME transaction as the base
+ * purchase credit (only on `manual_purchase`). Returns the newly-granted minor units (0 when
+ * no code, an idempotent replay, or a re-validation failure). The redeem RE-VALIDATES the
+ * code under the `promo_codes` row lock and throws typed errors when it went invalid /
+ * expired / exhausted between Apply-time and settlement (rare: concurrent cap-exhaustion or an
+ * admin deactivate). Those throws are pure-JS pre-write checks (they fire BEFORE any INSERT/
+ * UPDATE), so catching them leaves the surrounding transaction valid — the base purchase still
+ * credits and the receipt simply shows no bonus (honest). That "base still credits" guarantee
+ * holds ONLY for these pre-write typed throws: a genuine DB-level failure once the promo ledger/
+ * redemption INSERT has started would abort the whole transaction and roll back the base credit
+ * too. That is acceptable and safe — the webhook is idempotent (event-id gate + idempotency-keyed
+ * ledger entries), so Stripe's automatic redelivery re-applies the base credit cleanly on retry;
+ * nothing is double-credited and no paid-for credit is permanently lost.
+ */
+async function grantPromoBestEffort(
+  tx: DbTx,
+  effect: Extract<StripeEffect, { kind: 'credit' }>,
+  companyId: string
+): Promise<number> {
+  const promoCode = effect.promoCode;
+  if (!promoCode) return 0;
+  try {
+    const result = await promoRedemptionsRepository.redeem(tx, {
+      code: promoCode,
+      companyId,
+      walletId: effect.walletId,
+      redeemedByUserId: effect.memberId,
+      now: new Date(),
+    });
+    if (result.outcome === 'redeemed') {
+      log.info(
+        {
+          op: 'applyStripeEffect',
+          kind: 'promo_granted',
+          walletId: effect.walletId,
+          grantMinor: result.grantMinor,
+        },
+        'Granted promo bonus alongside manual purchase'
+      );
+      return result.grantMinor;
+    }
+    // already_redeemed — a replay or the company already used this code; no NEW bonus.
+    return 0;
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'applyStripeEffect',
+        kind: 'promo_skipped',
+        walletId: effect.walletId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Promo re-validation failed at settlement — skipping bonus (base purchase still credited)'
+    );
+    return 0;
+  }
+}
+
+/**
+ * BAL-377 — publish the `credit.topup.completed` receipt POST-COMMIT (a persisted marker always
+ * implies a committed credit). Relocated from the webhook route so it composes as a
+ * `PostCommitEffect` thunk alongside the BAL-378 session publishes (no `fastify` needed — uses
+ * the module `log`). Best-effort + idempotent by `correlationId` (`manual_purchase:{piId}` →
+ * BullMQ jobId dedup): a publish failure is logged, never thrown (the money is already
+ * committed; re-throwing would make Stripe retry the whole webhook for a notification hiccup). A
+ * receipt with no purchaser (defensive — a manual_purchase always stamps `memberId`) is skipped.
+ */
+async function publishTopupReceipt(receipt: CreditTopupReceipt): Promise<void> {
+  if (receipt.purchaserUserId === null) {
+    log.warn(
+      { op: 'publishTopupReceipt', correlationId: receipt.correlationId },
+      'credit.topup.completed skipped — manual purchase has no purchaser to notify'
+    );
+    return;
+  }
+  try {
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: receipt.correlationId,
+      userId: receipt.purchaserUserId,
+      companyId: receipt.companyId,
+      creditedMinor: receipt.creditedMinor,
+      chargedCurrency: receipt.chargedCurrency,
+      chargedAmountMinor: receipt.chargedAmountMinor,
+      promoGrantedMinor: receipt.promoGrantedMinor,
+      balanceAfterMinor: receipt.balanceAfterMinor,
+      expiresAt: receipt.expiresAt ?? '',
+    });
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'publishTopupReceipt',
+        correlationId: receipt.correlationId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to publish credit.topup.completed receipt (money committed; notification best-effort)'
+    );
+  }
+}
+
 async function applyCredit(
   tx: DbTx,
   effect: Extract<StripeEffect, { kind: 'credit' }>
 ): Promise<PostCommitEffect[]> {
   const idempotencyKey = ledgerKeyForCredit(effect);
-  const { deduped } = await applyLedgerEntry(tx, {
+  const base = await applyLedgerEntry(tx, {
     walletId: effect.walletId,
     entryType: 'purchase',
     reason: effect.reason,
@@ -284,7 +388,7 @@ async function applyCredit(
       walletId: effect.walletId,
       stripeId: effect.settlement.stripePaymentIntentId,
       amountMinor: effect.settlement.creditAmountMinor,
-      deduped,
+      deduped: base.deduped,
     },
     'Applied credit ledger effect'
   );
@@ -298,10 +402,31 @@ async function applyCredit(
       tx,
       effect.sessionId,
       effect.settlement.stripePaymentIntentId,
-      deduped
+      base.deduped
     );
   }
-  return [];
+
+  // BAL-377: only a FRESH manual_purchase surfaces a receipt (+ grants any promo) as a
+  // post-commit publish. A deduped replay never re-grants or re-publishes; auto_topup has its
+  // own lane and overdraft_settlement is handled above.
+  if (effect.reason !== 'manual_purchase' || base.deduped) {
+    return [];
+  }
+  const promoGrantedMinor = await grantPromoBestEffort(tx, effect, base.wallet.companyId);
+  const receipt: CreditTopupReceipt = {
+    correlationId: idempotencyKey, // = manual_purchase:{piId}
+    walletId: effect.walletId,
+    companyId: base.wallet.companyId,
+    purchaserUserId: effect.memberId,
+    creditedMinor: effect.settlement.creditAmountMinor,
+    chargedCurrency: effect.settlement.chargedCurrency,
+    chargedAmountMinor: effect.settlement.chargedAmountMinor,
+    promoGrantedMinor,
+    // The promo grant (when present) adds to the post-base balance in the same txn.
+    balanceAfterMinor: base.wallet.balanceMinor + promoGrantedMinor,
+    expiresAt: base.wallet.expiresAt ? base.wallet.expiresAt.toISOString() : null,
+  };
+  return [() => publishTopupReceipt(receipt)];
 }
 
 /**
@@ -395,7 +520,9 @@ async function applyChargeFailed(
  * through the shipped `@balo/db` repos so they commit or roll back with the event marker.
  *
  * Returns the deferred POST-COMMIT effects (notification publishes + analytics) the webhook
- * runs AFTER the txn commits — never inside it (BAL-378).
+ * runs AFTER the txn commits — never inside it. These include the BAL-378 session settled /
+ * settlement-failed notices AND the BAL-377 `credit.topup.completed` receipt (a fresh
+ * manual_purchase), all modelled uniformly as post-commit thunks.
  */
 export async function applyStripeEffect(
   tx: DbTx,

@@ -77,6 +77,12 @@ export type StripeEffect =
       memberId: string | null;
       sessionId: string | null;
       triggeringEntryId: string | null;
+      /**
+       * BAL-377 — an unadvertised promo code carried in the manual_purchase PI metadata,
+       * granted BEST-EFFORT alongside the base purchase credit (only on `manual_purchase`;
+       * always `null` for `auto_topup` / `overdraft_settlement`).
+       */
+      promoCode: string | null;
       settlement: SettlementFields;
     }
   | {
@@ -112,3 +118,26 @@ export type StripeEffect =
       currency: string;
       reason: string;
     };
+
+/**
+ * BAL-377 — the display facts a FRESH manual_purchase credit surfaces so the webhook can
+ * publish the `credit.topup.completed` receipt POST-COMMIT. All amounts are integer AUD
+ * minor units captured at settlement/commit time (never re-hydrated later). There is NO fee
+ * field (BAL-357): a top-up buys AUD at FACE VALUE; the Balo fee lives in the per-minute
+ * consume rate, so `creditedMinor` is the GROSS settled AUD (`balance_transaction.amount`),
+ * never a fee-net figure. Surfaced ONLY on a non-deduped manual_purchase credit — a replay
+ * (deduped) yields `null` so the receipt is never re-published from the money path (the
+ * BullMQ jobId dedup on `manual_purchase:{piId}` is the belt to this suspenders).
+ */
+export interface CreditTopupReceipt {
+  correlationId: string; // = manual_purchase:{piId}
+  walletId: string;
+  companyId: string;
+  purchaserUserId: string | null; // the initiating member (recipient 'self')
+  creditedMinor: number; // GROSS settled AUD credited
+  chargedCurrency: string; // presentment currency (lowercase)
+  chargedAmountMinor: number; // presentment minor units
+  promoGrantedMinor: number; // 0 when no promo was redeemed at settlement
+  balanceAfterMinor: number; // wallet balance after the credit (+ any promo grant)
+  expiresAt: string | null; // ISO rolled expiry (rolling-expiry reassurance)
+}

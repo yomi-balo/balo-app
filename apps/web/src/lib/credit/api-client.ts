@@ -5,19 +5,98 @@ import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
 
 /**
- * BAL-378 (ADR-1040 Lane 2) — the internal web→api client for the credit-session
- * routes.
+ * Server-only web→api clients for the credit surface. TWO distinct hops share this module,
+ * both mirroring the internal `loggedFetch` mechanics of `../notifications/publish.ts` but
+ * AWAITED (each needs the response back):
  *
- * Mirrors the mechanics of {@link file://../notifications/publish.ts} (the internal
- * `loggedFetch` hop with `getApiUrl()` fallback) but with TWO deliberate differences:
- *  1. The credit-session routes are WorkOS-authed (`requireAuth` → `request.userId`),
- *     NOT `x-internal-api-key`. So this client forwards the viewer's WorkOS
- *     access token as `Authorization: Bearer …`, resolved SERVER-SIDE from the
- *     iron-session — the browser never supplies it and no company / wallet id is
- *     ever trusted from the client.
- *  2. These calls need the RESPONSE (they are user-initiated mutations that toast
- *     their outcome), so they are awaited inline, not deferred to `after()`.
+ *  1. BAL-377 credit INTENT-creation (`createPurchaseIntent` / `createMandateSetupIntent`).
+ *     The Stripe provider layer + `STRIPE_SECRET_KEY` live on apps/api (Railway); apps/web
+ *     cannot import them, so intent-creation is delegated over the internal-secret hop
+ *     (`x-internal-api-key`). apps/web owns authz + wallet resolution + config + analytics;
+ *     apps/api owns the Stripe SDK call.
+ *  2. BAL-378 credit-SESSION drawdown (`callSessionApi`). Those routes are WorkOS-authed
+ *     (`requireAuth` → `request.userId`), NOT the internal secret — so this client forwards the
+ *     viewer's WorkOS access token as `Authorization: Bearer …`, resolved SERVER-SIDE from the
+ *     iron-session (the browser never supplies it and no company / wallet id is ever trusted
+ *     from the client). These are user-initiated mutations that toast their outcome.
  */
+
+function getApiUrl(): string {
+  const url = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
+  if (url === undefined || url.length === 0) {
+    log.warn('API_URL not configured — falling back to localhost:3002');
+    return 'http://localhost:3002';
+  }
+  return url;
+}
+
+// ── BAL-377: internal-secret credit intent-creation hop ─────────────────────────────────
+
+/** Thrown when a credit intent-creation call to apps/api fails (caught at the action boundary). */
+export class CreditApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status?: number
+  ) {
+    super(message);
+    this.name = 'CreditApiError';
+  }
+}
+
+async function postInternal<T>(path: string, body: unknown): Promise<T> {
+  const secret = process.env.INTERNAL_API_SECRET;
+  if (!secret) {
+    throw new CreditApiError('INTERNAL_API_SECRET is not configured');
+  }
+  const response = await loggedFetch(`${getApiUrl()}${path}`, {
+    service: 'balo-api',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-api-key': secret,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new CreditApiError(`${path} failed: ${text}`, response.status);
+  }
+  return (await response.json()) as T;
+}
+
+export interface PurchaseIntentInput {
+  walletId: string;
+  presentmentCurrency: string;
+  presentmentAmountMinor: number;
+  initiatingMemberId: string;
+  clientRequestId: string;
+  promoCode?: string;
+}
+
+export interface PurchaseIntentResult {
+  clientSecret: string;
+  paymentIntentId: string;
+}
+
+export interface SetupIntentResult {
+  clientSecret: string;
+  setupIntentId: string;
+  customerId: string;
+}
+
+/** Create the on-session purchase PaymentIntent (deferred flow) → its `clientSecret`. */
+export async function createPurchaseIntent(
+  input: PurchaseIntentInput
+): Promise<PurchaseIntentResult> {
+  return postInternal<PurchaseIntentResult>('/credit/purchase-intent', input);
+}
+
+/** Create the off-session mandate SetupIntent → its `clientSecret` (card-backed modes). */
+export async function createMandateSetupIntent(walletId: string): Promise<SetupIntentResult> {
+  return postInternal<SetupIntentResult>('/credit/setup-intent', { walletId });
+}
+
+// ── BAL-378: WorkOS-Bearer credit-session drawdown hop ──────────────────────────────────
 
 /** The authed principal for a credit-session api call (resolved from the iron-session). */
 interface SessionApiAuth {
@@ -29,15 +108,6 @@ interface SessionApiAuth {
 export type ApiCallResult<T> =
   | { ok: true; status: number; data: T }
   | { ok: false; status: number; code?: string; error: string };
-
-function getApiUrl(): string {
-  const url = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
-  if (url === undefined || url.length === 0) {
-    log.warn('API_URL not configured — falling back to localhost:3002');
-    return 'http://localhost:3002';
-  }
-  return url;
-}
 
 /**
  * Resolve the viewer's authenticated principal from the iron-session. Fails closed

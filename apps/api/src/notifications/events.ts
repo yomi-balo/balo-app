@@ -20,6 +20,9 @@ import type {
   OnboardingReminderPayload,
   CreditDormancyReminderPayload,
   CreditBalanceExpiredPayload,
+  CreditTopupCompletedPayload,
+  CreditTopupRequestedPayload,
+  PromoRedeemedPayload,
   ProposalSharedPayload,
   SessionLowBalancePayload,
   SessionGraceEnteredPayload,
@@ -268,7 +271,10 @@ export type NotificationEvent =
   | 'session.near_wrap'
   | 'session.settled'
   | 'session.settlement_failed'
-  | 'session.topup_nudge';
+  | 'session.topup_nudge'
+  | 'credit.topup.completed'
+  | 'credit.topup.requested'
+  | 'promo.redeemed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -291,7 +297,10 @@ export type ServerOnlyNotificationEvent =
   | 'session.near_wrap'
   | 'session.settled'
   | 'session.settlement_failed'
-  | 'session.topup_nudge';
+  | 'session.topup_nudge'
+  // BAL-377: the top-up receipt is published from the API Stripe webhook post-commit —
+  // never through the internal /notifications/publish route (no publishBodySchema arm).
+  | 'credit.topup.completed';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -343,4 +352,7 @@ export interface EventPayloadMap {
   'session.settled': SessionSettledPayload;
   'session.settlement_failed': SessionSettlementFailedPayload;
   'session.topup_nudge': SessionTopupNudgePayload;
+  'credit.topup.completed': CreditTopupCompletedPayload;
+  'credit.topup.requested': CreditTopupRequestedPayload;
+  'promo.redeemed': PromoRedeemedPayload;
 }

@@ -48,8 +48,10 @@ export async function stripeWebhookRoutes(fastify: FastifyInstance): Promise<voi
     // propagates to the app error handler → 500 → Stripe retries. null = unhandled type.
     const effect = await resolveStripeEffect(event);
 
-    // BAL-378: publishes + analytics an effect defers run AFTER the txn commits (never inside
-    // it — enqueuing to BullMQ / PostHog must not be undone by a rollback).
+    // Deferred POST-COMMIT effects (BAL-378 session settled / settlement-failed notices, the
+    // BAL-377 top-up receipt, + analytics) run AFTER the txn commits — never inside it, since
+    // enqueuing to BullMQ / PostHog must not be undone by a rollback. Empty for an unhandled
+    // type or a deduped replay.
     let postCommit: Array<() => Promise<void>> = [];
 
     await db.transaction(async (tx) => {
@@ -70,7 +72,8 @@ export async function stripeWebhookRoutes(fastify: FastifyInstance): Promise<voi
       await stripeWebhookEventsRepository.markProcessed(event.id, tx);
     });
 
-    // Post-commit side-effects (session settled / settlement-failed notices + analytics).
+    // Post-commit side-effects. Each publish is best-effort + idempotent by `correlationId`
+    // (BullMQ jobId dedup), so even a genuine Stripe replay collapses to one delivery.
     for (const run of postCommit) {
       await run();
     }

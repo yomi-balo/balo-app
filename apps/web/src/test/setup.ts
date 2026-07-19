@@ -87,6 +87,8 @@ vi.mock('@/lib/analytics', async () => {
     DOMAIN_JOIN_EVENTS: events.DOMAIN_JOIN_EVENTS,
     EXPERT_AGENCY_EVENTS: events.EXPERT_AGENCY_EVENTS,
     ONBOARDING_REMINDER_EVENTS: events.ONBOARDING_REMINDER_EVENTS,
+    CREDIT_EVENTS: events.CREDIT_EVENTS,
+    PROMO_EVENTS: events.PROMO_EVENTS,
     SESSION_EVENTS: events.SESSION_EVENTS,
     initAnalytics: vi.fn(),
   };

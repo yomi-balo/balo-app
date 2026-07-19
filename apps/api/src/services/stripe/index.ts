@@ -14,4 +14,9 @@ export {
 } from './charges.js';
 export { resolveStripeEffect, applyStripeEffect } from './dispatch.js';
 export { StripeConfigError } from './errors.js';
-export type { SettlementFields, OffSessionChargeResult, StripeEffect } from './types.js';
+export type {
+  SettlementFields,
+  OffSessionChargeResult,
+  StripeEffect,
+  CreditTopupReceipt,
+} from './types.js';

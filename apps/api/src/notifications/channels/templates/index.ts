@@ -44,7 +44,10 @@ import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
 import { SessionSettledEmail } from './session-settled.js';
 import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
-import { formatAudMinor, formatExpiryDateLong } from './credit-format.js';
+import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
+import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
+import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './credit-format.js';
+import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 
 interface TemplateOutput {
@@ -777,6 +780,69 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         reason === 'requires_action'
           ? 'Confirm your card to settle your recent session'
           : 'A payment on your recent session needs attention',
+    };
+  },
+
+  // BAL-377 (ADR-1040 Lane 1) top-up receipt — server-only, EMAIL to the PURCHASER
+  // (recipient 'self'). All figures are display facts captured at webhook time
+  // (creditedMinor / chargedCurrency / chargedAmountMinor / promoGrantedMinor /
+  // balanceAfterMinor / expiresAt in the merged payload), formatted here. The presentment
+  // "charged as" line shows ONLY on a non-AUD card (chargedCurrency !== 'aud'); an AUD buyer
+  // isn't shown "A$X → A$X". NO fee figure (BAL-357). Warm, congratulatory; rolling expiry
+  // framed as reassurance.
+  'credit-topup-completed': (data) => {
+    const chargedCurrency = ((data.chargedCurrency as string) ?? 'aud').toLowerCase();
+    const promoGrantedMinor = numberCount(data.promoGrantedMinor);
+    return {
+      component: React.createElement(CreditTopupCompletedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        credited: formatAudMinor(numberCount(data.creditedMinor)),
+        charged: formatPresentmentMinor(numberCount(data.chargedAmountMinor), chargedCurrency),
+        showCharged: chargedCurrency !== 'aud',
+        promoBonus: promoGrantedMinor > 0 ? formatAudMinor(promoGrantedMinor) : null,
+        balanceAfter: formatAudMinor(numberCount(data.balanceAfterMinor)),
+        expiryDate: formatExpiryDateLong((data.expiresAt as string) ?? ''),
+        ctaUrl: `${BASE_URL}/experts`,
+        baseUrl: BASE_URL,
+      }),
+      subject: "You're topped up — your balance is ready",
+    };
+  },
+
+  // BAL-377 / BAL-381 top-up nudge — EMAIL to each fanned-out MANAGE_BILLING holder. The
+  // nudging member's name arrives as `data.requesterName` (resolver hydrates it from
+  // payload.requestedByUserId); the recipient's own first name is `recipientName`. CTA lands
+  // on the top-up composer.
+  'credit-topup-requested': (data) => {
+    const memberName = (data.requesterName as string) ?? 'A teammate';
+    return {
+      component: React.createElement(CreditTopupRequestedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        memberName,
+        ctaUrl: `${BASE_URL}/billing/top-up`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(memberName)} asked you to top up your team's balance`,
+    };
+  },
+
+  // BAL-383 (ADR-1040) promo redeemed — warm milestone confirmation to the ACTOR who
+  // redeemed (recipient 'self'). `recipientName` greets the actor; `code` / `grantedLabel`
+  // / `companyName` come straight from the payload (spread into `data`). The CTA points at
+  // expert search — the natural next step once credit lands.
+  'promo-redeemed': (data) => {
+    const grantedLabel = (data.grantedLabel as string) ?? 'your credit';
+    const companyName = (data.companyName as string) ?? 'your team';
+    return {
+      component: React.createElement(PromoRedeemedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        code: (data.code as string) ?? 'your code',
+        grantedLabel,
+        companyName,
+        ctaUrl: `${BASE_URL}/experts`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${grantedLabel} in Balo credit is ready`,
     };
   },
 

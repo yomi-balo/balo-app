@@ -150,6 +150,13 @@ export const promoRedemptions = pgTable(
     // is soft-deleted (append-only), so the soft-delete recreate footgun does not apply
     // (identical reasoning to `credit_ledger.idempotency_key`).
     uniqueIndex('promo_redemptions_ledger_entry_idx').on(t.ledgerEntryId),
+    // Single-use PER COMPANY (BAL-377 / ADR-1040 Lane 1): at most one redemption of a given
+    // code per redeeming party. PLAIN (non-partial) unique for the SAME reason as the
+    // ledger-entry index — `promo_redemptions` is append-only with no soft-delete, so the
+    // partial-unique recreate footgun does not apply. This is both the `validate` /
+    // `redeem` single-use guarantee AND the concurrency backstop for the redeem race (the
+    // `promoRedemptionsRepository.redeem` `onConflictDoNothing` arbiter → `already_redeemed`).
+    uniqueIndex('promo_redemptions_company_code_idx').on(t.promoCodeId, t.companyId),
     check('promo_redemptions_granted_positive', sql`${t.grantedMinor} > 0`),
   ]
 );

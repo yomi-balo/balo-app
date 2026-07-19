@@ -15,6 +15,7 @@ const {
   mockAuditRecord,
   mockApplyMandate,
   mockApplyMandateStatus,
+  mockRedeem,
   mockDeriveIdempotencyKey,
   mockRetrieveSettlement,
   mockPaymentIntentsRetrieve,
@@ -25,11 +26,18 @@ const {
   mockReceivableClear,
   mockPublishSessionSettled,
   mockPublishSettlementFailure,
+  mockNotificationPublish,
 } = vi.hoisted(() => ({
-  mockApplyLedgerEntry: vi.fn(),
+  // Default: a fresh credit onto a wallet the receipt can read (companyId/balance/expiry).
+  mockApplyLedgerEntry: vi.fn(async () => ({
+    deduped: false,
+    entry: { id: 'ledger_1' },
+    wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+  })),
   mockAuditRecord: vi.fn(),
   mockApplyMandate: vi.fn(),
   mockApplyMandateStatus: vi.fn(),
+  mockRedeem: vi.fn(),
   mockDeriveIdempotencyKey: vi.fn((input: DeriveInput) => {
     switch (input.reason) {
       case 'manual_purchase':
@@ -51,6 +59,7 @@ const {
   mockReceivableClear: vi.fn(),
   mockPublishSessionSettled: vi.fn(),
   mockPublishSettlementFailure: vi.fn(),
+  mockNotificationPublish: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -71,12 +80,16 @@ vi.mock('@balo/db', () => ({
     open: mockReceivableOpen,
     clear: mockReceivableClear,
   },
+  promoRedemptionsRepository: { redeem: mockRedeem },
   deriveIdempotencyKey: mockDeriveIdempotencyKey,
   db: {},
 }));
 vi.mock('../credit-session/notify.js', () => ({
   publishSessionSettled: mockPublishSessionSettled,
   publishSettlementFailure: mockPublishSettlementFailure,
+}));
+vi.mock('../../notifications/publisher.js', () => ({
+  notificationEvents: { publish: mockNotificationPublish },
 }));
 vi.mock('../../lib/stripe.js', () => ({
   getStripeClient: () => ({
@@ -127,9 +140,42 @@ describe('resolveStripeEffect', () => {
       memberId: 'member_1',
       sessionId: null,
       triggeringEntryId: null,
+      promoCode: null,
       settlement: SETTLEMENT,
     });
     expect(mockRetrieveSettlement).toHaveBeenCalledWith('pi_1');
+  });
+
+  it('threads a manual_purchase promoCode from PI metadata into the credit effect', async () => {
+    mockRetrieveSettlement.mockResolvedValue(SETTLEMENT);
+    const effect = await resolveStripeEffect(
+      event('payment_intent.succeeded', {
+        id: 'pi_1',
+        metadata: {
+          walletId: 'wallet_1',
+          reason: 'manual_purchase',
+          memberId: 'member_1',
+          promoCode: 'WELCOME50',
+        },
+      })
+    );
+    expect(effect).toMatchObject({ kind: 'credit', promoCode: 'WELCOME50' });
+  });
+
+  it('never threads a promoCode for a non-manual credit reason (auto_topup)', async () => {
+    mockRetrieveSettlement.mockResolvedValue(SETTLEMENT);
+    const effect = await resolveStripeEffect(
+      event('payment_intent.succeeded', {
+        id: 'pi_1',
+        metadata: {
+          walletId: 'wallet_1',
+          reason: 'auto_topup',
+          triggeringEntryId: 'entry_1',
+          promoCode: 'WELCOME50',
+        },
+      })
+    );
+    expect(effect).toMatchObject({ kind: 'credit', reason: 'auto_topup', promoCode: null });
   });
 
   it('returns null for payment_intent.succeeded with missing metadata', async () => {
@@ -342,19 +388,25 @@ describe('resolveStripeEffect', () => {
 describe('applyStripeEffect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Ledger writes report a fresh (non-deduped) apply by default; receivable opens are fresh.
-    mockApplyLedgerEntry.mockResolvedValue({ deduped: false });
+    // Ledger writes report a fresh (non-deduped) apply onto a wallet the receipt can read;
+    // receivable opens are fresh.
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
     mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_1' }, created: true });
   });
 
   it('applies a manual_purchase credit via applyLedgerEntry with the PI-keyed idempotency key', async () => {
-    await applyStripeEffect(tx, {
+    const postCommit = await applyStripeEffect(tx, {
       kind: 'credit',
       reason: 'manual_purchase',
       walletId: 'wallet_1',
       memberId: 'member_1',
       sessionId: null,
       triggeringEntryId: null,
+      promoCode: null,
       settlement: SETTLEMENT,
     });
     expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
@@ -374,16 +426,105 @@ describe('applyStripeEffect', () => {
         stripeBalanceTransactionId: 'txn_1',
       })
     );
+    // Fresh manual_purchase → one DEFERRED post-commit receipt publish (no promo → 0 bonus).
+    expect(mockRedeem).not.toHaveBeenCalled();
+    expect(mockNotificationPublish).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockNotificationPublish).toHaveBeenCalledWith(
+      'credit.topup.completed',
+      expect.objectContaining({
+        correlationId: 'manual_purchase:pi_1',
+        userId: 'member_1',
+        companyId: 'company_1',
+        creditedMinor: 7600,
+        promoGrantedMinor: 0,
+        balanceAfterMinor: 17600,
+      })
+    );
+  });
+
+  it('grants a promo best-effort on a manual_purchase and reflects it in the receipt', async () => {
+    mockRedeem.mockResolvedValue({ outcome: 'redeemed', grantMinor: 5000, ledgerEntryId: 'le_2' });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: 'WELCOME50',
+      settlement: SETTLEMENT,
+    });
+    expect(mockRedeem).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        code: 'WELCOME50',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        redeemedByUserId: 'member_1',
+      })
+    );
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockNotificationPublish).toHaveBeenCalledWith(
+      'credit.topup.completed',
+      expect.objectContaining({ promoGrantedMinor: 5000, balanceAfterMinor: 22600 })
+    );
+  });
+
+  it('skips a promo that failed re-validation at settlement (base purchase still credits)', async () => {
+    mockRedeem.mockRejectedValue(new Error('PromoExhaustedError'));
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: 'WELCOME50',
+      settlement: SETTLEMENT,
+    });
+    // Base purchase credited; promo skipped → 0 bonus, receipt still published post-commit.
+    expect(mockApplyLedgerEntry).toHaveBeenCalledTimes(1);
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockNotificationPublish).toHaveBeenCalledWith(
+      'credit.topup.completed',
+      expect.objectContaining({ promoGrantedMinor: 0, balanceAfterMinor: 17600 })
+    );
+  });
+
+  it('does not re-grant or surface a receipt on a deduped (replayed) manual_purchase credit', async () => {
+    mockApplyLedgerEntry.mockResolvedValueOnce({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: 'WELCOME50',
+      settlement: SETTLEMENT,
+    });
+    expect(postCommit).toEqual([]);
+    expect(mockRedeem).not.toHaveBeenCalled();
+    expect(mockNotificationPublish).not.toHaveBeenCalled();
   });
 
   it('applies an auto_topup credit with the wallet+entry-keyed idempotency key', async () => {
-    await applyStripeEffect(tx, {
+    const postCommit = await applyStripeEffect(tx, {
       kind: 'credit',
       reason: 'auto_topup',
       walletId: 'wallet_1',
       memberId: null,
       sessionId: null,
       triggeringEntryId: 'entry_1',
+      promoCode: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_9' },
     });
     expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
@@ -394,6 +535,9 @@ describe('applyStripeEffect', () => {
         memberId: null,
       })
     );
+    // auto_topup never surfaces a top-up receipt (its own lane owns any signal).
+    expect(postCommit).toEqual([]);
+    expect(mockNotificationPublish).not.toHaveBeenCalled();
   });
 
   it('activates the mandate via applyMandate', async () => {
@@ -472,6 +616,7 @@ describe('applyStripeEffect', () => {
       memberId: 'member_1',
       sessionId: 'session_1',
       triggeringEntryId: null,
+      promoCode: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_7' },
     });
     expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
@@ -501,7 +646,11 @@ describe('applyStripeEffect', () => {
   });
 
   it('a REPLAYED overdraft_settlement credit re-marks idempotently but never re-publishes (FIX 9)', async () => {
-    mockApplyLedgerEntry.mockResolvedValue({ deduped: true });
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
     mockSessionFindById.mockResolvedValue({
       id: 'session_1',
       companyId: 'company_1',
@@ -516,6 +665,7 @@ describe('applyStripeEffect', () => {
       memberId: 'member_1',
       sessionId: 'session_1',
       triggeringEntryId: null,
+      promoCode: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_7' },
     });
     // The mark + clear stay (idempotent), but no post-commit receipt fires on the replay.
@@ -618,6 +768,7 @@ describe('applyStripeEffect', () => {
         memberId: null,
         sessionId: null,
         triggeringEntryId: null,
+        promoCode: null,
         settlement: SETTLEMENT,
       })
     ).rejects.toThrow(/triggeringEntryId/);
@@ -633,6 +784,7 @@ describe('applyStripeEffect', () => {
         memberId: 'member_1',
         sessionId: null,
         triggeringEntryId: null,
+        promoCode: null,
         settlement: SETTLEMENT,
       })
     ).rejects.toThrow(/sessionId/);

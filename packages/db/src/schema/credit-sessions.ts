@@ -129,10 +129,13 @@ export const creditSessions = pgTable(
     index('credit_sessions_meter_idx')
       .on(t.status)
       .where(sql`${t.status} IN ('active', 'grace') AND ${t.deletedAt} IS NULL`),
-    // Reconciliation of stuck settlements (findStuckSettling).
+    // Reconciliation of stuck settlements (findStuckSettling). Partial on the enum literal +
+    // `deleted_at IS NULL` (matches the meter index above; a settling row is never soft-deleted,
+    // so this is index-tidiness rather than a correctness fix — the `open` guard filters
+    // `deleted_at` anyway).
     index('credit_sessions_settling_idx')
       .on(t.settlementStatus)
-      .where(sql`${t.settlementStatus} = 'processing'`),
+      .where(sql`${t.settlementStatus} = 'processing' AND ${t.deletedAt} IS NULL`),
     check('credit_sessions_estimated_minutes_pos', sql`${t.estimatedMinutes} > 0`),
     check('credit_sessions_expert_hourly_pos', sql`${t.expertRateMinorPerHour} > 0`),
     check('credit_sessions_client_minute_pos', sql`${t.clientRateMinorPerMinute} > 0`),

@@ -302,6 +302,8 @@ export {
   type CreatePromoCodeInput,
   type UpdatePromoCapInput,
   type PromoRedemptionRecord,
+  type RedeemPromoInput,
+  type RedeemPromoResult,
 } from './promo-codes';
 export type {
   PromoCode,
@@ -310,6 +312,20 @@ export type {
   NewPromoRedemption,
   PromoCodeStatus,
 } from '../schema';
+// ── Promo redeem engine (BAL-377) ──────────────────────────────────────────
+export {
+  promoRedemptionsRepository,
+  PromoInvalidError,
+  PromoScheduledError,
+  PromoExpiredError,
+  PromoExhaustedError,
+  PromoAlreadyRedeemedError,
+  type PromoValidation,
+  type PromoValidationReason,
+  type RedeemResult,
+  type ValidatePromoInput,
+  type RedeemPromoGrantInput,
+} from './promo-redemptions';
 // ── Stripe provider (BAL-382) ─────────────────────────────────────────────
 export { stripeWebhookEventsRepository } from './stripe-webhook-events';
 export type { StripeWebhookEvent, NewStripeWebhookEvent } from '../schema';

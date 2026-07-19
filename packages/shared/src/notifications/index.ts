@@ -330,6 +330,25 @@ export interface CreditDormancyReminderPayload {
   expiresAt: string; // ISO — display "12 July 2027"
 }
 
+// BAL-383 (ADR-1040) — promo code redeemed. A retrospective, warm milestone
+// confirmation addressed to the ACTOR who redeemed (recipient 'self' via `userId`; the
+// resolver hydrates `data.user` and the delivery worker greets by name). It is NOT a
+// wallet-state notice, so it does NOT use the `company_billing_admins` fan-out (which
+// BAL-380 reserves for the impersonal, party-wide dormancy/expiry notices). Published
+// from the web redeem Server Action ONLY on a fresh `redeemed` outcome (never on
+// `already_redeemed`). `correlationId = promo_redemptions.id` → BullMQ jobId dedup, so a
+// retried publish never double-notifies (and `redeem()` is idempotent, so a re-run
+// returns the SAME redemption id). `grantedLabel` is pre-formatted (`formatMinorAud`) —
+// NO minor units in the payload. Defined ONCE here to avoid the api/web lockstep Sonar
+// new-code duplication.
+export interface PromoRedeemedPayload {
+  correlationId: string; // = promo_redemptions.id → BullMQ jobId dedup
+  userId: string; // = redeemedByUserId → recipient 'self' + resolver hydrates data.user
+  code: string; // normalized code — email/in-app body ("WELCOME50")
+  grantedLabel: string; // "A$50.00" — pre-formatted (formatMinorAud); no minor units in the payload
+  companyName: string; // party context — "added to {companyName}"
+}
+
 // BAL-380 (ADR-1040 Lane 3) — credit balance expired. The expiry sweep posted the
 // zeroing `entry_type='expiry' / reason='dormancy_expiry'` ledger entry, so the wallet
 // reached its rolling expiry date. SERVER-ONLY (published by the API sweep). Fans out to
@@ -433,4 +452,43 @@ export interface SessionTopupNudgePayload {
   companyId: string; // → data.billingUserIds
   requestedByUserId: string;
   requestedByName: string;
+}
+
+// BAL-377 (ADR-1040 Lane 1) — a manual top-up charged successfully and was credited.
+// SERVER-ONLY (published from the API Stripe webhook, post-commit — the shipped BAL-382
+// webhook is the single authoritative crediting path; this notice is a courtesy receipt).
+// Recipient is the PURCHASER (recipient 'self' via `userId`; the resolver's existing
+// `payload.userId → data.user` hydration names + targets them). Email + in-app. All
+// figures are display facts CAPTURED AT WEBHOOK TIME (carried in the payload, not
+// re-hydrated) — matching the dormancy-payload precedent. `correlationId` IS the ledger
+// idempotency key `manual_purchase:${piId}` → per-purchase BullMQ jobId dedup, so a
+// webhook replay collapses to one receipt. NO fee field (BAL-357): a top-up buys AUD at
+// FACE VALUE — the Balo fee lives in the per-minute consume rate, never here; `creditedMinor`
+// is the GROSS settled AUD (`balance_transaction.amount`), never a fee-net figure. Defined
+// ONCE here to avoid Sonar new-code duplication across the api + web catalogs.
+export interface CreditTopupCompletedPayload {
+  correlationId: string; // = manual_purchase:${piId} → BullMQ jobId dedup
+  userId: string; // the purchaser → recipient 'self'; resolver hydrates data.user
+  companyId: string; // context (the wallet's company)
+  creditedMinor: number; // GROSS settled AUD credited (balance_transaction.amount)
+  chargedCurrency: string; // presentment currency, lowercase (e.g. 'usd', 'aud')
+  chargedAmountMinor: number; // presentment minor units (what the card was billed)
+  promoGrantedMinor: number; // 0 when no promo redeemed at settlement
+  balanceAfterMinor: number; // wallet balance after the credit (+ any promo grant)
+  expiresAt: string; // ISO — rolled expiry (rolling-expiry reassurance line)
+}
+
+// BAL-377 / BAL-381 — a company member WITHOUT MANAGE_BILLING nudged the billing
+// holder(s) to top up. Published from the web `nudgeBillingAdminAction` (publishable).
+// Fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins' →
+// the resolver hydrates `data.billingUserIds` from `companyId`). `correlationId` is an
+// HOUR-BUCKETED anti-abuse key `topup-nudge:${companyId}:${userId}:${hourBucket}` (NOT a uuid,
+// NOT a stable domain id) — a burst of re-nudges inside one hour collapses to a single BullMQ
+// jobId (no email-bomb), while a genuine nudge in a later hour still fans out. `requestedByUserId`
+// names the nudging member (context/audit; never a recipient — they lack MANAGE_BILLING, so the
+// billing fan-out naturally excludes them). Defined ONCE here (shared-home convention).
+export interface CreditTopupRequestedPayload {
+  correlationId: string; // topup-nudge:{companyId}:{userId}:{hourBucket} — one dispatch/hour
+  companyId: string; // → resolver hydrates data.billingUserIds (fan-out) + data.company
+  requestedByUserId: string; // the nudging member (context/audit only)
 }

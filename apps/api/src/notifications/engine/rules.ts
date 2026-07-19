@@ -607,4 +607,17 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-377 (ADR-1040 Lane 1). A top-up charged successfully → a warm receipt to the
+  // PURCHASER (recipient 'self' via payload.userId; email + in-app). Server-published from
+  // the Stripe webhook post-commit.
+  'credit.topup.completed': emailAndInApp('self', 'credit-topup-completed'),
+  // BAL-377 / BAL-381. A member without MANAGE_BILLING nudged the billing holder(s) →
+  // fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins',
+  // resolved from data.billingUserIds) via email + in-app. Publishable from apps/web.
+  'credit.topup.requested': emailAndInApp('company_billing_admins', 'credit-topup-requested'),
+  // BAL-383 (ADR-1040): promo code redeemed — a warm, retrospective milestone
+  // confirmation to the ACTOR who redeemed (recipient 'self' via payload.userId; the
+  // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state
+  // notice, so NOT the company_billing_admins fan-out. Email + in-app, no SMS.
+  'promo.redeemed': emailAndInApp('self', 'promo-redeemed'),
 };

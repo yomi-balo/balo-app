@@ -651,6 +651,45 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: '/settings/billing',
     };
   },
+
+  // BAL-377 (ADR-1040 Lane 1) top-up receipt — the purchaser. Warm + factual: the credit
+  // landed and the balance is ready. Mentions a promo bonus when one was granted. NO fee
+  // figure (BAL-357). Deep-links to expert search (put the balance to use).
+  'credit-topup-completed': (data) => {
+    const balanceAfter = formatAudMinor(numberOrZero(data.balanceAfterMinor));
+    const promoGrantedMinor = numberOrZero(data.promoGrantedMinor);
+    const promoSuffix =
+      promoGrantedMinor > 0 ? ` (including ${formatAudMinor(promoGrantedMinor)} bonus)` : '';
+    return {
+      title: "You're topped up",
+      body: `Your balance is now ${balanceAfter}${promoSuffix}, ready when you are.`,
+      actionUrl: '/experts',
+    };
+  },
+
+  // BAL-377 / BAL-381 top-up nudge — company billing admins. Names the nudging member
+  // (data.requesterName, hydrated by the resolver). Deep-links to the top-up composer.
+  'credit-topup-requested': (data) => {
+    const memberName = (data.requesterName as string) ?? 'A teammate';
+    return {
+      title: 'Top-up requested',
+      body: `${memberName} asked you to top up your team's balance.`,
+      actionUrl: '/billing/top-up',
+    };
+  },
+
+  // BAL-383 (ADR-1040) promo redeemed — the ACTOR who redeemed (recipient 'self'). Warm,
+  // congratulatory, no countdown. `grantedLabel` / `companyName` come from the payload;
+  // deep-links to expert search (the natural next step once credit lands).
+  'promo-redeemed': (data) => {
+    const grantedLabel = (data.grantedLabel as string) ?? 'Your credit';
+    const companyName = (data.companyName as string) ?? 'your team';
+    return {
+      title: 'Credit added 🎉',
+      body: `${grantedLabel} is ready for ${companyName} — find an expert whenever you are.`,
+      actionUrl: '/experts',
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

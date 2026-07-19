@@ -71,7 +71,7 @@ ALTER TABLE "credit_receivables" ADD CONSTRAINT "credit_receivables_session_id_c
 CREATE INDEX "credit_sessions_wallet_idx" ON "credit_sessions" USING btree ("wallet_id");--> statement-breakpoint
 CREATE INDEX "credit_sessions_company_idx" ON "credit_sessions" USING btree ("company_id");--> statement-breakpoint
 CREATE INDEX "credit_sessions_meter_idx" ON "credit_sessions" USING btree ("status") WHERE "credit_sessions"."status" IN ('active', 'grace') AND "credit_sessions"."deleted_at" IS NULL;--> statement-breakpoint
-CREATE INDEX "credit_sessions_settling_idx" ON "credit_sessions" USING btree ("settlement_status") WHERE "credit_sessions"."settlement_status" = 'processing';--> statement-breakpoint
+CREATE INDEX "credit_sessions_settling_idx" ON "credit_sessions" USING btree ("settlement_status") WHERE "credit_sessions"."settlement_status" = 'processing' AND "credit_sessions"."deleted_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "credit_receivables_company_open_idx" ON "credit_receivables" USING btree ("company_id") WHERE "credit_receivables"."status" = 'open' AND "credit_receivables"."deleted_at" IS NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "credit_receivables_session_uidx" ON "credit_receivables" USING btree ("session_id") WHERE "credit_receivables"."deleted_at" IS NULL;--> statement-breakpoint
 ALTER TABLE "credit_ledger" ADD CONSTRAINT "credit_ledger_session_id_credit_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."credit_sessions"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
