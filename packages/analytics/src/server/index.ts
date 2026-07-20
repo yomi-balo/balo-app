@@ -25,4 +25,6 @@ export { SESSION_SERVER_EVENTS } from '../events/session';
 export { CASE_BILLING_SERVER_EVENTS } from '../events/case-billing';
 export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
+export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';
+export type { TranscriptVenue } from '../events/transcript';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';

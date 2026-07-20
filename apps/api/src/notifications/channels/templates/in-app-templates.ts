@@ -728,6 +728,21 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       data
     );
   },
+
+  // BAL-387 (ADR-1013 + ADR-1043) transcript recap ready — the client owner OR the delivering
+  // expert. One template serves both. Carries no money (fee-safe); the headline (when present)
+  // + action-item count read as helpful facts. Deep-links to the delivery workspace.
+  'recap-ready': (data) => {
+    const count = numberOrZero(data.actionItemCount);
+    const headline = (data.summaryHeadline as string) ?? '';
+    const plural = count === 1 ? '' : 's';
+    const countSuffix = count > 0 ? ` · ${count} action item${plural}` : '';
+    const body =
+      headline.length > 0
+        ? `${headline}${countSuffix}`
+        : `Your session summary is ready${countSuffix}.`;
+    return engagementNotice('Session recap ready', body, data);
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

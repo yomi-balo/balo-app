@@ -141,3 +141,8 @@ export {
   type ActionItemAssigneeRole,
   type ActionItemActorRole,
 } from './action-item';
+export {
+  TRANSCRIPT_SERVER_EVENTS,
+  type TranscriptServerEventMap,
+  type TranscriptVenue,
+} from './transcript';

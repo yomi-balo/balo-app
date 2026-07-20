@@ -556,3 +556,26 @@ export interface PayoutRecordedPayload {
   durationMinutes: number;
   recordedOn: string; // pre-formatted UTC date
 }
+
+// BAL-387 (ADR-1013 + ADR-1043) — a transcript recap is ready. SERVER-ONLY (published from the
+// pipeline worker post-`markRecapPublished`; no web mirror, no `publishBodySchema` arm). One
+// event, two conditioned rules keyed on recipient presence (the two-party `engagement.cancelled`
+// pattern): the CLIENT company owner (recipient:'client' via `recipientId`; skips gracefully when
+// absent) + the delivering EXPERT (recipient:'expert' via `expertProfileId` → the resolver
+// hydrates data.expert). Email + in-app to each; NO admin fan-out. Defined ONCE here to avoid the
+// SonarCloud new-code duplication gate. `correlationId = `${transcriptId}:recap_ready`` → BullMQ
+// jobId dedup (a second layer atop the `recap_ready_published_at` stage gate). LENS-SAFE: carries
+// NO money at all (the money block is BAL-399's separate `payment.charged` / `payout.recorded`),
+// so concealment is trivial. `summaryHeadline` is a short, plain-text, party-safe one-liner (no
+// fee content); `recordingRef` is NULLABLE/deferred (no live capture producer).
+export interface RecapReadyPayload {
+  correlationId: string; // `${transcriptId}:recap_ready` → BullMQ jobId dedup
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  transcriptId: string;
+  meetingId?: string | null; // nullable no-FK forward seam
+  recipientId?: string; // client company owner user id → recipient:'client'; absent → client rule skips
+  expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert'
+  actionItemCount: number; // display fact (lens-safe)
+  summaryHeadline?: string; // short plain-text one-liner (shared meeting context — no fee content)
+  recordingRef?: string | null; // NULLABLE/deferred — no producer
+}

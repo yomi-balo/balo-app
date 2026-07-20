@@ -440,3 +440,40 @@ export const actionItemAssigneePartyEnum = pgEnum('action_item_assignee_party', 
   'client',
   'expert',
 ]);
+
+// ── Transcript pipeline (BAL-387 / ADR-1013 + ADR-1043) ────────────────────
+//
+// All THREE enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
+// VALUE`), so every value commits atomically with the type. The ONLY value used as a
+// column DEFAULT is `transcript_status` `'processing'` (on `transcripts.status`), which
+// is SAFE in the SAME migration — the enum-default-same-txn hazard (memory
+// `reference_enum_default_same_tx_migration_hazard`) applies ONLY to ADD-VALUE, which
+// none of these are. NONE appears in an index predicate — every transcript partial index
+// predicates on `deleted_at`/`meeting_id` only (the ADD-VALUE house rule).
+
+/**
+ * BAL-387 — the capture vendor a transcript was normalized FROM. `daily_deepgram` =
+ * Balo Video's native Daily+Deepgram capture (speaker attribution via authenticated
+ * `user_id`); `recall` = a Recall bot at an external venue (name-diarization). No column
+ * default — every writer states the vendor explicitly.
+ */
+export const transcriptVendorEnum = pgEnum('transcript_vendor', ['daily_deepgram', 'recall']);
+
+/**
+ * BAL-387 — coarse transcript lifecycle. Default `processing` (raw persisted, pipeline
+ * stages still running); `ready` = recap published; `failed` = a stage exhausted its
+ * retries. Ordering carries no semantics — the pipeline's stage gates are the source of
+ * truth for progress.
+ */
+export const transcriptStatusEnum = pgEnum('transcript_status', ['processing', 'ready', 'failed']);
+
+/**
+ * BAL-387 — which LLM-derived artifact a `transcript_artifacts` row holds. `cleaned` =
+ * disfluency/ASR-normalized full text; `summary` = the concise recap. Raw is artifact #1
+ * (the `transcripts.canonical` jsonb), not a `transcript_artifacts` kind. No column
+ * default — every writer states the kind explicitly.
+ */
+export const transcriptArtifactKindEnum = pgEnum('transcript_artifact_kind', [
+  'cleaned',
+  'summary',
+]);

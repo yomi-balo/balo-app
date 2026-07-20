@@ -647,4 +647,13 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       (ctx) => ctx.payload.assigneeParty === 'expert'
     ),
   ],
+  // BAL-387 (ADR-1013 + ADR-1043): a transcript recap is ready. Two-party fan-out (mirrors
+  // engagement.cancelled): the CLIENT company owner (recipient:'client' via payload.recipientId
+  // — conditioned on its presence so a retainer/no-owner recap skips the client rule) + the
+  // delivering EXPERT (recipient:'expert' via payload.expertProfileId → the resolver hydrates
+  // data.expert). Email + in-app to each; NO admin fan-out. Carries no money (lens-safe).
+  'recap.ready': [
+    ...emailAndInApp('client', 'recap-ready', (ctx) => !!ctx.payload.recipientId),
+    ...emailAndInApp('expert', 'recap-ready'),
+  ],
 };

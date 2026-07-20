@@ -22,6 +22,7 @@ const mockStartCreditSessionMeterSweep = vi.fn();
 const mockRegisterCreditSessionMeterSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartReceivableDunningSweep = vi.fn();
 const mockRegisterReceivableDunningSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartTranscriptPipeline = vi.fn();
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -58,6 +59,11 @@ vi.mock('./credit-session-meter-sweep.js', () => ({
 vi.mock('./receivable-dunning-sweep.js', () => ({
   startReceivableDunningSweepWorker: () => mockStartReceivableDunningSweep(),
   registerReceivableDunningSweepCron: () => mockRegisterReceivableDunningSweepCron(),
+}));
+// BAL-387: mocking this is MANDATORY — otherwise the REDIS_URL-set test loads the real
+// module, which constructs a Worker on a live Redis connection and hangs (5s CI timeout).
+vi.mock('./transcript-pipeline.js', () => ({
+  startTranscriptPipelineWorker: () => mockStartTranscriptPipeline(),
 }));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
@@ -119,6 +125,7 @@ describe('startWorkers', () => {
     expect(mockRegisterCreditSessionMeterSweepCron).toHaveBeenCalled();
     expect(mockStartReceivableDunningSweep).toHaveBeenCalled();
     expect(mockRegisterReceivableDunningSweepCron).toHaveBeenCalled();
+    expect(mockStartTranscriptPipeline).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

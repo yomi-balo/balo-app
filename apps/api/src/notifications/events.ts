@@ -33,6 +33,7 @@ import type {
   SessionTopupNudgePayload,
   PaymentChargedPayload,
   PayoutRecordedPayload,
+  RecapReadyPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -280,7 +281,8 @@ export type NotificationEvent =
   | 'promo.redeemed'
   | 'payment.charged'
   | 'payout.recorded'
-  | 'action_item.assigned';
+  | 'action_item.assigned'
+  | 'recap.ready';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -310,7 +312,10 @@ export type ServerOnlyNotificationEvent =
   // BAL-399: both fire from `finalizeBilling` (the endSession / external-finalizer path) —
   // never from apps/web, so neither has a publishBodySchema arm.
   | 'payment.charged'
-  | 'payout.recorded';
+  | 'payout.recorded'
+  // BAL-387: published from the transcript pipeline worker post-`markRecapPublished` —
+  // never from apps/web, so it has no publishBodySchema arm.
+  | 'recap.ready';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -368,4 +373,5 @@ export interface EventPayloadMap {
   'payment.charged': PaymentChargedPayload;
   'payout.recorded': PayoutRecordedPayload;
   'action_item.assigned': ActionItemAssignedPayload;
+  'recap.ready': RecapReadyPayload;
 }

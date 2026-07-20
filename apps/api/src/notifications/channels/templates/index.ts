@@ -51,6 +51,7 @@ import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 import { ActionItemAssignedEmail } from './action-item-assigned.js';
+import { RecapReadyEmail } from './recap-ready.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -925,6 +926,21 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       subject: `${sanitizeSubjectTitle(actorLabel)} assigned you an action item on ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
+
+  // BAL-387 (ADR-1013 + ADR-1043) transcript recap ready — ONE component serves BOTH the client
+  // owner and the delivering expert (the greeting differs via the per-recipient `recipientName`).
+  // Carries no money (fee-safe); `summaryHeadline` / `actionItemCount` come straight from the
+  // payload. CTA deep-links to the delivery workspace `/engagements/{id}`. Stable subject.
+  'recap-ready': (data) => ({
+    component: React.createElement(RecapReadyEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      summaryHeadline: data.summaryHeadline as string | undefined,
+      actionItemCount: numberCount(data.actionItemCount),
+      engagementId: (data.engagementId as string) ?? '',
+      baseUrl: BASE_URL,
+    }),
+    subject: 'Your session recap is ready',
+  }),
 
   // BAL-386 — a client member shared a submitted proposal with an EXTERNAL colleague
   // (external `email_address` path — no user row to hydrate). The magic-link CTA is
