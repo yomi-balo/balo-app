@@ -15,6 +15,30 @@
 /** A$3.00/min (= A$180/hr) — presentation average for the time estimate. NEVER the fee. */
 export const RATE_PER_MIN_MINOR = 300;
 
+/**
+ * BAL-402 — the shared "running low" floor (A$50), a PURE DISPLAY threshold over the wallet's
+ * AUD-minor balance. Consumed by BOTH the holder resting states (`resolveRestingState`) and the
+ * member nudge (`MemberWalletNudge`), so the two lenses agree at the boundary by construction.
+ * Deliberately NOT the wallet's per-wallet `topupThresholdMinor` (that would couple the resting
+ * card to auto-top-up config, BAL-379). Equals `DEFAULT_THRESHOLD_MINOR` by design.
+ */
+export const LOW_BALANCE_MINOR = 5_000;
+
+/** The holder wallet resting-state discriminant, derived purely from the AUD-minor balance. */
+export type WalletRestingState = 'healthy' | 'low' | 'zero';
+
+/**
+ * Map an AUD-minor balance to a resting state: `zero` at or below 0 (an invitation to top up,
+ * never absence-framed), `low` in (0, LOW_BALANCE_MINOR), `healthy` at or above the floor. The
+ * low boundary is strict `<` so a balance exactly at the floor reads `healthy` — matching
+ * `MemberWalletNudge`'s `balanceMinor < LOW_BALANCE_MINOR`. Pure display; never feeds any math.
+ */
+export function resolveRestingState(balanceMinor: number): WalletRestingState {
+  if (balanceMinor <= 0) return 'zero';
+  if (balanceMinor < LOW_BALANCE_MINOR) return 'low';
+  return 'healthy';
+}
+
 /** Slider bounds + snap, in AUD minor units: A$300 … A$10,000, snapping to A$100. */
 export const MIN_AMOUNT_MINOR = 30_000;
 export const MAX_AMOUNT_MINOR = 1_000_000;

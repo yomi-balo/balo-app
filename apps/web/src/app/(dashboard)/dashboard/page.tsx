@@ -1,9 +1,15 @@
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { Gift } from 'lucide-react';
-import { getCurrentUser } from '@/lib/auth/session';
+import { getCurrentUser, getCompanyContext, requireUser } from '@/lib/auth/session';
 import { getChecklistStatus, type ChecklistStatus } from '@/lib/actions/expert-checklist';
 import { ExpertDashboard } from './_components/expert-dashboard';
+import { WalletWidget } from '@/components/balo/credit/wallet-widget';
+import { DashboardWalletSlot } from './_components/dashboard-wallet-slot';
 import { log } from '@/lib/logging';
+
+// Stable keys for the placeholder metric cards below (avoids array-index keys).
+const METRIC_PLACEHOLDER_KEYS = ['activity', 'engagements', 'spend'];
 
 export default async function DashboardPage(): Promise<React.JSX.Element> {
   const user = await getCurrentUser();
@@ -23,7 +29,12 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
     );
   }
 
-  // Client dashboard -- existing placeholder for now
+  // Client dashboard -- the wallet card is the first real content block; the promo link and the
+  // placeholder metric cards below remain out of scope. Mirror the top-up page: the actor comes
+  // from requireUser() and companyId from getCompanyContext().
+  const actor = await requireUser();
+  const { companyId } = await getCompanyContext();
+
   return (
     <div>
       <div className="mb-8">
@@ -31,6 +42,12 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
         <p className="text-muted-foreground mt-1 text-sm">
           Welcome back. Here is an overview of your activity.
         </p>
+      </div>
+      {/* BAL-402: the client-lens wallet card, streamed in after the rest of the page paints. */}
+      <div className="mb-6">
+        <Suspense fallback={<WalletWidget state="loading" />}>
+          <DashboardWalletSlot actor={actor} companyId={companyId} />
+        </Suspense>
       </div>
       {/* BAL-383: a lightweight entry point to the standalone /redeem surface. */}
       <Link
@@ -48,8 +65,11 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
         </span>
       </Link>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="border-border bg-card text-card-foreground rounded-xl border p-6">
+        {METRIC_PLACEHOLDER_KEYS.map((slot) => (
+          <div
+            key={slot}
+            className="border-border bg-card text-card-foreground rounded-xl border p-6"
+          >
             <div className="space-y-3">
               <div className="bg-muted h-4 w-24 animate-pulse rounded" />
               <div className="bg-muted h-8 w-16 animate-pulse rounded" />

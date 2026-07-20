@@ -6,6 +6,7 @@ import {
   formatIndicative,
   autoTopupConfigErrors,
   isAutoTopupConfigValid,
+  resolveRestingState,
   RATE_PER_MIN_MINOR,
   MIN_AMOUNT_MINOR,
   MAX_AMOUNT_MINOR,
@@ -13,6 +14,8 @@ import {
   MIN_RELOAD_MINOR,
   MAX_RELOAD_MINOR,
   MAX_THRESHOLD_MINOR,
+  LOW_BALANCE_MINOR,
+  DEFAULT_THRESHOLD_MINOR,
 } from './display-constants';
 
 describe('display-constants', () => {
@@ -89,6 +92,28 @@ describe('display-constants', () => {
       expect(isAutoTopupConfigValid('auto_topup', 30_000, 5_000)).toBe(true);
       expect(isAutoTopupConfigValid('auto_topup', 0, 5_000)).toBe(false);
       expect(isAutoTopupConfigValid('notify_only', 0, 0)).toBe(true);
+    });
+  });
+
+  describe('resolveRestingState', () => {
+    it('exposes the A$50 shared low floor, aligned with the default threshold', () => {
+      expect(LOW_BALANCE_MINOR).toBe(5_000);
+      expect(LOW_BALANCE_MINOR).toBe(DEFAULT_THRESHOLD_MINOR);
+    });
+
+    it('reads a negative or zero balance as "zero" (an invitation, not absence)', () => {
+      expect(resolveRestingState(-1)).toBe('zero');
+      expect(resolveRestingState(0)).toBe('zero');
+    });
+
+    it('reads a balance strictly under the floor as "low"', () => {
+      expect(resolveRestingState(1)).toBe('low');
+      expect(resolveRestingState(LOW_BALANCE_MINOR - 1)).toBe('low');
+    });
+
+    it('reads a balance at or above the floor as "healthy" (strict `<` boundary)', () => {
+      expect(resolveRestingState(LOW_BALANCE_MINOR)).toBe('healthy');
+      expect(resolveRestingState(34_700)).toBe('healthy');
     });
   });
 });
