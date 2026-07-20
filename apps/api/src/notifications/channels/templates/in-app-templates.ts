@@ -691,6 +691,29 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-399 (ADR-1040 / ADR-1043) payment charged — the acting MEMBER's consultation receipt
+  // (recipient 'self'). The all-in charge ONLY; NO expert figure / margin. Deep-links to billing.
+  'payment-charged': (data) => {
+    const amount = formatAudMinor(numberOrZero(data.amountAudMinor));
+    const expertName = (data.expertName as string) ?? 'your expert';
+    return {
+      title: 'Session receipt',
+      body: `Your session with ${expertName} came to ${amount}.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // BAL-399 (ADR-1040 / ADR-1043) payout recorded — the delivering EXPERT's own-earnings notice
+  // (recipient 'expert'). Own earnings ONLY; NO client charge / markup / margin. Links to earnings.
+  'payout-recorded': (data) => {
+    const amount = formatAudMinor(numberOrZero(data.amountAudMinor));
+    return {
+      title: 'Earnings recorded',
+      body: `${amount} from your recent session is recorded and on its way.`,
+      actionUrl: '/settings/earnings',
+    };
+  },
+
   // BAL-391 (ADR-1043) action item assigned — the assigned side (client owner OR expert).
   // One template serves both. Gender-neutral; `actorLabel` is the retrospective person;
   // the due date reads as a helpful fact (never a countdown). Deep-links to the workspace.

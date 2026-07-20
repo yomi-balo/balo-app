@@ -30,6 +30,8 @@ import {
   publishGraceEntered,
   publishLowBalance,
   publishNearWrap,
+  publishPaymentCharged,
+  publishPayoutRecorded,
   publishSessionSettled,
   publishSettlementFailure,
   publishTopupNudge,
@@ -201,5 +203,49 @@ describe('notify helpers', () => {
       requestedByUserId: 'user_1',
       requestedByName: 'Dana',
     });
+  });
+
+  it('publishPaymentCharged carries the client all-in charge to the acting member (self)', async () => {
+    // connectedMinutes × clientRateMinorPerMinute is the all-in — NO expert figure in the payload.
+    const session = { ...SESSION, connectedMinutes: 45 } as unknown as Parameters<
+      typeof publishPaymentCharged
+    >[0];
+    await publishPaymentCharged(session, NOW);
+    expect(mockPublish).toHaveBeenCalledWith('payment.charged', {
+      correlationId: 'session_1:payment_charged',
+      userId: 'user_1',
+      companyId: 'company_1',
+      sessionId: 'session_1',
+      amountAudMinor: 45 * 100,
+      durationMinutes: 45,
+      expertName: 'Jordan Ellis',
+      chargedOn: '16 July 2026',
+    });
+    // No expert-earnings key anywhere in the payload (fee concealment).
+    const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('expertAccruedMinor');
+    expect(payload).not.toHaveProperty('baloFeeBps');
+  });
+
+  it('publishPayoutRecorded carries the expert own earnings to the expert', async () => {
+    const session = {
+      ...SESSION,
+      connectedMinutes: 45,
+      expertAccruedMinor: 3600,
+    } as unknown as Parameters<typeof publishPayoutRecorded>[0];
+    await publishPayoutRecorded(session, NOW);
+    expect(mockPublish).toHaveBeenCalledWith('payout.recorded', {
+      correlationId: 'session_1:payout_recorded',
+      expertProfileId: 'expert_1',
+      sessionId: 'session_1',
+      amountAudMinor: 3600,
+      durationMinutes: 45,
+      recordedOn: '16 July 2026',
+    });
+    // No client rate / fee key anywhere in the payload (fee concealment) — amountAudMinor here
+    // IS the expert's OWN earnings, not the client charge.
+    const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('clientRateMinorPerMinute');
+    expect(payload).not.toHaveProperty('baloFeeBps');
   });
 });

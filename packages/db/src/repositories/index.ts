@@ -234,6 +234,7 @@ export {
   creditSessionsRepository,
   SessionNotFoundError,
   InvalidSessionTransitionError,
+  ExternalDurationConflictError,
   ExpertProfileNotFoundError,
   SESSION_EXPERT_ACCRUED_ACTION,
   SESSION_AUDIT_ENTITY_TYPE,
@@ -266,8 +267,15 @@ export {
   toClientWalletView,
   balanceContribution,
   toLedgerActivityView,
+  CLIENT_SESSION_MONEY_COLUMNS,
+  EXPERT_SESSION_MONEY_COLUMNS,
+  toClientMoneyBlock,
+  toExpertMoneyBlock,
+  toAdminMoneyBlock,
   type ClientWalletView,
   type LedgerActivityView,
+  type ClientSessionMoneyView,
+  type ExpertSessionMoneyView,
 } from './_shared/credit-views';
 export type {
   CreditWallet,
@@ -284,6 +292,8 @@ export type {
   NewCreditSession,
   CreditSessionStatus,
   CreditSettlementStatus,
+  CreditDurationSource,
+  CreditFinalizationPath,
   CreditReceivable,
   NewCreditReceivable,
   CreditReceivableStatus,
@@ -338,3 +348,14 @@ export {
 // ── Stripe provider (BAL-382) ─────────────────────────────────────────────
 export { stripeWebhookEventsRepository } from './stripe-webhook-events';
 export type { StripeWebhookEvent, NewStripeWebhookEvent } from '../schema';
+// ── Case consultation billing / expert payout obligation (BAL-399) ──────────
+export {
+  expertPayoutRecordsRepository,
+  type RecordPayoutInput,
+  type RecordPayoutResult,
+} from './expert-payout-records';
+export type {
+  ExpertPayoutRecord,
+  NewExpertPayoutRecord,
+  ExpertPayoutRecordStatus,
+} from '../schema';

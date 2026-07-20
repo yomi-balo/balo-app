@@ -47,6 +47,12 @@ export type NudgeServiceResult = { ok: true } | { ok: false; code: SessionActorE
 export interface EndSessionServiceResult {
   settlementStatus: CreditSettlementStatus;
   overdraftSettledMinor: number;
+  /**
+   * BAL-399: `true` when this was an EXTERNAL session that PARKED awaiting a BAL-133 duration
+   * confirmation — no settlement ran and the money block stays PENDING until the confirmed
+   * duration lands. Absent/false on the live-capture path (which finalizes immediately).
+   */
+  awaitingDuration?: boolean;
 }
 
 /** `endSession` outcome — authorize (fail-closed) then settle. */

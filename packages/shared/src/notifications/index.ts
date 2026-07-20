@@ -516,3 +516,43 @@ export interface CreditTopupRequestedPayload {
   companyId: string; // → resolver hydrates data.billingUserIds (fan-out) + data.company
   requestedByUserId: string; // the nudging member (context/audit only)
 }
+
+// BAL-399 (ADR-1040 / ADR-1043) — Case consultation billing-slice notifications. Both are
+// SERVER-ONLY (published from `finalizeBilling`, gated on the payout-record `created` flag so each
+// fires EXACTLY ONCE per session). Defined ONCE here to avoid the api/web lockstep Sonar new-code
+// duplication (memory `reference_notification_event_dup_shared_home`). Fee concealment holds at
+// the template layer too: `payment.charged` carries ONLY the client all-in (no expert figure /
+// margin); `payout.recorded` carries ONLY the expert's own earnings (no client charge / markup).
+
+/**
+ * A consultation's billing finalized and the CLIENT was charged. Recipient 'self' = the acting
+ * in-session member (`userId = initiatingMemberId`) — a PERSONAL consultation receipt, DISTINCT
+ * from the billing-admin `session.settled` fan-out (a person who is both simply gets both; no
+ * suppression, Owner Decision O1). Email + in-app. `amountAudMinor` is the all-in charge
+ * (connectedMinutes × client rate) — NO expert rate / accrual / fee anywhere.
+ */
+export interface PaymentChargedPayload {
+  correlationId: string; // `${sessionId}:payment_charged` → BullMQ jobId dedup
+  userId: string; // = initiatingMemberId → recipient 'self'; resolver hydrates data.user
+  companyId: string; // context (the wallet's company)
+  sessionId: string;
+  amountAudMinor: number; // connectedMinutes × clientRateMinorPerMinute (the all-in charge)
+  durationMinutes: number;
+  expertName: string; // display only (resolveExpertName)
+  chargedOn: string; // pre-formatted UTC date
+}
+
+/**
+ * A consultation's expert payout obligation was booked. Recipient 'expert' via
+ * `expertProfileId` → the resolver hydrates `data.expert` → the dispatcher resolves the expert's
+ * user id. No expert-facing payout notice existed before BAL-399. Email + in-app. `amountAudMinor`
+ * is the expert's OWN earnings (= expertAccruedMinor) — NO client charge / markup / margin.
+ */
+export interface PayoutRecordedPayload {
+  correlationId: string; // `${sessionId}:payout_recorded` → BullMQ jobId dedup
+  expertProfileId: string; // → data.expert → recipient 'expert'
+  sessionId: string;
+  amountAudMinor: number; // = expertAccruedMinor (own earnings)
+  durationMinutes: number;
+  recordedOn: string; // pre-formatted UTC date
+}

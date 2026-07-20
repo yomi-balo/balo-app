@@ -90,6 +90,7 @@ vi.mock('@/lib/analytics', async () => {
     CREDIT_EVENTS: events.CREDIT_EVENTS,
     PROMO_EVENTS: events.PROMO_EVENTS,
     SESSION_EVENTS: events.SESSION_EVENTS,
+    CASE_BILLING_EVENTS: events.CASE_BILLING_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

@@ -620,6 +620,14 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state
   // notice, so NOT the company_billing_admins fan-out. Email + in-app, no SMS.
   'promo.redeemed': emailAndInApp('self', 'promo-redeemed'),
+  // BAL-399 (ADR-1040 / ADR-1043): Case billing finalized. `payment.charged` is the acting
+  // member's PERSONAL consultation receipt (recipient 'self' via payload.userId; email + in-app) —
+  // DISTINCT from the billing-admin `session.settled` fan-out (Owner Decision O1: a person who is
+  // both simply gets both, no suppression). `payout.recorded` is the delivering expert's own
+  // earnings notice (recipient 'expert' via payload.expertProfileId → data.expert; email + in-app).
+  // Both server-published once at `finalizeBilling`; templates carry own-side figures ONLY.
+  'payment.charged': emailAndInApp('self', 'payment-charged'),
+  'payout.recorded': emailAndInApp('expert', 'payout-recorded'),
   // BAL-391 (ADR-1043): an action item was assigned to a SIDE of the engagement. One
   // event, two conditioned rules keyed on payload.assigneeParty (the
   // project.message_posted routing precedent) — the assigned side only gets email +

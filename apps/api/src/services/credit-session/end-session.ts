@@ -15,6 +15,7 @@ import {
   db,
   type CreditReceivableReason,
   type CreditSession,
+  type CreditFinalizationPath,
   type CreditSettlementStatus,
 } from '@balo/db';
 import { CAPABILITIES } from '@balo/shared/authz';
@@ -24,6 +25,7 @@ import { SETTLEMENT_RECONCILE_MAX_AGE_MINUTES } from '@balo/shared/pricing';
 import { createOffSessionCharge, retrievePaymentIntentStatus } from '../stripe/index.js';
 import { authorizeSessionActor } from './authorize-session-actor.js';
 import { driveSession } from './meter-driver.js';
+import { finalizeBilling } from './finalize-billing.js';
 import { publishSessionSettled, publishSettlementFailure } from './notify.js';
 import { settlementIdempotencyKey } from './settlement.js';
 import type { EndSessionServiceOutcome, EndSessionServiceResult } from './types.js';
@@ -188,24 +190,43 @@ async function settleOverdraft(
  */
 export async function endSessionAsSystem(
   sessionId: string,
-  opts: { now?: Date } = {}
+  opts: { now?: Date; finalizationPath?: CreditFinalizationPath } = {}
 ): Promise<EndSessionServiceResult> {
   const now = opts.now ?? new Date();
+  const finalizationPath: CreditFinalizationPath = opts.finalizationPath ?? 'live_capture';
   log.info({ sessionId }, 'Ending session (settlement)');
 
   // 1. Final meter — post any missing ticks, drive a last transition.
   await driveSession(sessionId, now);
 
-  // 2. Repo end (pure DB): release hold, finalize accrual + audit, compute overdraft.
-  const ended = await creditSessionsRepository.end(sessionId, { now });
+  // 2. Repo end (pure DB): release hold, finalize accrual + audit, compute overdraft, stamp the
+  //    billing-finalization markers with the finalization path.
+  const ended = await creditSessionsRepository.end(sessionId, { now, finalizationPath });
   const { session, overdraftMinor, expertAccruedMinor, mandateActive, alreadyEnded } = ended;
 
   if (alreadyEnded) {
+    // BAL-399 durability: a crash (or a finalizeBilling throw) between the end() commit and the
+    // payout booking strands a finalized session with NO obligation (the accrual is safe on the
+    // row, but the disbursement-layer record BAL-202/203 reads is missing, and the reaper covers
+    // only `processing` overdraft sessions — external sessions are excluded). The retry lands here.
+    // Replay finalizeBilling — idempotent via the payout `created` guard (created=false → no-op).
+    // ONLY for sessions finalized under BAL-399 semantics (billingFinalizedAt stamped — a legacy
+    // pre-deploy ended session has it NULL and must NOT get a late payout/receipt); use the
+    // PERSISTED finalizationPath, not the incoming param.
+    if (session.billingFinalizedAt !== null) {
+      await finalizeBilling(session, session.finalizationPath ?? finalizationPath, now);
+    }
     return {
       settlementStatus: session.settlementStatus,
       overdraftSettledMinor: session.overdraftSettledMinor ?? 0,
     };
   }
+
+  // 2b. BAL-399 — finalize the billing side-effects EXACTLY ONCE (payout obligation + member
+  //     receipt + expert payout notice + analytics), BEFORE the settle branch so it fires for
+  //     in-credit AND overdraft(processing) alike (expert-always-paid ⇒ payout booked at accrual
+  //     finalization, independent of the async card outcome). The payout-record UNIQUE dedups.
+  await finalizeBilling(session, finalizationPath, now);
 
   // 3a. In credit — nothing to charge; publish the settled receipt.
   if (overdraftMinor === 0) {
@@ -235,6 +256,22 @@ export async function endSession(
   });
   if (!auth.ok) {
     return auth;
+  }
+
+  // BAL-399: an EXTERNAL session cannot be wall-clock finalized on hang-up — it PARKS awaiting a
+  // BAL-133 duration confirmation (no settlement here; the money block stays PENDING). The
+  // live-capture path finalizes immediately as before.
+  if (auth.session.durationSource === 'external') {
+    const parked = await creditSessionsRepository.parkAwaitingDuration(sessionId);
+    log.info({ sessionId }, 'External session parked — awaiting duration confirmation');
+    return {
+      ok: true,
+      result: {
+        settlementStatus: parked.settlementStatus,
+        overdraftSettledMinor: 0,
+        awaitingDuration: true,
+      },
+    };
   }
 
   const result = await endSessionAsSystem(sessionId, opts);

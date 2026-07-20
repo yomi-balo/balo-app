@@ -129,6 +129,13 @@ export {
   type SessionServerEventMap,
 } from './session';
 export {
+  CASE_BILLING_EVENTS,
+  type CaseBillingEventMap,
+  CASE_BILLING_SERVER_EVENTS,
+  type CaseBillingServerEventMap,
+  type CaseBillingFinalizationPath,
+} from './case-billing';
+export {
   ACTION_ITEM_SERVER_EVENTS,
   type ActionItemServerEventMap,
   type ActionItemAssigneeRole,

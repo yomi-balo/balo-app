@@ -370,6 +370,54 @@ export const creditReceivableReasonEnum = pgEnum('credit_receivable_reason', [
   'settlement_requires_action',
 ]);
 
+// ── Case consultation billing slice (BAL-399 / ADR-1043) ───────────────────
+//
+// All THREE enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
+// VALUE`), so every value commits atomically with the type. Two of them are used as
+// column DEFAULTs — `credit_duration_source` DEFAULT 'live_capture' (credit_sessions)
+// and `expert_payout_record_status` DEFAULT 'recorded' (expert_payout_records). Per the
+// BAL-399 plan directive, the generated migration hand-casts BOTH defaults
+// `::text::<enum>` (memory `reference_enum_default_same_tx_migration_hazard`) as a
+// defensive measure for the from-scratch single-transaction migration run. The cast is
+// semantically identical to the bare literal, so it is a safe no-op even though — as the
+// BAL-378 enums above note — the enum-default-same-txn hazard strictly applies only to
+// ADD-VALUE. `credit_finalization_path` has NO column default (every writer states the
+// path), so it needs no cast.
+
+/**
+ * How a session's billable duration is established.
+ *  `live_capture` → wall-clock metering (BAL-378) finalizes at hang-up.
+ *  `external`     → held on an outside tool / bot failed; duration settled later via BAL-133.
+ */
+export const creditDurationSourceEnum = pgEnum('credit_duration_source', [
+  'live_capture',
+  'external',
+]);
+
+/**
+ * Which path produced the finalized billing figure (recap-facing). No column default —
+ * the writer states it: `live_capture` (wall-clock hang-up), `confirmed` / `disputed` /
+ * `auto_confirmed` (the external BAL-133 duration-settlement paths).
+ */
+export const creditFinalizationPathEnum = pgEnum('credit_finalization_path', [
+  'live_capture',
+  'confirmed',
+  'disputed',
+  'auto_confirmed',
+]);
+
+/**
+ * Expert payout obligation lifecycle. `recorded` (default) = obligation booked (BAL-399).
+ * `disbursing` / `paid` / `failed` are RESERVED for the future Airwallex payout-run
+ * (BAL-202/203) — BAL-399 only ever writes `recorded`. Ordering carries no semantics.
+ */
+export const expertPayoutRecordStatusEnum = pgEnum('expert_payout_record_status', [
+  'recorded',
+  'disbursing',
+  'paid',
+  'failed',
+]);
+
 // ── Action items — first-class model (BAL-391 / ADR-1043) ──────────────────
 //
 // All THREE enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD

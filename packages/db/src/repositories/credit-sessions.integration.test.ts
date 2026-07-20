@@ -10,7 +10,9 @@ import { db } from '../client';
 import {
   auditEvents,
   creditHolds,
+  creditLedger,
   creditSessions,
+  expertPayoutRecords,
   expertProfiles,
   type NewCreditWallet,
 } from '../schema';
@@ -18,10 +20,13 @@ import { creditWalletFactory, expertFactory, userFactory } from '../test/factori
 import {
   creditSessionsRepository,
   CLIENT_SESSION_VIEW_COLUMNS,
+  ExternalDurationConflictError,
   InvalidSessionTransitionError,
   SessionNotFoundError,
   type OpenSessionResult,
 } from './credit-sessions';
+import { expertPayoutRecordsRepository } from './expert-payout-records';
+import { toClientMoneyBlock } from './_shared/credit-views';
 import { creditLedgerRepository } from './credit-ledger';
 import { creditReceivablesRepository } from './credit-receivables';
 import { creditHoldsRepository } from './credit-holds';
@@ -797,5 +802,319 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
       .where(eq(creditSessions.id, settleId));
     const stuck = await creditSessionsRepository.findStuckSettling(BASE);
     expect(stuck.map((s) => s.id)).toContain(settleId);
+  });
+});
+
+// ── BAL-399: money-block views, finalize stamping, external duration, reaper guards ────────
+
+/** Flip a session to `external` provenance (the meeting layer sets this at open, ADR-1043). */
+async function markExternal(sessionId: string): Promise<void> {
+  await db
+    .update(creditSessions)
+    .set({ durationSource: 'external' })
+    .where(eq(creditSessions.id, sessionId));
+}
+
+describe('creditSessionsRepository — money-block lens projections (BAL-399)', () => {
+  it('findForExpertView returns own-earnings columns and excludes client rate / fee / overdraft / Stripe', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    const view = await creditSessionsRepository.findForExpertView(id);
+    expect(view).toBeDefined();
+    const keys = Object.keys(view!);
+    for (const banned of [
+      'clientRateMinorPerMinute',
+      'baloFeeBps',
+      'overdraftSettledMinor',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(banned);
+    }
+    expect(keys).toContain('expertRateMinorPerMinute');
+    expect(keys).toContain('expertAccruedMinor');
+    expect(keys).toContain('billingFinalizedAt');
+  });
+
+  it('findForAdminView returns the full row (fee + accrual visible)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    const view = await creditSessionsRepository.findForAdminView(id);
+    expect(view).toBeDefined();
+    expect(view!.baloFeeBps).toBe(DEFAULT_BALO_FEE_BPS);
+    expect(view).toHaveProperty('expertAccruedMinor');
+    expect(view).toHaveProperty('stripePaymentIntentId');
+  });
+});
+
+describe('creditSessionsRepository.end — billing-finalization stamping (BAL-399)', () => {
+  it('stamps billingFinalizedAt + finalizationPath=live_capture by default', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    const end = await creditSessionsRepository.end(id, { now: meterAt(3) });
+
+    expect(end.session.billingFinalizedAt).not.toBeNull();
+    expect(end.session.finalizationPath).toBe('live_capture');
+  });
+
+  it('records an explicit finalizationPath (external/BAL-133 finalizer)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(2));
+    const end = await creditSessionsRepository.end(id, {
+      now: meterAt(2),
+      finalizationPath: 'confirmed',
+    });
+
+    expect(end.session.finalizationPath).toBe('confirmed');
+  });
+});
+
+describe('creditSessionsRepository — external duration lifecycle (BAL-399)', () => {
+  it('parkAwaitingDuration releases the hold and parks the session as wrapped', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(
+      10 * CLIENT_RATE_PER_MIN
+    );
+
+    const parked = await creditSessionsRepository.parkAwaitingDuration(id);
+    expect(parked.status).toBe('wrapped');
+    expect(parked.billingFinalizedAt).toBeNull();
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+
+    // Idempotent.
+    const again = await creditSessionsRepository.parkAwaitingDuration(id);
+    expect(again.status).toBe('wrapped');
+  });
+
+  it('applyExternalDuration posts N consume ticks, draws the balance, and is idempotent', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    await creditSessionsRepository.parkAwaitingDuration(id);
+
+    const applied = await creditSessionsRepository.applyExternalDuration(id, 5);
+    expect(applied.connectedMinutes).toBe(5);
+    expect(applied.lastTickSeq).toBe(5);
+    const wallet = await creditWalletsRepository.findById(ctx.walletId);
+    expect(wallet?.balanceMinor).toBe(50_000 - 5 * CLIENT_RATE_PER_MIN);
+
+    // Replay draws nothing new (ledger UNIQUE dedup).
+    await creditSessionsRepository.applyExternalDuration(id, 5);
+    const walletAfter = await creditWalletsRepository.findById(ctx.walletId);
+    expect(walletAfter?.balanceMinor).toBe(50_000 - 5 * CLIENT_RATE_PER_MIN);
+
+    // The subsequent end() finalizes the expert accrual off the drawn minutes.
+    const end = await creditSessionsRepository.end(id, {
+      now: meterAt(5),
+      finalizationPath: 'confirmed',
+    });
+    expect(end.expertAccruedMinor).toBe(5 * EXPERT_RATE_PER_MIN);
+    expect(end.overdraftMinor).toBe(0);
+    expect(end.session.finalizationPath).toBe('confirmed');
+  });
+
+  it('draws the FULL confirmed minutes with no ceiling clamp (Owner Decision 3 → overdraft)', async () => {
+    // Small balance + mandate: 30 min × 250 = 7500 vs 5000 balance → −2500 overdraft, no clamp.
+    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    await creditSessionsRepository.parkAwaitingDuration(id);
+
+    await creditSessionsRepository.applyExternalDuration(id, 30);
+    const wallet = await creditWalletsRepository.findById(ctx.walletId);
+    expect(wallet?.balanceMinor).toBe(5000 - 30 * CLIENT_RATE_PER_MIN); // −2500, unclamped
+
+    const end = await creditSessionsRepository.end(id, { now: meterAt(30) });
+    expect(end.overdraftMinor).toBe(30 * CLIENT_RATE_PER_MIN - 5000); // 2500
+    expect(end.expertAccruedMinor).toBe(30 * EXPERT_RATE_PER_MIN); // full minutes accrued
+  });
+
+  it('bounds tick posting to ONCE — a second finalize with DIFFERENT minutes conflicts (TOCTOU)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    await creditSessionsRepository.parkAwaitingDuration(id);
+
+    // First confirmation draws 30 minutes and flips the session out of the parked state.
+    const applied = await creditSessionsRepository.applyExternalDuration(id, 30);
+    expect(applied.status).toBe('active');
+    const walletAfterFirst = await creditWalletsRepository.findById(ctx.walletId);
+    expect(walletAfterFirst?.balanceMinor).toBe(50_000 - 30 * CLIENT_RATE_PER_MIN);
+
+    // A disagreeing second confirmation (45 min) must NOT post more ticks — it conflicts.
+    await expect(creditSessionsRepository.applyExternalDuration(id, 45)).rejects.toBeInstanceOf(
+      ExternalDurationConflictError
+    );
+    const walletAfterSecond = await creditWalletsRepository.findById(ctx.walletId);
+    expect(walletAfterSecond?.balanceMinor).toBe(50_000 - 30 * CLIENT_RATE_PER_MIN); // unchanged
+
+    // A same-value replay stays idempotent (no throw, no further draw).
+    const replay = await creditSessionsRepository.applyExternalDuration(id, 30);
+    expect(replay.connectedMinutes).toBe(30);
+    const walletAfterReplay = await creditWalletsRepository.findById(ctx.walletId);
+    expect(walletAfterReplay?.balanceMinor).toBe(50_000 - 30 * CLIENT_RATE_PER_MIN); // still once
+  });
+});
+
+describe('creditSessionsRepository — reaper guards exclude external (BAL-399)', () => {
+  it('findMeterable excludes an external active session', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+
+    const meterable = await creditSessionsRepository.findMeterable();
+    expect(meterable.map((s) => s.id)).not.toContain(id);
+  });
+
+  it('findWrappedIdle excludes an external parked session', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    await creditSessionsRepository.parkAwaitingDuration(id);
+    await db
+      .update(creditSessions)
+      .set({ wrappedAt: new Date(BASE.getTime() - 60 * 60_000) })
+      .where(eq(creditSessions.id, id));
+
+    const idle = await creditSessionsRepository.findWrappedIdle(BASE);
+    expect(idle.map((s) => s.id)).not.toContain(id);
+  });
+});
+
+describe('creditSessionsRepository — displayed client charge == ledger-settled sum (BAL-399 invariant)', () => {
+  it('the money-block amountAudMinor equals Σ session_consume debits, across funded + grace minutes', async () => {
+    // 2 funded minutes (balance 500) then a mandate-backed grace/overdraft run — so at least one
+    // metered minute is a grace/overdraft minute (balance driven negative), the case that would
+    // expose any divergence between the DISPLAYED figure and the actual ledger draw.
+    const ctx = await setup({ balanceMinor: 500, mandate: true, overdraftCeilingMinor: 100_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(5)); // 5 ticks; minutes 3-5 = grace
+    await creditSessionsRepository.end(id, { now: meterAt(5) });
+
+    // Wallet went negative — this exercised real grace/overdraft minutes.
+    const wallet = await creditWalletsRepository.findById(ctx.walletId);
+    expect(wallet?.balanceMinor).toBe(500 - 5 * CLIENT_RATE_PER_MIN); // −750
+
+    // Ground truth: Σ of the session's `session_consume` debit amounts in the ledger.
+    const ledgerRows = await db
+      .select({ amountMinor: creditLedger.amountMinor })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.sessionId, id), eq(creditLedger.reason, 'session_consume')));
+    const ledgerDrawnMinor = ledgerRows.reduce((sum, row) => sum + Math.abs(row.amountMinor), 0);
+
+    // The DISPLAYED client all-in, and the derived connectedMinutes × rate, must equal the ledger.
+    const view = await creditSessionsRepository.findForClientMoneyView(id);
+    expect(view).toBeDefined();
+    const block = toClientMoneyBlock(view!);
+    const derivedMinor = view!.connectedMinutes * view!.clientRateMinorPerMinute;
+
+    expect(ledgerDrawnMinor).toBe(5 * CLIENT_RATE_PER_MIN); // 1250 — every minute drew the rate
+    expect(derivedMinor).toBe(ledgerDrawnMinor); // connectedMinutes × rate == ledger sum
+    expect(block.amountAudMinor).toBe(ledgerDrawnMinor); // displayed == ledger-settled sum
+  });
+});
+
+describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconciliation finder)', () => {
+  /** Open → connect → meter → end a session (end() stamps billingFinalizedAt; no payout row yet). */
+  async function finalizeSession(): Promise<{
+    id: string;
+    companyId: string;
+    expertProfileId: string;
+    expertAccruedMinor: number;
+    connectedMinutes: number;
+  }> {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    const ended = await creditSessionsRepository.end(id, { now: meterAt(3) });
+    return {
+      id,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      expertAccruedMinor: ended.expertAccruedMinor,
+      connectedMinutes: ended.session.connectedMinutes,
+    };
+  }
+
+  async function bookPayout(s: {
+    id: string;
+    companyId: string;
+    expertProfileId: string;
+    expertAccruedMinor: number;
+    connectedMinutes: number;
+  }): Promise<string> {
+    const { record } = await expertPayoutRecordsRepository.record({
+      sessionId: s.id,
+      expertProfileId: s.expertProfileId,
+      companyId: s.companyId,
+      amountMinor: s.expertAccruedMinor,
+      durationMinutes: s.connectedMinutes,
+      finalizationPath: 'live_capture',
+      idempotencyKey: `payout:${s.id}`,
+    });
+    return record.id;
+  }
+
+  it('picks up a finalized session with no payout; skips legacy-null / already-booked / too-recent', async () => {
+    const cutoff = new Date(BASE.getTime() + 100 * 60_000);
+
+    // A — finalized (billingFinalizedAt ≈ BASE+3.5min < cutoff), no payout → ELIGIBLE.
+    const a = await finalizeSession();
+
+    // B — finalized, but a payout obligation IS booked → SKIPPED.
+    const b = await finalizeSession();
+    await bookPayout(b);
+
+    // C — legacy pre-deploy ended session: billingFinalizedAt NULL → SKIPPED.
+    const c = await finalizeSession();
+    await db
+      .update(creditSessions)
+      .set({ billingFinalizedAt: null })
+      .where(eq(creditSessions.id, c.id));
+
+    // D — finalized after the cutoff grace (don't race an in-flight finalize) → SKIPPED.
+    const d = await finalizeSession();
+    await db
+      .update(creditSessions)
+      .set({ billingFinalizedAt: new Date(BASE.getTime() + 200 * 60_000) })
+      .where(eq(creditSessions.id, d.id));
+
+    const foundIds = (await creditSessionsRepository.findFinalizedMissingPayout(cutoff)).map(
+      (s) => s.id
+    );
+    expect(foundIds).toContain(a.id);
+    expect(foundIds).not.toContain(b.id); // payout already booked
+    expect(foundIds).not.toContain(c.id); // legacy null
+    expect(foundIds).not.toContain(d.id); // too recent
+  });
+
+  it('still returns a session whose ONLY payout record is soft-deleted (anti-join → still missing)', async () => {
+    const s = await finalizeSession();
+    const recordId = await bookPayout(s);
+    await db
+      .update(expertPayoutRecords)
+      .set({ deletedAt: new Date() })
+      .where(eq(expertPayoutRecords.id, recordId));
+
+    const cutoff = new Date(BASE.getTime() + 100 * 60_000);
+    const foundIds = (await creditSessionsRepository.findFinalizedMissingPayout(cutoff)).map(
+      (row) => row.id
+    );
+    expect(foundIds).toContain(s.id); // a soft-deleted obligation must not hide the strand
   });
 });

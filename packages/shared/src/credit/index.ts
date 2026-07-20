@@ -20,3 +20,19 @@ export {
   type SettleableSession,
   type MandateWalletFields,
 } from './settlement';
+export {
+  buildClientMoneyBlock,
+  buildExpertMoneyBlock,
+  buildAdminMoneyBlock,
+  type MoneyBlockLens,
+  type MoneyBlockState,
+  type MoneyBlockFinalizationPath,
+  type MoneyBlockPayoutStatus,
+  type ClientMoneyBlock,
+  type ExpertMoneyBlock,
+  type AdminMoneyBlock,
+  type SessionMoneyBlock,
+  type ClientMoneyBlockInput,
+  type ExpertMoneyBlockInput,
+  type AdminMoneyBlockInput,
+} from './money-block';

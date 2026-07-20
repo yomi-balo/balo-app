@@ -351,6 +351,13 @@
       "when": 1784475710816,
       "tag": "0049_clever_iron_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1784542062266,
+      "tag": "0050_next_cloak",
+      "breakpoints": true
     }
   ]
 }

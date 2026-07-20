@@ -6,8 +6,13 @@ const {
   mockEndSession,
   mockGetDrawdownState,
   mockNudge,
+  mockResolveMoneyBlock,
+  mockResolveAdminMoneyBlock,
+  mockFinalizeExternalDuration,
+  mockUsersFindById,
   SessionNotFoundError,
   InvalidSessionTransitionError,
+  ExternalDurationConflictError,
 } = vi.hoisted(() => {
   class SessionNotFoundError extends Error {
     constructor() {
@@ -21,24 +26,57 @@ const {
       this.name = 'InvalidSessionTransitionError';
     }
   }
+  class ExternalDurationConflictError extends Error {
+    constructor() {
+      super('conflict');
+      this.name = 'ExternalDurationConflictError';
+    }
+  }
   return {
     mockOpenSession: vi.fn(),
     mockConnectSession: vi.fn(),
     mockEndSession: vi.fn(),
     mockGetDrawdownState: vi.fn(),
     mockNudge: vi.fn(),
+    mockResolveMoneyBlock: vi.fn(),
+    mockResolveAdminMoneyBlock: vi.fn(),
+    mockFinalizeExternalDuration: vi.fn(),
+    mockUsersFindById: vi.fn(),
     SessionNotFoundError,
     InvalidSessionTransitionError,
+    ExternalDurationConflictError,
   };
 });
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('@balo/db', () => ({ SessionNotFoundError, InvalidSessionTransitionError }));
+vi.mock('@balo/db', () => ({
+  SessionNotFoundError,
+  InvalidSessionTransitionError,
+  ExternalDurationConflictError,
+  usersRepository: { findById: mockUsersFindById },
+}));
+// The real pure platform-authz map — an `admin`/`super_admin` platformRole holds
+// MANAGE_PLATFORM_FEES; a plain `user` (or undefined) holds nothing.
+vi.mock('@balo/shared/authz', () => ({
+  PLATFORM_CAPABILITIES: { MANAGE_PLATFORM_FEES: 'manage_platform_fees' },
+  platformRoleHasCapability: (role: string, capability: string) =>
+    (role === 'admin' || role === 'super_admin') && capability === 'manage_platform_fees',
+}));
 vi.mock('../../lib/require-auth.js', () => ({
   requireAuth: async (request: { userId?: string }) => {
     request.userId = 'user_1';
+  },
+}));
+vi.mock('../../lib/internal-auth.js', () => ({
+  requireInternalAuth: async (
+    request: { headers: Record<string, unknown> },
+    reply: { status: (c: number) => { send: (b: unknown) => void } }
+  ) => {
+    if (request.headers['x-internal-api-key'] !== 'test-secret') {
+      reply.status(401).send({ error: 'Unauthorized' });
+    }
   },
 }));
 vi.mock('../../services/credit-session/index.js', () => ({
@@ -47,6 +85,9 @@ vi.mock('../../services/credit-session/index.js', () => ({
   endSession: mockEndSession,
   getSessionDrawdownState: mockGetDrawdownState,
   nudgeAdminForTopup: mockNudge,
+  resolveSessionMoneyBlock: mockResolveMoneyBlock,
+  resolveAdminMoneyBlock: mockResolveAdminMoneyBlock,
+  finalizeExternalDuration: mockFinalizeExternalDuration,
 }));
 
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -223,6 +264,141 @@ describe('sessions routes', () => {
         url: `/sessions/${SESSION_ID}/drawdown-state`,
       });
       expect(res.statusCode).toBe(404);
+    });
+  });
+
+  describe('GET /sessions/:id/money-block (BAL-399)', () => {
+    it('200s the resolved lens block (client or expert) on success', async () => {
+      const block = {
+        lens: 'client',
+        state: 'finalized',
+        sessionId: SESSION_ID,
+        amountAudMinor: 15_000,
+      };
+      mockResolveMoneyBlock.mockResolvedValue({ ok: true, block });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/money-block` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(block);
+      expect(mockResolveMoneyBlock).toHaveBeenCalledWith(SESSION_ID, 'user_1');
+    });
+
+    it('404s (hides existence) when neither a member nor the expert', async () => {
+      mockResolveMoneyBlock.mockResolvedValue({ ok: false, code: 'not_found' });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/money-block` });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('503s (never leaks internals) when resolution throws', async () => {
+      mockResolveMoneyBlock.mockRejectedValue(new Error('db down'));
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/money-block` });
+      expect(res.statusCode).toBe(503);
+    });
+  });
+
+  describe('GET /admin/sessions/:id/money-block (BAL-399)', () => {
+    it('403s a non-staff user (lacks platform capability)', async () => {
+      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'user' });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/admin/sessions/${SESSION_ID}/money-block`,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(mockResolveAdminMoneyBlock).not.toHaveBeenCalled();
+    });
+
+    it('200s the admin (margin-bearing) block for platform staff', async () => {
+      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'admin' });
+      const block = {
+        lens: 'admin',
+        state: 'finalized',
+        sessionId: SESSION_ID,
+        marginAudMinor: 3750,
+      };
+      mockResolveAdminMoneyBlock.mockResolvedValue({ ok: true, block });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/admin/sessions/${SESSION_ID}/money-block`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(block);
+      // The service receives the caller's platformRole (self-assert defense-in-depth).
+      expect(mockResolveAdminMoneyBlock).toHaveBeenCalledWith(SESSION_ID, 'admin');
+    });
+
+    it('404s for staff when the session is missing', async () => {
+      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+      mockResolveAdminMoneyBlock.mockResolvedValue({ ok: false, code: 'not_found' });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/admin/sessions/${SESSION_ID}/money-block`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('503s (sanitized) for staff when resolution throws', async () => {
+      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'admin' });
+      mockResolveAdminMoneyBlock.mockRejectedValue(new Error('db down'));
+      const res = await app.inject({
+        method: 'GET',
+        url: `/admin/sessions/${SESSION_ID}/money-block`,
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'money_block_unavailable' });
+    });
+  });
+
+  describe('POST /internal/sessions/:id/finalize-duration (BAL-399)', () => {
+    const validBody = { minutes: 30, path: 'confirmed' };
+
+    it('401s without the internal secret (NOT client-callable)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/internal/sessions/${SESSION_ID}/finalize-duration`,
+        payload: validBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(mockFinalizeExternalDuration).not.toHaveBeenCalled();
+    });
+
+    it('200s and finalizes with the internal secret', async () => {
+      mockFinalizeExternalDuration.mockResolvedValue({
+        settlementStatus: 'processing',
+        overdraftSettledMinor: 1000,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/internal/sessions/${SESSION_ID}/finalize-duration`,
+        headers: { 'x-internal-api-key': 'test-secret' },
+        payload: validBody,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(mockFinalizeExternalDuration).toHaveBeenCalledWith({
+        sessionId: SESSION_ID,
+        minutes: 30,
+        path: 'confirmed',
+      });
+    });
+
+    it('400s on an invalid path', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/internal/sessions/${SESSION_ID}/finalize-duration`,
+        headers: { 'x-internal-api-key': 'test-secret' },
+        payload: { minutes: 30, path: 'live_capture' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(mockFinalizeExternalDuration).not.toHaveBeenCalled();
+    });
+
+    it('409s on an ExternalDurationConflictError (a disagreeing second confirmation)', async () => {
+      mockFinalizeExternalDuration.mockRejectedValue(new ExternalDurationConflictError());
+      const res = await app.inject({
+        method: 'POST',
+        url: `/internal/sessions/${SESSION_ID}/finalize-duration`,
+        headers: { 'x-internal-api-key': 'test-secret' },
+        payload: { minutes: 45, path: 'disputed' },
+      });
+      expect(res.statusCode).toBe(409);
     });
   });
 });

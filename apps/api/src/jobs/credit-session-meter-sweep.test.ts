@@ -6,19 +6,23 @@ const {
   mockFindWrappedIdle,
   mockFindStalePending,
   mockFindStuckSettling,
+  mockFindFinalizedMissingPayout,
   mockCancel,
   mockDriveSession,
   mockEndSession,
   mockReconcile,
+  mockFinalizeBilling,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
   mockFindStalePending: vi.fn(),
   mockFindStuckSettling: vi.fn(),
+  mockFindFinalizedMissingPayout: vi.fn(),
   mockCancel: vi.fn(),
   mockDriveSession: vi.fn(),
   mockEndSession: vi.fn(),
   mockReconcile: vi.fn(),
+  mockFinalizeBilling: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -30,6 +34,7 @@ vi.mock('@balo/db', () => ({
     findWrappedIdle: mockFindWrappedIdle,
     findStalePending: mockFindStalePending,
     findStuckSettling: mockFindStuckSettling,
+    findFinalizedMissingPayout: mockFindFinalizedMissingPayout,
     cancel: mockCancel,
   },
 }));
@@ -39,6 +44,7 @@ vi.mock('../services/credit-session/index.js', () => ({
   driveSession: mockDriveSession,
   endSessionAsSystem: mockEndSession,
   reconcileStuckSettlement: mockReconcile,
+  finalizeBilling: mockFinalizeBilling,
 }));
 
 import { runSessionMeterSweep } from './credit-session-meter-sweep.js';
@@ -62,6 +68,7 @@ describe('runSessionMeterSweep', () => {
     mockFindWrappedIdle.mockResolvedValue([]);
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
+    mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockDriveSession.mockImplementation(async (id: string) => ({
       session: activeSession({ id }),
       transitions: {},
@@ -125,5 +132,59 @@ describe('runSessionMeterSweep', () => {
     const result = await runSessionMeterSweep(NOW);
     // s1 threw, s2 succeeded — the sweep does not abort.
     expect(result.metered).toBe(1);
+  });
+
+  // BAL-399 pass 5 — reconcile finalized sessions with no payout obligation booked.
+  it('reconciles a stranded finalized session by replaying finalizeBilling with the persisted path', async () => {
+    const stranded = activeSession({
+      status: 'ended',
+      billingFinalizedAt: new Date(NOW.getTime() - 10 * 60_000),
+      finalizationPath: 'confirmed',
+    });
+    mockFindFinalizedMissingPayout.mockResolvedValue([stranded]);
+    const result = await runSessionMeterSweep(NOW);
+    expect(mockFinalizeBilling).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeBilling).toHaveBeenCalledWith(stranded, 'confirmed', NOW);
+    expect(result.recovered).toBe(1);
+    // The reconcile books the payout — it never re-drives the meter or re-settles.
+    expect(mockDriveSession).not.toHaveBeenCalled();
+    expect(mockEndSession).not.toHaveBeenCalled();
+    expect(mockReconcile).not.toHaveBeenCalled();
+  });
+
+  it('defaults a null finalizationPath to live_capture on replay', async () => {
+    const stranded = activeSession({
+      status: 'ended',
+      billingFinalizedAt: new Date(NOW.getTime() - 10 * 60_000),
+      finalizationPath: null,
+    });
+    mockFindFinalizedMissingPayout.mockResolvedValue([stranded]);
+    await runSessionMeterSweep(NOW);
+    expect(mockFinalizeBilling).toHaveBeenCalledWith(stranded, 'live_capture', NOW);
+  });
+
+  it('is a no-op once the obligation is booked (finder returns nothing on the next sweep)', async () => {
+    // First sweep recovers; the anti-join then no longer returns the row (payout now exists).
+    mockFindFinalizedMissingPayout.mockResolvedValueOnce([
+      activeSession({ id: 's1', status: 'ended', finalizationPath: 'live_capture' }),
+    ]);
+    mockFindFinalizedMissingPayout.mockResolvedValueOnce([]);
+    const first = await runSessionMeterSweep(NOW);
+    const second = await runSessionMeterSweep(NOW);
+    expect(first.recovered).toBe(1);
+    expect(second.recovered).toBe(0);
+    expect(mockFinalizeBilling).toHaveBeenCalledTimes(1);
+  });
+
+  it('isolates a per-row finalizeBilling failure (batch continues, sweep does not abort)', async () => {
+    mockFindFinalizedMissingPayout.mockResolvedValue([
+      activeSession({ id: 's1', status: 'ended', finalizationPath: 'live_capture' }),
+      activeSession({ id: 's2', status: 'ended', finalizationPath: 'live_capture' }),
+    ]);
+    mockFinalizeBilling.mockRejectedValueOnce(new Error('record failed'));
+    mockFinalizeBilling.mockResolvedValueOnce(undefined);
+    const result = await runSessionMeterSweep(NOW);
+    expect(mockFinalizeBilling).toHaveBeenCalledTimes(2); // both attempted
+    expect(result.recovered).toBe(1); // s1 threw, s2 recovered
   });
 });

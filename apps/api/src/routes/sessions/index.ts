@@ -5,19 +5,33 @@
  * lifecycle errors map to 404 / 409.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { InvalidSessionTransitionError, SessionNotFoundError } from '@balo/db';
+import {
+  ExternalDurationConflictError,
+  InvalidSessionTransitionError,
+  SessionNotFoundError,
+  usersRepository,
+} from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import { requireAuth } from '../../lib/require-auth.js';
+import { requireInternalAuth } from '../../lib/internal-auth.js';
 import {
   connectSession,
   endSession,
+  finalizeExternalDuration,
   getSessionDrawdownState,
   nudgeAdminForTopup,
   openSession,
+  resolveAdminMoneyBlock,
+  resolveSessionMoneyBlock,
   type OpenSessionServiceErrorCode,
   type SessionActorErrorCode,
 } from '../../services/credit-session/index.js';
-import { openSessionBodySchema, sessionIdParamsSchema } from './schema.js';
+import {
+  finalizeDurationBodySchema,
+  openSessionBodySchema,
+  sessionIdParamsSchema,
+} from './schema.js';
 
 const log = createLogger('sessions-route');
 
@@ -55,6 +69,8 @@ function parseSessionId(request: FastifyRequest, reply: FastifyReply): string | 
 function lifecycleErrorStatus(error: unknown): number | null {
   if (error instanceof SessionNotFoundError) return 404;
   if (error instanceof InvalidSessionTransitionError) return 409;
+  // BAL-399: a second external finalize with disagreeing minutes is a conflict, not a 500.
+  if (error instanceof ExternalDurationConflictError) return 409;
   return null;
 }
 
@@ -166,6 +182,122 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
         return;
       }
       reply.code(200).send(state);
+    }
+  );
+
+  // GET /sessions/:id/money-block — BAL-399 recap money block. Lens resolved fail-closed:
+  // company member → CLIENT lens; else the session's expert → EXPERT lens; else 404 (hides
+  // existence). Admin (margin) lens is NEVER served here — only on the platform-gated route below.
+  fastify.get(
+    '/sessions/:id/money-block',
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const userId = resolveUserId(request, reply);
+      if (userId === null) return;
+      const sessionId = parseSessionId(request, reply);
+      if (sessionId === null) return;
+
+      try {
+        const result = await resolveSessionMoneyBlock(sessionId, userId);
+        if (!result.ok) {
+          reply.code(404).send({ error: 'session_not_found' });
+          return;
+        }
+        reply.code(200).send(result.block);
+      } catch (error) {
+        log.error(
+          {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          },
+          'Failed to resolve session money block'
+        );
+        reply.code(503).send({ error: 'money_block_unavailable' });
+      }
+    }
+  );
+
+  // GET /admin/sessions/:id/money-block — BAL-399 ADMIN (margin-bearing) lens. Platform-staff
+  // ONLY (hasPlatformCapability, ADR-1035). Never reachable by a company member or expert.
+  fastify.get(
+    '/admin/sessions/:id/money-block',
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const userId = resolveUserId(request, reply);
+      if (userId === null) return;
+      const sessionId = parseSessionId(request, reply);
+      if (sessionId === null) return;
+
+      const user = await usersRepository.findById(userId);
+      if (
+        user === undefined ||
+        !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)
+      ) {
+        log.warn({ sessionId, userId }, 'Admin money-block denied — lacks platform capability');
+        reply.code(403).send({ error: 'forbidden' });
+        return;
+      }
+
+      try {
+        // The service self-asserts MANAGE_PLATFORM_FEES too (defense-in-depth); the route already
+        // denied above, so `forbidden` here is only reachable if the two ever diverge.
+        const result = await resolveAdminMoneyBlock(sessionId, user.platformRole);
+        if (!result.ok) {
+          reply
+            .code(result.code === 'forbidden' ? 403 : 404)
+            .send({ error: result.code === 'forbidden' ? 'forbidden' : 'session_not_found' });
+          return;
+        }
+        reply.code(200).send(result.block);
+      } catch (error) {
+        log.error(
+          {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          },
+          'Failed to resolve admin session money block'
+        );
+        reply.code(503).send({ error: 'money_block_unavailable' });
+      }
+    }
+  );
+
+  // POST /internal/sessions/:id/finalize-duration — BAL-399 BAL-133 CONSUMER seam. System-authed
+  // internal route (requireInternalAuth secret; NOT client-callable — the WorkOS-authed routes
+  // above never expose duration finalization). BAL-133 produces the confirm/dispute UI + auto-
+  // confirm sweep and CALLS this contract; the meeting.duration_confirm_* chain stays in BAL-133.
+  fastify.post(
+    '/internal/sessions/:id/finalize-duration',
+    { preHandler: [requireInternalAuth] },
+    async (request, reply) => {
+      const sessionId = parseSessionId(request, reply);
+      if (sessionId === null) return;
+      const parsed = finalizeDurationBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        reply.code(400).send({
+          error: 'invalid_request',
+          details: parsed.error.issues.map((issue) => issue.message),
+        });
+        return;
+      }
+
+      try {
+        const result = await finalizeExternalDuration({
+          sessionId,
+          minutes: parsed.data.minutes,
+          path: parsed.data.path,
+          ...(parsed.data.settledByUserId === undefined
+            ? {}
+            : { settledByUserId: parsed.data.settledByUserId }),
+        });
+        reply.code(200).send(result);
+      } catch (error) {
+        const status = lifecycleErrorStatus(error);
+        if (status === null) throw error;
+        reply.code(status).send({ error: 'invalid_session_state' });
+      }
     }
   );
 
