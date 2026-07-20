@@ -478,6 +478,30 @@ export interface CreditTopupCompletedPayload {
   expiresAt: string; // ISO — rolled expiry (rolling-expiry reassurance line)
 }
 
+// BAL-391 (ADR-1043) — an action item was assigned to a SIDE of the engagement. One
+// event, two conditioned rules keyed on `assigneeParty` (the project.message_posted
+// routing precedent): 'client' → recipient:'client' via `recipientId` (the client
+// company owner); 'expert' → recipient:'expert' via `expertProfileId` → the resolver
+// hydrates data.expert. Email + in-app to the assigned side; NO admin fan-out. Defined
+// ONCE here (not inlined in the api + web catalogs) to avoid the SonarCloud new-code
+// duplication gate. `correlationId = `${actionItemId}:assigned:${assignedAtMs}`` — a
+// reassign re-notifies (fresh ms) while a dispatcher retry dedups by jobId.
+// `recipientId` absent (client party, no owner) → the client rule skips gracefully.
+// `actionItemBody` is PLAIN TEXT (the template caps length); `actorLabel` is the
+// retrospective person who assigned (BAL-329). `dueOn` is pre-formatted UTC.
+export interface ActionItemAssignedPayload {
+  correlationId: string; // `${actionItemId}:assigned:${assignedAtMs}` → BullMQ jobId dedup
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  actionItemId: string;
+  assigneeParty: 'client' | 'expert'; // routes the two conditioned rules
+  recipientId?: string; // client company owner user id → recipient:'client'; set when assigneeParty==='client'
+  expertProfileId?: string; // → resolver hydrates data.expert → recipient:'expert'; set when assigneeParty==='expert'
+  actorLabel: string; // {actor} — retrospective person who assigned ("Dana @ Northwind Industrial")
+  projectTitle: string; // subject + body
+  actionItemBody: string; // the item text — email/in-app body (plain text)
+  dueOn?: string; // "9 Jul 2026" (pre-formatted UTC) when a due date is set — helpful fact
+}
+
 // BAL-377 / BAL-381 — a company member WITHOUT MANAGE_BILLING nudged the billing
 // holder(s) to top up. Published from the web `nudgeBillingAdminAction` (publishable).
 // Fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins' →

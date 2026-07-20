@@ -12,6 +12,7 @@ vi.mock('server-only', () => ({}));
 const {
   mockFindEngagementWithMilestones,
   mockFindIdByProjectRequestId,
+  mockListActionItems,
   mockGetCurrentUser,
   mockNotFound,
   mockRedirect,
@@ -21,6 +22,7 @@ const {
 } = vi.hoisted(() => ({
   mockFindEngagementWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
+  mockListActionItems: vi.fn(),
   mockGetCurrentUser: vi.fn(),
   // notFound()/redirect() must THROW so control flow stops, exactly like Next.
   mockNotFound: vi.fn(() => {
@@ -41,6 +43,11 @@ vi.mock('@balo/db', () => ({
   engagementsRepository: {
     findEngagementWithMilestones: mockFindEngagementWithMilestones,
     findIdByProjectRequestId: mockFindIdByProjectRequestId,
+  },
+  // BAL-391: the page loads live action items as a separate read and maps them
+  // into the panel view (real, unmocked mapper) — default to an empty list.
+  actionItemsRepository: {
+    listByEngagement: mockListActionItems,
   },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
@@ -141,6 +148,7 @@ async function renderPage(from?: string, id = ENGAGEMENT_ID) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockListActionItems.mockResolvedValue([]);
 });
 
 describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {

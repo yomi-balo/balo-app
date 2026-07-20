@@ -1,6 +1,6 @@
 {
-  "id": "082226cf-4170-482c-9b03-bf5d14dd6261",
-  "prevId": "838cbad4-168e-41a4-be67-a5b87236e9ac",
+  "id": "3e024bb2-062b-4968-aa34-09f5982976af",
+  "prevId": "082226cf-4170-482c-9b03-bf5d14dd6261",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2710,6 +2710,212 @@
       },
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.expert_payout_records": {
+      "name": "expert_payout_records",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expert_profile_id": {
+          "name": "expert_profile_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount_minor": {
+          "name": "amount_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "char(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'AUD'"
+        },
+        "duration_minutes": {
+          "name": "duration_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "finalization_path": {
+          "name": "finalization_path",
+          "type": "credit_finalization_path",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "expert_payout_record_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'recorded'"
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "expert_payout_records_session_uq": {
+          "name": "expert_payout_records_session_uq",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"expert_payout_records\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "expert_payout_records_idem_uq": {
+          "name": "expert_payout_records_idem_uq",
+          "columns": [
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"expert_payout_records\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "expert_payout_records_expert_idx": {
+          "name": "expert_payout_records_expert_idx",
+          "columns": [
+            {
+              "expression": "expert_profile_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "expert_payout_records_status_idx": {
+          "name": "expert_payout_records_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"expert_payout_records\".\"status\" = 'recorded' AND \"expert_payout_records\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "expert_payout_records_session_id_credit_sessions_id_fk": {
+          "name": "expert_payout_records_session_id_credit_sessions_id_fk",
+          "tableFrom": "expert_payout_records",
+          "tableTo": "credit_sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "expert_payout_records_expert_profile_id_expert_profiles_id_fk": {
+          "name": "expert_payout_records_expert_profile_id_expert_profiles_id_fk",
+          "tableFrom": "expert_payout_records",
+          "tableTo": "expert_profiles",
+          "columnsFrom": ["expert_profile_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "expert_payout_records_company_id_companies_id_fk": {
+          "name": "expert_payout_records_company_id_companies_id_fk",
+          "tableFrom": "expert_payout_records",
+          "tableTo": "companies",
+          "columnsFrom": ["company_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "expert_payout_records_amount_nonneg": {
+          "name": "expert_payout_records_amount_nonneg",
+          "value": "\"expert_payout_records\".\"amount_minor\" >= 0"
+        },
+        "expert_payout_records_duration_nonneg": {
+          "name": "expert_payout_records_duration_nonneg",
+          "value": "\"expert_payout_records\".\"duration_minutes\" >= 0"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.company_billing_details": {
@@ -8472,6 +8678,14 @@
           "notNull": true,
           "default": "'not_required'"
         },
+        "duration_source": {
+          "name": "duration_source",
+          "type": "credit_duration_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'live_capture'"
+        },
         "estimated_minutes": {
           "name": "estimated_minutes",
           "type": "integer",
@@ -8582,6 +8796,19 @@
         "overdraft_settled_minor": {
           "name": "overdraft_settled_minor",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "billing_finalized_at": {
+          "name": "billing_finalized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finalization_path": {
+          "name": "finalization_path",
+          "type": "credit_finalization_path",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": false
         },
@@ -9657,10 +9884,20 @@
       "schema": "public",
       "values": ["confirmed", "cancelled"]
     },
+    "public.credit_duration_source": {
+      "name": "credit_duration_source",
+      "schema": "public",
+      "values": ["live_capture", "external"]
+    },
     "public.credit_entry_type": {
       "name": "credit_entry_type",
       "schema": "public",
       "values": ["purchase", "consume", "refund", "expiry", "adjustment"]
+    },
+    "public.credit_finalization_path": {
+      "name": "credit_finalization_path",
+      "schema": "public",
+      "values": ["live_capture", "confirmed", "disputed", "auto_confirmed"]
     },
     "public.credit_hold_status": {
       "name": "credit_hold_status",
@@ -9719,6 +9956,11 @@
       "name": "engagement_status",
       "schema": "public",
       "values": ["active", "completed", "cancelled", "pending_acceptance"]
+    },
+    "public.expert_payout_record_status": {
+      "name": "expert_payout_record_status",
+      "schema": "public",
+      "values": ["recorded", "disbursing", "paid", "failed"]
     },
     "public.expert_type": {
       "name": "expert_type",

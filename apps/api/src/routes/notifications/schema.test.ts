@@ -1135,6 +1135,70 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('action_item.assigned (BAL-391)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:assigned:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      actionItemId: '550e8400-e29b-41d4-a716-446655440002',
+      assigneeParty: 'client' as const,
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      actorLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      actionItemBody: 'Send the migration plan to the client',
+      dueOn: '9 Jul 2026',
+    };
+
+    it('accepts a valid client-party payload', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'action_item.assigned', payload: valid }).success
+      ).toBe(true);
+    });
+
+    it('accepts an expert-party payload with expertProfileId (and no recipientId/dueOn)', () => {
+      const { recipientId: _r, dueOn: _d, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({
+          event: 'action_item.assigned',
+          payload: {
+            ...rest,
+            assigneeParty: 'expert',
+            expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+          },
+        }).success
+      ).toBe(true);
+    });
+
+    it('accepts the epoch-suffixed correlationId but rejects one over 120 chars', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'action_item.assigned',
+          payload: { ...valid, correlationId: 'a'.repeat(121) },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects an invalid assigneeParty, a non-uuid engagementId, and an empty body', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'action_item.assigned',
+          payload: { ...valid, assigneeParty: 'unassigned' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'action_item.assigned',
+          payload: { ...valid, engagementId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'action_item.assigned',
+          payload: { ...valid, actionItemBody: '' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

@@ -50,6 +50,7 @@ import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
+import { ActionItemAssignedEmail } from './action-item-assigned.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -901,6 +902,27 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'Your session earnings are recorded',
+    };
+  },
+
+  // BAL-391 (ADR-1043) action item assigned — ONE component serves BOTH the client and
+  // expert rules (the greeting differs via the per-recipient `recipientName`). Subject
+  // names the retrospective actor + the project; the body carries the item text and the
+  // optional due date as a helpful fact. CTA deep-links to the delivery workspace.
+  'action-item-assigned': (data) => {
+    const actorLabel = (data.actorLabel as string) ?? 'A teammate';
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(ActionItemAssignedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle,
+        actorLabel,
+        actionItemBody: (data.actionItemBody as string) ?? 'an action item',
+        dueOn: data.dueOn as string | undefined,
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorLabel)} assigned you an action item on ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
 

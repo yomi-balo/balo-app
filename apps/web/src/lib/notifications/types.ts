@@ -18,6 +18,7 @@ import type {
   CreditTopupRequestedPayload,
   PromoRedeemedPayload,
   ProposalSharedPayload,
+  ActionItemAssignedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -242,7 +243,10 @@ export type NotificationEvent =
   // Published from nudgeBillingAdminAction (the top-up receipt is API-webhook-published
   // only, so credit.topup.completed is deliberately ABSENT from this web union).
   | 'credit.topup.requested'
-  | 'promo.redeemed';
+  | 'promo.redeemed'
+  // BAL-391 (ADR-1043) — an action item was assigned to a side of the engagement.
+  // Published from the delivery-workspace create/assign Server Actions.
+  | 'action_item.assigned';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -281,4 +285,5 @@ export interface EventPayloadMap {
   'company.provisioned': CompanyProvisionedPayload;
   'credit.topup.requested': CreditTopupRequestedPayload;
   'promo.redeemed': PromoRedeemedPayload;
+  'action_item.assigned': ActionItemAssignedPayload;
 }

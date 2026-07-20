@@ -117,6 +117,15 @@ export {
   MilestoneReorderMismatchError,
   type EngagementMilestoneStatus,
 } from './engagement-milestones';
+export {
+  actionItemsRepository,
+  ACTION_ITEM_STATUS_TRANSITIONS,
+  isAllowedActionItemTransition,
+  InvalidActionItemTransitionError,
+  type ActionItemStatus,
+  type ActionItemAssigneeParty,
+} from './action-items';
+export type { ActionItem, NewActionItem } from '../schema';
 export type {
   PricingMethod,
   ProposalCadence,

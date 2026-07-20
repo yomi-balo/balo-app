@@ -24,6 +24,7 @@ import type {
   CreditTopupRequestedPayload,
   PromoRedeemedPayload,
   ProposalSharedPayload,
+  ActionItemAssignedPayload,
   SessionLowBalancePayload,
   SessionGraceEnteredPayload,
   SessionNearWrapPayload,
@@ -278,7 +279,8 @@ export type NotificationEvent =
   | 'credit.topup.requested'
   | 'promo.redeemed'
   | 'payment.charged'
-  | 'payout.recorded';
+  | 'payout.recorded'
+  | 'action_item.assigned';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -365,4 +367,5 @@ export interface EventPayloadMap {
   'promo.redeemed': PromoRedeemedPayload;
   'payment.charged': PaymentChargedPayload;
   'payout.recorded': PayoutRecordedPayload;
+  'action_item.assigned': ActionItemAssignedPayload;
 }

@@ -135,3 +135,9 @@ export {
   type CaseBillingServerEventMap,
   type CaseBillingFinalizationPath,
 } from './case-billing';
+export {
+  ACTION_ITEM_SERVER_EVENTS,
+  type ActionItemServerEventMap,
+  type ActionItemAssigneeRole,
+  type ActionItemActorRole,
+} from './action-item';
