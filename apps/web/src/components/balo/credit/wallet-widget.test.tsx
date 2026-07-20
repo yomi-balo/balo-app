@@ -58,6 +58,69 @@ describe('WalletWidget — error state', () => {
   });
 });
 
+describe('WalletWidget — resting states (BAL-402)', () => {
+  it('healthy shows the balance, renders the action slot, and no "Running low" chip', () => {
+    render(
+      <WalletWidget
+        state="healthy"
+        balanceMinor={34_700}
+        action={<button type="button">Top up</button>}
+      />
+    );
+    expect(screen.getByText('A$347.00')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Top up' })).toBeInTheDocument();
+    expect(screen.queryByText('Running low')).not.toBeInTheDocument();
+  });
+
+  it('low shows the amber "Running low" chip alongside the balance', () => {
+    render(<WalletWidget state="low" balanceMinor={1_820} />);
+    expect(screen.getByText('A$18.20')).toBeInTheDocument();
+    expect(screen.getByText('Running low')).toBeInTheDocument();
+  });
+
+  it('zero frames the balance as an invitation, not absence', () => {
+    render(
+      <WalletWidget state="zero" balanceMinor={0} action={<button type="button">Top up</button>} />
+    );
+    expect(screen.getByText('A$0.00')).toBeInTheDocument();
+    expect(screen.getByText('Top up to start a consultation.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Top up' })).toBeInTheDocument();
+  });
+
+  it('never renders the word "overdraft" on any resting state', () => {
+    for (const state of ['healthy', 'low', 'zero'] as const) {
+      const { unmount } = render(<WalletWidget state={state} balanceMinor={1_000} />);
+      expect(document.body.textContent?.toLowerCase()).not.toContain('overdraft');
+      unmount();
+    }
+  });
+});
+
+describe('WalletWidget — indicative FX secondary', () => {
+  it('renders the "≈ local" line when a non-null fx snapshot is passed', () => {
+    render(
+      <WalletWidget
+        state="healthy"
+        balanceMinor={34_700}
+        fx={{ currency: 'USD', audToQuote: 0.642 }}
+      />
+    );
+    expect(screen.getByText('≈ US$223')).toBeInTheDocument();
+  });
+
+  it('omits the "≈ local" line when fx is null (missing or stale rate)', () => {
+    render(<WalletWidget state="healthy" balanceMinor={34_700} fx={null} />);
+    expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
+  });
+
+  it('never shows an indicative line on the zero state even with a rate', () => {
+    render(
+      <WalletWidget state="zero" balanceMinor={0} fx={{ currency: 'USD', audToQuote: 0.642 }} />
+    );
+    expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
+  });
+});
+
 describe('WalletWidget — accessibility', () => {
   it('session state has no violations', async () => {
     const { container } = render(
@@ -70,4 +133,19 @@ describe('WalletWidget — accessibility', () => {
     const { container } = render(<WalletWidget state="error" onRetry={vi.fn()} />);
     expect(await axe(container)).toHaveNoViolations();
   }, 15000);
+
+  it('holder resting states have no violations', async () => {
+    for (const state of ['healthy', 'low', 'zero'] as const) {
+      const { container, unmount } = render(
+        <WalletWidget
+          state={state}
+          balanceMinor={1_820}
+          fx={{ currency: 'USD', audToQuote: 0.642 }}
+          action={<button type="button">Top up</button>}
+        />
+      );
+      expect(await axe(container)).toHaveNoViolations();
+      unmount();
+    }
+  }, 20000);
 });

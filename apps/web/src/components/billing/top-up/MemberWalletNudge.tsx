@@ -6,7 +6,7 @@ import { Users, Bell, Check, ShieldCheck, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { nudgeBillingAdminAction } from '@/lib/credit/actions';
-import { formatAud, formatIndicative } from '@/lib/credit/display-constants';
+import { formatAud, formatIndicative, LOW_BALANCE_MINOR } from '@/lib/credit/display-constants';
 import type { DisplayFxSnapshot } from './types';
 
 interface MemberWalletNudgeProps {
@@ -14,19 +14,25 @@ interface MemberWalletNudgeProps {
   /** The billing holder's display name (or a warm generic when unresolved). */
   readonly adminLabel: string;
   readonly fx: DisplayFxSnapshot | null;
+  /**
+   * BAL-402 — optional analytics hook, invoked with the resting state on the nudge press (on
+   * intent, before the async action). Omitted on the `/billing/top-up` route + `TopUpLauncher`,
+   * which keep firing no analytics; the dashboard passes it to emit `wallet_nudge_clicked`.
+   */
+  readonly onNudgeClick?: (state: 'low' | 'zero') => void;
 }
-
-const LOW_BALANCE_MINOR = 5_000; // A$50 — a member-facing "running low" heuristic
 
 /**
  * BAL-381 member variant — a company member WITHOUT MANAGE_BILLING sees and spends the shared
  * team balance but can't top up. Their constructive action is to NUDGE the billing holder(s).
- * Team-framed copy ("your team's balance"), never "top up"; "overdraft" never appears.
+ * Team-framed copy ("your team's balance"), never "top up"; "overdraft" never appears. The
+ * `LOW_BALANCE_MINOR` floor is shared with the holder resting states (single source of truth).
  */
 export function MemberWalletNudge({
   balanceMinor,
   adminLabel,
   fx,
+  onNudgeClick,
 }: Readonly<MemberWalletNudgeProps>) {
   const [requested, setRequested] = useState(false);
   const [pending, setPending] = useState(false);
@@ -51,8 +57,9 @@ export function MemberWalletNudge({
   }, [pending, requested, adminLabel]);
 
   const handleNudgeClick = useCallback(() => {
+    onNudgeClick?.(isZero ? 'zero' : 'low');
     nudge().catch(() => undefined);
-  }, [nudge]);
+  }, [nudge, onNudgeClick, isZero]);
 
   function renderAction() {
     if (requested) {
@@ -69,7 +76,7 @@ export function MemberWalletNudge({
           onClick={handleNudgeClick}
           disabled={pending}
           variant={isZero ? 'default' : 'secondary'}
-          className="w-full"
+          className="min-h-11 w-full"
         >
           {pending ? (
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />

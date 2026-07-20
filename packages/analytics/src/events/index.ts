@@ -141,3 +141,9 @@ export {
   type ActionItemAssigneeRole,
   type ActionItemActorRole,
 } from './action-item';
+export {
+  WALLET_EVENTS,
+  type WalletEventMap,
+  type WalletLens,
+  type WalletRestingStateName,
+} from './wallet';

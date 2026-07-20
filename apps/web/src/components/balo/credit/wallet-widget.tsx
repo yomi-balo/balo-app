@@ -3,26 +3,40 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Clock, Gift, Radio, RotateCw, Wallet } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatIndicative } from '@/lib/credit/display-constants';
+import type { DisplayFxSnapshot } from '@/components/billing/top-up/types';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — the shared client-lens wallet primitive (§9, §14 Q7),
- * from `wallet-balance-widget.jsx`.
+ * from `wallet-balance-widget.jsx`. Extended in BAL-402 with the holder resting states.
  *
- * FOCUSED build: only the `session` + `promo` states (plus `loading` / `error`) ship
- * here — the ones the in-session Case surface needs. It is deliberately structured as a
- * `state` union + a switch so BAL-377 can add `healthy` / `low` / `zero` / `stale`
- * (and the indicative-FX secondary) at the marked extension point without a rewrite.
+ * States: `session` + `promo` (the in-session Case surface), `loading` / `error`, and the
+ * resting `healthy` / `low` / `zero` (the dashboard holder lens). An optional `fx` snapshot
+ * renders an indicative "≈ local" secondary — `fx=null` (a missing OR stale rate, which are
+ * indistinguishable) simply omits that line; it is never surfaced as an error. An optional
+ * `action` slot renders the caller-composed affordance (e.g. a Top-up link) in the resting
+ * footer, so this stays a context-neutral primitive — it imports no routing and no analytics.
  *
  * HARD BOUNDARY: client-lens only — this never renders on an expert / payout lens.
  * AUD is the real figure; the `session` balance ticks down as a PURE display counter
- * between authoritative refreshes (no ticking-clock alarm, no "overdraft").
+ * between authoritative refreshes (no ticking-clock alarm, no "overdraft"). The gradient
+ * accent is reserved for `session` only — resting states use solid `--primary` (the dashboard
+ * is context-neutral).
  */
 
 /**
- * The states this focused widget implements. BAL-377 EXTENSION POINT: widen this union
- * with `'healthy' | 'low' | 'zero' | 'stale'` and add their cases in the switch below.
+ * The states this widget implements. `healthy` / `low` / `zero` are the holder resting states
+ * (BAL-402); a `stale` FX cache is deliberately NOT a state — a stale rate resolves to `fx=null`
+ * upstream, which just omits the indicative line (see the header comment).
  */
-export type WalletWidgetState = 'session' | 'promo' | 'loading' | 'error';
+export type WalletWidgetState =
+  | 'session'
+  | 'promo'
+  | 'loading'
+  | 'error'
+  | 'healthy'
+  | 'low'
+  | 'zero';
 
 interface WalletWidgetProps {
   state: WalletWidgetState;
@@ -32,8 +46,19 @@ interface WalletWidgetProps {
   promoMinor?: number;
   /** Per-minute AUD-minor charge shown in the `session` state. */
   ratePerMinuteMinor?: number;
+  /** Indicative display-FX; `null`/omitted hides the "≈ local" secondary (never an error). */
+  fx?: DisplayFxSnapshot | null;
+  /** Caller-composed affordance rendered in the resting-state footer (e.g. a Top-up link). */
+  action?: React.ReactNode;
   onRetry?: () => void;
   className?: string;
+}
+
+/** Border token per state: amber for `low`, primary hairline for `session`, neutral otherwise. */
+function restingBorderClass(state: WalletWidgetState): string {
+  if (state === 'low') return 'border-warning/40';
+  if (state === 'session') return 'border-primary/30';
+  return 'border-border';
 }
 
 const CARD_CLASS =
@@ -131,6 +156,8 @@ export function WalletWidget({
   balanceMinor = 0,
   promoMinor = 0,
   ratePerMinuteMinor = 0,
+  fx,
+  action,
   onRetry,
   className,
 }: Readonly<WalletWidgetProps>): React.JSX.Element {
@@ -145,10 +172,14 @@ export function WalletWidget({
     return <ErrorState onRetry={handleRetry} className={className} />;
   }
 
+  const isPromo = state === 'promo';
+  const isLow = state === 'low';
+  const isZero = state === 'zero';
+  const isResting = state === 'healthy' || isLow || isZero;
   const shownBalance = isSession ? liveBalance : balanceMinor;
 
   return (
-    <div className={cn(CARD_CLASS, isSession ? 'border-primary/30' : 'border-border', className)}>
+    <div className={cn(CARD_CLASS, restingBorderClass(state), className)}>
       {isSession ? (
         <div className="from-primary absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r to-violet-600" />
       ) : null}
@@ -165,12 +196,29 @@ export function WalletWidget({
             In consultation
           </span>
         ) : null}
+        {isLow ? (
+          <span className="border-warning/40 bg-warning/10 text-warning inline-flex items-center rounded-full border px-2.5 py-1 text-[11.5px] font-semibold">
+            Running low
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-3.5">
-        <span className="text-foreground text-[34px] leading-none font-semibold tracking-tight tabular-nums">
-          {formatAud(shownBalance)}
-        </span>
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span
+            className={cn(
+              'text-[34px] leading-none font-semibold tracking-tight tabular-nums',
+              isZero ? 'text-muted-foreground' : 'text-foreground'
+            )}
+          >
+            {formatAud(shownBalance)}
+          </span>
+          {fx && !isZero && !isSession ? (
+            <span className="text-muted-foreground text-sm font-medium tabular-nums">
+              ≈ {formatIndicative(shownBalance, fx.currency, fx.audToQuote)}
+            </span>
+          ) : null}
+        </div>
 
         {isSession ? (
           <div className="text-muted-foreground mt-1.5 text-[13px] font-medium">
@@ -178,11 +226,17 @@ export function WalletWidget({
           </div>
         ) : null}
 
-        {state === 'promo' ? (
+        {isPromo ? (
           <div className="text-success bg-success/10 mt-2 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12.5px] font-semibold">
             <Gift className="size-3" strokeWidth={2.4} aria-hidden />
             Includes {formatAud(promoMinor)} promo credit
           </div>
+        ) : null}
+
+        {isZero ? (
+          <p className="text-foreground/90 mt-1.5 text-[14px] leading-relaxed font-medium">
+            Top up to start a consultation.
+          </p>
         ) : null}
       </div>
 
@@ -192,11 +246,13 @@ export function WalletWidget({
             <Clock className="size-3" strokeWidth={2.2} aria-hidden />
             We&apos;ll give you a heads-up before it runs out.
           </div>
-        ) : (
+        ) : null}
+        {isPromo ? (
           <p className="text-success/90 bg-success/5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium">
             Promo credit is ring-fenced — it&apos;s spent first and never triggers a card charge.
           </p>
-        )}
+        ) : null}
+        {isResting ? action : null}
       </div>
     </div>
   );
