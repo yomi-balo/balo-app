@@ -344,6 +344,13 @@
       "when": 1784470874192,
       "tag": "0048_easy_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1784475710816,
+      "tag": "0049_clever_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

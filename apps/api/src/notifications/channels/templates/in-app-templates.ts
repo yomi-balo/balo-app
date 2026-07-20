@@ -690,6 +690,21 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: '/experts',
     };
   },
+
+  // BAL-391 (ADR-1043) action item assigned — the assigned side (client owner OR expert).
+  // One template serves both. Gender-neutral; `actorLabel` is the retrospective person;
+  // the due date reads as a helpful fact (never a countdown). Deep-links to the workspace.
+  'action-item-assigned': (data) => {
+    const actor = (data.actorLabel as string) ?? 'A teammate';
+    const body = (data.actionItemBody as string) ?? 'an action item';
+    const dueOn = data.dueOn as string | undefined;
+    const dueSuffix = dueOn ? ` · noted for ${dueOn}` : '';
+    return engagementNotice(
+      'New action item',
+      `${actor} assigned you '${body}'${dueSuffix}.`,
+      data
+    );
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

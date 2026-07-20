@@ -2,21 +2,19 @@ import { and, asc, eq, isNull, max } from 'drizzle-orm';
 import { db } from '../client';
 import {
   engagementMilestones,
-  engagements,
   type Engagement,
   type EngagementMilestone,
   type ProposalMilestone,
 } from '../schema';
 import { recordDeliveryAudit, type DeliveryAuditAction } from './_shared/delivery-audit';
+import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
 
-/** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
-type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+// Re-export so the established public path `import { EngagementNotActiveError } from '@balo/db'`
+// (via repositories/index.ts) stays intact after the lock helper moved to _shared.
+export { EngagementNotActiveError } from './_shared/engagement-lock';
 
 /** Milestone status, derived from the schema column (single source of truth). */
 export type EngagementMilestoneStatus = EngagementMilestone['status'];
-
-/** Engagement status, derived from the schema column. */
-type EngagementStatus = Engagement['status'];
 
 /**
  * Allowed milestone status transitions (BAL-330). Mirrors the proposal transition
@@ -55,16 +53,6 @@ export class InvalidMilestoneTransitionError extends Error {
   }
 }
 
-export class EngagementNotActiveError extends Error {
-  constructor(
-    public readonly engagementId: string,
-    public readonly status: EngagementStatus
-  ) {
-    super(`Engagement ${engagementId} is not active (status: ${status})`);
-    this.name = 'EngagementNotActiveError';
-  }
-}
-
 /**
  * Thrown by {@link engagementMilestonesRepository.reorder} when the provided id list
  * is not an exact permutation of the engagement's LIVE milestone id set (a stale tab
@@ -87,27 +75,6 @@ export class MilestoneReorderMismatchError extends Error {
  * engagement row → then milestone row. Never the reverse (deadlock hazard). This
  * mirrors `proposals.accept`'s documented "proposal first, then relationship".
  */
-
-/**
- * Lock the LIVE engagement FOR UPDATE and assert it is `active`. Shared first step
- * of every milestone transition (and `add`). Throws `Error` (missing) /
- * `EngagementNotActiveError` (non-active).
- */
-async function lockActiveEngagement(tx: DbTx, engagementId: string): Promise<Engagement> {
-  const [engagement] = await tx
-    .select()
-    .from(engagements)
-    .where(and(eq(engagements.id, engagementId), isNull(engagements.deletedAt)))
-    .for('update');
-
-  if (engagement === undefined) {
-    throw new Error(`Engagement not found: ${engagementId}`);
-  }
-  if (engagement.status !== 'active') {
-    throw new EngagementNotActiveError(engagementId, engagement.status);
-  }
-  return engagement;
-}
 
 /**
  * The shared lock dance for milestone-scoped transitions:

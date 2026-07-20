@@ -29,6 +29,7 @@ import type {
 import type { CreditEventMap, CreditServerEventMap } from './events/credit';
 import type { PromoServerEventMap, PromoEventMap } from './events/promo';
 import type { SessionEventMap, SessionServerEventMap } from './events/session';
+import type { ActionItemServerEventMap } from './events/action-item';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -74,6 +75,7 @@ export type ServerEvents = ExpertServerEventMap &
   OnboardingReminderServerEventMap &
   CreditServerEventMap &
   PromoServerEventMap &
-  SessionServerEventMap;
+  SessionServerEventMap &
+  ActionItemServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

@@ -592,6 +592,53 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-391 action_item.assigned', () => {
+    it('gives each side email + in-app, one shared template, no admin fan-out', () => {
+      const rules = notificationRules['action_item.assigned'];
+      expect(rules).toBeDefined();
+      // client (email + in-app) + expert (email + in-app) = 4 conditioned rules.
+      expect(rules).toHaveLength(4);
+      for (const rule of rules!) {
+        expect(rule.template).toBe('action-item-assigned');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeDefined();
+      }
+      expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
+        'client',
+        'client',
+        'expert',
+        'expert',
+      ]);
+      // Assignee-only — the admins are never a recipient.
+      expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
+      // No SMS — each side gets email + in-app.
+      expect(rules!.filter((r) => r.channel === 'email')).toHaveLength(2);
+      expect(rules!.filter((r) => r.channel === 'in-app')).toHaveLength(2);
+    });
+
+    it('routes by payload.assigneeParty — only the assigned side fires', () => {
+      const rules = notificationRules['action_item.assigned']!;
+      const clientRule = rules.find((r) => r.recipient === 'client')!;
+      const expertRule = rules.find((r) => r.recipient === 'expert')!;
+
+      const toClient = {
+        event: 'action_item.assigned',
+        payload: { assigneeParty: 'client' },
+        data: {},
+      };
+      expect(clientRule.condition!(toClient)).toBe(true);
+      expect(expertRule.condition!(toClient)).toBe(false);
+
+      const toExpert = {
+        event: 'action_item.assigned',
+        payload: { assigneeParty: 'expert' },
+        data: {},
+      };
+      expect(clientRule.condition!(toExpert)).toBe(false);
+      expect(expertRule.condition!(toExpert)).toBe(true);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

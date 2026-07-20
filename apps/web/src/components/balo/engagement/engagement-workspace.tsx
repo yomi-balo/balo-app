@@ -1,4 +1,5 @@
 import type { EngagementWorkspaceView } from '@/lib/engagement/engagement-view';
+import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
 import { Reveal } from './reveal';
 import { EngagementHeader } from './engagement-header';
 import { ReviewBanner } from './review-banner';
@@ -12,11 +13,14 @@ import { MilestoneRail } from './milestone-rail';
 import { ExpertMilestoneRail } from './expert-milestone-rail';
 import { MilestoneEmptyState } from './milestone-empty-state';
 import { ExpertCompletionCard } from './expert-completion-card';
+import { ActionItemsPanel } from './action-items-panel';
 
 interface EngagementWorkspaceProps {
   view: EngagementWorkspaceView;
   /** Email dual-CTA deep-link intent (`?action=`) — auto-opens the client review modal. */
   initialAction?: ReviewInitialAction | null;
+  /** BAL-391 — the action-items panel view; omitted (undefined) → the section is skipped. */
+  actionItems?: ActionItemsPanelView;
 }
 
 /**
@@ -35,7 +39,13 @@ interface EngagementWorkspaceProps {
 export function EngagementWorkspace({
   view,
   initialAction = null,
+  actionItems,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
+  // Render the action-items panel only when it has something to show — live items OR a
+  // writable (active) engagement inviting the first add. A read-only, empty panel is
+  // purely retrospective, so it is skipped entirely.
+  const showActionItems =
+    actionItems !== undefined && (actionItems.items.length > 0 || actionItems.canWrite);
   // The delivering expert gets the INTERACTIVE rail only while the engagement is
   // active — the plan locks during client review / terminal states, where the
   // read-only rail (a server component) preserves D1's no-client-bundle posture. On an
@@ -121,6 +131,12 @@ export function EngagementWorkspace({
       )}
 
       {milestoneSection}
+
+      {showActionItems && actionItems !== undefined && (
+        <Reveal delay={0.22}>
+          <ActionItemsPanel view={actionItems} />
+        </Reveal>
+      )}
 
       {view.completionCard !== null && (
         <Reveal delay={0.25}>

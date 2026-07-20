@@ -620,4 +620,23 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state
   // notice, so NOT the company_billing_admins fan-out. Email + in-app, no SMS.
   'promo.redeemed': emailAndInApp('self', 'promo-redeemed'),
+  // BAL-391 (ADR-1043): an action item was assigned to a SIDE of the engagement. One
+  // event, two conditioned rules keyed on payload.assigneeParty (the
+  // project.message_posted routing precedent) — the assigned side only gets email +
+  // in-app: 'client' → recipient:'client' via payload.recipientId (client company
+  // owner; skips gracefully when absent); 'expert' → recipient:'expert' via
+  // payload.expertProfileId → the resolver hydrates data.expert. NO admin fan-out
+  // (assignee-only).
+  'action_item.assigned': [
+    ...emailAndInApp(
+      'client',
+      'action-item-assigned',
+      (ctx) => ctx.payload.assigneeParty === 'client'
+    ),
+    ...emailAndInApp(
+      'expert',
+      'action-item-assigned',
+      (ctx) => ctx.payload.assigneeParty === 'expert'
+    ),
+  ],
 };
