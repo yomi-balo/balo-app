@@ -22,4 +22,5 @@ export { ONBOARDING_REMINDER_SERVER_EVENTS } from '../events/onboarding-reminder
 export { CREDIT_SERVER_EVENTS } from '../events/credit';
 export { PROMO_SERVER_EVENTS } from '../events/promo';
 export { SESSION_SERVER_EVENTS } from '../events/session';
+export { CASE_BILLING_SERVER_EVENTS } from '../events/case-billing';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';

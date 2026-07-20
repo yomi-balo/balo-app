@@ -164,6 +164,42 @@ export async function publishSettlementFailure(input: {
   });
 }
 
+/**
+ * BAL-399 — the acting member's PERSONAL consultation receipt (recipient 'self', email + in-app).
+ * Published once from `finalizeBilling`. Carries the all-in charge (connectedMinutes × client rate)
+ * — NO expert rate/accrual/margin (fee concealment). Distinct from the billing-admin
+ * `session.settled` fan-out (Owner Decision O1).
+ */
+export async function publishPaymentCharged(session: CreditSession, now: Date): Promise<void> {
+  const expertName = await resolveExpertName(session.expertProfileId);
+  await notificationEvents.publish('payment.charged', {
+    correlationId: `${session.id}:payment_charged`,
+    userId: session.initiatingMemberId,
+    companyId: session.companyId,
+    sessionId: session.id,
+    amountAudMinor: session.connectedMinutes * session.clientRateMinorPerMinute,
+    durationMinutes: session.connectedMinutes,
+    expertName,
+    chargedOn: formatSettledOn(now),
+  });
+}
+
+/**
+ * BAL-399 — the delivering expert's own-earnings notice (recipient 'expert', email + in-app).
+ * Published once from `finalizeBilling`. Carries the expert's OWN earnings (= expertAccruedMinor)
+ * — NO client charge/markup/margin (fee concealment).
+ */
+export async function publishPayoutRecorded(session: CreditSession, now: Date): Promise<void> {
+  await notificationEvents.publish('payout.recorded', {
+    correlationId: `${session.id}:payout_recorded`,
+    expertProfileId: session.expertProfileId,
+    sessionId: session.id,
+    amountAudMinor: session.expertAccruedMinor,
+    durationMinutes: session.connectedMinutes,
+    recordedOn: formatSettledOn(now),
+  });
+}
+
 /** Member nudge asking billing admins to top up (in-app fan-out). Re-notifiable per click. */
 export async function publishTopupNudge(
   session: { id: string; companyId: string },

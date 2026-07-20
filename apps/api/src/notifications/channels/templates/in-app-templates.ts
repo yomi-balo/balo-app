@@ -690,6 +690,29 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: '/experts',
     };
   },
+
+  // BAL-399 (ADR-1040 / ADR-1043) payment charged — the acting MEMBER's consultation receipt
+  // (recipient 'self'). The all-in charge ONLY; NO expert figure / margin. Deep-links to billing.
+  'payment-charged': (data) => {
+    const amount = formatAudMinor(numberOrZero(data.amountAudMinor));
+    const expertName = (data.expertName as string) ?? 'your expert';
+    return {
+      title: 'Session receipt',
+      body: `Your session with ${expertName} came to ${amount}.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // BAL-399 (ADR-1040 / ADR-1043) payout recorded — the delivering EXPERT's own-earnings notice
+  // (recipient 'expert'). Own earnings ONLY; NO client charge / markup / margin. Links to earnings.
+  'payout-recorded': (data) => {
+    const amount = formatAudMinor(numberOrZero(data.amountAudMinor));
+    return {
+      title: 'Earnings recorded',
+      body: `${amount} from your recent session is recorded and on its way.`,
+      actionUrl: '/settings/earnings',
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

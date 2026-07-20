@@ -14,7 +14,12 @@ import { creditHolds } from './credit-holds';
 import { companies } from './companies';
 import { expertProfiles } from './experts';
 import { users } from './users';
-import { creditSessionStatusEnum, creditSettlementStatusEnum } from './enums';
+import {
+  creditSessionStatusEnum,
+  creditSettlementStatusEnum,
+  creditDurationSourceEnum,
+  creditFinalizationPathEnum,
+} from './enums';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -76,6 +81,11 @@ export const creditSessions = pgTable(
       .notNull()
       .default('not_required'),
 
+    // Duration provenance (BAL-399) — set at open; immutable. `live_capture` (default) =
+    // wall-clock metering auto-finalizes at hang-up; `external` = the session parks awaiting
+    // an outside-tool duration settled later via BAL-133. Fee-safe (client-viewable).
+    durationSource: creditDurationSourceEnum('duration_source').notNull().default('live_capture'),
+
     // ── Snapshots (immutable for the life of the session; economics never drift) ──
     // Sizes the hold (estimated MAX cost).
     estimatedMinutes: integer('estimated_minutes').notNull(),
@@ -114,6 +124,13 @@ export const creditSessions = pgTable(
     // Terminal negative-balance magnitude at `end` (the settlement basis; promo excluded
     // by construction). Null until ended.
     overdraftSettledMinor: integer('overdraft_settled_minor'),
+
+    // ── Billing finalization markers (BAL-399) — the single pending-vs-finalized signal ──
+    // `billingFinalizedAt` NULL ⇒ pending receipt (the money block shows elapsed only, no
+    // figures); stamped ONCE when the money block finalizes. `finalizationPath` records which
+    // path finalized it (live_capture / confirmed / disputed / auto_confirmed). Both fee-safe.
+    billingFinalizedAt: timestamp('billing_finalized_at', { withTimezone: true }),
+    finalizationPath: creditFinalizationPathEnum('finalization_path'),
 
     // Settlement PaymentIntent (reconciliation; NEVER client-facing).
     stripePaymentIntentId: text('stripe_payment_intent_id'),
@@ -186,3 +203,7 @@ export type NewCreditSession = typeof creditSessions.$inferInsert;
 export type CreditSessionStatus = (typeof creditSessionStatusEnum.enumValues)[number];
 /** Settlement outcome status (schema-derived — single source of truth). */
 export type CreditSettlementStatus = (typeof creditSettlementStatusEnum.enumValues)[number];
+/** How a session's billable duration is established (schema-derived). */
+export type CreditDurationSource = (typeof creditDurationSourceEnum.enumValues)[number];
+/** Which path produced the finalized billing figure (schema-derived). */
+export type CreditFinalizationPath = (typeof creditFinalizationPathEnum.enumValues)[number];

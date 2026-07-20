@@ -12,6 +12,8 @@ const {
   mockPublishSessionSettled,
   mockPublishSettlementFailure,
   mockAuthorize,
+  mockFinalizeBilling,
+  mockPark,
 } = vi.hoisted(() => ({
   mockEnd: vi.fn(),
   mockMarkSettlementResult: vi.fn(),
@@ -24,13 +26,19 @@ const {
   mockPublishSessionSettled: vi.fn(),
   mockPublishSettlementFailure: vi.fn(),
   mockAuthorize: vi.fn(),
+  mockFinalizeBilling: vi.fn(),
+  mockPark: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
-  creditSessionsRepository: { end: mockEnd, markSettlementResult: mockMarkSettlementResult },
+  creditSessionsRepository: {
+    end: mockEnd,
+    markSettlementResult: mockMarkSettlementResult,
+    parkAwaitingDuration: mockPark,
+  },
   creditWalletsRepository: { findById: mockFindWallet },
   creditReceivablesRepository: { open: mockReceivableOpen, clear: mockReceivableClear },
   deriveIdempotencyKey: (input: { sessionId?: string }) =>
@@ -43,6 +51,7 @@ vi.mock('../stripe/index.js', () => ({
 }));
 vi.mock('./meter-driver.js', () => ({ driveSession: mockDriveSession }));
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorize }));
+vi.mock('./finalize-billing.js', () => ({ finalizeBilling: mockFinalizeBilling }));
 vi.mock('./notify.js', () => ({
   publishSessionSettled: mockPublishSessionSettled,
   publishSettlementFailure: mockPublishSettlementFailure,
@@ -103,6 +112,28 @@ describe('endSession', () => {
     mockAuthorize.mockResolvedValue({ ok: false, code: 'forbidden' });
     const result = await endSession('session_1', 'stranger');
     expect(result).toEqual({ ok: false, code: 'forbidden' });
+    expect(mockDriveSession).not.toHaveBeenCalled();
+    expect(mockEnd).not.toHaveBeenCalled();
+  });
+
+  it('BAL-399: an EXTERNAL session PARKS awaiting duration — no metering / end / settlement', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, durationSource: 'external' },
+      role: 'member',
+    });
+    mockPark.mockResolvedValue({ ...SESSION, status: 'wrapped', settlementStatus: 'not_required' });
+    const result = await endSession('session_1', 'user_1');
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        settlementStatus: 'not_required',
+        overdraftSettledMinor: 0,
+        awaitingDuration: true,
+      },
+    });
+    expect(mockPark).toHaveBeenCalledWith('session_1');
+    // No wall-clock settlement machinery runs for the external park.
     expect(mockDriveSession).not.toHaveBeenCalled();
     expect(mockEnd).not.toHaveBeenCalled();
   });

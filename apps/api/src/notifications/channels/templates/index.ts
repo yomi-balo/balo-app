@@ -49,6 +49,7 @@ import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
 import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
+import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -843,6 +844,63 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${grantedLabel} in Balo credit is ready`,
+    };
+  },
+
+  // BAL-399 (ADR-1040 / ADR-1043) payment charged — the acting MEMBER's consultation receipt
+  // (recipient 'self'). The all-in charge ONLY (`amountAudMinor` = connectedMinutes × client
+  // rate); NO expert figure / margin (fee concealment). `recipientName` greets the member.
+  'payment-charged': (data) => {
+    const expertName = (data.expertName as string) ?? 'your expert';
+    const amount = formatAudMinor(numberCount(data.amountAudMinor));
+    const durationMinutes = numberCount(data.durationMinutes);
+    const chargedOn = (data.chargedOn as string) ?? '';
+    return {
+      component: React.createElement(CaseBillingReceiptEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        previewText: `Your ${durationMinutes}-minute session with ${expertName} came to ${amount}.`,
+        pillLabel: '💳 Session receipt',
+        pillTone: 'primary',
+        heading: 'Your session wrapped up',
+        subtext: 'A quick receipt for your records.',
+        bodyLines: [
+          `Your ${durationMinutes}-minute session with ${expertName} on ${chargedOn} wrapped up.`,
+          `The total came to ${amount} — nothing further to do.`,
+        ],
+        ctaLabel: 'View billing →',
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        footerPrefix: 'Questions about this charge?',
+        baseUrl: BASE_URL,
+      }),
+      subject: `Your session with ${sanitizeSubjectTitle(expertName)} — receipt`,
+    };
+  },
+
+  // BAL-399 (ADR-1040 / ADR-1043) payout recorded — the delivering EXPERT's own-earnings notice
+  // (recipient 'expert'). Own earnings ONLY (`amountAudMinor` = expertAccruedMinor); NO client
+  // charge / markup / margin (fee concealment). `recipientName` greets the expert.
+  'payout-recorded': (data) => {
+    const amount = formatAudMinor(numberCount(data.amountAudMinor));
+    const durationMinutes = numberCount(data.durationMinutes);
+    const recordedOn = (data.recordedOn as string) ?? '';
+    return {
+      component: React.createElement(CaseBillingReceiptEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        previewText: `${amount} from your ${durationMinutes}-minute session is recorded.`,
+        pillLabel: '✅ Earnings recorded',
+        pillTone: 'success',
+        heading: 'Your earnings are recorded',
+        subtext: "Nice work — this one's in the books.",
+        bodyLines: [
+          `Your ${durationMinutes}-minute session on ${recordedOn} wrapped up, and ${amount} in earnings is recorded.`,
+          'It will be included in your next payout — nothing you need to do.',
+        ],
+        ctaLabel: 'View earnings →',
+        ctaUrl: `${BASE_URL}/settings/earnings`,
+        footerPrefix: 'Questions about your earnings?',
+        baseUrl: BASE_URL,
+      }),
+      subject: 'Your session earnings are recorded',
     };
   },
 

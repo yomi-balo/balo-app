@@ -1,10 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import type { CreditWallet, CreditLedgerEntry } from '../../schema';
+import type { CreditWallet, CreditLedgerEntry, CreditSession } from '../../schema';
 import {
   CLIENT_WALLET_VIEW_COLUMNS,
   toClientWalletView,
   balanceContribution,
   toLedgerActivityView,
+  CLIENT_SESSION_MONEY_COLUMNS,
+  EXPERT_SESSION_MONEY_COLUMNS,
+  toClientMoneyBlock,
+  toExpertMoneyBlock,
+  toAdminMoneyBlock,
 } from './credit-views';
 
 /**
@@ -205,5 +210,181 @@ describe('toLedgerActivityView (invariant #2 — no margin/markup/fee/quote on a
     expect(view.display).toBeNull();
     expect(view.amountMinor).toBe(1000);
     expect(view.entryType).toBe('purchase');
+  });
+});
+
+// ── Money-block lens invariants (BAL-399) — fee-concealment core ────────────────────────
+//
+// A sentinel session with EVERY off-lens field POPULATED (expert rate, fee bps, accrual, the
+// Stripe reference, the overdraft). The serializers read only the allow-listed columns, so the
+// off-lens VALUES must appear nowhere in the client/expert output — asserted on both
+// `Object.keys` AND the serialized string. The admin positive assertion proves the negatives
+// above are not vacuous; the pending case proves a not-yet-finalized receipt zeroes every figure.
+
+// Digit-disjoint sentinels so a legitimate own-side figure never accidentally CONTAINS a
+// forbidden one as a substring (e.g. a fee bps hiding inside the expert earnings).
+const EXPERT_MINUTE_SENTINEL = 2071; // raw expert rate/min — must never reach a client
+const FEE_BPS_SENTINEL = 6789; // markup bps — must never reach a client or expert
+const EXPERT_ACCRUED_SENTINEL = 93_195; // finalized expert pay (45 × 2071) — must never reach a client
+const STRIPE_PI_SENTINEL = 'pi_secret_settle_1'; // reconciliation ref — must never reach either lens
+const CLIENT_MINUTE_SENTINEL = 3040; // client rate/min — must never reach an expert
+
+function fullSession(overrides: Partial<CreditSession> = {}): CreditSession {
+  return {
+    id: 'session_1',
+    walletId: 'wal_1',
+    companyId: 'co_1',
+    expertProfileId: 'exp_1',
+    initiatingMemberId: 'user_1',
+    holdId: null,
+    status: 'ended',
+    settlementStatus: 'not_required',
+    durationSource: 'live_capture',
+    estimatedMinutes: 60,
+    // Off-lens economics — DELIBERATELY populated so the "never surfaces" guarantee is exercised.
+    expertRateMinorPerHour: 150_000,
+    baloFeeBps: FEE_BPS_SENTINEL,
+    clientRateMinorPerMinute: CLIENT_MINUTE_SENTINEL,
+    expertRateMinorPerMinute: EXPERT_MINUTE_SENTINEL,
+    effectiveCeilingMinor: 15_000,
+    graceBoundMinutes: 30,
+    connectedAt: new Date('2026-07-20T12:00:00Z'),
+    lastTickSeq: 45,
+    connectedMinutes: 45,
+    expertAccruedMinor: EXPERT_ACCRUED_SENTINEL,
+    lowWarnedAt: null,
+    graceEnteredAt: null,
+    nearWrapWarnedAt: null,
+    wrappedAt: null,
+    endedAt: new Date('2026-07-20T12:45:00Z'),
+    settledAt: new Date('2026-07-20T12:45:05Z'),
+    overdraftSettledMinor: 4500,
+    billingFinalizedAt: new Date('2026-07-20T12:45:05Z'),
+    finalizationPath: 'live_capture',
+    stripePaymentIntentId: STRIPE_PI_SENTINEL,
+    createdAt: new Date('2026-07-20T11:00:00Z'),
+    updatedAt: new Date('2026-07-20T12:45:05Z'),
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+// Invariant #4 — the projection allow-lists structurally exclude the counterparty economics.
+describe('money-block projection allow-lists (invariant #4)', () => {
+  it('CLIENT_SESSION_MONEY_COLUMNS excludes expertRate* / baloFeeBps / expertAccruedMinor / stripePaymentIntentId', () => {
+    const keys = Object.keys(CLIENT_SESSION_MONEY_COLUMNS);
+    for (const excluded of [
+      'expertRateMinorPerHour',
+      'expertRateMinorPerMinute',
+      'expertAccruedMinor',
+      'baloFeeBps',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(excluded);
+    }
+  });
+
+  it('EXPERT_SESSION_MONEY_COLUMNS excludes clientRate* / baloFeeBps / overdraftSettledMinor / stripePaymentIntentId', () => {
+    const keys = Object.keys(EXPERT_SESSION_MONEY_COLUMNS);
+    for (const excluded of [
+      'clientRateMinorPerMinute',
+      'baloFeeBps',
+      'overdraftSettledMinor',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(excluded);
+    }
+  });
+});
+
+// Invariant #1 — the client money block never carries an expert / fee / margin / Stripe figure.
+describe('toClientMoneyBlock (invariant #1 — no expert economics / fee / margin on a client lens)', () => {
+  it('never emits expertRate* / expertAccruedMinor / baloFeeBps / margin / stripePaymentIntentId — keys and values', () => {
+    const block = toClientMoneyBlock(fullSession());
+    const keys = Object.keys(block);
+    for (const forbidden of [
+      'expertRateMinorPerMinute',
+      'expertRateMinorPerHour',
+      'expertAccruedMinor',
+      'baloFeeBps',
+      'marginAudMinor',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(forbidden);
+    }
+    const serialized = JSON.stringify(block);
+    expect(serialized).not.toContain(String(EXPERT_MINUTE_SENTINEL));
+    expect(serialized).not.toContain(String(EXPERT_ACCRUED_SENTINEL));
+    expect(serialized).not.toContain(STRIPE_PI_SENTINEL);
+    // The all-in charge IS surfaced (client-safe) and equals connectedMinutes × client rate.
+    expect(block.amountAudMinor).toBe(45 * CLIENT_MINUTE_SENTINEL);
+  });
+});
+
+// Invariant #2 — the expert money block never carries a client charge / fee / margin / overdraft.
+describe('toExpertMoneyBlock (invariant #2 — own earnings only)', () => {
+  it('never emits clientRate* / baloFeeBps / margin / overdraftSettledMinor / stripePaymentIntentId — keys and values', () => {
+    const block = toExpertMoneyBlock(fullSession(), 'recorded');
+    const keys = Object.keys(block);
+    for (const forbidden of [
+      'clientRateMinorPerMinute',
+      'amountAudMinor',
+      'clientChargeAudMinor',
+      'baloFeeBps',
+      'marginAudMinor',
+      'overdraftSettledMinor',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(forbidden);
+    }
+    const serialized = JSON.stringify(block);
+    expect(serialized).not.toContain(String(CLIENT_MINUTE_SENTINEL));
+    expect(serialized).not.toContain(String(FEE_BPS_SENTINEL));
+    expect(serialized).not.toContain(STRIPE_PI_SENTINEL);
+    // Own earnings ARE surfaced.
+    expect(block.earningsAudMinor).toBe(EXPERT_ACCRUED_SENTINEL);
+    expect(block.payoutStatus).toBe('recorded');
+  });
+});
+
+// Invariant #3 — admin is the SOLE lens where margin / fee appear (proves #1/#2 aren't vacuous).
+describe('toAdminMoneyBlock (invariant #3 — the sole margin-bearing lens)', () => {
+  it('surfaces marginAudMinor + baloFeeBps from the snapshots', () => {
+    const block = toAdminMoneyBlock(fullSession());
+    expect(block.baloFeeBps).toBe(FEE_BPS_SENTINEL);
+    expect(block.clientChargeAudMinor).toBe(45 * CLIENT_MINUTE_SENTINEL);
+    expect(block.expertEarningsAudMinor).toBe(EXPERT_ACCRUED_SENTINEL);
+    expect(block.marginAudMinor).toBe(45 * CLIENT_MINUTE_SENTINEL - EXPERT_ACCRUED_SENTINEL);
+    expect(block.overdraftSettledMinor).toBe(4500);
+  });
+});
+
+// Invariant #5 — a pending (not-yet-finalized) receipt zeroes every money figure on every lens.
+describe('money-block pending state (invariant #5 — never leaks the finalized number)', () => {
+  const pending = fullSession({ billingFinalizedAt: null, finalizationPath: null });
+
+  it('client pending zeroes the all-in charge and duration', () => {
+    const block = toClientMoneyBlock(pending);
+    expect(block.state).toBe('pending');
+    expect(block.amountAudMinor).toBe(0);
+    expect(block.durationMinutes).toBe(0);
+    expect(JSON.stringify(block)).not.toContain(String(45 * CLIENT_MINUTE_SENTINEL));
+  });
+
+  it('expert pending zeroes earnings and duration', () => {
+    const block = toExpertMoneyBlock(pending, 'recorded');
+    expect(block.state).toBe('pending');
+    expect(block.earningsAudMinor).toBe(0);
+    expect(block.durationMinutes).toBe(0);
+    expect(JSON.stringify(block)).not.toContain(String(EXPERT_ACCRUED_SENTINEL));
+  });
+
+  it('admin pending zeroes client charge, expert earnings, and margin', () => {
+    const block = toAdminMoneyBlock(pending);
+    expect(block.state).toBe('pending');
+    expect(block.clientChargeAudMinor).toBe(0);
+    expect(block.expertEarningsAudMinor).toBe(0);
+    expect(block.marginAudMinor).toBe(0);
+    expect(block.overdraftSettledMinor).toBe(0);
   });
 });

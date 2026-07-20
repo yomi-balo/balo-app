@@ -30,6 +30,8 @@ import type {
   SessionSettledPayload,
   SessionSettlementFailedPayload,
   SessionTopupNudgePayload,
+  PaymentChargedPayload,
+  PayoutRecordedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -274,7 +276,9 @@ export type NotificationEvent =
   | 'session.topup_nudge'
   | 'credit.topup.completed'
   | 'credit.topup.requested'
-  | 'promo.redeemed';
+  | 'promo.redeemed'
+  | 'payment.charged'
+  | 'payout.recorded';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -300,7 +304,11 @@ export type ServerOnlyNotificationEvent =
   | 'session.topup_nudge'
   // BAL-377: the top-up receipt is published from the API Stripe webhook post-commit —
   // never through the internal /notifications/publish route (no publishBodySchema arm).
-  | 'credit.topup.completed';
+  | 'credit.topup.completed'
+  // BAL-399: both fire from `finalizeBilling` (the endSession / external-finalizer path) —
+  // never from apps/web, so neither has a publishBodySchema arm.
+  | 'payment.charged'
+  | 'payout.recorded';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -355,4 +363,6 @@ export interface EventPayloadMap {
   'credit.topup.completed': CreditTopupCompletedPayload;
   'credit.topup.requested': CreditTopupRequestedPayload;
   'promo.redeemed': PromoRedeemedPayload;
+  'payment.charged': PaymentChargedPayload;
+  'payout.recorded': PayoutRecordedPayload;
 }

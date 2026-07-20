@@ -18,11 +18,18 @@ import {
   type CreditSession,
   type CreditSessionStatus,
   type CreditSettlementStatus,
+  type CreditFinalizationPath,
   type CreditWallet,
   type NewCreditSession,
 } from '../schema';
 import { acquireWalletLock } from './_shared/wallet-lock';
 import { deriveIdempotencyKey } from './_shared/credit-idempotency';
+import {
+  CLIENT_SESSION_MONEY_COLUMNS,
+  EXPERT_SESSION_MONEY_COLUMNS,
+  type ClientSessionMoneyView,
+  type ExpertSessionMoneyView,
+} from './_shared/credit-views';
 import type { DbExecutor } from './_shared/db-executor';
 import { applyLedgerEntry, WalletNotFoundError } from './credit-ledger';
 import { creditHoldsRepository } from './credit-holds';
@@ -52,6 +59,20 @@ export class InvalidSessionTransitionError extends Error {
   }
 }
 
+/**
+ * BAL-399 — thrown by `applyExternalDuration` when a SECOND finalize arrives with a DIFFERENT
+ * confirmed `minutes` after duration was already applied (a genuine conflict — two disagreeing
+ * confirmations). The in-lock guard has already flipped the session out of the parked state, so
+ * this NEVER double-draws; the internal route maps it to 409. A same-value replay is idempotent
+ * (no throw).
+ */
+export class ExternalDurationConflictError extends Error {
+  constructor(public readonly sessionId: string) {
+    super(`External duration already applied for session ${sessionId} with different minutes`);
+    this.name = 'ExternalDurationConflictError';
+  }
+}
+
 /** Thrown when `open` references an expert profile that does not exist. */
 export class ExpertProfileNotFoundError extends Error {
   constructor(public readonly expertProfileId: string) {
@@ -78,6 +99,7 @@ export const CLIENT_SESSION_VIEW_COLUMNS = {
   holdId: true,
   status: true,
   settlementStatus: true,
+  durationSource: true,
   estimatedMinutes: true,
   clientRateMinorPerMinute: true,
   effectiveCeilingMinor: true,
@@ -614,13 +636,57 @@ export const creditSessionsRepository = {
     });
   },
 
-  /** Sessions the reaper must meter — status ∈ {active, grace}, oldest-connected first. */
+  /**
+   * The CLIENT-lens MONEY-BLOCK projected read (BAL-399 fee/PII boundary — no RLS). Returns ONLY
+   * the allow-list columns, so `expertRate*` / `baloFeeBps` / `expertAccruedMinor` /
+   * `stripePaymentIntentId` are STRUCTURALLY absent — the client sees the all-in charge only. This
+   * is a DISTINCT projection from `findForClientView` (the drawdown view): it carries the billing-
+   * finalization markers the money block needs.
+   */
+  async findForClientMoneyView(id: string): Promise<ClientSessionMoneyView | undefined> {
+    return db.query.creditSessions.findFirst({
+      columns: CLIENT_SESSION_MONEY_COLUMNS,
+      where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
+    });
+  },
+
+  /**
+   * The EXPERT-lens projected read (BAL-399 fee/PII boundary — no RLS). Returns ONLY the
+   * allow-list columns, so `clientRate*` / `baloFeeBps` / `overdraftSettledMinor` /
+   * `stripePaymentIntentId` are STRUCTURALLY absent — an expert sees own earnings only.
+   */
+  async findForExpertView(id: string): Promise<ExpertSessionMoneyView | undefined> {
+    return db.query.creditSessions.findFirst({
+      columns: EXPERT_SESSION_MONEY_COLUMNS,
+      where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
+    });
+  },
+
+  /**
+   * The ADMIN-lens read — the SOLE relaxed money-block surface (full row incl. margin/fee).
+   * Never reachable by a company member or expert (the `hasPlatformCapability` route gates it).
+   */
+  async findForAdminView(id: string): Promise<CreditSession | undefined> {
+    return db.query.creditSessions.findFirst({
+      where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
+    });
+  },
+
+  /**
+   * Sessions the reaper must meter — status ∈ {active, grace}, oldest-connected first.
+   * BAL-399: `duration_source = 'live_capture'` only — an `external` session is settled via
+   * BAL-133 confirmation (`applyExternalDuration`), never wall-clock metered.
+   */
   async findMeterable(): Promise<CreditSession[]> {
     return db
       .select()
       .from(creditSessions)
       .where(
-        and(inArray(creditSessions.status, ['active', 'grace']), isNull(creditSessions.deletedAt))
+        and(
+          inArray(creditSessions.status, ['active', 'grace']),
+          eq(creditSessions.durationSource, 'live_capture'),
+          isNull(creditSessions.deletedAt)
+        )
       )
       .orderBy(asc(creditSessions.connectedAt));
   },
@@ -647,10 +713,13 @@ export const creditSessionsRepository = {
       if (session === undefined) {
         throw new SessionNotFoundError(sessionId);
       }
-      // Only active/grace sessions meter; a null anchor cannot be metered.
+      // Only active/grace sessions meter; a null anchor cannot be metered. BAL-399: an
+      // `external` session is settled via BAL-133 confirmation, never wall-clock metered —
+      // early-return defensively even if the reaper finder's guard were ever bypassed.
       if (
         (session.status !== 'active' && session.status !== 'grace') ||
-        session.connectedAt === null
+        session.connectedAt === null ||
+        session.durationSource !== 'live_capture'
       ) {
         return { session, transitions: {}, ticksPosted: 0 };
       }
@@ -712,9 +781,18 @@ export const creditSessionsRepository = {
    * `settlementStatus` (`not_required` when in credit, else `processing`). This method is
    * PURE DB — it never calls Stripe; it returns `overdraftMinor` + `mandateActive` for the
    * service to drive the off-session charge. Idempotent on an already-`ended` session.
+   *
+   * BAL-399: the terminal UPDATE also stamps `billingFinalizedAt = now` + `finalizationPath`
+   * (default `'live_capture'`) — the single "money block is finalized" marker the recap reads.
+   * The optional `finalizationPath` records which path finalized (`confirmed` / `disputed` /
+   * `auto_confirmed` for the external/BAL-133 finalizer); existing callers are unaffected.
    */
-  async end(sessionId: string, opts: { now?: Date } = {}): Promise<EndSessionResult> {
+  async end(
+    sessionId: string,
+    opts: { now?: Date; finalizationPath?: CreditFinalizationPath } = {}
+  ): Promise<EndSessionResult> {
     const now = opts.now ?? new Date();
+    const finalizationPath: CreditFinalizationPath = opts.finalizationPath ?? 'live_capture';
     return db.transaction(async (tx) => {
       const session = await readSessionForUpdate(tx, sessionId);
       if (session === undefined) {
@@ -784,6 +862,9 @@ export const creditSessionsRepository = {
           overdraftSettledMinor: overdraftMinor,
           expertAccruedMinor,
           settlementStatus,
+          // BAL-399: finalize the money block in the same terminal UPDATE.
+          billingFinalizedAt: now,
+          finalizationPath,
         })
         .where(eq(creditSessions.id, session.id))
         .returning();
@@ -798,6 +879,126 @@ export const creditSessionsRepository = {
         mandateActive: isWalletMandateActive(wallet),
         alreadyEnded: false,
       };
+    });
+  },
+
+  /**
+   * BAL-399 — park an `external` session (bot-fail / outside-tool hang-up) into the `wrapped`
+   * pause AWAITING a BAL-133 duration confirmation, in ONE wallet-locked txn: release the
+   * pre-connect hold (idempotency-safe — only an `active` hold) and set `status='wrapped'`,
+   * leaving `billingFinalizedAt` NULL (the money block stays a PENDING receipt). Legal only from
+   * `active` / `grace` / `wrapped` (idempotent on an already-`wrapped` session). The reaper's
+   * `findWrappedIdle` excludes `external`, so this park never auto-ends before confirmation.
+   */
+  async parkAwaitingDuration(sessionId: string): Promise<CreditSession> {
+    return db.transaction(async (tx) => {
+      const session = await readSessionForUpdate(tx, sessionId);
+      if (session === undefined) {
+        throw new SessionNotFoundError(sessionId);
+      }
+      if (session.status === 'wrapped') {
+        return session; // idempotent — already parked
+      }
+      if (session.status !== 'active' && session.status !== 'grace') {
+        throw new InvalidSessionTransitionError(session.status, 'wrapped');
+      }
+
+      await acquireWalletLock(tx, session.walletId);
+      if (session.holdId !== null) {
+        const [hold] = await tx
+          .select({ status: creditHolds.status })
+          .from(creditHolds)
+          .where(eq(creditHolds.id, session.holdId))
+          .limit(1);
+        if (hold?.status === 'active') {
+          await creditHoldsRepository.release(session.holdId, { exec: tx });
+        }
+      }
+
+      const [updated] = await tx
+        .update(creditSessions)
+        .set({ status: 'wrapped', wrappedAt: session.wrappedAt ?? new Date() })
+        .where(eq(creditSessions.id, session.id))
+        .returning();
+      if (updated === undefined) {
+        throw new SessionNotFoundError(sessionId);
+      }
+      return updated;
+    });
+  },
+
+  /**
+   * BAL-399 — apply a BAL-133-confirmed `external` duration in ONE wallet-locked txn, EXACTLY ONCE.
+   * `readSessionForUpdate` takes the session ROW lock (`FOR UPDATE`), so two concurrent finalizers
+   * on the same session serialize here and the second observes the first's COMMITTED state — that
+   * is the TOCTOU guard, NOT the service's pre-read. The fresh parked state is `status='wrapped'`
+   * (set by `parkAwaitingDuration`) with `billingFinalizedAt IS NULL`:
+   *  - already finalized (`billingFinalizedAt` set) → idempotent no-op;
+   *  - no longer parked (a prior call flipped it out) → SAME confirmed minutes is an idempotent
+   *    no-op, a DIFFERENT minutes is a real conflict → `ExternalDurationConflictError` (→ 409),
+   *    so a disagreeing second confirmation can NEVER post a second set of ticks (no double-draw);
+   *  - fresh parked → post the `session_consume` ticks `1 … minutes` (REUSE `deriveIdempotencyKey`),
+   *    drawing the FULL confirmed minutes at the snapshotted client rate with NO ceiling clamp
+   *    (Owner Decision 3 — the live ceiling was a UX pause, never a billing cap; overflow goes
+   *    negative → the service's `end()` settles it off-session or opens a receivable + dunning),
+   *    and ATOMICALLY flip `status` out of `wrapped` (→ `active`, which `end()` accepts and the
+   *    reaper ignores for `external`) so a concurrent second call sees the changed state.
+   * The service then calls `end()` to finalize the accrual + settle. This bounds TICK POSTING to
+   * once (the payout `created` guard bounds payout-booking to once separately).
+   */
+  async applyExternalDuration(sessionId: string, minutes: number): Promise<CreditSession> {
+    return db.transaction(async (tx) => {
+      const session = await readSessionForUpdate(tx, sessionId);
+      if (session === undefined) {
+        throw new SessionNotFoundError(sessionId);
+      }
+
+      await acquireWalletLock(tx, session.walletId);
+
+      // In-lock exactly-once guard (TOCTOU). Already finalized ⇒ nothing to do.
+      if (session.billingFinalizedAt !== null) {
+        return session;
+      }
+      // No longer the fresh parked state ⇒ duration was already applied by a prior (committed)
+      // call: same minutes is an idempotent no-op; a different minutes is a genuine conflict.
+      if (session.status !== 'wrapped') {
+        if (session.connectedMinutes === minutes) {
+          return session;
+        }
+        throw new ExternalDurationConflictError(sessionId);
+      }
+
+      // Fresh parked → draw the full confirmed minutes (no ceiling clamp). `lastTickSeq` is 0 for a
+      // parked external session (never live-metered), so this posts `1 … minutes`; the `+1` resume
+      // is defensive and each tick dedups on the ledger UNIQUE on any replay.
+      for (let seq = session.lastTickSeq + 1; seq <= minutes; seq++) {
+        await applyLedgerEntry(tx, {
+          walletId: session.walletId,
+          entryType: 'consume',
+          reason: 'session_consume',
+          amountMinor: -session.clientRateMinorPerMinute,
+          idempotencyKey: deriveIdempotencyKey({
+            reason: 'session_consume',
+            sessionId: session.id,
+            tickSeq: seq,
+          }),
+          memberId: session.initiatingMemberId,
+          sessionId: session.id,
+        });
+      }
+
+      const nextTickSeq = Math.max(session.lastTickSeq, minutes);
+      const [updated] = await tx
+        .update(creditSessions)
+        // Flip OUT of the parked `wrapped` state in the SAME locked txn — the mutex that makes a
+        // concurrent second call no-op/409 instead of drawing again.
+        .set({ status: 'active', connectedMinutes: minutes, lastTickSeq: nextTickSeq })
+        .where(eq(creditSessions.id, session.id))
+        .returning();
+      if (updated === undefined) {
+        throw new SessionNotFoundError(sessionId);
+      }
+      return updated;
     });
   },
 
@@ -896,7 +1097,10 @@ export const creditSessionsRepository = {
 
   /**
    * Reaper finder: `wrapped` sessions paused at/before `cutoff` — auto-end candidates. The
-   * caller computes `cutoff = now − WRAPPED_IDLE_END_MINUTES`.
+   * caller computes `cutoff = now − WRAPPED_IDLE_END_MINUTES`. BAL-399: `duration_source =
+   * 'live_capture'` only — an `external` session parked (`parkAwaitingDuration`) awaiting BAL-133
+   * confirmation shares the `wrapped` state but must NEVER be auto-ended by the idle reaper
+   * (that would finalize it at zero minutes before the duration is confirmed).
    */
   async findWrappedIdle(cutoff: Date): Promise<CreditSession[]> {
     return db
@@ -905,6 +1109,7 @@ export const creditSessionsRepository = {
       .where(
         and(
           eq(creditSessions.status, 'wrapped'),
+          eq(creditSessions.durationSource, 'live_capture'),
           lte(creditSessions.wrappedAt, cutoff),
           isNull(creditSessions.deletedAt)
         )
