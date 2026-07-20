@@ -240,12 +240,16 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       try {
-        const block = await resolveAdminMoneyBlock(sessionId);
-        if (block === undefined) {
-          reply.code(404).send({ error: 'session_not_found' });
+        // The service self-asserts MANAGE_PLATFORM_FEES too (defense-in-depth); the route already
+        // denied above, so `forbidden` here is only reachable if the two ever diverge.
+        const result = await resolveAdminMoneyBlock(sessionId, user.platformRole);
+        if (!result.ok) {
+          reply
+            .code(result.code === 'forbidden' ? 403 : 404)
+            .send({ error: result.code === 'forbidden' ? 'forbidden' : 'session_not_found' });
           return;
         }
-        reply.code(200).send(block);
+        reply.code(200).send(result.block);
       } catch (error) {
         log.error(
           {

@@ -11,6 +11,7 @@ import { getQueue } from '../lib/queue.js';
 import {
   driveSession,
   endSessionAsSystem,
+  finalizeBilling,
   reconcileStuckSettlement,
 } from '../services/credit-session/index.js';
 
@@ -28,6 +29,12 @@ import {
  *     (releases the hold).
  *  4. STUCK-SETTLING — `settlementStatus='processing'` past the reconcile cutoff → re-invoke the
  *     session-keyed charge (Stripe returns the same PI — no double-charge).
+ *  5. PAYOUT-RECONCILE (BAL-399) — sessions finalized but with NO payout obligation booked (a
+ *     crash or a swallowed `finalizeBilling.record()` throw between the `end()` commit and the
+ *     payout booking) → replay `finalizeBilling` DIRECTLY (books the obligation + best-effort
+ *     notices; does NOT settle/charge). Keys on the DB end-state, so it covers all four ending
+ *     paths (route, wrapped-idle reaper, max-duration reaper, external) uniformly. Idempotent via
+ *     the payout `created` guard, so it is race-safe against a concurrent legitimate finalize.
  *
  * Metering is deterministic + idempotent (tickSeq minute-index ledger key), so a re-meter that
  * crosses nothing publishes nothing. All money/lock logic lives in `@balo/db` — this stays thin.
@@ -38,6 +45,13 @@ export const CREDIT_SESSION_METER_SWEEP_CRON = '* * * * *'; // every minute
 const MS_PER_MINUTE = 60_000;
 /** A settlement stuck in `processing` past this many minutes is reconciled (avoids racing the webhook). */
 const STUCK_SETTLEMENT_MINUTES = 10;
+/**
+ * BAL-399: only reconcile a missing payout once its `billing_finalized_at` is this many minutes old
+ * — a small grace (consistent with the local `STUCK_SETTLEMENT_MINUTES` posture) so we NEVER race
+ * the µs-window between the `end()` commit and the `finalizeBilling.record()` commit of a
+ * legitimate in-flight finalize.
+ */
+const PAYOUT_RECONCILE_GRACE_MINUTES = 5;
 
 const logger = createLogger('credit-session-meter-sweep');
 
@@ -136,17 +150,57 @@ async function runStuckSettlingPass(now: Date, log: (message: string) => void): 
   return reconciled;
 }
 
+/**
+ * Pass 5 (BAL-399) — reconcile FINALIZED sessions that never got a payout obligation booked (a
+ * crash or a swallowed `finalizeBilling.record()` throw). Replays `finalizeBilling` DIRECTLY —
+ * NOT `finalizeExternalDuration` (its `billing_finalized_at` guard would block it) and NOT
+ * `endSessionAsSystem` (would needlessly re-drive the meter / re-enter settlement). `finalizeBilling`
+ * only books the payout + best-effort notices + analytics; it never settles/charges, so it is safe
+ * for overdraft(`processing`) sessions too (expert-always-paid is independent of settlement).
+ * Idempotent via the payout `created` guard.
+ */
+async function runFinalizedMissingPayoutPass(
+  now: Date,
+  log: (message: string) => void
+): Promise<number> {
+  let recovered = 0;
+  const cutoff = new Date(now.getTime() - PAYOUT_RECONCILE_GRACE_MINUTES * MS_PER_MINUTE);
+  const sessions = await creditSessionsRepository.findFinalizedMissingPayout(cutoff);
+  for (const session of sessions) {
+    try {
+      await finalizeBilling(session, session.finalizationPath ?? 'live_capture', now);
+      recovered += 1;
+      logger.info(
+        { sessionId: session.id, finalizationPath: session.finalizationPath },
+        'Recovered stranded payout obligation (finalizeBilling replay)'
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      log(`payout reconcile failed for session ${session.id}: ${message}`);
+      logger.error({ sessionId: session.id, error: message }, 'Payout reconcile failed');
+    }
+  }
+  return recovered;
+}
+
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
 export async function runSessionMeterSweep(
   now: Date,
   log: (message: string) => void = () => {}
-): Promise<{ metered: number; ended: number; cancelled: number; reconciled: number }> {
+): Promise<{
+  metered: number;
+  ended: number;
+  cancelled: number;
+  reconciled: number;
+  recovered: number;
+}> {
   const metered = await runMeterPass(now, log);
   const ended = await runWrappedIdlePass(now, log);
   const cancelled = await runStalePendingPass(now, log);
   const reconciled = await runStuckSettlingPass(now, log);
-  logger.info({ metered, ended, cancelled, reconciled }, 'Session meter sweep complete');
-  return { metered, ended, cancelled, reconciled };
+  const recovered = await runFinalizedMissingPayoutPass(now, log);
+  logger.info({ metered, ended, cancelled, reconciled, recovered }, 'Session meter sweep complete');
+  return { metered, ended, cancelled, reconciled, recovered };
 }
 
 /** Start the credit-session meter sweep worker (concurrency 1 — serialised passes). */
@@ -154,12 +208,12 @@ export function startCreditSessionMeterSweepWorker(): Worker {
   return new Worker(
     CREDIT_SESSION_METER_SWEEP_QUEUE,
     async (job: Job) => {
-      const { metered, ended, cancelled, reconciled } = await runSessionMeterSweep(
+      const { metered, ended, cancelled, reconciled, recovered } = await runSessionMeterSweep(
         new Date(),
         (m) => job.log(m)
       );
       job.log(
-        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled`
+        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered`
       );
     },
     {

@@ -22,6 +22,9 @@ const {
   mockAuthorizeExpert: vi.fn(),
 }));
 
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: {
     findForClientMoneyView: mockFindForClientMoneyView,
@@ -33,6 +36,7 @@ vi.mock('@balo/db', () => ({
   toExpertMoneyBlock: mockToExpertMoneyBlock,
   toAdminMoneyBlock: mockToAdminMoneyBlock,
 }));
+// The real pure platform-authz map — `admin`/`super_admin` hold MANAGE_PLATFORM_FEES; `user` none.
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorizeActor }));
 vi.mock('./authorize-session-expert.js', () => ({ authorizeSessionExpert: mockAuthorizeExpert }));
 
@@ -88,15 +92,24 @@ describe('resolveAdminMoneyBlock', () => {
     mockToAdminMoneyBlock.mockReturnValue({ lens: 'admin', marginAudMinor: 3750 });
   });
 
-  it('serializes the admin (margin-bearing) block from the full row', async () => {
+  it('serializes the admin (margin-bearing) block for a platform-staff role', async () => {
     mockFindForAdminView.mockResolvedValue({ id: 'session_1' });
-    const block = await resolveAdminMoneyBlock('session_1');
-    expect(block).toEqual({ lens: 'admin', marginAudMinor: 3750 });
+    const result = await resolveAdminMoneyBlock('session_1', 'admin');
+    expect(result).toEqual({ ok: true, block: { lens: 'admin', marginAudMinor: 3750 } });
   });
 
-  it('returns undefined when the session is missing', async () => {
+  it('SELF-ASSERTS the capability — a non-privileged role is forbidden WITHOUT reading the session', async () => {
+    const result = await resolveAdminMoneyBlock('session_1', 'user');
+    expect(result).toEqual({ ok: false, code: 'forbidden' });
+    // Defense-in-depth: never touches the margin-bearing view for a role that lacks the capability.
+    expect(mockFindForAdminView).not.toHaveBeenCalled();
+    expect(mockToAdminMoneyBlock).not.toHaveBeenCalled();
+  });
+
+  it('returns not_found when the session is missing (staff role)', async () => {
     mockFindForAdminView.mockResolvedValue(undefined);
-    expect(await resolveAdminMoneyBlock('nope')).toBeUndefined();
+    const result = await resolveAdminMoneyBlock('nope', 'super_admin');
+    expect(result).toEqual({ ok: false, code: 'not_found' });
     expect(mockToAdminMoneyBlock).not.toHaveBeenCalled();
   });
 });

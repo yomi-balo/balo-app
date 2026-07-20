@@ -314,18 +314,20 @@ describe('sessions routes', () => {
         sessionId: SESSION_ID,
         marginAudMinor: 3750,
       };
-      mockResolveAdminMoneyBlock.mockResolvedValue(block);
+      mockResolveAdminMoneyBlock.mockResolvedValue({ ok: true, block });
       const res = await app.inject({
         method: 'GET',
         url: `/admin/sessions/${SESSION_ID}/money-block`,
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual(block);
+      // The service receives the caller's platformRole (self-assert defense-in-depth).
+      expect(mockResolveAdminMoneyBlock).toHaveBeenCalledWith(SESSION_ID, 'admin');
     });
 
     it('404s for staff when the session is missing', async () => {
       mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
-      mockResolveAdminMoneyBlock.mockResolvedValue(undefined);
+      mockResolveAdminMoneyBlock.mockResolvedValue({ ok: false, code: 'not_found' });
       const res = await app.inject({
         method: 'GET',
         url: `/admin/sessions/${SESSION_ID}/money-block`,

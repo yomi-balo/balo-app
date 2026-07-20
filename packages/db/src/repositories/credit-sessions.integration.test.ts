@@ -10,7 +10,9 @@ import { db } from '../client';
 import {
   auditEvents,
   creditHolds,
+  creditLedger,
   creditSessions,
+  expertPayoutRecords,
   expertProfiles,
   type NewCreditWallet,
 } from '../schema';
@@ -23,6 +25,8 @@ import {
   SessionNotFoundError,
   type OpenSessionResult,
 } from './credit-sessions';
+import { expertPayoutRecordsRepository } from './expert-payout-records';
+import { toClientMoneyBlock } from './_shared/credit-views';
 import { creditLedgerRepository } from './credit-ledger';
 import { creditReceivablesRepository } from './credit-receivables';
 import { creditHoldsRepository } from './credit-holds';
@@ -987,5 +991,130 @@ describe('creditSessionsRepository — reaper guards exclude external (BAL-399)'
 
     const idle = await creditSessionsRepository.findWrappedIdle(BASE);
     expect(idle.map((s) => s.id)).not.toContain(id);
+  });
+});
+
+describe('creditSessionsRepository — displayed client charge == ledger-settled sum (BAL-399 invariant)', () => {
+  it('the money-block amountAudMinor equals Σ session_consume debits, across funded + grace minutes', async () => {
+    // 2 funded minutes (balance 500) then a mandate-backed grace/overdraft run — so at least one
+    // metered minute is a grace/overdraft minute (balance driven negative), the case that would
+    // expose any divergence between the DISPLAYED figure and the actual ledger draw.
+    const ctx = await setup({ balanceMinor: 500, mandate: true, overdraftCeilingMinor: 100_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(5)); // 5 ticks; minutes 3-5 = grace
+    await creditSessionsRepository.end(id, { now: meterAt(5) });
+
+    // Wallet went negative — this exercised real grace/overdraft minutes.
+    const wallet = await creditWalletsRepository.findById(ctx.walletId);
+    expect(wallet?.balanceMinor).toBe(500 - 5 * CLIENT_RATE_PER_MIN); // −750
+
+    // Ground truth: Σ of the session's `session_consume` debit amounts in the ledger.
+    const ledgerRows = await db
+      .select({ amountMinor: creditLedger.amountMinor })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.sessionId, id), eq(creditLedger.reason, 'session_consume')));
+    const ledgerDrawnMinor = ledgerRows.reduce((sum, row) => sum + Math.abs(row.amountMinor), 0);
+
+    // The DISPLAYED client all-in, and the derived connectedMinutes × rate, must equal the ledger.
+    const view = await creditSessionsRepository.findForClientMoneyView(id);
+    expect(view).toBeDefined();
+    const block = toClientMoneyBlock(view!);
+    const derivedMinor = view!.connectedMinutes * view!.clientRateMinorPerMinute;
+
+    expect(ledgerDrawnMinor).toBe(5 * CLIENT_RATE_PER_MIN); // 1250 — every minute drew the rate
+    expect(derivedMinor).toBe(ledgerDrawnMinor); // connectedMinutes × rate == ledger sum
+    expect(block.amountAudMinor).toBe(ledgerDrawnMinor); // displayed == ledger-settled sum
+  });
+});
+
+describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconciliation finder)', () => {
+  /** Open → connect → meter → end a session (end() stamps billingFinalizedAt; no payout row yet). */
+  async function finalizeSession(): Promise<{
+    id: string;
+    companyId: string;
+    expertProfileId: string;
+    expertAccruedMinor: number;
+    connectedMinutes: number;
+  }> {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    const ended = await creditSessionsRepository.end(id, { now: meterAt(3) });
+    return {
+      id,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      expertAccruedMinor: ended.expertAccruedMinor,
+      connectedMinutes: ended.session.connectedMinutes,
+    };
+  }
+
+  async function bookPayout(s: {
+    id: string;
+    companyId: string;
+    expertProfileId: string;
+    expertAccruedMinor: number;
+    connectedMinutes: number;
+  }): Promise<string> {
+    const { record } = await expertPayoutRecordsRepository.record({
+      sessionId: s.id,
+      expertProfileId: s.expertProfileId,
+      companyId: s.companyId,
+      amountMinor: s.expertAccruedMinor,
+      durationMinutes: s.connectedMinutes,
+      finalizationPath: 'live_capture',
+      idempotencyKey: `payout:${s.id}`,
+    });
+    return record.id;
+  }
+
+  it('picks up a finalized session with no payout; skips legacy-null / already-booked / too-recent', async () => {
+    const cutoff = new Date(BASE.getTime() + 100 * 60_000);
+
+    // A — finalized (billingFinalizedAt ≈ BASE+3.5min < cutoff), no payout → ELIGIBLE.
+    const a = await finalizeSession();
+
+    // B — finalized, but a payout obligation IS booked → SKIPPED.
+    const b = await finalizeSession();
+    await bookPayout(b);
+
+    // C — legacy pre-deploy ended session: billingFinalizedAt NULL → SKIPPED.
+    const c = await finalizeSession();
+    await db
+      .update(creditSessions)
+      .set({ billingFinalizedAt: null })
+      .where(eq(creditSessions.id, c.id));
+
+    // D — finalized after the cutoff grace (don't race an in-flight finalize) → SKIPPED.
+    const d = await finalizeSession();
+    await db
+      .update(creditSessions)
+      .set({ billingFinalizedAt: new Date(BASE.getTime() + 200 * 60_000) })
+      .where(eq(creditSessions.id, d.id));
+
+    const foundIds = (await creditSessionsRepository.findFinalizedMissingPayout(cutoff)).map(
+      (s) => s.id
+    );
+    expect(foundIds).toContain(a.id);
+    expect(foundIds).not.toContain(b.id); // payout already booked
+    expect(foundIds).not.toContain(c.id); // legacy null
+    expect(foundIds).not.toContain(d.id); // too recent
+  });
+
+  it('still returns a session whose ONLY payout record is soft-deleted (anti-join → still missing)', async () => {
+    const s = await finalizeSession();
+    const recordId = await bookPayout(s);
+    await db
+      .update(expertPayoutRecords)
+      .set({ deletedAt: new Date() })
+      .where(eq(expertPayoutRecords.id, recordId));
+
+    const cutoff = new Date(BASE.getTime() + 100 * 60_000);
+    const foundIds = (await creditSessionsRepository.findFinalizedMissingPayout(cutoff)).map(
+      (row) => row.id
+    );
+    expect(foundIds).toContain(s.id); // a soft-deleted obligation must not hide the strand
   });
 });

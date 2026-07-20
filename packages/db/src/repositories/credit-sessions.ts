@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import {
   applyBaloFee,
   deriveMinuteRateCents,
@@ -14,6 +14,7 @@ import {
   creditHolds,
   creditSessions,
   creditWallets,
+  expertPayoutRecords,
   expertProfiles,
   type CreditSession,
   type CreditSessionStatus,
@@ -1135,5 +1136,40 @@ export const creditSessionsRepository = {
         )
       )
       .orderBy(asc(creditSessions.endedAt));
+  },
+
+  /**
+   * BAL-399 reconciliation finder (the durability BACKSTOP for the expert-always-paid guarantee at
+   * the disbursement layer): sessions FINALIZED under BAL-399 semantics (`billing_finalized_at`
+   * stamped — legacy pre-deploy ended sessions have it NULL and are excluded) that have NO live
+   * payout obligation. A LEFT-JOIN anti-join on `expert_payout_records` (the deleted-row filter is
+   * in the JOIN so a soft-deleted obligation still counts as "missing"). Covers ALL four ending
+   * paths uniformly because it keys on the DB END-STATE, not the trigger: a crash — or a swallowed
+   * `finalizeBilling.record()` throw — between the `end()` commit and the payout booking leaves
+   * exactly this shape. `cutoff` is `now − grace`, so a legitimate in-flight finalize (the µs
+   * between `end()` commit and `record()` commit) is never raced. Batch-bounded via `limit`.
+   */
+  async findFinalizedMissingPayout(cutoff: Date, limit = 100): Promise<CreditSession[]> {
+    const rows = await db
+      .select({ session: creditSessions })
+      .from(creditSessions)
+      .leftJoin(
+        expertPayoutRecords,
+        and(
+          eq(expertPayoutRecords.sessionId, creditSessions.id),
+          isNull(expertPayoutRecords.deletedAt)
+        )
+      )
+      .where(
+        and(
+          isNotNull(creditSessions.billingFinalizedAt),
+          lte(creditSessions.billingFinalizedAt, cutoff),
+          isNull(creditSessions.deletedAt),
+          isNull(expertPayoutRecords.id)
+        )
+      )
+      .orderBy(asc(creditSessions.billingFinalizedAt))
+      .limit(limit);
+    return rows.map((row) => row.session);
   },
 };

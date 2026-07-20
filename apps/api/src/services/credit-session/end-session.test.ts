@@ -138,6 +138,60 @@ describe('endSession', () => {
     expect(mockEnd).not.toHaveBeenCalled();
   });
 
+  it('BAL-399 durability: an already-ended + FINALIZED session replays finalizeBilling (crash recovery)', async () => {
+    // Simulates a crash between the end() commit and the payout booking: end() reports alreadyEnded,
+    // the row already carries billingFinalizedAt + finalizationPath. The retry must re-book.
+    const finalizedSession = {
+      ...SESSION,
+      settlementStatus: 'not_required',
+      billingFinalizedAt: new Date('2026-07-20T12:45:00Z'),
+      finalizationPath: 'confirmed', // PERSISTED path — must win over the live_capture default
+    };
+    mockEnd.mockResolvedValue(endResult({ alreadyEnded: true, session: finalizedSession }));
+    const result = await endSession('session_1', 'user_1');
+    expect(result).toEqual({
+      ok: true,
+      result: { settlementStatus: 'not_required', overdraftSettledMinor: 0 },
+    });
+    // Replayed with the PERSISTED path (idempotency lives in finalizeBilling's created guard).
+    expect(mockFinalizeBilling).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeBilling).toHaveBeenCalledWith(
+      finalizedSession,
+      'confirmed',
+      expect.any(Date)
+    );
+    // The settlement machinery does NOT re-run on the already-ended branch.
+    expect(mockPublishSessionSettled).not.toHaveBeenCalled();
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
+
+  it('BAL-399 durability: a repeated alreadyEnded replay delegates with stable idempotent inputs (no double-book)', async () => {
+    // Two retries land on the alreadyEnded branch: each delegates to finalizeBilling with the SAME
+    // (session, persisted path) — the exactly-once dedup is finalizeBilling's payout `created` guard
+    // (asserted in finalize-billing.test.ts), so a second booking/notice never happens.
+    const finalizedSession = {
+      ...SESSION,
+      settlementStatus: 'not_required',
+      billingFinalizedAt: new Date('2026-07-20T12:45:00Z'),
+      finalizationPath: 'confirmed',
+    };
+    mockEnd.mockResolvedValue(endResult({ alreadyEnded: true, session: finalizedSession }));
+    await endSession('session_1', 'user_1');
+    await endSession('session_1', 'user_1');
+    expect(mockFinalizeBilling).toHaveBeenCalledTimes(2);
+    for (const call of mockFinalizeBilling.mock.calls) {
+      expect(call[0]).toEqual(finalizedSession);
+      expect(call[1]).toBe('confirmed');
+    }
+  });
+
+  it('BAL-399 durability: a legacy pre-deploy ended session (billingFinalizedAt NULL) is NOT re-finalized', async () => {
+    const legacySession = { ...SESSION, settlementStatus: 'settled', billingFinalizedAt: null };
+    mockEnd.mockResolvedValue(endResult({ alreadyEnded: true, session: legacySession }));
+    await endSession('session_1', 'user_1');
+    expect(mockFinalizeBilling).not.toHaveBeenCalled();
+  });
+
   it('publishes settled (no charge) when there is no overdraft', async () => {
     mockEnd.mockResolvedValue(endResult({ overdraftMinor: 0 }));
     const result = await endSession('session_1', 'user_1');

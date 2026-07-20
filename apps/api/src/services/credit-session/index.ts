@@ -23,6 +23,7 @@ export {
   resolveAdminMoneyBlock,
   type MemberOrExpertMoneyBlock,
   type ResolveMoneyBlockResult,
+  type ResolveAdminMoneyBlockResult,
 } from './money-block.js';
 export {
   settlementIdempotencyKey,

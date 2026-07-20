@@ -205,6 +205,17 @@ export async function endSessionAsSystem(
   const { session, overdraftMinor, expertAccruedMinor, mandateActive, alreadyEnded } = ended;
 
   if (alreadyEnded) {
+    // BAL-399 durability: a crash (or a finalizeBilling throw) between the end() commit and the
+    // payout booking strands a finalized session with NO obligation (the accrual is safe on the
+    // row, but the disbursement-layer record BAL-202/203 reads is missing, and the reaper covers
+    // only `processing` overdraft sessions — external sessions are excluded). The retry lands here.
+    // Replay finalizeBilling — idempotent via the payout `created` guard (created=false → no-op).
+    // ONLY for sessions finalized under BAL-399 semantics (billingFinalizedAt stamped — a legacy
+    // pre-deploy ended session has it NULL and must NOT get a late payout/receipt); use the
+    // PERSISTED finalizationPath, not the incoming param.
+    if (session.billingFinalizedAt !== null) {
+      await finalizeBilling(session, session.finalizationPath ?? finalizationPath, now);
+    }
     return {
       settlementStatus: session.settlementStatus,
       overdraftSettledMinor: session.overdraftSettledMinor ?? 0,

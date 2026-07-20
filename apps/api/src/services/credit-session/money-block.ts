@@ -19,8 +19,12 @@ import {
   toAdminMoneyBlock,
 } from '@balo/db';
 import type { ClientMoneyBlock, ExpertMoneyBlock, AdminMoneyBlock } from '@balo/shared/credit';
+import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { createLogger } from '@balo/shared/logging';
 import { authorizeSessionActor } from './authorize-session-actor.js';
 import { authorizeSessionExpert } from './authorize-session-expert.js';
+
+const log = createLogger('credit-session');
 
 /** The member/expert money block a `GET /sessions/:id/money-block` response carries. */
 export type MemberOrExpertMoneyBlock = ClientMoneyBlock | ExpertMoneyBlock;
@@ -28,6 +32,10 @@ export type MemberOrExpertMoneyBlock = ClientMoneyBlock | ExpertMoneyBlock;
 export type ResolveMoneyBlockResult =
   | { ok: true; block: MemberOrExpertMoneyBlock }
   | { ok: false; code: 'not_found' };
+
+export type ResolveAdminMoneyBlockResult =
+  | { ok: true; block: AdminMoneyBlock }
+  | { ok: false; code: 'forbidden' | 'not_found' };
 
 /**
  * Resolve the client OR expert money block for `sessionId` + the authenticated `userId`. A company
@@ -65,16 +73,26 @@ export async function resolveSessionMoneyBlock(
 }
 
 /**
- * Resolve the ADMIN (margin-bearing) money block. The route MUST have already passed the
- * `hasPlatformCapability` gate — this function performs NO authorization. `undefined` when the
- * session is missing/soft-deleted.
+ * Resolve the ADMIN (margin-bearing) money block. SELF-ASSERTS the platform capability
+ * (`MANAGE_PLATFORM_FEES`, ADR-1035) before reading the margin-bearing view — defense-in-depth so
+ * a future non-route caller can't leak margin even if it skips the route gate (the route also
+ * pre-checks + logs; this is the safety net). `forbidden` when the role lacks the capability
+ * (WITHOUT ever reading the session); `not_found` when the session is missing/soft-deleted.
  */
 export async function resolveAdminMoneyBlock(
-  sessionId: string
-): Promise<AdminMoneyBlock | undefined> {
+  sessionId: string,
+  platformRole: string
+): Promise<ResolveAdminMoneyBlockResult> {
+  if (!platformRoleHasCapability(platformRole, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)) {
+    log.warn(
+      { sessionId, platformRole },
+      'Admin money-block denied at the service boundary — role lacks MANAGE_PLATFORM_FEES'
+    );
+    return { ok: false, code: 'forbidden' };
+  }
   const view = await creditSessionsRepository.findForAdminView(sessionId);
   if (view === undefined) {
-    return undefined;
+    return { ok: false, code: 'not_found' };
   }
-  return toAdminMoneyBlock(view);
+  return { ok: true, block: toAdminMoneyBlock(view) };
 }
