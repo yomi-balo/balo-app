@@ -1,17 +1,11 @@
-import {
-  creditWalletsRepository,
-  partyMembershipsRepository,
-  usersRepository,
-  fxDisplayRatesRepository,
-} from '@balo/db';
-import { isFxRateStale } from '@balo/shared/pricing';
+import { creditWalletsRepository } from '@balo/db';
 import { requireUser, getCompanyContext } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { TopUpComposer } from '@/components/billing/top-up/TopUpComposer';
 import { MemberWalletNudge } from '@/components/billing/top-up/MemberWalletNudge';
-import type { DisplayFxSnapshot, WalletSnapshot } from '@/components/billing/top-up/types';
-import type { DisplayCurrency } from '@/lib/credit/display-constants';
+import type { WalletSnapshot } from '@/components/billing/top-up/types';
 import { resolveBuyerCurrency, resolveDisplayQuote } from '@/lib/credit/display-fx';
+import { resolveDisplayFx, resolveBillingAdminLabel } from '@/lib/credit/wallet-read';
 
 /**
  * BAL-377 top-up route (ADR-1040 Lane 1). Capability-gated: a MANAGE_BILLING holder gets the
@@ -20,33 +14,6 @@ import { resolveBuyerCurrency, resolveDisplayQuote } from '@/lib/credit/display-
  * only projected, serialisable snapshots to the client (never the full wallet row → no Stripe
  * customer / payment-method / mandate-ref secrets reach the client bundle).
  */
-
-/**
- * Resolve the presentation-only display-FX snapshot for a specific indicative quote (null when
- * missing or stale). Only called when the buyer is NOT an AUD buyer — an AUD buyer is charged
- * in their own currency, so the indicative is hidden entirely (see `resolveDisplayQuote`).
- */
-async function resolveDisplayFx(quote: DisplayCurrency): Promise<DisplayFxSnapshot | null> {
-  const rate = await fxDisplayRatesRepository.getLatest(quote);
-  if (rate === undefined || isFxRateStale(rate.asOf, new Date())) {
-    return null;
-  }
-  const audToQuote = Number(rate.rate);
-  if (!Number.isFinite(audToQuote) || audToQuote <= 0) {
-    return null;
-  }
-  return { currency: quote, audToQuote };
-}
-
-/** The first billing holder's display name for the member nudge copy (warm generic fallback). */
-async function resolveBillingAdminLabel(companyId: string): Promise<string> {
-  const billingUserIds = await partyMembershipsRepository.listBillingUserIds(companyId);
-  const [firstId] = billingUserIds;
-  if (firstId === undefined) return 'your billing admin';
-  const admin = await usersRepository.findById(firstId);
-  const name = [admin?.firstName, admin?.lastName].filter(Boolean).join(' ').trim();
-  return name.length > 0 ? name : 'your billing admin';
-}
 
 export default async function TopUpPage() {
   const user = await requireUser();

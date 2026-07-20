@@ -28,6 +28,7 @@ export {
   PROMO_EVENTS,
   SESSION_EVENTS,
   CASE_BILLING_EVENTS,
+  WALLET_EVENTS,
 } from '../events';
 
 export type {
@@ -73,4 +74,7 @@ export type {
   PromoEventMap,
   SessionEventMap,
   CaseBillingEventMap,
+  WalletEventMap,
+  WalletLens,
+  WalletRestingStateName,
 } from '../events';

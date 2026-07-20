@@ -142,6 +142,12 @@ export {
   type ActionItemActorRole,
 } from './action-item';
 export {
+  WALLET_EVENTS,
+  type WalletEventMap,
+  type WalletLens,
+  type WalletRestingStateName,
+} from './wallet';
+export {
   TRANSCRIPT_SERVER_EVENTS,
   type TranscriptServerEventMap,
   type TranscriptVenue,

@@ -26,6 +26,8 @@ describe('MemberWalletNudge', () => {
     render(<MemberWalletNudge balanceMinor={1_820} adminLabel="Sam" fx={null} />);
 
     const button = screen.getByRole('button', { name: /Nudge Sam to top up/i });
+    // ≥44px tap target (balo-ui) on the interactive element itself.
+    expect(button).toHaveClass('min-h-11');
     await userEvent.click(button);
 
     expect(mockNudge).toHaveBeenCalledTimes(1);
@@ -35,6 +37,38 @@ describe('MemberWalletNudge', () => {
   it('frames a used-up balance as asking the admin to top up', () => {
     render(<MemberWalletNudge balanceMinor={0} adminLabel="Sam" fx={null} />);
     expect(screen.getByText(/team's balance is used up/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Ask Sam to top up/i })).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: /Ask Sam to top up/i });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('min-h-11');
+  });
+
+  it('invokes onNudgeClick with the resting state on press (low)', async () => {
+    mockNudge.mockResolvedValue({ ok: true });
+    const onNudgeClick = vi.fn();
+    render(
+      <MemberWalletNudge
+        balanceMinor={1_820}
+        adminLabel="Sam"
+        fx={null}
+        onNudgeClick={onNudgeClick}
+      />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /Nudge Sam to top up/i }));
+
+    expect(onNudgeClick).toHaveBeenCalledWith('low');
+    expect(mockNudge).toHaveBeenCalledTimes(1);
+  });
+
+  it('invokes onNudgeClick with "zero" on a used-up balance', async () => {
+    mockNudge.mockResolvedValue({ ok: true });
+    const onNudgeClick = vi.fn();
+    render(
+      <MemberWalletNudge balanceMinor={0} adminLabel="Sam" fx={null} onNudgeClick={onNudgeClick} />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /Ask Sam to top up/i }));
+
+    expect(onNudgeClick).toHaveBeenCalledWith('zero');
   });
 });
