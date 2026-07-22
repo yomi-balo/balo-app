@@ -23,6 +23,7 @@ import { isWalletMandateActive, toSettleableSession } from '@balo/shared/credit'
 import { createLogger } from '@balo/shared/logging';
 import { SETTLEMENT_RECONCILE_MAX_AGE_MINUTES } from '@balo/shared/pricing';
 import { createOffSessionCharge, retrievePaymentIntentStatus } from '../stripe/index.js';
+import { triggerAutoTopupBestEffort } from '../credit/auto-topup.js';
 import { authorizeSessionActor } from './authorize-session-actor.js';
 import { driveSession } from './meter-driver.js';
 import { finalizeBilling } from './finalize-billing.js';
@@ -232,6 +233,15 @@ export async function endSessionAsSystem(
   if (overdraftMinor === 0) {
     await publishSessionSettled(toSettleableSession(session), now);
     log.info({ sessionId, expertAccruedMinor }, 'Session ended — settled (no charge)');
+    // BAL-379: the resting balance just finalized (possibly below the auto-top-up threshold) —
+    // consider a between-session reload. Best-effort + POST-COMMIT (end() already committed): the
+    // wrapper never throws, so a trigger fault can never break the settlement return, and the
+    // engine re-reads everything under its OWN wallet lock (this site only pokes it with walletId).
+    await triggerAutoTopupBestEffort(session.walletId, {
+      op: 'endSessionAsSystem',
+      sessionId,
+      reason: 'auto_topup_trigger',
+    });
     return { settlementStatus: 'not_required', overdraftSettledMinor: 0 };
   }
 

@@ -146,6 +146,18 @@ export const DEFAULT_TOPUP_THRESHOLD_MINOR = 2000;
 export const DEFAULT_TOPUP_RELOAD_MINOR = 10000;
 
 /**
+ * BAL-379 — how long a `credit_wallets.pending_topup_at` marker keeps a wallet's auto-top-up
+ * single-in-flight (15 min). While the marker is set AND younger than this TTL, the engine's
+ * safe-to-charge guard skips (`topup_in_flight`), so a second session can't fire a concurrent
+ * reload before the first PI's success/fail webhook clears the marker. A marker OLDER than the
+ * TTL is treated as stale/lost (the success/fail webhook never arrived) and a later crossing may
+ * re-fire — self-healing. 15 min is >> normal webhook latency (< 5s), and << Stripe's ~24h
+ * idempotency-key-expiry edge, so a re-fire after the TTL still reuses the crossing's stable key
+ * when the entry hasn't changed (and mints a fresh key when a new session has moved the ledger).
+ */
+export const TOPUP_IN_FLIGHT_TTL_MS = 15 * 60 * 1000;
+
+/**
  * Rolling wallet expiry window, in months: expiry = last ledger-affecting interaction
  * + this many months. Feeds `make_interval(months => WALLET_EXPIRY_MONTHS)` in
  * `applyLedgerEntry`.

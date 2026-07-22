@@ -102,11 +102,18 @@ export type StripeEffect =
       outcome: unknown;
       /**
        * BAL-378: PI metadata `reason` + `sessionId` — an ASYNC `overdraft_settlement` failure
-       * (after a `processing` accept) routes to the receivable/dunning path; other reasons
-       * (auto_topup / manual_purchase) keep the log-only behaviour.
+       * (after a `processing` accept) routes to the receivable/dunning path; `manual_purchase`
+       * keeps the log-only behaviour.
        */
       reason: string | null;
       sessionId: string | null;
+      /**
+       * BAL-379: PI metadata `triggeringEntryId` + the PI `amount` — an ASYNC `auto_topup`
+       * failure routes to the failed NOTICE (notification-only, NO receivable). Both `null` for
+       * non-auto_topup reasons.
+       */
+      triggeringEntryId: string | null;
+      amountMinor: number | null;
     }
   | {
       kind: 'dispute';

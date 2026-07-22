@@ -1,0 +1,1 @@
+ALTER TABLE "credit_wallets" ADD COLUMN "pending_topup_at" timestamp with time zone;

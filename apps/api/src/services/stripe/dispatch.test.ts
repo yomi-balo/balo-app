@@ -27,6 +27,11 @@ const {
   mockPublishSessionSettled,
   mockPublishSettlementFailure,
   mockNotificationPublish,
+  mockWalletFindById,
+  mockSetPendingTopupAt,
+  mockPublishAutoTopupExecuted,
+  mockPublishAutoTopupFailed,
+  mockTriggerAutoTopup,
 } = vi.hoisted(() => ({
   // Default: a fresh credit onto a wallet the receipt can read (companyId/balance/expiry).
   mockApplyLedgerEntry: vi.fn(async () => ({
@@ -60,6 +65,11 @@ const {
   mockPublishSessionSettled: vi.fn(),
   mockPublishSettlementFailure: vi.fn(),
   mockNotificationPublish: vi.fn(),
+  mockWalletFindById: vi.fn(),
+  mockSetPendingTopupAt: vi.fn(),
+  mockPublishAutoTopupExecuted: vi.fn(),
+  mockPublishAutoTopupFailed: vi.fn(),
+  mockTriggerAutoTopup: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -71,6 +81,8 @@ vi.mock('@balo/db', () => ({
   creditWalletsRepository: {
     applyMandate: mockApplyMandate,
     applyMandateStatus: mockApplyMandateStatus,
+    findById: mockWalletFindById,
+    setPendingTopupAt: mockSetPendingTopupAt,
   },
   creditSessionsRepository: {
     findById: mockSessionFindById,
@@ -98,6 +110,11 @@ vi.mock('../../lib/stripe.js', () => ({
   }),
 }));
 vi.mock('./charges.js', () => ({ retrieveSettlement: mockRetrieveSettlement }));
+vi.mock('../credit/auto-topup.js', () => ({
+  publishAutoTopupExecuted: mockPublishAutoTopupExecuted,
+  publishAutoTopupFailed: mockPublishAutoTopupFailed,
+  triggerAutoTopupBestEffort: mockTriggerAutoTopup,
+}));
 
 import { applyStripeEffect, resolveStripeEffect } from './dispatch.js';
 import { StripeSettlementError } from './errors.js';
@@ -193,6 +210,7 @@ describe('resolveStripeEffect', () => {
     const effect = await resolveStripeEffect(
       event('payment_intent.payment_failed', {
         id: 'pi_2',
+        amount: 5000,
         latest_charge: 'ch_2',
         metadata: { walletId: 'wallet_1' },
         last_payment_error: { code: 'card_declined' },
@@ -206,6 +224,8 @@ describe('resolveStripeEffect', () => {
       outcome: { type: 'blocked', reason: 'highest_risk_level' },
       reason: null,
       sessionId: null,
+      triggeringEntryId: null,
+      amountMinor: 5000,
     });
   });
 
@@ -285,6 +305,7 @@ describe('resolveStripeEffect', () => {
     const effect = await resolveStripeEffect(
       event('payment_intent.payment_failed', {
         id: 'pi_3',
+        amount: 10_000,
         latest_charge: null,
         metadata: { walletId: 'wallet_1' },
         last_payment_error: { code: 'card_declined', decline_code: 'generic_decline' },
@@ -298,6 +319,8 @@ describe('resolveStripeEffect', () => {
       outcome: { code: 'card_declined', decline_code: 'generic_decline' },
       reason: null,
       sessionId: null,
+      triggeringEntryId: null,
+      amountMinor: 10_000,
     });
     expect(mockChargesRetrieve).not.toHaveBeenCalled();
   });
@@ -307,6 +330,7 @@ describe('resolveStripeEffect', () => {
     const effect = await resolveStripeEffect(
       event('payment_intent.payment_failed', {
         id: 'pi_4',
+        amount: 10_000,
         latest_charge: 'ch_4',
         metadata: {}, // no walletId → null
         last_payment_error: { code: 'processing_error' },
@@ -320,6 +344,8 @@ describe('resolveStripeEffect', () => {
       outcome: { code: 'processing_error' },
       reason: null,
       sessionId: null,
+      triggeringEntryId: null,
+      amountMinor: 10_000,
     });
   });
 
@@ -396,6 +422,12 @@ describe('applyStripeEffect', () => {
       wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
     });
     mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_1' }, created: true });
+    // BAL-379: the auto_topup charge_failed arm reads the committed wallet (balance unchanged).
+    mockWalletFindById.mockResolvedValue({
+      companyId: 'company_1',
+      balanceMinor: 500,
+      topupReloadMinor: 10_000,
+    });
   });
 
   it('applies a manual_purchase credit via applyLedgerEntry with the PI-keyed idempotency key', async () => {
@@ -516,7 +548,7 @@ describe('applyStripeEffect', () => {
     expect(mockNotificationPublish).not.toHaveBeenCalled();
   });
 
-  it('applies an auto_topup credit with the wallet+entry-keyed idempotency key', async () => {
+  it('applies a FRESH auto_topup credit with the entry-keyed key + surfaces the executed notice (BAL-379)', async () => {
     const postCommit = await applyStripeEffect(tx, {
       kind: 'credit',
       reason: 'auto_topup',
@@ -535,9 +567,42 @@ describe('applyStripeEffect', () => {
         memberId: null,
       })
     );
-    // auto_topup never surfaces a top-up receipt (its own lane owns any signal).
+    // A fresh auto_topup credit CLEARS the in-flight marker in the webhook txn + DEFERS the
+    // executed notice + AUTO_TOPUP_FIRED analytics post-commit. `triggerBalanceMinor` = balanceAfter
+    // (17600) − reload (7600) = 10000.
+    expect(mockSetPendingTopupAt).toHaveBeenCalledWith('wallet_1', null, tx);
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockPublishAutoTopupExecuted).toHaveBeenCalledWith({
+      walletId: 'wallet_1',
+      companyId: 'company_1',
+      triggeringEntryId: 'entry_1',
+      reloadedMinor: 7600,
+      triggerBalanceMinor: 10_000,
+      balanceAfterMinor: 17_600,
+      expiresAt: new Date('2027-01-01').toISOString(),
+    });
+  });
+
+  it('does NOT surface the executed notice OR clear the marker on a deduped (replayed) auto_topup credit (BAL-379)', async () => {
+    mockApplyLedgerEntry.mockResolvedValueOnce({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'auto_topup',
+      walletId: 'wallet_1',
+      memberId: null,
+      sessionId: null,
+      triggeringEntryId: 'entry_1',
+      promoCode: null,
+      settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_9' },
+    });
     expect(postCommit).toEqual([]);
-    expect(mockNotificationPublish).not.toHaveBeenCalled();
+    expect(mockPublishAutoTopupExecuted).not.toHaveBeenCalled();
+    expect(mockSetPendingTopupAt).not.toHaveBeenCalled();
   });
 
   it('activates the mandate via applyMandate', async () => {
@@ -562,20 +627,71 @@ describe('applyStripeEffect', () => {
     expect(mockApplyMandateStatus).toHaveBeenCalledWith(tx, 'wallet_1', 'failed');
   });
 
-  it('logs a non-overdraft charge_failed without any DB write or post-commit effect', async () => {
+  it('logs a log-only charge_failed (manual_purchase) without any DB write or post-commit effect', async () => {
     const postCommit = await applyStripeEffect(tx, {
       kind: 'charge_failed',
       walletId: 'wallet_1',
       paymentIntentId: 'pi_2',
       code: 'card_declined',
       outcome: { type: 'blocked', reason: 'highest_risk_level' },
-      reason: 'auto_topup',
+      reason: 'manual_purchase',
       sessionId: null,
+      triggeringEntryId: null,
+      amountMinor: null,
     });
     expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
     expect(mockMarkSettlementResult).not.toHaveBeenCalled();
     expect(mockReceivableOpen).not.toHaveBeenCalled();
     expect(postCommit).toEqual([]);
+  });
+
+  it('routes an async auto_topup charge_failed → failed NOTICE only, NO receivable (BAL-379)', async () => {
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_1',
+      paymentIntentId: 'pi_at',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'auto_topup',
+      sessionId: null,
+      triggeringEntryId: 'entry_7',
+      amountMinor: 10_000,
+    });
+    // NO receivable, NO settlement mark — an auto-top-up failure is not money owed.
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(mockMarkSettlementResult).not.toHaveBeenCalled();
+    // The reload definitively failed → CLEAR the in-flight marker in the webhook txn.
+    expect(mockSetPendingTopupAt).toHaveBeenCalledWith('wallet_1', null, tx);
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    // Notification-only recovery belt: emitAnalytics false, keyed on the crossing + wallet balance.
+    expect(mockPublishAutoTopupFailed).toHaveBeenCalledWith({
+      walletId: 'wallet_1',
+      companyId: 'company_1',
+      triggeringEntryId: 'entry_7',
+      reason: 'declined',
+      attemptedMinor: 10_000,
+      triggerBalanceMinor: 500,
+      failureCode: 'card_declined',
+      emitAnalytics: false,
+    });
+  });
+
+  it('auto_topup charge_failed no-ops when the wallet is missing (BAL-379)', async () => {
+    mockWalletFindById.mockResolvedValueOnce(undefined);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_gone',
+      paymentIntentId: 'pi_at2',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'auto_topup',
+      sessionId: null,
+      triggeringEntryId: 'entry_7',
+      amountMinor: 10_000,
+    });
+    expect(postCommit).toEqual([]);
+    expect(mockPublishAutoTopupFailed).not.toHaveBeenCalled();
   });
 
   it('records a dispute audit row', async () => {
@@ -638,11 +754,17 @@ describe('applyStripeEffect', () => {
     );
     expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, tx);
 
-    // The settled publish is DEFERRED to post-commit.
+    // The settled publish is DEFERRED post-commit, ALONGSIDE the BAL-379 auto-top-up trigger
+    // (an overdraft settlement lands the wallet at ~0 < threshold ⇒ a reload crossing).
     expect(mockPublishSessionSettled).not.toHaveBeenCalled();
-    expect(postCommit).toHaveLength(1);
+    expect(postCommit).toHaveLength(2);
     await postCommit[0]?.();
+    await postCommit[1]?.();
     expect(mockPublishSessionSettled).toHaveBeenCalled();
+    expect(mockTriggerAutoTopup).toHaveBeenCalledWith(
+      'wallet_1',
+      expect.objectContaining({ reason: 'auto_topup_trigger' })
+    );
   });
 
   it('a REPLAYED overdraft_settlement credit re-marks idempotently but never re-publishes (FIX 9)', async () => {
@@ -693,6 +815,8 @@ describe('applyStripeEffect', () => {
       outcome: null,
       reason: 'overdraft_settlement',
       sessionId: 'session_2',
+      triggeringEntryId: null,
+      amountMinor: null,
     });
     expect(mockMarkSettlementResult).toHaveBeenCalledWith(
       tx,
@@ -738,6 +862,8 @@ describe('applyStripeEffect', () => {
       outcome: null,
       reason: 'overdraft_settlement',
       sessionId: 'session_2',
+      triggeringEntryId: null,
+      amountMinor: null,
     });
     expect(mockReceivableOpen).toHaveBeenCalled();
     expect(postCommit).toEqual([]);
@@ -753,6 +879,8 @@ describe('applyStripeEffect', () => {
       outcome: null,
       reason: 'overdraft_settlement',
       sessionId: 'session_missing',
+      triggeringEntryId: null,
+      amountMinor: null,
     });
     expect(mockMarkSettlementResult).not.toHaveBeenCalled();
     expect(mockReceivableOpen).not.toHaveBeenCalled();

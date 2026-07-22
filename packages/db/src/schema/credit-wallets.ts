@@ -91,6 +91,17 @@ export const creditWallets = pgTable(
     // brand-new wallet before any SetupIntent). Also off client surfaces (invariant #1).
     mandateStatus: mandateStatusEnum('mandate_status'),
 
+    // BAL-379 — durable per-wallet auto-top-up single-in-flight marker. NULL = no auto-top-up
+    // charge in flight. Set (under the wallet advisory lock) when the engine decides to charge a
+    // reload; cleared by the success/fail webhook (or on a definite sync failure). While set AND
+    // younger than TOPUP_IN_FLIGHT_TTL_MS, a second session cannot fire a concurrent reload — this
+    // closes the "PI in flight but no ledger row yet" double-charge window (open() allows
+    // below-threshold starts on the mandate, so a new session can end low before PI₁ settles). A
+    // stale marker (older than the TTL) is a lost webhook, and a later crossing may re-fire. This
+    // is INTERNAL operational state — NEVER on a client surface (excluded from the allow-list
+    // CLIENT_WALLET_VIEW_COLUMNS).
+    pendingTopupAt: timestamp('pending_topup_at', { withTimezone: true }),
+
     // Mutable projection ⇒ `updated_at` is correct. NO `...softDelete` (see header).
     ...timestamps,
   },

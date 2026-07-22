@@ -346,3 +346,30 @@ describe('creditWalletsRepository.applyMandate / applyMandateStatus (BAL-382)', 
     ).rejects.toThrow(/not found/i);
   });
 });
+
+describe('creditWalletsRepository.setPendingTopupAt (BAL-379 single-in-flight marker)', () => {
+  it('arms then clears the pending_topup_at marker (round-trip)', async () => {
+    const { wallet } = await creditWalletFactory();
+    // Fresh wallet — no marker.
+    expect((await creditWalletsRepository.findById(wallet.id))?.pendingTopupAt).toBeNull();
+
+    const at = new Date('2027-03-01T10:00:00.000Z');
+    await creditWalletsRepository.setPendingTopupAt(wallet.id, at);
+    const armed = await creditWalletsRepository.findById(wallet.id);
+    expect(armed?.pendingTopupAt?.getTime()).toBe(at.getTime());
+
+    await creditWalletsRepository.setPendingTopupAt(wallet.id, null);
+    const cleared = await creditWalletsRepository.findById(wallet.id);
+    expect(cleared?.pendingTopupAt).toBeNull();
+  });
+
+  it('composes under a caller transaction (exec) — the arm is visible after commit', async () => {
+    const { wallet } = await creditWalletFactory();
+    const at = new Date('2027-03-02T12:00:00.000Z');
+    await db.transaction(async (tx) => {
+      await creditWalletsRepository.setPendingTopupAt(wallet.id, at, tx);
+    });
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.pendingTopupAt?.getTime()).toBe(at.getTime());
+  });
+});

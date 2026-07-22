@@ -538,6 +538,15 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // template switches on payload.window (60|30). Server-only (published by the sweep).
   'credit.dormancy_reminder': emailAndInApp('company_billing_admins', 'credit-dormancy-reminder'),
   'credit.balance_expired': emailAndInApp('company_billing_admins', 'credit-balance-expired'),
+  // BAL-379 (ADR-1040): between-session auto-top-up executed / failed. Both fan out to the
+  // company's MANAGE_BILLING holders (recipient 'company_billing_admins', resolved from
+  // data.billingUserIds) via email + in-app. Warm executed confirmation; calm, non-dunning
+  // failed copy. Server-only (published from the Stripe webhook / settlement path post-commit).
+  'credit.auto_topup.executed': emailAndInApp(
+    'company_billing_admins',
+    'credit-auto-topup-executed'
+  ),
+  'credit.auto_topup.failed': emailAndInApp('company_billing_admins', 'credit-auto-topup-failed'),
   // BAL-378 (ADR-1040 Lane 2): in-session drawdown / settlement notices. Warm, no
   // "overdraft" anywhere (billing admins are client-side too). Self events carry `userId`
   // (resolver hydrates data.user → the SMS `phoneVerifiedAt` gate); fan-out events carry

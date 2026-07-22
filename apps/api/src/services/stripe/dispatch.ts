@@ -13,6 +13,11 @@ import { createLogger } from '@balo/shared/logging';
 import { toSettleableSession } from '@balo/shared/credit';
 import { getStripeClient } from '../../lib/stripe.js';
 import { publishSessionSettled, publishSettlementFailure } from '../credit-session/notify.js';
+import {
+  publishAutoTopupExecuted,
+  publishAutoTopupFailed,
+  triggerAutoTopupBestEffort,
+} from '../credit/auto-topup.js';
 import { notificationEvents } from '../../notifications/publisher.js';
 import { retrieveSettlement } from './charges.js';
 import type { CreditTopupReceipt, PostCommitEffect, StripeEffect } from './types.js';
@@ -105,6 +110,10 @@ async function resolvePaymentIntentFailed(pi: Stripe.PaymentIntent): Promise<Str
     // BAL-378: route an ASYNC overdraft-settlement failure to the receivable/dunning path.
     reason: pi.metadata.reason ?? null,
     sessionId: pi.metadata.sessionId ?? null,
+    // BAL-379: route an ASYNC auto_topup failure to the failed NOTICE (no receivable). `pi.amount`
+    // is the AUD reload minor amount we tried to charge.
+    triggeringEntryId: pi.metadata.triggeringEntryId ?? null,
+    amountMinor: pi.amount,
   };
 }
 
@@ -258,7 +267,19 @@ async function markSettlementSettled(
     return [];
   }
   const settleable = toSettleableSession(session);
-  return [() => publishSessionSettled(settleable, new Date())];
+  return [
+    () => publishSessionSettled(settleable, new Date()),
+    // BAL-379: an overdraft settlement lands the wallet at ~0 (< threshold) with an active
+    // mandate ⇒ a legitimate between-session reload crossing. Best-effort, post-commit — a
+    // trigger fault must never make Stripe retry the (already-committed) settlement webhook.
+    // Gated on `!deduped` above so a webhook replay never re-evaluates (a replay is inert
+    // anyway via the stable key).
+    () =>
+      triggerAutoTopupBestEffort(session.walletId, {
+        op: 'applyStripeEffect',
+        reason: 'auto_topup_trigger',
+      }),
+  ];
 }
 
 /**
@@ -406,9 +427,39 @@ async function applyCredit(
     );
   }
 
+  // BAL-379: a FRESH auto_topup credit surfaces the executed notice + AUTO_TOPUP_FIRED analytics
+  // as a post-commit publish. `base.wallet.balanceMinor` is the POST-credit balance, so the
+  // pre-reload resting balance that triggered the crossing is `balanceAfter − reload`. Gated on
+  // `!base.deduped` ⇒ exactly once per crossing (a replayed webhook returns [], no re-notify /
+  // no re-analytics). `ledgerKeyForCredit` guarantees a non-null `triggeringEntryId` here.
+  if (effect.reason === 'auto_topup') {
+    if (base.deduped || effect.triggeringEntryId === null) {
+      return [];
+    }
+    // BAL-379: the reload landed — CLEAR the single-in-flight marker in the SAME webhook txn so
+    // future reloads can fire (at-most-one-in-flight per wallet ⇒ this marker is our own crossing's,
+    // so an unconditional clear on the fresh credit is correct).
+    await creditWalletsRepository.setPendingTopupAt(effect.walletId, null, tx);
+    const reloadedMinor = effect.settlement.creditAmountMinor; // = balance_transaction.amount (AUD face value)
+    // `triggerBalanceMinor` reconstructs the PRE-reload resting balance from the POST-credit balance
+    // (`balanceAfter − reload`). ANALYTICS-ONLY and approximate: an independent ledger entry landing
+    // between fire and this credit (rare, and rarer still with the in-flight marker) would skew it.
+    // No state is threaded through Stripe — this is the honest post-commit reconstruction.
+    const executed = {
+      walletId: effect.walletId,
+      companyId: base.wallet.companyId,
+      triggeringEntryId: effect.triggeringEntryId,
+      reloadedMinor,
+      triggerBalanceMinor: base.wallet.balanceMinor - reloadedMinor,
+      balanceAfterMinor: base.wallet.balanceMinor,
+      expiresAt: base.wallet.expiresAt ? base.wallet.expiresAt.toISOString() : '',
+    };
+    return [() => publishAutoTopupExecuted(executed)];
+  }
+
   // BAL-377: only a FRESH manual_purchase surfaces a receipt (+ grants any promo) as a
   // post-commit publish. A deduped replay never re-grants or re-publishes; auto_topup has its
-  // own lane and overdraft_settlement is handled above.
+  // own lane (above) and overdraft_settlement is handled above.
   if (effect.reason !== 'manual_purchase' || base.deduped) {
     return [];
   }
@@ -509,6 +560,37 @@ async function applyChargeFailed(
   // reasons keep the log-only behaviour (their consumer lane owns any follow-up).
   if (effect.reason === 'overdraft_settlement' && effect.sessionId !== null) {
     return handleOverdraftChargeFailed(tx, effect.sessionId, effect.paymentIntentId);
+  }
+  // BAL-379: an async auto_topup failure routes to the failed NOTICE ONLY — NO receivable, NO
+  // account hold (an auto-top-up failure is not money owed; the company keeps spending its
+  // existing balance). Notification-only recovery belt: `emitAnalytics: false` so the SYNC engine
+  // owns the analytics; the shared `…:failed` correlationId dedups this against the sync notice.
+  // The failed PI wrote nothing, so a committed wallet read is correct (balance unchanged since fire).
+  if (
+    effect.reason === 'auto_topup' &&
+    effect.walletId !== null &&
+    effect.triggeringEntryId !== null
+  ) {
+    const walletId = effect.walletId;
+    const triggeringEntryId = effect.triggeringEntryId;
+    const wallet = await creditWalletsRepository.findById(walletId);
+    if (wallet === undefined) {
+      return [];
+    }
+    // BAL-379: the reload definitively failed — CLEAR the single-in-flight marker (in the webhook
+    // txn) so a future reload can fire. Idempotent if the sync engine already cleared it.
+    await creditWalletsRepository.setPendingTopupAt(walletId, null, tx);
+    const failed = {
+      walletId,
+      companyId: wallet.companyId,
+      triggeringEntryId,
+      reason: 'declined' as const,
+      attemptedMinor: effect.amountMinor ?? wallet.topupReloadMinor,
+      triggerBalanceMinor: wallet.balanceMinor,
+      failureCode: effect.code ?? undefined,
+      emitAnalytics: false,
+    };
+    return [() => publishAutoTopupFailed(failed)];
   }
   return [];
 }

@@ -31,6 +31,8 @@ describe('CREDIT_SERVER_EVENTS', () => {
       'DORMANCY_REMINDER_SENT',
       'BALANCE_EXPIRED',
       'FX_CACHE_STALE',
+      'AUTO_TOPUP_FIRED',
+      'AUTO_TOPUP_FAILED',
     ]);
   });
 
@@ -38,6 +40,8 @@ describe('CREDIT_SERVER_EVENTS', () => {
     expect(CREDIT_SERVER_EVENTS.DORMANCY_REMINDER_SENT).toBe('credit_dormancy_reminder_sent');
     expect(CREDIT_SERVER_EVENTS.BALANCE_EXPIRED).toBe('credit_balance_expired');
     expect(CREDIT_SERVER_EVENTS.FX_CACHE_STALE).toBe('credit_fx_cache_stale');
+    expect(CREDIT_SERVER_EVENTS.AUTO_TOPUP_FIRED).toBe('credit_auto_topup_fired');
+    expect(CREDIT_SERVER_EVENTS.AUTO_TOPUP_FAILED).toBe('credit_auto_topup_failed');
   });
 
   it('values follow the snake_case naming convention', () => {

@@ -42,6 +42,8 @@ import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
 import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
+import { CreditAutoTopupExecutedEmail } from './credit-auto-topup-executed.js';
+import { CreditAutoTopupFailedEmail } from './credit-auto-topup-failed.js';
 import { SessionSettledEmail } from './session-settled.js';
 import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
 import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
@@ -740,6 +742,43 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'About your Balo balance',
+    };
+  },
+
+  // BAL-379 (ADR-1040) auto-top-up executed — server-only, EMAIL to the billing admins. Warm
+  // confirmation; `reloadedMinor` / `balanceAfterMinor` / `expiresAt` are AUD face-value display
+  // facts formatted here (NO fee/margin/overdraft figure). CTA lands on the billing panel.
+  'credit-auto-topup-executed': (data) => {
+    return {
+      component: React.createElement(CreditAutoTopupExecutedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        reloaded: formatAudMinor(numberCount(data.reloadedMinor)),
+        balanceAfter: formatAudMinor(numberCount(data.balanceAfterMinor)),
+        expiryDate: formatExpiryDateLong((data.expiresAt as string) ?? ''),
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject: "Auto-top-up complete — your team's balance is topped up",
+    };
+  },
+
+  // BAL-379 (ADR-1040) auto-top-up failed — server-only, EMAIL to the billing admins. Calm,
+  // non-dunning (NO receivable, nothing owed). `reason` switches SCA vs hard-decline copy;
+  // `attemptedMinor` is the AUD reload face value. CTA lands on the billing panel.
+  'credit-auto-topup-failed': (data) => {
+    const reason = data.reason === 'requires_action' ? 'requires_action' : 'declined';
+    return {
+      component: React.createElement(CreditAutoTopupFailedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        attempted: formatAudMinor(numberCount(data.attemptedMinor)),
+        reason,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject:
+        reason === 'requires_action'
+          ? 'Confirm your card to keep auto-top-up on'
+          : 'A quick card update keeps auto-top-up on',
     };
   },
 
