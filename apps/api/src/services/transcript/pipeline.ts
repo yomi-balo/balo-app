@@ -93,27 +93,44 @@ function auditColumns(audit: LlmAudit): {
   };
 }
 
-/** Money/rate tokens that must never surface on the lens-shared recap headline (defense-in-depth). */
+/**
+ * UNAMBIGUOUS money signals that must never surface on the lens-shared recap headline
+ * (defense-in-depth). Deliberately NARROW — currency symbols/codes, explicit per-hour rate
+ * expressions, and `fee(s)`/`invoice`. Ordinary consulting words (`rate`, `rates`, `quote`,
+ * `price`, `pricing`, `cost`) are EXCLUDED: they collide with non-commercial usage ("rate of
+ * adoption", "a quote from their vendor doc"). Suppression is now observable (an analytic fires),
+ * so any residual false positives can be measured and the vocabulary tuned. Flat quantifier-free
+ * alternation (ReDoS-safe re SonarCloud S5852).
+ */
 const MONEY_RATE_PATTERN =
-  /(\$|€|£|₤|\bAUD\b|\bUSD\b|\bGBP\b|\bEUR\b|\bper hour\b|\bper hr\b|\/hr\b|\/hour\b|\bhourly\b|\brate\b|\brates\b|\bfee\b|\bfees\b|\bprice\b|\bpricing\b|\binvoice\b|\bquote\b)/i;
+  /(\$|€|£|₤|\bAUD\b|\bUSD\b|\bGBP\b|\bEUR\b|\bper hour\b|\bper hr\b|\/hr\b|\/hour\b|\bhourly\b|\bfees?\b|\binvoice\b)/i;
 
-/** Short, plain-text, party-safe headline from the summary; `undefined` when empty (Noop). */
-function buildSummaryHeadline(summary: string): string | undefined {
+/**
+ * Short, plain-text, party-safe headline from the summary. `suppressed` is `true` ONLY when the
+ * money guard matched (so the caller can emit a tuning analytic) — an empty/Noop summary yields
+ * `{ headline: undefined, suppressed: false }` (nothing to suppress).
+ */
+function buildSummaryHeadline(summary: string): {
+  headline: string | undefined;
+  suppressed: boolean;
+} {
   const trimmed = summary.trim();
   if (trimmed.length === 0) {
-    return undefined;
+    return { headline: undefined, suppressed: false };
   }
   const [firstLine] = trimmed.split('\n');
   const oneLiner =
     firstLine !== undefined && firstLine.trim().length > 0 ? firstLine.trim() : trimmed;
-  // Defense-in-depth: never surface a money/rate one-liner on the lens-shared recap. A dropped
-  // headline just means the recap has no one-liner — it still fires.
+  // Defense-in-depth: never surface a money one-liner on the lens-shared recap. A dropped headline
+  // just means the recap has no one-liner — it still fires — and the caller records the suppression.
   if (MONEY_RATE_PATTERN.test(oneLiner)) {
-    return undefined;
+    return { headline: undefined, suppressed: true };
   }
-  return oneLiner.length > SUMMARY_HEADLINE_MAX
-    ? `${oneLiner.slice(0, SUMMARY_HEADLINE_MAX)}…`
-    : oneLiner;
+  const headline =
+    oneLiner.length > SUMMARY_HEADLINE_MAX
+      ? `${oneLiner.slice(0, SUMMARY_HEADLINE_MAX)}…`
+      : oneLiner;
+  return { headline, suppressed: false };
 }
 
 /**
@@ -315,6 +332,7 @@ async function stagePublishRecap(
   }
 
   const recipientId = await companiesRepository.findOwnerUserIdByCompanyId(engagement.companyId);
+  const { headline, suppressed } = buildSummaryHeadline(summaryText);
   const payload: RecapReadyPayload = {
     correlationId: `${transcript.id}:recap_ready`,
     engagementId: transcript.engagementId,
@@ -323,9 +341,17 @@ async function stagePublishRecap(
     recipientId,
     expertProfileId: engagement.expertProfileId,
     actionItemCount: extractedItems.length,
-    summaryHeadline: buildSummaryHeadline(summaryText),
+    summaryHeadline: headline,
     recordingRef: transcript.recordingRef,
   };
+  if (suppressed) {
+    // Observability for the money guard: lets us measure false positives + tune the vocabulary.
+    trackServer(TRANSCRIPT_SERVER_EVENTS.SUMMARY_HEADLINE_SUPPRESSED, {
+      engagement_id: transcript.engagementId,
+      meeting_id: transcript.meetingId,
+      distinct_id: PIPELINE_DISTINCT_ID,
+    });
+  }
   await notificationEvents.publish('recap.ready', payload);
   await transcriptsRepository.markRecapPublished(transcript.id);
   log.info({ transcriptId: transcript.id }, 'Recap published (recap.ready)');

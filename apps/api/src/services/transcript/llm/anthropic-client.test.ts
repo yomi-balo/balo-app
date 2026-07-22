@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateText, generateObject } from 'ai';
-import { createLlmClient } from './anthropic-client.js';
+import { createLlmClient, LlmOutputTruncatedError } from './anthropic-client.js';
 import { dailyMultiSpeaker } from '../normalizers/__fixtures__/daily-deepgram.js';
 import { normalizeDailyDeepgram } from '../normalizers/daily-deepgram.js';
 
@@ -145,7 +145,7 @@ describe('createLlmClient', () => {
 
     const client = createLlmClient();
     await expect(client.cleanupTranscript({ transcript: canonical })).rejects.toThrow(
-      /truncated at the .*-token cap/
+      LlmOutputTruncatedError
     );
   });
 
@@ -159,7 +159,7 @@ describe('createLlmClient', () => {
 
     const client = createLlmClient();
     await expect(client.summarize({ cleanedText: 'CLEANED' })).rejects.toThrow(
-      /truncated at the .*-token cap/
+      LlmOutputTruncatedError
     );
   });
 

@@ -1,7 +1,7 @@
 /**
  * BAL-387 (ADR-1013 + ADR-1043) — transcript pipeline analytics.
  *
- * SERVER-ONLY. All three events fire from the API transcript pipeline / capture-failure seam via
+ * SERVER-ONLY. These events fire from the API transcript pipeline / capture-failure seam via
  * `trackServer`. They must NOT be added to `AllEvents` (the client union) nor to the
  * `apps/web/src/test/setup.ts` client mock — that mock is client-only.
  *
@@ -19,6 +19,8 @@ export const TRANSCRIPT_SERVER_EVENTS = {
   SUMMARY_READY: 'summary_ready',
   /** The pipeline permanently failed after exhausting retries (from worker.on('failed')). */
   TRANSCRIPT_FAILED: 'transcript_failed',
+  /** The summary one-liner was dropped by the money guard (observability for tuning false positives). */
+  SUMMARY_HEADLINE_SUPPRESSED: 'summary_headline_suppressed',
 } as const;
 
 /** Capture venue (`daily_deepgram` → `balo_video`; `recall` → `external`). */
@@ -50,6 +52,11 @@ export interface TranscriptServerEventMap {
   [TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED]: {
     stage: string;
     vendor: 'daily_deepgram' | 'recall';
+    distinct_id: string;
+  };
+  [TRANSCRIPT_SERVER_EVENTS.SUMMARY_HEADLINE_SUPPRESSED]: {
+    engagement_id: string;
+    meeting_id: string | null;
     distinct_id: string;
   };
 }

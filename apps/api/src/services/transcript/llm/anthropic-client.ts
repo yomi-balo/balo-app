@@ -29,6 +29,19 @@ const MAX_OUTPUT_TOKENS = 8192;
  */
 const CLEANUP_MAX_OUTPUT_TOKENS = 32000;
 
+/**
+ * Thrown when an LLM text stage hits its output-token cap (`finishReason === 'length'`). This is a
+ * DETERMINISTIC failure — a retry re-spends a full Sonnet pass for the same truncated result — so
+ * the job layer maps it to BullMQ's `UnrecoverableError` to fail fast (no retry storm). Defined
+ * here WITHOUT importing bullmq, to keep the LLM module free of the queue dependency (layering).
+ */
+export class LlmOutputTruncatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LlmOutputTruncatedError';
+  }
+}
+
 /** Warn ONCE across the process when running without a key (avoids per-run log spam). */
 let noopWarned = false;
 
@@ -110,7 +123,7 @@ class AnthropicLlmClient implements LlmClient {
       maxOutputTokens: CLEANUP_MAX_OUTPUT_TOKENS,
     });
     if (result.finishReason === 'length') {
-      throw new Error(
+      throw new LlmOutputTruncatedError(
         `Transcript cleanup output was truncated at the ${CLEANUP_MAX_OUTPUT_TOKENS}-token cap ` +
           '(finishReason=length) — refusing to persist a partial artifact'
       );
@@ -138,7 +151,7 @@ class AnthropicLlmClient implements LlmClient {
       maxOutputTokens: MAX_OUTPUT_TOKENS,
     });
     if (result.finishReason === 'length') {
-      throw new Error(
+      throw new LlmOutputTruncatedError(
         `Transcript summary output was truncated at the ${MAX_OUTPUT_TOKENS}-token cap ` +
           '(finishReason=length) — refusing to persist a partial artifact'
       );

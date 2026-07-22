@@ -54,6 +54,7 @@ vi.mock('@balo/analytics/server', () => ({
     SUMMARY_READY: 'summary_ready',
     BOT_JOIN_FAILED: 'bot_join_failed',
     TRANSCRIPT_FAILED: 'transcript_failed',
+    SUMMARY_HEADLINE_SUPPRESSED: 'summary_headline_suppressed',
   },
 }));
 
@@ -314,7 +315,7 @@ describe('runTranscriptPipeline', () => {
     expect(db.markRecapPublished).not.toHaveBeenCalled();
   });
 
-  it('drops a money/rate summary headline from the recap payload (defense-in-depth)', async () => {
+  it('drops a money summary headline + emits summary_headline_suppressed (observable)', async () => {
     setupFreshRun();
     const moneyLlm: LlmClient = {
       ...fakeLlm,
@@ -330,5 +331,49 @@ describe('runTranscriptPipeline', () => {
       'recap.ready',
       expect.objectContaining({ summaryHeadline: undefined })
     );
+    // Suppression is measurable (so false positives can be tuned).
+    expect(trackServer).toHaveBeenCalledWith('summary_headline_suppressed', {
+      engagement_id: 'eng1',
+      meeting_id: null,
+      distinct_id: 'system:transcript-pipeline',
+    });
+  });
+
+  it('does NOT suppress ordinary consulting language (narrowed money vocabulary)', async () => {
+    setupFreshRun();
+    const cleanLlm: LlmClient = {
+      ...fakeLlm,
+      summarize: vi.fn().mockResolvedValue({
+        summary: 'We reviewed the rate of adoption and a quote from the vendor doc',
+        audit: makeAudit('transcript.summary'),
+      }),
+    };
+
+    await runTranscriptPipeline(job, { llm: cleanLlm });
+
+    // 'rate' / 'quote' are no longer in the vocabulary → the headline survives, no event.
+    expect(publish).toHaveBeenCalledWith(
+      'recap.ready',
+      expect.objectContaining({
+        summaryHeadline: 'We reviewed the rate of adoption and a quote from the vendor doc',
+      })
+    );
+    expect(trackServer).not.toHaveBeenCalledWith('summary_headline_suppressed', expect.anything());
+  });
+
+  it('emits no suppression event for an empty (Noop) summary', async () => {
+    setupFreshRun();
+    const noopLlm: LlmClient = {
+      ...fakeLlm,
+      summarize: vi.fn().mockResolvedValue({ summary: '', audit: makeAudit('transcript.summary') }),
+    };
+
+    await runTranscriptPipeline(job, { llm: noopLlm });
+
+    expect(publish).toHaveBeenCalledWith(
+      'recap.ready',
+      expect.objectContaining({ summaryHeadline: undefined })
+    );
+    expect(trackServer).not.toHaveBeenCalledWith('summary_headline_suppressed', expect.anything());
   });
 });

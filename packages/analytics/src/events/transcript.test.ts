@@ -5,6 +5,7 @@ describe('TRANSCRIPT_SERVER_EVENTS', () => {
   it('exposes exactly the BAL-387 transcript server events', () => {
     expect(Object.keys(TRANSCRIPT_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'BOT_JOIN_FAILED',
+      'SUMMARY_HEADLINE_SUPPRESSED',
       'SUMMARY_READY',
       'TRANSCRIPT_FAILED',
       'TRANSCRIPT_READY',
@@ -16,6 +17,9 @@ describe('TRANSCRIPT_SERVER_EVENTS', () => {
     expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_READY).toBe('transcript_ready');
     expect(TRANSCRIPT_SERVER_EVENTS.SUMMARY_READY).toBe('summary_ready');
     expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED).toBe('transcript_failed');
+    expect(TRANSCRIPT_SERVER_EVENTS.SUMMARY_HEADLINE_SUPPRESSED).toBe(
+      'summary_headline_suppressed'
+    );
   });
 
   it('uses snake_case event values', () => {
