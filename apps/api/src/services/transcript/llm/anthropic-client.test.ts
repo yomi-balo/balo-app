@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateText, generateObject } from 'ai';
 import { createLlmClient } from './anthropic-client.js';
 import { dailyMultiSpeaker } from '../normalizers/__fixtures__/daily-deepgram.js';
@@ -23,11 +23,22 @@ vi.mock('@ai-sdk/anthropic', () => ({
 const canonical = normalizeDailyDeepgram(dailyMultiSpeaker);
 
 describe('createLlmClient', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.TRANSCRIPT_CLEANUP_MODEL;
     delete process.env.TRANSCRIPT_SUMMARY_MODEL;
+  });
+
+  afterEach(() => {
+    // Restore NODE_ENV so the prod-throw test never leaks into the other Noop-path tests.
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   it('warns once when ANTHROPIC_API_KEY is absent (Noop path, no network)', async () => {
@@ -96,7 +107,7 @@ describe('createLlmClient', () => {
       body: 'Send the migration plan',
       assigneeParty: 'expert',
     });
-    expect(extracted.items[0]?.dueAt).toBeInstanceOf(Date);
+    expect(extracted.items[0]?.dueAt).toBe('2026-08-01');
     expect(extracted.audit.promptId).toBe('transcript.extract');
     expect(vi.mocked(generateObject)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -122,5 +133,38 @@ describe('createLlmClient', () => {
     const extracted = await client.extractActionItems({ cleanedText: 'C', summary: 'S' });
     expect(extracted.items[0]?.dueAt).toBeNull();
     expect(extracted.items[1]?.dueAt).toBeNull();
+  });
+
+  it('cleanup REJECTS when the model output is truncated at the token cap (finishReason=length)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'PARTIAL',
+      finishReason: 'length',
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+
+    const client = createLlmClient();
+    await expect(client.cleanupTranscript({ transcript: canonical })).rejects.toThrow(
+      /truncated at the .*-token cap/
+    );
+  });
+
+  it('summary REJECTS when the model output is truncated at the token cap (finishReason=length)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'PARTIAL',
+      finishReason: 'length',
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+
+    const client = createLlmClient();
+    await expect(client.summarize({ cleanedText: 'CLEANED' })).rejects.toThrow(
+      /truncated at the .*-token cap/
+    );
+  });
+
+  it('throws (not Noop) when ANTHROPIC_API_KEY is absent in production', () => {
+    process.env.NODE_ENV = 'production';
+    expect(() => createLlmClient()).toThrow(/ANTHROPIC_API_KEY is required in production/);
   });
 });

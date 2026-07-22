@@ -58,7 +58,11 @@ export interface CanonicalTranscript {
 export interface ExtractedActionItem {
   body: string;
   assigneeParty: 'client' | 'expert' | null;
-  dueAt: Date | null;
+  // ISO-8601 string (NOT Date): this interface is the jsonb `$type` on
+  // `transcripts.extracted_action_items`, and jsonb round-trips a Date to a string. Storing it
+  // as a string keeps the read/write type honest; the pipeline parses it to a Date only at the
+  // `createFromExtraction` promotion boundary.
+  dueAt: string | null;
 }
 
 /**
@@ -78,6 +82,16 @@ export interface ExtractedActionItem {
  *
  * NO RLS (matching the credit/action-item precedents): access is gated at the application
  * layer + fee-safe projections. The recap carries no money, so lens concealment is trivial.
+ *
+ * ADR-1030 system-actor exemption (owner-ruled; amendment drafted/reviewed outside this PR):
+ * the pipeline is exempt from durable human ATTRIBUTION because all three hold — (1) it changes
+ * no party's authority/capability; (2) no money moves or accrues; (3) it writes no party-visible
+ * domain rows directly — the one party-visible output (first-class `action_items`) is created via
+ * BAL-391's `createFromExtraction` seam, which carries its own attribution + audit, and that
+ * obligation is the seam's, not the pipeline's. The exemption is from attribution, NOT
+ * observability: the status machine + stage-gate timestamps are the operational record, and the
+ * two terminal-skip paths (engagement-not-active, engagement-not-found) additionally persist
+ * `failed_stage`/`failure_reason` and emit the `transcript_failed` analytic.
  */
 export const transcripts = pgTable(
   'transcripts',

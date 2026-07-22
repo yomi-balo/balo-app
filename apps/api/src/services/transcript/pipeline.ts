@@ -24,6 +24,15 @@ const PIPELINE_DISTINCT_ID = 'system:transcript-pipeline';
 /** Cap the summary one-liner carried on the recap payload (no fee content). */
 const SUMMARY_HEADLINE_MAX = 140;
 
+/** Parse a stored ISO `dueAt` to a Date at the createFromExtraction boundary; null on absent/invalid. */
+function toDueAtDate(iso: string | null): Date | null {
+  if (iso === null) {
+    return null;
+  }
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 /** The sequential stages, in order — surfaced on `TranscriptStageError.stage` + `markFailed`. */
 export type TranscriptStage =
   | 'normalize'
@@ -84,6 +93,10 @@ function auditColumns(audit: LlmAudit): {
   };
 }
 
+/** Money/rate tokens that must never surface on the lens-shared recap headline (defense-in-depth). */
+const MONEY_RATE_PATTERN =
+  /(\$|€|£|₤|\bAUD\b|\bUSD\b|\bGBP\b|\bEUR\b|\bper hour\b|\bper hr\b|\/hr\b|\/hour\b|\bhourly\b|\brate\b|\brates\b|\bfee\b|\bfees\b|\bprice\b|\bpricing\b|\binvoice\b|\bquote\b)/i;
+
 /** Short, plain-text, party-safe headline from the summary; `undefined` when empty (Noop). */
 function buildSummaryHeadline(summary: string): string | undefined {
   const trimmed = summary.trim();
@@ -93,19 +106,14 @@ function buildSummaryHeadline(summary: string): string | undefined {
   const [firstLine] = trimmed.split('\n');
   const oneLiner =
     firstLine !== undefined && firstLine.trim().length > 0 ? firstLine.trim() : trimmed;
+  // Defense-in-depth: never surface a money/rate one-liner on the lens-shared recap. A dropped
+  // headline just means the recap has no one-liner — it still fires.
+  if (MONEY_RATE_PATTERN.test(oneLiner)) {
+    return undefined;
+  }
   return oneLiner.length > SUMMARY_HEADLINE_MAX
     ? `${oneLiner.slice(0, SUMMARY_HEADLINE_MAX)}…`
     : oneLiner;
-}
-
-/** The client-company owner user id, or undefined (retainer / no live owner) — mirrors auto-accept-sweep. */
-async function resolveOwnerUserId(companyId: string): Promise<string | undefined> {
-  try {
-    const owner = await companiesRepository.findOwnerByCompanyId(companyId);
-    return owner.id;
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -242,7 +250,7 @@ async function stagePromoteActionItems(
       items: extractedItems.map((item) => ({
         body: item.body,
         assigneeParty: item.assigneeParty,
-        dueAt: item.dueAt,
+        dueAt: toDueAtDate(item.dueAt),
       })),
     });
     await transcriptsRepository.markActionItemsExtracted(transcript.id);
@@ -256,6 +264,18 @@ async function stagePromoteActionItems(
         { transcriptId: transcript.id, engagementId: transcript.engagementId },
         'Engagement not active — skipping action-item promotion (items retained; terminal skip)'
       );
+      // ADR-1030: the exemption is from attribution, not observability. Persist the degradation
+      // (status UNCHANGED — the recap still publishes downstream) and emit the failure analytic.
+      await transcriptsRepository.recordStageSkip(
+        transcript.id,
+        'extract_action_items',
+        'engagement_not_active'
+      );
+      trackServer(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED, {
+        stage: 'extract_action_items',
+        vendor: transcript.vendor,
+        distinct_id: PIPELINE_DISTINCT_ID,
+      });
       await transcriptsRepository.markActionItemsExtracted(transcript.id);
       return;
     }
@@ -281,13 +301,20 @@ async function stagePublishRecap(
   if (engagement === undefined) {
     log.warn(
       { transcriptId: transcript.id, engagementId: transcript.engagementId },
-      'Engagement not found — marking recap published without fan-out (terminal skip)'
+      'Engagement not found — recap cannot be delivered, marking failed (terminal skip)'
     );
-    await transcriptsRepository.markRecapPublished(transcript.id);
+    // Genuine terminal failure: nothing was published, so `status='failed'` is honest (NOT
+    // markRecapPublished). ADR-1030 observability: record + emit the failure analytic.
+    await transcriptsRepository.markFailed(transcript.id, 'publish_recap', 'engagement_not_found');
+    trackServer(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED, {
+      stage: 'publish_recap',
+      vendor: transcript.vendor,
+      distinct_id: PIPELINE_DISTINCT_ID,
+    });
     return;
   }
 
-  const recipientId = await resolveOwnerUserId(engagement.companyId);
+  const recipientId = await companiesRepository.findOwnerUserIdByCompanyId(engagement.companyId);
   const payload: RecapReadyPayload = {
     correlationId: `${transcript.id}:recap_ready`,
     engagementId: transcript.engagementId,

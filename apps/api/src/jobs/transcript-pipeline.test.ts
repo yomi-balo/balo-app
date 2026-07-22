@@ -5,6 +5,7 @@ const findByCaptureId = vi.hoisted(() => vi.fn());
 const markFailed = vi.hoisted(() => vi.fn());
 const runTranscriptPipeline = vi.hoisted(() => vi.fn());
 const createLlmClient = vi.hoisted(() => vi.fn(() => ({ client: true })));
+const trackServer = vi.hoisted(() => vi.fn());
 
 // Capture the processor + `failed` handler the worker wires up, so the tests can drive them
 // directly (the mocked Worker never runs a real queue).
@@ -53,6 +54,15 @@ vi.mock('../services/transcript/pipeline.js', () => ({
 vi.mock('../services/transcript/llm/anthropic-client.js', () => ({ createLlmClient }));
 vi.mock('@balo/db', () => ({
   transcriptsRepository: { findByCaptureId, markFailed },
+}));
+vi.mock('@balo/analytics/server', () => ({
+  trackServer,
+  TRANSCRIPT_SERVER_EVENTS: {
+    TRANSCRIPT_READY: 'transcript_ready',
+    SUMMARY_READY: 'summary_ready',
+    BOT_JOIN_FAILED: 'bot_join_failed',
+    TRANSCRIPT_FAILED: 'transcript_failed',
+  },
 }));
 vi.mock('@balo/shared/logging', () => ({ createLogger: () => ({ error: vi.fn() }) }));
 
@@ -129,18 +139,29 @@ describe('transcript-pipeline job', () => {
       new Error('boom')
     );
     expect(findByCaptureId).not.toHaveBeenCalled();
+    // The failure event fires only on the exhausted branch, never on an interim retry.
+    expect(trackServer).not.toHaveBeenCalled();
   });
 
-  it('marks the transcript failed with the erroring stage once retries are exhausted', async () => {
+  it('marks the transcript failed and emits transcript_failed once retries are exhausted', async () => {
     findByCaptureId.mockResolvedValue({ id: 't-1' });
     startTranscriptPipelineWorker();
     wired.failedHandler?.(
-      { data: { captureId: 'cap-3' }, opts: { attempts: 3 }, attemptsMade: 3 },
+      {
+        data: { captureId: 'cap-3', vendor: 'daily_deepgram' },
+        opts: { attempts: 3 },
+        attemptsMade: 3,
+      },
       new MockStageError('cleanup failed', 'cleanup')
     );
     await vi.waitFor(() =>
       expect(markFailed).toHaveBeenCalledWith('t-1', 'cleanup', 'cleanup failed')
     );
+    expect(trackServer).toHaveBeenCalledWith('transcript_failed', {
+      stage: 'cleanup',
+      vendor: 'daily_deepgram',
+      distinct_id: 'system:transcript-pipeline',
+    });
   });
 
   it('uses the "unknown" stage for a non-stage error and no-ops when no transcript row exists', async () => {

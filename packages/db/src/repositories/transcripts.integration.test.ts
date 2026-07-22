@@ -134,6 +134,23 @@ describe('transcriptsRepository stage markers', () => {
     expect(updated.failureReason).toBe('LLM timeout');
     expect(updated.status).toBe('failed');
   });
+
+  it('recordStageSkip records the skip stage + reason but leaves status UNCHANGED', async () => {
+    const { transcript } = await transcriptFactory();
+    expect(transcript.status).toBe('processing');
+
+    await transcriptsRepository.recordStageSkip(
+      transcript.id,
+      'extract_action_items',
+      'engagement_not_active'
+    );
+
+    // Reload to prove the degradation persisted without flipping status (distinct from markFailed).
+    const reloaded = await transcriptsRepository.findById(transcript.id);
+    expect(reloaded?.failedStage).toBe('extract_action_items');
+    expect(reloaded?.failureReason).toBe('engagement_not_active');
+    expect(reloaded?.status).toBe('processing');
+  });
 });
 
 describe('transcripts — engagement cascade', () => {

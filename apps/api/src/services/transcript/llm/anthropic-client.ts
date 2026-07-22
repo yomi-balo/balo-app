@@ -21,16 +21,23 @@ const log = createLogger('transcript-llm');
  */
 const MAX_OUTPUT_TOKENS = 8192;
 
+/**
+ * Dedicated, larger cap for cleanup ONLY: cleanup must reproduce the ENTIRE transcript verbatim,
+ * so a long consultation exceeds the summary/extraction cap. Summary + extraction stay bounded on
+ * `MAX_OUTPUT_TOKENS`. If cleanup still hits this cap we throw (below) rather than persist a
+ * silently-truncated half-transcript as the canonical cleaned artifact.
+ */
+const CLEANUP_MAX_OUTPUT_TOKENS = 32000;
+
 /** Warn ONCE across the process when running without a key (avoids per-run log spam). */
 let noopWarned = false;
 
-/** Parse an LLM-supplied ISO `dueAt` to a Date; `null` on absent/invalid input. */
-function parseDueAt(value: string | null): Date | null {
+/** Keep the LLM-supplied ISO `dueAt` as a string when it parses to a real date; `null` otherwise. */
+function normalizeIsoDueAt(value: string | null): string | null {
   if (value === null) {
     return null;
   }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  return Number.isNaN(new Date(value).getTime()) ? null : value;
 }
 
 /**
@@ -100,8 +107,14 @@ class AnthropicLlmClient implements LlmClient {
       model: this.anthropic(modelId),
       system: p.system,
       prompt: p.user,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens: CLEANUP_MAX_OUTPUT_TOKENS,
     });
+    if (result.finishReason === 'length') {
+      throw new Error(
+        `Transcript cleanup output was truncated at the ${CLEANUP_MAX_OUTPUT_TOKENS}-token cap ` +
+          '(finishReason=length) — refusing to persist a partial artifact'
+      );
+    }
     return {
       text: result.text,
       audit: {
@@ -124,6 +137,12 @@ class AnthropicLlmClient implements LlmClient {
       prompt: p.user,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
     });
+    if (result.finishReason === 'length') {
+      throw new Error(
+        `Transcript summary output was truncated at the ${MAX_OUTPUT_TOKENS}-token cap ` +
+          '(finishReason=length) — refusing to persist a partial artifact'
+      );
+    }
     return {
       summary: result.text,
       audit: {
@@ -153,7 +172,7 @@ class AnthropicLlmClient implements LlmClient {
     const items: ExtractedActionItem[] = result.object.items.map((item) => ({
       body: item.body,
       assigneeParty: item.assigneeParty,
-      dueAt: parseDueAt(item.dueAt),
+      dueAt: normalizeIsoDueAt(item.dueAt),
     }));
     return {
       items,
@@ -177,6 +196,12 @@ class AnthropicLlmClient implements LlmClient {
 export function createLlmClient(): LlmClient {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (apiKey === undefined || apiKey.length === 0) {
+    if (process.env.NODE_ENV === 'production') {
+      // In prod the passthrough Noop would silently persist an empty summary + zero action
+      // items and stamp the recap as published (unreprocessable). Fail loudly so the job
+      // retries and markFailed engages, instead of shipping a degraded recap.
+      throw new Error('ANTHROPIC_API_KEY is required in production for the transcript pipeline');
+    }
     return new NoopLlmClient();
   }
   return new AnthropicLlmClient(apiKey);

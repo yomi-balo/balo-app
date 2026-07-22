@@ -6,6 +6,7 @@ describe('TRANSCRIPT_SERVER_EVENTS', () => {
     expect(Object.keys(TRANSCRIPT_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'BOT_JOIN_FAILED',
       'SUMMARY_READY',
+      'TRANSCRIPT_FAILED',
       'TRANSCRIPT_READY',
     ]);
   });
@@ -14,6 +15,7 @@ describe('TRANSCRIPT_SERVER_EVENTS', () => {
     expect(TRANSCRIPT_SERVER_EVENTS.BOT_JOIN_FAILED).toBe('bot_join_failed');
     expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_READY).toBe('transcript_ready');
     expect(TRANSCRIPT_SERVER_EVENTS.SUMMARY_READY).toBe('summary_ready');
+    expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED).toBe('transcript_failed');
   });
 
   it('uses snake_case event values', () => {

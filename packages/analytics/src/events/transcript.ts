@@ -17,6 +17,8 @@ export const TRANSCRIPT_SERVER_EVENTS = {
   TRANSCRIPT_READY: 'transcript_ready',
   /** The summary + action items were produced (newly, once per capture). */
   SUMMARY_READY: 'summary_ready',
+  /** The pipeline permanently failed after exhausting retries (from worker.on('failed')). */
+  TRANSCRIPT_FAILED: 'transcript_failed',
 } as const;
 
 /** Capture venue (`daily_deepgram` → `balo_video`; `recall` → `external`). */
@@ -43,6 +45,11 @@ export interface TranscriptServerEventMap {
     action_item_count: number;
     /** Pipeline elapsed ms. */
     duration_ms: number | null;
+    distinct_id: string;
+  };
+  [TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED]: {
+    stage: string;
+    vendor: 'daily_deepgram' | 'recall';
     distinct_id: string;
   };
 }

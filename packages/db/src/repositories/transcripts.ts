@@ -158,4 +158,23 @@ export const transcriptsRepository = {
     }
     return updated;
   },
+
+  /**
+   * Record a stage SKIP (degradation) on a path that still completes — distinct from
+   * `markFailed`: it stamps `failed_stage`/`failure_reason` for observability (ADR-1030's
+   * system-actor exemption is from attribution, not observability) but leaves `status`
+   * UNCHANGED. Used by the pipeline's engagement-not-active terminal skip, where the recap
+   * still publishes downstream (so the row ends `ready`, with the skip recorded). `updated_at`
+   * auto-bumps via the column's `$onUpdate` hook.
+   */
+  async recordStageSkip(id: string, stage: string, reason: string): Promise<void> {
+    const [updated] = await db
+      .update(transcripts)
+      .set({ failedStage: stage, failureReason: reason })
+      .where(eq(transcripts.id, id))
+      .returning();
+    if (updated === undefined) {
+      throw new Error(`Failed to record stage skip on transcript: ${id}`);
+    }
+  },
 };

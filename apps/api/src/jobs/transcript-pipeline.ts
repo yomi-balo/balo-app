@@ -1,6 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import { transcriptsRepository, type TranscriptVendor } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { trackServer, TRANSCRIPT_SERVER_EVENTS } from '@balo/analytics/server';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
 import { createLlmClient } from '../services/transcript/llm/anthropic-client.js';
@@ -103,6 +104,11 @@ export function startTranscriptPipelineWorker(): Worker<TranscriptPipelineJobInp
     }
     const stage = err instanceof TranscriptStageError ? err.stage : 'unknown';
     markFailedForCapture(job.data.captureId, stage, err.message).catch(() => undefined);
+    trackServer(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED, {
+      stage,
+      vendor: job.data.vendor,
+      distinct_id: 'system:transcript-pipeline',
+    });
   });
 
   return worker;
