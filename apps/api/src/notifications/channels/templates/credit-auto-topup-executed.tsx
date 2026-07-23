@@ -61,8 +61,10 @@ export function CreditAutoTopupExecutedEmail({
           card to keep things moving — no action needed.
         </Text>
         <Text style={shared.bodyText}>
-          Your balance is now {balanceAfter}. It stays active until {expiryDate} — any consultation
-          or top-up keeps it going, so nothing is left hanging.
+          Your balance is now {balanceAfter}.
+          {expiryDate
+            ? ` It stays active until ${expiryDate} — any consultation or top-up keeps it going, so nothing is left hanging.`
+            : ''}
         </Text>
 
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>

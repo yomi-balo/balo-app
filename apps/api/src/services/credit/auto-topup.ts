@@ -213,7 +213,7 @@ async function loadAndDecide(walletId: string): Promise<Phase1Result> {
 
     // (d) safe-to-charge-between-sessions: never during a live consultation / in-flight
     //     settlement, never on a soft account-hold, never on an unsettled negative balance.
-    const activeSession = await creditSessionsRepository.hasActiveSessionForWallet(tx, walletId);
+    const activeSession = await creditSessionsRepository.hasActiveSessionForWallet(walletId, tx);
     const openReceivable = await creditReceivablesRepository.hasOpenReceivable(
       wallet.companyId,
       tx
@@ -234,7 +234,7 @@ async function loadAndDecide(walletId: string): Promise<Phase1Result> {
     }
 
     // Pin the entry that produced the current resting balance ⇒ the crossing's stable key.
-    const triggeringEntryId = await creditLedgerRepository.getLatestEntryId(tx, walletId);
+    const triggeringEntryId = await creditLedgerRepository.getLatestEntryId(walletId, tx);
     if (triggeringEntryId === undefined) {
       return { kind: 'skip', reason: 'no_ledger_entry' };
     }

@@ -749,12 +749,13 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // confirmation; `reloadedMinor` / `balanceAfterMinor` / `expiresAt` are AUD face-value display
   // facts formatted here (NO fee/margin/overdraft figure). CTA lands on the billing panel.
   'credit-auto-topup-executed': (data) => {
+    const expiresAtIso = (data.expiresAt as string) ?? '';
     return {
       component: React.createElement(CreditAutoTopupExecutedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
         reloaded: formatAudMinor(numberCount(data.reloadedMinor)),
         balanceAfter: formatAudMinor(numberCount(data.balanceAfterMinor)),
-        expiryDate: formatExpiryDateLong((data.expiresAt as string) ?? ''),
+        expiryDate: expiresAtIso ? formatExpiryDateLong(expiresAtIso) : '',
         ctaUrl: `${BASE_URL}/settings/billing`,
         baseUrl: BASE_URL,
       }),

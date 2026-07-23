@@ -109,8 +109,9 @@ export type StripeEffect =
       sessionId: string | null;
       /**
        * BAL-379: PI metadata `triggeringEntryId` + the PI `amount` — an ASYNC `auto_topup`
-       * failure routes to the failed NOTICE (notification-only, NO receivable). Both `null` for
-       * non-auto_topup reasons.
+       * failure routes to the failed NOTICE (notification-only, NO receivable). `triggeringEntryId`
+       * is `null` for non-auto_topup reasons; `amountMinor` is always the PI `amount`, read only on
+       * the `auto_topup` arm.
        */
       triggeringEntryId: string | null;
       amountMinor: number | null;

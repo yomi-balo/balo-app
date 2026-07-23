@@ -1124,7 +1124,7 @@ describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconcili
 describe('creditSessionsRepository.hasActiveSessionForWallet', () => {
   it('is false for a wallet with no sessions', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
-    expect(await creditSessionsRepository.hasActiveSessionForWallet(db, ctx.walletId)).toBe(false);
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
   });
 
   // Every non-terminal status blocks a between-session reload (data-driven — one shape).
@@ -1135,7 +1135,7 @@ describe('creditSessionsRepository.hasActiveSessionForWallet', () => {
       if (status !== 'pending') {
         await db.update(creditSessions).set({ status }).where(eq(creditSessions.id, id));
       }
-      expect(await creditSessionsRepository.hasActiveSessionForWallet(db, ctx.walletId)).toBe(true);
+      expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(true);
     });
   }
 
@@ -1146,7 +1146,7 @@ describe('creditSessionsRepository.hasActiveSessionForWallet', () => {
       .update(creditSessions)
       .set({ status: 'ended', settlementStatus: 'processing' })
       .where(eq(creditSessions.id, id));
-    expect(await creditSessionsRepository.hasActiveSessionForWallet(db, ctx.walletId)).toBe(true);
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(true);
   });
 
   it('is false when the only session is terminal and settled', async () => {
@@ -1156,13 +1156,13 @@ describe('creditSessionsRepository.hasActiveSessionForWallet', () => {
       .update(creditSessions)
       .set({ status: 'ended', settlementStatus: 'settled' })
       .where(eq(creditSessions.id, id));
-    expect(await creditSessionsRepository.hasActiveSessionForWallet(db, ctx.walletId)).toBe(false);
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
   });
 
   it('is false when the only non-terminal session is soft-deleted', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
     await db.update(creditSessions).set({ deletedAt: new Date() }).where(eq(creditSessions.id, id));
-    expect(await creditSessionsRepository.hasActiveSessionForWallet(db, ctx.walletId)).toBe(false);
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
   });
 });

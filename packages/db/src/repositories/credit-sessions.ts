@@ -639,7 +639,7 @@ export const creditSessionsRepository = {
    * `settlement_pending` rejection codes. Threads the caller's `exec` so it runs UNDER the
    * engine's advisory lock (the same consistent snapshot as the balance it decides on).
    */
-  async hasActiveSessionForWallet(exec: DbExecutor, walletId: string): Promise<boolean> {
+  async hasActiveSessionForWallet(walletId: string, exec: DbExecutor = db): Promise<boolean> {
     const [row] = await exec
       .select({ id: creditSessions.id })
       .from(creditSessions)

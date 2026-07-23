@@ -412,7 +412,7 @@ export const creditLedgerRepository = {
    * two concurrent evaluations then pin the SAME entry id ⇒ derive the SAME
    * `auto_topup:{walletId}:{entryId}` idempotency key ⇒ Stripe collapses them to one charge.
    */
-  async getLatestEntryId(exec: DbExecutor, walletId: string): Promise<string | undefined> {
+  async getLatestEntryId(walletId: string, exec: DbExecutor = db): Promise<string | undefined> {
     const [row] = await exec
       .select({ id: creditLedger.id })
       .from(creditLedger)

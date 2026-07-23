@@ -615,7 +615,7 @@ describe('creditLedgerRepository reads', () => {
 describe('creditLedgerRepository.getLatestEntryId (BAL-379 auto-top-up)', () => {
   it('returns undefined for a wallet with no ledger rows', async () => {
     const { wallet } = await creditWalletFactory();
-    expect(await creditLedgerRepository.getLatestEntryId(db, wallet.id)).toBeUndefined();
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).toBeUndefined();
   });
 
   it('returns the max-seq (latest) entry id, stable across repeated reads', async () => {
@@ -638,11 +638,11 @@ describe('creditLedgerRepository.getLatestEntryId (BAL-379 auto-top-up)', () => 
       memberId: member.id,
     });
 
-    const latest = await creditLedgerRepository.getLatestEntryId(db, wallet.id);
+    const latest = await creditLedgerRepository.getLatestEntryId(wallet.id, db);
     expect(latest).toBe(second.entry.id);
     expect(latest).not.toBe(first.entry.id);
     // Stable across repeated reads (no interleaving write).
-    expect(await creditLedgerRepository.getLatestEntryId(db, wallet.id)).toBe(second.entry.id);
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).toBe(second.entry.id);
   });
 
   it('exactly once per crossing: the reload changes the latest entry (re-eval inert) and credits once', async () => {
@@ -659,7 +659,7 @@ describe('creditLedgerRepository.getLatestEntryId (BAL-379 auto-top-up)', () => 
       idempotencyKey: 'crossing_trigger',
       memberId: member.id,
     });
-    const triggeringEntryId = await creditLedgerRepository.getLatestEntryId(db, wallet.id);
+    const triggeringEntryId = await creditLedgerRepository.getLatestEntryId(wallet.id, db);
     expect(triggeringEntryId).toBe(trigger.entry.id);
 
     // The reload the webhook credits, keyed on the pinned trigger entry.
@@ -679,8 +679,8 @@ describe('creditLedgerRepository.getLatestEntryId (BAL-379 auto-top-up)', () => 
 
     // The latest entry is now the reload → a re-evaluation pins a DIFFERENT entry ⇒ a
     // different key ⇒ this crossing can never re-fire.
-    expect(await creditLedgerRepository.getLatestEntryId(db, wallet.id)).toBe(reload.entry.id);
-    expect(await creditLedgerRepository.getLatestEntryId(db, wallet.id)).not.toBe(
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).toBe(reload.entry.id);
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).not.toBe(
       triggeringEntryId
     );
 
@@ -721,7 +721,7 @@ describe('creditLedgerRepository.getLatestEntryId (BAL-379 auto-top-up)', () => 
     const lockedRead = (): Promise<string | undefined> =>
       db.transaction(async (tx) => {
         await acquireWalletLock(tx, wallet.id);
-        return creditLedgerRepository.getLatestEntryId(tx, wallet.id);
+        return creditLedgerRepository.getLatestEntryId(wallet.id, tx);
       });
 
     const first = await lockedRead();

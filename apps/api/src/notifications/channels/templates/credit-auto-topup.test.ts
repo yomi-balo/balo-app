@@ -62,6 +62,13 @@ describe('CreditAutoTopupExecutedEmail (BAL-379)', () => {
     const html = await render(CreditAutoTopupExecutedEmail(props()));
     expect(html).not.toMatch(/\b(he|she|him|her|his|hers)\b/i);
   });
+
+  it('drops the expiry clause when expiryDate is empty (keeps the balance sentence)', async () => {
+    const html = clean(await render(CreditAutoTopupExecutedEmail(props({ expiryDate: '' }))));
+    expect(html).toContain('Your balance is now A$110.00');
+    expect(html).not.toContain('stays active until');
+    expect(html).not.toMatch(/Invalid Date/i);
+  });
 });
 
 // ── CreditAutoTopupFailedEmail (component) ───────────────────────────────────
@@ -125,6 +132,19 @@ describe('getEmailTemplate — credit-auto-topup-executed factory', () => {
     });
     const html = clean(await render(out.component));
     expect(html).toContain('Hi there,');
+  });
+
+  it('drops the expiry clause when expiresAt is empty (no "Invalid Date")', async () => {
+    const out = getEmailTemplate('credit-auto-topup-executed', {
+      recipientName: 'Priya',
+      reloadedMinor: 10_000,
+      balanceAfterMinor: 11_000,
+      expiresAt: '',
+    });
+    const html = clean(await render(out.component));
+    expect(html).toContain('Your balance is now A$110.00');
+    expect(html).not.toContain('stays active until');
+    expect(html).not.toMatch(/Invalid Date|the expiry date/i);
   });
 });
 
