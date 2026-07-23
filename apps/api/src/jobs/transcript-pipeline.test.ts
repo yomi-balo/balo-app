@@ -239,6 +239,9 @@ describe('transcript-pipeline job', () => {
     expect(thrown).toBeInstanceOf(MockUnrecoverableError);
     expect(thrown).toBeInstanceOf(UnrecoverableTranscriptStageError);
     expect((thrown as UnrecoverableTranscriptStageError).stage).toBe('cleanup');
+    // The original error is preserved as `cause` so the truncation stack survives to Sentry.
+    expect((thrown as UnrecoverableTranscriptStageError).cause).toBe(stageErr);
+    expect((stageErr as { cause?: unknown }).cause).toBeInstanceOf(MockTruncatedError);
 
     // on('failed') fires at attemptsMade=1 (attempts remain) but the error is unrecoverable →
     // treated as terminal: markFailed + transcript_failed, NOT skipped as an interim retry.

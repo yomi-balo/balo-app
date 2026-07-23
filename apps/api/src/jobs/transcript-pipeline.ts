@@ -64,14 +64,16 @@ const log = createLogger('transcript-pipeline');
  * queue stops retrying immediately, while still carrying the failing `stage` for `markFailed` +
  * the `transcript_failed` analytic. The worker handler wraps a truncation (`LlmOutputTruncatedError`)
  * in this so a full-transcript Sonnet pass is not re-spent two more times for the same result.
+ * Preserves the original error as `cause` so the underlying stack survives to Sentry.
  */
 export class UnrecoverableTranscriptStageError extends UnrecoverableError {
   readonly stage: string;
 
-  constructor(stage: string, message: string) {
+  constructor(stage: string, message: string, cause?: unknown) {
     super(message);
     this.name = 'UnrecoverableTranscriptStageError';
     this.stage = stage;
+    this.cause = cause;
   }
 }
 
@@ -131,8 +133,9 @@ export function startTranscriptPipelineWorker(): Worker<TranscriptPipelineJobInp
       } catch (err) {
         if (err instanceof TranscriptStageError && err.cause instanceof LlmOutputTruncatedError) {
           // Deterministic truncation → surface as UnrecoverableError so BullMQ does NOT retry
-          // (a retry would re-spend a full Sonnet pass for the same truncated output).
-          throw new UnrecoverableTranscriptStageError(err.stage, err.message);
+          // (a retry would re-spend a full Sonnet pass for the same truncated output). Pass the
+          // original error as `cause` so the LlmOutputTruncatedError stack survives to Sentry.
+          throw new UnrecoverableTranscriptStageError(err.stage, err.message, err);
         }
         throw err;
       }
