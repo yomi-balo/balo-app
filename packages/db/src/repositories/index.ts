@@ -126,6 +126,25 @@ export {
   type ActionItemAssigneeParty,
 } from './action-items';
 export type { ActionItem, NewActionItem } from '../schema';
+// ── Transcript pipeline (BAL-387 / ADR-1013 + ADR-1043) ────────────────────
+export { transcriptsRepository, type InsertRawTranscriptInput } from './transcripts';
+export {
+  transcriptArtifactsRepository,
+  type UpsertTranscriptArtifactInput,
+} from './transcript-artifacts';
+export type {
+  Transcript,
+  NewTranscript,
+  TranscriptArtifact,
+  NewTranscriptArtifact,
+  TranscriptVendor,
+  TranscriptStatus,
+  TranscriptArtifactKind,
+  CanonicalTranscript,
+  CanonicalSpeaker,
+  CanonicalSegment,
+  ExtractedActionItem,
+} from '../schema';
 export type {
   PricingMethod,
   ProposalCadence,

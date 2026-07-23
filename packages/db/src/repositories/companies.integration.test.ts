@@ -110,6 +110,44 @@ describe('companiesRepository.findOwnerByCompanyId', () => {
   });
 });
 
+// ── companiesRepository.findOwnerUserIdByCompanyId ───────────────────
+
+describe('companiesRepository.findOwnerUserIdByCompanyId', () => {
+  it("returns the owner's user id for a company with an owner membership", async () => {
+    const companyId = await seedCompany();
+    const owner = await userFactory();
+    await db.insert(companyMembers).values({ companyId, userId: owner.id, role: 'owner' });
+
+    const found = await companiesRepository.findOwnerUserIdByCompanyId(companyId);
+
+    expect(found).toBe(owner.id);
+  });
+
+  it('returns undefined (does NOT throw) for a company with no live owner', async () => {
+    const companyId = await seedCompany();
+
+    await expect(
+      companiesRepository.findOwnerUserIdByCompanyId(companyId)
+    ).resolves.toBeUndefined();
+  });
+
+  it('excludes a soft-removed owner membership → undefined (BAL-345)', async () => {
+    const companyId = await seedCompany();
+    const owner = await userFactory();
+    await companyMemberFactory({
+      companyId,
+      userId: owner.id,
+      role: 'owner',
+      deletedAt: new Date(),
+      deletedByUserId: owner.id,
+    });
+
+    await expect(
+      companiesRepository.findOwnerUserIdByCompanyId(companyId)
+    ).resolves.toBeUndefined();
+  });
+});
+
 // ── companiesRepository.findByUserId (BAL-345 multi-membership) ──────────
 
 describe('companiesRepository.findByUserId', () => {

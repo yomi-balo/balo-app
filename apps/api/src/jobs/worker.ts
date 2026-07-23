@@ -22,6 +22,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startFxDisplayRateSweepWorker, registerFxDisplayRateSweepCron },
     { startCreditSessionMeterSweepWorker, registerCreditSessionMeterSweepCron },
     { startReceivableDunningSweepWorker, registerReceivableDunningSweepCron },
+    { startTranscriptPipelineWorker },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -35,6 +36,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./fx-display-rate-sweep.js'),
     import('./credit-session-meter-sweep.js'),
     import('./receivable-dunning-sweep.js'),
+    import('./transcript-pipeline.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -61,5 +63,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   await registerCreditSessionMeterSweepCron();
   startReceivableDunningSweepWorker();
   await registerReceivableDunningSweepCron();
+  // BAL-387 (ADR-1013): the transcript pipeline worker (event-triggered — no cron).
+  startTranscriptPipelineWorker();
   logger?.info('BullMQ workers started');
 }

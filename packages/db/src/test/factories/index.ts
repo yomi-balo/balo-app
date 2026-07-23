@@ -20,6 +20,11 @@ export { engagementMilestoneFactory } from './engagement-milestone.factory';
 export type { EngagementMilestoneFactoryResult } from './engagement-milestone.factory';
 export { actionItemFactory } from './action-item.factory';
 export type { ActionItemFactoryResult } from './action-item.factory';
+export { transcriptFactory, transcriptArtifactFactory } from './transcript.factory';
+export type {
+  TranscriptFactoryResult,
+  TranscriptArtifactFactoryResult,
+} from './transcript.factory';
 export { creditWalletFactory } from './credit-wallet.factory';
 export type { CreditWalletFactoryResult } from './credit-wallet.factory';
 export { promoCodeFactory, promoRedemptionFactory } from './promo-code.factory';

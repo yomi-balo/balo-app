@@ -116,6 +116,27 @@ export const companiesRepository = {
   },
 
   /**
+   * The owner user id of a company, or `undefined` when the company has no live owner
+   * (retainer / owner-miss) — the non-throwing variant of `findOwnerByCompanyId` for callers
+   * where a missing owner is an expected, non-fatal case (e.g. resolving a notification
+   * recipient). A transient DB error still THROWS (so the caller can retry) — a genuine
+   * no-owner is never conflated with a failure.
+   */
+  findOwnerUserIdByCompanyId: async (companyId: string): Promise<string | undefined> => {
+    const membership = await db.query.companyMembers.findFirst({
+      where: and(
+        eq(companyMembers.companyId, companyId),
+        eq(companyMembers.role, 'owner'),
+        isNull(companyMembers.deletedAt)
+      ),
+      orderBy: (members, { asc }) => [asc(members.joinedAt), asc(members.id)],
+      // Project only the id — avoid hydrating the full user row (PII/secret-leak footgun).
+      with: { user: { columns: { id: true } } },
+    });
+    return membership?.user?.id;
+  },
+
+  /**
    * Atomically increment/decrement credit balance
    */
   updateCredits: async (id: string, delta: number): Promise<Company> => {

@@ -1,0 +1,290 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const queueAdd = vi.hoisted(() => vi.fn());
+const findByCaptureId = vi.hoisted(() => vi.fn());
+const markFailed = vi.hoisted(() => vi.fn());
+const runTranscriptPipeline = vi.hoisted(() => vi.fn());
+const createLlmClient = vi.hoisted(() => vi.fn(() => ({ client: true })));
+const trackServer = vi.hoisted(() => vi.fn());
+const logError = vi.hoisted(() => vi.fn());
+
+// Capture the processor + `failed` handler the worker wires up, so the tests can drive them
+// directly (the mocked Worker never runs a real queue).
+const wired = vi.hoisted(
+  () =>
+    ({ processor: undefined, failedHandler: undefined }) as {
+      processor?: (job: unknown) => Promise<void>;
+      failedHandler?: (job: unknown, err: Error) => void;
+    }
+);
+
+// A `function` (not arrow) so `new Worker(...)` treats it as a constructor and uses its
+// returned object (vitest requires `function`/`class` for constructable mocks).
+const WorkerMock = vi.hoisted(() =>
+  vi.fn(function (_queue: string, processor: (job: unknown) => Promise<void>) {
+    wired.processor = processor;
+    return {
+      on: (event: string, handler: (job: unknown, err: Error) => void) => {
+        if (event === 'failed') {
+          wired.failedHandler = handler;
+        }
+      },
+    };
+  })
+);
+
+// Mirror the real `TranscriptStageError` (carries a `.stage` + a `.cause`) so the `instanceof`
+// + `err.cause instanceof …` branches in the handler resolve.
+const MockStageError = vi.hoisted(
+  () =>
+    class extends Error {
+      stage: string;
+      constructor(message: string, stage: string, cause?: unknown) {
+        super(message);
+        this.stage = stage;
+        this.cause = cause;
+      }
+    }
+);
+
+// Mirror the real `LlmOutputTruncatedError` (the deterministic-truncation cause).
+const MockTruncatedError = vi.hoisted(
+  () =>
+    class extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'LlmOutputTruncatedError';
+      }
+    }
+);
+
+// Mirror BullMQ's `UnrecoverableError` (a real class so `UnrecoverableTranscriptStageError extends
+// UnrecoverableError` loads and `instanceof` resolves).
+const MockUnrecoverableError = vi.hoisted(
+  () =>
+    class extends Error {
+      constructor(message?: string) {
+        super(message);
+        this.name = 'UnrecoverableError';
+      }
+    }
+);
+
+vi.mock('../lib/queue.js', () => ({ getQueue: () => ({ add: queueAdd }) }));
+vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: true })) }));
+vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
+vi.mock('../services/transcript/pipeline.js', () => ({
+  runTranscriptPipeline,
+  TranscriptStageError: MockStageError,
+}));
+vi.mock('../services/transcript/llm/anthropic-client.js', () => ({
+  createLlmClient,
+  LlmOutputTruncatedError: MockTruncatedError,
+}));
+vi.mock('@balo/db', () => ({
+  transcriptsRepository: { findByCaptureId, markFailed },
+}));
+vi.mock('@balo/analytics/server', () => ({
+  trackServer,
+  TRANSCRIPT_SERVER_EVENTS: {
+    TRANSCRIPT_READY: 'transcript_ready',
+    SUMMARY_READY: 'summary_ready',
+    BOT_JOIN_FAILED: 'bot_join_failed',
+    TRANSCRIPT_FAILED: 'transcript_failed',
+  },
+}));
+vi.mock('@balo/shared/logging', () => ({ createLogger: () => ({ error: logError }) }));
+
+import {
+  enqueueTranscriptPipeline,
+  startTranscriptPipelineWorker,
+  UnrecoverableTranscriptStageError,
+  TRANSCRIPT_PIPELINE_QUEUE,
+} from './transcript-pipeline.js';
+import { dailyMultiSpeaker } from '../services/transcript/normalizers/__fixtures__/daily-deepgram.js';
+
+describe('transcript-pipeline job', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('enqueueTranscriptPipeline adds a job with the stable jobId + retry/backoff', async () => {
+    await enqueueTranscriptPipeline({
+      captureId: 'cap-abc',
+      engagementId: 'eng1',
+      meetingId: null,
+      vendor: 'daily_deepgram',
+      payload: dailyMultiSpeaker,
+      recordingRef: null,
+      durationMs: 12500,
+    });
+
+    expect(queueAdd).toHaveBeenCalledWith(
+      'run',
+      expect.objectContaining({
+        captureId: 'cap-abc',
+        engagementId: 'eng1',
+        vendor: 'daily_deepgram',
+      }),
+      {
+        jobId: 'transcript-pipeline--cap-abc',
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+      }
+    );
+  });
+
+  it('exposes the queue name', () => {
+    expect(TRANSCRIPT_PIPELINE_QUEUE).toBe('transcript-pipeline');
+  });
+
+  it('startTranscriptPipelineWorker constructs a Worker on the queue with concurrency 5', () => {
+    startTranscriptPipelineWorker();
+    expect(WorkerMock).toHaveBeenCalledWith(
+      'transcript-pipeline',
+      expect.any(Function),
+      expect.objectContaining({ concurrency: 5 })
+    );
+  });
+
+  it('the worker processor runs the pipeline with the job data and a fresh llm client', async () => {
+    startTranscriptPipelineWorker();
+    await wired.processor?.({ data: { captureId: 'cap-1', engagementId: 'e1' } });
+    expect(runTranscriptPipeline).toHaveBeenCalledWith(
+      { captureId: 'cap-1', engagementId: 'e1' },
+      expect.objectContaining({ llm: expect.anything() })
+    );
+  });
+
+  it('the failed handler is a no-op when there is no job', () => {
+    startTranscriptPipelineWorker();
+    expect(() => wired.failedHandler?.(null, new Error('x'))).not.toThrow();
+    expect(findByCaptureId).not.toHaveBeenCalled();
+  });
+
+  it('the failed handler waits for BullMQ to retry while attempts remain', () => {
+    startTranscriptPipelineWorker();
+    wired.failedHandler?.(
+      { data: { captureId: 'cap-2' }, opts: { attempts: 3 }, attemptsMade: 1 },
+      new Error('boom')
+    );
+    expect(findByCaptureId).not.toHaveBeenCalled();
+    // The failure event fires only on the exhausted branch, never on an interim retry.
+    expect(trackServer).not.toHaveBeenCalled();
+  });
+
+  it('marks the transcript failed and emits transcript_failed once retries are exhausted', async () => {
+    findByCaptureId.mockResolvedValue({ id: 't-1' });
+    startTranscriptPipelineWorker();
+    wired.failedHandler?.(
+      {
+        data: { captureId: 'cap-3', vendor: 'daily_deepgram' },
+        opts: { attempts: 3 },
+        attemptsMade: 3,
+      },
+      new MockStageError('cleanup failed', 'cleanup')
+    );
+    await vi.waitFor(() =>
+      expect(markFailed).toHaveBeenCalledWith('t-1', 'cleanup', 'cleanup failed')
+    );
+    expect(trackServer).toHaveBeenCalledWith('transcript_failed', {
+      stage: 'cleanup',
+      vendor: 'daily_deepgram',
+      distinct_id: 'system:transcript-pipeline',
+    });
+  });
+
+  it('uses the "unknown" stage for a non-stage error and no-ops when no transcript row exists', async () => {
+    findByCaptureId.mockResolvedValue(undefined);
+    startTranscriptPipelineWorker();
+    wired.failedHandler?.(
+      { data: { captureId: 'cap-4' }, opts: {}, attemptsMade: 3 },
+      new Error('generic')
+    );
+    await vi.waitFor(() => expect(findByCaptureId).toHaveBeenCalledWith('cap-4'));
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('swallows a repository error while marking failed on exhausted retries', async () => {
+    findByCaptureId.mockRejectedValue(new Error('db down'));
+    startTranscriptPipelineWorker();
+    expect(() =>
+      wired.failedHandler?.(
+        { data: { captureId: 'cap-5' }, opts: { attempts: 3 }, attemptsMade: 3 },
+        new Error('generic')
+      )
+    ).not.toThrow();
+    await vi.waitFor(() => expect(findByCaptureId).toHaveBeenCalledWith('cap-5'));
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it('wraps a deterministic truncation as UnrecoverableError → terminal even at attemptsMade=1', async () => {
+    findByCaptureId.mockResolvedValue({ id: 't-2' });
+    // The pipeline surfaces a truncation-caused stage error; the processor must rethrow it as an
+    // UnrecoverableError so BullMQ does NOT retry (no re-spend of a full Sonnet cleanup pass).
+    const stageErr = new MockStageError(
+      'cleanup failed (truncated)',
+      'cleanup',
+      new MockTruncatedError('truncated at cap')
+    );
+    runTranscriptPipeline.mockRejectedValue(stageErr);
+    startTranscriptPipelineWorker();
+
+    let thrown: unknown;
+    try {
+      await wired.processor?.({ data: { captureId: 'cap-6', vendor: 'daily_deepgram' } });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(MockUnrecoverableError);
+    expect(thrown).toBeInstanceOf(UnrecoverableTranscriptStageError);
+    expect((thrown as UnrecoverableTranscriptStageError).stage).toBe('cleanup');
+    // The original error is preserved as `cause` so the truncation stack survives to Sentry.
+    expect((thrown as UnrecoverableTranscriptStageError).cause).toBe(stageErr);
+    expect((stageErr as { cause?: unknown }).cause).toBeInstanceOf(MockTruncatedError);
+
+    // on('failed') fires at attemptsMade=1 (attempts remain) but the error is unrecoverable →
+    // treated as terminal: markFailed + transcript_failed, NOT skipped as an interim retry.
+    wired.failedHandler?.(
+      {
+        data: { captureId: 'cap-6', vendor: 'daily_deepgram' },
+        opts: { attempts: 3 },
+        attemptsMade: 1,
+      },
+      thrown as Error
+    );
+    await vi.waitFor(() =>
+      expect(markFailed).toHaveBeenCalledWith('t-2', 'cleanup', 'cleanup failed (truncated)')
+    );
+    expect(trackServer).toHaveBeenCalledWith('transcript_failed', {
+      stage: 'cleanup',
+      vendor: 'daily_deepgram',
+      distinct_id: 'system:transcript-pipeline',
+    });
+  });
+
+  it('logs an error at startup when the prod key is missing (worker still constructs, no throw)', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalKey = process.env.ANTHROPIC_API_KEY;
+    process.env.NODE_ENV = 'production';
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      expect(() => startTranscriptPipelineWorker()).not.toThrow();
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('ANTHROPIC_API_KEY is not set in production')
+      );
+      expect(WorkerMock).toHaveBeenCalled();
+    } finally {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      if (originalKey === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = originalKey;
+      }
+    }
+  });
+});
