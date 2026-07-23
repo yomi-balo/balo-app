@@ -1118,3 +1118,51 @@ describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconcili
     expect(foundIds).toContain(s.id); // a soft-deleted obligation must not hide the strand
   });
 });
+
+// ── hasActiveSessionForWallet (BAL-379 auto-top-up safe-to-charge gate) ─────
+
+describe('creditSessionsRepository.hasActiveSessionForWallet', () => {
+  it('is false for a wallet with no sessions', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
+  });
+
+  // Every non-terminal status blocks a between-session reload (data-driven — one shape).
+  for (const status of ['pending', 'active', 'grace', 'wrapped'] as const) {
+    it(`is true for a non-terminal '${status}' session`, async () => {
+      const ctx = await setup({ balanceMinor: 50_000 });
+      const id = await openOk(ctx); // opens 'pending'
+      if (status !== 'pending') {
+        await db.update(creditSessions).set({ status }).where(eq(creditSessions.id, id));
+      }
+      expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(true);
+    });
+  }
+
+  it("is true when a prior (terminal) session's settlement is still 'processing'", async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'processing' })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(true);
+  });
+
+  it('is false when the only session is terminal and settled', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'settled' })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
+  });
+
+  it('is false when the only non-terminal session is soft-deleted', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db.update(creditSessions).set({ deletedAt: new Date() }).where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
+  });
+});

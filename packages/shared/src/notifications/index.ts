@@ -365,6 +365,42 @@ export interface CreditBalanceExpiredPayload {
   expiredMinor: number; // analytics only; NOT shown in the expired copy
 }
 
+// BAL-379 (ADR-1040) — a between-session auto-top-up reload was CHARGED and CREDITED. The
+// wallet's resting balance finalized below the configured threshold when a session settled,
+// so the reload chunk was charged on the company's stored off-session mandate and the
+// `payment_intent.succeeded` webhook credited it. SERVER-ONLY (published from the API Stripe
+// webhook post-commit — no web mirror, no `publishBodySchema` arm). Fans out to the company's
+// MANAGE_BILLING holders (recipient 'company_billing_admins' → the resolver hydrates
+// `data.billingUserIds` from `companyId`). `correlationId` IS the ledger idempotency key
+// `auto_topup:{walletId}:{triggeringEntryId}` → per-crossing BullMQ jobId dedup, so a replayed
+// webhook never re-notifies. Every amount is the AUD reload FACE value (no fee/margin/overdraft
+// — fee-concealment posture). Defined ONCE here (shared-home convention — avoids the Sonar
+// new-code duplication gate across the api + web catalogs).
+export interface CreditAutoTopupExecutedPayload {
+  correlationId: string; // = auto_topup:{walletId}:{triggeringEntryId} (ledger key) → jobId dedup
+  walletId: string;
+  companyId: string; // → resolver hydrates data.billingUserIds (fan-out)
+  reloadedMinor: number; // AUD reload FACE value (balance_transaction.amount); no fee/margin
+  balanceAfterMinor: number; // wallet balance after the reload (the client's own balance)
+  expiresAt: string; // ISO rolled expiry (rolling-expiry reassurance)
+}
+
+// BAL-379 (ADR-1040) — a between-session auto-top-up reload charge could NOT complete
+// (SCA/`requires_action` or a hard decline). SERVER-ONLY. Fans out to the company's
+// MANAGE_BILLING holders. NO receivable, NO account hold — an auto-top-up failure is not
+// money owed; the company keeps spending its existing balance. Calm, actionable copy ("update
+// the card to keep auto-top-up on"), never dunning/countdown. `correlationId` is the ledger
+// key with a `:failed` suffix — the SYNC engine and the ASYNC `payment_intent.payment_failed`
+// belt publish with the SAME correlationId ⇒ one notice per crossing (BullMQ jobId dedup).
+// `attemptedMinor` is the AUD reload face value we tried to charge. Defined ONCE here.
+export interface CreditAutoTopupFailedPayload {
+  correlationId: string; // = auto_topup:{walletId}:{triggeringEntryId}:failed → jobId dedup
+  walletId: string;
+  companyId: string; // → fan-out
+  reason: 'declined' | 'requires_action';
+  attemptedMinor: number; // AUD reload face value we tried to charge (no trigger-balance in copy)
+}
+
 // BAL-378 (ADR-1040 Lane 2) — in-session drawdown / settlement notification payloads.
 // ALL published SERVER-SIDE (meter driver / endSession service / settlement webhook / nudge
 // route) — none has a web mirror or a `publishBodySchema` arm. Defined ONCE here (never

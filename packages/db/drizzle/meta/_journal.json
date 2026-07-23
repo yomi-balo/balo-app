@@ -365,6 +365,13 @@
       "when": 1784551804957,
       "tag": "0051_yielding_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1784770260607,
+      "tag": "0052_black_felicia_hardy",
+      "breakpoints": true
     }
   ]
 }

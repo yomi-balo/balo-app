@@ -18,6 +18,7 @@ import {
 } from './credit-ledger';
 import { creditWalletsRepository } from './credit-wallets';
 import { deriveIdempotencyKey } from './_shared/credit-idempotency';
+import { acquireWalletLock } from './_shared/wallet-lock';
 
 /**
  * Integration tests for the atomic ledger-write primitive (BAL-376). Covers invariants
@@ -608,6 +609,125 @@ describe('creditLedgerRepository reads', () => {
   it('sumAmountByWallet returns 0 for a wallet with no entries', async () => {
     const { wallet } = await creditWalletFactory();
     expect(await creditLedgerRepository.sumAmountByWallet(wallet.id)).toBe(0);
+  });
+});
+
+describe('creditLedgerRepository.getLatestEntryId (BAL-379 auto-top-up)', () => {
+  it('returns undefined for a wallet with no ledger rows', async () => {
+    const { wallet } = await creditWalletFactory();
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).toBeUndefined();
+  });
+
+  it('returns the max-seq (latest) entry id, stable across repeated reads', async () => {
+    const { wallet } = await creditWalletFactory();
+    const member = await userFactory();
+    const first = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 5000,
+      idempotencyKey: 'gle_1',
+      memberId: member.id,
+    });
+    const second = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 3000,
+      idempotencyKey: 'gle_2',
+      memberId: member.id,
+    });
+
+    const latest = await creditLedgerRepository.getLatestEntryId(wallet.id, db);
+    expect(latest).toBe(second.entry.id);
+    expect(latest).not.toBe(first.entry.id);
+    // Stable across repeated reads (no interleaving write).
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).toBe(second.entry.id);
+  });
+
+  it('exactly once per crossing: the reload changes the latest entry (re-eval inert) and credits once', async () => {
+    const { wallet } = await creditWalletFactory({ values: { balanceMinor: 1000 } });
+    const member = await userFactory();
+
+    // The entry that produced the below-threshold resting balance = the trigger. The engine
+    // pins it as `triggeringEntryId` under the wallet lock.
+    const trigger = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 1000,
+      idempotencyKey: 'crossing_trigger',
+      memberId: member.id,
+    });
+    const triggeringEntryId = await creditLedgerRepository.getLatestEntryId(wallet.id, db);
+    expect(triggeringEntryId).toBe(trigger.entry.id);
+
+    // The reload the webhook credits, keyed on the pinned trigger entry.
+    const reloadKey = deriveIdempotencyKey({
+      reason: 'auto_topup',
+      walletId: wallet.id,
+      triggeringEntryId: triggeringEntryId as string,
+    });
+    const reload = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'auto_topup',
+      amountMinor: 10_000,
+      idempotencyKey: reloadKey,
+    });
+    expect(reload.deduped).toBe(false);
+
+    // The latest entry is now the reload → a re-evaluation pins a DIFFERENT entry ⇒ a
+    // different key ⇒ this crossing can never re-fire.
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).toBe(reload.entry.id);
+    expect(await creditLedgerRepository.getLatestEntryId(wallet.id, db)).not.toBe(
+      triggeringEntryId
+    );
+
+    // A replayed webhook (same crossing key) dedups → one reload row, credited once.
+    const replay = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'auto_topup',
+      amountMinor: 10_000,
+      idempotencyKey: reloadKey,
+    });
+    expect(replay.deduped).toBe(true);
+
+    const autoTopupRows = (await creditLedgerRepository.listByWallet(wallet.id)).filter(
+      (r) => r.reason === 'auto_topup'
+    );
+    expect(autoTopupRows).toHaveLength(1);
+    expect(await creditLedgerRepository.sumAmountByWallet(wallet.id)).toBe(11_000); // 1000 + one reload
+  });
+
+  // Models the engine's Phase-1 read-under-lock. The single-in-flight guarantee (two
+  // concurrent evaluations pin the SAME entry id ⇒ one Stripe key) is validated
+  // DETERMINISTICALLY here: the max:1 test pool has no true parallel connection (see the
+  // header CONCURRENCY CAVEAT), so we assert two SEQUENTIAL locked reads agree with no
+  // interleaving writer — the property the advisory lock provides between real evaluations.
+  it('two sequential locked reads of the crossing agree (single-in-flight, deterministic)', async () => {
+    const { wallet } = await creditWalletFactory();
+    const member = await userFactory();
+    const trigger = await creditLedgerRepository.postEntry({
+      walletId: wallet.id,
+      entryType: 'purchase',
+      reason: 'manual_purchase',
+      amountMinor: 1000,
+      idempotencyKey: 'locked_read_trigger',
+      memberId: member.id,
+    });
+
+    const lockedRead = (): Promise<string | undefined> =>
+      db.transaction(async (tx) => {
+        await acquireWalletLock(tx, wallet.id);
+        return creditLedgerRepository.getLatestEntryId(wallet.id, tx);
+      });
+
+    const first = await lockedRead();
+    const second = await lockedRead();
+    expect(first).toBe(trigger.entry.id);
+    expect(second).toBe(first);
   });
 });
 

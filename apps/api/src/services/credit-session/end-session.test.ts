@@ -14,6 +14,7 @@ const {
   mockAuthorize,
   mockFinalizeBilling,
   mockPark,
+  mockTriggerAutoTopup,
 } = vi.hoisted(() => ({
   mockEnd: vi.fn(),
   mockMarkSettlementResult: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockAuthorize: vi.fn(),
   mockFinalizeBilling: vi.fn(),
   mockPark: vi.fn(),
+  mockTriggerAutoTopup: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -55,6 +57,9 @@ vi.mock('./finalize-billing.js', () => ({ finalizeBilling: mockFinalizeBilling }
 vi.mock('./notify.js', () => ({
   publishSessionSettled: mockPublishSessionSettled,
   publishSettlementFailure: mockPublishSettlementFailure,
+}));
+vi.mock('../credit/auto-topup.js', () => ({
+  triggerAutoTopupBestEffort: mockTriggerAutoTopup,
 }));
 
 import type { CreditSession } from '@balo/db';
@@ -201,6 +206,22 @@ describe('endSession', () => {
     });
     expect(mockPublishSessionSettled).toHaveBeenCalled();
     expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
+
+  it('BAL-379: pokes the between-session auto-top-up trigger on the in-credit path', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 0 }));
+    await endSession('session_1', 'user_1');
+    expect(mockTriggerAutoTopup).toHaveBeenCalledWith(
+      'wallet_1',
+      expect.objectContaining({ reason: 'auto_topup_trigger' })
+    );
+  });
+
+  it('BAL-379: does NOT trigger auto-top-up on the overdraft path (settlement owns that crossing)', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1000, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    await endSession('session_1', 'user_1');
+    expect(mockTriggerAutoTopup).not.toHaveBeenCalled();
   });
 
   it('never returns the raw expertAccruedMinor to the client (fee/PII boundary)', async () => {

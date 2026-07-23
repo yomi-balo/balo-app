@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   applyBaloFee,
   deriveMinuteRateCents,
@@ -623,6 +623,38 @@ export const creditSessionsRepository = {
     return db.query.creditSessions.findFirst({
       where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
     });
+  },
+
+  /**
+   * BAL-379 — TRUE when the wallet has EITHER a non-terminal session
+   * (`status ∈ {pending,active,grace,wrapped}`, not soft-deleted) OR any session whose
+   * overdraft settlement is still `processing` (the `payment_intent.succeeded` webhook is
+   * the sole crediting authority — a reload must not race an in-flight settlement). This is
+   * the single combined boolean the auto-top-up engine's safe-to-charge gate reads so it
+   * never fires a between-session reload DURING a live consultation or while a prior
+   * settlement is pending.
+   *
+   * The reusable extraction of the two inline gates in `open()` — but DELIBERATELY NOT used
+   * to refactor `open()`, which needs the granular `session_in_progress` vs
+   * `settlement_pending` rejection codes. Threads the caller's `exec` so it runs UNDER the
+   * engine's advisory lock (the same consistent snapshot as the balance it decides on).
+   */
+  async hasActiveSessionForWallet(walletId: string, exec: DbExecutor = db): Promise<boolean> {
+    const [row] = await exec
+      .select({ id: creditSessions.id })
+      .from(creditSessions)
+      .where(
+        and(
+          eq(creditSessions.walletId, walletId),
+          isNull(creditSessions.deletedAt),
+          or(
+            inArray(creditSessions.status, ['pending', 'active', 'grace', 'wrapped']),
+            eq(creditSessions.settlementStatus, 'processing')
+          )
+        )
+      )
+      .limit(1);
+    return row !== undefined;
   },
 
   /**

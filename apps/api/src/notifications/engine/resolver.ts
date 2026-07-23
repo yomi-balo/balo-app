@@ -38,6 +38,10 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
 const BILLING_FANOUT_EVENTS = new Set<string>([
   'credit.dormancy_reminder',
   'credit.balance_expired',
+  // BAL-379: auto-top-up executed / failed carry `companyId` → the billing admins (same
+  // payload-only hydration as dormancy_reminder — only `billingUserIds`).
+  'credit.auto_topup.executed',
+  'credit.auto_topup.failed',
   // BAL-378: session settlement / grace notices carry `companyId` → the billing admins.
   // (`session.low_balance` / `session.near_wrap` are `self`-only — no fan-out entry.)
   'session.grace_entered',

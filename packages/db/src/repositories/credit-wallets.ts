@@ -81,9 +81,30 @@ export const creditWalletsRepository = {
     return raced;
   },
 
-  /** Wallet by id (no soft-delete on this table). */
-  async findById(id: string): Promise<CreditWallet | undefined> {
-    return db.query.creditWallets.findFirst({ where: eq(creditWallets.id, id) });
+  /**
+   * Wallet by id (no soft-delete on this table). TX-COMPOSABLE: pass a `tx` to read UNDER a
+   * parent transaction's advisory lock (BAL-379 auto-top-up Phase 1 needs the wallet in the
+   * SAME locked snapshot as the guard reads — the base `db` reads on a DIFFERENT connection,
+   * outside any lock the caller holds), or omit `exec` to read standalone on the base `db`.
+   */
+  async findById(id: string, exec: DbExecutor = db): Promise<CreditWallet | undefined> {
+    const [row] = await exec.select().from(creditWallets).where(eq(creditWallets.id, id)).limit(1);
+    return row;
+  },
+
+  /**
+   * BAL-379 — set/clear the auto-top-up single-in-flight marker (`pending_topup_at`). Pass a
+   * `Date` to ARM it (the engine, on a charge decision) or `null` to CLEAR it (the success/fail
+   * webhook, or a definite sync failure). TX-COMPOSABLE (`exec`): the ARM runs INSIDE the engine's
+   * Phase-1 advisory-locked txn so a concurrent evaluation serialized behind the lock sees it set;
+   * the CLEARs pass the base `db` (their own txn / standalone). `updated_at` is bumped
+   * automatically via the column's `$onUpdateFn`.
+   */
+  async setPendingTopupAt(walletId: string, at: Date | null, exec: DbExecutor = db): Promise<void> {
+    await exec
+      .update(creditWallets)
+      .set({ pendingTopupAt: at })
+      .where(eq(creditWallets.id, walletId));
   },
 
   /** The one wallet for a company (rides `credit_wallets_company_idx`). */

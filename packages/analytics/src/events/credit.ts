@@ -49,6 +49,18 @@ export const CREDIT_SERVER_EVENTS = {
   BALANCE_EXPIRED: 'credit_balance_expired',
   /** The FX sweep served a display-FX cache row older than the 48h staleness threshold. */
   FX_CACHE_STALE: 'credit_fx_cache_stale',
+  /**
+   * BAL-379: a between-session auto-top-up reload was CREDITED (money-in truth). Fires from
+   * the `payment_intent.succeeded` webhook's executed branch, exactly once per crossing via
+   * the ledger idempotency key (never on a deduped replay).
+   */
+  AUTO_TOPUP_FIRED: 'credit_auto_topup_fired',
+  /**
+   * BAL-379: a between-session auto-top-up charge could NOT complete (money-not-in). Fires
+   * from the SYNC engine only (`requires_action` / hard decline); the async
+   * `payment_intent.payment_failed` recovery belt is notification-only (no analytics).
+   */
+  AUTO_TOPUP_FAILED: 'credit_auto_topup_failed',
 } as const;
 
 /** Display-FX quote currency (string-compatible with `@balo/db` FxDisplayQuote). */
@@ -73,6 +85,29 @@ export interface CreditServerEventMap {
     quote: FxDisplayQuoteCode;
     as_of_age_hours: number;
     /** = 'system:fx-display' (no acting user — matches the onboarding-sweep system:* precedent). */
+    distinct_id: string;
+  };
+  [CREDIT_SERVER_EVENTS.AUTO_TOPUP_FIRED]: {
+    /** AUD reload FACE value credited (no fee/margin — fee-concealment posture). */
+    amount_minor: number;
+    /** Resting balance that triggered the reload (pre-reload). */
+    trigger_balance_minor: number;
+    company_id: string;
+    wallet_id: string;
+    /** = company_id (the natural subject of a wallet-level money event). */
+    distinct_id: string;
+  };
+  [CREDIT_SERVER_EVENTS.AUTO_TOPUP_FAILED]: {
+    /** AUD reload FACE value we attempted to charge. */
+    amount_minor: number;
+    /** Resting balance at fire time. */
+    trigger_balance_minor: number;
+    failure_reason: 'declined' | 'requires_action';
+    /** Stripe decline code when present. */
+    failure_code?: string;
+    company_id: string;
+    wallet_id: string;
+    /** = company_id. */
     distinct_id: string;
   };
 }

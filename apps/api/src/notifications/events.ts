@@ -20,6 +20,8 @@ import type {
   OnboardingReminderPayload,
   CreditDormancyReminderPayload,
   CreditBalanceExpiredPayload,
+  CreditAutoTopupExecutedPayload,
+  CreditAutoTopupFailedPayload,
   CreditTopupCompletedPayload,
   CreditTopupRequestedPayload,
   PromoRedeemedPayload,
@@ -270,6 +272,8 @@ export type NotificationEvent =
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
   | 'credit.balance_expired'
+  | 'credit.auto_topup.executed'
+  | 'credit.auto_topup.failed'
   | 'session.low_balance'
   | 'session.grace_entered'
   | 'session.near_wrap'
@@ -300,6 +304,10 @@ export type ServerOnlyNotificationEvent =
   | 'onboarding.reminder'
   | 'credit.dormancy_reminder'
   | 'credit.balance_expired'
+  // BAL-379: both fire from the API Stripe webhook / settlement path post-commit — never from
+  // apps/web, so neither has a publishBodySchema arm.
+  | 'credit.auto_topup.executed'
+  | 'credit.auto_topup.failed'
   | 'session.low_balance'
   | 'session.grace_entered'
   | 'session.near_wrap'
@@ -361,6 +369,8 @@ export interface EventPayloadMap {
   'onboarding.reminder': OnboardingReminderPayload;
   'credit.dormancy_reminder': CreditDormancyReminderPayload;
   'credit.balance_expired': CreditBalanceExpiredPayload;
+  'credit.auto_topup.executed': CreditAutoTopupExecutedPayload;
+  'credit.auto_topup.failed': CreditAutoTopupFailedPayload;
   'session.low_balance': SessionLowBalancePayload;
   'session.grace_entered': SessionGraceEnteredPayload;
   'session.near_wrap': SessionNearWrapPayload;

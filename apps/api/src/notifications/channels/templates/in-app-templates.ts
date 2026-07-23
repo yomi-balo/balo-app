@@ -575,6 +575,36 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     actionUrl: '/settings/billing',
   }),
 
+  // BAL-379 (ADR-1040) auto-top-up executed — company billing admins. Warm, factual: the balance
+  // ran low and was topped up on the saved card. AUD face value only (NO fee/overdraft). Billing.
+  'credit-auto-topup-executed': (data) => {
+    const reloaded = formatAudMinor(numberOrZero(data.reloadedMinor));
+    const balanceAfter = formatAudMinor(numberOrZero(data.balanceAfterMinor));
+    return {
+      title: 'Auto-top-up complete',
+      body: `We added ${reloaded} to keep things moving — your balance is now ${balanceAfter}.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // BAL-379 (ADR-1040) auto-top-up failed — company billing admins. Calm, non-dunning (nothing
+  // owed, nothing on hold). `reason` switches SCA vs hard-decline copy. AUD face value only.
+  'credit-auto-topup-failed': (data) => {
+    const attempted = formatAudMinor(numberOrZero(data.attemptedMinor));
+    if (data.reason === 'requires_action') {
+      return {
+        title: 'Confirm your card to keep auto-top-up on',
+        body: `Adding ${attempted} automatically needs a quick confirmation on your card — nothing's on hold.`,
+        actionUrl: '/settings/billing',
+      };
+    }
+    return {
+      title: 'A quick card update keeps auto-top-up on',
+      body: `We couldn't add ${attempted} automatically — nothing's owed or on hold; a card update keeps it going.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
   // BAL-378 (ADR-1040 Lane 2) in-session drawdown / settlement in-app notices. Warm,
   // non-countdown; "extra time" is the client name for what was drawn past the balance — the
   // word "overdraft" NEVER appears. Money via `formatAudMinor` (no inline formatting).

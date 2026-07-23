@@ -1,4 +1,4 @@
-import { asc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import { WALLET_EXPIRY_MONTHS } from '@balo/shared/pricing';
 import { db } from '../client';
 import {
@@ -13,6 +13,7 @@ import { acquireWalletLock } from './_shared/wallet-lock';
 import { recordCreditAudit, type CreditAuditAction } from './_shared/credit-audit';
 import { balanceContribution } from './_shared/credit-views';
 import { deriveIdempotencyKey } from './_shared/credit-idempotency';
+import type { DbExecutor } from './_shared/db-executor';
 
 /** Active transaction handle (matches `advanceEngagementStatus` in engagements.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -398,6 +399,27 @@ export const creditLedgerRepository = {
   /** The ledger row for an idempotency key, if any. */
   async findByIdempotencyKey(key: string): Promise<CreditLedgerEntry | undefined> {
     return db.query.creditLedger.findFirst({ where: eq(creditLedger.idempotencyKey, key) });
+  },
+
+  /**
+   * The id of the wallet's LATEST ledger entry (max `seq`) — the entry that produced the
+   * current resting balance (BAL-379). `undefined` when the wallet has no ledger rows.
+   * Orders by the monotonic `seq` identity, NOT `created_at` (transaction-scoped `now()`
+   * ties several same-txn appends), matching `listByWallet`'s canonical total order.
+   *
+   * Threads the caller's `exec` so the auto-top-up engine reads it UNDER its per-wallet
+   * advisory lock, in the SAME consistent snapshot as the balance/mandate it decides on:
+   * two concurrent evaluations then pin the SAME entry id ⇒ derive the SAME
+   * `auto_topup:{walletId}:{entryId}` idempotency key ⇒ Stripe collapses them to one charge.
+   */
+  async getLatestEntryId(walletId: string, exec: DbExecutor = db): Promise<string | undefined> {
+    const [row] = await exec
+      .select({ id: creditLedger.id })
+      .from(creditLedger)
+      .where(eq(creditLedger.walletId, walletId))
+      .orderBy(desc(creditLedger.seq))
+      .limit(1);
+    return row?.id;
   },
 
   /**
