@@ -95,6 +95,7 @@ import { sessionsRoutes } from './index.js';
 
 const EXPERT_ID = '11111111-1111-4111-8111-111111111111';
 const SESSION_ID = '22222222-2222-4222-8222-222222222222';
+const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
 const DRAWDOWN = { key: 'healthy', lens: 'client' };
 
 describe('sessions routes', () => {
@@ -141,6 +142,56 @@ describe('sessions routes', () => {
         method: 'POST',
         url: '/sessions',
         payload: { estimatedMinutes: 0 },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(mockOpenSession).not.toHaveBeenCalled();
+    });
+
+    it('threads a valid companyId through to the service (BAL-401)', async () => {
+      mockOpenSession.mockResolvedValue({
+        ok: true,
+        sessionId: SESSION_ID,
+        status: 'pending',
+        holdId: 'hold_1',
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, companyId: COMPANY_ID },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(mockOpenSession).toHaveBeenCalledWith({
+        initiatingMemberId: 'user_1',
+        expertProfileId: EXPERT_ID,
+        estimatedMinutes: 30,
+        companyId: COMPANY_ID,
+      });
+    });
+
+    it('409s with the eligible companies on company_selection_required (BAL-401)', async () => {
+      const companies = [
+        { id: COMPANY_ID, name: 'Acme', logoUrl: null },
+        { id: EXPERT_ID, name: 'Globex', logoUrl: 'https://logo/globex.png' },
+      ];
+      mockOpenSession.mockResolvedValue({
+        ok: false,
+        code: 'company_selection_required',
+        companies,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ code: 'company_selection_required', companies });
+    });
+
+    it('400s on a non-uuid companyId without calling the service (BAL-401)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, companyId: 'not-a-uuid' },
       });
       expect(res.statusCode).toBe(400);
       expect(mockOpenSession).not.toHaveBeenCalled();

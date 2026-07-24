@@ -6,21 +6,30 @@ import { z } from 'zod';
 import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import type { DrawdownState } from '@balo/shared/credit';
 import { callSessionApi } from '../api-client';
-import type { ActionResult, ConnectSessionData, EndSessionData, OpenSessionData } from './types';
+import type {
+  ActionResult,
+  ConnectSessionData,
+  EndSessionData,
+  OpenSessionActionResult,
+  OpenSessionData,
+} from './types';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — the thin credit-session Server Actions.
  *
  * Each is a minimal WorkOS-authed hop to the Fastify api (§8) via
  * {@link callSessionApi}. They resolve the actor SERVER-SIDE (the api re-verifies the
- * Bearer token) and NEVER accept a company / wallet id from the client — only the
- * expert / session id and the estimate. The component layer toasts each outcome.
+ * Bearer token) and never accept an arbitrary WALLET id from the client. A `companyId`
+ * (BAL-401) is accepted but is capability-gated server-side — `openSession` only honours a
+ * company the caller holds CONSUME_CREDITS on (fail-closed), so it cannot be used to draw
+ * down another tenant's wallet. The component layer toasts each outcome.
  */
 
 const openInputSchema = z
   .object({
     expertProfileId: z.uuid(),
     estimatedMinutes: z.number().int().positive().max(MAX_SESSION_MINUTES),
+    companyId: z.uuid().optional(),
   })
   .strict();
 
@@ -35,6 +44,7 @@ const OPEN_GATE_MESSAGE: Record<string, string> = {
     "Just a moment — we're finalizing your last session. Try again in a few seconds.",
   expert_rate_missing: 'This expert has not set a rate yet — please try another expert.',
   forbidden: 'You do not have permission to start a consultation for this team.',
+  company_selection_required: 'Choose which team this consultation is for.',
 };
 
 function openGateMessage(code: string | undefined): string {
@@ -46,13 +56,16 @@ function openGateMessage(code: string | undefined): string {
 }
 
 /**
- * Open a PENDING credit session (gate + hold). The api resolves the wallet + company
- * from the authed user; a money / capability gate returns a warm, mapped message.
+ * Open a PENDING credit session (gate + hold). The api resolves the wallet from the chosen
+ * (capability-gated) company; a money / capability gate returns a warm, mapped message. When
+ * more than one billing company is eligible and none was chosen, the failure carries the
+ * eligible `companies` (BAL-401) for the caller to pick from.
  */
 export async function openSessionAction(input: {
   expertProfileId: string;
   estimatedMinutes: number;
-}): Promise<ActionResult<OpenSessionData>> {
+  companyId?: string;
+}): Promise<OpenSessionActionResult> {
   const parsed = openInputSchema.safeParse(input);
   if (!parsed.success) {
     return { success: false, error: 'Enter a valid expert and session length.' };
@@ -61,10 +74,16 @@ export async function openSessionAction(input: {
   const result = await callSessionApi<OpenSessionData>('/sessions', 'POST', {
     expertProfileId: parsed.data.expertProfileId,
     estimatedMinutes: parsed.data.estimatedMinutes,
+    ...(parsed.data.companyId === undefined ? {} : { companyId: parsed.data.companyId }),
   });
 
   if (!result.ok) {
-    return { success: false, error: openGateMessage(result.code), code: result.code };
+    return {
+      success: false,
+      error: openGateMessage(result.code),
+      code: result.code,
+      ...(result.companies === undefined ? {} : { companies: result.companies }),
+    };
   }
   return { success: true, data: result.data };
 }

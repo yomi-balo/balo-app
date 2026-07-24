@@ -2,12 +2,20 @@
  * BAL-378 (ADR-1040 Lane 2) — credit-session service IO types (pure).
  */
 import type { CreditSession, CreditSettlementStatus } from '@balo/db';
+import type { EligibleCompany } from '@balo/shared/credit';
 
 export interface OpenSessionServiceInput {
-  /** The acting member (from auth). The session's company + wallet are resolved from them. */
+  /** The acting member (from auth). The session's wallet is resolved from the chosen company. */
   initiatingMemberId: string;
   expertProfileId: string;
   estimatedMinutes: number;
+  /**
+   * BAL-401 — the billing company to draw down. CAPABILITY-GATED, NOT an arbitrary wallet id:
+   * `openSession` only honours a company the caller holds `CONSUME_CREDITS` on (fail-closed IDOR
+   * guard). Omit it and the service auto-selects when exactly one company is eligible, or returns
+   * `company_selection_required` when more than one is.
+   */
+  companyId?: string;
 }
 
 /** Gate outcomes surfaced as a discriminated union — the route maps codes to 403 / 409. */
@@ -22,6 +30,10 @@ export type OpenSessionServiceErrorCode =
 
 export type OpenSessionServiceResult =
   | { ok: true; sessionId: string; status: 'pending'; holdId: string | null }
+  // BAL-401 — >1 eligible billing company and none chosen: the actor must pick one. Carries a
+  // NARROW eligible-company list (id/name/logoUrl only). Deliberately NOT an
+  // `OpenSessionServiceErrorCode` so `openErrorStatus` never has to consider `companies`.
+  | { ok: false; code: 'company_selection_required'; companies: EligibleCompany[] }
   | { ok: false; code: OpenSessionServiceErrorCode };
 
 /**

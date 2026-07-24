@@ -93,9 +93,16 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
       initiatingMemberId: userId,
       expertProfileId: parsed.data.expertProfileId,
       estimatedMinutes: parsed.data.estimatedMinutes,
+      ...(parsed.data.companyId === undefined ? {} : { companyId: parsed.data.companyId }),
     });
 
     if (!result.ok) {
+      // BAL-401 — >1 eligible billing company, none chosen: surface the narrow list so the
+      // caller can pick one. 409 (authorized-but-ambiguous); the client branches on `code`.
+      if (result.code === 'company_selection_required') {
+        reply.code(409).send({ code: result.code, companies: result.companies });
+        return;
+      }
       reply.code(openErrorStatus(result.code)).send({ code: result.code });
       return;
     }

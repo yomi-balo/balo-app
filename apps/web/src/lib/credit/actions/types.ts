@@ -1,4 +1,4 @@
-import type { CreditSessionStatus, DrawdownState } from '@balo/shared/credit';
+import type { CreditSessionStatus, DrawdownState, EligibleCompany } from '@balo/shared/credit';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — pure result types for the credit-session Server Actions.
@@ -13,6 +13,15 @@ import type { CreditSessionStatus, DrawdownState } from '@balo/shared/credit';
 export type ActionResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code?: string };
+
+/**
+ * BAL-401 — `openSessionAction` outcome. Distinct from the shared generic `ActionResult<T>` (kept
+ * pristine for connect/end/nudge) because a failure MAY carry the eligible companies when the api
+ * returns `company_selection_required` (>1 CONSUME_CREDITS company, none chosen).
+ */
+export type OpenSessionActionResult =
+  | { success: true; data: OpenSessionData }
+  | { success: false; error: string; code?: string; companies?: EligibleCompany[] };
 
 /** `POST /sessions` success body. */
 export interface OpenSessionData {
