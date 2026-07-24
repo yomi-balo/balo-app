@@ -3,6 +3,7 @@
  * (the drawdown route) and apps/web (the in-session components). Kept off the pino-pulling
  * package root so it is safe for the client bundle.
  */
+export { type EligibleCompany } from './eligible-company';
 export {
   deriveDrawdownState,
   derivePromoRemainingMinor,

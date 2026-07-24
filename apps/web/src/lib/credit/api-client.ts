@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { EligibleCompany } from '@balo/shared/credit';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -17,8 +18,11 @@ import { getSession } from '@/lib/auth/session';
  *  2. BAL-378 credit-SESSION drawdown (`callSessionApi`). Those routes are WorkOS-authed
  *     (`requireAuth` → `request.userId`), NOT the internal secret — so this client forwards the
  *     viewer's WorkOS access token as `Authorization: Bearer …`, resolved SERVER-SIDE from the
- *     iron-session (the browser never supplies it and no company / wallet id is ever trusted
- *     from the client). These are user-initiated mutations that toast their outcome.
+ *     iron-session (the browser never supplies it). No arbitrary WALLET id is ever trusted from
+ *     the client; a `companyId` (BAL-401) MAY be forwarded but is capability-gated server-side —
+ *     `openSession` only honours a company the caller holds CONSUME_CREDITS on (fail-closed), so
+ *     it cannot draw down another tenant's wallet. These are user-initiated mutations that toast
+ *     their outcome.
  */
 
 function getApiUrl(): string {
@@ -107,7 +111,7 @@ interface SessionApiAuth {
 /** A typed result of a credit-session api call — success carries the parsed body. */
 export type ApiCallResult<T> =
   | { ok: true; status: number; data: T }
-  | { ok: false; status: number; code?: string; error: string };
+  | { ok: false; status: number; code?: string; error: string; companies?: EligibleCompany[] };
 
 /**
  * Resolve the viewer's authenticated principal from the iron-session. Fails closed
@@ -145,6 +149,27 @@ function readString(body: Record<string, unknown>, key: string): string | undefi
 }
 
 /**
+ * BAL-401 — defensively parse the `company_selection_required` companies list off a failure
+ * body. Returns `undefined` when the field is absent/not an array; drops any item missing a
+ * string `id`/`name`. `logoUrl` is nullable end-to-end (personal / logoless companies).
+ */
+function readEligibleCompanies(body: Record<string, unknown>): EligibleCompany[] | undefined {
+  const raw = body['companies'];
+  if (!Array.isArray(raw)) return undefined;
+  const out: EligibleCompany[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const rec = item as Record<string, unknown>;
+    const id = rec['id'];
+    const name = rec['name'];
+    const logoUrl = rec['logoUrl'];
+    if (typeof id !== 'string' || typeof name !== 'string') continue;
+    out.push({ id, name, logoUrl: typeof logoUrl === 'string' ? logoUrl : null });
+  }
+  return out;
+}
+
+/**
  * Call a credit-session api route with the viewer's Bearer token. Never throws — a
  * transport error, a non-2xx, or an unauthenticated session all resolve to a typed
  * `{ ok: false }` the action layer maps to a friendly, non-leaking message.
@@ -173,11 +198,13 @@ export async function callSessionApi<T>(
     const parsed = safeParse(await response.text());
 
     if (!response.ok) {
+      const companies = readEligibleCompanies(parsed);
       return {
         ok: false,
         status: response.status,
         code: readString(parsed, 'code'),
         error: readString(parsed, 'error') ?? readString(parsed, 'code') ?? 'Request failed.',
+        ...(companies === undefined ? {} : { companies }),
       };
     }
 

@@ -20,6 +20,7 @@ import {
 
 const EXPERT_ID = 'b0000000-0000-4000-8000-000000000001';
 const SESSION_ID = 'c0000000-0000-4000-8000-000000000002';
+const COMPANY_ID = 'd0000000-0000-4000-8000-000000000003';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -43,6 +44,60 @@ describe('openSessionAction', () => {
       success: true,
       data: { sessionId: SESSION_ID, status: 'pending', holdId: 'hold-1' },
     });
+  });
+
+  it('forwards a valid companyId to the api (BAL-401)', async () => {
+    mockCall.mockResolvedValue({
+      ok: true,
+      status: 201,
+      data: { sessionId: SESSION_ID, status: 'pending', holdId: 'hold-1' },
+    });
+
+    const result = await openSessionAction({
+      expertProfileId: EXPERT_ID,
+      estimatedMinutes: 30,
+      companyId: COMPANY_ID,
+    });
+
+    expect(mockCall).toHaveBeenCalledWith('/sessions', 'POST', {
+      expertProfileId: EXPERT_ID,
+      estimatedMinutes: 30,
+      companyId: COMPANY_ID,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('surfaces the eligible companies + warm copy on company_selection_required (BAL-401)', async () => {
+    const companies = [
+      { id: COMPANY_ID, name: 'Acme', logoUrl: null },
+      { id: EXPERT_ID, name: 'Globex', logoUrl: 'https://logo/globex.png' },
+    ];
+    mockCall.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'company_selection_required',
+      companies,
+      error: 'x',
+    });
+
+    const result = await openSessionAction({ expertProfileId: EXPERT_ID, estimatedMinutes: 30 });
+
+    expect(result).toEqual({
+      success: false,
+      code: 'company_selection_required',
+      companies,
+      error: 'Choose which team this consultation is for.',
+    });
+  });
+
+  it('rejects a non-uuid companyId WITHOUT calling the api (BAL-401)', async () => {
+    const result = await openSessionAction({
+      expertProfileId: EXPERT_ID,
+      estimatedMinutes: 30,
+      companyId: 'not-a-uuid',
+    });
+    expect(mockCall).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
   });
 
   it('maps an insufficient-funds gate to warm copy (never "overdraft")', async () => {
