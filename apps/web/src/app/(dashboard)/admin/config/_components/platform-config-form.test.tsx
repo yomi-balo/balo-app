@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import type { PlatformConfigAdminDTO } from '@/lib/platform-config/platform-config-admin';
 import {
+  MAX_LENGTH_ERROR,
   MIN_LENGTH_ERROR,
   WHOLE_NUMBER_MESSAGE,
   successMessage,
@@ -71,6 +72,22 @@ describe('PlatformConfigForm', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent(WHOLE_NUMBER_MESSAGE);
     expect(screen.getByRole('alert')).not.toHaveTextContent(MIN_LENGTH_ERROR);
+    expect(field()).toHaveAttribute('aria-invalid', 'true');
+    expect(saveButton()).toBeDisabled();
+    expect(mockSetMin).not.toHaveBeenCalled();
+  });
+
+  it('shows the above-cap error and blocks save for a value over the session cap', async () => {
+    const user = userEvent.setup();
+    renderForm(20);
+    await user.clear(field());
+    await user.type(field(), '500');
+
+    // A minimum above the 240-minute session cap is unbookable — its own distinct message,
+    // not the floor/whole-number copy.
+    expect(screen.getByRole('alert')).toHaveTextContent(MAX_LENGTH_ERROR);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(MIN_LENGTH_ERROR);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(WHOLE_NUMBER_MESSAGE);
     expect(field()).toHaveAttribute('aria-invalid', 'true');
     expect(saveButton()).toBeDisabled();
     expect(mockSetMin).not.toHaveBeenCalled();

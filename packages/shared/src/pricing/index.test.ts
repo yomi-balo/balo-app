@@ -348,8 +348,22 @@ describe('Admin minimum consultation length (BAL-398)', () => {
     expect(BILLING_FLOOR_MINUTES).toBe(15);
   });
 
+  it('pins MAX_SESSION_MINUTES to 240 (locks the DB CHECK upper literal to the constant)', () => {
+    // The platform_config CHECK uses a numeric literal `<= 240`; this assertion is the
+    // tripwire that fires if the session cap and the hand-verified DDL literal ever drift.
+    expect(MAX_SESSION_MINUTES).toBe(240);
+  });
+
+  it('keeps the billing floor below the session cap (floor < cap coherence)', () => {
+    expect(BILLING_FLOOR_MINUTES).toBeLessThan(MAX_SESSION_MINUTES);
+  });
+
   it('keeps the default admin minimum at or above the billing floor (ticket invariant)', () => {
     expect(DEFAULT_MIN_CONSULTATION_MINUTES).toBeGreaterThanOrEqual(BILLING_FLOOR_MINUTES);
+  });
+
+  it('keeps the default admin minimum at or below the session cap (ticket invariant)', () => {
+    expect(DEFAULT_MIN_CONSULTATION_MINUTES).toBeLessThanOrEqual(MAX_SESSION_MINUTES);
   });
 
   describe('isValidMinConsultationMinutes', () => {
@@ -361,8 +375,16 @@ describe('Admin minimum consultation length (BAL-398)', () => {
       expect(isValidMinConsultationMinutes(30)).toBe(true);
     });
 
+    it('accepts the session cap at the upper boundary (240)', () => {
+      expect(isValidMinConsultationMinutes(MAX_SESSION_MINUTES)).toBe(true);
+    });
+
     it('rejects a value below the floor (14)', () => {
       expect(isValidMinConsultationMinutes(14)).toBe(false);
+    });
+
+    it('rejects a value above the session cap (241)', () => {
+      expect(isValidMinConsultationMinutes(MAX_SESSION_MINUTES + 1)).toBe(false);
     });
 
     it('rejects a non-integer (15.5)', () => {

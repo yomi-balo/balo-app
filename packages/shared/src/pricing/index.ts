@@ -142,10 +142,18 @@ export const BILLING_FLOOR_MINUTES = 15;
 /** Default admin minimum consultation length = the billing floor. */
 export const DEFAULT_MIN_CONSULTATION_MINUTES = BILLING_FLOOR_MINUTES;
 
-/** Integer minutes at or above the billing floor. The single "is this a storable
- *  minimum" predicate — the server Zod refine AND the invariant test reference it. */
+/** Integer minutes within the inclusive range `[BILLING_FLOOR_MINUTES,
+ *  MAX_SESSION_MINUTES]`. The single "is this a storable minimum" predicate — the
+ *  server Zod refine AND the invariant test reference it.
+ *
+ *  The UPPER bound (`MAX_SESSION_MINUTES`, the hard per-session duration cap) matters:
+ *  a minimum ABOVE the session cap is a floor no bookable window can satisfy, so the
+ *  availability resolver's `minMinutes` filter drops EVERY window → `earliestAvailableAt`
+ *  is null for every expert → with the availability gate on, the whole marketplace hides.
+ *  Bounding the minimum above by the session cap makes a fat-fingered value (e.g. 500)
+ *  unstorable, symmetric to the floor below. */
 export function isValidMinConsultationMinutes(n: number): boolean {
-  return Number.isInteger(n) && n >= BILLING_FLOOR_MINUTES;
+  return Number.isInteger(n) && n >= BILLING_FLOOR_MINUTES && n <= MAX_SESSION_MINUTES;
 }
 
 // ── Client Credit System platform-money constants (BAL-376 / ADR-1040) ────

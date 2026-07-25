@@ -13,9 +13,11 @@ import { PlatformConfigForm } from './_components/platform-config-form';
  * Admin platform-config surface (BAL-398). Server Component:
  *  1. `getCurrentUser()` — null → `/login` (the unauthenticated edge; the (dashboard)
  *     layout + `/admin` middleware already gate onboarding + the admin role).
- *  2. non-admin → `notFound()` — an admin-only surface that must not leak its existence
- *     to a client/expert (a 404 is indistinguishable from "no route"); also protects the
- *     Server Action surface as a page-level backstop.
+ *  2. non-admin → `notFound()` — the `/admin` middleware prefix is the FIRST line of defence
+ *     (it redirects a non-admin to `/dashboard` before this page ever renders, so the 404 is
+ *     not what a client/expert normally hits). This page-level `isPlatformAdmin → notFound()`
+ *     is a defense-in-depth backstop (e.g. if middleware coverage ever changes) that still
+ *     avoids leaking the surface's existence (a 404 is indistinguishable from "no route").
  *  3. load the DTO inside a try/catch that `log.error`s then re-throws to `error.tsx`.
  *  4. render the form (which owns the one config card + Sonner toast on save).
  *

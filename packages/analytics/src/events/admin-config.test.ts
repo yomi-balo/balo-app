@@ -14,9 +14,12 @@ describe('ADMIN_CONFIG_SERVER_EVENTS', () => {
     );
   });
 
-  it('uses the {feature}_…_{past_tense_verb} snake_case convention', () => {
+  it('uses the admin-prefixed snake_case convention', () => {
+    // Shape-only guard (admin-prefixed, multi-segment snake_case) — deliberately NOT tied to a
+    // `_set` suffix, so the first admin-config event that isn't a `_set` won't break it. The
+    // exact-value assertion above is the real per-event guard.
     for (const value of Object.values(ADMIN_CONFIG_SERVER_EVENTS)) {
-      expect(value).toMatch(/^admin_[a-z_]+_set$/);
+      expect(value).toMatch(/^admin_[a-z]+(_[a-z]+)+$/);
     }
   });
 });

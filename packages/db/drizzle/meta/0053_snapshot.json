@@ -1,5 +1,5 @@
 {
-  "id": "4e138b5e-30d8-40a5-819f-294ceba44ae4",
+  "id": "380d53d5-3e14-4400-8c5a-94519c0a1420",
   "prevId": "a7d20585-cb8b-4b8a-8596-833892a23550",
   "version": "7",
   "dialect": "postgresql",
@@ -10243,6 +10243,10 @@
         "platform_config_min_ge_floor": {
           "name": "platform_config_min_ge_floor",
           "value": "\"platform_config\".\"min_consultation_minutes\" >= 15"
+        },
+        "platform_config_min_le_cap": {
+          "name": "platform_config_min_le_cap",
+          "value": "\"platform_config\".\"min_consultation_minutes\" <= 240"
         }
       },
       "isRLSEnabled": false

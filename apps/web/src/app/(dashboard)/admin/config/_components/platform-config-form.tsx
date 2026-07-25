@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react';
 import { motion } from 'motion/react';
 import { toast } from 'sonner';
 import { Clock, Save } from 'lucide-react';
-import { isValidMinConsultationMinutes } from '@balo/shared/pricing';
+import { isValidMinConsultationMinutes, MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,6 +14,7 @@ import {
   FIELD_DESCRIPTION,
   FIELD_LABEL,
   FIELD_UNIT,
+  MAX_LENGTH_ERROR,
   MIN_LENGTH_ERROR,
   WHOLE_NUMBER_MESSAGE,
   successMessage,
@@ -45,9 +46,15 @@ export function PlatformConfigForm({ dto }: Readonly<PlatformConfigFormProps>): 
   const showError = trimmed !== '' && !isValid;
   const canSave = isValid && !isPristine && !isPending;
   // Only the DISPLAYED reason branches — the Save gate stays `isValidMinConsultationMinutes`.
-  // A non-integer (e.g. 15.5) is a whole-minute mistake; an integer that lands here is below
-  // the billing floor (`< dto.billingFloorMinutes`), so it keeps the floor copy.
-  const errorMessage = Number.isInteger(parsed) ? MIN_LENGTH_ERROR : WHOLE_NUMBER_MESSAGE;
+  // A non-integer (e.g. 15.5) is a whole-minute mistake; an integer above the hard session cap
+  // (`> MAX_SESSION_MINUTES`) is unbookable (would null availability platform-wide); otherwise
+  // the integer that lands here is below the billing floor, so it keeps the floor copy.
+  let errorMessage = MIN_LENGTH_ERROR;
+  if (!Number.isInteger(parsed)) {
+    errorMessage = WHOLE_NUMBER_MESSAGE;
+  } else if (parsed > MAX_SESSION_MINUTES) {
+    errorMessage = MAX_LENGTH_ERROR;
+  }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -101,6 +108,7 @@ export function PlatformConfigForm({ dto }: Readonly<PlatformConfigFormProps>): 
               type="number"
               inputMode="numeric"
               min={dto.billingFloorMinutes}
+              max={MAX_SESSION_MINUTES}
               step={1}
               value={value}
               onChange={(e) => setValue(e.target.value)}

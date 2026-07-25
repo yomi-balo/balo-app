@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isValidMinConsultationMinutes } from '@balo/shared/pricing';
+import { isValidMinConsultationMinutes, MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 
 /**
  * Shared Zod schema + user-facing copy for the platform-config Server Action (BAL-398).
@@ -20,6 +20,12 @@ export const MIN_LENGTH_ERROR =
 /** Distinct inline copy for a non-integer entry (e.g. `15.5`) — a whole-minute mistake, not
  *  a below-floor one, so it reads differently from `MIN_LENGTH_ERROR` in the form. */
 export const WHOLE_NUMBER_MESSAGE = 'Use a whole number of minutes.';
+
+/** The above-cap rejection copy — inline in the form for a value over the hard session cap.
+ *  Interpolates `MAX_SESSION_MINUTES` so the number can never drift from the constant the
+ *  predicate (and the DB CHECK) enforce. A minimum above the session cap is unbookable, so
+ *  the message reads warm-factual (§10.7), not adversarial. */
+export const MAX_LENGTH_ERROR = `Keep it to ${MAX_SESSION_MINUTES} minutes or fewer — a single consultation can’t run longer than the session cap.`;
 
 /** Field label + unit hint. */
 export const FIELD_LABEL = 'Minimum consultation length';

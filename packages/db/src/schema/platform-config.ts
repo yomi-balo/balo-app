@@ -23,17 +23,24 @@ import { BILLING_FLOOR_MINUTES } from '@balo/shared/pricing'; // SSOT for the co
  *    footgun). Precedent for omitting `deleted_at`: `companies`
  *    (memory `reference_companies_table_no_deleted_at`) and `credit_wallets` (BAL-376) both
  *    deliberately have no `deleted_at`.
- *  - KEEPS only `updated_at` + `updated_by`: the config is a mutable projection whose ONLY
- *    interesting history is "when was it last changed and by whom" — `updated_at` (bumped
- *    via `$onUpdateFn`, matching the shared `timestamps` helper's semantics) and
- *    `updated_by` (nullable FK → the admin who last edited; the seed leaves it NULL).
+ *  - KEEPS only `updated_at` + `updated_by`: last-actor attribution only — `updated_at`
+ *    (bumped via `$onUpdateFn`, matching the shared `timestamps` helper's semantics) and
+ *    `updated_by` (nullable FK → the admin who last edited; the seed leaves it NULL). Per
+ *    ADR-1030 the platform pattern is a full `audit_events` row per mutating admin action;
+ *    this table (consistent with the existing promo-code admin actions) records only the
+ *    last actor via `updated_by`/`updated_at`, NOT a per-mutation audit row. That is a
+ *    known, pre-existing drift tracked as a follow-up — not a decided exemption — and this
+ *    slice deliberately does not add an `audit_events` write (separate ticket).
  *
- * The `platform_config_min_ge_floor` CHECK uses the numeric literal `15`, kept in lockstep
- * with `BILLING_FLOOR_MINUTES` by the invariant test in `@balo/shared`
- * (`pricing/index.test.ts`, `BILLING_FLOOR_MINUTES === 15`). A numeric literal (not a `${}`
- * interpolation) matches every existing `check()` in the schema — e.g. `credit_wallets`'
- * `... >= 0` and `engagements`' bounds — so the CHECK is the structural money-floor backstop
- * while the imported constant drives the column DEFAULT + the app-layer Zod guard.
+ * The two `min_consultation_minutes` CHECKs (`... >= 15` floor, `... <= 240` cap) use
+ * numeric literals kept in lockstep with `BILLING_FLOOR_MINUTES` (15) and
+ * `MAX_SESSION_MINUTES` (240) by the invariant test in `@balo/shared`
+ * (`pricing/index.test.ts`). The upper bound matters: a minimum above the hard session cap
+ * is a floor no bookable window can satisfy, so the availability resolver would null
+ * `earliestAvailableAt` for every expert. A numeric literal (not a `${}` interpolation)
+ * matches every existing `check()` in the schema — e.g. `credit_wallets`' `... >= 0` and
+ * `engagements`' bounds — so the CHECKs are the structural money-floor/cap backstop while
+ * the imported constants drive the column DEFAULT + the app-layer Zod guard.
  */
 export const platformConfig = pgTable(
   'platform_config',
@@ -51,6 +58,7 @@ export const platformConfig = pgTable(
   (t) => [
     check('platform_config_singleton', sql`${t.id} = 1`),
     check('platform_config_min_ge_floor', sql`${t.minConsultationMinutes} >= 15`),
+    check('platform_config_min_le_cap', sql`${t.minConsultationMinutes} <= 240`),
   ]
 );
 

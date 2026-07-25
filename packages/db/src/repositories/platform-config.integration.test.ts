@@ -89,6 +89,15 @@ describe('platform_config DB constraints (structural money-floor backstop)', () 
     ).rejects.toThrow();
   });
 
+  it('rejects a minimum above the session cap (CHECK platform_config_min_le_cap)', async () => {
+    // Symmetric to the floor: a raw write above MAX_SESSION_MINUTES (240) must be refused by
+    // the DB CHECK — a minimum above the hard session cap is unbookable and would null
+    // availability platform-wide, so it is blocked structurally, not just by the caller.
+    await expect(
+      db.update(platformConfig).set({ minConsultationMinutes: 241 }).where(eq(platformConfig.id, 1))
+    ).rejects.toThrow();
+  });
+
   it('rejects a second config row (CHECK platform_config_singleton, id must be 1)', async () => {
     await expect(
       db.insert(platformConfig).values({ id: 2, minConsultationMinutes: 30 })
