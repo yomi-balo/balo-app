@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyBaloFee,
+  BILLING_FLOOR_MINUTES,
   DEFAULT_BALO_FEE_BPS,
+  DEFAULT_MIN_CONSULTATION_MINUTES,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
   DEFAULT_TOPUP_RELOAD_MINOR,
   DEFAULT_TOPUP_THRESHOLD_MINOR,
@@ -13,6 +15,7 @@ import {
   FX_DISPLAY_STALENESS_MS,
   isFxRateStale,
   isValidBaloFeeBps,
+  isValidMinConsultationMinutes,
   LOW_BALANCE_WARNING_MINUTES,
   MAX_BALO_FEE_BPS,
   MAX_SESSION_MINUTES,
@@ -335,5 +338,35 @@ describe('isFxRateStale', () => {
   it('is stale for a quote days old', () => {
     const asOf = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
     expect(isFxRateStale(asOf, now)).toBe(true);
+  });
+});
+
+describe('Admin minimum consultation length (BAL-398)', () => {
+  it('pins BILLING_FLOOR_MINUTES to 15 (locks the DB CHECK literal to the constant)', () => {
+    // The platform_config CHECK uses a numeric literal `>= 15`; this assertion is the
+    // tripwire that fires if the constant and the hand-verified DDL literal ever drift.
+    expect(BILLING_FLOOR_MINUTES).toBe(15);
+  });
+
+  it('keeps the default admin minimum at or above the billing floor (ticket invariant)', () => {
+    expect(DEFAULT_MIN_CONSULTATION_MINUTES).toBeGreaterThanOrEqual(BILLING_FLOOR_MINUTES);
+  });
+
+  describe('isValidMinConsultationMinutes', () => {
+    it('accepts the floor (15)', () => {
+      expect(isValidMinConsultationMinutes(15)).toBe(true);
+    });
+
+    it('accepts an integer above the floor (30)', () => {
+      expect(isValidMinConsultationMinutes(30)).toBe(true);
+    });
+
+    it('rejects a value below the floor (14)', () => {
+      expect(isValidMinConsultationMinutes(14)).toBe(false);
+    });
+
+    it('rejects a non-integer (15.5)', () => {
+      expect(isValidMinConsultationMinutes(15.5)).toBe(false);
+    });
   });
 });

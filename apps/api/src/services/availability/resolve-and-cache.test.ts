@@ -7,6 +7,7 @@ const {
   mockListRules,
   mockListConsultations,
   mockUpsertCache,
+  mockGetPlatformConfig,
   mockResolve,
   mockWarn,
   mockInfo,
@@ -15,6 +16,7 @@ const {
   mockListRules: vi.fn(),
   mockListConsultations: vi.fn(),
   mockUpsertCache: vi.fn(),
+  mockGetPlatformConfig: vi.fn(),
   mockResolve: vi.fn(),
   mockWarn: vi.fn(),
   mockInfo: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock('@balo/db', () => ({
   availabilityRulesRepository: { listByExpertProfileId: mockListRules },
   consultationsRepository: { listConfirmedInRange: mockListConsultations },
   calendarRepository: { upsertAvailabilityCache: mockUpsertCache },
+  platformConfigRepository: { get: mockGetPlatformConfig },
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -49,12 +52,13 @@ describe('resolveAndCacheAvailability', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.RESOLVER_HORIZON_DAYS;
-    delete process.env.MIN_CONSULTATION_MINUTES;
+    // The seeded platform-config singleton drives minMinutes (BAL-398). Default it to
+    // the billing floor; individual tests override to exercise config-driven values.
+    mockGetPlatformConfig.mockResolvedValue({ minConsultationMinutes: 15 });
   });
 
   afterEach(() => {
     delete process.env.RESOLVER_HORIZON_DAYS;
-    delete process.env.MIN_CONSULTATION_MINUTES;
   });
 
   it('happy path: loads inputs, calls resolver, writes cache with the result', async () => {
@@ -122,9 +126,10 @@ describe('resolveAndCacheAvailability', () => {
     expect(result).toEqual({ earliestAvailableAt: null });
   });
 
-  it('uses option overrides for now / horizonDays / minMinutes over env defaults', async () => {
+  it('uses option overrides for now / horizonDays (env) and minMinutes (over config)', async () => {
     process.env.RESOLVER_HORIZON_DAYS = '7';
-    process.env.MIN_CONSULTATION_MINUTES = '30';
+    // Config would resolve minMinutes to 30, but the explicit option must win.
+    mockGetPlatformConfig.mockResolvedValue({ minConsultationMinutes: 30 });
 
     mockFindTimezone.mockResolvedValue('UTC');
     mockListRules.mockResolvedValue([]);
@@ -138,7 +143,7 @@ describe('resolveAndCacheAvailability', () => {
       minMinutes: 45,
     });
 
-    // Options beat env defaults.
+    // Options beat env (horizon) and platform config (minMinutes).
     expect(mockListConsultations).toHaveBeenCalledWith(
       EXPERT_ID,
       customNow,
@@ -153,6 +158,19 @@ describe('resolveAndCacheAvailability', () => {
     );
   });
 
+  it('drives minMinutes from the platform-config value when no option is passed', async () => {
+    mockGetPlatformConfig.mockResolvedValue({ minConsultationMinutes: 30 });
+
+    mockFindTimezone.mockResolvedValue('UTC');
+    mockListRules.mockResolvedValue([]);
+    mockListConsultations.mockResolvedValue([]);
+    mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ minMinutes: 30 }));
+  });
+
   it('defaults busyBlocks to [] when none are supplied', async () => {
     mockFindTimezone.mockResolvedValue('UTC');
     mockListRules.mockResolvedValue([]);
@@ -164,9 +182,8 @@ describe('resolveAndCacheAvailability', () => {
     expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ busyBlocks: [] }));
   });
 
-  it('reads horizon + minMinutes from env when neither option nor explicit value is passed', async () => {
+  it('reads horizon from env, and minMinutes from config, when no option is passed', async () => {
     process.env.RESOLVER_HORIZON_DAYS = '21';
-    process.env.MIN_CONSULTATION_MINUTES = '20';
 
     mockFindTimezone.mockResolvedValue('UTC');
     mockListRules.mockResolvedValue([]);
@@ -175,18 +192,20 @@ describe('resolveAndCacheAvailability', () => {
 
     await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
+    // Horizon still reads the env var; minMinutes now reads the seeded config (15).
     expect(mockResolve).toHaveBeenCalledWith(
-      expect.objectContaining({ horizonDays: 21, minMinutes: 20 })
+      expect.objectContaining({ horizonDays: 21, minMinutes: 15 })
     );
   });
 
-  it('falls back to defaults — and produces a valid horizonEnd — when env vars are non-numeric', async () => {
+  it('falls back to defaults — valid horizonEnd on non-numeric env, floor when config is absent', async () => {
     // Regression guard: previously the inline `isFiniteNumber` ternary at the
     // resolve() call covered the resolver input but `horizonEnd` was computed
     // from the unguarded value, so a non-numeric env produced an Invalid Date
     // range for the consultations query and silently subtracted zero bookings.
     process.env.RESOLVER_HORIZON_DAYS = 'abc';
-    process.env.MIN_CONSULTATION_MINUTES = 'not-a-number';
+    // Config row somehow absent → minMinutes falls back to BILLING_FLOOR_MINUTES (15).
+    mockGetPlatformConfig.mockResolvedValue(undefined);
 
     mockFindTimezone.mockResolvedValue('UTC');
     mockListRules.mockResolvedValue([]);

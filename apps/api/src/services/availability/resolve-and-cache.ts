@@ -3,15 +3,16 @@ import {
   calendarRepository,
   consultationsRepository,
   expertsRepository,
+  platformConfigRepository,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { BILLING_FLOOR_MINUTES } from '@balo/shared/pricing';
 import { resolve } from './resolver.js';
 import type { BusyBlock } from './types.js';
 
 const log = createLogger('availability-resolve-and-cache');
 
 const DEFAULT_HORIZON_DAYS = 14;
-const DEFAULT_MIN_MINUTES = 15;
 
 export interface ResolveAndCacheOptions {
   /** Vendor free/busy windows. Defaults to `[]` until BAL-194/195 wires Cronofy. */
@@ -20,7 +21,8 @@ export interface ResolveAndCacheOptions {
   now?: Date;
   /** Days to look ahead. Defaults to `RESOLVER_HORIZON_DAYS` env or 14. */
   horizonDays?: number;
-  /** Discard sub-windows shorter than this. Defaults to `MIN_CONSULTATION_MINUTES` env or 15. */
+  /** Discard sub-windows shorter than this. Defaults to the `platform_config` minimum
+   *  consultation length (falling back to `BILLING_FLOOR_MINUTES`). */
   minMinutes?: number;
 }
 
@@ -48,10 +50,6 @@ export async function resolveAndCacheAvailability(
     options.horizonDays ?? Number.parseInt(process.env.RESOLVER_HORIZON_DAYS ?? '14', 10),
     DEFAULT_HORIZON_DAYS
   );
-  const minMinutes = guardedNumber(
-    options.minMinutes ?? Number.parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
-    DEFAULT_MIN_MINUTES
-  );
   const busyBlocks = options.busyBlocks ?? [];
 
   const timezone = await expertsRepository.findTimezone(expertProfileId);
@@ -65,10 +63,18 @@ export async function resolveAndCacheAvailability(
 
   const horizonEnd = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
 
-  const [rules, baloConsultations] = await Promise.all([
+  const [rules, baloConsultations, config] = await Promise.all([
     availabilityRulesRepository.listByExpertProfileId(expertProfileId),
     consultationsRepository.listConfirmedInRange(expertProfileId, now, horizonEnd),
+    platformConfigRepository.get(),
   ]);
+  // Minimum bookable window comes from the platform-config singleton (BAL-398), with
+  // an explicit option override for testability and a `BILLING_FLOOR_MINUTES` fallback
+  // for the impossible "no seeded row" case (defense-in-depth).
+  const minMinutes = guardedNumber(
+    options.minMinutes ?? config?.minConsultationMinutes ?? BILLING_FLOOR_MINUTES,
+    BILLING_FLOOR_MINUTES
+  );
 
   const result = resolve({
     rules: rules.map((r) => ({

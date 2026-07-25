@@ -19,6 +19,8 @@ export const PLATFORM_CAPABILITIES = {
   MANAGE_PLATFORM_FEES: 'manage_platform_fees',
   /** Mint / deactivate / cap-edit promo codes on the credit system (BAL-384). */
   MANAGE_PROMO_CODES: 'manage_promo_codes',
+  /** Set platform-wide config, e.g. the minimum bookable consultation length (BAL-398). */
+  MANAGE_PLATFORM_CONFIG: 'manage_platform_config',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -28,6 +30,7 @@ export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLA
 const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
   PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
+  PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG,
 ];
 
 /**

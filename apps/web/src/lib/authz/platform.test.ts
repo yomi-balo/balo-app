@@ -29,4 +29,22 @@ describe('hasPlatformCapability', () => {
       false
     );
   });
+
+  it('allows an admin to MANAGE_PLATFORM_CONFIG', () => {
+    expect(hasPlatformCapability(user('admin'), PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG)).toBe(
+      true
+    );
+  });
+
+  it('allows a super_admin to MANAGE_PLATFORM_CONFIG', () => {
+    expect(
+      hasPlatformCapability(user('super_admin'), PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG)
+    ).toBe(true);
+  });
+
+  it('denies a plain user MANAGE_PLATFORM_CONFIG', () => {
+    expect(hasPlatformCapability(user('user'), PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG)).toBe(
+      false
+    );
+  });
 });

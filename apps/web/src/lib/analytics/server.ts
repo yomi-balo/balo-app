@@ -15,6 +15,7 @@ export {
   AUTH_SERVER_EVENTS,
   PROMO_SERVER_EVENTS,
   ACTION_ITEM_SERVER_EVENTS,
+  ADMIN_CONFIG_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

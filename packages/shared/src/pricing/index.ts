@@ -126,6 +126,28 @@ export function applyBaloFee(cents: number, feeBps: number): number {
   return Math.round((cents * (10_000 + feeBps)) / 10_000);
 }
 
+// ── Admin minimum consultation length (BAL-398 / ADR-1044) ────────────────
+//
+// The FIRST platform-config-backed setting: a Balo-admin-editable minimum
+// consultation length (whole minutes). These pure constants are the SSOT the
+// persistence AND the validation layers both import so they can never drift.
+
+/** Billing charges/holds carry a 15-minute floor (ADR-1044/ADR-1040): a hold is
+ *  booked-duration × rate with no round-up yet, so the admin minimum can never go
+ *  below this without systematically under-holding. SSOT for: the platform_config
+ *  column default, the DB CHECK bound, the admin Zod schema, the resolver fallback,
+ *  and the invariant test. */
+export const BILLING_FLOOR_MINUTES = 15;
+
+/** Default admin minimum consultation length = the billing floor. */
+export const DEFAULT_MIN_CONSULTATION_MINUTES = BILLING_FLOOR_MINUTES;
+
+/** Integer minutes at or above the billing floor. The single "is this a storable
+ *  minimum" predicate — the server Zod refine AND the invariant test reference it. */
+export function isValidMinConsultationMinutes(n: number): boolean {
+  return Number.isInteger(n) && n >= BILLING_FLOOR_MINUTES;
+}
+
 // ── Client Credit System platform-money constants (BAL-376 / ADR-1040) ────
 //
 // No platform-config table exists, so these live as code constants alongside

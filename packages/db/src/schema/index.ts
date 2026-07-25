@@ -38,3 +38,4 @@ export * from './fx-display-rates';
 export * from './proposal-share-links';
 export * from './promo-codes';
 export * from './stripe-webhook-events';
+export * from './platform-config';

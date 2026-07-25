@@ -27,4 +27,5 @@ export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
 export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';
 export type { TranscriptVenue } from '../events/transcript';
+export { ADMIN_CONFIG_SERVER_EVENTS } from '../events/admin-config';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';

@@ -378,3 +378,6 @@ export type {
   NewExpertPayoutRecord,
   ExpertPayoutRecordStatus,
 } from '../schema';
+// ── Platform config — admin minimum consultation length (BAL-398) ───────────
+export { platformConfigRepository } from './platform-config';
+export type { PlatformConfig, NewPlatformConfig } from '../schema';

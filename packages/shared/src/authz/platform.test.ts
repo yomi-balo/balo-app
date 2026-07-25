@@ -35,6 +35,24 @@ describe('platformRoleHasCapability', () => {
       false
     );
   });
+
+  it('grants MANAGE_PLATFORM_CONFIG to admin', () => {
+    expect(platformRoleHasCapability('admin', PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG)).toBe(
+      true
+    );
+  });
+
+  it('grants MANAGE_PLATFORM_CONFIG to super_admin', () => {
+    expect(
+      platformRoleHasCapability('super_admin', PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG)
+    ).toBe(true);
+  });
+
+  it('denies MANAGE_PLATFORM_CONFIG to a plain user', () => {
+    expect(platformRoleHasCapability('user', PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG)).toBe(
+      false
+    );
+  });
 });
 
 describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
@@ -42,8 +60,21 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
     expect(PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES).toBe('manage_platform_fees');
   });
 
+  it('maps MANAGE_PLATFORM_CONFIG to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG).toBe('manage_platform_config');
+  });
+
   it('gives admin and super_admin the identical staff bundle, and omits user', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toEqual(PLATFORM_ROLE_CAPABILITIES.super_admin);
     expect(PLATFORM_ROLE_CAPABILITIES.user).toBeUndefined();
+  });
+
+  it('includes MANAGE_PLATFORM_CONFIG in the staff bundle held by admin and super_admin', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(
+      PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG
+    );
+    expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toContain(
+      PLATFORM_CAPABILITIES.MANAGE_PLATFORM_CONFIG
+    );
   });
 });

@@ -152,3 +152,4 @@ export {
   type TranscriptServerEventMap,
   type TranscriptVenue,
 } from './transcript';
+export { ADMIN_CONFIG_SERVER_EVENTS, type AdminConfigServerEventMap } from './admin-config';
