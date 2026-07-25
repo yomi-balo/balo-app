@@ -41,6 +41,13 @@ vi.mock('../_actions/fix-calendar-permissions', () => ({
   fixCalendarPermissionsAction: (...args: unknown[]) => mockFixPermissions(...args),
 }));
 
+// Stub the self-contained Time-off card — it fetches its own data on mount and
+// is covered by its own test. Stubbing keeps this suite focused on connection
+// states and avoids unrelated act() warnings from the card's async load.
+vi.mock('./date-overrides-card', () => ({
+  DateOverridesCard: () => <div data-testid="date-overrides-card" />,
+}));
+
 vi.mock('motion/react', () => {
   const MOTION_PROPS = new Set([
     'variants',

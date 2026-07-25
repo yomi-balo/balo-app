@@ -64,6 +64,9 @@ export const CALENDAR_SERVER_EVENTS = {
   // BAL-233: Error state events
   RELINK_URL_GENERATED: 'calendar_relink_url_generated',
   SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
+  // BAL-235: Date overrides (time off) events
+  AVAILABILITY_OVERRIDE_CREATED: 'availability_override_created',
+  AVAILABILITY_OVERRIDE_DELETED: 'availability_override_deleted',
 } as const;
 
 export interface CalendarServerEventMap {
@@ -93,6 +96,17 @@ export interface CalendarServerEventMap {
     distinct_id: string;
   };
   [CALENDAR_SERVER_EVENTS.SYNC_PENDING_AUTO_RESOLVED]: {
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.AVAILABILITY_OVERRIDE_CREATED]: {
+    /** Inclusive day count of the block (single day = 1). */
+    duration_days: number;
+    has_label: boolean;
+    /** = expertProfileId. */
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.AVAILABILITY_OVERRIDE_DELETED]: {
+    /** = expertProfileId. */
     distinct_id: string;
   };
 }

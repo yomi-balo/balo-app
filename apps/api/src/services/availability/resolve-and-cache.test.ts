@@ -6,6 +6,7 @@ const {
   mockFindTimezone,
   mockListRules,
   mockListConsultations,
+  mockListUpcoming,
   mockUpsertCache,
   mockResolve,
   mockWarn,
@@ -14,6 +15,7 @@ const {
   mockFindTimezone: vi.fn(),
   mockListRules: vi.fn(),
   mockListConsultations: vi.fn(),
+  mockListUpcoming: vi.fn(),
   mockUpsertCache: vi.fn(),
   mockResolve: vi.fn(),
   mockWarn: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock('@balo/db', () => ({
   expertsRepository: { findTimezone: mockFindTimezone },
   availabilityRulesRepository: { listByExpertProfileId: mockListRules },
   consultationsRepository: { listConfirmedInRange: mockListConsultations },
+  availabilityOverridesRepository: { listUpcoming: mockListUpcoming },
   calendarRepository: { upsertAvailabilityCache: mockUpsertCache },
 }));
 
@@ -48,6 +51,8 @@ describe('resolveAndCacheAvailability', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no time-off blocks. Individual tests override as needed.
+    mockListUpcoming.mockResolvedValue([]);
     delete process.env.RESOLVER_HORIZON_DAYS;
     delete process.env.MIN_CONSULTATION_MINUTES;
   });
@@ -80,10 +85,12 @@ describe('resolveAndCacheAvailability', () => {
       NOW,
       new Date(NOW.getTime() + 14 * 24 * 60 * 60 * 1000)
     );
+    expect(mockListUpcoming).toHaveBeenCalledWith(EXPERT_ID);
     expect(mockResolve).toHaveBeenCalledWith({
       rules,
       baloConsultations: consultations,
       busyBlocks: [],
+      overrideBlocks: [],
       timezone: 'Australia/Sydney',
       now: NOW,
       horizonDays: 14,
@@ -92,6 +99,55 @@ describe('resolveAndCacheAvailability', () => {
     expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, earliest);
     expect(mockInfo).toHaveBeenCalled();
     expect(result).toEqual({ earliestAvailableAt: earliest });
+  });
+
+  it('loads overrides and expands each [startDate, endDate] to an end-inclusive whole-day UTC interval', async () => {
+    // Sydney in June is AEST (UTC+10, no DST): local midnight = 14:00 UTC the
+    // prior day. endDate is INCLUSIVE, so the interval runs to midnight of the
+    // day AFTER endDate (2026-06-12 local → 2026-06-11T14:00:00Z).
+    mockFindTimezone.mockResolvedValue('Australia/Sydney');
+    mockListRules.mockResolvedValue([]);
+    mockListConsultations.mockResolvedValue([]);
+    mockListUpcoming.mockResolvedValue([
+      { id: 'o1', startDate: '2026-06-10', endDate: '2026-06-11', label: 'Leave' },
+    ]);
+    mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        overrideBlocks: [
+          {
+            startAt: new Date('2026-06-09T14:00:00.000Z'),
+            endAt: new Date('2026-06-11T14:00:00.000Z'),
+          },
+        ],
+      })
+    );
+  });
+
+  it('expands a single-day override (startDate === endDate) to exactly one whole UTC day', async () => {
+    mockFindTimezone.mockResolvedValue('UTC');
+    mockListRules.mockResolvedValue([]);
+    mockListConsultations.mockResolvedValue([]);
+    mockListUpcoming.mockResolvedValue([
+      { id: 'o1', startDate: '2026-12-25', endDate: '2026-12-25', label: null },
+    ]);
+    mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        overrideBlocks: [
+          {
+            startAt: new Date('2026-12-25T00:00:00.000Z'),
+            endAt: new Date('2026-12-26T00:00:00.000Z'),
+          },
+        ],
+      })
+    );
   });
 
   it('returns null and warns when the expert profile has no timezone', async () => {

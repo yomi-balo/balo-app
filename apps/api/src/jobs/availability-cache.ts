@@ -1,4 +1,5 @@
 import { Worker, type Job } from 'bullmq';
+import type { FastifyBaseLogger } from 'fastify';
 import { calendarRepository } from '@balo/db';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
@@ -14,6 +15,40 @@ export const STALENESS_CHECK_QUEUE = 'staleness-check';
 
 export interface AvailabilityCacheJobData {
   expertProfileId: string;
+}
+
+// ── Enqueue helper ───────────────────────────────────────────────
+
+/**
+ * Enqueues a (deduplicated) availability-cache rebuild for one expert.
+ *
+ * Best-effort: a Redis hiccup must never fail the caller's mutation, so we
+ * swallow and log any enqueue error. The `jobId` dedupes concurrent triggers
+ * (webhook change + settings mutation) into a single pending rebuild.
+ *
+ * Shared by the Cronofy webhook and the expert availability-override routes.
+ */
+export async function enqueueAvailabilityCacheRebuild(
+  expertProfileId: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  try {
+    const queue = getQueue(AVAILABILITY_CACHE_QUEUE);
+    await queue.add(
+      'rebuild-availability-cache',
+      { expertProfileId } satisfies AvailabilityCacheJobData,
+      {
+        jobId: `availability-${expertProfileId}`,
+        removeOnComplete: true,
+        removeOnFail: false,
+      }
+    );
+  } catch (err: unknown) {
+    log.error(
+      { expertProfileId, error: err instanceof Error ? err.message : String(err) },
+      'Failed to enqueue availability cache rebuild job'
+    );
+  }
 }
 
 // ── Worker: Rebuild availability cache ───────────────────────────

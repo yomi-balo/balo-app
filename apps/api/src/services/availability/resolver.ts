@@ -33,7 +33,16 @@ import type {
  * accepted for v1 (locked by `resolver.test.ts > DST spring-forward`).
  */
 export function resolve(input: ResolverInput): ResolverResult {
-  const { rules, baloConsultations, busyBlocks, timezone, now, horizonDays, minMinutes } = input;
+  const {
+    rules,
+    baloConsultations,
+    busyBlocks,
+    overrideBlocks,
+    timezone,
+    now,
+    horizonDays,
+    minMinutes,
+  } = input;
 
   const { rangeStart, rangeEnd } = boundWindow(now, horizonDays);
   if (rangeStart >= rangeEnd) {
@@ -53,10 +62,19 @@ export function resolve(input: ResolverInput): ResolverResult {
 
   const merged = mergeOverlapping(clipped);
   const busy = combineBusyIntervals(baloConsultations, busyBlocks);
+  // Pre-sort override blocks so `subtractBusy` (which assumes sorted-by-start
+  // input) removes them correctly. Overrides are subtracted FIRST — a full-day
+  // holiday/leave block clears the whole day before consultations/vendor busy.
+  const blocks = [...overrideBlocks].sort(compareByStart);
 
   const free: BusyBlock[] = [];
   for (const window of merged) {
-    free.push(...subtractBusy(window, busy));
+    // 1) Remove full-day override blocks (holidays/leave) — most aggressive.
+    const afterOverrides = subtractBusy(window, blocks);
+    // 2) Then remove consultations + vendor busy from what remains.
+    for (const seg of afterOverrides) {
+      free.push(...subtractBusy(seg, busy));
+    }
   }
 
   const minMs = minMinutes * 60 * 1000;

@@ -15,6 +15,7 @@ import { CalendarO365GuidanceModal } from './calendar-o365-guidance-modal';
 import { CalendarO365WaitingCard } from './calendar-o365-waiting-card';
 import { CalendarSessionExpiredCard } from './calendar-session-expired-card';
 import { CalendarTrustRow } from './calendar-trust-row';
+import { DateOverridesCard } from './date-overrides-card';
 import { useCalendarPolling } from '../_hooks/use-calendar-polling';
 import { getCalendarConnectionAction } from '../_actions/get-calendar-connection';
 import { initiateCalendarConnectAction } from '../_actions/initiate-calendar-connect';
@@ -362,6 +363,11 @@ export function CalendarTab(): React.JSX.Element {
           <CalendarTrustRow />
         </motion.div>
       )}
+
+      {/* Time off — always mounted; independent of calendar-connection status */}
+      <motion.div variants={itemVariants}>
+        <DateOverridesCard />
+      </motion.div>
     </motion.div>
   );
 }
