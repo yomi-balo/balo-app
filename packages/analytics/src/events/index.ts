@@ -147,6 +147,7 @@ export {
   type WalletLens,
   type WalletRestingStateName,
 } from './wallet';
+export { SCHEDULE_EVENTS, type ScheduleEventMap } from './schedule';
 export {
   TRANSCRIPT_SERVER_EVENTS,
   type TranscriptServerEventMap,

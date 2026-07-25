@@ -2,7 +2,13 @@ import 'server-only';
 
 import { cache } from 'react';
 import { getSession } from '@/lib/auth/session';
-import { expertsRepository, usersRepository, payoutsRepository } from '@balo/db';
+import {
+  expertsRepository,
+  usersRepository,
+  payoutsRepository,
+  calendarRepository,
+  availabilityRulesRepository,
+} from '@balo/db';
 import { log } from '@/lib/logging';
 
 export interface ChecklistStatus {
@@ -36,10 +42,12 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Expert profile required');
   }
 
-  const [profile, user, hasPayouts] = await Promise.all([
+  const [profile, user, hasPayouts, connection, hasSchedule] = await Promise.all([
     expertsRepository.findProfileById(expertProfileId),
     usersRepository.findById(session.user.id),
     payoutsRepository.hasPayoutDetails(expertProfileId),
+    calendarRepository.findConnectionByExpertProfileId(expertProfileId),
+    availabilityRulesRepository.hasActiveRules(expertProfileId),
   ]);
 
   if (!profile || !user) {
@@ -52,6 +60,10 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Profile or user not found');
   }
 
+  // `calendar`: a non-soft-deleted calendar_connections row exists (the authoritative
+  // connection source; the former `cronofySyncStatus` read was a dead column — no writer).
+  const calendar = Boolean(connection);
+
   const items = {
     profile: Boolean(
       profile.headline &&
@@ -62,8 +74,9 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     ),
     phone: Boolean(user.phoneVerifiedAt),
     rate: Boolean(profile.rateCents && profile.rateCents > 0),
-    calendar: Boolean(profile.cronofySyncStatus && profile.cronofySyncStatus !== 'not_connected'),
-    availability: false, // TODO: BAL-195 — check availability_slots table
+    calendar,
+    // Availability requires ≥1 enabled weekly rule AND a connected calendar (BAL-234).
+    availability: hasSchedule && calendar,
     payouts: hasPayouts,
   };
 

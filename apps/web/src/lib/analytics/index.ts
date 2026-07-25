@@ -29,6 +29,7 @@ export {
   SESSION_EVENTS,
   CASE_BILLING_EVENTS,
   WALLET_EVENTS,
+  SCHEDULE_EVENTS,
 } from '@balo/analytics/client';
 
 export type {

@@ -35,7 +35,12 @@ import type {
 export function resolve(input: ResolverInput): ResolverResult {
   const { rules, baloConsultations, busyBlocks, timezone, now, horizonDays, minMinutes } = input;
 
-  const { rangeStart, rangeEnd } = boundWindow(now, horizonDays);
+  // Booking rules (BAL-234). Default to 0 so the BAL-243 behaviour is unchanged.
+  const bufferBeforeMs = (input.bufferBeforeMinutes ?? 0) * 60 * 1000;
+  const bufferAfterMs = (input.bufferAfterMinutes ?? 0) * 60 * 1000;
+  const minimumNoticeMs = (input.minimumNoticeMinutes ?? 0) * 60 * 1000;
+
+  const { rangeStart, rangeEnd } = boundWindow(now, horizonDays, minimumNoticeMs);
   if (rangeStart >= rangeEnd) {
     return { earliestAvailableAt: null };
   }
@@ -52,7 +57,7 @@ export function resolve(input: ResolverInput): ResolverResult {
   }
 
   const merged = mergeOverlapping(clipped);
-  const busy = combineBusyIntervals(baloConsultations, busyBlocks);
+  const busy = combineBusyIntervals(baloConsultations, busyBlocks, bufferBeforeMs, bufferAfterMs);
 
   const free: BusyBlock[] = [];
   for (const window of merged) {
@@ -76,10 +81,17 @@ export function resolve(input: ResolverInput): ResolverResult {
 
 // ── Step helpers ───────────────────────────────────────────────
 
-function boundWindow(now: Date, horizonDays: number): { rangeStart: Date; rangeEnd: Date } {
+function boundWindow(
+  now: Date,
+  horizonDays: number,
+  minimumNoticeMs: number
+): { rangeStart: Date; rangeEnd: Date } {
   // Truncate `now` to the next minute so the earliest result is a clean instant.
-  const rangeStart = ceilToNextMinute(now);
-  const rangeEnd = new Date(rangeStart.getTime() + horizonDays * 24 * 60 * 60 * 1000);
+  const earliestStart = ceilToNextMinute(now);
+  // Minimum notice pushes the near edge forward; the far edge (booking window)
+  // is always measured from `now`, so `windowDays` isn't consumed by notice.
+  const rangeStart = laterOf(earliestStart, new Date(now.getTime() + minimumNoticeMs));
+  const rangeEnd = new Date(earliestStart.getTime() + horizonDays * 24 * 60 * 60 * 1000);
   return { rangeStart, rangeEnd };
 }
 
@@ -172,13 +184,25 @@ function mergeOverlapping(windows: BusyBlock[]): BusyBlock[] {
   return merged;
 }
 
+/**
+ * Merge consultations + vendor busy blocks into one sorted busy list, padding
+ * each interval by the booking buffers so a booking reserves buffer time on
+ * both sides. With both buffers 0 this is the identity transform (BAL-243
+ * behaviour).
+ */
 function combineBusyIntervals(
   consultations: ResolverConsultation[],
-  busyBlocks: BusyBlock[]
+  busyBlocks: BusyBlock[],
+  bufferBeforeMs: number,
+  bufferAfterMs: number
 ): BusyBlock[] {
+  const pad = (b: BusyBlock): BusyBlock => ({
+    startAt: new Date(b.startAt.getTime() - bufferBeforeMs),
+    endAt: new Date(b.endAt.getTime() + bufferAfterMs),
+  });
   return [
-    ...consultations.map<BusyBlock>((c) => ({ startAt: c.startAt, endAt: c.endAt })),
-    ...busyBlocks,
+    ...consultations.map<BusyBlock>((c) => pad({ startAt: c.startAt, endAt: c.endAt })),
+    ...busyBlocks.map<BusyBlock>(pad),
   ].sort(compareByStart);
 }
 

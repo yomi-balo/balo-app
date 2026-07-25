@@ -20,7 +20,7 @@ import { ProfileTab } from './profile-tab';
 import { ExpertiseTab } from './expertise-tab';
 import { WorkHistoryTab } from './work-history-tab';
 import { CertificationsTab } from './certifications-tab';
-import { CalendarTab } from './calendar-tab';
+import { ScheduleTab } from './schedule-tab';
 import { AgencyDomainsTab } from './agency-domains-tab';
 import { cn } from '@/lib/utils';
 import type {
@@ -344,7 +344,7 @@ function TabPanelContent(props: Readonly<TabPanelContentProps>): React.JSX.Eleme
   if (tab === 'schedule') {
     return (
       <div className="mx-auto max-w-[620px]">
-        <CalendarTab />
+        <ScheduleTab />
       </div>
     );
   }

@@ -187,6 +187,13 @@ interface UpdateProfileInput {
   isCertifiedTrainer?: boolean;
   searchable?: boolean;
   rateCents?: number;
+  // Calendar / booking-rule writes (BAL-234). `timezone` write is net-new here —
+  // the schedule editor persists the expert's own tz alongside the booking rules.
+  timezone?: string;
+  bookingBufferBeforeMinutes?: number;
+  bookingBufferAfterMinutes?: number;
+  bookingMinimumNoticeMinutes?: number;
+  bookingWindowDays?: number;
 }
 
 interface SyncLanguageInput {
@@ -308,6 +315,41 @@ export const expertsRepository = {
       columns: { timezone: true },
     });
     return row?.timezone ?? null;
+  },
+
+  /**
+   * The full set of resolver inputs owned by the expert — timezone + the four
+   * booking rules — in one `columns:`-projected read (never hydrate the whole
+   * row: it carries stripeConnectId / cronofyUserId / PII the resolver must not
+   * see). Returns null if the profile doesn't exist so the resolve-and-cache
+   * wire-up can short-circuit. Field names are the resolver's own vocabulary
+   * (`bufferBeforeMinutes`, …), decoupled from the DB column names.
+   */
+  async findResolverSettings(expertProfileId: string): Promise<{
+    timezone: string;
+    bufferBeforeMinutes: number;
+    bufferAfterMinutes: number;
+    minimumNoticeMinutes: number;
+    windowDays: number;
+  } | null> {
+    const row = await db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+      columns: {
+        timezone: true,
+        bookingBufferBeforeMinutes: true,
+        bookingBufferAfterMinutes: true,
+        bookingMinimumNoticeMinutes: true,
+        bookingWindowDays: true,
+      },
+    });
+    if (!row) return null;
+    return {
+      timezone: row.timezone,
+      bufferBeforeMinutes: row.bookingBufferBeforeMinutes,
+      bufferAfterMinutes: row.bookingBufferAfterMinutes,
+      minimumNoticeMinutes: row.bookingMinimumNoticeMinutes,
+      windowDays: row.bookingWindowDays,
+    };
   },
 
   /**

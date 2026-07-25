@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // ── Hoisted mocks ──────────────────────────────────────────────
 
 const {
-  mockFindTimezone,
+  mockFindResolverSettings,
   mockListRules,
   mockListConsultations,
   mockUpsertCache,
@@ -11,7 +11,7 @@ const {
   mockWarn,
   mockInfo,
 } = vi.hoisted(() => ({
-  mockFindTimezone: vi.fn(),
+  mockFindResolverSettings: vi.fn(),
   mockListRules: vi.fn(),
   mockListConsultations: vi.fn(),
   mockUpsertCache: vi.fn(),
@@ -21,7 +21,7 @@ const {
 }));
 
 vi.mock('@balo/db', () => ({
-  expertsRepository: { findTimezone: mockFindTimezone },
+  expertsRepository: { findResolverSettings: mockFindResolverSettings },
   availabilityRulesRepository: { listByExpertProfileId: mockListRules },
   consultationsRepository: { listConfirmedInRange: mockListConsultations },
   calendarRepository: { upsertAvailabilityCache: mockUpsertCache },
@@ -42,6 +42,18 @@ vi.mock('./resolver.js', () => ({
 
 import { resolveAndCacheAvailability } from './resolve-and-cache';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Full resolver settings as returned by `findResolverSettings`. */
+const settings = (overrides: Partial<Record<string, unknown>> = {}) => ({
+  timezone: 'Australia/Sydney',
+  bufferBeforeMinutes: 15,
+  bufferAfterMinutes: 30,
+  minimumNoticeMinutes: 120,
+  windowDays: 30,
+  ...overrides,
+});
+
 describe('resolveAndCacheAvailability', () => {
   const EXPERT_ID = '00000000-0000-0000-0000-000000000001';
   const NOW = new Date('2026-06-01T00:00:00.000Z');
@@ -57,8 +69,8 @@ describe('resolveAndCacheAvailability', () => {
     delete process.env.MIN_CONSULTATION_MINUTES;
   });
 
-  it('happy path: loads inputs, calls resolver, writes cache with the result', async () => {
-    mockFindTimezone.mockResolvedValue('Australia/Sydney');
+  it('happy path: loads settings, threads booking rules into the resolver, writes cache', async () => {
+    mockFindResolverSettings.mockResolvedValue(settings());
     const rules = [{ dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }];
     const consultations = [
       {
@@ -73,12 +85,13 @@ describe('resolveAndCacheAvailability', () => {
 
     const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
-    expect(mockFindTimezone).toHaveBeenCalledWith(EXPERT_ID);
+    expect(mockFindResolverSettings).toHaveBeenCalledWith(EXPERT_ID);
     expect(mockListRules).toHaveBeenCalledWith(EXPERT_ID);
+    // windowDays (30) becomes the horizon → consultations query spans 30 days.
     expect(mockListConsultations).toHaveBeenCalledWith(
       EXPERT_ID,
       NOW,
-      new Date(NOW.getTime() + 14 * 24 * 60 * 60 * 1000)
+      new Date(NOW.getTime() + 30 * DAY_MS)
     );
     expect(mockResolve).toHaveBeenCalledWith({
       rules,
@@ -86,16 +99,19 @@ describe('resolveAndCacheAvailability', () => {
       busyBlocks: [],
       timezone: 'Australia/Sydney',
       now: NOW,
-      horizonDays: 14,
+      horizonDays: 30,
       minMinutes: 15,
+      bufferBeforeMinutes: 15,
+      bufferAfterMinutes: 30,
+      minimumNoticeMinutes: 120,
     });
     expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, earliest);
     expect(mockInfo).toHaveBeenCalled();
     expect(result).toEqual({ earliestAvailableAt: earliest });
   });
 
-  it('returns null and warns when the expert profile has no timezone', async () => {
-    mockFindTimezone.mockResolvedValue(null);
+  it('returns null and warns when the expert profile is not found', async () => {
+    mockFindResolverSettings.mockResolvedValue(null);
 
     const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
@@ -111,7 +127,7 @@ describe('resolveAndCacheAvailability', () => {
   });
 
   it('writes null to the cache when the resolver returns null', async () => {
-    mockFindTimezone.mockResolvedValue('UTC');
+    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 14 }));
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
@@ -122,11 +138,11 @@ describe('resolveAndCacheAvailability', () => {
     expect(result).toEqual({ earliestAvailableAt: null });
   });
 
-  it('uses option overrides for now / horizonDays / minMinutes over env defaults', async () => {
+  it('lets an explicit horizonDays option win over env and the booking window', async () => {
     process.env.RESOLVER_HORIZON_DAYS = '7';
     process.env.MIN_CONSULTATION_MINUTES = '30';
 
-    mockFindTimezone.mockResolvedValue('UTC');
+    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 30 }));
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
@@ -138,37 +154,21 @@ describe('resolveAndCacheAvailability', () => {
       minMinutes: 45,
     });
 
-    // Options beat env defaults.
     expect(mockListConsultations).toHaveBeenCalledWith(
       EXPERT_ID,
       customNow,
-      new Date(customNow.getTime() + 3 * 24 * 60 * 60 * 1000)
+      new Date(customNow.getTime() + 3 * DAY_MS)
     );
     expect(mockResolve).toHaveBeenCalledWith(
-      expect.objectContaining({
-        now: customNow,
-        horizonDays: 3,
-        minMinutes: 45,
-      })
+      expect.objectContaining({ now: customNow, horizonDays: 3, minMinutes: 45 })
     );
   });
 
-  it('defaults busyBlocks to [] when none are supplied', async () => {
-    mockFindTimezone.mockResolvedValue('UTC');
-    mockListRules.mockResolvedValue([]);
-    mockListConsultations.mockResolvedValue([]);
-    mockResolve.mockReturnValue({ earliestAvailableAt: null });
-
-    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
-
-    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ busyBlocks: [] }));
-  });
-
-  it('reads horizon + minMinutes from env when neither option nor explicit value is passed', async () => {
+  it('lets a valid RESOLVER_HORIZON_DAYS env override the booking window', async () => {
     process.env.RESOLVER_HORIZON_DAYS = '21';
     process.env.MIN_CONSULTATION_MINUTES = '20';
 
-    mockFindTimezone.mockResolvedValue('UTC');
+    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 30 }));
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
@@ -180,29 +180,35 @@ describe('resolveAndCacheAvailability', () => {
     );
   });
 
-  it('falls back to defaults — and produces a valid horizonEnd — when env vars are non-numeric', async () => {
-    // Regression guard: previously the inline `isFiniteNumber` ternary at the
-    // resolve() call covered the resolver input but `horizonEnd` was computed
-    // from the unguarded value, so a non-numeric env produced an Invalid Date
-    // range for the consultations query and silently subtracted zero bookings.
+  it('falls through to the booking window (finite horizonEnd) when env vars are non-numeric', async () => {
     process.env.RESOLVER_HORIZON_DAYS = 'abc';
     process.env.MIN_CONSULTATION_MINUTES = 'not-a-number';
 
-    mockFindTimezone.mockResolvedValue('UTC');
+    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 45 }));
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
 
     await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
-    // Defaults (14d / 15min) apply, and the consultations query gets a finite
-    // horizonEnd derived from those defaults — not Invalid Date.
-    const expectedEnd = new Date(NOW.getTime() + 14 * 24 * 60 * 60 * 1000);
+    // Non-numeric env is ignored → the expert's booking window (45d) is used,
+    // and the consultations query gets a finite horizonEnd (not Invalid Date).
+    const expectedEnd = new Date(NOW.getTime() + 45 * DAY_MS);
     expect(mockListConsultations).toHaveBeenCalledWith(EXPERT_ID, NOW, expectedEnd);
     expect(Number.isFinite(expectedEnd.getTime())).toBe(true);
-
     expect(mockResolve).toHaveBeenCalledWith(
-      expect.objectContaining({ horizonDays: 14, minMinutes: 15 })
+      expect.objectContaining({ horizonDays: 45, minMinutes: 15 })
     );
+  });
+
+  it('defaults busyBlocks to [] when none are supplied', async () => {
+    mockFindResolverSettings.mockResolvedValue(settings());
+    mockListRules.mockResolvedValue([]);
+    mockListConsultations.mockResolvedValue([]);
+    mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ busyBlocks: [] }));
   });
 });

@@ -152,6 +152,81 @@ describe('expertsRepository.updateProfile', () => {
     expect(updated?.headline).toBe('New headline');
     expect(updated?.rateCents).toBe(150);
   });
+
+  it('round-trips the timezone and four booking-rule columns (BAL-234)', async () => {
+    const draft = await expertDraftFactory();
+
+    await expertsRepository.updateProfile(draft.id, {
+      timezone: 'Australia/Melbourne',
+      bookingBufferBeforeMinutes: 15,
+      bookingBufferAfterMinutes: 10,
+      bookingMinimumNoticeMinutes: 120,
+      bookingWindowDays: 30,
+    });
+
+    const updated = await expertsRepository.findProfileById(draft.id);
+    expect(updated?.timezone).toBe('Australia/Melbourne');
+    expect(updated?.bookingBufferBeforeMinutes).toBe(15);
+    expect(updated?.bookingBufferAfterMinutes).toBe(10);
+    expect(updated?.bookingMinimumNoticeMinutes).toBe(120);
+    expect(updated?.bookingWindowDays).toBe(30);
+  });
+
+  it('a fresh draft has booking-rule defaults 0/0/0/60 and timezone UTC', async () => {
+    const draft = await expertDraftFactory();
+
+    const fresh = await expertsRepository.findProfileById(draft.id);
+    expect(fresh?.timezone).toBe('UTC');
+    expect(fresh?.bookingBufferBeforeMinutes).toBe(0);
+    expect(fresh?.bookingBufferAfterMinutes).toBe(0);
+    expect(fresh?.bookingMinimumNoticeMinutes).toBe(0);
+    expect(fresh?.bookingWindowDays).toBe(60);
+  });
+});
+
+// ── findResolverSettings (BAL-234) ──────────────────────────────────
+
+describe('expertsRepository.findResolverSettings', () => {
+  it('returns the projected timezone + booking-rule shape', async () => {
+    const draft = await expertDraftFactory();
+    await expertsRepository.updateProfile(draft.id, {
+      timezone: 'America/New_York',
+      bookingBufferBeforeMinutes: 5,
+      bookingBufferAfterMinutes: 30,
+      bookingMinimumNoticeMinutes: 1440,
+      bookingWindowDays: 90,
+    });
+
+    const settings = await expertsRepository.findResolverSettings(draft.id);
+
+    expect(settings).toEqual({
+      timezone: 'America/New_York',
+      bufferBeforeMinutes: 5,
+      bufferAfterMinutes: 30,
+      minimumNoticeMinutes: 1440,
+      windowDays: 90,
+    });
+  });
+
+  it('returns the defaults for a fresh draft', async () => {
+    const draft = await expertDraftFactory();
+
+    const settings = await expertsRepository.findResolverSettings(draft.id);
+
+    expect(settings).toEqual({
+      timezone: 'UTC',
+      bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0,
+      minimumNoticeMinutes: 0,
+      windowDays: 60,
+    });
+  });
+
+  it('returns null for an unknown profile id', async () => {
+    const settings = await expertsRepository.findResolverSettings(randomUUID());
+
+    expect(settings).toBeNull();
+  });
 });
 
 // ── linkAgency (BAL-356) ────────────────────────────────────────────

@@ -40,28 +40,29 @@ export async function resolveAndCacheAvailability(
   options: ResolveAndCacheOptions = {}
 ): Promise<{ earliestAvailableAt: Date | null }> {
   const now = options.now ?? new Date();
-  // Resolve env-or-default once, then guard, so `horizonEnd` and the resolver
-  // input both see the same finite number. A malformed env var (e.g.
-  // RESOLVER_HORIZON_DAYS='abc') would otherwise make `horizonEnd` an Invalid
-  // Date and silently skip subtracting any consultations.
-  const horizonDays = guardedNumber(
-    options.horizonDays ?? Number.parseInt(process.env.RESOLVER_HORIZON_DAYS ?? '14', 10),
-    DEFAULT_HORIZON_DAYS
-  );
-  const minMinutes = guardedNumber(
-    options.minMinutes ?? Number.parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
-    DEFAULT_MIN_MINUTES
-  );
-  const busyBlocks = options.busyBlocks ?? [];
 
-  const timezone = await expertsRepository.findTimezone(expertProfileId);
-  if (!timezone) {
+  // Load the expert's resolver settings (timezone + booking rules) first — the
+  // booking window is the resolver's default horizon, so we need it before
+  // resolving `horizonDays`.
+  const settings = await expertsRepository.findResolverSettings(expertProfileId);
+  if (!settings) {
     log.warn(
       { expertProfileId },
       'Skipping availability cache rebuild — expert profile or timezone not found'
     );
     return { earliestAvailableAt: null };
   }
+
+  // Precedence: explicit option > valid env override > the expert's booking
+  // window. Guarded so `horizonEnd` and the resolver input always see the same
+  // finite number (a malformed env var would otherwise make `horizonEnd` an
+  // Invalid Date and silently skip subtracting any consultations).
+  const horizonDays = resolveHorizonDays(options.horizonDays, settings.windowDays);
+  const minMinutes = guardedNumber(
+    options.minMinutes ?? Number.parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
+    DEFAULT_MIN_MINUTES
+  );
+  const busyBlocks = options.busyBlocks ?? [];
 
   const horizonEnd = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
 
@@ -81,10 +82,13 @@ export async function resolveAndCacheAvailability(
       endAt: c.endAt,
     })),
     busyBlocks,
-    timezone,
+    timezone: settings.timezone,
     now,
     horizonDays,
     minMinutes,
+    bufferBeforeMinutes: settings.bufferBeforeMinutes,
+    bufferAfterMinutes: settings.bufferAfterMinutes,
+    minimumNoticeMinutes: settings.minimumNoticeMinutes,
   });
 
   await calendarRepository.upsertAvailabilityCache(expertProfileId, result.earliestAvailableAt);
@@ -105,4 +109,21 @@ export async function resolveAndCacheAvailability(
 
 function guardedNumber(n: unknown, fallback: number): number {
   return typeof n === 'number' && Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Resolve the look-ahead horizon. Precedence: an explicit option, then a valid
+ * `RESOLVER_HORIZON_DAYS` env override, then the expert's own booking window.
+ * A missing or non-numeric env var is ignored so the booking window wins.
+ */
+function resolveHorizonDays(optionValue: number | undefined, windowDays: number): number {
+  if (optionValue !== undefined) {
+    return guardedNumber(optionValue, windowDays);
+  }
+  const envRaw = process.env.RESOLVER_HORIZON_DAYS;
+  if (envRaw !== undefined) {
+    const parsed = Number.parseInt(envRaw, 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return guardedNumber(windowDays, DEFAULT_HORIZON_DAYS);
 }

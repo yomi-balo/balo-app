@@ -82,6 +82,14 @@ export const expertProfiles = pgTable(
     // Calendar / availability
     timezone: text('timezone').notNull().default('UTC'),
 
+    // Booking rules (BAL-234) — scalar 1:1 settings fed into the availability
+    // resolver. Stored here (not a separate table) since there is exactly one set
+    // per expert. Constant NOT NULL defaults → PG11+ fast metadata-only add.
+    bookingBufferBeforeMinutes: integer('booking_buffer_before_minutes').notNull().default(0),
+    bookingBufferAfterMinutes: integer('booking_buffer_after_minutes').notNull().default(0),
+    bookingMinimumNoticeMinutes: integer('booking_minimum_notice_minutes').notNull().default(0),
+    bookingWindowDays: integer('booking_window_days').notNull().default(60),
+
     ...timestamps,
     approvedAt: timestamp('approved_at', { withTimezone: true }),
 

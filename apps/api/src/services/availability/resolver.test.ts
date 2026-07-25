@@ -223,4 +223,92 @@ describe('resolve (BAL-243 availability resolver)', () => {
       expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T14:30:00.000Z'));
     });
   });
+
+  describe('booking rules (BAL-234)', () => {
+    describe('minimum notice', () => {
+      it('pushes the earliest slot forward by the notice window (same day)', () => {
+        // now = Mon 00:00 UTC; 720-minute notice = 12h → earliest cannot be
+        // before 12:00, so the 09:00 rule opening is skipped to 12:00.
+        const result = resolve(
+          baseInput({
+            rules: [{ dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }],
+            minimumNoticeMinutes: 720,
+          })
+        );
+
+        expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T12:00:00.000Z'));
+      });
+
+      it('can skip past the current day into the next matching weekday', () => {
+        // Monday-only rule; a 24h notice pushes past Monday 06-01 entirely, so
+        // the earliest is the following Monday 06-08.
+        const result = resolve(
+          baseInput({
+            rules: [{ dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }],
+            minimumNoticeMinutes: 1440,
+          })
+        );
+
+        expect(result.earliestAvailableAt).toEqual(new Date('2026-06-08T09:00:00.000Z'));
+      });
+    });
+
+    describe('buffers', () => {
+      it('pads a busy interval on the leading side, discarding a too-short pre-gap', () => {
+        // Consultation 09:20–11:00; a 10-min before-buffer extends it to 09:10.
+        // The remaining 09:00–09:10 gap (10 min) is below the 15-min floor and
+        // is discarded, so the earliest slot is 11:00.
+        const result = resolve(
+          baseInput({
+            rules: [{ dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }],
+            baloConsultations: [
+              {
+                startAt: new Date('2026-06-01T09:20:00.000Z'),
+                endAt: new Date('2026-06-01T11:00:00.000Z'),
+              },
+            ],
+            bufferBeforeMinutes: 10,
+            minMinutes: 15,
+          })
+        );
+
+        expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T11:00:00.000Z'));
+      });
+
+      it('pads a busy interval on the trailing side', () => {
+        // Consultation 09:00–10:00; a 30-min after-buffer extends it to 10:30,
+        // so the earliest free slot opens at 10:30 (not 10:00).
+        const result = resolve(
+          baseInput({
+            rules: [{ dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }],
+            baloConsultations: [
+              {
+                startAt: new Date('2026-06-01T09:00:00.000Z'),
+                endAt: new Date('2026-06-01T10:00:00.000Z'),
+              },
+            ],
+            bufferAfterMinutes: 30,
+            minMinutes: 15,
+          })
+        );
+
+        expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T10:30:00.000Z'));
+      });
+    });
+
+    describe('booking window (horizonDays)', () => {
+      it('returns null when the only matching day falls beyond the window', () => {
+        // Saturday-only rule; a 3-day horizon from Monday 06-01 ends Thu 06-04,
+        // before the next Saturday 06-06 — so no slot is found.
+        const result = resolve(
+          baseInput({
+            rules: [{ dayOfWeek: 6, startTime: '10:00:00', endTime: '12:00:00' }],
+            horizonDays: 3,
+          })
+        );
+
+        expect(result.earliestAvailableAt).toBeNull();
+      });
+    });
+  });
 });

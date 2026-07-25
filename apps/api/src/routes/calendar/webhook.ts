@@ -1,11 +1,10 @@
 import type { FastifyInstance, FastifyBaseLogger } from 'fastify';
 import { calendarRepository, type CalendarConnection } from '@balo/db';
-import { getQueue } from '../../lib/queue.js';
-import { AVAILABILITY_CACHE_QUEUE } from '../../jobs/availability-cache.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import { getValidAccessToken } from '../../services/cronofy/token-manager.js';
 import { listAndStoreCalendars, registerPushChannel } from '../../services/cronofy/oauth.js';
 import { getCronofyUserClient } from '../../lib/cronofy.js';
+import { enqueueAvailabilityCacheRebuild } from '../../services/availability/enqueue-rebuild.js';
 
 // ── Webhook types ───────────────────────────────────────────────
 
@@ -21,29 +20,6 @@ interface CronofyWebhookBody {
 }
 
 // ── Notification handlers ───────────────────────────────────────
-
-async function enqueueAvailabilityCacheRebuild(
-  expertProfileId: string,
-  log: FastifyBaseLogger
-): Promise<void> {
-  try {
-    const queue = getQueue(AVAILABILITY_CACHE_QUEUE);
-    await queue.add(
-      'rebuild-availability-cache',
-      { expertProfileId },
-      {
-        jobId: `availability-${expertProfileId}`,
-        removeOnComplete: true,
-        removeOnFail: false,
-      }
-    );
-  } catch (err: unknown) {
-    log.error(
-      { expertProfileId, error: err instanceof Error ? err.message : String(err) },
-      'Failed to enqueue availability cache rebuild job'
-    );
-  }
-}
 
 async function handleChange(connection: CalendarConnection, log: FastifyBaseLogger): Promise<void> {
   await calendarRepository.updateLastSyncedAt(connection.id);
