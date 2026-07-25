@@ -9,12 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  BUFFER_OPTIONS,
-  NOTICE_OPTIONS,
-  WINDOW_OPTIONS,
-  type RuleOption,
-} from '../_lib/schedule-helpers';
+import { BUFFER_OPTIONS, NOTICE_OPTIONS, type RuleOption } from '../_lib/schedule-helpers';
 import type { BookingSettings } from '../_types/schedule';
 
 interface RuleField {
@@ -24,14 +19,9 @@ interface RuleField {
   options: readonly RuleOption[];
 }
 
-// Exact option sets from availability-editor.jsx. No consultation-length control (BAL-398).
+// Option sets from availability-editor.jsx. No consultation-length or booking-window
+// control — both are platform config (BAL-398), not per-expert settings.
 const RULE_FIELDS: readonly RuleField[] = [
-  {
-    key: 'windowDays',
-    label: 'Booking window',
-    help: 'How far ahead clients can book.',
-    options: WINDOW_OPTIONS,
-  },
   {
     key: 'bufferBeforeMinutes',
     label: 'Buffer before',

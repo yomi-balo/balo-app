@@ -7,7 +7,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScheduleTimeSelect } from './schedule-time-select';
-import { DAY_META, MAX_RANGES_PER_DAY, type DayState } from '../_lib/schedule-helpers';
+import {
+  DAY_META,
+  MAX_RANGES_PER_DAY,
+  START_TIME_OPTIONS,
+  type DayState,
+} from '../_lib/schedule-helpers';
 
 interface ScheduleDayRowProps {
   dayIndex: number;
@@ -83,6 +88,7 @@ export function ScheduleDayRow({
               <div key={range.id} className="flex flex-wrap items-center gap-2">
                 <ScheduleTimeSelect
                   value={range.start}
+                  options={START_TIME_OPTIONS}
                   ariaLabel={`${meta.full} range ${rangeIndex + 1} start time`}
                   onChange={(value) => onRangeChange(range.id, 'start', value)}
                 />

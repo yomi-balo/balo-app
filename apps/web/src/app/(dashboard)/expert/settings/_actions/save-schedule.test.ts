@@ -43,7 +43,6 @@ const VALID_INPUT = {
     bufferBeforeMinutes: 0,
     bufferAfterMinutes: 10,
     minimumNoticeMinutes: 240,
-    windowDays: 60,
   },
   rules: [
     { dayOfWeek: 1, startTime: '09:00', endTime: '17:00' },

@@ -41,7 +41,7 @@ export interface ResolverInput {
   timezone: string;
   /** UTC instant; injected for testability. */
   now: Date;
-  /** Number of days to look ahead from `now` (the expert's booking window). */
+  /** Number of days to look ahead from `now` (platform-level config, BAL-398). */
   horizonDays: number;
   /** Discard sub-windows shorter than this many minutes. */
   minMinutes: number;

@@ -4,6 +4,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 
 const {
   mockFindProfileById,
+  mockFindResolverSettings,
   mockUpdateProfile,
   mockReplaceForExpert,
   mockDeleteAllForExpert,
@@ -13,6 +14,7 @@ const {
   mockQueueAdd,
 } = vi.hoisted(() => ({
   mockFindProfileById: vi.fn(),
+  mockFindResolverSettings: vi.fn(),
   mockUpdateProfile: vi.fn(),
   mockReplaceForExpert: vi.fn(),
   mockDeleteAllForExpert: vi.fn(),
@@ -25,6 +27,7 @@ const {
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     findProfileById: mockFindProfileById,
+    findResolverSettings: mockFindResolverSettings,
     updateProfile: mockUpdateProfile,
   },
   availabilityRulesRepository: {
@@ -96,7 +99,6 @@ const PROFILE = {
   bookingBufferBeforeMinutes: 15,
   bookingBufferAfterMinutes: 30,
   bookingMinimumNoticeMinutes: 120,
-  bookingWindowDays: 60,
 };
 
 /** Assert a rebuild job was enqueued with the coalescing jobId. */
@@ -114,7 +116,6 @@ const VALID_BODY = {
     bufferBeforeMinutes: 15,
     bufferAfterMinutes: 30,
     minimumNoticeMinutes: 120,
-    windowDays: 60,
   },
   rules: [
     { dayOfWeek: 1, startTime: '09:00', endTime: '12:00' },
@@ -162,7 +163,7 @@ describe('experts schedule API routes', () => {
     });
 
     it('returns 404 when the profile does not exist', async () => {
-      mockFindProfileById.mockResolvedValue(undefined);
+      mockFindResolverSettings.mockResolvedValue(null);
       mockListRules.mockResolvedValue([]);
 
       const res = await app.inject({
@@ -174,7 +175,13 @@ describe('experts schedule API routes', () => {
     });
 
     it('returns tz + booking settings + rules trimmed to HH:mm', async () => {
-      mockFindProfileById.mockResolvedValue(PROFILE);
+      // GET reads via the column-projected findResolverSettings (no full-row hydration).
+      mockFindResolverSettings.mockResolvedValue({
+        timezone: 'Australia/Melbourne',
+        bufferBeforeMinutes: 15,
+        bufferAfterMinutes: 30,
+        minimumNoticeMinutes: 120,
+      });
       mockListRules.mockResolvedValue([
         { dayOfWeek: 1, startTime: '09:00:00', endTime: '12:00:00' },
         { dayOfWeek: 1, startTime: '13:00:00', endTime: '17:00:00' },
@@ -194,7 +201,6 @@ describe('experts schedule API routes', () => {
           bufferBeforeMinutes: 15,
           bufferAfterMinutes: 30,
           minimumNoticeMinutes: 120,
-          windowDays: 60,
         },
         rules: [
           { dayOfWeek: 1, startTime: '09:00', endTime: '12:00' },
@@ -204,13 +210,11 @@ describe('experts schedule API routes', () => {
     });
 
     it('returns empty rules and default settings when unset', async () => {
-      mockFindProfileById.mockResolvedValue({
-        id: EXPERT_UUID,
+      mockFindResolverSettings.mockResolvedValue({
         timezone: 'UTC',
-        bookingBufferBeforeMinutes: 0,
-        bookingBufferAfterMinutes: 0,
-        bookingMinimumNoticeMinutes: 0,
-        bookingWindowDays: 60,
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+        minimumNoticeMinutes: 0,
       });
       mockListRules.mockResolvedValue([]);
 
@@ -228,7 +232,6 @@ describe('experts schedule API routes', () => {
         bufferBeforeMinutes: 0,
         bufferAfterMinutes: 0,
         minimumNoticeMinutes: 0,
-        windowDays: 60,
       });
     });
   });
@@ -322,7 +325,6 @@ describe('experts schedule API routes', () => {
           bookingBufferBeforeMinutes: 15,
           bookingBufferAfterMinutes: 30,
           bookingMinimumNoticeMinutes: 120,
-          bookingWindowDays: 60,
         },
         { __tx: true }
       );

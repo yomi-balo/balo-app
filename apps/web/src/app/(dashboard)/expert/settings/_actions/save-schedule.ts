@@ -10,11 +10,11 @@ import { internalApiFetch } from '../_lib/internal-api';
 import { scheduleRulesSchema } from '../_lib/schedule-helpers';
 import type { ScheduleData } from '../_types/schedule';
 
+// Bounds mirror the CHECK constraints on `expert_profiles` and the API route.
 const bookingSettingsSchema = z.object({
   bufferBeforeMinutes: z.number().int().min(0).max(120),
   bufferAfterMinutes: z.number().int().min(0).max(120),
   minimumNoticeMinutes: z.number().int().min(0).max(20160), // ≤ 14 days
-  windowDays: z.number().int().min(1).max(365),
 });
 
 const saveScheduleSchema = z.object({

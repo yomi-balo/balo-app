@@ -1,5 +1,5 @@
 {
-  "id": "7c710209-d2df-4ac0-8b0b-4c3255bdbb9a",
+  "id": "05f3e5ea-dc13-4610-a38e-f4afdb80cdc7",
   "prevId": "a7d20585-cb8b-4b8a-8596-833892a23550",
   "version": "7",
   "dialect": "postgresql",
@@ -2017,13 +2017,6 @@
           "notNull": true,
           "default": 0
         },
-        "booking_window_days": {
-          "name": "booking_window_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 60
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2155,7 +2148,20 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "expert_profiles_booking_buffer_before_check": {
+          "name": "expert_profiles_booking_buffer_before_check",
+          "value": "\"expert_profiles\".\"booking_buffer_before_minutes\" BETWEEN 0 AND 120"
+        },
+        "expert_profiles_booking_buffer_after_check": {
+          "name": "expert_profiles_booking_buffer_after_check",
+          "value": "\"expert_profiles\".\"booking_buffer_after_minutes\" BETWEEN 0 AND 120"
+        },
+        "expert_profiles_booking_minimum_notice_check": {
+          "name": "expert_profiles_booking_minimum_notice_check",
+          "value": "\"expert_profiles\".\"booking_minimum_notice_minutes\" BETWEEN 0 AND 20160"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.work_history": {
@@ -3832,9 +3838,9 @@
           "name": "avail_rules_day_check",
           "value": "\"availability_rules\".\"day_of_week\" BETWEEN 0 AND 6"
         },
-        "avail_rules_start_before_end_check": {
-          "name": "avail_rules_start_before_end_check",
-          "value": "\"availability_rules\".\"start_time\" < \"availability_rules\".\"end_time\""
+        "avail_rules_start_ne_end_check": {
+          "name": "avail_rules_start_ne_end_check",
+          "value": "\"availability_rules\".\"start_time\" <> \"availability_rules\".\"end_time\""
         }
       },
       "isRLSEnabled": false

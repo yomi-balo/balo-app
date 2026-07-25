@@ -68,9 +68,14 @@ export function ScheduleTab(): React.JSX.Element {
   const [timezone, setTimezone] = useState('Australia/Melbourne');
   const [saving, setSaving] = useState(false);
   const [showSavedSummary, setShowSavedSummary] = useState(false);
+  // Target timezone awaiting confirmation (AC12): non-null while the reinterpret
+  // warning dialog is open. Only reached when the expert has active saved rules.
+  const [pendingTimezone, setPendingTimezone] = useState<string | null>(null);
 
   const expertIdRef = useRef<string>('');
   const persistedTimezoneRef = useRef<string>('Australia/Melbourne');
+  const persistedBookingSettingsRef = useRef<BookingSettings>(DEFAULT_BOOKING_SETTINGS);
+  const hasPersistedRulesRef = useRef<boolean>(false);
 
   const loadSchedule = useCallback(async (): Promise<void> => {
     setViewState('loading');
@@ -81,6 +86,8 @@ export function ScheduleTab(): React.JSX.Element {
     }
     expertIdRef.current = data.expertProfileId;
     persistedTimezoneRef.current = data.timezone;
+    persistedBookingSettingsRef.current = data.bookingSettings;
+    hasPersistedRulesRef.current = data.rules.length > 0;
     setTimezone(data.timezone);
     setBookingSettings(data.bookingSettings);
     if (data.rules.length === 0) {
@@ -179,9 +186,8 @@ export function ScheduleTab(): React.JSX.Element {
 
   // ── Timezone (persisted immediately via PATCH) ───────────────────
 
-  const handleTimezoneChange = useCallback(async (nextTimezone: string): Promise<void> => {
+  const commitTimezoneChange = useCallback(async (nextTimezone: string): Promise<void> => {
     const previous = persistedTimezoneRef.current;
-    if (nextTimezone === previous) return;
     setTimezone(nextTimezone);
     const result = await updateScheduleTimezoneAction(nextTimezone);
     if (result.success) {
@@ -197,6 +203,27 @@ export function ScheduleTab(): React.JSX.Element {
       toast.error(result.error ?? 'Failed to update timezone');
     }
   }, []);
+
+  // Changing timezone reinterprets every saved wall-clock rule (Melbourne 9–5 →
+  // New York 9–5). Confirm first when the expert has active rules (AC12 / §3);
+  // otherwise commit straight away.
+  const handleTimezoneChange = useCallback(
+    (nextTimezone: string): void => {
+      if (nextTimezone === persistedTimezoneRef.current) return;
+      if (hasPersistedRulesRef.current) {
+        setPendingTimezone(nextTimezone);
+        return;
+      }
+      void commitTimezoneChange(nextTimezone);
+    },
+    [commitTimezoneChange]
+  );
+
+  const confirmTimezoneChange = useCallback((): void => {
+    const next = pendingTimezone;
+    setPendingTimezone(null);
+    if (next) void commitTimezoneChange(next);
+  }, [pendingTimezone, commitTimezoneChange]);
 
   // ── Empty-state entry points ─────────────────────────────────────
 
@@ -234,12 +261,28 @@ export function ScheduleTab(): React.JSX.Element {
     setSaving(false);
     if (result.success) {
       persistedTimezoneRef.current = timezone;
+      hasPersistedRulesRef.current = weekToRules(week).length > 0;
       track(SCHEDULE_EVENTS.SAVED, {
         expert_id: expertIdRef.current,
         days_enabled: countEnabledDays(week),
         has_split_days: hasSplitDays(week),
       });
-      track(SCHEDULE_EVENTS.BOOKING_RULES_SAVED, { expert_id: expertIdRef.current });
+      // Fire booking_rules_saved ONLY when the settings differ from what's
+      // persisted — without the change-gate it just duplicates schedule_saved.
+      const prev = persistedBookingSettingsRef.current;
+      if (
+        bookingSettings.bufferBeforeMinutes !== prev.bufferBeforeMinutes ||
+        bookingSettings.bufferAfterMinutes !== prev.bufferAfterMinutes ||
+        bookingSettings.minimumNoticeMinutes !== prev.minimumNoticeMinutes
+      ) {
+        track(SCHEDULE_EVENTS.BOOKING_RULES_SAVED, {
+          expert_id: expertIdRef.current,
+          buffer_before_minutes: bookingSettings.bufferBeforeMinutes,
+          buffer_after_minutes: bookingSettings.bufferAfterMinutes,
+          minimum_notice_minutes: bookingSettings.minimumNoticeMinutes,
+        });
+      }
+      persistedBookingSettingsRef.current = bookingSettings;
       setShowSavedSummary(true);
       toast.success('Schedule saved');
     } else {
@@ -252,6 +295,7 @@ export function ScheduleTab(): React.JSX.Element {
     const result = await clearScheduleAction();
     setSaving(false);
     if (result.success) {
+      hasPersistedRulesRef.current = false;
       track(SCHEDULE_EVENTS.CLEARED, { expert_id: expertIdRef.current });
       setWeek(createEmptyWeek());
       setShowSavedSummary(false);
@@ -309,6 +353,32 @@ export function ScheduleTab(): React.JSX.Element {
                   Your hours are set in this timezone. Clients see slots converted to their own.
                 </p>
               </section>
+
+              {/* Reinterpret warning — only reached when active rules exist (AC12) */}
+              <AlertDialog
+                open={pendingTimezone !== null}
+                onOpenChange={(open) => {
+                  if (!open) setPendingTimezone(null);
+                }}
+              >
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Change your timezone?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Your weekly hours are saved as clock times. Switching timezone keeps the same
+                      clock times but reads them in the new zone — 9:00 AM stays 9:00 AM, but it now
+                      lands at a different real moment, so every bookable slot shifts. Busy times on
+                      your connected calendar aren&apos;t affected.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep current timezone</AlertDialogCancel>
+                    <AlertDialogAction onClick={confirmTimezoneChange}>
+                      Change timezone
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
 
               {/* Weekly hours */}
               <section className="border-border bg-card rounded-xl border p-6">

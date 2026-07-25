@@ -41,9 +41,7 @@ export async function resolveAndCacheAvailability(
 ): Promise<{ earliestAvailableAt: Date | null }> {
   const now = options.now ?? new Date();
 
-  // Load the expert's resolver settings (timezone + booking rules) first — the
-  // booking window is the resolver's default horizon, so we need it before
-  // resolving `horizonDays`.
+  // Load the expert's resolver settings (timezone + booking rules) first.
   const settings = await expertsRepository.findResolverSettings(expertProfileId);
   if (!settings) {
     log.warn(
@@ -53,11 +51,12 @@ export async function resolveAndCacheAvailability(
     return { earliestAvailableAt: null };
   }
 
-  // Precedence: explicit option > valid env override > the expert's booking
-  // window. Guarded so `horizonEnd` and the resolver input always see the same
+  // Precedence: explicit option > valid `RESOLVER_HORIZON_DAYS` env > default.
+  // The look-ahead horizon is platform-level config (BAL-398), never a per-expert
+  // setting. Guarded so `horizonEnd` and the resolver input always see the same
   // finite number (a malformed env var would otherwise make `horizonEnd` an
   // Invalid Date and silently skip subtracting any consultations).
-  const horizonDays = resolveHorizonDays(options.horizonDays, settings.windowDays);
+  const horizonDays = resolveHorizonDays(options.horizonDays);
   const minMinutes = guardedNumber(
     options.minMinutes ?? Number.parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
     DEFAULT_MIN_MINUTES
@@ -113,17 +112,18 @@ function guardedNumber(n: unknown, fallback: number): number {
 
 /**
  * Resolve the look-ahead horizon. Precedence: an explicit option, then a valid
- * `RESOLVER_HORIZON_DAYS` env override, then the expert's own booking window.
- * A missing or non-numeric env var is ignored so the booking window wins.
+ * `RESOLVER_HORIZON_DAYS` env override, then `DEFAULT_HORIZON_DAYS`. A missing or
+ * non-numeric env var is ignored so the default wins. The horizon is platform
+ * config (BAL-398), not a per-expert column.
  */
-function resolveHorizonDays(optionValue: number | undefined, windowDays: number): number {
+function resolveHorizonDays(optionValue: number | undefined): number {
   if (optionValue !== undefined) {
-    return guardedNumber(optionValue, windowDays);
+    return guardedNumber(optionValue, DEFAULT_HORIZON_DAYS);
   }
   const envRaw = process.env.RESOLVER_HORIZON_DAYS;
   if (envRaw !== undefined) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed)) return parsed;
   }
-  return guardedNumber(windowDays, DEFAULT_HORIZON_DAYS);
+  return DEFAULT_HORIZON_DAYS;
 }

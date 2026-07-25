@@ -147,6 +147,98 @@ describe('resolve (BAL-243 availability resolver)', () => {
     });
   });
 
+  describe('cross-midnight rules (BAL-234)', () => {
+    it('expands a rule whose end < start into the following date', () => {
+      // Monday 22:00 → 02:00 (Tue), anchored on Monday (dow=1). now = Mon 00:00 UTC.
+      // In UTC the window is 2026-06-01T22:00Z → 2026-06-02T02:00Z; earliest is 22:00.
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 1, startTime: '22:00:00', endTime: '02:00:00' }],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T22:00:00.000Z'));
+    });
+
+    it('yields a post-midnight slot when a consultation covers the pre-midnight part', () => {
+      // Mon 22:00 → Tue 02:00; a consultation covers 22:00–00:00, leaving 00:00–02:00 Tue.
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 1, startTime: '22:00:00', endTime: '02:00:00' }],
+          baloConsultations: [
+            {
+              startAt: new Date('2026-06-01T22:00:00.000Z'),
+              endAt: new Date('2026-06-02T00:00:00.000Z'),
+            },
+          ],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-02T00:00:00.000Z'));
+    });
+
+    it('captures a crossing rule anchored on the day BEFORE rangeStart', () => {
+      // now = Tue 2026-06-02 00:30 UTC. A Monday-anchored crossing rule 22:00→02:00
+      // spills into Tuesday 00:00–02:00. Without expanding the day-before anchor the
+      // earliest would jump to the next Monday; here it is `now` (00:30) inside the
+      // spilled window — proving the anchor day is not missed.
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 1, startTime: '22:00:00', endTime: '02:00:00' }],
+          now: new Date('2026-06-02T00:30:00.000Z'),
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-02T00:30:00.000Z'));
+    });
+
+    it('a crossing night over the spring-forward gap opens at its start (skipped hour lost)', () => {
+      // Sydney spring-forward: Sun 2026-10-04, clock jumps 02:00 AEST → 03:00 AEDT.
+      // Saturday-anchored crossing rule 22:00 (Sat, AEST UTC+10) → 06:00 (Sun, AEDT UTC+11):
+      //   start = 2026-10-03T22:00 AEST − 10h = 2026-10-03T12:00:00Z
+      //   end   = 2026-10-04T06:00 AEDT − 11h = 2026-10-03T19:00:00Z
+      // Elapsed real time is 7h, not 8h — the 02:00–03:00 wall-clock hour never happened.
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 6, startTime: '22:00:00', endTime: '06:00:00' }],
+          timezone: 'Australia/Sydney',
+          // Fri 2026-10-02 00:00 UTC = Fri 10:00 AEST, before the Saturday window.
+          now: new Date('2026-10-02T00:00:00.000Z'),
+          horizonDays: 14,
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-10-03T12:00:00.000Z'));
+    });
+
+    it('computes the crossing end with the POST-transition offset (AEDT), not AEST', () => {
+      // Same Saturday-anchored 22:00→06:00 window over the spring-forward night. Its
+      // end (06:00 Sun AEDT) is 2026-10-03T19:00Z. Block the window up to 18:50Z and
+      // require a 15-min slot: only 10 min remain → null. If the end were wrongly
+      // computed at AEST (UTC+10 → 20:00Z), 70 min would remain and a slot would be
+      // found — so `null` asserts the end endpoint used the following date's offset.
+      // horizonDays=2 keeps only this Saturday's window in range (the next Saturday
+      // would otherwise supply an unblocked slot).
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 6, startTime: '22:00:00', endTime: '06:00:00' }],
+          timezone: 'Australia/Sydney',
+          now: new Date('2026-10-02T00:00:00.000Z'),
+          horizonDays: 2,
+          baloConsultations: [
+            {
+              startAt: new Date('2026-10-03T12:00:00.000Z'),
+              endAt: new Date('2026-10-03T18:50:00.000Z'),
+            },
+          ],
+          minMinutes: 15,
+        })
+      );
+
+      expect(result.earliestAvailableAt).toBeNull();
+    });
+  });
+
   describe('cancellation contract boundary', () => {
     // The repository filters `status = 'cancelled'` BEFORE handing rows to the
     // resolver. We assert that contract here: with the cancelled consultation
@@ -296,8 +388,8 @@ describe('resolve (BAL-243 availability resolver)', () => {
       });
     });
 
-    describe('booking window (horizonDays)', () => {
-      it('returns null when the only matching day falls beyond the window', () => {
+    describe('horizon (horizonDays)', () => {
+      it('returns null when the only matching day falls beyond the horizon', () => {
         // Saturday-only rule; a 3-day horizon from Monday 06-01 ends Thu 06-04,
         // before the next Saturday 06-06 — so no slot is found.
         const result = resolve(

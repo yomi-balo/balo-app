@@ -13,7 +13,9 @@ import type {
  * Algorithm (BAL-243 plan §4.3):
  *   1. Bound window to `[now, now + horizonDays)`.
  *   2. Group rules by `dayOfWeek`.
- *   3. Per-date expand rules into UTC using `fromZonedTime` (DST-correct).
+ *   3. Per-date expand rules into UTC using `fromZonedTime` (DST-correct). A rule
+ *      whose wall-clock `end < start` crosses midnight — its end is taken from the
+ *      following date (see `expandRuleOnDate`).
  *   4. Clip windows to the bounded range.
  *   5. Merge overlapping/adjacent rule windows on the same day.
  *   6. Subtract busy intervals (consultations ++ vendor busy blocks).
@@ -88,8 +90,8 @@ function boundWindow(
 ): { rangeStart: Date; rangeEnd: Date } {
   // Truncate `now` to the next minute so the earliest result is a clean instant.
   const earliestStart = ceilToNextMinute(now);
-  // Minimum notice pushes the near edge forward; the far edge (booking window)
-  // is always measured from `now`, so `windowDays` isn't consumed by notice.
+  // Minimum notice pushes the near edge forward; the far edge (the horizon) is
+  // always measured from `now`, so `horizonDays` isn't consumed by notice.
   const rangeStart = laterOf(earliestStart, new Date(now.getTime() + minimumNoticeMs));
   const rangeEnd = new Date(earliestStart.getTime() + horizonDays * 24 * 60 * 60 * 1000);
   return { rangeStart, rangeEnd };
@@ -123,14 +125,17 @@ function expandRulesInRange(
   const zonedEnd = toZonedTime(rangeEnd, timezone);
 
   const dateCursor = new Date(zonedNow.getFullYear(), zonedNow.getMonth(), zonedNow.getDate());
+  // Step back one local day so a crossing-midnight rule anchored on the day BEFORE
+  // rangeStart (whose window spills into the range) is still expanded. clipToWindow
+  // trims anything ending at/before rangeStart, so same-day rules are unaffected.
+  dateCursor.setDate(dateCursor.getDate() - 1);
   const lastDate = new Date(zonedEnd.getFullYear(), zonedEnd.getMonth(), zonedEnd.getDate());
 
   while (dateCursor <= lastDate) {
     const dayRules = rulesByDow.get(dateCursor.getDay());
     if (dayRules) {
-      const dateStr = formatDateOnly(dateCursor);
       for (const rule of dayRules) {
-        const window = expandRuleOnDate(rule, dateStr, timezone);
+        const window = expandRuleOnDate(rule, dateCursor, timezone);
         if (window) expanded.push(window);
       }
     }
@@ -141,11 +146,28 @@ function expandRulesInRange(
   return expanded;
 }
 
-function expandRuleOnDate(rule: ResolverRule, dateStr: string, timezone: string): BusyBlock | null {
+/**
+ * Expand one rule anchored on `date` (its START date, in the expert's timezone)
+ * into a single UTC window.
+ *
+ * `dayOfWeek` anchors the start. A rule whose wall-clock `end < start` CROSSES
+ * MIDNIGHT — its end lands on the FOLLOWING local date, and each endpoint is
+ * converted to UTC against its own date so a DST transition inside the window is
+ * honoured (a spring-forward crossing night is one hour shorter, matching real
+ * elapsed time). Same-day rules keep both endpoints on `date`. `start === end` is
+ * barred by the DB CHECK; the `<=` guard is a defensive backstop.
+ */
+function expandRuleOnDate(rule: ResolverRule, date: Date, timezone: string): BusyBlock | null {
   const startTime = padTime(rule.startTime);
   const endTime = padTime(rule.endTime);
-  const utcStart = fromZonedTime(`${dateStr}T${startTime}`, timezone);
-  const utcEnd = fromZonedTime(`${dateStr}T${endTime}`, timezone);
+  const startDateStr = formatDateOnly(date);
+  const crossesMidnight = endTime < startTime;
+  const endDateStr = crossesMidnight
+    ? formatDateOnly(new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1))
+    : startDateStr;
+
+  const utcStart = fromZonedTime(`${startDateStr}T${startTime}`, timezone);
+  const utcEnd = fromZonedTime(`${endDateStr}T${endTime}`, timezone);
 
   if (!Number.isFinite(utcStart.getTime()) || !Number.isFinite(utcEnd.getTime())) {
     return null;

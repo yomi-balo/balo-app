@@ -60,9 +60,11 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Profile or user not found');
   }
 
-  // `calendar`: a non-soft-deleted calendar_connections row exists (the authoritative
-  // connection source; the former `cronofySyncStatus` read was a dead column — no writer).
-  const calendar = Boolean(connection);
+  // `calendar`: a live calendar_connections row in the `connected` state (BAL-234).
+  // A revoked/errored connection (`auth_error`, `sync_pending`) is not connected.
+  // This replaces the dead `cronofySyncStatus` read (no writer) and keeps the
+  // check vendor-agnostic for the ADR-1021 migration.
+  const calendar = connection?.status === 'connected';
 
   const items = {
     profile: Boolean(
@@ -75,8 +77,10 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     phone: Boolean(user.phoneVerifiedAt),
     rate: Boolean(profile.rateCents && profile.rateCents > 0),
     calendar,
-    // Availability requires ≥1 enabled weekly rule AND a connected calendar (BAL-234).
-    availability: hasSchedule && calendar,
+    // "Set your availability" completes when ≥1 enabled weekly rule is saved (BAL-234
+    // §7). NOT conjoined with `calendar` — that is its own checklist item, and
+    // conjoining would leave this item unstickable while the hours are visibly saved.
+    availability: hasSchedule,
     payouts: hasPayouts,
   };
 

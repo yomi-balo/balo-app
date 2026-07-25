@@ -153,7 +153,7 @@ describe('expertsRepository.updateProfile', () => {
     expect(updated?.rateCents).toBe(150);
   });
 
-  it('round-trips the timezone and four booking-rule columns (BAL-234)', async () => {
+  it('round-trips the timezone and three booking-rule columns (BAL-234)', async () => {
     const draft = await expertDraftFactory();
 
     await expertsRepository.updateProfile(draft.id, {
@@ -161,7 +161,6 @@ describe('expertsRepository.updateProfile', () => {
       bookingBufferBeforeMinutes: 15,
       bookingBufferAfterMinutes: 10,
       bookingMinimumNoticeMinutes: 120,
-      bookingWindowDays: 30,
     });
 
     const updated = await expertsRepository.findProfileById(draft.id);
@@ -169,10 +168,9 @@ describe('expertsRepository.updateProfile', () => {
     expect(updated?.bookingBufferBeforeMinutes).toBe(15);
     expect(updated?.bookingBufferAfterMinutes).toBe(10);
     expect(updated?.bookingMinimumNoticeMinutes).toBe(120);
-    expect(updated?.bookingWindowDays).toBe(30);
   });
 
-  it('a fresh draft has booking-rule defaults 0/0/0/60 and timezone UTC', async () => {
+  it('a fresh draft has booking-rule defaults 0/0/0 and timezone UTC', async () => {
     const draft = await expertDraftFactory();
 
     const fresh = await expertsRepository.findProfileById(draft.id);
@@ -180,7 +178,24 @@ describe('expertsRepository.updateProfile', () => {
     expect(fresh?.bookingBufferBeforeMinutes).toBe(0);
     expect(fresh?.bookingBufferAfterMinutes).toBe(0);
     expect(fresh?.bookingMinimumNoticeMinutes).toBe(0);
-    expect(fresh?.bookingWindowDays).toBe(60);
+  });
+
+  it('rejects a booking buffer beyond the CHECK bound (0..120)', async () => {
+    const draft = await expertDraftFactory();
+
+    // The migration CHECK (BETWEEN 0 AND 120) is the second line of defense behind
+    // the API/action Zod. 200 exceeds it, so the DB write must fail.
+    await expect(
+      expertsRepository.updateProfile(draft.id, { bookingBufferBeforeMinutes: 200 })
+    ).rejects.toThrow();
+  });
+
+  it('rejects a minimum-notice beyond the CHECK bound (0..20160)', async () => {
+    const draft = await expertDraftFactory();
+
+    await expect(
+      expertsRepository.updateProfile(draft.id, { bookingMinimumNoticeMinutes: 20161 })
+    ).rejects.toThrow();
   });
 });
 
@@ -194,7 +209,6 @@ describe('expertsRepository.findResolverSettings', () => {
       bookingBufferBeforeMinutes: 5,
       bookingBufferAfterMinutes: 30,
       bookingMinimumNoticeMinutes: 1440,
-      bookingWindowDays: 90,
     });
 
     const settings = await expertsRepository.findResolverSettings(draft.id);
@@ -204,7 +218,6 @@ describe('expertsRepository.findResolverSettings', () => {
       bufferBeforeMinutes: 5,
       bufferAfterMinutes: 30,
       minimumNoticeMinutes: 1440,
-      windowDays: 90,
     });
   });
 
@@ -218,7 +231,6 @@ describe('expertsRepository.findResolverSettings', () => {
       bufferBeforeMinutes: 0,
       bufferAfterMinutes: 0,
       minimumNoticeMinutes: 0,
-      windowDays: 60,
     });
   });
 

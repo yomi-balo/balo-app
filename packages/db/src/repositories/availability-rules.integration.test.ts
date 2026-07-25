@@ -127,6 +127,41 @@ describe('availabilityRulesRepository.listByExpertProfileId', () => {
   });
 });
 
+// ── start_time <> end_time CHECK (BAL-234 cross-midnight model) ─────
+
+describe('availability_rules start/end CHECK (BAL-234)', () => {
+  it('allows a crossing-midnight window (end_time < start_time)', async () => {
+    const draft = await expertDraftFactory();
+
+    // 22:00 → 02:00 crosses midnight; the anchor day is the START day. The old
+    // CHECK (start < end) forbade this; the new CHECK (start <> end) permits it.
+    await db.insert(availabilityRules).values({
+      expertProfileId: draft.id,
+      dayOfWeek: 1,
+      startTime: '22:00:00',
+      endTime: '02:00:00',
+    });
+
+    const rules = await availabilityRulesRepository.listByExpertProfileId(draft.id);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.startTime).toBe('22:00:00');
+    expect(rules[0]?.endTime).toBe('02:00:00');
+  });
+
+  it('rejects a zero-length window (start_time = end_time)', async () => {
+    const draft = await expertDraftFactory();
+
+    await expect(
+      db.insert(availabilityRules).values({
+        expertProfileId: draft.id,
+        dayOfWeek: 1,
+        startTime: '09:00:00',
+        endTime: '09:00:00',
+      })
+    ).rejects.toThrow();
+  });
+});
+
 // ── replaceForExpert ────────────────────────────────────────────────
 
 describe('availabilityRulesRepository.replaceForExpert', () => {

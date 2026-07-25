@@ -26,11 +26,12 @@ const ruleSchema = z
 // expert who never changes their timezone can't save their schedule.
 const timezoneSchema = z.string().refine(isValidTimezone, 'Invalid timezone');
 
+// Bounds mirror the CHECK constraints on `expert_profiles` (BAL-234). No
+// booking-window field: the look-ahead horizon is platform config (BAL-398).
 const bookingSettingsSchema = z.object({
   bufferBeforeMinutes: z.number().int().min(0).max(120),
   bufferAfterMinutes: z.number().int().min(0).max(120),
   minimumNoticeMinutes: z.number().int().min(0).max(20160), // ≤ 14 days
-  windowDays: z.number().int().min(1).max(365),
 });
 
 const paramsSchema = z.object({ expertProfileId: z.string().uuid() });
@@ -121,22 +122,23 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       const { expertProfileId } = params.data;
 
       try {
-        const [profile, rules] = await Promise.all([
-          expertsRepository.findProfileById(expertProfileId),
+        // Column-projected read (timezone + the 3 booking columns) — never hydrate
+        // the full expert_profiles row, which carries stripeConnectId / tokens.
+        const [settings, rules] = await Promise.all([
+          expertsRepository.findResolverSettings(expertProfileId),
           availabilityRulesRepository.listByExpertProfileId(expertProfileId),
         ]);
 
-        if (!profile) {
+        if (!settings) {
           return reply.status(404).send({ error: 'Expert profile not found' });
         }
 
         return reply.send({
-          timezone: profile.timezone,
+          timezone: settings.timezone,
           bookingSettings: {
-            bufferBeforeMinutes: profile.bookingBufferBeforeMinutes,
-            bufferAfterMinutes: profile.bookingBufferAfterMinutes,
-            minimumNoticeMinutes: profile.bookingMinimumNoticeMinutes,
-            windowDays: profile.bookingWindowDays,
+            bufferBeforeMinutes: settings.bufferBeforeMinutes,
+            bufferAfterMinutes: settings.bufferAfterMinutes,
+            minimumNoticeMinutes: settings.minimumNoticeMinutes,
           },
           rules: rules.map((r) => ({
             dayOfWeek: r.dayOfWeek,
@@ -188,7 +190,6 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
               bookingBufferBeforeMinutes: bookingSettings.bufferBeforeMinutes,
               bookingBufferAfterMinutes: bookingSettings.bufferAfterMinutes,
               bookingMinimumNoticeMinutes: bookingSettings.minimumNoticeMinutes,
-              bookingWindowDays: bookingSettings.windowDays,
             },
             tx
           );

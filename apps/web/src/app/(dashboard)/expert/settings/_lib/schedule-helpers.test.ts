@@ -3,8 +3,8 @@ import {
   BUFFER_OPTIONS,
   DEFAULT_BOOKING_SETTINGS,
   NOTICE_OPTIONS,
+  START_TIME_OPTIONS,
   TIME_OPTIONS,
-  WINDOW_OPTIONS,
   countEnabledDays,
   createDefaultWeek,
   createEmptyWeek,
@@ -46,15 +46,28 @@ describe('TIME_OPTIONS', () => {
   });
 });
 
+describe('START_TIME_OPTIONS', () => {
+  it('stops at 23:30 so a valid end is always selectable (BAL-234 AC4)', () => {
+    // 96 total slots minus the 23:45 start that would leave no valid end.
+    expect(START_TIME_OPTIONS).toHaveLength(95);
+    expect(START_TIME_OPTIONS[0]).toEqual({ value: '00:00', label: '12:00 AM' });
+    expect(START_TIME_OPTIONS.at(-1)).toEqual({ value: '23:30', label: '11:30 PM' });
+    expect(START_TIME_OPTIONS.some((o) => o.value === '23:45')).toBe(false);
+  });
+});
+
 describe('option sets', () => {
-  it('matches the exact design-reference option sets', () => {
+  it('matches the exact design-reference option sets (no booking-window control)', () => {
     expect(BUFFER_OPTIONS.map((o) => o.value)).toEqual([0, 5, 10, 15, 30]);
     expect(NOTICE_OPTIONS.map((o) => o.value)).toEqual([0, 60, 120, 240, 720, 1440, 2880]);
-    expect(WINDOW_OPTIONS.map((o) => o.value)).toEqual([14, 30, 60, 90]);
   });
 
-  it('defaults the booking window to 60 days', () => {
-    expect(DEFAULT_BOOKING_SETTINGS.windowDays).toBe(60);
+  it('defaults every booking rule to 0 (buffers + notice only)', () => {
+    expect(DEFAULT_BOOKING_SETTINGS).toEqual({
+      bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0,
+      minimumNoticeMinutes: 0,
+    });
   });
 });
 

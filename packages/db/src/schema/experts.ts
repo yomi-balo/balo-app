@@ -8,6 +8,7 @@ import {
   date,
   uniqueIndex,
   index,
+  check,
   customType,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -85,10 +86,12 @@ export const expertProfiles = pgTable(
     // Booking rules (BAL-234) — scalar 1:1 settings fed into the availability
     // resolver. Stored here (not a separate table) since there is exactly one set
     // per expert. Constant NOT NULL defaults → PG11+ fast metadata-only add.
+    // Bounds enforced both here (CHECK) and in the API/action Zod. No
+    // booking-window column: the look-ahead horizon is platform config (BAL-398),
+    // not a per-expert setting.
     bookingBufferBeforeMinutes: integer('booking_buffer_before_minutes').notNull().default(0),
     bookingBufferAfterMinutes: integer('booking_buffer_after_minutes').notNull().default(0),
     bookingMinimumNoticeMinutes: integer('booking_minimum_notice_minutes').notNull().default(0),
-    bookingWindowDays: integer('booking_window_days').notNull().default(60),
 
     ...timestamps,
     approvedAt: timestamp('approved_at', { withTimezone: true }),
@@ -110,6 +113,19 @@ export const expertProfiles = pgTable(
     // "experts by agency" / payout-entity lookups. `agencyId` is set by
     // expertsRepository.linkAgency for all three agency-resolution outcomes.
     agencyIdx: index('expert_profiles_agency_id_idx').on(table.agencyId),
+    // Booking-rule bounds (BAL-234) — mirrored by Zod in the schedule route/action.
+    bookingBufferBeforeCheck: check(
+      'expert_profiles_booking_buffer_before_check',
+      sql`${table.bookingBufferBeforeMinutes} BETWEEN 0 AND 120`
+    ),
+    bookingBufferAfterCheck: check(
+      'expert_profiles_booking_buffer_after_check',
+      sql`${table.bookingBufferAfterMinutes} BETWEEN 0 AND 120`
+    ),
+    bookingMinimumNoticeCheck: check(
+      'expert_profiles_booking_minimum_notice_check',
+      sql`${table.bookingMinimumNoticeMinutes} BETWEEN 0 AND 20160`
+    ),
   })
 );
 

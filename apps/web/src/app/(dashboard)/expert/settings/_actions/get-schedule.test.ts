@@ -38,7 +38,6 @@ const SCHEDULE = {
     bufferBeforeMinutes: 0,
     bufferAfterMinutes: 0,
     minimumNoticeMinutes: 0,
-    windowDays: 60,
   },
   rules: [{ dayOfWeek: 1, startTime: '09:00', endTime: '17:00' }],
 };

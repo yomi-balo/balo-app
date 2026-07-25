@@ -50,9 +50,12 @@ const settings = (overrides: Partial<Record<string, unknown>> = {}) => ({
   bufferBeforeMinutes: 15,
   bufferAfterMinutes: 30,
   minimumNoticeMinutes: 120,
-  windowDays: 30,
   ...overrides,
 });
+
+// Default horizon when no explicit option and no RESOLVER_HORIZON_DAYS env (the
+// look-ahead horizon is platform config, BAL-398 — not a per-expert column).
+const DEFAULT_HORIZON_DAYS = 14;
 
 describe('resolveAndCacheAvailability', () => {
   const EXPERT_ID = '00000000-0000-0000-0000-000000000001';
@@ -87,11 +90,11 @@ describe('resolveAndCacheAvailability', () => {
 
     expect(mockFindResolverSettings).toHaveBeenCalledWith(EXPERT_ID);
     expect(mockListRules).toHaveBeenCalledWith(EXPERT_ID);
-    // windowDays (30) becomes the horizon → consultations query spans 30 days.
+    // No env/option → the default 14-day horizon → consultations query spans 14 days.
     expect(mockListConsultations).toHaveBeenCalledWith(
       EXPERT_ID,
       NOW,
-      new Date(NOW.getTime() + 30 * DAY_MS)
+      new Date(NOW.getTime() + DEFAULT_HORIZON_DAYS * DAY_MS)
     );
     expect(mockResolve).toHaveBeenCalledWith({
       rules,
@@ -99,7 +102,7 @@ describe('resolveAndCacheAvailability', () => {
       busyBlocks: [],
       timezone: 'Australia/Sydney',
       now: NOW,
-      horizonDays: 30,
+      horizonDays: DEFAULT_HORIZON_DAYS,
       minMinutes: 15,
       bufferBeforeMinutes: 15,
       bufferAfterMinutes: 30,
@@ -127,7 +130,7 @@ describe('resolveAndCacheAvailability', () => {
   });
 
   it('writes null to the cache when the resolver returns null', async () => {
-    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 14 }));
+    mockFindResolverSettings.mockResolvedValue(settings());
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
@@ -138,11 +141,11 @@ describe('resolveAndCacheAvailability', () => {
     expect(result).toEqual({ earliestAvailableAt: null });
   });
 
-  it('lets an explicit horizonDays option win over env and the booking window', async () => {
+  it('lets an explicit horizonDays option win over env and the default', async () => {
     process.env.RESOLVER_HORIZON_DAYS = '7';
     process.env.MIN_CONSULTATION_MINUTES = '30';
 
-    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 30 }));
+    mockFindResolverSettings.mockResolvedValue(settings());
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
@@ -164,11 +167,11 @@ describe('resolveAndCacheAvailability', () => {
     );
   });
 
-  it('lets a valid RESOLVER_HORIZON_DAYS env override the booking window', async () => {
+  it('lets a valid RESOLVER_HORIZON_DAYS env override the default', async () => {
     process.env.RESOLVER_HORIZON_DAYS = '21';
     process.env.MIN_CONSULTATION_MINUTES = '20';
 
-    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 30 }));
+    mockFindResolverSettings.mockResolvedValue(settings());
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
@@ -180,24 +183,24 @@ describe('resolveAndCacheAvailability', () => {
     );
   });
 
-  it('falls through to the booking window (finite horizonEnd) when env vars are non-numeric', async () => {
+  it('falls through to the default horizon (finite horizonEnd) when env vars are non-numeric', async () => {
     process.env.RESOLVER_HORIZON_DAYS = 'abc';
     process.env.MIN_CONSULTATION_MINUTES = 'not-a-number';
 
-    mockFindResolverSettings.mockResolvedValue(settings({ windowDays: 45 }));
+    mockFindResolverSettings.mockResolvedValue(settings());
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
 
     await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
-    // Non-numeric env is ignored → the expert's booking window (45d) is used,
-    // and the consultations query gets a finite horizonEnd (not Invalid Date).
-    const expectedEnd = new Date(NOW.getTime() + 45 * DAY_MS);
+    // Non-numeric env is ignored → the 14-day default is used, and the
+    // consultations query gets a finite horizonEnd (not Invalid Date).
+    const expectedEnd = new Date(NOW.getTime() + DEFAULT_HORIZON_DAYS * DAY_MS);
     expect(mockListConsultations).toHaveBeenCalledWith(EXPERT_ID, NOW, expectedEnd);
     expect(Number.isFinite(expectedEnd.getTime())).toBe(true);
     expect(mockResolve).toHaveBeenCalledWith(
-      expect.objectContaining({ horizonDays: 45, minMinutes: 15 })
+      expect.objectContaining({ horizonDays: DEFAULT_HORIZON_DAYS, minMinutes: 15 })
     );
   });
 

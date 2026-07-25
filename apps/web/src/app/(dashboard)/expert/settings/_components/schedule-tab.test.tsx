@@ -32,6 +32,34 @@ vi.mock('./schedule-timezone-combobox', () => ({
   ),
 }));
 
+// Stub the Radix-heavy booking-rules selects; expose a deterministic change button so
+// the booking_rules_saved change-gate can be driven without pointer events. Field
+// rendering itself is covered by booking-rules-section.test.tsx.
+vi.mock('./booking-rules-section', () => ({
+  BookingRulesSection: ({
+    settings,
+    onChange,
+  }: {
+    settings: {
+      bufferBeforeMinutes: number;
+      bufferAfterMinutes: number;
+      minimumNoticeMinutes: number;
+    };
+    onChange: (next: {
+      bufferBeforeMinutes: number;
+      bufferAfterMinutes: number;
+      minimumNoticeMinutes: number;
+    }) => void;
+  }) => (
+    <div>
+      <span>Booking rules</span>
+      <button type="button" onClick={() => onChange({ ...settings, bufferBeforeMinutes: 30 })}>
+        stub-change-buffer
+      </button>
+    </div>
+  ),
+}));
+
 const mockGetSchedule = vi.fn();
 const mockSaveSchedule = vi.fn();
 const mockClearSchedule = vi.fn();
@@ -72,7 +100,6 @@ const DEFAULT_SETTINGS = {
   bufferBeforeMinutes: 0,
   bufferAfterMinutes: 10,
   minimumNoticeMinutes: 240,
-  windowDays: 60,
 };
 
 function loadResult(overrides: Partial<ScheduleLoadResult> = {}): ScheduleLoadResult {
@@ -106,11 +133,11 @@ describe('ScheduleTab', () => {
     expect(screen.getByTestId('calendar-tab-stub')).toBeInTheDocument();
   });
 
-  it('shows booking rules but no consultation-length control', async () => {
+  it('shows booking rules but no consultation-length or booking-window control', async () => {
     render(<ScheduleTab />);
     await screen.findByText('Weekly hours');
     expect(screen.getByText('Booking rules')).toBeInTheDocument();
-    expect(screen.getByText('Booking window')).toBeInTheDocument();
+    expect(screen.queryByText('Booking window')).not.toBeInTheDocument();
     expect(screen.queryByText(/consultation length/i)).not.toBeInTheDocument();
   });
 
@@ -134,7 +161,7 @@ describe('ScheduleTab', () => {
     expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
   });
 
-  it('saves the schedule and fires schedule + booking-rules analytics', async () => {
+  it('saves the schedule and fires schedule_saved; suppresses booking_rules_saved when unchanged', async () => {
     const user = userEvent.setup();
     render(<ScheduleTab />);
     await screen.findByText('Weekly hours');
@@ -147,8 +174,25 @@ describe('ScheduleTab', () => {
       SCHEDULE_EVENTS.SAVED,
       expect.objectContaining({ expert_id: 'profile-1', has_split_days: false })
     );
+    // Booking settings equal the persisted values → the change-gate suppresses the event.
+    expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.BOOKING_RULES_SAVED, expect.anything());
+  });
+
+  it('fires booking_rules_saved with the new values when a booking rule changes', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    // Change the before-buffer via the stub, then save.
+    await user.click(screen.getByRole('button', { name: 'stub-change-buffer' }));
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+
+    await waitFor(() => expect(mockSaveSchedule).toHaveBeenCalledTimes(1));
     expect(track).toHaveBeenCalledWith(SCHEDULE_EVENTS.BOOKING_RULES_SAVED, {
       expert_id: 'profile-1',
+      buffer_before_minutes: 30,
+      buffer_after_minutes: 10,
+      minimum_notice_minutes: 240,
     });
   });
 
@@ -170,12 +214,18 @@ describe('ScheduleTab', () => {
     expect(await screen.findByText('Set your weekly hours')).toBeInTheDocument();
   });
 
-  it('persists a timezone change and fires the timezone analytics event', async () => {
+  it('confirms before changing timezone when rules exist, then persists and fires analytics', async () => {
     const user = userEvent.setup();
     render(<ScheduleTab />);
     await screen.findByText('Weekly hours');
 
+    // Selecting a new timezone opens the reinterpret confirmation — it must NOT persist yet.
     await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+    expect(await screen.findByText('Change your timezone?')).toBeInTheDocument();
+    expect(mockUpdateTimezone).not.toHaveBeenCalled();
+
+    // Confirming performs the change.
+    await user.click(screen.getByRole('button', { name: 'Change timezone' }));
 
     await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
     expect(track).toHaveBeenCalledWith(SCHEDULE_EVENTS.TIMEZONE_CHANGED, {
@@ -184,6 +234,35 @@ describe('ScheduleTab', () => {
       to_timezone: 'Australia/Sydney',
     });
     expect(toast.success).toHaveBeenCalledWith('Timezone updated');
+  });
+
+  it('cancels a timezone change, leaving it unpersisted', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+    expect(await screen.findByText('Change your timezone?')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Keep current timezone' }));
+
+    expect(mockUpdateTimezone).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.TIMEZONE_CHANGED, expect.anything());
+  });
+
+  it('changes timezone immediately (no confirmation) when no schedule is saved yet', async () => {
+    mockGetSchedule.mockResolvedValue(loadResult({ rules: [] }));
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+
+    // Enter the editor from the empty state — nothing is persisted, so no reinterpret risk.
+    await user.click(await screen.findByRole('button', { name: 'Use these hours' }));
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+
+    await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
+    expect(screen.queryByText('Change your timezone?')).not.toBeInTheDocument();
   });
 
   it('surfaces a non-blocking DST warning when a range lands in a spring-forward gap', async () => {

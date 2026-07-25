@@ -6,12 +6,14 @@
  * both speak this contract.
  */
 
-/** Booking rules that feed Balo's availability resolver. */
+/**
+ * Booking rules that feed Balo's availability resolver. No booking-window field —
+ * the look-ahead horizon is platform config (BAL-398), not a per-expert setting.
+ */
 export interface BookingSettings {
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
   minimumNoticeMinutes: number;
-  windowDays: number;
 }
 
 /** A single recurring wall-clock range on one weekday. */

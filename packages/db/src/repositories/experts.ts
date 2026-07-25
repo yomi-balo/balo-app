@@ -193,7 +193,6 @@ interface UpdateProfileInput {
   bookingBufferBeforeMinutes?: number;
   bookingBufferAfterMinutes?: number;
   bookingMinimumNoticeMinutes?: number;
-  bookingWindowDays?: number;
 }
 
 interface SyncLanguageInput {
@@ -330,7 +329,6 @@ export const expertsRepository = {
     bufferBeforeMinutes: number;
     bufferAfterMinutes: number;
     minimumNoticeMinutes: number;
-    windowDays: number;
   } | null> {
     const row = await db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
@@ -339,7 +337,6 @@ export const expertsRepository = {
         bookingBufferBeforeMinutes: true,
         bookingBufferAfterMinutes: true,
         bookingMinimumNoticeMinutes: true,
-        bookingWindowDays: true,
       },
     });
     if (!row) return null;
@@ -348,7 +345,6 @@ export const expertsRepository = {
       bufferBeforeMinutes: row.bookingBufferBeforeMinutes,
       bufferAfterMinutes: row.bookingBufferAfterMinutes,
       minimumNoticeMinutes: row.bookingMinimumNoticeMinutes,
-      windowDays: row.bookingWindowDays,
     };
   },
 

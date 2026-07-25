@@ -51,6 +51,13 @@ export const TIME_STEP_MINUTES = 15;
 const MINUTES_PER_DAY = 24 * 60;
 const DEFAULT_START = '09:00';
 const DEFAULT_END = '17:00';
+/**
+ * Latest selectable START time. With a 15-minute minimum range, 23:45 as a start
+ * would leave no valid end (any auto-bump clamps back to 23:45 → start === end,
+ * an error the expert can't clear). 23:30 is the last start that keeps an end
+ * selectable.
+ */
+export const LATEST_START_HHMM = '23:30';
 
 // ── Time helpers ────────────────────────────────────────────────────
 
@@ -81,13 +88,18 @@ export interface TimeOption {
   label: string;
 }
 
-/** All 15-minute slots, 00:00 → 23:45. */
+/** All 15-minute slots, 00:00 → 23:45. Used for END pickers. */
 export const TIME_OPTIONS: readonly TimeOption[] = Array.from(
   { length: MINUTES_PER_DAY / TIME_STEP_MINUTES },
   (_unused, index) => {
     const value = minutesToHhmm(index * TIME_STEP_MINUTES);
     return { value, label: formatHhmm(value) };
   }
+);
+
+/** START-picker slots, 00:00 → 23:30 (a valid end must always remain selectable). */
+export const START_TIME_OPTIONS: readonly TimeOption[] = TIME_OPTIONS.filter(
+  (option) => option.value <= LATEST_START_HHMM
 );
 
 // ── Booking-rule option sets (exact sets from availability-editor.jsx) ──
@@ -115,18 +127,10 @@ export const NOTICE_OPTIONS: readonly RuleOption[] = [
   { value: 2880, label: '2 days' },
 ];
 
-export const WINDOW_OPTIONS: readonly RuleOption[] = [
-  { value: 14, label: '2 weeks ahead' },
-  { value: 30, label: '30 days ahead' },
-  { value: 60, label: '60 days ahead' },
-  { value: 90, label: '90 days ahead' },
-];
-
 export const DEFAULT_BOOKING_SETTINGS: BookingSettings = {
   bufferBeforeMinutes: 0,
   bufferAfterMinutes: 0,
   minimumNoticeMinutes: 0,
-  windowDays: 60,
 };
 
 // ── Default / seed schedule ─────────────────────────────────────────

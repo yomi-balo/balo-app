@@ -35,7 +35,11 @@ export const availabilityRules = pgTable(
     index('avail_rules_expert_profile_idx').on(table.expertProfileId),
     index('avail_rules_expert_day_idx').on(table.expertProfileId, table.dayOfWeek),
     check('avail_rules_day_check', sql`${table.dayOfWeek} BETWEEN 0 AND 6`),
-    check('avail_rules_start_before_end_check', sql`${table.startTime} < ${table.endTime}`),
+    // BAL-234: start != end (a zero-length window is meaningless). `end < start`
+    // is a valid window that CROSSES MIDNIGHT into the following date; `dayOfWeek`
+    // anchors the START. The resolver expands the end from the next date. The
+    // editor/API still author same-day ranges only — the crossing UI is BAL-415.
+    check('avail_rules_start_ne_end_check', sql`${table.startTime} <> ${table.endTime}`),
   ]
 );
 

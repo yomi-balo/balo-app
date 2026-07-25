@@ -15,6 +15,12 @@ export interface ScheduleEventMap {
   };
   [SCHEDULE_EVENTS.BOOKING_RULES_SAVED]: {
     expert_id: string;
+    /** Minutes of buffer reserved before each consultation. */
+    buffer_before_minutes: number;
+    /** Minutes of buffer reserved after each consultation. */
+    buffer_after_minutes: number;
+    /** Soonest a client can book, in minutes from now. */
+    minimum_notice_minutes: number;
   };
   [SCHEDULE_EVENTS.TIMEZONE_CHANGED]: {
     expert_id: string;
