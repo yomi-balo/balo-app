@@ -412,8 +412,8 @@ describe('experts schedule API routes', () => {
 
       const res = await app.inject({
         method: 'DELETE',
-        url: `/api/experts/${EXPERT_UUID}/schedule?actorUserId=${ACTOR_UUID}`,
-        headers: AUTH_ONLY,
+        url: `/api/experts/${EXPERT_UUID}/schedule`,
+        headers: { ...AUTH_ONLY, 'x-actor-user-id': ACTOR_UUID },
       });
 
       expect(res.statusCode).toBe(200);

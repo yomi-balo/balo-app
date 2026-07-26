@@ -225,7 +225,12 @@ export const usersRepository = {
     executor?: DbExecutor
   ): Promise<void> => {
     const exec = executor ?? db;
-    await exec.update(users).set({ timezone, updatedAt: new Date() }).where(eq(users.id, userId));
+    // Guard on deletedAt IS NULL — this write is reachable from a request path
+    // (the schedule save), so never resurrect a soft-deleted user's row.
+    await exec
+      .update(users)
+      .set({ timezone, updatedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)));
   },
 
   /**

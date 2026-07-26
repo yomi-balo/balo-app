@@ -58,9 +58,16 @@ const postBodySchema = z.object({
 
 const patchTzSchema = z.object({ timezone: timezoneSchema, actorUserId: actorUserIdSchema });
 
-// DELETE carries no JSON body (empty-body + json content-type is fragile), so the
-// actor rides a query param instead.
-const deleteQuerySchema = z.object({ actorUserId: actorUserIdSchema });
+/**
+ * DELETE carries no JSON body (empty-body + json content-type is fragile), so the
+ * actor rides the `x-actor-user-id` HEADER — not a query param, which would put the
+ * user's UUID in the request-URL access log. A malformed/absent header records a
+ * null-actor audit rather than failing the clear over an audit detail.
+ */
+function actorFromHeader(header: string | string[] | undefined): string | undefined {
+  const value = Array.isArray(header) ? header[0] : header;
+  return value !== undefined && actorUserIdSchema.safeParse(value).success ? value : undefined;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -264,11 +271,8 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       const params = parseOrReply(paramsSchema, request.params, reply, 'Invalid path parameters');
       if (!params.ok) return reply;
 
-      const query = parseOrReply(deleteQuerySchema, request.query, reply, 'Invalid query');
-      if (!query.ok) return reply;
-
       const { expertProfileId } = params.data;
-      const { actorUserId } = query.data;
+      const actorUserId = actorFromHeader(request.headers['x-actor-user-id']);
 
       try {
         if (!(await loadProfileOr404(expertProfileId, reply))) return reply;
