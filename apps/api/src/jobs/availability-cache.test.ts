@@ -57,6 +57,8 @@ vi.mock('bullmq', () => ({
         capturedStalenessProcessor = processor;
       }
     }
+    // The availability worker registers a `failed` listener for observability.
+    on(): void {}
   },
   Queue: class MockQueue {},
 }));
@@ -140,7 +142,7 @@ describe('availability-cache jobs', () => {
         expect.objectContaining({
           jobId: 'availability-expert-1',
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: true,
         })
       );
       expect(mockJob.log).toHaveBeenCalledWith('Enqueued 2 stale connection rebuild jobs');

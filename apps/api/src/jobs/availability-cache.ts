@@ -1,9 +1,12 @@
 import { Worker, type Job } from 'bullmq';
 import { calendarRepository } from '@balo/db';
+import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import { resolveAndCacheAvailability } from '../services/availability/resolve-and-cache.js';
+
+const log = createLogger('availability-cache-worker');
 
 // ── Queue names ──────────────────────────────────────────────────
 
@@ -48,6 +51,21 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
     }
   );
 
+  // Terminal failures used to be invisible: the enqueue swallows dropped duplicates,
+  // and jobs now self-heal (removeOnFail: true) rather than lingering in Redis. This
+  // listener is the failure signal — a rebuild that exhausts its attempts reaches
+  // Axiom/Sentry instead of silently leaving `earliest_available_at` stale.
+  worker.on('failed', (job, err) => {
+    log.error(
+      {
+        expertProfileId: job?.data.expertProfileId,
+        attemptsMade: job?.attemptsMade,
+        error: err.message,
+      },
+      'Availability cache rebuild job failed'
+    );
+  });
+
   return worker;
 }
 
@@ -78,7 +96,11 @@ export function startStalenessCheckWorker(): Worker {
           {
             jobId: `availability-${conn.expertProfileId}`,
             removeOnComplete: true,
-            removeOnFail: false,
+            // Self-heal on failure — a retained failed job would block this same
+            // fixed jobId on every later trigger (see enqueue-rebuild.ts).
+            removeOnFail: true,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
           }
         );
       }

@@ -17,6 +17,7 @@ import {
   rulesToWeek,
   summarizeWeek,
   validateWeek,
+  weekOverlapsGap,
   weekToRules,
   type WeekState,
 } from './schedule-helpers';
@@ -189,5 +190,33 @@ describe('findDstConflict', () => {
 
   it('returns null for a default week (no Sunday) even in a DST zone', () => {
     expect(findDstConflict(createDefaultWeek(), 'Australia/Melbourne', FROM)).toBeNull();
+  });
+});
+
+describe('weekOverlapsGap (pure, Intl-free)', () => {
+  // Sunday 02:00–03:00 gap (the extracted overlap test takes a precomputed gap).
+  const GAP = { dateISO: '2026-10-04', dayOfWeek: 0, gapStartMinutes: 120, gapEndMinutes: 180 };
+
+  const sundayWeek = (start: string, end: string): WeekState => {
+    const week = createEmptyWeek();
+    const sunday = week[6];
+    if (sunday) {
+      sunday.enabled = true;
+      sunday.ranges = [{ id: newRangeId(), start, end }];
+    }
+    return week;
+  };
+
+  it('is true when an enabled range on the gap weekday overlaps the gap', () => {
+    expect(weekOverlapsGap(sundayWeek('01:00', '04:00'), GAP)).toBe(true);
+  });
+
+  it('is false when the range is entirely outside the gap window', () => {
+    expect(weekOverlapsGap(sundayWeek('05:00', '09:00'), GAP)).toBe(false);
+  });
+
+  it('is false when no enabled day falls on the gap weekday', () => {
+    // Mon–Fri default week; the gap is on Sunday.
+    expect(weekOverlapsGap(createDefaultWeek(), GAP)).toBe(false);
   });
 });

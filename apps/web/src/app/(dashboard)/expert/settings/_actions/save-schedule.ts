@@ -46,7 +46,9 @@ export const saveScheduleAction = withAuth(
 
       await internalApiFetch<{ success: boolean }>(
         `/api/experts/${expertProfileId}/schedule`,
-        { method: 'POST', body: JSON.stringify(payload) },
+        // actorUserId is the session user (audit attribution only, ADR-1030) — the
+        // IDOR gate remains the session-derived expertProfileId above.
+        { method: 'POST', body: JSON.stringify({ ...payload, actorUserId: session.user.id }) },
         'schedule-api'
       );
 

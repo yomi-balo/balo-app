@@ -16,8 +16,9 @@ export interface UpdateScheduleTimezoneResult {
 }
 
 /**
- * Updates the timezone on the signed-in expert's profile (expert_profiles.timezone).
- * Distinct from the onboarding update-timezone action, which writes users.timezone.
+ * Updates the signed-in expert's timezone. The PATCH route writes BOTH
+ * expert_profiles.timezone (resolver) and users.timezone + derived country
+ * (public display) in one transaction, so the two stay in sync (BAL-234).
  * IDOR gate: the expertProfileId is derived from the session, never the client.
  */
 export const updateScheduleTimezoneAction = withAuth(
@@ -32,7 +33,10 @@ export const updateScheduleTimezoneAction = withAuth(
 
       await internalApiFetch<{ success: boolean }>(
         `/api/experts/${expertProfileId}/timezone`,
-        { method: 'PATCH', body: JSON.stringify({ timezone: validTimezone }) },
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ timezone: validTimezone, actorUserId: session.user.id }),
+        },
         'schedule-api'
       );
 

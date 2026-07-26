@@ -62,7 +62,7 @@ describe('clearScheduleAction', () => {
 
     expect(result).toEqual({ success: true });
     expect(mockInternalApiFetch).toHaveBeenCalledWith(
-      '/api/experts/profile-1/schedule',
+      '/api/experts/profile-1/schedule?actorUserId=user-1',
       { method: 'DELETE' },
       'schedule-api'
     );

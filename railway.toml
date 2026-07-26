@@ -3,7 +3,9 @@
 buildCommand = "pnpm install --frozen-lockfile && pnpm build --filter api"
 
 [deploy]
-startCommand = "node apps/api/dist/index.js"
+# TZ=UTC pins the process timezone: the availability resolver iterates local-midnight
+# Date objects (getDay()/setDate()), which are only correct when the server runs UTC.
+startCommand = "TZ=UTC node apps/api/dist/index.js"
 numReplicas = 1
 healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"

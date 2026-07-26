@@ -23,7 +23,9 @@ export const clearScheduleAction = withAuth(async (session): Promise<ClearSchedu
 
   try {
     await internalApiFetch<{ success: boolean }>(
-      `/api/experts/${expertProfileId}/schedule`,
+      // actorUserId rides a query param (DELETE carries no JSON body) for ADR-1030
+      // audit attribution; the IDOR gate is the session-derived expertProfileId.
+      `/api/experts/${expertProfileId}/schedule?actorUserId=${encodeURIComponent(session.user.id)}`,
       { method: 'DELETE' },
       'schedule-api'
     );

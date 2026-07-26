@@ -6,9 +6,11 @@ const {
   mockFindProfileById,
   mockFindResolverSettings,
   mockUpdateProfile,
+  mockUpdateTimezone,
   mockReplaceForExpert,
   mockDeleteAllForExpert,
   mockListRules,
+  mockRecordScheduleAudit,
   mockTransaction,
   mockGetQueue,
   mockQueueAdd,
@@ -16,9 +18,11 @@ const {
   mockFindProfileById: vi.fn(),
   mockFindResolverSettings: vi.fn(),
   mockUpdateProfile: vi.fn(),
+  mockUpdateTimezone: vi.fn(),
   mockReplaceForExpert: vi.fn(),
   mockDeleteAllForExpert: vi.fn(),
   mockListRules: vi.fn(),
+  mockRecordScheduleAudit: vi.fn(),
   mockTransaction: vi.fn(),
   mockGetQueue: vi.fn(),
   mockQueueAdd: vi.fn(),
@@ -30,11 +34,15 @@ vi.mock('@balo/db', () => ({
     findResolverSettings: mockFindResolverSettings,
     updateProfile: mockUpdateProfile,
   },
+  usersRepository: {
+    updateTimezone: mockUpdateTimezone,
+  },
   availabilityRulesRepository: {
     replaceForExpert: mockReplaceForExpert,
     deleteAllForExpert: mockDeleteAllForExpert,
     listByExpertProfileId: mockListRules,
   },
+  recordScheduleAudit: mockRecordScheduleAudit,
   db: {
     transaction: (cb: (tx: unknown) => unknown) => mockTransaction(cb),
   },
@@ -85,6 +93,8 @@ import { buildApp } from '../../app.js';
 
 const TEST_SECRET = 'test-internal-secret';
 const EXPERT_UUID = '550e8400-e29b-41d4-a716-446655440000';
+const USER_UUID = '550e8400-e29b-41d4-a716-446655440001';
+const ACTOR_UUID = '550e8400-e29b-41d4-a716-446655440002';
 const AUTH_HEADERS = {
   'content-type': 'application/json',
   'x-internal-api-key': TEST_SECRET,
@@ -95,23 +105,31 @@ const AUTH_ONLY = { 'x-internal-api-key': TEST_SECRET };
 
 const PROFILE = {
   id: EXPERT_UUID,
+  userId: USER_UUID,
   timezone: 'Australia/Melbourne',
   bookingBufferBeforeMinutes: 15,
   bookingBufferAfterMinutes: 30,
   bookingMinimumNoticeMinutes: 120,
 };
 
-/** Assert a rebuild job was enqueued with the coalescing jobId. */
+/** Assert a rebuild job was enqueued with the coalescing jobId (self-heal on fail). */
 const expectRebuildEnqueued = (): void => {
   expect(mockQueueAdd).toHaveBeenCalledWith(
     'rebuild-availability-cache',
     { expertProfileId: EXPERT_UUID },
-    { jobId: `availability-${EXPERT_UUID}`, removeOnComplete: true, removeOnFail: false }
+    {
+      jobId: `availability-${EXPERT_UUID}`,
+      removeOnComplete: true,
+      removeOnFail: true,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+    }
   );
 };
 
 const VALID_BODY = {
   timezone: 'Australia/Melbourne',
+  actorUserId: ACTOR_UUID,
   bookingSettings: {
     bufferBeforeMinutes: 15,
     bufferAfterMinutes: 30,
@@ -331,6 +349,19 @@ describe('experts schedule API routes', () => {
       expect(mockReplaceForExpert).toHaveBeenCalledWith(EXPERT_UUID, VALID_BODY.rules, {
         __tx: true,
       });
+      // Dual-write: users.timezone kept in sync in the SAME tx (userId from the profile).
+      expect(mockUpdateTimezone).toHaveBeenCalledWith(USER_UUID, 'Australia/Melbourne', {
+        __tx: true,
+      });
+      // ADR-1030 audit inside the tx, actor threaded from the web action.
+      expect(mockRecordScheduleAudit).toHaveBeenCalledWith(
+        { __tx: true },
+        expect.objectContaining({
+          actorUserId: ACTOR_UUID,
+          action: 'expert_schedule.updated',
+          expertProfileId: EXPERT_UUID,
+        })
+      );
 
       // Enqueue AFTER the tx, with the coalescing jobId.
       expectRebuildEnqueued();
@@ -376,18 +407,26 @@ describe('experts schedule API routes', () => {
       expect(mockDeleteAllForExpert).not.toHaveBeenCalled();
     });
 
-    it('soft-deletes all rules then enqueues a rebuild', async () => {
+    it('soft-deletes all rules (in a tx, with audit) then enqueues a rebuild', async () => {
       mockFindProfileById.mockResolvedValue(PROFILE);
 
       const res = await app.inject({
         method: 'DELETE',
-        url: `/api/experts/${EXPERT_UUID}/schedule`,
+        url: `/api/experts/${EXPERT_UUID}/schedule?actorUserId=${ACTOR_UUID}`,
         headers: AUTH_ONLY,
       });
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ success: true });
-      expect(mockDeleteAllForExpert).toHaveBeenCalledWith(EXPERT_UUID);
+      expect(mockDeleteAllForExpert).toHaveBeenCalledWith(EXPERT_UUID, { __tx: true });
+      expect(mockRecordScheduleAudit).toHaveBeenCalledWith(
+        { __tx: true },
+        expect.objectContaining({
+          actorUserId: ACTOR_UUID,
+          action: 'expert_schedule.cleared',
+          expertProfileId: EXPERT_UUID,
+        })
+      );
       expectRebuildEnqueued();
     });
   });
@@ -428,21 +467,37 @@ describe('experts schedule API routes', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    it('updates the timezone then enqueues a rebuild', async () => {
+    it('updates both timezones (in a tx, with audit) then enqueues a rebuild', async () => {
       mockFindProfileById.mockResolvedValue(PROFILE);
 
       const res = await app.inject({
         method: 'PATCH',
         url: `/api/experts/${EXPERT_UUID}/timezone`,
         headers: AUTH_HEADERS,
-        payload: { timezone: 'America/New_York' },
+        payload: { timezone: 'America/New_York', actorUserId: ACTOR_UUID },
       });
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ success: true });
-      expect(mockUpdateProfile).toHaveBeenCalledWith(EXPERT_UUID, {
-        timezone: 'America/New_York',
+      expect(mockUpdateProfile).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        { timezone: 'America/New_York' },
+        { __tx: true }
+      );
+      // Dual-write into users.timezone, same tx.
+      expect(mockUpdateTimezone).toHaveBeenCalledWith(USER_UUID, 'America/New_York', {
+        __tx: true,
       });
+      // Audit captures old + new timezone (the prior value is otherwise overwritten).
+      expect(mockRecordScheduleAudit).toHaveBeenCalledWith(
+        { __tx: true },
+        expect.objectContaining({
+          actorUserId: ACTOR_UUID,
+          action: 'expert_timezone.changed',
+          expertProfileId: EXPERT_UUID,
+          metadata: { oldTimezone: 'Australia/Melbourne', newTimezone: 'America/New_York' },
+        })
+      );
       expectRebuildEnqueued();
     });
   });

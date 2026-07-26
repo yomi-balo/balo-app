@@ -199,6 +199,7 @@ export type {
 } from './party-domains';
 export { auditEventsRepository } from './audit-events';
 export type { RecordAuditInput } from './audit-events';
+export { recordScheduleAudit, type ScheduleAuditAction } from './_shared/schedule-audit';
 export { partyMembershipsRepository } from './party-memberships';
 export type {
   DomainMembershipInput,

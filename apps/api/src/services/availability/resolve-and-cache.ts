@@ -123,7 +123,9 @@ function resolveHorizonDays(optionValue: number | undefined): number {
   const envRaw = process.env.RESOLVER_HORIZON_DAYS;
   if (envRaw !== undefined) {
     const parsed = Number.parseInt(envRaw, 10);
-    if (Number.isFinite(parsed)) return parsed;
+    // Must be strictly positive — a 0 or negative horizon collapses the window to
+    // empty ("never available"), so a misconfigured env falls through to the default.
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
   }
   return DEFAULT_HORIZON_DAYS;
 }

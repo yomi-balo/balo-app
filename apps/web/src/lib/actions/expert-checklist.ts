@@ -85,7 +85,7 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   };
 
   const completedCount = Object.values(items).filter(Boolean).length;
-  const allComplete = completedCount === 6;
+  const allComplete = completedCount === Object.keys(items).length;
 
   // When all 6 complete, set searchable = true (idempotent)
   if (allComplete && !profile.searchable) {

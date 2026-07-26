@@ -22,6 +22,12 @@ export async function internalApiFetch<T>(
   options: InternalApiOptions = {},
   service = 'internal-api'
 ): Promise<T> {
+  // Fail fast with a clear cause instead of sending an empty key and getting an
+  // opaque 401 back from the internal route.
+  if (!API_KEY) {
+    throw new Error('INTERNAL_API_SECRET is not set — cannot authenticate internal API calls');
+  }
+
   const url = `${API_BASE_URL}${path}`;
 
   const response = await loggedFetch(url, {

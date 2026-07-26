@@ -317,7 +317,7 @@ export const expertsRepository = {
   },
 
   /**
-   * The full set of resolver inputs owned by the expert — timezone + the four
+   * The full set of resolver inputs owned by the expert — timezone + the three
    * booking rules — in one `columns:`-projected read (never hydrate the whole
    * row: it carries stripeConnectId / cronofyUserId / PII the resolver must not
    * see). Returns null if the profile doesn't exist so the resolve-and-cache

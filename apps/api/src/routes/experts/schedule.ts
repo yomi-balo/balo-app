@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
-import { availabilityRulesRepository, db, expertsRepository } from '@balo/db';
+import {
+  availabilityRulesRepository,
+  db,
+  expertsRepository,
+  usersRepository,
+  recordScheduleAudit,
+  type ExpertProfile,
+} from '@balo/db';
 import { isValidTimezone } from '@balo/shared/timezone';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { enqueueAvailabilityCacheRebuild } from '../../services/availability/enqueue-rebuild.js';
@@ -36,13 +43,24 @@ const bookingSettingsSchema = z.object({
 
 const paramsSchema = z.object({ expertProfileId: z.string().uuid() });
 
+// The acting user's id, threaded from the web server action for ADR-1030 audit
+// attribution ONLY (never authorization — the IDOR gate is the session-derived
+// expertProfileId in the web action). Optional so a caller that omits it records a
+// null-actor audit row rather than 400ing.
+const actorUserIdSchema = z.string().uuid().optional();
+
 const postBodySchema = z.object({
   timezone: timezoneSchema,
   bookingSettings: bookingSettingsSchema,
   rules: z.array(ruleSchema).max(21), // ≤ 3 ranges × 7 days
+  actorUserId: actorUserIdSchema,
 });
 
-const patchTzSchema = z.object({ timezone: timezoneSchema });
+const patchTzSchema = z.object({ timezone: timezoneSchema, actorUserId: actorUserIdSchema });
+
+// DELETE carries no JSON body (empty-body + json content-type is fragile), so the
+// actor rides a query param instead.
+const deleteQuerySchema = z.object({ actorUserId: actorUserIdSchema });
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -71,16 +89,21 @@ function parseOrReply<S extends z.ZodTypeAny>(
 }
 
 /**
- * Confirm the expert profile exists. On absence, send a 404 and return false so
- * the mutation handlers short-circuit before touching the DB or the queue.
+ * Load the expert profile, or send a 404 and return null so the mutation handlers
+ * short-circuit before touching the DB or the queue. Returns the row (not a bool)
+ * so callers get `userId` (to keep users.timezone in sync) and the prior
+ * `timezone` (for the audit metadata) without a second read.
  */
-async function ensureProfileExists(expertProfileId: string, reply: FastifyReply): Promise<boolean> {
+async function loadProfileOr404(
+  expertProfileId: string,
+  reply: FastifyReply
+): Promise<ExpertProfile | null> {
   const profile = await expertsRepository.findProfileById(expertProfileId);
   if (!profile) {
     reply.status(404).send({ error: 'Expert profile not found' });
-    return false;
+    return null;
   }
-  return true;
+  return profile;
 }
 
 /** Log an error and send the standard 500. Returns the reply to `return`. */
@@ -177,10 +200,12 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       if (!body.ok) return reply;
 
       const { expertProfileId } = params.data;
-      const { timezone, bookingSettings, rules } = body.data;
+      const { timezone, bookingSettings, rules, actorUserId } = body.data;
 
       try {
-        if (!(await ensureProfileExists(expertProfileId, reply))) return reply;
+        const profile = await loadProfileOr404(expertProfileId, reply);
+        if (!profile) return reply;
+        const oldTimezone = profile.timezone;
 
         await db.transaction(async (tx) => {
           await expertsRepository.updateProfile(
@@ -194,6 +219,21 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             tx
           );
           await availabilityRulesRepository.replaceForExpert(expertProfileId, rules, tx);
+          // Keep the public-display timezone (users.timezone → country/countryCode)
+          // in lock-step with the resolver timezone (expert_profiles.timezone), in
+          // the SAME transaction so they can never diverge.
+          await usersRepository.updateTimezone(profile.userId, timezone, tx);
+          await recordScheduleAudit(tx, {
+            actorUserId: actorUserId ?? null,
+            action: 'expert_schedule.updated',
+            expertProfileId,
+            metadata: {
+              oldTimezone,
+              newTimezone: timezone,
+              daysEnabled: new Set(rules.map((r) => r.dayOfWeek)).size,
+              ruleCount: rules.length,
+            },
+          });
         });
 
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
@@ -224,12 +264,23 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       const params = parseOrReply(paramsSchema, request.params, reply, 'Invalid path parameters');
       if (!params.ok) return reply;
 
+      const query = parseOrReply(deleteQuerySchema, request.query, reply, 'Invalid query');
+      if (!query.ok) return reply;
+
       const { expertProfileId } = params.data;
+      const { actorUserId } = query.data;
 
       try {
-        if (!(await ensureProfileExists(expertProfileId, reply))) return reply;
+        if (!(await loadProfileOr404(expertProfileId, reply))) return reply;
 
-        await availabilityRulesRepository.deleteAllForExpert(expertProfileId);
+        await db.transaction(async (tx) => {
+          await availabilityRulesRepository.deleteAllForExpert(expertProfileId, tx);
+          await recordScheduleAudit(tx, {
+            actorUserId: actorUserId ?? null,
+            action: 'expert_schedule.cleared',
+            expertProfileId,
+          });
+        });
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });
@@ -262,12 +313,25 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       if (!body.ok) return reply;
 
       const { expertProfileId } = params.data;
-      const { timezone } = body.data;
+      const { timezone, actorUserId } = body.data;
 
       try {
-        if (!(await ensureProfileExists(expertProfileId, reply))) return reply;
+        const profile = await loadProfileOr404(expertProfileId, reply);
+        if (!profile) return reply;
+        const oldTimezone = profile.timezone;
 
-        await expertsRepository.updateProfile(expertProfileId, { timezone });
+        await db.transaction(async (tx) => {
+          await expertsRepository.updateProfile(expertProfileId, { timezone }, tx);
+          // Mirror the tz change into users.timezone (+ derived country) so the
+          // public profile location doesn't go stale — same tx as above.
+          await usersRepository.updateTimezone(profile.userId, timezone, tx);
+          await recordScheduleAudit(tx, {
+            actorUserId: actorUserId ?? null,
+            action: 'expert_timezone.changed',
+            expertProfileId,
+            metadata: { oldTimezone, newTimezone: timezone },
+          });
+        });
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });

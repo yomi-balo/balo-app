@@ -1,4 +1,5 @@
 import { eq, and, isNull, inArray, gt, lte } from 'drizzle-orm';
+import { deriveCountryFromTimezone } from '@balo/shared/timezone';
 import { db } from '../client';
 import {
   users,
@@ -11,6 +12,7 @@ import {
   type CompanyMember,
 } from '../schema';
 import { auditEventsRepository } from './audit-events';
+import type { DbExecutor } from './_shared/db-executor';
 
 /**
  * Platform-role enum values, derived from the inferred `users.platformRole`
@@ -203,6 +205,35 @@ export const usersRepository = {
       .where(eq(users.id, id))
       .returning();
     return user!;
+  },
+
+  /**
+   * Set the user's timezone AND the derived country/countryCode in one write.
+   * Executor-aware so it can ride the schedule editor's transaction (BAL-234):
+   * the expert-side timezone change writes `expert_profiles.timezone` (resolver
+   * SSOT) and this in the SAME tx, keeping the public display country
+   * (`users.country`/`countryCode`) from desyncing. Reuses
+   * `deriveCountryFromTimezone`; an unmapped zone (or 'UTC') leaves country
+   * untouched — never nulls an existing country — matching `updateTimezoneAction`.
+   */
+  updateTimezone: async (
+    userId: string,
+    timezone: string,
+    executor?: DbExecutor
+  ): Promise<void> => {
+    const exec = executor ?? db;
+    const countryData = deriveCountryFromTimezone(timezone);
+    await exec
+      .update(users)
+      .set({
+        timezone,
+        ...(countryData && {
+          country: countryData.country,
+          countryCode: countryData.countryCode,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
   },
 
   /**

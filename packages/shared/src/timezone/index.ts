@@ -486,21 +486,40 @@ const MS_PER_DAY = 86_400_000;
 /** Scan horizon (~13 months) — v1 warns on the single upcoming transition only. */
 const SCAN_DAYS = 400;
 
+/**
+ * One `Intl.DateTimeFormat` per timezone, reused for the process lifetime. Every
+ * formatter option here is a compile-time constant, so the IANA zone string is a
+ * complete cache key. `formatToParts(instant)` takes the instant per-call and does
+ * not mutate the formatter, so sharing one instance per zone is safe — and it
+ * collapses the ~400 constructions per spring-forward scan (which builds one
+ * formatter per sampled day) down to one per distinct zone.
+ */
+const wallClockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallClockFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = wallClockFormatters.get(timeZone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    wallClockFormatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 /** Wall-clock parts of an instant as observed in `timeZone`. */
 function tzWallClock(
   timeZone: string,
   instant: Date
 ): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
+  const formatter = wallClockFormatter(timeZone);
   let year = 0;
   let month = 1;
   let day = 1;

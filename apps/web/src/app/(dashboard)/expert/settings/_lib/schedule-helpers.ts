@@ -307,6 +307,25 @@ export function summarizeWeek(week: WeekState): ScheduleSummarySegment[] {
 // ── DST spring-forward conflict (non-blocking warning) ──────────────
 
 /**
+ * Pure, Intl-free overlap test: does any enabled range on the gap's weekday land
+ * in the spring-forward gap? Split out from `findDstConflict` so the cheap
+ * per-keystroke check runs WITHOUT re-paying the expensive `getNextSpringForwardGap`
+ * scan (which depends only on the timezone).
+ */
+export function weekOverlapsGap(week: WeekState, gap: SpringForwardGap): boolean {
+  for (const [index, day] of week.entries()) {
+    const meta = DAY_META[index];
+    if (!day.enabled || !meta || meta.dayOfWeek !== gap.dayOfWeek) continue;
+    for (const range of day.ranges) {
+      const startMinutes = hhmmToMinutes(range.start);
+      const endMinutes = hhmmToMinutes(range.end);
+      if (startMinutes < gap.gapEndMinutes && endMinutes > gap.gapStartMinutes) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Returns the upcoming spring-forward gap if any enabled range on the transition's
  * weekday would land in it, else null. Warning only — never blocks saving.
  */
@@ -317,19 +336,12 @@ export function findDstConflict(
 ): SpringForwardGap | null {
   const gap = getNextSpringForwardGap(timezone, now);
   if (!gap) return null;
-  for (const [index, day] of week.entries()) {
-    const meta = DAY_META[index];
-    if (!day.enabled || !meta || meta.dayOfWeek !== gap.dayOfWeek) continue;
-    for (const range of day.ranges) {
-      const startMinutes = hhmmToMinutes(range.start);
-      const endMinutes = hhmmToMinutes(range.end);
-      if (startMinutes < gap.gapEndMinutes && endMinutes > gap.gapStartMinutes) {
-        return gap;
-      }
-    }
-  }
-  return null;
+  return weekOverlapsGap(week, gap) ? gap : null;
 }
+
+// Re-exported so the editor can run the expensive scan and the cheap overlap test
+// on separate memo keys (scan on timezone, overlap on the week).
+export { getNextSpringForwardGap };
 
 /** '02:00 AM' style label for a gap minute-of-day. */
 export function formatGapMinutes(minutes: number): string {

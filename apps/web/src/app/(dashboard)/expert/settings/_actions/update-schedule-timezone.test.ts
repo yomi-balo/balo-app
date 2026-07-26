@@ -63,7 +63,10 @@ describe('updateScheduleTimezoneAction', () => {
     expect(result).toEqual({ success: true });
     expect(mockInternalApiFetch).toHaveBeenCalledWith(
       '/api/experts/profile-1/timezone',
-      { method: 'PATCH', body: JSON.stringify({ timezone: 'Australia/Sydney' }) },
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ timezone: 'Australia/Sydney', actorUserId: 'user-1' }),
+      },
       'schedule-api'
     );
     expect(revalidatePath).toHaveBeenCalledWith('/expert/settings');

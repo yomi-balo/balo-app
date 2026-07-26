@@ -183,6 +183,25 @@ describe('resolveAndCacheAvailability', () => {
     );
   });
 
+  it('rejects a non-positive RESOLVER_HORIZON_DAYS (0 / negative) → falls through to the default', async () => {
+    // 0 or negative would collapse the window to empty ("never available"); a
+    // misconfigured env must not silently take a profile offline.
+    for (const bad of ['0', '-5']) {
+      vi.clearAllMocks();
+      process.env.RESOLVER_HORIZON_DAYS = bad;
+      mockFindResolverSettings.mockResolvedValue(settings());
+      mockListRules.mockResolvedValue([]);
+      mockListConsultations.mockResolvedValue([]);
+      mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+      await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ horizonDays: DEFAULT_HORIZON_DAYS })
+      );
+    }
+  });
+
   it('falls through to the default horizon (finite horizonEnd) when env vars are non-numeric', async () => {
     process.env.RESOLVER_HORIZON_DAYS = 'abc';
     process.env.MIN_CONSULTATION_MINUTES = 'not-a-number';

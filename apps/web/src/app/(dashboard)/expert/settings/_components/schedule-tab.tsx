@@ -35,7 +35,8 @@ import {
   createDefaultWeek,
   createEmptyWeek,
   defaultRange,
-  findDstConflict,
+  getNextSpringForwardGap,
+  weekOverlapsGap,
   hasSplitDays,
   hhmmToMinutes,
   minutesToHhmm,
@@ -253,15 +254,12 @@ export function ScheduleTab(): React.JSX.Element {
       return;
     }
     setSaving(true);
-    const result = await saveScheduleAction({
-      timezone,
-      bookingSettings,
-      rules: weekToRules(week),
-    });
+    const rules = weekToRules(week);
+    const result = await saveScheduleAction({ timezone, bookingSettings, rules });
     setSaving(false);
     if (result.success) {
       persistedTimezoneRef.current = timezone;
-      hasPersistedRulesRef.current = weekToRules(week).length > 0;
+      hasPersistedRulesRef.current = rules.length > 0;
       track(SCHEDULE_EVENTS.SAVED, {
         expert_id: expertIdRef.current,
         days_enabled: countEnabledDays(week),
@@ -306,7 +304,14 @@ export function ScheduleTab(): React.JSX.Element {
     }
   }, []);
 
-  const dstGap = useMemo(() => findDstConflict(week, timezone, new Date()), [week, timezone]);
+  // The expensive Intl spring-forward scan depends only on the timezone, so it runs
+  // once per timezone change — not on every keystroke. The cheap overlap test runs
+  // per edit against the already-computed gap.
+  const springForwardGap = useMemo(() => getNextSpringForwardGap(timezone, new Date()), [timezone]);
+  const dstGap = useMemo(
+    () => (springForwardGap && weekOverlapsGap(week, springForwardGap) ? springForwardGap : null),
+    [week, springForwardGap]
+  );
 
   return (
     <div>

@@ -93,6 +93,62 @@ describe('usersRepository.update', () => {
   });
 });
 
+describe('usersRepository.updateTimezone (BAL-234)', () => {
+  it('sets timezone and derives country/countryCode for a mapped zone', async () => {
+    const user = await userFactory({ timezone: 'UTC', country: null, countryCode: null });
+
+    await usersRepository.updateTimezone(user.id, 'Australia/Melbourne');
+
+    const updated = await usersRepository.findById(user.id);
+    expect(updated?.timezone).toBe('Australia/Melbourne');
+    expect(updated?.country).toBe('Australia');
+    expect(updated?.countryCode).toBe('AU');
+  });
+
+  it('leaves an existing country untouched for an unmapped zone (never nulls it)', async () => {
+    const user = await userFactory({
+      timezone: 'Australia/Melbourne',
+      country: 'Australia',
+      countryCode: 'AU',
+    });
+
+    // 'UTC' is not in the country mapping → deriveCountryFromTimezone returns null.
+    await usersRepository.updateTimezone(user.id, 'UTC');
+
+    const updated = await usersRepository.findById(user.id);
+    expect(updated?.timezone).toBe('UTC');
+    expect(updated?.country).toBe('Australia');
+    expect(updated?.countryCode).toBe('AU');
+  });
+
+  it('composes under a parent transaction via the executor param', async () => {
+    const user = await userFactory({ timezone: 'UTC', country: null, countryCode: null });
+
+    await db.transaction(async (tx) => {
+      await usersRepository.updateTimezone(user.id, 'America/New_York', tx);
+    });
+
+    const updated = await usersRepository.findById(user.id);
+    expect(updated?.timezone).toBe('America/New_York');
+    expect(updated?.countryCode).toBe('US');
+  });
+
+  it('rolls back with the enclosing transaction', async () => {
+    const user = await userFactory({ timezone: 'Australia/Melbourne', countryCode: 'AU' });
+
+    await expect(
+      db.transaction(async (tx) => {
+        await usersRepository.updateTimezone(user.id, 'America/New_York', tx);
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    const fresh = await usersRepository.findById(user.id);
+    expect(fresh?.timezone).toBe('Australia/Melbourne');
+    expect(fresh?.countryCode).toBe('AU');
+  });
+});
+
 describe('usersRepository.findIdsByPlatformRoles', () => {
   it('returns ids for users whose platformRole matches', async () => {
     const admin = await userFactory({ platformRole: 'admin' });

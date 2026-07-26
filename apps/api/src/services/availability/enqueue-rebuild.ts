@@ -14,6 +14,13 @@ import { AVAILABILITY_CACHE_QUEUE } from '../../jobs/availability-cache.js';
  * `earliest_available_at` but must not fail the caller's request. Extracted to
  * one place so the ~15-line body isn't duplicated (SonarCloud new-code
  * duplication gate).
+ *
+ * `removeOnFail: true` is deliberate: this is an idempotent cache-rebuild, and the
+ * fixed per-expert `jobId` means a RETAINED failed job would block every later
+ * enqueue for that expert (webhook, schedule-save, staleness cron) — permanently
+ * wedging their availability. Dropping the job on terminal failure lets the next
+ * trigger self-heal. `attempts`/`backoff` first absorb transient DB blips; the
+ * worker's `failed` listener is what surfaces a terminal failure to logs/Sentry.
  */
 export async function enqueueAvailabilityCacheRebuild(
   expertProfileId: string,
@@ -27,7 +34,9 @@ export async function enqueueAvailabilityCacheRebuild(
       {
         jobId: `availability-${expertProfileId}`,
         removeOnComplete: true,
-        removeOnFail: false,
+        removeOnFail: true,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
       }
     );
   } catch (err: unknown) {

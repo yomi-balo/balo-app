@@ -39,7 +39,14 @@ describe('enqueueAvailabilityCacheRebuild', () => {
     expect(mockQueueAdd).toHaveBeenCalledWith(
       'rebuild-availability-cache',
       { expertProfileId: EXPERT_ID },
-      { jobId: `availability-${EXPERT_ID}`, removeOnComplete: true, removeOnFail: false }
+      {
+        jobId: `availability-${EXPERT_ID}`,
+        removeOnComplete: true,
+        // removeOnFail: true so a terminal failure can't wedge the fixed jobId.
+        removeOnFail: true,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+      }
     );
     expect(log.error).not.toHaveBeenCalled();
   });
