@@ -58,7 +58,8 @@ export type NewAvailabilityRule = typeof availabilityRules.$inferInsert;
  * Postgres `date` (Drizzle maps `date` → JS string 'YYYY-MM-DD') — never a
  * `timestamp`. The availability resolver expands each range into whole UTC days
  * via `fromZonedTime` + the expert timezone (server-side) and subtracts them
- * BEFORE weekly rules + calendar busy, so blocked days never surface as bookable.
+ * (as ordinary busy intervals) from the weekly-rule windows, so blocked days
+ * never surface as bookable.
  *
  * Soft-deletable. Mutations come from the settings "Time off" card via the
  * server-action → internal-Fastify → repo path; the resolver only reads.
@@ -67,6 +68,13 @@ export type NewAvailabilityRule = typeof availabilityRules.$inferInsert;
  * `availability_cache` / `calendar_connections`): the whole availability domain
  * is admin-client-only behind WorkOS / `requireInternalAuth`. Adding RLS to one
  * table of the domain would be drift; a domain-wide hardening ticket is deferred.
+ *
+ * No actor / attribution columns (no `created_by` / `deleted_by`) — a deliberate,
+ * documented domain exemption, not an oversight, mirroring the sibling
+ * `availability_rules`. Today only the owning expert mutates their OWN time off
+ * via a session-derived `expertProfileId`, so the actor is unambiguous without a
+ * recorded column (ADR-1029). If an admin "manage expert time off" capability
+ * ships later (multiple possible actors), add `deleted_by` then.
  */
 export const availabilityOverrides = pgTable(
   'availability_overrides',

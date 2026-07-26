@@ -16,7 +16,8 @@ import type {
  *   3. Per-date expand rules into UTC using `fromZonedTime` (DST-correct).
  *   4. Clip windows to the bounded range.
  *   5. Merge overlapping/adjacent rule windows on the same day.
- *   6. Subtract busy intervals (consultations ++ vendor busy blocks).
+ *   6. Subtract busy intervals (consultations + vendor busy + date overrides,
+ *      all folded into one order-independent busy set).
  *   7. Drop sub-windows shorter than `minMinutes`.
  *   8. Return `earliestAvailableAt = head?.startAt ?? null`.
  *
@@ -61,20 +62,16 @@ export function resolve(input: ResolverInput): ResolverResult {
   }
 
   const merged = mergeOverlapping(clipped);
-  const busy = combineBusyIntervals(baloConsultations, busyBlocks);
-  // Pre-sort override blocks so `subtractBusy` (which assumes sorted-by-start
-  // input) removes them correctly. Overrides are subtracted FIRST — a full-day
-  // holiday/leave block clears the whole day before consultations/vendor busy.
-  const blocks = [...overrideBlocks].sort(compareByStart);
+  // Override blocks (holidays/leave) are treated as ordinary busy intervals:
+  // fold them in alongside consultations and vendor busy so all three sources
+  // merge and sort once. Interval set-difference is order-independent
+  // (W ∖ A ∖ B === W ∖ (A ∪ B)), so an override simply removes any overlapping
+  // availability — there is no ordering or precedence between the busy sources.
+  const busy = combineBusyIntervals(baloConsultations, [...busyBlocks, ...overrideBlocks]);
 
   const free: BusyBlock[] = [];
   for (const window of merged) {
-    // 1) Remove full-day override blocks (holidays/leave) — most aggressive.
-    const afterOverrides = subtractBusy(window, blocks);
-    // 2) Then remove consultations + vendor busy from what remains.
-    for (const seg of afterOverrides) {
-      free.push(...subtractBusy(seg, busy));
-    }
+    free.push(...subtractBusy(window, busy));
   }
 
   const minMs = minMinutes * 60 * 1000;

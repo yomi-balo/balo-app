@@ -37,6 +37,24 @@ const NEW_YEAR: AvailabilityOverrideDto = {
   label: 'Holiday',
 };
 
+/**
+ * Click today's cell in the open calendar. Today is always in the default
+ * (current) month and — since the picker now disables all days before today —
+ * is guaranteed enabled, so this is deterministic regardless of the run date
+ * (a fixed day-of-month could otherwise land on a past, disabled cell). Each
+ * day button carries a date-unique `data-day` (`Date#toLocaleDateString`), so
+ * matching today's key avoids the outside-day duplicate-number ambiguity.
+ */
+async function pickToday(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const grid = await screen.findByRole('grid');
+  const todayKey = new Date().toLocaleDateString();
+  const todayButton = within(grid)
+    .getAllByRole('button')
+    .find((b) => b.getAttribute('data-day') === todayKey);
+  if (!todayButton) throw new Error("expected today's day button to be enabled");
+  await user.click(todayButton);
+}
+
 describe('DateOverridesCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -76,15 +94,9 @@ describe('DateOverridesCard', () => {
 
     await user.click(screen.getByRole('button', { name: /add time off/i }));
 
-    // Popover + calendar open. Pick the 15th of whatever month the calendar
-    // shows (unique within the grid) BEFORE typing the label — typing re-renders
-    // the popover and would detach an earlier grid reference.
-    const grid = await screen.findByRole('grid');
-    const fifteenth = within(grid)
-      .getAllByRole('button')
-      .find((b) => b.textContent?.trim() === '15');
-    if (!fifteenth) throw new Error('expected a day button labelled 15');
-    await user.click(fifteenth);
+    // Popover + calendar open. Pick today (always enabled) BEFORE typing the
+    // label — typing re-renders the popover and would detach an earlier grid ref.
+    await pickToday(user);
 
     await user.type(screen.getByLabelText('Label (optional)'), 'Holiday');
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
@@ -112,11 +124,7 @@ describe('DateOverridesCard', () => {
 
     await screen.findByText(/No time off scheduled/i);
     await user.click(screen.getByRole('button', { name: /add time off/i }));
-    const grid = await screen.findByRole('grid');
-    const dayButtons = within(grid).getAllByRole('button');
-    const fifteenth = dayButtons.find((b) => b.textContent?.trim() === '15');
-    if (!fifteenth) throw new Error('expected a day button labelled 15');
-    await user.click(fifteenth);
+    await pickToday(user);
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
 
     await waitFor(() =>

@@ -146,6 +146,16 @@ describe('CalendarTab', () => {
     });
   });
 
+  it('mounts the Time off card even when no calendar is connected (disconnected state)', async () => {
+    // The card is rendered independent of connection status; assert it survives
+    // the empty/disconnected render, not just the connected ones.
+    render(<CalendarTab />);
+    await waitFor(() => {
+      expect(screen.getByText('Connect a calendar')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('date-overrides-card')).toBeInTheDocument();
+  });
+
   // ── Connected state ──────────────────────────────────────────
 
   it('renders connected state when connection exists', async () => {

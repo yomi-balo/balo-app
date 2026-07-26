@@ -283,9 +283,11 @@ describe('resolve (BAL-243 availability resolver)', () => {
       expect(result.earliestAvailableAt).toEqual(new Date('2026-06-02T09:00:00.000Z'));
     });
 
-    it('subtracts overrides before busy — an override wins even where a consultation also sits', () => {
-      // Override clears all of Monday; a consultation on the same day is moot.
-      // Earliest jumps to Tuesday regardless of the (redundant) consultation.
+    it('an override covering a rule day removes it regardless of any consultation also on that day', () => {
+      // The override clears all of Monday. Whether or not a consultation also
+      // sits on Monday is irrelevant: overrides are folded into the busy set and
+      // set-difference is order-independent, so Monday is removed either way and
+      // earliest jumps to Tuesday.
       const result = resolve(
         baseInput({
           rules: monFriNineToFive,

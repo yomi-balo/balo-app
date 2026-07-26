@@ -11,6 +11,9 @@ import { DateOverrideAddPopover, type CreateOverrideInput } from './date-overrid
 import { DateOverrideDeleteConfirm } from './date-override-delete-confirm';
 import type { AvailabilityOverrideDto } from '../_types/availability-override';
 
+/** Brand violet for the Time-off IconBadge (header + row tiles). */
+const OVERRIDE_ICON_COLOR = '#7C3AED';
+
 // ── Date formatting (display only; no timezone math) ─────────────
 
 const MONTHS = [
@@ -75,7 +78,7 @@ function DateOverrideRow({
 
   return (
     <div className="flex items-center gap-3 py-3">
-      <IconBadge icon={CalendarDays} color="#7C3AED" size={40} iconSize={18} />
+      <IconBadge icon={CalendarDays} color={OVERRIDE_ICON_COLOR} size={40} iconSize={18} />
       <div className="min-w-0 flex-1">
         <div className="text-foreground truncate text-sm font-semibold">{rangeLabel}</div>
         <div className="text-muted-foreground mt-0.5 truncate text-sm">
@@ -138,7 +141,7 @@ export function DateOverridesCard(): React.JSX.Element {
     <div className="border-border bg-card mt-4 rounded-xl border p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-3">
-          <IconBadge icon={CalendarDays} color="#7C3AED" size={44} iconSize={22} />
+          <IconBadge icon={CalendarDays} color={OVERRIDE_ICON_COLOR} size={44} iconSize={22} />
           <div>
             <h2 className="text-foreground text-base font-semibold">Time off</h2>
             <p className="text-muted-foreground mt-0.5 text-sm leading-relaxed">

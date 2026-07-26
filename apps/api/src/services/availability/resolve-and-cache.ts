@@ -120,7 +120,14 @@ export async function resolveAndCacheAvailability(
 /** `'YYYY-MM-DD'` → the next calendar day `'YYYY-MM-DD'` (UTC arithmetic, tz-agnostic). */
 function nextDayIso(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
-  if (y === undefined || m === undefined || d === undefined) return iso; // defensive
+  if (y === undefined || m === undefined || d === undefined) {
+    // Input always comes from a Postgres DATE column (guaranteed YYYY-MM-DD),
+    // so this is unreachable. Throw rather than silently returning `iso`: that
+    // would yield a zero-length override interval and drop the block, leaving
+    // the expert bookable during their own leave — the wrong failure mode for
+    // a booking-integrity value.
+    throw new Error(`nextDayIso: invalid date string "${iso}" — expected YYYY-MM-DD`);
+  }
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { DateRange } from 'react-day-picker';
 import { Loader2, Plus } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -34,6 +34,15 @@ export function DateOverrideAddPopover({
   const [range, setRange] = useState<DateRange | undefined>(undefined);
   const [label, setLabel] = useState('');
   const [pending, setPending] = useState(false);
+
+  // Local-midnight today. Past dates are hidden by `listUpcoming` on refresh, so
+  // blocking them at the source prevents a phantom/inconsistent optimistic row.
+  // `{ before: today }` is exclusive of `today`, so today itself stays selectable.
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
 
   const reset = useCallback(() => {
     setRange(undefined);
@@ -79,6 +88,7 @@ export function DateOverrideAddPopover({
           selected={range}
           onSelect={setRange}
           numberOfMonths={1}
+          disabled={{ before: today }}
           autoFocus
           className="p-3"
         />

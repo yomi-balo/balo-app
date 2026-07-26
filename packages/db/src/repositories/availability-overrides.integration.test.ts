@@ -1,23 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import { availabilityOverrides } from '../schema';
 import { expertDraftFactory } from '../test/factories';
 import { availabilityOverridesRepository } from './availability-overrides';
 
 /**
- * Today's date as the DB sees it (UTC `CURRENT_DATE`). The integration
- * Postgres container runs in UTC, so the UTC ISO date matches `CURRENT_DATE`.
+ * A `date` value computed relative to the DB's OWN `CURRENT_DATE`, so the
+ * boundary cases below are deterministic on any run date and never drift against
+ * the JS clock (no JS/DB midnight-rollover skew). `n` is a whole-day offset:
+ * `dayOffset(-1)` is yesterday, `dayOffset(0)` today. `(${n})::int` keeps the
+ * `date + integer` (→ `date`) operator, and the literal interpolates no user
+ * input beyond the numeric offset.
  */
-function isoDate(offsetDays = 0): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + offsetDays);
-  const [datePart] = d.toISOString().split('T');
-  if (datePart === undefined) throw new Error('unreachable');
-  return datePart;
+function dayOffset(n: number): SQL {
+  return sql`(CURRENT_DATE + (${n})::int)`;
 }
-
-const TODAY = isoDate(0);
 
 // ── create ──────────────────────────────────────────────────────────
 
@@ -74,20 +72,50 @@ describe('availabilityOverridesRepository.listUpcoming', () => {
     expect(rows[0]?.startDate).toBe('2099-06-01');
   });
 
-  it('includes a block whose endDate is exactly today', async () => {
+  it('applies the tz-safe one-day-wide upcoming boundary (today & yesterday in, 2+ days past out)', async () => {
     const draft = await expertDraftFactory();
 
-    // endDate === CURRENT_DATE must be inclusive (>= boundary).
-    await db.insert(availabilityOverrides).values({
-      expertProfileId: draft.id,
-      startDate: isoDate(-3),
-      endDate: TODAY,
-    });
+    // All four endDates are computed relative to the DB's own CURRENT_DATE so the
+    // boundary is exact on any run date. The filter is
+    // `endDate >= CURRENT_DATE - INTERVAL '1 day'`, so today and yesterday both
+    // survive while anything two or more days past is dropped.
+    await db.insert(availabilityOverrides).values([
+      // endDate === today → included (the >= boundary is inclusive of today).
+      {
+        expertProfileId: draft.id,
+        startDate: dayOffset(-1),
+        endDate: dayOffset(0),
+        label: 'today',
+      },
+      // endDate === yesterday → STILL included by the one-day tz fudge. Under the
+      // old naive `>= CURRENT_DATE` this row was wrongly excluded, un-blocking
+      // leave that is still active for a west-of-UTC expert.
+      {
+        expertProfileId: draft.id,
+        startDate: dayOffset(-2),
+        endDate: dayOffset(-1),
+        label: 'yesterday',
+      },
+      // endDate two days past → excluded (outside even the widened window).
+      {
+        expertProfileId: draft.id,
+        startDate: dayOffset(-3),
+        endDate: dayOffset(-2),
+        label: 'two-days-past',
+      },
+      // Far past → excluded.
+      {
+        expertProfileId: draft.id,
+        startDate: '2000-01-01',
+        endDate: '2000-01-02',
+        label: 'far-past',
+      },
+    ]);
 
     const rows = await availabilityOverridesRepository.listUpcoming(draft.id);
 
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.endDate).toBe(TODAY);
+    // Only today + yesterday survive, ordered by startDate asc.
+    expect(rows.map((r) => r.label)).toEqual(['yesterday', 'today']);
   });
 
   it('orders by startDate ascending', async () => {
