@@ -39,6 +39,9 @@ export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export { availabilityRulesRepository } from './availability-rules';
+export { availabilityOverridesRepository } from './availability-overrides';
+export type { CreateAvailabilityOverrideInput } from './availability-overrides';
+export type { AvailabilityOverride, NewAvailabilityOverride } from '../schema';
 export { consultationsRepository } from './consultations';
 export { projectRequestsRepository } from './project-requests';
 export {

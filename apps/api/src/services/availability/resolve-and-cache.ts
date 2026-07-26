@@ -1,9 +1,11 @@
 import {
+  availabilityOverridesRepository,
   availabilityRulesRepository,
   calendarRepository,
   consultationsRepository,
   expertsRepository,
 } from '@balo/db';
+import { fromZonedTime } from 'date-fns-tz';
 import { createLogger } from '@balo/shared/logging';
 import { resolve } from './resolver.js';
 import type { BusyBlock } from './types.js';
@@ -65,10 +67,20 @@ export async function resolveAndCacheAvailability(
 
   const horizonEnd = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
 
-  const [rules, baloConsultations] = await Promise.all([
+  const [rules, baloConsultations, overrides] = await Promise.all([
     availabilityRulesRepository.listByExpertProfileId(expertProfileId),
     consultationsRepository.listConfirmedInRange(expertProfileId, now, horizonEnd),
+    availabilityOverridesRepository.listUpcoming(expertProfileId),
   ]);
+
+  // Expand each `[startDate, endDate]` date-only block to an END-INCLUSIVE whole
+  // -day UTC interval in the expert's own timezone. `endDate` is inclusive, so
+  // the interval runs to midnight of the day AFTER `endDate`. Same `fromZonedTime`
+  // approach the resolver uses for rules, so DST is handled identically.
+  const overrideBlocks: BusyBlock[] = overrides.map((o) => ({
+    startAt: fromZonedTime(`${o.startDate}T00:00:00`, timezone),
+    endAt: fromZonedTime(`${nextDayIso(o.endDate)}T00:00:00`, timezone),
+  }));
 
   const result = resolve({
     rules: rules.map((r) => ({
@@ -81,6 +93,7 @@ export async function resolveAndCacheAvailability(
       endAt: c.endAt,
     })),
     busyBlocks,
+    overrideBlocks,
     timezone,
     now,
     horizonDays,
@@ -96,11 +109,26 @@ export async function resolveAndCacheAvailability(
       ruleCount: rules.length,
       consultationCount: baloConsultations.length,
       busyBlockCount: busyBlocks.length,
+      overrideCount: overrides.length,
     },
     'Availability cache rebuilt'
   );
 
   return { earliestAvailableAt: result.earliestAvailableAt };
+}
+
+/** `'YYYY-MM-DD'` → the next calendar day `'YYYY-MM-DD'` (UTC arithmetic, tz-agnostic). */
+function nextDayIso(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (y === undefined || m === undefined || d === undefined) {
+    // Input always comes from a Postgres DATE column (guaranteed YYYY-MM-DD),
+    // so this is unreachable. Throw rather than silently returning `iso`: that
+    // would yield a zero-length override interval and drop the block, leaving
+    // the expert bookable during their own leave — the wrong failure mode for
+    // a booking-integrity value.
+    throw new Error(`nextDayIso: invalid date string "${iso}" — expected YYYY-MM-DD`);
+  }
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
 function guardedNumber(n: unknown, fallback: number): number {
