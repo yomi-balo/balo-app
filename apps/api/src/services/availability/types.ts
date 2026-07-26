@@ -37,6 +37,14 @@ export interface ResolverInput {
   baloConsultations: ResolverConsultation[];
   /** Vendor free/busy windows; `[]` is valid until BAL-194/195 wires Cronofy. */
   busyBlocks: BusyBlock[];
+  /**
+   * Full-day time-off blocks (holidays/leave) already expanded to UTC intervals
+   * by `resolve-and-cache`. Treated as ordinary busy intervals — folded in with
+   * consultations + vendor busy and subtracted from open windows (set-difference
+   * is order-independent, so there is no precedence between busy sources). `[]`
+   * is valid (no blocks).
+   */
+  overrideBlocks: BusyBlock[];
   /** IANA timezone name from `expert_profiles.timezone`. */
   timezone: string;
   /** UTC instant; injected for testability. */

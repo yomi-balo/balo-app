@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyBaseLogger } from 'fastify';
 import { calendarRepository, type CalendarConnection } from '@balo/db';
+import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import { getValidAccessToken } from '../../services/cronofy/token-manager.js';
 import { listAndStoreCalendars, registerPushChannel } from '../../services/cronofy/oauth.js';
 import { getCronofyUserClient } from '../../lib/cronofy.js';
-import { enqueueAvailabilityCacheRebuild } from '../../services/availability/enqueue-rebuild.js';
 
 // ── Webhook types ───────────────────────────────────────────────
 

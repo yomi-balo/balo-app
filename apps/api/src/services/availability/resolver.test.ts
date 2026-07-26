@@ -9,6 +9,7 @@ const baseInput = (overrides: Partial<ResolverInput> = {}): ResolverInput => ({
   rules: [],
   baloConsultations: [],
   busyBlocks: [],
+  overrideBlocks: [],
   timezone: UTC,
   // Monday 2026-06-01 00:00 UTC.
   now: new Date('2026-06-01T00:00:00.000Z'),
@@ -299,6 +300,105 @@ describe('resolve (BAL-243 availability resolver)', () => {
 
       // 09:00-10:00 sub-window satisfies the 15-minute floor.
       expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T09:00:00.000Z'));
+    });
+  });
+
+  describe('date overrides (time off / holidays)', () => {
+    it('(a) an override covering the only rule day pushes earliest to the next matching day', () => {
+      // Monday-only rule; a full-day override on Mon 2026-06-01 clears it, so the
+      // next opening is the following Monday inside the 14-day horizon.
+      const result = resolve(
+        baseInput({
+          rules: [{ dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }],
+          overrideBlocks: [
+            {
+              startAt: new Date('2026-06-01T00:00:00.000Z'),
+              endAt: new Date('2026-06-02T00:00:00.000Z'),
+            },
+          ],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-08T09:00:00.000Z'));
+    });
+
+    it('(b) a multi-day override blocks every covered rule day', () => {
+      // Mon-Fri rule; a Mon-Fri (2026-06-01..06-05) override covers the whole
+      // first work-week, so the next opening is Mon 2026-06-08.
+      const result = resolve(
+        baseInput({
+          rules: monFriNineToFive,
+          overrideBlocks: [
+            {
+              startAt: new Date('2026-06-01T00:00:00.000Z'),
+              endAt: new Date('2026-06-06T00:00:00.000Z'),
+            },
+          ],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-08T09:00:00.000Z'));
+    });
+
+    it('(c) an override outside the horizon leaves earliest unchanged', () => {
+      // Override sits a month out, past the 14-day horizon → no effect.
+      const result = resolve(
+        baseInput({
+          rules: monFriNineToFive,
+          overrideBlocks: [
+            {
+              startAt: new Date('2026-07-01T00:00:00.000Z'),
+              endAt: new Date('2026-07-02T00:00:00.000Z'),
+            },
+          ],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-01T09:00:00.000Z'));
+    });
+
+    it('(d) an override on the earliest day pushes earliest to the next open day', () => {
+      // Mon-Fri rule; a single-day override on Mon 2026-06-01 pushes earliest to
+      // Tue 2026-06-02 (the next open rule day), not a full week.
+      const result = resolve(
+        baseInput({
+          rules: monFriNineToFive,
+          overrideBlocks: [
+            {
+              startAt: new Date('2026-06-01T00:00:00.000Z'),
+              endAt: new Date('2026-06-02T00:00:00.000Z'),
+            },
+          ],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-02T09:00:00.000Z'));
+    });
+
+    it('an override covering a rule day removes it regardless of any consultation also on that day', () => {
+      // The override clears all of Monday. Whether or not a consultation also
+      // sits on Monday is irrelevant: overrides are folded into the busy set and
+      // set-difference is order-independent, so Monday is removed either way and
+      // earliest jumps to Tuesday.
+      const result = resolve(
+        baseInput({
+          rules: monFriNineToFive,
+          overrideBlocks: [
+            {
+              startAt: new Date('2026-06-01T00:00:00.000Z'),
+              endAt: new Date('2026-06-02T00:00:00.000Z'),
+            },
+          ],
+          baloConsultations: [
+            {
+              startAt: new Date('2026-06-01T09:00:00.000Z'),
+              endAt: new Date('2026-06-01T10:00:00.000Z'),
+            },
+          ],
+        })
+      );
+
+      expect(result.earliestAvailableAt).toEqual(new Date('2026-06-02T09:00:00.000Z'));
     });
   });
 

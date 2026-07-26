@@ -10,7 +10,7 @@ import {
 } from '@balo/db';
 import { isValidTimezone } from '@balo/shared/timezone';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
-import { enqueueAvailabilityCacheRebuild } from '../../services/availability/enqueue-rebuild.js';
+import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 
 // ── Validation schemas ──────────────────────────────────────────
 

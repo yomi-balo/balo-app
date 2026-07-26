@@ -18,7 +18,8 @@ import type {
  *      following date (see `expandRuleOnDate`).
  *   4. Clip windows to the bounded range.
  *   5. Merge overlapping/adjacent rule windows on the same day.
- *   6. Subtract busy intervals (consultations ++ vendor busy blocks).
+ *   6. Subtract busy intervals (consultations + vendor busy + date overrides,
+ *      all folded into one order-independent busy set).
  *   7. Drop sub-windows shorter than `minMinutes`.
  *   8. Return `earliestAvailableAt = head?.startAt ?? null`.
  *
@@ -35,7 +36,16 @@ import type {
  * accepted for v1 (locked by `resolver.test.ts > DST spring-forward`).
  */
 export function resolve(input: ResolverInput): ResolverResult {
-  const { rules, baloConsultations, busyBlocks, timezone, now, horizonDays, minMinutes } = input;
+  const {
+    rules,
+    baloConsultations,
+    busyBlocks,
+    overrideBlocks,
+    timezone,
+    now,
+    horizonDays,
+    minMinutes,
+  } = input;
 
   // Booking rules (BAL-234). Default to 0 so the BAL-243 behaviour is unchanged.
   const bufferBeforeMs = (input.bufferBeforeMinutes ?? 0) * 60 * 1000;
@@ -59,7 +69,17 @@ export function resolve(input: ResolverInput): ResolverResult {
   }
 
   const merged = mergeOverlapping(clipped);
-  const busy = combineBusyIntervals(baloConsultations, busyBlocks, bufferBeforeMs, bufferAfterMs);
+  // Override blocks (holidays/leave) are treated as ordinary busy intervals: fold
+  // them in alongside consultations and vendor busy so all sources merge, get the
+  // booking buffers applied, and sort once. Interval set-difference is
+  // order-independent (W ∖ A ∖ B === W ∖ (A ∪ B)), so an override simply removes any
+  // overlapping availability — there is no precedence between the busy sources.
+  const busy = combineBusyIntervals(
+    baloConsultations,
+    [...busyBlocks, ...overrideBlocks],
+    bufferBeforeMs,
+    bufferAfterMs
+  );
 
   const free: BusyBlock[] = [];
   for (const window of merged) {
