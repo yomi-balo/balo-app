@@ -1,5 +1,4 @@
 import { eq, and, isNull, inArray, gt, lte } from 'drizzle-orm';
-import { deriveCountryFromTimezone } from '@balo/shared/timezone';
 import { db } from '../client';
 import {
   users,
@@ -208,13 +207,17 @@ export const usersRepository = {
   },
 
   /**
-   * Set the user's timezone AND the derived country/countryCode in one write.
-   * Executor-aware so it can ride the schedule editor's transaction (BAL-234):
-   * the expert-side timezone change writes `expert_profiles.timezone` (resolver
-   * SSOT) and this in the SAME tx, keeping the public display country
-   * (`users.country`/`countryCode`) from desyncing. Reuses
-   * `deriveCountryFromTimezone`; an unmapped zone (or 'UTC') leaves country
-   * untouched — never nulls an existing country — matching `updateTimezoneAction`.
+   * Set the user's timezone ONLY. Executor-aware so it can ride the schedule
+   * editor's transaction (BAL-234): the expert-side timezone change writes
+   * `expert_profiles.timezone` (resolver SSOT) and this (`users.timezone`) in the
+   * SAME tx, keeping them in lock-step.
+   *
+   * Deliberately does NOT touch `users.country`/`countryCode`: those are owned by
+   * the explicit country picker (`saveCountryAction`), and an expert can author
+   * working hours in a zone other than where they live (e.g. an AU expert serving
+   * US clients in America/New_York). Inferring country from the zone here would
+   * clobber the stated value on every schedule save — inference must not beat a
+   * choice the user made by hand.
    */
   updateTimezone: async (
     userId: string,
@@ -222,18 +225,7 @@ export const usersRepository = {
     executor?: DbExecutor
   ): Promise<void> => {
     const exec = executor ?? db;
-    const countryData = deriveCountryFromTimezone(timezone);
-    await exec
-      .update(users)
-      .set({
-        timezone,
-        ...(countryData && {
-          country: countryData.country,
-          countryCode: countryData.countryCode,
-        }),
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, userId));
+    await exec.update(users).set({ timezone, updatedAt: new Date() }).where(eq(users.id, userId));
   },
 
   /**

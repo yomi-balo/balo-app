@@ -17,8 +17,8 @@ export interface UpdateScheduleTimezoneResult {
 
 /**
  * Updates the signed-in expert's timezone. The PATCH route writes BOTH
- * expert_profiles.timezone (resolver) and users.timezone + derived country
- * (public display) in one transaction, so the two stay in sync (BAL-234).
+ * expert_profiles.timezone (resolver) and users.timezone in one transaction so
+ * the two stay in sync (BAL-234). Country is left to the explicit country picker.
  * IDOR gate: the expertProfileId is derived from the session, never the client.
  */
 export const updateScheduleTimezoneAction = withAuth(

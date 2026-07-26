@@ -94,47 +94,47 @@ describe('usersRepository.update', () => {
 });
 
 describe('usersRepository.updateTimezone (BAL-234)', () => {
-  it('sets timezone and derives country/countryCode for a mapped zone', async () => {
-    const user = await userFactory({ timezone: 'UTC', country: null, countryCode: null });
-
-    await usersRepository.updateTimezone(user.id, 'Australia/Melbourne');
-
-    const updated = await usersRepository.findById(user.id);
-    expect(updated?.timezone).toBe('Australia/Melbourne');
-    expect(updated?.country).toBe('Australia');
-    expect(updated?.countryCode).toBe('AU');
-  });
-
-  it('leaves an existing country untouched for an unmapped zone (never nulls it)', async () => {
+  it('sets the timezone and does NOT overwrite the explicitly-chosen country', async () => {
+    // An AU expert authoring hours in New York keeps their AU country: the zone must
+    // never clobber the country the user picked by hand (saveCountryAction), even
+    // though America/New_York IS in the country mapping.
     const user = await userFactory({
       timezone: 'Australia/Melbourne',
       country: 'Australia',
       countryCode: 'AU',
     });
 
-    // 'UTC' is not in the country mapping → deriveCountryFromTimezone returns null.
-    await usersRepository.updateTimezone(user.id, 'UTC');
+    await usersRepository.updateTimezone(user.id, 'America/New_York');
 
     const updated = await usersRepository.findById(user.id);
-    expect(updated?.timezone).toBe('UTC');
+    expect(updated?.timezone).toBe('America/New_York');
     expect(updated?.country).toBe('Australia');
     expect(updated?.countryCode).toBe('AU');
   });
 
-  it('composes under a parent transaction via the executor param', async () => {
+  it('leaves a null country null (never infers one from the zone)', async () => {
     const user = await userFactory({ timezone: 'UTC', country: null, countryCode: null });
+
+    await usersRepository.updateTimezone(user.id, 'Australia/Melbourne');
+
+    const updated = await usersRepository.findById(user.id);
+    expect(updated?.timezone).toBe('Australia/Melbourne');
+    expect(updated?.country).toBeNull();
+    expect(updated?.countryCode).toBeNull();
+  });
+
+  it('composes under a parent transaction via the executor param', async () => {
+    const user = await userFactory({ timezone: 'UTC' });
 
     await db.transaction(async (tx) => {
       await usersRepository.updateTimezone(user.id, 'America/New_York', tx);
     });
 
-    const updated = await usersRepository.findById(user.id);
-    expect(updated?.timezone).toBe('America/New_York');
-    expect(updated?.countryCode).toBe('US');
+    expect((await usersRepository.findById(user.id))?.timezone).toBe('America/New_York');
   });
 
   it('rolls back with the enclosing transaction', async () => {
-    const user = await userFactory({ timezone: 'Australia/Melbourne', countryCode: 'AU' });
+    const user = await userFactory({ timezone: 'Australia/Melbourne' });
 
     await expect(
       db.transaction(async (tx) => {
@@ -143,9 +143,7 @@ describe('usersRepository.updateTimezone (BAL-234)', () => {
       })
     ).rejects.toThrow('boom');
 
-    const fresh = await usersRepository.findById(user.id);
-    expect(fresh?.timezone).toBe('Australia/Melbourne');
-    expect(fresh?.countryCode).toBe('AU');
+    expect((await usersRepository.findById(user.id))?.timezone).toBe('Australia/Melbourne');
   });
 });
 

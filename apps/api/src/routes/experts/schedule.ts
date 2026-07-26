@@ -219,9 +219,9 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             tx
           );
           await availabilityRulesRepository.replaceForExpert(expertProfileId, rules, tx);
-          // Keep the public-display timezone (users.timezone → country/countryCode)
-          // in lock-step with the resolver timezone (expert_profiles.timezone), in
-          // the SAME transaction so they can never diverge.
+          // Keep the user's timezone (users.timezone) in lock-step with the resolver
+          // timezone (expert_profiles.timezone), in the SAME transaction. Country is
+          // deliberately NOT touched — it's owned by the explicit country picker.
           await usersRepository.updateTimezone(profile.userId, timezone, tx);
           await recordScheduleAudit(tx, {
             actorUserId: actorUserId ?? null,
@@ -322,8 +322,8 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
 
         await db.transaction(async (tx) => {
           await expertsRepository.updateProfile(expertProfileId, { timezone }, tx);
-          // Mirror the tz change into users.timezone (+ derived country) so the
-          // public profile location doesn't go stale — same tx as above.
+          // Mirror the tz change into users.timezone, same tx (country stays owned
+          // by the explicit country picker, not inferred from the zone).
           await usersRepository.updateTimezone(profile.userId, timezone, tx);
           await recordScheduleAudit(tx, {
             actorUserId: actorUserId ?? null,
