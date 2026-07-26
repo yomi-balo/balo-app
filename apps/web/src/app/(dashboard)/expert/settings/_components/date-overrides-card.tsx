@@ -62,6 +62,20 @@ function sortByStart(list: AvailabilityOverrideDto[]): AvailabilityOverrideDto[]
   return [...list].sort((a, b) => a.startDate.localeCompare(b.startDate));
 }
 
+/**
+ * Browser-local today as zero-padded `YYYY-MM-DD` — the expert's own current
+ * date, which is the correct frame for a display-only "upcoming" list. Uses
+ * LOCAL getters (mirrors the add-popover's `toIsoDate`); `toISOString()` would
+ * be UTC and reintroduce the east-of-UTC skew this filter exists to remove.
+ */
+function localTodayIso(): string {
+  const now = new Date();
+  const y = now.getFullYear().toString().padStart(4, '0');
+  const m = (now.getMonth() + 1).toString().padStart(2, '0');
+  const d = now.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 // ── Row ──────────────────────────────────────────────────────────
 
 interface DateOverrideRowProps {
@@ -137,6 +151,17 @@ export function DateOverridesCard(): React.JSX.Element {
     }
   }, []);
 
+  // Display-frame filter: only blocks that end today-or-later in the expert's
+  // OWN local timezone. The server window is deliberately wider (endDate >=
+  // CURRENT_DATE - 1 day) so the resolver never drops a still-active block for
+  // a west-of-UTC expert; that same widening makes yesterday's finished block
+  // linger here for east-of-UTC (all AU) experts unless we re-narrow at render.
+  // `overrides` is already sorted (sortByStart at every set), so filtering
+  // preserves order; optimistic adds are today-or-future (picker disables past
+  // dates) so they still show; deletes remove by id from the source list.
+  const todayIso = localTodayIso();
+  const visibleOverrides = overrides.filter((o) => o.endDate >= todayIso);
+
   return (
     <div className="border-border bg-card mt-4 rounded-xl border p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -166,15 +191,15 @@ export function DateOverridesCard(): React.JSX.Element {
           </div>
         )}
 
-        {state === 'ready' && overrides.length === 0 && (
+        {state === 'ready' && visibleOverrides.length === 0 && (
           <div className="border-border text-muted-foreground rounded-lg border border-dashed px-4 py-6 text-center text-sm leading-relaxed">
             No time off scheduled — add dates when you&apos;re unavailable.
           </div>
         )}
 
-        {state === 'ready' && overrides.length > 0 && (
+        {state === 'ready' && visibleOverrides.length > 0 && (
           <div className="divide-border divide-y">
-            {overrides.map((override) => (
+            {visibleOverrides.map((override) => (
               <DateOverrideRow key={override.id} override={override} onDelete={handleDelete} />
             ))}
           </div>

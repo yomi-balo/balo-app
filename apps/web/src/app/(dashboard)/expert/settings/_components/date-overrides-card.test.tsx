@@ -38,6 +38,23 @@ const NEW_YEAR: AvailabilityOverrideDto = {
 };
 
 /**
+ * Local `YYYY-MM-DD` at `offsetDays` from today, computed with the SAME local
+ * getters the card uses for its display filter (`localTodayIso`). Deriving both
+ * sides from the real clock keeps the test deterministic on any run date and in
+ * any timezone (passes under TZ=UTC): offset(0) is today, offset(-1) yesterday,
+ * offset(n) future. Month/year boundaries are handled by Date constructor
+ * overflow. NOT `toISOString()` — that's UTC and would desync from the card.
+ */
+function localIsoOffset(offsetDays: number): string {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays);
+  const y = d.getFullYear().toString().padStart(4, '0');
+  const m = (d.getMonth() + 1).toString().padStart(2, '0');
+  const day = d.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
  * Click today's cell in the open calendar. Today is always in the default
  * (current) month and — since the picker now disables all days before today —
  * is guaranteed enabled, so this is deterministic regardless of the run date
@@ -75,6 +92,48 @@ describe('DateOverridesCard', () => {
 
     expect(await screen.findByText('Fri, 25 Dec 2026')).toBeInTheDocument();
     expect(screen.getByText('Holiday')).toBeInTheDocument();
+  });
+
+  it('hides a block that ended yesterday (local) while showing a still-active one', async () => {
+    // The server window is deliberately wide (endDate >= CURRENT_DATE - 1 day)
+    // for the resolver, so `listUpcoming` can hand the card a block that finished
+    // yesterday in the expert's own timezone. The card's display filter must
+    // drop it — otherwise every east-of-UTC (AU) expert sees a stale row for 24h.
+    const pastBlock: AvailabilityOverrideDto = {
+      id: 'past',
+      startDate: localIsoOffset(-1),
+      endDate: localIsoOffset(-1),
+      label: 'Finished yesterday',
+    };
+    const activeBlock: AvailabilityOverrideDto = {
+      id: 'today',
+      startDate: localIsoOffset(0),
+      endDate: localIsoOffset(0),
+      label: 'Starts today',
+    };
+    mockGet.mockResolvedValue([pastBlock, activeBlock]);
+    render(<DateOverridesCard />);
+
+    // `endDate === today` is inclusive (>=), so the active block renders …
+    expect(await screen.findByText('Starts today')).toBeInTheDocument();
+    // … while yesterday's finished block is filtered out of the display list.
+    expect(screen.queryByText('Finished yesterday')).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state (not a lingering row) when the only block ended yesterday', async () => {
+    const pastBlock: AvailabilityOverrideDto = {
+      id: 'past-only',
+      startDate: localIsoOffset(-2),
+      endDate: localIsoOffset(-1),
+      label: 'Old leave',
+    };
+    mockGet.mockResolvedValue([pastBlock]);
+    render(<DateOverridesCard />);
+
+    expect(
+      await screen.findByText(/No time off scheduled — add dates when you're unavailable\./i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Old leave')).not.toBeInTheDocument();
   });
 
   it('shows an error state when the fetch rejects', async () => {
