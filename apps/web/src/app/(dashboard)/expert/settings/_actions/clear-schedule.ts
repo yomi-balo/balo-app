@@ -3,7 +3,7 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 
 export interface ClearScheduleResult {
@@ -43,7 +43,7 @@ export const clearScheduleAction = withAuth(async (session): Promise<ClearSchedu
     log.error('Failed to clear expert schedule', {
       userId: session.user.id,
       expertProfileId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
     return { success: false, error: 'Failed to clear schedule. Please try again.' };

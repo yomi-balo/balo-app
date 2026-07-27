@@ -38,10 +38,10 @@ import {
   getNextSpringForwardGap,
   weekOverlapsGap,
   hasSplitDays,
-  hhmmToMinutes,
-  minutesToHhmm,
+  changeRangeInWeek,
+  removeRangeFromWeek,
+  copyDayRangesInWeek,
   nextRangeDefault,
-  newRangeId,
   rulesToWeek,
   validateWeek,
   weekToRules,
@@ -122,23 +122,7 @@ export function ScheduleTab(): React.JSX.Element {
   const handleRangeChange = useCallback(
     (dayIndex: number, rangeId: string, field: 'start' | 'end', value: string): void => {
       setShowSavedSummary(false);
-      setWeek((prev) =>
-        prev.map((day, index) => {
-          if (index !== dayIndex) return day;
-          return {
-            ...day,
-            ranges: day.ranges.map((range) => {
-              if (range.id !== rangeId) return range;
-              if (field === 'start') {
-                const nextEnd =
-                  value >= range.end ? minutesToHhmm(hhmmToMinutes(value) + 15) : range.end;
-                return { ...range, start: value, end: nextEnd };
-              }
-              return { ...range, end: value };
-            }),
-          };
-        })
-      );
+      setWeek((prev) => changeRangeInWeek(prev, dayIndex, rangeId, field, value));
     },
     []
   );
@@ -154,30 +138,12 @@ export function ScheduleTab(): React.JSX.Element {
 
   const handleRemoveRange = useCallback((dayIndex: number, rangeId: string): void => {
     setShowSavedSummary(false);
-    setWeek((prev) =>
-      prev.map((day, index) => {
-        if (index !== dayIndex) return day;
-        const ranges = day.ranges.filter((range) => range.id !== rangeId);
-        return { ...day, ranges, enabled: ranges.length > 0 && day.enabled };
-      })
-    );
+    setWeek((prev) => removeRangeFromWeek(prev, dayIndex, rangeId));
   }, []);
 
   const handleCopyToDays = useCallback((sourceIndex: number, targetIndices: number[]): void => {
     setShowSavedSummary(false);
-    setWeek((prev) => {
-      const source = prev[sourceIndex];
-      if (!source) return prev;
-      const targets = new Set(targetIndices);
-      return prev.map((day, index) => {
-        if (!targets.has(index)) return day;
-        return {
-          ...day,
-          enabled: true,
-          ranges: source.ranges.map((range) => ({ ...range, id: newRangeId() })),
-        };
-      });
-    });
+    setWeek((prev) => copyDayRangesInWeek(prev, sourceIndex, targetIndices));
   }, []);
 
   const handleBookingChange = useCallback((next: BookingSettings): void => {

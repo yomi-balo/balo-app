@@ -161,6 +161,72 @@ export function nextRangeDefault(existing: TimeRange[]): TimeRange {
   return { id: newRangeId(), start: minutesToHhmm(startMinutes), end: minutesToHhmm(endMinutes) };
 }
 
+// ── Week mutations (pure; keep the component's setWeek callbacks shallow) ─────
+
+function applyRangeChange(
+  range: TimeRange,
+  rangeId: string,
+  field: 'start' | 'end',
+  value: string
+): TimeRange {
+  if (range.id !== rangeId) return range;
+  if (field === 'start') {
+    // Bumping the start to/past the end auto-advances the end one step so the
+    // range stays valid.
+    const end =
+      value >= range.end ? minutesToHhmm(hhmmToMinutes(value) + TIME_STEP_MINUTES) : range.end;
+    return { ...range, start: value, end };
+  }
+  return { ...range, end: value };
+}
+
+/** Immutably update one range's start/end within a day. */
+export function changeRangeInWeek(
+  week: WeekState,
+  dayIndex: number,
+  rangeId: string,
+  field: 'start' | 'end',
+  value: string
+): WeekState {
+  return week.map((day, index) =>
+    index === dayIndex
+      ? {
+          ...day,
+          ranges: day.ranges.map((range) => applyRangeChange(range, rangeId, field, value)),
+        }
+      : day
+  );
+}
+
+/** Immutably remove one range from a day; disable the day if it becomes empty. */
+export function removeRangeFromWeek(week: WeekState, dayIndex: number, rangeId: string): WeekState {
+  return week.map((day, index) => {
+    if (index !== dayIndex) return day;
+    const ranges = day.ranges.filter((range) => range.id !== rangeId);
+    return { ...day, ranges, enabled: ranges.length > 0 && day.enabled };
+  });
+}
+
+function cloneRangeWithNewId(range: TimeRange): TimeRange {
+  return { ...range, id: newRangeId() };
+}
+
+/** Immutably copy one day's ranges (fresh ids) onto the target days, enabling them. */
+export function copyDayRangesInWeek(
+  week: WeekState,
+  sourceIndex: number,
+  targetIndices: number[]
+): WeekState {
+  const source = week[sourceIndex];
+  if (!source) return week;
+  const targets = new Set(targetIndices);
+  return week.map((day, index) =>
+    targets.has(index)
+      ? { ...day, enabled: true, ranges: source.ranges.map(cloneRangeWithNewId) }
+      : day
+  );
+}
+
 // ── Wire-contract conversion ────────────────────────────────────────
 
 export function weekToRules(week: WeekState): ScheduleRule[] {

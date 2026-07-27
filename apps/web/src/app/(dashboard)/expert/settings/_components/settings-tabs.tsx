@@ -140,6 +140,7 @@ export function SettingsTabs({
           const isActive = mainTab === t.key;
           return (
             <button
+              type="button"
               key={t.key}
               role="tab"
               aria-selected={isActive}
@@ -183,6 +184,7 @@ export function SettingsTabs({
             const isActive = subTab === t.key;
             return (
               <button
+                type="button"
                 key={t.key}
                 role="tab"
                 aria-selected={isActive}

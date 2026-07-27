@@ -5,10 +5,13 @@ import {
   NOTICE_OPTIONS,
   START_TIME_OPTIONS,
   TIME_OPTIONS,
+  changeRangeInWeek,
+  copyDayRangesInWeek,
   countEnabledDays,
   createDefaultWeek,
   createEmptyWeek,
   findDstConflict,
+  removeRangeFromWeek,
   formatHhmm,
   hasSplitDays,
   hhmmToMinutes,
@@ -190,6 +193,52 @@ describe('findDstConflict', () => {
 
   it('returns null for a default week (no Sunday) even in a DST zone', () => {
     expect(findDstConflict(createDefaultWeek(), 'Australia/Melbourne', FROM)).toBeNull();
+  });
+});
+
+describe('week mutations (extracted pure helpers)', () => {
+  const weekWith = (dayIndex: number, ranges: { start: string; end: string }[]): WeekState => {
+    const week = createEmptyWeek();
+    const day = week[dayIndex];
+    if (day) {
+      day.enabled = true;
+      day.ranges = ranges.map((r) => ({ id: newRangeId(), start: r.start, end: r.end }));
+    }
+    return week;
+  };
+  const firstRangeId = (week: WeekState): string => week[0]?.ranges[0]?.id ?? '';
+
+  it('changeRangeInWeek auto-bumps the end when the start moves to/past it', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '10:00' }]);
+    const next = changeRangeInWeek(week, 0, firstRangeId(week), 'start', '10:30');
+    expect(next[0]?.ranges[0]).toMatchObject({ start: '10:30', end: '10:45' });
+  });
+
+  it('changeRangeInWeek sets the end directly for the end field', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '10:00' }]);
+    const next = changeRangeInWeek(week, 0, firstRangeId(week), 'end', '11:00');
+    expect(next[0]?.ranges[0]).toMatchObject({ start: '09:00', end: '11:00' });
+  });
+
+  it('removeRangeFromWeek removes the range and disables an emptied day', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '10:00' }]);
+    const next = removeRangeFromWeek(week, 0, firstRangeId(week));
+    expect(next[0]?.ranges).toHaveLength(0);
+    expect(next[0]?.enabled).toBe(false);
+  });
+
+  it('copyDayRangesInWeek copies ranges with fresh ids and enables the targets', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '17:00' }]);
+    const next = copyDayRangesInWeek(week, 0, [1, 2]);
+    expect(next[1]?.enabled).toBe(true);
+    expect(next[1]?.ranges[0]).toMatchObject({ start: '09:00', end: '17:00' });
+    expect(next[1]?.ranges[0]?.id).not.toBe(firstRangeId(week));
+    expect(next[2]?.enabled).toBe(true);
+  });
+
+  it('copyDayRangesInWeek is a no-op for an out-of-range source index', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '17:00' }]);
+    expect(copyDayRangesInWeek(week, 99, [1])).toBe(week);
   });
 });
 

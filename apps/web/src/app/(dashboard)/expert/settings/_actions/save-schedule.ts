@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { isValidTimezone } from '@balo/shared/timezone';
 import { withAuth } from '@/lib/auth/with-auth';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 import { scheduleRulesSchema } from '../_lib/schedule-helpers';
 import type { ScheduleData } from '../_types/schedule';
@@ -67,7 +67,7 @@ export const saveScheduleAction = withAuth(
       log.error('Failed to save expert schedule', {
         userId: session.user.id,
         expertProfileId,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
 

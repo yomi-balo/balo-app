@@ -11,6 +11,7 @@ vi.mock('@/lib/auth/session', () => ({
 
 vi.mock('@/lib/logging', () => ({
   log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+  errorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
 const mockInternalApiFetch = vi.fn();

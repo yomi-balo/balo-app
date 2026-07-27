@@ -20,5 +20,20 @@ export const log = {
   debug: (msg: string, data?: object) => logger.debug(data, msg),
 };
 
+/**
+ * Safe `unknown` → string for logging. Never uses `String(obj)` (which yields the
+ * useless `'[object Object]'`): a thrown non-Error, non-string value is serialized
+ * as JSON so it stays legible in logs.
+ */
+export function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err) ?? 'Unknown error';
+  } catch {
+    return 'Unknown error';
+  }
+}
+
 export { getContext, withContext, requestContext } from './context';
 export type { RequestContext } from './context';

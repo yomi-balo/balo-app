@@ -622,7 +622,9 @@ export function isWallClockInSpringForwardGap(
   range: { dayOfWeek: number; startMinutes: number; endMinutes: number }
 ): boolean {
   const gap = getNextSpringForwardGap(timeZone, from);
-  if (!gap || range.dayOfWeek !== gap.dayOfWeek) return false;
+  // Split guards (not `!gap || …gap.x`) so `gap` narrows to non-null for the reads below.
+  if (!gap) return false;
+  if (range.dayOfWeek !== gap.dayOfWeek) return false;
   // Interval overlap between [start, end) and [gapStart, gapEnd).
   return range.startMinutes < gap.gapEndMinutes && range.endMinutes > gap.gapStartMinutes;
 }

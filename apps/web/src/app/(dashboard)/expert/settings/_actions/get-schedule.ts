@@ -2,7 +2,7 @@
 import 'server-only';
 
 import { withAuth } from '@/lib/auth/with-auth';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 import type { ScheduleData } from '../_types/schedule';
 
@@ -38,7 +38,7 @@ export const getScheduleAction = withAuth(async (session): Promise<ScheduleLoadR
     log.error('Failed to fetch expert schedule', {
       userId: session.user.id,
       expertProfileId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
     return null;
