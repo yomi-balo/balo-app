@@ -49,10 +49,21 @@ export interface ResolverInput {
   timezone: string;
   /** UTC instant; injected for testability. */
   now: Date;
-  /** Number of days to look ahead from `now`. */
+  /** Number of days to look ahead from `now` (platform-level config, BAL-398). */
   horizonDays: number;
   /** Discard sub-windows shorter than this many minutes. */
   minMinutes: number;
+  /**
+   * Booking-rule padding (BAL-234). Optional with safe defaults (0) so the
+   * existing BAL-243 resolver behaviour — including the locked DST case — is
+   * byte-identical when unset.
+   */
+  /** Minutes of buffer reserved BEFORE each busy interval. Default 0. */
+  bufferBeforeMinutes?: number;
+  /** Minutes of buffer reserved AFTER each busy interval. Default 0. */
+  bufferAfterMinutes?: number;
+  /** Earliest bookable slot must be at least this many minutes from `now`. Default 0. */
+  minimumNoticeMinutes?: number;
 }
 
 export interface ResolverResult {

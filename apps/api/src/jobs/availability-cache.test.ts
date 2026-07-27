@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { FastifyBaseLogger } from 'fastify';
 
 // ── Hoisted mocks ──────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ vi.mock('bullmq', () => ({
         capturedStalenessProcessor = processor;
       }
     }
+    // The availability worker registers a `failed` listener for observability.
+    on(): void {}
   },
   Queue: class MockQueue {},
 }));
@@ -65,6 +68,7 @@ import {
   startAvailabilityCacheWorker,
   startStalenessCheckWorker,
   registerStalenessCheckCron,
+  enqueueAvailabilityCacheRebuild,
   AVAILABILITY_CACHE_QUEUE,
   STALENESS_CHECK_QUEUE,
 } from './availability-cache';
@@ -140,7 +144,7 @@ describe('availability-cache jobs', () => {
         expect.objectContaining({
           jobId: 'availability-expert-1',
           removeOnComplete: true,
-          removeOnFail: false,
+          removeOnFail: true,
         })
       );
       expect(mockJob.log).toHaveBeenCalledWith('Enqueued 2 stale connection rebuild jobs');
@@ -160,6 +164,42 @@ describe('availability-cache jobs', () => {
           repeat: { pattern: '*/15 * * * *' },
           removeOnComplete: true,
         })
+      );
+    });
+  });
+
+  describe('enqueueAvailabilityCacheRebuild', () => {
+    const makeLog = (): FastifyBaseLogger => ({ error: vi.fn() }) as unknown as FastifyBaseLogger;
+
+    it('enqueues with the coalescing jobId and self-heal options', async () => {
+      const log = makeLog();
+
+      await enqueueAvailabilityCacheRebuild('expert-1', log);
+
+      expect(mockQueueAdd).toHaveBeenCalledWith(
+        'rebuild-availability-cache',
+        { expertProfileId: 'expert-1' },
+        {
+          jobId: 'availability-expert-1',
+          removeOnComplete: true,
+          // removeOnFail: true so a terminal failure can't wedge the fixed jobId.
+          removeOnFail: true,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+        }
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it('logs and swallows enqueue failures (never throws)', async () => {
+      const log = makeLog();
+      mockQueueAdd.mockRejectedValueOnce(new Error('redis down'));
+
+      await expect(enqueueAvailabilityCacheRebuild('expert-1', log)).resolves.toBeUndefined();
+
+      expect(log.error).toHaveBeenCalledWith(
+        { expertProfileId: 'expert-1', error: 'redis down' },
+        'Failed to enqueue availability cache rebuild job'
       );
     });
   });

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { TIMEZONE_TO_COUNTRY, deriveCountryFromTimezone, extractCityFromTimezone } from './index';
+import {
+  TIMEZONE_TO_COUNTRY,
+  deriveCountryFromTimezone,
+  extractCityFromTimezone,
+  isValidTimezone,
+  getNextSpringForwardGap,
+  isWallClockInSpringForwardGap,
+} from './index';
 
 describe('TIMEZONE_TO_COUNTRY', () => {
   it('contains entries for all Australian timezones', () => {
@@ -154,5 +161,103 @@ describe('extractCityFromTimezone', () => {
 
   it('returns null for empty string', () => {
     expect(extractCityFromTimezone('')).toBeNull();
+  });
+});
+
+describe('isValidTimezone', () => {
+  it("accepts 'UTC' even though Intl.supportedValuesOf omits it", () => {
+    expect(isValidTimezone('UTC')).toBe(true);
+  });
+
+  it('accepts a real IANA zone', () => {
+    expect(isValidTimezone('Australia/Melbourne')).toBe(true);
+  });
+
+  it('rejects an unknown zone', () => {
+    expect(isValidTimezone('Not/AZone')).toBe(false);
+  });
+
+  it('rejects an empty string', () => {
+    expect(isValidTimezone('')).toBe(false);
+  });
+});
+
+describe('getNextSpringForwardGap', () => {
+  // Fixed `from` dates keep these assertions stable regardless of the run date.
+  const FROM_JAN_2026 = new Date('2026-01-01T00:00:00Z');
+
+  it('detects the Australia/Melbourne October spring-forward (02:00 → 03:00 on a Sunday)', () => {
+    const gap = getNextSpringForwardGap('Australia/Melbourne', FROM_JAN_2026);
+    expect(gap).not.toBeNull();
+    expect(gap?.gapStartMinutes).toBe(120); // 02:00
+    expect(gap?.gapEndMinutes).toBe(180); // 03:00
+    expect(gap?.dayOfWeek).toBe(0); // Sunday
+    // First Sunday of October 2026 is the 4th.
+    expect(gap?.dateISO).toBe('2026-10-04');
+  });
+
+  it('detects the America/New_York March spring-forward (02:00 → 03:00 on a Sunday)', () => {
+    const gap = getNextSpringForwardGap('America/New_York', FROM_JAN_2026);
+    expect(gap).not.toBeNull();
+    expect(gap?.gapStartMinutes).toBe(120); // 02:00
+    expect(gap?.gapEndMinutes).toBe(180); // 03:00
+    expect(gap?.dayOfWeek).toBe(0); // Sunday
+    // Second Sunday of March 2026 is the 8th.
+    expect(gap?.dateISO).toBe('2026-03-08');
+  });
+
+  it('returns null for a timezone without DST (Asia/Singapore)', () => {
+    expect(getNextSpringForwardGap('Asia/Singapore', FROM_JAN_2026)).toBeNull();
+  });
+
+  it('ignores the fall-back transition and returns the following spring-forward', () => {
+    // From April 2026 (after the AU April fall-back) the next gap is still October.
+    const gap = getNextSpringForwardGap('Australia/Melbourne', new Date('2026-04-10T00:00:00Z'));
+    expect(gap?.dateISO).toBe('2026-10-04');
+  });
+});
+
+describe('isWallClockInSpringForwardGap', () => {
+  const FROM_JAN_2026 = new Date('2026-01-01T00:00:00Z');
+
+  it('flags a Sunday range that overlaps the Melbourne gap', () => {
+    // 01:30–04:00 (90–240) on Sunday spans the 02:00–03:00 gap.
+    expect(
+      isWallClockInSpringForwardGap('Australia/Melbourne', FROM_JAN_2026, {
+        dayOfWeek: 0,
+        startMinutes: 90,
+        endMinutes: 240,
+      })
+    ).toBe(true);
+  });
+
+  it('never flags a 09:00 start (outside every spring-forward gap)', () => {
+    expect(
+      isWallClockInSpringForwardGap('Australia/Melbourne', FROM_JAN_2026, {
+        dayOfWeek: 0,
+        startMinutes: 540, // 09:00
+        endMinutes: 1020, // 17:00
+      })
+    ).toBe(false);
+  });
+
+  it('does not flag ranges on a different weekday than the transition', () => {
+    expect(
+      isWallClockInSpringForwardGap('Australia/Melbourne', FROM_JAN_2026, {
+        dayOfWeek: 3, // Wednesday — the gap falls on Sunday
+        startMinutes: 90,
+        endMinutes: 240,
+      })
+    ).toBe(false);
+  });
+
+  it('returns false for a timezone without DST', () => {
+    expect(
+      isWallClockInSpringForwardGap('Asia/Singapore', FROM_JAN_2026, {
+        dayOfWeek: 0,
+        startMinutes: 90,
+        endMinutes: 240,
+      })
+    ).toBe(false);
   });
 });

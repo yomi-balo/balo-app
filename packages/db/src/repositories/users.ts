@@ -11,6 +11,7 @@ import {
   type CompanyMember,
 } from '../schema';
 import { auditEventsRepository } from './audit-events';
+import type { DbExecutor } from './_shared/db-executor';
 
 /**
  * Platform-role enum values, derived from the inferred `users.platformRole`
@@ -203,6 +204,33 @@ export const usersRepository = {
       .where(eq(users.id, id))
       .returning();
     return user!;
+  },
+
+  /**
+   * Set the user's timezone ONLY. Executor-aware so it can ride the schedule
+   * editor's transaction (BAL-234): the expert-side timezone change writes
+   * `expert_profiles.timezone` (resolver SSOT) and this (`users.timezone`) in the
+   * SAME tx, keeping them in lock-step.
+   *
+   * Deliberately does NOT touch `users.country`/`countryCode`: those are owned by
+   * the explicit country picker (`saveCountryAction`), and an expert can author
+   * working hours in a zone other than where they live (e.g. an AU expert serving
+   * US clients in America/New_York). Inferring country from the zone here would
+   * clobber the stated value on every schedule save — inference must not beat a
+   * choice the user made by hand.
+   */
+  updateTimezone: async (
+    userId: string,
+    timezone: string,
+    executor?: DbExecutor
+  ): Promise<void> => {
+    const exec = executor ?? db;
+    // Guard on deletedAt IS NULL — this write is reachable from a request path
+    // (the schedule save), so never resurrect a soft-deleted user's row.
+    await exec
+      .update(users)
+      .set({ timezone, updatedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)));
   },
 
   /**

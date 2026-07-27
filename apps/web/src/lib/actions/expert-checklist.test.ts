@@ -16,6 +16,8 @@ const mockFindProfileById = vi.fn();
 const mockUpdateProfile = vi.fn();
 const mockFindUserById = vi.fn();
 const mockHasPayoutDetails = vi.fn();
+const mockFindConnection = vi.fn();
+const mockHasActiveRules = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
@@ -27,6 +29,12 @@ vi.mock('@balo/db', () => ({
   },
   payoutsRepository: {
     hasPayoutDetails: (...args: unknown[]) => mockHasPayoutDetails(...args),
+  },
+  calendarRepository: {
+    findConnectionByExpertProfileId: (...args: unknown[]) => mockFindConnection(...args),
+  },
+  availabilityRulesRepository: {
+    hasActiveRules: (...args: unknown[]) => mockHasActiveRules(...args),
   },
 }));
 
@@ -53,14 +61,13 @@ const EXPERT_SESSION = {
   },
 };
 
-/** A profile where every non-availability checklist item is satisfied. */
+/** A profile where every profile-owned checklist item is satisfied. */
 function completeProfile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'profile-1',
     headline: 'Salesforce Architect',
     bio: 'Ten years building on the platform.',
     rateCents: 313,
-    cronofySyncStatus: 'connected',
     searchable: false,
     ...overrides,
   };
@@ -82,6 +89,9 @@ describe('getChecklistStatus', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockUpdateProfile.mockResolvedValue(undefined);
+    // Default: calendar connected, no weekly schedule yet.
+    mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'connected' });
+    mockHasActiveRules.mockResolvedValue(false);
   });
 
   describe('authentication & mode guards', () => {
@@ -115,7 +125,7 @@ describe('getChecklistStatus', () => {
     });
   });
 
-  describe('rate checklist item & returned rateCents (line 64 & 84)', () => {
+  describe('rate checklist item & returned rateCents', () => {
     it('marks rate complete and returns the raw rateCents when rateCents > 0', async () => {
       mockFindProfileById.mockResolvedValue(completeProfile({ rateCents: 313 }));
       mockFindUserById.mockResolvedValue(completeUser());
@@ -137,29 +147,109 @@ describe('getChecklistStatus', () => {
       expect(status.items.rate).toBe(false);
       expect(status.rateCents).toBeNull();
     });
+  });
 
-    it('marks rate incomplete and returns null when rateCents is 0', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ rateCents: 0 }));
+  describe('calendar & availability signals (BAL-234)', () => {
+    it('marks calendar complete when the connection row is in the connected state', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile());
       mockFindUserById.mockResolvedValue(completeUser());
       mockHasPayoutDetails.mockResolvedValue(true);
+      mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'connected' });
 
       const status = await getChecklistStatus();
 
-      expect(status.items.rate).toBe(false);
-      // 0 is falsy → rateCents ?? null returns 0 (not null), since 0 is not nullish.
-      expect(status.rateCents).toBe(0);
+      expect(status.items.calendar).toBe(true);
+      expect(mockFindConnection).toHaveBeenCalledWith('profile-1');
+    });
+
+    it('marks calendar incomplete for a non-connected status (auth_error)', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile());
+      mockFindUserById.mockResolvedValue(completeUser());
+      mockHasPayoutDetails.mockResolvedValue(true);
+      // A revoked/errored connection is NOT a connected one — gated on status.
+      mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'auth_error' });
+
+      const status = await getChecklistStatus();
+
+      expect(status.items.calendar).toBe(false);
+    });
+
+    it('marks calendar incomplete when there is no connection row', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile());
+      mockFindUserById.mockResolvedValue(completeUser());
+      mockHasPayoutDetails.mockResolvedValue(true);
+      mockFindConnection.mockResolvedValue(undefined);
+      mockHasActiveRules.mockResolvedValue(true);
+
+      const status = await getChecklistStatus();
+
+      expect(status.items.calendar).toBe(false);
+      // Availability is decoupled from calendar (BAL-234 §7): a saved schedule
+      // completes it even while the calendar item is still incomplete.
+      expect(status.items.availability).toBe(true);
+    });
+
+    it('marks availability complete on ≥1 saved rule, independent of the calendar', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile());
+      mockFindUserById.mockResolvedValue(completeUser());
+      mockHasPayoutDetails.mockResolvedValue(true);
+      // No calendar connection at all — availability must still complete.
+      mockFindConnection.mockResolvedValue(undefined);
+      mockHasActiveRules.mockResolvedValue(true);
+
+      const status = await getChecklistStatus();
+
+      expect(status.items.availability).toBe(true);
+      expect(status.items.calendar).toBe(false);
+      expect(mockHasActiveRules).toHaveBeenCalledWith('profile-1');
+    });
+
+    it('keeps availability incomplete when no schedule exists', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile());
+      mockFindUserById.mockResolvedValue(completeUser());
+      mockHasPayoutDetails.mockResolvedValue(true);
+      mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'connected' });
+      mockHasActiveRules.mockResolvedValue(false);
+
+      const status = await getChecklistStatus();
+
+      expect(status.items.availability).toBe(false);
     });
   });
 
   describe('searchable side-effect', () => {
-    // NOTE: `availability` is currently hard-coded to `false` (TODO BAL-195),
-    // so `allComplete` (= all 6 items) can never be true with current source.
-    // These tests therefore pin the present behaviour: the side-effect guard
-    // never fires, and updateProfile is never called from the checklist.
+    it('sets searchable when all six items complete', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile({ searchable: false }));
+      mockFindUserById.mockResolvedValue(completeUser());
+      mockHasPayoutDetails.mockResolvedValue(true);
+      mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'connected' });
+      mockHasActiveRules.mockResolvedValue(true);
+
+      const status = await getChecklistStatus();
+
+      expect(status.allComplete).toBe(true);
+      expect(status.completedCount).toBe(6);
+      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { searchable: true });
+    });
+
+    it('does NOT set searchable again when the profile is already searchable', async () => {
+      mockFindProfileById.mockResolvedValue(completeProfile({ searchable: true }));
+      mockFindUserById.mockResolvedValue(completeUser());
+      mockHasPayoutDetails.mockResolvedValue(true);
+      mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'connected' });
+      mockHasActiveRules.mockResolvedValue(true);
+
+      const status = await getChecklistStatus();
+
+      expect(status.allComplete).toBe(true);
+      expect(mockUpdateProfile).not.toHaveBeenCalled();
+    });
+
     it('does NOT set searchable when availability keeps the checklist incomplete', async () => {
       mockFindProfileById.mockResolvedValue(completeProfile({ searchable: false }));
       mockFindUserById.mockResolvedValue(completeUser());
       mockHasPayoutDetails.mockResolvedValue(true);
+      mockHasActiveRules.mockResolvedValue(false);
 
       const status = await getChecklistStatus();
 
@@ -167,28 +257,18 @@ describe('getChecklistStatus', () => {
       expect(status.allComplete).toBe(false);
       expect(mockUpdateProfile).not.toHaveBeenCalled();
     });
-
-    it('does NOT set searchable when several items are incomplete', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ rateCents: null }));
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(false);
-
-      const status = await getChecklistStatus();
-
-      expect(status.allComplete).toBe(false);
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
-    });
   });
 
   describe('completedCount', () => {
-    it('counts the satisfied items (5 of 6 when availability is the only gap)', async () => {
+    it('counts 5 of 6 when only the weekly schedule is missing', async () => {
       mockFindProfileById.mockResolvedValue(completeProfile());
       mockFindUserById.mockResolvedValue(completeUser());
       mockHasPayoutDetails.mockResolvedValue(true);
+      mockFindConnection.mockResolvedValue({ id: 'conn-1', status: 'connected' });
+      mockHasActiveRules.mockResolvedValue(false);
 
       const status = await getChecklistStatus();
 
-      // profile, phone, rate, calendar, payouts = 5; availability = false.
       expect(status.completedCount).toBe(5);
       expect(status.items).toEqual({
         profile: true,

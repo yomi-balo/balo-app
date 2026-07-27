@@ -1,0 +1,271 @@
+import { describe, it, expect } from 'vitest';
+import {
+  BUFFER_OPTIONS,
+  DEFAULT_BOOKING_SETTINGS,
+  NOTICE_OPTIONS,
+  START_TIME_OPTIONS,
+  TIME_OPTIONS,
+  changeRangeInWeek,
+  copyDayRangesInWeek,
+  countEnabledDays,
+  createDefaultWeek,
+  createEmptyWeek,
+  findDstConflict,
+  removeRangeFromWeek,
+  formatHhmm,
+  hasSplitDays,
+  hhmmToMinutes,
+  minutesToHhmm,
+  newRangeId,
+  rulesToWeek,
+  summarizeWeek,
+  validateWeek,
+  weekOverlapsGap,
+  weekToRules,
+  type WeekState,
+} from './schedule-helpers';
+
+describe('time conversions', () => {
+  it('round-trips minutes ↔ HH:mm', () => {
+    expect(hhmmToMinutes('09:00')).toBe(540);
+    expect(hhmmToMinutes('17:45')).toBe(1065);
+    expect(minutesToHhmm(540)).toBe('09:00');
+    expect(minutesToHhmm(1065)).toBe('17:45');
+  });
+
+  it('formats 12-hour labels', () => {
+    expect(formatHhmm('00:00')).toBe('12:00 AM');
+    expect(formatHhmm('09:00')).toBe('9:00 AM');
+    expect(formatHhmm('12:00')).toBe('12:00 PM');
+    expect(formatHhmm('13:30')).toBe('1:30 PM');
+    expect(formatHhmm('23:45')).toBe('11:45 PM');
+  });
+});
+
+describe('TIME_OPTIONS', () => {
+  it('covers every 15-minute slot from 00:00 to 23:45', () => {
+    expect(TIME_OPTIONS).toHaveLength(96);
+    expect(TIME_OPTIONS[0]).toEqual({ value: '00:00', label: '12:00 AM' });
+    expect(TIME_OPTIONS.at(-1)).toEqual({ value: '23:45', label: '11:45 PM' });
+  });
+});
+
+describe('START_TIME_OPTIONS', () => {
+  it('stops at 23:30 so a valid end is always selectable (BAL-234 AC4)', () => {
+    // 96 total slots minus the 23:45 start that would leave no valid end.
+    expect(START_TIME_OPTIONS).toHaveLength(95);
+    expect(START_TIME_OPTIONS[0]).toEqual({ value: '00:00', label: '12:00 AM' });
+    expect(START_TIME_OPTIONS.at(-1)).toEqual({ value: '23:30', label: '11:30 PM' });
+    expect(START_TIME_OPTIONS.some((o) => o.value === '23:45')).toBe(false);
+  });
+});
+
+describe('option sets', () => {
+  it('matches the exact design-reference option sets (no booking-window control)', () => {
+    expect(BUFFER_OPTIONS.map((o) => o.value)).toEqual([0, 5, 10, 15, 30]);
+    expect(NOTICE_OPTIONS.map((o) => o.value)).toEqual([0, 60, 120, 240, 720, 1440, 2880]);
+  });
+
+  it('defaults every booking rule to 0 (buffers + notice only)', () => {
+    expect(DEFAULT_BOOKING_SETTINGS).toEqual({
+      bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0,
+      minimumNoticeMinutes: 0,
+    });
+  });
+});
+
+describe('createDefaultWeek', () => {
+  it('enables Mon–Fri 09:00–17:00 and turns Sat/Sun off', () => {
+    const week = createDefaultWeek();
+    expect(week).toHaveLength(7);
+    for (let i = 0; i < 5; i++) {
+      expect(week[i]?.enabled).toBe(true);
+      expect(week[i]?.ranges).toHaveLength(1);
+      expect(week[i]?.ranges[0]?.start).toBe('09:00');
+      expect(week[i]?.ranges[0]?.end).toBe('17:00');
+    }
+    expect(week[5]?.enabled).toBe(false);
+    expect(week[6]?.enabled).toBe(false);
+  });
+});
+
+describe('weekToRules ↔ rulesToWeek (Mon-first display ↔ 0=Sun dayOfWeek)', () => {
+  it('serializes the default week to Monday=1 … Friday=5', () => {
+    const rules = weekToRules(createDefaultWeek());
+    expect(rules).toHaveLength(5);
+    expect(rules.map((r) => r.dayOfWeek)).toEqual([1, 2, 3, 4, 5]);
+    expect(rules.every((r) => r.startTime === '09:00' && r.endTime === '17:00')).toBe(true);
+  });
+
+  it('round-trips rules back into the correct display slots', () => {
+    const week = rulesToWeek([
+      { dayOfWeek: 0, startTime: '10:00', endTime: '12:00' }, // Sunday → index 6
+      { dayOfWeek: 1, startTime: '09:00', endTime: '17:00' }, // Monday → index 0
+    ]);
+    expect(week[0]?.enabled).toBe(true);
+    expect(week[6]?.enabled).toBe(true);
+    expect(week[1]?.enabled).toBe(false);
+    expect(week[6]?.ranges[0]?.start).toBe('10:00');
+  });
+});
+
+describe('derived metrics', () => {
+  it('counts enabled days and detects split days', () => {
+    const week = createDefaultWeek();
+    expect(countEnabledDays(week)).toBe(5);
+    expect(hasSplitDays(week)).toBe(false);
+
+    week[0]?.ranges.push({ id: newRangeId(), start: '18:00', end: '20:00' });
+    expect(hasSplitDays(week)).toBe(true);
+  });
+});
+
+describe('validateWeek', () => {
+  it('returns null for a valid week', () => {
+    expect(validateWeek(createDefaultWeek())).toBeNull();
+  });
+
+  it('flags an enabled day with no ranges', () => {
+    const week = createEmptyWeek();
+    const monday = week[0];
+    if (monday) monday.enabled = true;
+    expect(validateWeek(week)).toMatch(/Monday/);
+  });
+
+  it('flags overlapping ranges on a day', () => {
+    const week = createEmptyWeek();
+    const monday = week[0];
+    if (monday) {
+      monday.enabled = true;
+      monday.ranges = [
+        { id: newRangeId(), start: '09:00', end: '12:00' },
+        { id: newRangeId(), start: '11:00', end: '14:00' },
+      ];
+    }
+    expect(validateWeek(week)).toMatch(/overlap/i);
+  });
+
+  it('flags a range whose end is not after its start', () => {
+    const week = createEmptyWeek();
+    const monday = week[0];
+    if (monday) {
+      monday.enabled = true;
+      monday.ranges = [{ id: newRangeId(), start: '17:00', end: '09:00' }];
+    }
+    expect(validateWeek(week)).not.toBeNull();
+  });
+});
+
+describe('summarizeWeek', () => {
+  it('groups consecutive identical days into a single segment', () => {
+    expect(summarizeWeek(createDefaultWeek())).toEqual([
+      { days: 'Mon–Fri', hours: '9:00 AM – 5:00 PM' },
+    ]);
+  });
+
+  it('splits a day with different hours into its own segment', () => {
+    const week = createDefaultWeek();
+    const wed = week[2];
+    if (wed) wed.ranges = [{ id: newRangeId(), start: '10:00', end: '14:00' }];
+    const segments = summarizeWeek(week);
+    expect(segments).toEqual([
+      { days: 'Mon–Tue', hours: '9:00 AM – 5:00 PM' },
+      { days: 'Wed', hours: '10:00 AM – 2:00 PM' },
+      { days: 'Thu–Fri', hours: '9:00 AM – 5:00 PM' },
+    ]);
+  });
+});
+
+describe('findDstConflict', () => {
+  const FROM = new Date('2026-01-01T00:00:00Z');
+
+  it('returns the gap when a Sunday range overlaps the Melbourne spring-forward', () => {
+    const week: WeekState = createEmptyWeek();
+    const sunday = week[6];
+    if (sunday) {
+      sunday.enabled = true;
+      sunday.ranges = [{ id: newRangeId(), start: '01:00', end: '04:00' }];
+    }
+    const gap = findDstConflict(week, 'Australia/Melbourne', FROM);
+    expect(gap?.gapStartMinutes).toBe(120);
+  });
+
+  it('returns null for a default week (no Sunday) even in a DST zone', () => {
+    expect(findDstConflict(createDefaultWeek(), 'Australia/Melbourne', FROM)).toBeNull();
+  });
+});
+
+describe('week mutations (extracted pure helpers)', () => {
+  const weekWith = (dayIndex: number, ranges: { start: string; end: string }[]): WeekState => {
+    const week = createEmptyWeek();
+    const day = week[dayIndex];
+    if (day) {
+      day.enabled = true;
+      day.ranges = ranges.map((r) => ({ id: newRangeId(), start: r.start, end: r.end }));
+    }
+    return week;
+  };
+  const firstRangeId = (week: WeekState): string => week[0]?.ranges[0]?.id ?? '';
+
+  it('changeRangeInWeek auto-bumps the end when the start moves to/past it', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '10:00' }]);
+    const next = changeRangeInWeek(week, 0, firstRangeId(week), 'start', '10:30');
+    expect(next[0]?.ranges[0]).toMatchObject({ start: '10:30', end: '10:45' });
+  });
+
+  it('changeRangeInWeek sets the end directly for the end field', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '10:00' }]);
+    const next = changeRangeInWeek(week, 0, firstRangeId(week), 'end', '11:00');
+    expect(next[0]?.ranges[0]).toMatchObject({ start: '09:00', end: '11:00' });
+  });
+
+  it('removeRangeFromWeek removes the range and disables an emptied day', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '10:00' }]);
+    const next = removeRangeFromWeek(week, 0, firstRangeId(week));
+    expect(next[0]?.ranges).toHaveLength(0);
+    expect(next[0]?.enabled).toBe(false);
+  });
+
+  it('copyDayRangesInWeek copies ranges with fresh ids and enables the targets', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '17:00' }]);
+    const next = copyDayRangesInWeek(week, 0, [1, 2]);
+    expect(next[1]?.enabled).toBe(true);
+    expect(next[1]?.ranges[0]).toMatchObject({ start: '09:00', end: '17:00' });
+    expect(next[1]?.ranges[0]?.id).not.toBe(firstRangeId(week));
+    expect(next[2]?.enabled).toBe(true);
+  });
+
+  it('copyDayRangesInWeek is a no-op for an out-of-range source index', () => {
+    const week = weekWith(0, [{ start: '09:00', end: '17:00' }]);
+    expect(copyDayRangesInWeek(week, 99, [1])).toBe(week);
+  });
+});
+
+describe('weekOverlapsGap (pure, Intl-free)', () => {
+  // Sunday 02:00–03:00 gap (the extracted overlap test takes a precomputed gap).
+  const GAP = { dateISO: '2026-10-04', dayOfWeek: 0, gapStartMinutes: 120, gapEndMinutes: 180 };
+
+  const sundayWeek = (start: string, end: string): WeekState => {
+    const week = createEmptyWeek();
+    const sunday = week[6];
+    if (sunday) {
+      sunday.enabled = true;
+      sunday.ranges = [{ id: newRangeId(), start, end }];
+    }
+    return week;
+  };
+
+  it('is true when an enabled range on the gap weekday overlaps the gap', () => {
+    expect(weekOverlapsGap(sundayWeek('01:00', '04:00'), GAP)).toBe(true);
+  });
+
+  it('is false when the range is entirely outside the gap window', () => {
+    expect(weekOverlapsGap(sundayWeek('05:00', '09:00'), GAP)).toBe(false);
+  });
+
+  it('is false when no enabled day falls on the gap weekday', () => {
+    // Mon–Fri default week; the gap is on Sunday.
+    expect(weekOverlapsGap(createDefaultWeek(), GAP)).toBe(false);
+  });
+});

@@ -1,0 +1,89 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+}));
+
+const mockSave = vi.fn();
+let mockSessionObj: Record<string, unknown>;
+
+vi.mock('@/lib/auth/session', () => ({
+  getSession: vi.fn(() => Promise.resolve(mockSessionObj)),
+}));
+
+vi.mock('@/lib/logging', () => ({
+  log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+  errorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
+}));
+
+const mockInternalApiFetch = vi.fn();
+vi.mock('../_lib/internal-api', () => ({
+  internalApiFetch: (...args: unknown[]) => mockInternalApiFetch(...args),
+}));
+
+import { updateScheduleTimezoneAction } from './update-schedule-timezone';
+import { revalidatePath } from 'next/cache';
+import { log } from '@/lib/logging';
+
+const EXPERT_SESSION = {
+  user: {
+    onboardingCompleted: true,
+    id: 'user-1',
+    email: 'expert@example.com',
+    activeMode: 'expert',
+    expertProfileId: 'profile-1',
+  },
+  save: mockSave,
+};
+
+describe('updateScheduleTimezoneAction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionObj = { ...EXPERT_SESSION };
+  });
+
+  it('throws when there is no session user', async () => {
+    mockSessionObj = { save: mockSave };
+    await expect(updateScheduleTimezoneAction('Australia/Sydney')).rejects.toThrow('Unauthorized');
+  });
+
+  it('returns an error when not in expert mode', async () => {
+    mockSessionObj = { user: { ...EXPERT_SESSION.user, activeMode: 'client' }, save: mockSave };
+    const result = await updateScheduleTimezoneAction('Australia/Sydney');
+    expect(result).toEqual({ success: false, error: 'Expert profile required' });
+    expect(mockInternalApiFetch).not.toHaveBeenCalled();
+  });
+
+  it('PATCHes the session-derived timezone path and revalidates', async () => {
+    mockInternalApiFetch.mockResolvedValueOnce({ success: true });
+
+    const result = await updateScheduleTimezoneAction('Australia/Sydney');
+
+    expect(result).toEqual({ success: true });
+    expect(mockInternalApiFetch).toHaveBeenCalledWith(
+      '/api/experts/profile-1/timezone',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ timezone: 'Australia/Sydney', actorUserId: 'user-1' }),
+      },
+      'schedule-api'
+    );
+    expect(revalidatePath).toHaveBeenCalledWith('/expert/settings');
+    expect(log.info).toHaveBeenCalled();
+  });
+
+  it('rejects an invalid timezone before calling the API', async () => {
+    const result = await updateScheduleTimezoneAction('Not/AZone');
+    expect(result.success).toBe(false);
+    expect(mockInternalApiFetch).not.toHaveBeenCalled();
+  });
+
+  it('returns an error and logs when the API call fails', async () => {
+    mockInternalApiFetch.mockRejectedValueOnce(new Error('boom'));
+    const result = await updateScheduleTimezoneAction('Australia/Sydney');
+    expect(result.success).toBe(false);
+    expect(log.error).toHaveBeenCalled();
+  });
+});

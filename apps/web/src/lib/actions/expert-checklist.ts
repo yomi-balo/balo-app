@@ -2,7 +2,13 @@ import 'server-only';
 
 import { cache } from 'react';
 import { getSession } from '@/lib/auth/session';
-import { expertsRepository, usersRepository, payoutsRepository } from '@balo/db';
+import {
+  expertsRepository,
+  usersRepository,
+  payoutsRepository,
+  calendarRepository,
+  availabilityRulesRepository,
+} from '@balo/db';
 import { log } from '@/lib/logging';
 
 export interface ChecklistStatus {
@@ -36,10 +42,12 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Expert profile required');
   }
 
-  const [profile, user, hasPayouts] = await Promise.all([
+  const [profile, user, hasPayouts, connection, hasSchedule] = await Promise.all([
     expertsRepository.findProfileById(expertProfileId),
     usersRepository.findById(session.user.id),
     payoutsRepository.hasPayoutDetails(expertProfileId),
+    calendarRepository.findConnectionByExpertProfileId(expertProfileId),
+    availabilityRulesRepository.hasActiveRules(expertProfileId),
   ]);
 
   if (!profile || !user) {
@@ -52,6 +60,12 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Profile or user not found');
   }
 
+  // `calendar`: a live calendar_connections row in the `connected` state (BAL-234).
+  // A revoked/errored connection (`auth_error`, `sync_pending`) is not connected.
+  // This replaces the dead `cronofySyncStatus` read (no writer) and keeps the
+  // check vendor-agnostic for the ADR-1021 migration.
+  const calendar = connection?.status === 'connected';
+
   const items = {
     profile: Boolean(
       profile.headline &&
@@ -62,13 +76,16 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     ),
     phone: Boolean(user.phoneVerifiedAt),
     rate: Boolean(profile.rateCents && profile.rateCents > 0),
-    calendar: Boolean(profile.cronofySyncStatus && profile.cronofySyncStatus !== 'not_connected'),
-    availability: false, // TODO: BAL-195 — check availability_slots table
+    calendar,
+    // "Set your availability" completes when ≥1 enabled weekly rule is saved (BAL-234
+    // §7). NOT conjoined with `calendar` — that is its own checklist item, and
+    // conjoining would leave this item unstickable while the hours are visibly saved.
+    availability: hasSchedule,
     payouts: hasPayouts,
   };
 
   const completedCount = Object.values(items).filter(Boolean).length;
-  const allComplete = completedCount === 6;
+  const allComplete = completedCount === Object.keys(items).length;
 
   // When all 6 complete, set searchable = true (idempotent)
   if (allComplete && !profile.searchable) {

@@ -1,10 +1,13 @@
 import { Worker, type Job } from 'bullmq';
 import type { FastifyBaseLogger } from 'fastify';
 import { calendarRepository } from '@balo/db';
+import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import { resolveAndCacheAvailability } from '../services/availability/resolve-and-cache.js';
+
+const log = createLogger('availability-cache-worker');
 
 // ── Queue names ──────────────────────────────────────────────────
 
@@ -26,7 +29,14 @@ export interface AvailabilityCacheJobData {
  * swallow and log any enqueue error. The `jobId` dedupes concurrent triggers
  * (webhook change + settings mutation) into a single pending rebuild.
  *
- * Shared by the Cronofy webhook and the expert availability-override routes.
+ * `removeOnFail: true` is deliberate: this is an idempotent cache-rebuild, and the
+ * fixed per-expert `jobId` means a RETAINED failed job would block every later
+ * enqueue for that expert (webhook, schedule-save, override change, staleness cron)
+ * — permanently wedging their availability. Dropping the job on terminal failure
+ * lets the next trigger self-heal. `attempts`/`backoff` absorb transient DB blips;
+ * the worker's `failed` listener surfaces a terminal failure to logs/Sentry.
+ *
+ * Shared by the Cronofy webhook, the schedule editor, and the availability-override routes.
  */
 export async function enqueueAvailabilityCacheRebuild(
   expertProfileId: string,
@@ -40,7 +50,9 @@ export async function enqueueAvailabilityCacheRebuild(
       {
         jobId: `availability-${expertProfileId}`,
         removeOnComplete: true,
-        removeOnFail: false,
+        removeOnFail: true,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
       }
     );
   } catch (err: unknown) {
@@ -83,6 +95,21 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
     }
   );
 
+  // Terminal failures used to be invisible: the enqueue swallows dropped duplicates,
+  // and jobs now self-heal (removeOnFail: true) rather than lingering in Redis. This
+  // listener is the failure signal — a rebuild that exhausts its attempts reaches
+  // Axiom/Sentry instead of silently leaving `earliest_available_at` stale.
+  worker.on('failed', (job, err) => {
+    log.error(
+      {
+        expertProfileId: job?.data.expertProfileId,
+        attemptsMade: job?.attemptsMade,
+        error: err.message,
+      },
+      'Availability cache rebuild job failed'
+    );
+  });
+
   return worker;
 }
 
@@ -113,7 +140,11 @@ export function startStalenessCheckWorker(): Worker {
           {
             jobId: `availability-${conn.expertProfileId}`,
             removeOnComplete: true,
-            removeOnFail: false,
+            // Self-heal on failure — a retained failed job would block this same
+            // fixed jobId on every later trigger (see enqueue-rebuild.ts).
+            removeOnFail: true,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
           }
         );
       }

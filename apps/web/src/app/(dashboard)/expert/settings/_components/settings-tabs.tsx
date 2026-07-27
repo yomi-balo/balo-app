@@ -20,7 +20,7 @@ import { ProfileTab } from './profile-tab';
 import { ExpertiseTab } from './expertise-tab';
 import { WorkHistoryTab } from './work-history-tab';
 import { CertificationsTab } from './certifications-tab';
-import { CalendarTab } from './calendar-tab';
+import { ScheduleTab } from './schedule-tab';
 import { AgencyDomainsTab } from './agency-domains-tab';
 import { cn } from '@/lib/utils';
 import type {
@@ -140,6 +140,7 @@ export function SettingsTabs({
           const isActive = mainTab === t.key;
           return (
             <button
+              type="button"
               key={t.key}
               role="tab"
               aria-selected={isActive}
@@ -183,6 +184,7 @@ export function SettingsTabs({
             const isActive = subTab === t.key;
             return (
               <button
+                type="button"
                 key={t.key}
                 role="tab"
                 aria-selected={isActive}
@@ -344,7 +346,7 @@ function TabPanelContent(props: Readonly<TabPanelContentProps>): React.JSX.Eleme
   if (tab === 'schedule') {
     return (
       <div className="mx-auto max-w-[620px]">
-        <CalendarTab />
+        <ScheduleTab />
       </div>
     );
   }

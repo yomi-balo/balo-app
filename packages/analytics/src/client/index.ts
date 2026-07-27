@@ -29,6 +29,7 @@ export {
   SESSION_EVENTS,
   CASE_BILLING_EVENTS,
   WALLET_EVENTS,
+  SCHEDULE_EVENTS,
 } from '../events';
 
 export type {
@@ -77,4 +78,5 @@ export type {
   WalletEventMap,
   WalletLens,
   WalletRestingStateName,
+  ScheduleEventMap,
 } from '../events';

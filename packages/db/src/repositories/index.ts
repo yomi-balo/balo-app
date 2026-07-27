@@ -38,7 +38,7 @@ export type {
 export { notificationLogRepository } from './notification-log';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
-export { availabilityRulesRepository } from './availability-rules';
+export { availabilityRulesRepository, type WeeklyRuleInput } from './availability-rules';
 export { availabilityOverridesRepository } from './availability-overrides';
 export type { CreateAvailabilityOverrideInput } from './availability-overrides';
 export type { AvailabilityOverride, NewAvailabilityOverride } from '../schema';
@@ -202,6 +202,7 @@ export type {
 } from './party-domains';
 export { auditEventsRepository } from './audit-events';
 export type { RecordAuditInput } from './audit-events';
+export { recordScheduleAudit, type ScheduleAuditAction } from './_shared/schedule-audit';
 export { partyMembershipsRepository } from './party-memberships';
 export type {
   DomainMembershipInput,

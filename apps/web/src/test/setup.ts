@@ -92,6 +92,7 @@ vi.mock('@/lib/analytics', async () => {
     SESSION_EVENTS: events.SESSION_EVENTS,
     CASE_BILLING_EVENTS: events.CASE_BILLING_EVENTS,
     WALLET_EVENTS: events.WALLET_EVENTS,
+    SCHEDULE_EVENTS: events.SCHEDULE_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

@@ -438,3 +438,193 @@ export function extractCityFromTimezone(timezone: string | null | undefined): st
   if (!city) return null;
   return city.replaceAll('_', ' ');
 }
+
+// ── Timezone validity ───────────────────────────────────────────
+//
+// `Intl.supportedValuesOf('timeZone')` OMITS 'UTC' in Node, yet 'UTC' is the
+// `expert_profiles.timezone` column default (and the system default), so a fresh
+// expert who never changes their timezone must still validate. Built ONCE at module
+// scope — `supportedValuesOf` allocates a ~400-entry array on every call.
+
+const VALID_TIMEZONES = new Set<string>([...Intl.supportedValuesOf('timeZone'), 'UTC']);
+
+/**
+ * True when `tz` is an IANA timezone identifier this platform accepts — any zone
+ * from `Intl.supportedValuesOf('timeZone')` plus the special-cased `'UTC'` (which
+ * Node omits from that list). Empty strings and unknown zones are false. Shared by
+ * the API and web validation layers so the valid-zone set is defined in one place.
+ */
+export function isValidTimezone(tz: string): boolean {
+  return VALID_TIMEZONES.has(tz);
+}
+
+// ── DST spring-forward gap detection (pure, Intl-only) ──────────────
+//
+// Wall-clock availability rules (BAL-234) are timezone-agnostic. On a spring-forward
+// (DST) transition, a local wall-clock interval is skipped entirely — e.g. clocks jump
+// 02:00 → 03:00, so any rule landing in [02:00, 03:00) does not exist that day. This
+// surfaces a NON-BLOCKING warning in the schedule editor. The server-side resolver
+// (date-fns-tz) remains the authoritative, lenient interpreter; these helpers only warn.
+//
+// Intl-only so the ONE implementation runs unchanged in the browser and the API without
+// adding a date library to the web app (@balo/shared has no date-fns).
+
+/** A skipped wall-clock interval caused by a DST spring-forward transition. */
+export interface SpringForwardGap {
+  /** ISO date (YYYY-MM-DD, local to the timezone) on which the gap occurs. */
+  dateISO: string;
+  /** JS day-of-week of that local date (0=Sun … 6=Sat). */
+  dayOfWeek: number;
+  /** Local minute-of-day the gap starts, inclusive (e.g. 120 for 02:00). */
+  gapStartMinutes: number;
+  /** Local minute-of-day the gap ends, exclusive (e.g. 180 for 03:00). */
+  gapEndMinutes: number;
+}
+
+const MS_PER_MINUTE = 60_000;
+const MS_PER_DAY = 86_400_000;
+/** Scan horizon (~13 months) — v1 warns on the single upcoming transition only. */
+const SCAN_DAYS = 400;
+
+/**
+ * One `Intl.DateTimeFormat` per timezone, reused for the process lifetime. Every
+ * formatter option here is a compile-time constant, so the IANA zone string is a
+ * complete cache key. `formatToParts(instant)` takes the instant per-call and does
+ * not mutate the formatter, so sharing one instance per zone is safe — and it
+ * collapses the ~400 constructions per spring-forward scan (which builds one
+ * formatter per sampled day) down to one per distinct zone.
+ */
+const wallClockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallClockFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = wallClockFormatters.get(timeZone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    wallClockFormatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
+/** Wall-clock parts of an instant as observed in `timeZone`. */
+function tzWallClock(
+  timeZone: string,
+  instant: Date
+): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
+  const formatter = wallClockFormatter(timeZone);
+  let year = 0;
+  let month = 1;
+  let day = 1;
+  let hour = 0;
+  let minute = 0;
+  let second = 0;
+  for (const part of formatter.formatToParts(instant)) {
+    const value = Number(part.value);
+    if (part.type === 'year') year = value;
+    else if (part.type === 'month') month = value;
+    else if (part.type === 'day') day = value;
+    else if (part.type === 'hour') hour = value === 24 ? 0 : value;
+    else if (part.type === 'minute') minute = value;
+    else if (part.type === 'second') second = value;
+  }
+  return { year, month, day, hour, minute, second };
+}
+
+/** Offset (minutes) that `timeZone` is ahead of UTC at `instant`. */
+function tzOffsetMinutes(timeZone: string, instant: Date): number {
+  const wall = tzWallClock(timeZone, instant);
+  const asUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);
+  return Math.round((asUtc - instant.getTime()) / MS_PER_MINUTE);
+}
+
+/** UTC parts of a raw millisecond value (used to read a wall-clock built as UTC). */
+function utcParts(ms: number): {
+  year: number;
+  month: number;
+  day: number;
+  dow: number;
+  minuteOfDay: number;
+} {
+  const date = new Date(ms);
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    dow: date.getUTCDay(),
+    minuteOfDay: date.getUTCHours() * 60 + date.getUTCMinutes(),
+  };
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** Binary-search the spring-forward transition between two 24h-apart samples. */
+function pinpointGap(timeZone: string, loInstant: Date, hiInstant: Date): SpringForwardGap {
+  const before = tzOffsetMinutes(timeZone, loInstant);
+  const after = tzOffsetMinutes(timeZone, hiInstant);
+  let loMs = loInstant.getTime();
+  let hiMs = hiInstant.getTime();
+  while (hiMs - loMs > MS_PER_MINUTE) {
+    const midMs = loMs + Math.floor((hiMs - loMs) / 2);
+    if (tzOffsetMinutes(timeZone, new Date(midMs)) <= before) {
+      loMs = midMs;
+    } else {
+      hiMs = midMs;
+    }
+  }
+  // Wall-clock the skipped interval starts at = the transition instant read with the OLD offset.
+  const wall = utcParts(hiMs + before * MS_PER_MINUTE);
+  const gapStartMinutes = wall.minuteOfDay;
+  return {
+    dateISO: `${wall.year}-${pad2(wall.month)}-${pad2(wall.day)}`,
+    dayOfWeek: wall.dow,
+    gapStartMinutes,
+    gapEndMinutes: gapStartMinutes + (after - before),
+  };
+}
+
+/**
+ * The timezone's next spring-forward (DST) gap on/after `from`, or null when the zone
+ * has no forward transition within the scan horizon (e.g. Asia/Singapore has no DST).
+ * Fall-back transitions (clocks repeat, no skipped interval) are intentionally ignored.
+ */
+export function getNextSpringForwardGap(timeZone: string, from: Date): SpringForwardGap | null {
+  let prevOffset = tzOffsetMinutes(timeZone, from);
+  let prevInstant = from;
+  for (let dayIndex = 1; dayIndex <= SCAN_DAYS; dayIndex++) {
+    const currInstant = new Date(from.getTime() + dayIndex * MS_PER_DAY);
+    const currOffset = tzOffsetMinutes(timeZone, currInstant);
+    if (currOffset > prevOffset) {
+      return pinpointGap(timeZone, prevInstant, currInstant);
+    }
+    prevInstant = currInstant;
+    prevOffset = currOffset;
+  }
+  return null;
+}
+
+/**
+ * True when a weekly wall-clock range would land in the timezone's upcoming spring-forward
+ * gap. Only the transition's own weekday is considered (v1: single upcoming transition).
+ */
+export function isWallClockInSpringForwardGap(
+  timeZone: string,
+  from: Date,
+  range: { dayOfWeek: number; startMinutes: number; endMinutes: number }
+): boolean {
+  const gap = getNextSpringForwardGap(timeZone, from);
+  // Split guards (not `!gap || …gap.x`) so `gap` narrows to non-null for the reads below.
+  if (!gap) return false;
+  if (range.dayOfWeek !== gap.dayOfWeek) return false;
+  // Interval overlap between [start, end) and [gapStart, gapEnd).
+  return range.startMinutes < gap.gapEndMinutes && range.endMinutes > gap.gapStartMinutes;
+}
