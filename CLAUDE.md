@@ -191,7 +191,12 @@ Do not add new repository files without integration tests. SonarQube will flag c
 - **Expert status:** Derived from `expert_profiles` existence + `approvedAt`
 - **Active view:** `users.activeMode` enum (`client`, `expert`)
 - WorkOS handles identity. Balo handles authorization and user data.
-- **Authorization is capability-based (ADR-1029).** Resolve `hasCapability(...)` at every call site — never gate on `platformRole ===`, `role ===`, or `activeMode ===`. Roles (`owner`/`admin`/`member`/`finance`), additive `member_capability_overrides`, and `representations` (AE / account-manager act-on-behalf) are capability bundles; `activeMode` is a view toggle, never an authorization input.
+- **Authorization is capability-based (ADR-1029).** Resolve a capability at every call site — never gate on `platformRole ===`, `role ===`, `lens ===`, or `activeMode ===`. `activeMode` is a view toggle, never an authorization input.
+- **Three capability axes, each with a distinct subject. Pick the axis by subject; never widen one to cover another:**
+  - **Membership** — `hasCapability(actor, capability, { companyId } | { agencyId })`. Gates by party membership. `packages/shared/src/authz/index.ts` is the single place a role string is interpreted into capabilities; do not re-read a role anywhere else. Shipped tokens: `participate`, `manage_requests`, `approve_own_proposals`, `consume_credits` (base member bundle) plus `manage_members`, `manage_billing` (owner/admin only). Company roles are `owner`/`admin`/`member`; agency roles are `owner`/`admin`/`expert`.
+  - **Platform** — `hasPlatformCapability(...)` (ADR-1035). Gates Balo-staff mutations by `platformRole`, not membership. ADR-1035 explicitly rejected overloading `hasCapability` with a platform scope.
+  - **Engagement** — `hasEngagementCapability(...)` (ADR-1046). Gates by delivery identity on a specific engagement. Currently `host_meetings` only, held by the delivering expert plus their agency `owner`/`admin` — never role `expert`, never a delegate or guest.
+- **Decided in ADR-1029 but NOT built.** Do not write code, tickets, or docs against these as though they exist: the `finance` role, `approve_any_proposals`, `member_capability_overrides`, the `capability` pgEnum, and `representations` (act-on-behalf; ticketed as BAL-313, still open). See ADR-1029's 2026-07-30 amendment for the full as-built reconciliation.
 - Custom UI modals (not hosted AuthKit redirect)
 - Session via iron-session with 7-day cookie (`balo_session`)
 
