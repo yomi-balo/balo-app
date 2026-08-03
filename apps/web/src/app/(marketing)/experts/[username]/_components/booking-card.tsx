@@ -34,8 +34,11 @@ const TRUST_ROWS = [
  * pinned card is clipped at the viewport top: stuck card top = top − pull-up
  * (here 112 − 105 = 7px). Bump both together if you change the overlap.
  *
- * CTAs are stubbed (BAL-252/253/255 replace the handler bodies). Fires a
- * `cta_impression` per CTA on mount.
+ * CTAs are stubbed — the tickets that replace the handler bodies:
+ *   onBook        → BAL-400 (booking flow; BAL-252 was cancelled and superseded)
+ *   onStartProject → BAL-253
+ *   onMessage      → BAL-255
+ * Fires a `cta_impression` per CTA on mount.
  */
 export function BookingCard({
   expertId,
