@@ -265,11 +265,7 @@ function WaitingStage({ lens, scenario, phase }) {
           className="absolute -right-1 -bottom-1 flex items-center justify-center rounded-full"
           style={{ width: 26, height: 26, background: C.stage }}
         >
-          <Icon
-            size={18}
-            color={done ? C.amber : C.brand}
-            className={done ? '' : 'animate-spin'}
-          />
+          <Icon size={18} color={done ? C.amber : C.brand} className={done ? '' : 'animate-spin'} />
         </span>
       </div>
 
@@ -377,22 +373,28 @@ export default function App() {
       {alerting && (
         <div
           className="flex w-full items-center gap-2.5 rounded-xl px-4 py-2.5"
-          style={{ maxWidth: 1120, background: C.amberSoft, border: `1px solid rgba(224,163,62,0.35)` }}
+          style={{
+            maxWidth: 1120,
+            background: C.amberSoft,
+            border: `1px solid rgba(224,163,62,0.35)`,
+          }}
         >
           <Clock size={14} color={C.amber} className="shrink-0" />
           <span className="text-xs leading-relaxed" style={{ color: '#7A5312' }}>
             <strong>Off-screen:</strong> a high-priority email alert has gone to the Balo team so
             someone can try to reach {PEOPLE.expert.name.split(' ').slice(-1)[0]} or find cover. No
-            customer-facing UI — it’s an operational alert, and it cancels if the expert joins first.
+            customer-facing UI — it’s an operational alert, and it cancels if the expert joins
+            first.
           </span>
         </div>
       )}
 
       <div className="max-w-2xl text-center">
         <p className="text-xs leading-relaxed" style={{ color: '#6B7482' }}>
-          Prototype · patch for <strong>WaitingStage</strong> and one line of <strong>TopBar</strong>{' '}
-          in <code>balo-in-meeting-ui.jsx</code>. The clock starts when the <em>expert</em> joins —
-          switch <strong>Who’s late</strong> to Expert and nothing counts for anyone, on either lens.
+          Prototype · patch for <strong>WaitingStage</strong> and one line of{' '}
+          <strong>TopBar</strong> in <code>balo-in-meeting-ui.jsx</code>. The clock starts when the{' '}
+          <em>expert</em> joins — switch <strong>Who’s late</strong> to Expert and nothing counts
+          for anyone, on either lens.
         </p>
       </div>
     </div>

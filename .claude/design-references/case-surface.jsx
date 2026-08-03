@@ -117,19 +117,46 @@ const EXPERT = {
   reviews: 23,
   rate: 6.25,
 };
-const CLIENT = { name: 'Jordan', full: 'Jordan Lee', company: 'Northwind Industrial', initial: 'J' };
+const CLIENT = {
+  name: 'Jordan',
+  full: 'Jordan Lee',
+  company: 'Northwind Industrial',
+  initial: 'J',
+};
 
 const HELD = [
-  { n: 1, at: '12 Jun', state: 'held', minutes: 12, floored: true, items: 2, rec: true, tx: true, files: 1 },
+  {
+    n: 1,
+    at: '12 Jun',
+    state: 'held',
+    minutes: 12,
+    floored: true,
+    items: 2,
+    rec: true,
+    tx: true,
+    files: 1,
+  },
   { n: 2, at: '19 Jul', state: 'held', minutes: 45, items: 3, rec: true, tx: true, files: 2 },
   { n: 3, at: '24 Jul', state: 'cancelled' },
   { n: 4, at: '28 Jul', state: 'no_show', minutes: 15 },
 ];
 
 const EARLIER = [
-  { from: 'client', at: '12 Jun', body: 'Booked in for later today — I’ve pasted the error into the case description.' },
-  { from: 'expert', at: '12 Jun', body: 'Got it. Have the debug log open when we start and we’ll trace it live.' },
-  { from: 'client', at: '14 Jun', body: 'Tried the After-Save switch in sandbox. Better, but not gone.' },
+  {
+    from: 'client',
+    at: '12 Jun',
+    body: 'Booked in for later today — I’ve pasted the error into the case description.',
+  },
+  {
+    from: 'expert',
+    at: '12 Jun',
+    body: 'Got it. Have the debug log open when we start and we’ll trace it live.',
+  },
+  {
+    from: 'client',
+    at: '14 Jun',
+    body: 'Tried the After-Save switch in sandbox. Better, but not gone.',
+  },
 ];
 const RECENT = [
   {
@@ -570,7 +597,7 @@ export default function App() {
       </div>
 
       <div className="w-full" style={{ maxWidth: 1060 }}>
-        {/* ── header ────────────────────────────────────── */}
+        {/* ── header ───────────────────────────────────────── */}
         <div
           className="rounded-3xl px-6 py-5"
           style={{
@@ -677,7 +704,11 @@ export default function App() {
                 )}
               </div>
               {nudge.alt && (
-                <button onClick={() => setAsked(false)} className="shrink-0" style={{ color: C.faint }}>
+                <button
+                  onClick={() => setAsked(false)}
+                  className="shrink-0"
+                  style={{ color: C.faint }}
+                >
                   <X size={15} />
                 </button>
               )}
@@ -778,7 +809,7 @@ export default function App() {
             </Card>
           </div>
 
-          {/* ── rail ──────────────────────────────── */}
+          {/* ── rail ─────────────────────────────────────── */}
           <div className="flex flex-col gap-3" style={{ flex: '0 1 288px', minWidth: 264 }}>
             {client ? (
               <Card>
@@ -791,7 +822,10 @@ export default function App() {
                     <div className="mt-0.5 text-xs leading-snug" style={{ color: C.faint }}>
                       {EXPERT.title}
                     </div>
-                    <div className="mt-1.5 flex items-center gap-1 text-xs" style={{ color: C.sub }}>
+                    <div
+                      className="mt-1.5 flex items-center gap-1 text-xs"
+                      style={{ color: C.sub }}
+                    >
                       <Star size={12} color={C.star} fill={C.star} />
                       <span className="font-medium" style={{ color: C.text }}>
                         {EXPERT.rating}
@@ -812,7 +846,11 @@ export default function App() {
                         <button
                           key={s}
                           className="balo-slot flex items-center justify-between rounded-xl px-3 py-2 text-left text-xs font-medium"
-                          style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}
+                          style={{
+                            background: '#fff',
+                            border: `1px solid ${C.line}`,
+                            color: C.text,
+                          }}
                         >
                           {s}
                           <ChevronRight size={13} color={C.faint} />

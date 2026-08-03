@@ -17,7 +17,7 @@ import { Check, Star, ArrowRight, RotateCcw, Clock, ShieldCheck, CircleCheck } f
  * Asking at the moment the client actually knows the answer is the whole point.
  * Because it is consequential, it gets a confirmation step — never a bare tap.
  *
- * ── ORDERING: RATE FIRST, THEN RESOLVE ─────────────────────────────────────
+ * ── ORDERING: RATE FIRST, THEN RESOLVE ────────────────────────────────────────
  * The rule is: the resolve prompt appears once a rating EXISTS (given just now, or
  * already on file). Reasons:
  *  - Rating is asked every consultation; resolve is asked rarely. Primary before
@@ -30,7 +30,7 @@ import { Check, Star, ArrowRight, RotateCcw, Clock, ShieldCheck, CircleCheck } f
  *  - If they never rate, resolve never shows here. Acceptable: the case surface
  *    keeps "Mark resolved" and the 30-day sweep is the backstop.
  *
- * ── THE THREE RATING STATES (BAL-390) ──────────────────────────────────────
+ * ── THE THREE RATING STATES (BAL-390) ─────────────────────────────────────────
  *  1. No rating yet     → ask.
  *  2. Existing rating ≥4 → display it, do NOT prompt.
  *  3. Existing rating <4 → display it and invite a revision.
@@ -43,7 +43,7 @@ import { Check, Star, ArrowRight, RotateCcw, Clock, ShieldCheck, CircleCheck } f
  * in both directions. A one-way ratchet in the copy would make the aggregate
  * meaningless faster than the trigger alone does.
  *
- * ── CONTEXT ─────────────────────────────────────────────────────────────
+ * ── CONTEXT ───────────────────────────────────────────────────────────────────
  * Resolve is CASE-CONTEXT ONLY. A project kickoff or discovery call has no case to
  * resolve, so the prompt is absent — not disabled. Copy follows the context too:
  * "consultation" for a case, "meeting" otherwise (BAL-132's "Back to {context}").
@@ -114,9 +114,7 @@ function Stars({ value, onChange, hover, onHover, size = 30 }) {
     <div className="flex items-center gap-1.5">
       {[1, 2, 3, 4, 5].map((n) => {
         const lit = (hover || value) >= n;
-        const S = (
-          <Star size={size} color={lit ? C.star : C.line} fill={lit ? C.star : 'none'} />
-        );
+        const S = <Star size={size} color={lit ? C.star : C.line} fill={lit ? C.star : 'none'} />;
         return readOnly ? (
           <span key={n}>{S}</span>
         ) : (
@@ -247,7 +245,10 @@ function ResolvePrompt({ rated }) {
       >
         <CircleCheck size={16} color={C.good} className="mt-0.5 shrink-0" />
         <span className="text-sm" style={{ color: '#1B5C42' }}>
-          Case closed. {rated ? 'Your review is saved, so nothing else to do.' : 'We’ll email you a short review request.'}
+          Case closed.{' '}
+          {rated
+            ? 'Your review is saved, so nothing else to do.'
+            : 'We’ll email you a short review request.'}
         </span>
       </div>
     );
@@ -459,7 +460,10 @@ export default function App() {
           </div>
 
           {/* rejoin — small, for accidental leaves */}
-          <button className="mt-5 inline-flex items-center gap-1.5 text-sm" style={{ color: C.sub }}>
+          <button
+            className="mt-5 inline-flex items-center gap-1.5 text-sm"
+            style={{ color: C.sub }}
+          >
             <RotateCcw size={14} /> Rejoin the {noun}
           </button>
         </div>

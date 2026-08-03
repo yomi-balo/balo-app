@@ -3,7 +3,6 @@ import {
   X,
   UserPlus,
   Link2,
-  Check,
   Users,
   Building2,
   Video,
@@ -40,13 +39,13 @@ import {
  * gmail.com would otherwise grant case-level access to every Gmail guest. Reuse
  * ADR-1039's freemail list — the same rule as domain auto-join.
  *
- * ── ATTENDANCE AND VISIBILITY ARE TWO DIFFERENT THINGS ───────────────────────
+ * ── ATTENDANCE AND VISIBILITY ARE TWO DIFFERENT THINGS ────────────────────────
  * The guest row keys to `meetings.id` (BAL-418) — a guest attends ONE call, not
  * every call in the case. `access_scope` carries what they can see afterwards.
  * Corrected from the original ticket, which keyed the guest to the engagement and
  * would have put a guest on every future consultation.
  *
- * ── ADMIT/DENY IS CAPABILITY-GATED, NOT LENS-GATED ──────────────────────────
+ * ── ADMIT/DENY IS CAPABILITY-GATED, NOT LENS-GATED ────────────────────────────
  * The existing in-meeting reference gates the admit queue on `lens === 'expert'`,
  * which is exactly the comparison ADR-1029 forbids and ADR-1046 replaced. It is
  * `hasEngagementCapability(actor, 'host_meetings', hostContext)`:
@@ -82,7 +81,14 @@ const C = {
 };
 
 const CLIENT_DOMAIN = 'northwind.com';
-const FREEMAIL = ['gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'icloud.com', 'proton.me'];
+const FREEMAIL = [
+  'gmail.com',
+  'outlook.com',
+  'hotmail.com',
+  'yahoo.com',
+  'icloud.com',
+  'proton.me',
+];
 const MAX_PARTICIPANTS = 10;
 
 const EXPERT = { name: 'Amara', full: 'Dr. Amara Okafor', agency: 'CloudPeak' };
@@ -419,7 +425,7 @@ export default function App() {
           </Panel>
         )}
 
-        {/* ── 3. in-call People tab ──────────────────────── */}
+        {/* ── 3. in-call People tab ─────────────────────────── */}
         {entry === 'incall' && (
           <div
             className="w-full rounded-3xl px-5 py-4"
@@ -444,7 +450,10 @@ export default function App() {
             {WAITING.length > 0 && (
               <div
                 className="mb-3 rounded-2xl px-3 py-2.5"
-                style={{ background: isHost ? C.warnSoft : '#F7F8FA', border: `1px solid ${isHost ? C.warnLine : C.line}` }}
+                style={{
+                  background: isHost ? C.warnSoft : '#F7F8FA',
+                  border: `1px solid ${isHost ? C.warnLine : C.line}`,
+                }}
               >
                 <div className="mb-2 flex items-center gap-1.5">
                   <Clock size={12} color={isHost ? C.warn : C.faint} />
@@ -470,7 +479,11 @@ export default function App() {
                       <div className="flex shrink-0 gap-1.5">
                         <button
                           className="rounded-lg px-2.5 py-1 text-xs font-medium"
-                          style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.sub }}
+                          style={{
+                            background: '#fff',
+                            border: `1px solid ${C.line}`,
+                            color: C.sub,
+                          }}
                         >
                           Deny
                         </button>
@@ -556,7 +569,8 @@ export default function App() {
                 <Link2 size={13} /> Copy join link
               </button>
               <p className="mt-1.5 text-center text-xs leading-relaxed" style={{ color: C.faint }}>
-                Emailed guests join straight away. Anyone using the copied link waits to be admitted.
+                Emailed guests join straight away. Anyone using the copied link waits to be
+                admitted.
               </p>
             </div>
           </div>

@@ -104,8 +104,16 @@ const HELD = [
 ];
 
 const EARLIER = [
-  { from: 'client', at: '12 Jun', body: 'Booked in for later today — error is in the case description.' },
-  { from: 'expert', at: '12 Jun', body: 'Got it. Have the debug log open and we’ll trace it live.' },
+  {
+    from: 'client',
+    at: '12 Jun',
+    body: 'Booked in for later today — error is in the case description.',
+  },
+  {
+    from: 'expert',
+    at: '12 Jun',
+    body: 'Got it. Have the debug log open and we’ll trace it live.',
+  },
 ];
 const RECENT = [
   {
@@ -119,7 +127,11 @@ const RECENT = [
     body: 'Still going. It survived the release but came back once the campaign flow was re-enabled.',
     attach: 'flow-debug-15jul.txt',
   },
-  { from: 'client', at: '30 Jul', body: 'Sorry about Tuesday — got pulled into a release. Free this week?' },
+  {
+    from: 'client',
+    at: '30 Jul',
+    body: 'Sorry about Tuesday — got pulled into a release. Free this week?',
+  },
 ];
 
 const ACTION_ITEMS = [
@@ -192,7 +204,10 @@ function Avatar({ who, size = 26 }) {
 
 function Card({ children, pad = 'px-4 py-3.5' }) {
   return (
-    <div className={`rounded-2xl ${pad}`} style={{ background: C.card, border: `1px solid ${C.line}` }}>
+    <div
+      className={`rounded-2xl ${pad}`}
+      style={{ background: C.card, border: `1px solid ${C.line}` }}
+    >
       {children}
     </div>
   );
@@ -263,17 +278,65 @@ export default function App() {
   const nudge = (() => {
     if (upcoming && upcoming.proposal)
       return client
-        ? { tone: 'warn', icon: CalendarClock, title: 'A new time is waiting on you', body: `${EXPERT.name} suggested three alternatives.`, slots: true }
-        : { tone: 'warn', icon: CalendarClock, title: `${CLIENT.name} hasn’t picked a time`, body: 'The original slot stays booked until they choose.', cta: 'Send a reminder', ghost: true };
+        ? {
+            tone: 'warn',
+            icon: CalendarClock,
+            title: 'A new time is waiting on you',
+            body: `${EXPERT.name} suggested three alternatives.`,
+            slots: true,
+          }
+        : {
+            tone: 'warn',
+            icon: CalendarClock,
+            title: `${CLIENT.name} hasn’t picked a time`,
+            body: 'The original slot stays booked until they choose.',
+            cta: 'Send a reminder',
+            ghost: true,
+          };
     if (upcoming && upcoming.soon)
-      return { tone: 'brand', icon: Video, live: true, title: 'Starts in 8 minutes', body: client ? `${EXPERT.name} will join from here.` : `${CLIENT.name} is expecting you.`, cta: 'Join now', pulse: true };
+      return {
+        tone: 'brand',
+        icon: Video,
+        live: true,
+        title: 'Starts in 8 minutes',
+        body: client ? `${EXPERT.name} will join from here.` : `${CLIENT.name} is expecting you.`,
+        cta: 'Join now',
+        pulse: true,
+      };
     if (upcoming)
-      return { tone: 'brand', icon: CalendarClock, title: `Next · ${upcoming.at}`, body: client ? 'The join link is in your calendar. Nothing to do until then.' : `${CLIENT.name} is booked in.`, cta: 'Reschedule', ghost: true };
+      return {
+        tone: 'brand',
+        icon: CalendarClock,
+        title: `Next · ${upcoming.at}`,
+        body: client
+          ? 'The join link is in your calendar. Nothing to do until then.'
+          : `${CLIENT.name} is booked in.`,
+        cta: 'Reschedule',
+        ghost: true,
+      };
     if (client && asked)
-      return { tone: 'brand', icon: Sparkles, title: `${EXPERT.name} thinks this is sorted`, body: 'Closing wraps it up — you can always start a new one.', cta: 'Mark resolved', alt: 'Not yet' };
+      return {
+        tone: 'brand',
+        icon: Sparkles,
+        title: `${EXPERT.name} thinks this is sorted`,
+        body: 'Closing wraps it up — you can always start a new one.',
+        cta: 'Mark resolved',
+        alt: 'Not yet',
+      };
     return client
-      ? { tone: 'brand', icon: Video, title: 'Nothing booked yet', body: `${EXPERT.name} has time this week.`, cta: 'Book a consultation' }
-      : { tone: 'brand', icon: CalendarClock, title: 'Nothing booked', body: `${CLIENT.name} hasn’t booked a follow-up.` };
+      ? {
+          tone: 'brand',
+          icon: Video,
+          title: 'Nothing booked yet',
+          body: `${EXPERT.name} has time this week.`,
+          cta: 'Book a consultation',
+        }
+      : {
+          tone: 'brand',
+          icon: CalendarClock,
+          title: 'Nothing booked',
+          body: `${CLIENT.name} hasn’t booked a follow-up.`,
+        };
   })();
 
   const warn = nudge?.tone === 'warn';
@@ -282,29 +345,77 @@ export default function App() {
   const nInk = warn ? C.warn : C.brand;
 
   return (
-    <div className="flex w-full flex-col items-center gap-3 p-4" style={{ background: '#DFE2E7', fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif' }}>
+    <div
+      className="flex w-full flex-col items-center gap-3 p-4"
+      style={{
+        background: '#DFE2E7',
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif',
+      }}
+    >
       <style>{CSS}</style>
 
-      <div className="flex flex-wrap items-center justify-center gap-2 rounded-xl px-3 py-2.5" style={{ background: C.ink }}>
-        <Seg dark value={lens} onChange={setLens} options={[{ value: 'client', label: 'Client' }, { value: 'expert', label: 'Expert' }]} />
-        <Seg dark value={next} onChange={setNext} options={[{ value: 'booked', label: 'Booked' }, { value: 'soon', label: 'Starting' }, { value: 'proposed', label: 'New time' }, { value: 'none', label: 'Nothing' }]} />
+      <div
+        className="flex flex-wrap items-center justify-center gap-2 rounded-xl px-3 py-2.5"
+        style={{ background: C.ink }}
+      >
+        <Seg
+          dark
+          value={lens}
+          onChange={setLens}
+          options={[
+            { value: 'client', label: 'Client' },
+            { value: 'expert', label: 'Expert' },
+          ]}
+        />
+        <Seg
+          dark
+          value={next}
+          onChange={setNext}
+          options={[
+            { value: 'booked', label: 'Booked' },
+            { value: 'soon', label: 'Starting' },
+            { value: 'proposed', label: 'New time' },
+            { value: 'none', label: 'Nothing' },
+          ]}
+        />
       </div>
 
       {/* phone */}
       <div
         className="relative overflow-hidden"
-        style={{ width: 390, height: 780, background: C.bg, borderRadius: 38, border: `10px solid #16181D`, boxShadow: '0 24px 60px rgba(16,20,28,0.28)' }}
+        style={{
+          width: 390,
+          height: 780,
+          background: C.bg,
+          borderRadius: 38,
+          border: `10px solid #16181D`,
+          boxShadow: '0 24px 60px rgba(16,20,28,0.28)',
+        }}
       >
         <div className="h-full overflow-y-auto pb-6" style={{ scrollbarWidth: 'none' }}>
           {/* sticky compact header */}
-          <div className="sticky top-0 z-10 px-4 pt-3 pb-2.5" style={{ background: 'rgba(238,240,243,0.92)', backdropFilter: 'blur(8px)' }}>
+          <div
+            className="sticky top-0 z-10 px-4 pt-3 pb-2.5"
+            style={{ background: 'rgba(238,240,243,0.92)', backdropFilter: 'blur(8px)' }}
+          >
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <h1 className="truncate text-base leading-snug font-semibold" style={{ color: C.text }}>
+                <h1
+                  className="truncate text-base leading-snug font-semibold"
+                  style={{ color: C.text }}
+                >
                   Flow interview stuck on a loop
                 </h1>
-                <div className="mt-0.5 flex items-center gap-1.5 text-xs" style={{ color: C.faint }}>
-                  <span className="rounded-full px-2 py-0.5 font-medium" style={{ background: C.goodSoft, color: C.good }}>Open</span>
+                <div
+                  className="mt-0.5 flex items-center gap-1.5 text-xs"
+                  style={{ color: C.faint }}
+                >
+                  <span
+                    className="rounded-full px-2 py-0.5 font-medium"
+                    style={{ background: C.goodSoft, color: C.good }}
+                  >
+                    Open
+                  </span>
                   <span>2 held · opened 12 Jun</span>
                 </div>
               </div>
@@ -322,31 +433,60 @@ export default function App() {
             {/* booking strip — never behind a sheet */}
             {client && (
               <Card pad="px-3.5 py-3">
-                <button onClick={() => setSlots(!slots)} className="flex w-full items-center gap-2.5 text-left">
+                <button
+                  onClick={() => setSlots(!slots)}
+                  className="flex w-full items-center gap-2.5 text-left"
+                >
                   <Avatar who="expert" size={38} />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold" style={{ color: C.text }}>{EXPERT.full}</div>
-                    <div className="mt-0.5 flex items-center gap-1 text-xs" style={{ color: C.faint }}>
+                    <div className="truncate text-sm font-semibold" style={{ color: C.text }}>
+                      {EXPERT.full}
+                    </div>
+                    <div
+                      className="mt-0.5 flex items-center gap-1 text-xs"
+                      style={{ color: C.faint }}
+                    >
                       <Star size={11} color={C.star} fill={C.star} />
-                      <span className="font-medium" style={{ color: C.text }}>{EXPERT.rating}</span>
-                      <span>({EXPERT.reviews}) · {money(EXPERT.rate)}/min</span>
+                      <span className="font-medium" style={{ color: C.text }}>
+                        {EXPERT.rating}
+                      </span>
+                      <span>
+                        ({EXPERT.reviews}) · {money(EXPERT.rate)}/min
+                      </span>
                     </div>
                   </div>
-                  <span className="flex shrink-0 items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: C.brand }}>
+                  <span
+                    className="flex shrink-0 items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold text-white"
+                    style={{ background: C.brand }}
+                  >
                     Book {slots ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   </span>
                 </button>
 
                 {slots && (
-                  <div className="mt-3 flex flex-col gap-1.5" style={{ borderTop: `1px solid ${C.line2}`, paddingTop: 12 }}>
+                  <div
+                    className="mt-3 flex flex-col gap-1.5"
+                    style={{ borderTop: `1px solid ${C.line2}`, paddingTop: 12 }}
+                  >
                     {SLOTS.map((s) => (
-                      <button key={s} className="flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium" style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}>
+                      <button
+                        key={s}
+                        className="flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium"
+                        style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}
+                      >
                         {s}
                         <ChevronRight size={14} color={C.faint} />
                       </button>
                     ))}
-                    <button className="mt-0.5 py-1.5 text-xs font-medium" style={{ color: C.brand }}>See more times</button>
-                    <div className="text-center text-xs" style={{ color: C.faint }}>15-minute minimum</div>
+                    <button
+                      className="mt-0.5 py-1.5 text-xs font-medium"
+                      style={{ color: C.brand }}
+                    >
+                      See more times
+                    </button>
+                    <div className="text-center text-xs" style={{ color: C.faint }}>
+                      15-minute minimum
+                    </div>
                   </div>
                 )}
               </Card>
@@ -354,19 +494,41 @@ export default function App() {
 
             {/* nudge */}
             {nudge && (
-              <div className="flex items-start gap-2.5 rounded-2xl px-3.5 py-3" style={{ background: nBg, border: `1px solid ${nLine}` }}>
+              <div
+                className="flex items-start gap-2.5 rounded-2xl px-3.5 py-3"
+                style={{ background: nBg, border: `1px solid ${nLine}` }}
+              >
                 <nudge.icon size={16} color={nInk} className="mt-0.5 shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    {nudge.live && <span className="balo-dot inline-block shrink-0 rounded-full" style={{ width: 6, height: 6, background: C.live }} />}
-                    <div className="text-sm font-semibold" style={{ color: C.text }}>{nudge.title}</div>
+                    {nudge.live && (
+                      <span
+                        className="balo-dot inline-block shrink-0 rounded-full"
+                        style={{ width: 6, height: 6, background: C.live }}
+                      />
+                    )}
+                    <div className="text-sm font-semibold" style={{ color: C.text }}>
+                      {nudge.title}
+                    </div>
                   </div>
-                  <div className="mt-0.5 text-sm leading-snug" style={{ color: C.sub }}>{nudge.body}</div>
+                  <div className="mt-0.5 text-sm leading-snug" style={{ color: C.sub }}>
+                    {nudge.body}
+                  </div>
 
                   {nudge.slots && (
                     <div className="mt-2 flex flex-col gap-1.5">
                       {SLOTS.map((s) => (
-                        <button key={s} className="rounded-lg px-3 py-2 text-left text-xs font-medium" style={{ background: '#fff', border: `1px solid ${C.warnLine}`, color: C.text }}>{s}</button>
+                        <button
+                          key={s}
+                          className="rounded-lg px-3 py-2 text-left text-xs font-medium"
+                          style={{
+                            background: '#fff',
+                            border: `1px solid ${C.warnLine}`,
+                            color: C.text,
+                          }}
+                        >
+                          {s}
+                        </button>
                       ))}
                     </div>
                   )}
@@ -374,28 +536,54 @@ export default function App() {
                     <div className="mt-2.5 flex items-center gap-2">
                       <button
                         className={`rounded-lg px-3.5 py-2 text-xs font-semibold ${nudge.pulse ? 'balo-join' : ''}`}
-                        style={nudge.ghost ? { background: '#fff', border: `1px solid ${C.line}`, color: C.sub } : { background: nInk, color: '#fff' }}
+                        style={
+                          nudge.ghost
+                            ? { background: '#fff', border: `1px solid ${C.line}`, color: C.sub }
+                            : { background: nInk, color: '#fff' }
+                        }
                       >
                         {nudge.cta}
                       </button>
                       {nudge.alt && (
-                        <button onClick={() => setAsked(false)} className="rounded-lg px-3 py-2 text-xs font-medium" style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.sub }}>{nudge.alt}</button>
+                        <button
+                          onClick={() => setAsked(false)}
+                          className="rounded-lg px-3 py-2 text-xs font-medium"
+                          style={{
+                            background: '#fff',
+                            border: `1px solid ${C.line}`,
+                            color: C.sub,
+                          }}
+                        >
+                          {nudge.alt}
+                        </button>
                       )}
                     </div>
                   )}
                 </div>
-                {nudge.alt && <button onClick={() => setAsked(false)} style={{ color: C.faint }}><X size={14} /></button>}
+                {nudge.alt && (
+                  <button onClick={() => setAsked(false)} style={{ color: C.faint }}>
+                    <X size={14} />
+                  </button>
+                )}
               </div>
             )}
 
             {/* conversation — expands inline, no scroll trap */}
             <Card>
               <div className="mb-2 flex items-baseline justify-between">
-                <h2 className="text-sm font-semibold" style={{ color: C.text }}>Conversation</h2>
-                <span className="text-xs" style={{ color: C.faint }}>Free</span>
+                <h2 className="text-sm font-semibold" style={{ color: C.text }}>
+                  Conversation
+                </h2>
+                <span className="text-xs" style={{ color: C.faint }}>
+                  Free
+                </span>
               </div>
               {!expanded && (
-                <button onClick={() => setExpanded(true)} className="mb-1 inline-flex items-center gap-1 text-xs font-medium" style={{ color: C.brand }}>
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="mb-1 inline-flex items-center gap-1 text-xs font-medium"
+                  style={{ color: C.brand }}
+                >
                   <ChevronUp size={12} /> {EARLIER.length} earlier
                 </button>
               )}
@@ -407,12 +595,25 @@ export default function App() {
                       <Avatar who={m.from} size={24} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-1.5">
-                          <span className="text-xs font-semibold" style={{ color: C.text }}>{isMine ? 'You' : m.from === 'expert' ? EXPERT.name : CLIENT.name}</span>
-                          <span className="text-xs" style={{ color: C.faint }}>{m.at}</span>
+                          <span className="text-xs font-semibold" style={{ color: C.text }}>
+                            {isMine ? 'You' : m.from === 'expert' ? EXPERT.name : CLIENT.name}
+                          </span>
+                          <span className="text-xs" style={{ color: C.faint }}>
+                            {m.at}
+                          </span>
                         </div>
-                        <p className="mt-0.5 text-sm leading-relaxed" style={{ color: C.sub }}>{m.body}</p>
+                        <p className="mt-0.5 text-sm leading-relaxed" style={{ color: C.sub }}>
+                          {m.body}
+                        </p>
                         {m.attach && (
-                          <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs" style={{ background: '#F7F8FA', border: `1px solid ${C.line}`, color: C.sub }}>
+                          <div
+                            className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs"
+                            style={{
+                              background: '#F7F8FA',
+                              border: `1px solid ${C.line}`,
+                              color: C.sub,
+                            }}
+                          >
                             <Paperclip size={11} /> {m.attach}
                           </div>
                         )}
@@ -421,10 +622,18 @@ export default function App() {
                   );
                 })}
               </div>
-              <div className="mt-1.5 flex items-center gap-2 rounded-2xl px-3 py-2" style={{ background: '#FAFBFC', border: `1px solid ${C.line}` }}>
+              <div
+                className="mt-1.5 flex items-center gap-2 rounded-2xl px-3 py-2"
+                style={{ background: '#FAFBFC', border: `1px solid ${C.line}` }}
+              >
                 <Paperclip size={15} color={C.faint} />
-                <div className="flex-1 text-sm" style={{ color: C.faint }}>Message {client ? EXPERT.name : CLIENT.name}…</div>
-                <span className="flex items-center justify-center rounded-lg" style={{ width: 28, height: 28, background: C.brand, color: '#fff' }}>
+                <div className="flex-1 text-sm" style={{ color: C.faint }}>
+                  Message {client ? EXPERT.name : CLIENT.name}…
+                </div>
+                <span
+                  className="flex items-center justify-center rounded-lg"
+                  style={{ width: 28, height: 28, background: C.brand, color: '#fff' }}
+                >
                   <Send size={13} />
                 </span>
               </div>
@@ -433,34 +642,82 @@ export default function App() {
             {/* consultations */}
             <Card>
               <div className="mb-1 flex items-baseline justify-between">
-                <h2 className="text-sm font-semibold" style={{ color: C.text }}>Consultations</h2>
-                <span className="text-xs" style={{ color: C.faint }}>{consultations.length}</span>
+                <h2 className="text-sm font-semibold" style={{ color: C.text }}>
+                  Consultations
+                </h2>
+                <span className="text-xs" style={{ color: C.faint }}>
+                  {consultations.length}
+                </span>
               </div>
               {consultations.map((c, i) => {
                 const cancelled = c.state === 'cancelled';
                 const scheduled = c.state === 'scheduled';
                 const Icon = cancelled ? CircleSlash : scheduled ? CalendarClock : Video;
                 return (
-                  <div key={c.n} className="flex items-start gap-2.5 py-2.5" style={{ borderBottom: i === consultations.length - 1 ? 'none' : `1px solid ${C.line2}` }}>
-                    <span className="mt-0.5 flex shrink-0 items-center justify-center rounded-lg" style={{ width: 26, height: 26, background: cancelled ? '#F4F5F7' : scheduled ? C.warnSoft : C.brandSoft }}>
+                  <div
+                    key={c.n}
+                    className="flex items-start gap-2.5 py-2.5"
+                    style={{
+                      borderBottom:
+                        i === consultations.length - 1 ? 'none' : `1px solid ${C.line2}`,
+                    }}
+                  >
+                    <span
+                      className="mt-0.5 flex shrink-0 items-center justify-center rounded-lg"
+                      style={{
+                        width: 26,
+                        height: 26,
+                        background: cancelled ? '#F4F5F7' : scheduled ? C.warnSoft : C.brandSoft,
+                      }}
+                    >
                       <Icon size={13} color={cancelled ? C.faint : scheduled ? C.warn : C.brand} />
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span className="text-sm font-medium" style={{ color: cancelled ? C.faint : C.text }}>{c.at}</span>
-                        {c.minutes ? <span className="text-xs" style={{ color: C.sub }}>{c.minutes} min</span> : null}
+                        <span
+                          className="text-sm font-medium"
+                          style={{ color: cancelled ? C.faint : C.text }}
+                        >
+                          {c.at}
+                        </span>
+                        {c.minutes ? (
+                          <span className="text-xs" style={{ color: C.sub }}>
+                            {c.minutes} min
+                          </span>
+                        ) : null}
                       </div>
                       {c.state === 'held' && (
                         <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center gap-1 text-xs font-medium" style={{ color: C.brand }}>Recap <ArrowRight size={10} /></span>
+                          <span
+                            className="inline-flex items-center gap-1 text-xs font-medium"
+                            style={{ color: C.brand }}
+                          >
+                            Recap <ArrowRight size={10} />
+                          </span>
                           {c.rec && <PlayCircle size={12} color={C.faint} />}
                           {c.tx && <FileText size={12} color={C.faint} />}
-                          {c.items ? <span className="text-xs" style={{ color: C.faint }}>{c.items} items</span> : null}
+                          {c.items ? (
+                            <span className="text-xs" style={{ color: C.faint }}>
+                              {c.items} items
+                            </span>
+                          ) : null}
                         </div>
                       )}
-                      {cancelled && <div className="text-xs" style={{ color: C.faint }}>Cancelled — nothing charged</div>}
-                      {c.state === 'no_show' && <div className="text-xs" style={{ color: C.faint }}>{client ? 'Billed at the minimum' : 'Settled at the minimum'}</div>}
-                      {scheduled && <div className="text-xs" style={{ color: C.faint }}>Upcoming</div>}
+                      {cancelled && (
+                        <div className="text-xs" style={{ color: C.faint }}>
+                          Cancelled — nothing charged
+                        </div>
+                      )}
+                      {c.state === 'no_show' && (
+                        <div className="text-xs" style={{ color: C.faint }}>
+                          {client ? 'Billed at the minimum' : 'Settled at the minimum'}
+                        </div>
+                      )}
+                      {scheduled && (
+                        <div className="text-xs" style={{ color: C.faint }}>
+                          Upcoming
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -472,32 +729,61 @@ export default function App() {
         {/* details sheet */}
         {sheet && (
           <>
-            <div className="absolute inset-0" style={{ background: 'rgba(11,14,19,0.35)' }} onClick={() => setSheet(null)} />
-            <div className="balo-sheet absolute right-0 bottom-0 left-0 rounded-t-3xl px-4 pt-2.5 pb-6" style={{ background: C.card, maxHeight: '76%', overflowY: 'auto' }}>
-              <div className="mx-auto mb-3 rounded-full" style={{ width: 36, height: 4, background: '#DDE1E6' }} />
+            <div
+              className="absolute inset-0"
+              style={{ background: 'rgba(11,14,19,0.35)' }}
+              onClick={() => setSheet(null)}
+            />
+            <div
+              className="balo-sheet absolute right-0 bottom-0 left-0 rounded-t-3xl px-4 pt-2.5 pb-6"
+              style={{ background: C.card, maxHeight: '76%', overflowY: 'auto' }}
+            >
+              <div
+                className="mx-auto mb-3 rounded-full"
+                style={{ width: 36, height: 4, background: '#DDE1E6' }}
+              />
               <Seg
                 value={tab}
                 onChange={setTab}
-                options={[{ value: 'items', label: 'Action items' }, { value: 'files', label: 'Files' }, { value: 'people', label: 'People' }]}
+                options={[
+                  { value: 'items', label: 'Action items' },
+                  { value: 'files', label: 'Files' },
+                  { value: 'people', label: 'People' },
+                ]}
               />
 
               <div className="mt-4">
                 {tab === 'items' && (
                   <>
                     <Items label="Yours" items={ACTION_ITEMS.filter((a) => a.party === mine)} />
-                    <Items label={`${client ? EXPERT.name : CLIENT.name}’s`} items={ACTION_ITEMS.filter((a) => a.party === theirs)} />
-                    <Items label="Unassigned" muted items={ACTION_ITEMS.filter((a) => a.party === null)} />
+                    <Items
+                      label={`${client ? EXPERT.name : CLIENT.name}’s`}
+                      items={ACTION_ITEMS.filter((a) => a.party === theirs)}
+                    />
+                    <Items
+                      label="Unassigned"
+                      muted
+                      items={ACTION_ITEMS.filter((a) => a.party === null)}
+                    />
                   </>
                 )}
 
                 {tab === 'files' && (
                   <div className="flex flex-col gap-1">
                     {FILES.map((f, i) => (
-                      <button key={i} className="flex items-center gap-2.5 rounded-xl px-2 py-2.5 text-left" style={{ border: `1px solid transparent` }}>
+                      <button
+                        key={i}
+                        className="flex items-center gap-2.5 rounded-xl px-2 py-2.5 text-left"
+                        style={{ border: `1px solid transparent` }}
+                      >
                         <Paperclip size={14} color={C.faint} className="shrink-0" />
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium" style={{ color: C.text }}>{f.name}</div>
-                          <div className="text-xs" style={{ color: C.faint }}>{f.from} · {f.size}</div>
+                          <div className="truncate text-sm font-medium" style={{ color: C.text }}>
+                            {f.name}
+                          </div>
+                          <div className="text-xs" style={{ color: C.faint }}>
+                            {f.from} · {f.size}
+                          </div>
                         </div>
                         <Download size={15} color={C.sub} className="shrink-0" />
                       </button>
@@ -509,23 +795,35 @@ export default function App() {
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center gap-2.5">
                       <Avatar who={client ? 'client' : 'expert'} size={32} />
-                      <div className="text-sm" style={{ color: C.text }}>You</div>
+                      <div className="text-sm" style={{ color: C.text }}>
+                        You
+                      </div>
                     </div>
                     <div className="flex items-center gap-2.5">
                       <Avatar who={client ? 'expert' : 'client'} size={32} />
                       <div className="min-w-0">
-                        <div className="text-sm" style={{ color: C.text }}>{client ? EXPERT.full : CLIENT.name}</div>
-                        <div className="text-xs" style={{ color: C.faint }}>{client ? EXPERT.agency : CLIENT.company}</div>
+                        <div className="text-sm" style={{ color: C.text }}>
+                          {client ? EXPERT.full : CLIENT.name}
+                        </div>
+                        <div className="text-xs" style={{ color: C.faint }}>
+                          {client ? EXPERT.agency : CLIENT.company}
+                        </div>
                       </div>
                     </div>
                     <div className="text-xs leading-relaxed" style={{ color: C.faint }}>
                       Anyone invited sees this whole case, including past consultations.
                     </div>
-                    <button className="inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium" style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}>
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium"
+                      style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}
+                    >
                       <UserPlus size={14} /> Invite a colleague
                     </button>
                     {client && (
-                      <button className="inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium" style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}>
+                      <button
+                        className="inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium"
+                        style={{ background: '#fff', border: `1px solid ${C.line}`, color: C.text }}
+                      >
                         <CircleCheck size={14} /> Mark resolved
                       </button>
                     )}
@@ -538,8 +836,8 @@ export default function App() {
       </div>
 
       <p className="max-w-md text-center text-xs leading-relaxed" style={{ color: '#6B7482' }}>
-        Prototype · case surface, mobile. Reference (items, files, people) is behind Details; booking
-        stays on the page. Tap Details, or the expert strip for slots.
+        Prototype · case surface, mobile. Reference (items, files, people) is behind Details;
+        booking stays on the page. Tap Details, or the expert strip for slots.
       </p>
     </div>
   );
