@@ -86,8 +86,8 @@ export function projectDeliveryToEngagementStatus(s: ProjectDeliveryStatus): Eng
  * `engagement_type` can never be omitted — it is a required parameter with no default.
  *
  * `baloFeeBps` is accepted because PROJECT engagements snapshot it at kickoff. The
- * CASE path never passes it (D3: `credit_sessions.balo_fee_bps` is the case-margin
- * SSOT), and `CaseEngagementRow` omits the column entirely.
+ * CASE path passes `null` EXPLICITLY (D3: `credit_sessions.balo_fee_bps` is the
+ * case-margin SSOT), and `CaseEngagementRow` omits the column entirely.
  */
 export async function insertEngagementRowTx(
   tx: DbTx,
@@ -98,7 +98,17 @@ export async function insertEngagementRowTx(
     /** Defaults to `'active'` at the column. */
     status?: EngagementStatus;
     currency?: string;
-    baloFeeBps?: number;
+    /**
+     * Balo margin snapshot (bps). THREE-WAY on purpose, and the CHECK
+     * `engagement_balo_fee_bps_case_null` decides which is legal:
+     *   · a number  — a project/package/retainer snapshot.
+     *   · `undefined` (omitted) — falls through to the column DEFAULT (2500). Legal for
+     *     every NON-case type; on a CASE it is a 23514, which is the point: a case path
+     *     that forgets fails loudly rather than storing an uncharged 2500.
+     *   · `null` — the CASE path, written EXPLICITLY. Required on a case, a 23514 on
+     *     any other type.
+     */
+    baloFeeBps?: number | null;
     activatedAt?: Date;
   }
 ): Promise<Engagement> {
@@ -182,19 +192,56 @@ export async function softDeleteEngagementTx(
 
   await tx.update(engagements).set({ deletedAt }).where(eq(engagements.id, engagementId));
 
-  if (parent.engagementType === 'project') {
-    await tx
-      .update(projectEngagements)
-      .set({ deletedAt })
-      .where(
-        and(eq(projectEngagements.engagementId, engagementId), isNull(projectEngagements.deletedAt))
-      );
-  } else if (parent.engagementType === 'case') {
-    await tx
-      .update(caseEngagements)
-      .set({ deletedAt })
-      .where(
-        and(eq(caseEngagements.engagementId, engagementId), isNull(caseEngagements.deletedAt))
-      );
+  // EXHAUSTIVE ON `engagement_type` BY CONSTRUCTION — a `switch` rather than an
+  // if/else-if chain precisely so the childless types are an EXPLICIT arm and a
+  // never-yet-seen label cannot fall through silently.
+  switch (parent.engagementType) {
+    case 'project':
+      await tx
+        .update(projectEngagements)
+        .set({ deletedAt })
+        .where(
+          and(
+            eq(projectEngagements.engagementId, engagementId),
+            isNull(projectEngagements.deletedAt)
+          )
+        );
+      break;
+    case 'case':
+      await tx
+        .update(caseEngagements)
+        .set({ deletedAt })
+        .where(
+          and(eq(caseEngagements.engagementId, engagementId), isNull(caseEngagements.deletedAt))
+        );
+      break;
+    case 'package':
+    case 'retainer':
+      // DELIBERATE NO-OP, NOT A SILENT FALL-THROUGH. `package` and `retainer` are
+      // DECLARED enum labels with NO child table today (see the gap docblock on
+      // `engagements` in schema/engagements.ts): a row of either type is insertable as a
+      // BARE PARENT, so there is no child row to mirror the stamp onto and stamping the
+      // parent alone is the whole correct behaviour.
+      //
+      // It does NOT throw, on purpose: a bare `package`/`retainer` parent is a legal
+      // insert, so throwing would reject a legal soft-delete for a shape the schema
+      // permits.
+      //
+      // ⚠ THE MOMENT EITHER GETS A CHILD TABLE, THIS ARM BECOMES A BUG — the child would
+      // keep `deleted_at IS NULL`, stay live under any partial UNIQUE index it carries,
+      // and block re-materialisation with a `23505`
+      // (reference_softdelete_nonpartial_unique_recreate). Adding the table and adding
+      // the branch here are ONE change, never two.
+      //
+      // Note what this arm CANNOT catch: adding a child table is not an enum change, so
+      // no compile error fires. The `default` below only catches a NEW LABEL. The
+      // schema docblock is the other half of the guard.
+      break;
+    default: {
+      // Compile-time exhaustiveness: a fifth `engagement_type` label stops typechecking
+      // here until it is consciously handled above.
+      const exhaustive: never = parent.engagementType;
+      throw new Error(`Unhandled engagement type in softDeleteEngagementTx: ${String(exhaustive)}`);
+    }
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { asc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   auditEvents,
@@ -24,6 +24,7 @@ import {
 } from './case-engagements';
 import { EngagementTypeMismatchError } from './_shared/engagement-supertype';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
+import { expectCheckViolation } from '../test/helpers/expect-check-violation';
 
 /** Delivery audit rows for one entity (BAL-344 generic table, ordered createdAt asc). */
 async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
@@ -32,23 +33,6 @@ async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
     .from(auditEvents)
     .where(eq(auditEvents.entityId, entityId))
     .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
-}
-
-/**
- * Assert a raw statement violates a CHECK (23514), running it inside its OWN
- * SAVEPOINT.
- *
- * ⚠ LOAD-BEARING. The integration harness holds every test inside one outer
- * transaction, and a failed statement ABORTS it — every subsequent statement then
- * fails `25P02 current transaction is aborted` instead of the constraint code you
- * meant to assert. A nested `db.transaction` is a SAVEPOINT (see
- * test/setup-integration.ts), so the rollback is contained and the next probe in the
- * same test still runs.
- */
-async function expectCheckViolation(statement: SQL): Promise<void> {
-  await expect(db.transaction(async (tx) => tx.execute(statement))).rejects.toMatchObject({
-    code: '23514',
-  });
 }
 
 async function seedCompanyId(): Promise<string> {
@@ -91,6 +75,113 @@ describe('caseEngagementsRepository.create', () => {
       .where(eq(caseEngagements.engagementId, created.id));
     expect(child?.engagementType).toBe('case');
     expect(child?.title).toBe('Flow fails on record update');
+  });
+
+  it('(b) the PARENT row it writes has balo_fee_bps IS NULL — read RAW, not through the strip', async () => {
+    // ⚠ READ THE PARENT COLUMN DIRECTLY. `CaseEngagementRow`'s `Omit` and `toCaseRow`'s
+    // strip both hide the key from the case path, but neither stops a REPORTING QUERY,
+    // AN ADMIN SURFACE OR A RECONCILIATION SCRIPT doing a raw
+    // `db.select().from(engagements)` and reading a credible-but-WRONG 2500 that was
+    // never charged at that rate. NULL is what makes that unreadable, and only a raw
+    // read of the stored column proves it.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const created = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      title: 'Fee must be NULL on a case',
+      description: '<p>x</p>',
+    });
+
+    const [raw] = await db
+      .select({ baloFeeBps: engagements.baloFeeBps })
+      .from(engagements)
+      .where(eq(engagements.id, created.id));
+    expect(raw?.baloFeeBps).toBeNull();
+
+    // And the same read scoped the way a reporting query would scope it.
+    const caseRows = await db
+      .select({ baloFeeBps: engagements.baloFeeBps })
+      .from(engagements)
+      .where(and(eq(engagements.engagementType, 'case'), isNull(engagements.deletedAt)));
+    expect(caseRows.length).toBeGreaterThan(0);
+    expect(caseRows.every((r) => r.baloFeeBps === null)).toBe(true);
+  });
+
+  it('(c) a raw case INSERT that CARRIES a fee is REJECTED (23514), including via the DEFAULT', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    // Explicit fee → rejected.
+    await expectCheckViolation(sql`
+      INSERT INTO engagements (engagement_type, company_id, expert_profile_id, balo_fee_bps)
+      VALUES ('case', ${companyId}::uuid, ${expert.id}::uuid, 2500)
+    `);
+
+    // OMITTED fee → falls through to the column DEFAULT (2500) → ALSO rejected. This is
+    // the whole reason the DEFAULT was kept rather than dropped: a case writer that
+    // forgets to pass `null` fails LOUDLY here instead of silently storing an uncharged
+    // 2500. (`caseEngagementsRepository.create` passes `baloFeeBps: null` explicitly.)
+    await expectCheckViolation(sql`
+      INSERT INTO engagements (engagement_type, company_id, expert_profile_id)
+      VALUES ('case', ${companyId}::uuid, ${expert.id}::uuid)
+    `);
+
+    // A raw UPDATE putting a fee back onto a LIVE case is rejected too — the invariant
+    // is not just an insert-time one.
+    const { engagement } = await caseEngagementFactory();
+    await expectCheckViolation(sql`
+      UPDATE engagements SET balo_fee_bps = 2500 WHERE id = ${engagement.id}::uuid
+    `);
+  });
+
+  it('writes exactly ONE engagement.created audit row with engagement_type=case metadata', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const created = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      title: 'Audited at birth',
+      description: '<p>x</p>',
+    });
+
+    const events = await auditEventsForEntity(created.id);
+    const createdEvents = events.filter((e) => e.action === 'engagement.created');
+    expect(createdEvents).toHaveLength(1);
+    const [createdEvent] = createdEvents;
+    expect(createdEvent?.entityType).toBe('engagement');
+    expect(createdEvent?.entityId).toBe(created.id);
+    // ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION: BAL-417 ships no live case producer
+    // (D4), so no caller has a human actor to name and `actorUserId` stays NULL rather
+    // than being fabricated. BAL-400's booking surface passes `actorUserId`.
+    expect(createdEvent?.actorUserId).toBeNull();
+    // The DISCRIMINATOR: `engagement.created` is type-agnostic, so only the metadata
+    // tells a downstream reader a Case (not a Project) was created.
+    expect(createdEvent?.metadata).toMatchObject({
+      engagement_type: 'case',
+      engagementId: created.id,
+    });
+  });
+
+  it('attributes engagement.created to the actor when one is supplied', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const actor = await userFactory();
+
+    const created = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      title: 'Attributed',
+      description: '<p>x</p>',
+      actorUserId: actor.id,
+    });
+
+    const [createdEvent] = (await auditEventsForEntity(created.id)).filter(
+      (e) => e.action === 'engagement.created'
+    );
+    expect(createdEvent?.actorUserId).toBe(actor.id);
   });
 
   it('the returned CaseEngagementRow has NO baloFeeBps key and its createdAt is the PARENT’s', async () => {

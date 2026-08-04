@@ -30,16 +30,53 @@ describe('insertEngagementRowTx', () => {
         engagementType: 'case',
         companyId,
         expertProfileId: expert.id,
+        // A CASE must write the fee as NULL EXPLICITLY — `engagement_balo_fee_bps_case_null`
+        // rejects the column DEFAULT (2500) on a case row. See the `baloFeeBps` docblock.
+        baloFeeBps: null,
       })
     );
 
     expect(row.engagementType).toBe('case');
     expect(row.status).toBe('active');
     expect(row.currency).toBe('aud');
-    expect(row.baloFeeBps).toBe(2500);
+    expect(row.baloFeeBps).toBeNull();
 
     const [persisted] = await db.select().from(engagements).where(eq(engagements.id, row.id));
     expect(persisted?.engagementType).toBe('case');
+  });
+
+  it('a CASE insert that OMITS baloFeeBps fails LOUDLY on the CHECK rather than storing 2500', async () => {
+    // The design decision behind keeping the column DEFAULT: an omitted fee on a
+    // project/retainer still works (the retainer seam), while a case path that forgets
+    // to pass `null` gets a 23514 instead of a credible-but-uncharged 2500.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    await expect(
+      db.transaction(async (tx) =>
+        insertEngagementRowTx(tx, {
+          engagementType: 'case',
+          companyId,
+          expertProfileId: expert.id,
+        })
+      )
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('a NON-case insert with an explicit NULL fee is rejected — NOT NULL semantics survive', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    await expect(
+      db.transaction(async (tx) =>
+        insertEngagementRowTx(tx, {
+          engagementType: 'project',
+          companyId,
+          expertProfileId: expert.id,
+          baloFeeBps: null,
+        })
+      )
+    ).rejects.toMatchObject({ code: '23514' });
   });
 
   it('a raw INSERT that omits engagement_type is rejected (23502) — no schema default rescues it', async () => {
@@ -176,6 +213,7 @@ describe('the supertype/subtype pairing is enforced AT THE DATABASE', () => {
         engagementType: 'case',
         companyId,
         expertProfileId: expert.id,
+        baloFeeBps: null, // required on a case — engagement_balo_fee_bps_case_null
       })
     );
 
@@ -191,9 +229,39 @@ describe('the supertype/subtype pairing is enforced AT THE DATABASE', () => {
   it('a raw UPDATE flipping the PARENT engagement_type out from under a child is rejected (23503)', async () => {
     const { engagement } = await engagementFactory();
 
+    // ⚠ THE FEE MUST BE NULLED IN THE SAME STATEMENT, or this test stops testing what it
+    // says. A project row carries `balo_fee_bps = 2500`, so a bare
+    // `SET engagement_type = 'case'` now trips `engagement_balo_fee_bps_case_null`
+    // (23514) FIRST and the composite FK never gets evaluated — the flip is still
+    // rejected, but by the wrong constraint, and the FK backstop would go unproven.
+    // Satisfying the fee invariant isolates `project_engagement_parent_type_fk`.
+    await expect(
+      db.execute(
+        sql`UPDATE engagements SET engagement_type = 'case', balo_fee_bps = NULL WHERE id = ${engagement.id}::uuid`
+      )
+    ).rejects.toMatchObject({ code: '23503' });
+  });
+
+  it('the NAIVE type flip (fee left in place) is rejected by the fee invariant first (23514)', async () => {
+    // The other half of the statement above, pinned so nobody "simplifies" the NULL back
+    // out of it: both constraints reject the flip, and which one fires depends on
+    // whether the fee is made coherent in the same statement.
+    const { engagement } = await engagementFactory();
+
     await expect(
       db.execute(
         sql`UPDATE engagements SET engagement_type = 'case' WHERE id = ${engagement.id}::uuid`
+      )
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('flipping a CASE parent to project is rejected too (23503, fee made coherent)', async () => {
+    // The mirror direction, so the FK backstop is proven for both children.
+    const { engagement } = await caseEngagementFactory();
+
+    await expect(
+      db.execute(
+        sql`UPDATE engagements SET engagement_type = 'project', balo_fee_bps = 2500 WHERE id = ${engagement.id}::uuid`
       )
     ).rejects.toMatchObject({ code: '23503' });
   });

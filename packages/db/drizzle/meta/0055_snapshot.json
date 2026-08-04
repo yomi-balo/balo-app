@@ -1,5 +1,5 @@
 {
-  "id": "49477392-e31c-4cee-93d5-60973350895e",
+  "id": "13daff36-60ad-4968-b7fd-40717c9eb234",
   "prevId": "82754de4-f225-40e6-8666-bdc3f94476fb",
   "version": "7",
   "dialect": "postgresql",
@@ -6876,7 +6876,7 @@
           "name": "balo_fee_bps",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": 2500
         },
         "activated_at": {
@@ -6999,6 +6999,10 @@
         "engagement_balo_fee_bps_range": {
           "name": "engagement_balo_fee_bps_range",
           "value": "\"engagements\".\"balo_fee_bps\" >= 0 AND \"engagements\".\"balo_fee_bps\" <= 10000"
+        },
+        "engagement_balo_fee_bps_case_null": {
+          "name": "engagement_balo_fee_bps_case_null",
+          "value": "(\"engagements\".\"engagement_type\" = 'case') = (\"engagements\".\"balo_fee_bps\" IS NULL)"
         }
       },
       "isRLSEnabled": false

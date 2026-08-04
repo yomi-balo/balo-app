@@ -23,6 +23,11 @@
 --      creating it first would force two index rebuilds through a partial predicate
 --      for no benefit.
 --
+--   4. The `balo_fee_bps` NULLABLE-FOR-CASES pair (`ALTER COLUMN … DROP NOT NULL` +
+--      `ADD CONSTRAINT "engagement_balo_fee_bps_case_null"`) was PLACED immediately
+--      after the `engagement_type` column add. The CHECK reads `engagement_type`, so it
+--      cannot precede that ADD COLUMN.
+--
 -- There is deliberately NO DATA MIGRATION here — no `INSERT INTO project_engagements
 -- … SELECT`, no interim `DEFAULT 'project'` on `engagement_type`, no
 -- `UPDATE … SET status='active' WHERE status='pending_acceptance'`. Pre-launch, no
@@ -124,6 +129,17 @@ ALTER TABLE "engagements" ADD COLUMN "engagement_type" "engagement_type" NOT NUL
 -- HAND-EDIT 1 (see header): MOVED UP from after the child FKs. The composite FKs below
 -- reference this constraint, so it must exist first.
 ALTER TABLE "engagements" ADD CONSTRAINT "engagement_id_type_uq" UNIQUE("id","engagement_type");--> statement-breakpoint
+-- HAND-PLACEMENT 4 (see header): `balo_fee_bps` becomes NULLABLE-FOR-CASES. The CHECK is
+-- a BICONDITIONAL and is STRICTLY STRONGER than the `NOT NULL` it replaces — NOT NULL for
+-- every non-case type AND NULL for every case. It has no three-valued-logic hole:
+-- `engagement_type` is NOT NULL so the left side is never NULL, and `IS NULL` never
+-- returns NULL, so the whole expression is always TRUE or FALSE (contrast the `=`-on-a-
+-- nullable-column hole that had to be closed in `case_engagement_close_coherent`). The
+-- pre-existing `engagement_balo_fee_bps_range` is left untouched on purpose: it evaluates
+-- to NULL on a case row, which Postgres treats as satisfied — the BENIGN direction, and
+-- the only reason a case insert is possible at all.
+ALTER TABLE "engagements" ALTER COLUMN "balo_fee_bps" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "engagements" ADD CONSTRAINT "engagement_balo_fee_bps_case_null" CHECK (("engagements"."engagement_type" = 'case') = ("engagements"."balo_fee_bps" IS NULL));--> statement-breakpoint
 ALTER TABLE "project_engagements" ADD CONSTRAINT "project_engagements_source_proposal_id_proposals_id_fk" FOREIGN KEY ("source_proposal_id") REFERENCES "public"."proposals"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_engagements" ADD CONSTRAINT "project_engagements_relationship_id_request_expert_relationships_id_fk" FOREIGN KEY ("relationship_id") REFERENCES "public"."request_expert_relationships"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_engagements" ADD CONSTRAINT "project_engagements_project_request_id_project_requests_id_fk" FOREIGN KEY ("project_request_id") REFERENCES "public"."project_requests"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint

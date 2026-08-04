@@ -16,7 +16,7 @@ import { isAllowedTransition, InvalidStatusTransitionError } from './project-req
 import { assertEngagementTermsCoherent } from './proposal-coherence';
 import { listByProposalTx } from './proposal-milestones';
 import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
-import { recordDeliveryAudit } from './_shared/delivery-audit';
+import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import {
   insertEngagementRowTx,
   lockEngagementRowTx,
@@ -428,16 +428,37 @@ type WorkspaceGraphRow = NonNullable<
  *
  * The `where` guarantees `engagementType === 'project'`, so a null child means a
  * writer bypassed the repository — throw, never silently skip.
+ *
+ * IT IS ALSO THE ONE PLACE `baloFeeBps` IS NARROWED `number | null` → `number` — see the
+ * guard below. That keeps `ProjectEngagementWithMilestones.baloFeeBps` a plain `number`
+ * for every consumer, so the two `applyBaloFee(...)` call sites in
+ * `apps/web/src/lib/engagement/engagement-view.ts` need no null handling of their own.
  */
 function foldWorkspaceRow(row: WorkspaceGraphRow) {
   const child = row.projectEngagement;
   if (child === null) {
     throw new Error(`Project engagement child row missing: ${row.id}`);
   }
-  const { projectEngagement: _child, ...parent } = row;
+  const { projectEngagement: _child, baloFeeBps, ...parent } = row;
+  // `engagements.balo_fee_bps` is NULLABLE-FOR-CASES (BAL-417 post-review), so this graph
+  // types it `number | null`. `engagement_balo_fee_bps_case_null` forces it NOT NULL for
+  // every non-case type and `queryProjectEngagementWithMilestones` filters
+  // `engagement_type = 'project'`, so NULL is unreachable here unless that CHECK was
+  // dropped. Narrowed by DESTRUCTURE + GUARD (never `!` — Sonar reads a non-null
+  // assertion under `noUncheckedIndexedAccess` as unnecessary).
+  //
+  // ⚠ THIS GUARD FAILS LOUDLY, IT DOES NOT FALL BACK. A `?? 2500` or `?? 0` here would
+  // gross the CLIENT's price up by a fee nobody agreed to (or silently drop the margin),
+  // and the workspace would render a wrong number rather than an error.
+  if (baloFeeBps === null) {
+    throw new Error(
+      `Project engagement ${row.id} has a NULL balo_fee_bps — engagement_balo_fee_bps_case_null violated`
+    );
+  }
   const { deliveryStatus, projectRequest, acceptedBy, changeRequestedBy, ...childScalars } = child;
   return {
     ...parent,
+    baloFeeBps,
     ...childScalars,
     projectRequest, // HOISTED grandchild
     acceptedBy, // HOISTED grandchild
@@ -754,6 +775,11 @@ export const projectEngagementsRepository = {
      * retainer/embedded engagement has no proposal to snapshot from, so an omitted
      * value falls through to the column default (2500). `materializeFromKickoff`
      * (which always has an accepted proposal) requires it.
+     *
+     * ⚠ STILL `number`, NOT `number | null`, even though the COLUMN is now nullable:
+     * `engagement_balo_fee_bps_case_null` forces NULL for a case and NOT NULL for every
+     * other type, and this writer only ever produces `engagement_type = 'project'`. The
+     * DEFAULT is what keeps the omit-the-fee retainer seam working.
      */
     baloFeeBps?: number;
     currency?: string;
@@ -763,6 +789,14 @@ export const projectEngagementsRepository = {
     billingModel?: string;
     approvalModel?: string;
     activatedAt?: Date;
+    /**
+     * The human who created the engagement, for the `engagement.created` audit row.
+     * OPTIONAL because this seam writer has no live production caller yet (the retainer
+     * / embedded product is the intended one); an omitted/`null` value is the ADR-1030
+     * SYSTEM-ACTOR ATTRIBUTION EXEMPTION, not a fabricated actor. Contrast
+     * `materializeFromKickoff`, which always has the approving admin.
+     */
+    actorUserId?: string | null;
   }): Promise<ProjectEngagementRow> {
     assertTermsBeforeInsert(input);
 
@@ -796,6 +830,13 @@ export const projectEngagementsRepository = {
       if (child === undefined) {
         throw new Error('Failed to create engagement');
       }
+
+      await recordEngagementCreated(tx, {
+        engagementId: parent.id,
+        engagementType: 'project',
+        actorUserId: input.actorUserId ?? null,
+      });
+
       return toProjectRow(parent, child);
     });
   },
@@ -902,6 +943,15 @@ export const projectEngagementsRepository = {
       if (child === undefined) {
         throw new Error('Failed to materialise engagement');
       }
+
+      // FIRST audit row for the engagement, before `milestones_snapshotted`, so the trail
+      // reads creation-then-snapshot. Unlike the seam writer this path HAS a human actor
+      // (the admin approving kickoff) — no ADR-1030 exemption is needed or taken.
+      await recordEngagementCreated(tx, {
+        engagementId: parent.id,
+        engagementType: 'project',
+        actorUserId: input.approvingAdminUserId,
+      });
 
       // BAL-330: snapshot the accepted proposal's live milestones into the new
       // engagement (same tx). A zero-milestone proposal → zero rows; the snapshot

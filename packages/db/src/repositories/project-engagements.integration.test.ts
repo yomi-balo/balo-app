@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
@@ -25,6 +25,7 @@ import {
 } from '../test/factories';
 import type { ProposalFactoryResult } from '../test/factories';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
+import { expectCheckViolation } from '../test/helpers/expect-check-violation';
 import { engagementsRepository } from './engagements';
 import {
   projectEngagementsRepository,
@@ -232,6 +233,188 @@ describe('projectEngagementsRepository.create — the seam proof', () => {
       .from(projectEngagements)
       .where(eq(projectEngagements.engagementId, engagement.id));
     expect(survivorChild?.sourceProposalId).toBeNull();
+  });
+});
+
+describe('engagement_balo_fee_bps_case_null — the NULLABLE-FOR-CASES invariant (project side)', () => {
+  // The CASE half of the truth table lives in `case-engagements.integration.test.ts`.
+  // These are the PROJECT rows of it, plus the raw-write backstop that makes the
+  // constraint STRICTLY STRONGER than the `NOT NULL` it replaced.
+
+  it('(a) a project engagement created WITH a fee round-trips it (raw parent column, not just the fold)', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 3000,
+    });
+
+    expect(engagement.baloFeeBps).toBe(3000);
+    const [parent] = await db
+      .select({ baloFeeBps: engagements.baloFeeBps })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.baloFeeBps).toBe(3000);
+
+    // The hydrated workspace graph narrows `number | null` → `number` in
+    // `foldWorkspaceRow`; prove the value survives that guard rather than being
+    // replaced by it.
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.baloFeeBps).toBe(3000);
+  });
+
+  it('(d) a project engagement created WITHOUT a fee still works via the column DEFAULT', async () => {
+    // The seam writer types `baloFeeBps` OPTIONAL for the retainer/embedded product,
+    // which has no proposal to snapshot from. Keeping the DEFAULT (rather than dropping
+    // it alongside NOT NULL) is what keeps that path working.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+    });
+
+    expect(engagement.baloFeeBps).toBe(2500);
+    const [parent] = await db
+      .select({ baloFeeBps: engagements.baloFeeBps })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.baloFeeBps).toBe(2500);
+  });
+
+  it('a raw NON-case INSERT with a NULL fee is REJECTED (23514) — NOT NULL semantics survive', async () => {
+    // The direction that proves the biconditional is STRICTLY STRONGER than `NOT NULL`
+    // rather than a relaxation of it: every non-case type still cannot store NULL.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    for (const type of ['project', 'package', 'retainer'] as const) {
+      await expectCheckViolation(sql`
+        INSERT INTO engagements (engagement_type, company_id, expert_profile_id, balo_fee_bps)
+        VALUES (${type}, ${companyId}::uuid, ${expert.id}::uuid, NULL)
+      `);
+    }
+
+    // …and a raw UPDATE nulling a LIVE project's fee is rejected too.
+    const { engagement } = await engagementFactory();
+    await expectCheckViolation(sql`
+      UPDATE engagements SET balo_fee_bps = NULL WHERE id = ${engagement.id}::uuid
+    `);
+  });
+
+  it('engagement_balo_fee_bps_range still bites on a NON-NULL out-of-range fee', async () => {
+    // The range CHECK evaluates to NULL on a case row (Postgres treats that as
+    // satisfied) — the BENIGN direction, and the only reason a case insert is possible.
+    // It must still constrain a value that DOES exist; a `COALESCE` / `IS NOT DISTINCT
+    // FROM` "fix" would break every case insert, and deleting the CHECK would let an
+    // out-of-range project fee through. Both regressions are caught here.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    for (const bps of [-1, 10_001]) {
+      await expectCheckViolation(sql`
+        INSERT INTO engagements (engagement_type, company_id, expert_profile_id, balo_fee_bps)
+        VALUES ('project', ${companyId}::uuid, ${expert.id}::uuid, ${bps})
+      `);
+    }
+  });
+});
+
+describe('engagement.created audit — the project creation paths (BAL-417 post-review)', () => {
+  it('the seam writer emits exactly one engagement.created with engagement_type=project', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+    });
+
+    const createdEvents = (await auditEventsForEntity(engagement.id)).filter(
+      (e) => e.action === 'engagement.created'
+    );
+    expect(createdEvents).toHaveLength(1);
+    const [createdEvent] = createdEvents;
+    expect(createdEvent?.entityType).toBe('engagement');
+    expect(createdEvent?.entityId).toBe(engagement.id);
+    // The DISCRIMINATOR — `engagement.created` is deliberately type-agnostic, so this is
+    // the only thing separating a Project creation from a Case creation downstream.
+    expect(createdEvent?.metadata).toMatchObject({
+      engagement_type: 'project',
+      engagementId: engagement.id,
+    });
+    // ADR-1030 system-actor exemption: this seam writer has no live caller and no human
+    // actor to name, so the row is UNATTRIBUTED rather than fabricated.
+    expect(createdEvent?.actorUserId).toBeNull();
+  });
+
+  it('the seam writer attributes engagement.created when an actor is supplied', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const actor = await userFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+      actorUserId: actor.id,
+    });
+
+    const [createdEvent] = (await auditEventsForEntity(engagement.id)).filter(
+      (e) => e.action === 'engagement.created'
+    );
+    expect(createdEvent?.actorUserId).toBe(actor.id);
+  });
+
+  it('materializeFromKickoff emits exactly one engagement.created, attributed to the approving admin, BEFORE the snapshot', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({
+      bothGates: true,
+      milestoneCount: 2,
+    });
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 300_000,
+      baloFeeBps: 2500,
+    });
+
+    const events = await auditEventsForEntity(engagement.id);
+    const createdEvents = events.filter((e) => e.action === 'engagement.created');
+    expect(createdEvents).toHaveLength(1);
+    const [createdEvent] = createdEvents;
+    expect(createdEvent?.entityType).toBe('engagement');
+    // This path HAS a human actor (the admin approving kickoff), so no ADR-1030
+    // exemption is taken — the row is attributed.
+    expect(createdEvent?.actorUserId).toBe(adminId);
+    expect(createdEvent?.metadata).toMatchObject({
+      engagement_type: 'project',
+      engagementId: engagement.id,
+    });
+
+    // The trail reads creation-then-snapshot, not the other way round. Both rows share
+    // one transaction, so compare INDEX POSITIONS in `auditEventsForEntity`'s
+    // (created_at, id) order rather than timestamps.
+    const actions = events.map((e) => e.action);
+    expect(actions.indexOf('engagement.created')).toBeGreaterThanOrEqual(0);
+    expect(actions.indexOf('engagement.created')).toBeLessThan(
+      actions.indexOf('engagement.milestones_snapshotted')
+    );
   });
 });
 

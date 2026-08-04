@@ -2,7 +2,7 @@ import { and, asc, eq, isNull, lte } from 'drizzle-orm';
 import { db } from '../client';
 import { caseEngagements, engagements, type CaseEngagement, type Engagement } from '../schema';
 import { partyMembershipsRepository } from './party-memberships';
-import { recordDeliveryAudit } from './_shared/delivery-audit';
+import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import { insertEngagementRowTx, lockEngagementRowTx } from './_shared/engagement-supertype';
 
 /**
@@ -101,8 +101,13 @@ export const caseEngagementsRepository = {
    * A Case is `active` from creation, so `activatedAt` defaults to now exactly as the
    * project path does.
    *
-   * NOTE the absent `baloFeeBps` parameter: see `CaseEngagementRow`. The parent row's
-   * column takes its schema default and is never read for a case.
+   * NOTE the absent `baloFeeBps` parameter: see `CaseEngagementRow`. This path writes the
+   * parent's column as `null` EXPLICITLY — the `engagement_balo_fee_bps_case_null` CHECK
+   * requires it, and omitting it would fall through to the column DEFAULT (2500) and be
+   * rejected 23514 rather than silently stored.
+   *
+   * Emits ONE `engagement.created` audit row in the SAME transaction (see
+   * `recordEngagementCreated`), so a Case's trail starts at creation and not at close.
    *
    * CONTRACT — bare INSERT. Raw FK violation (23503) on an unknown `companyId` /
    * `expertProfileId`; CHECK (23514) on a blank `title` / `description`.
@@ -114,6 +119,14 @@ export const caseEngagementsRepository = {
     description: string;
     currency?: string;
     activatedAt?: Date;
+    /**
+     * The human who created the case, for the `engagement.created` audit row. OPTIONAL:
+     * BAL-417 ships no live producer (D4), so every current caller is a test and there
+     * is no actor to name — an omitted/`null` value is the ADR-1030 SYSTEM-ACTOR
+     * ATTRIBUTION EXEMPTION (the same shape `createFromExtraction` uses), NOT a
+     * fabricated one. BAL-400's booking surface should pass the booking user.
+     */
+    actorUserId?: string | null;
   }): Promise<CaseEngagementRow> {
     return db.transaction(async (tx) => {
       const parent = await insertEngagementRowTx(tx, {
@@ -121,6 +134,8 @@ export const caseEngagementsRepository = {
         companyId: input.companyId,
         expertProfileId: input.expertProfileId,
         currency: input.currency,
+        // EXPLICIT NULL — see the `balo_fee_bps` docblock on `engagements`.
+        baloFeeBps: null,
         activatedAt: input.activatedAt ?? new Date(),
       });
 
@@ -136,6 +151,13 @@ export const caseEngagementsRepository = {
       if (child === undefined) {
         throw new Error('Failed to create case engagement');
       }
+
+      await recordEngagementCreated(tx, {
+        engagementId: parent.id,
+        engagementType: 'case',
+        actorUserId: input.actorUserId ?? null,
+      });
+
       return toCaseRow(parent, child);
     });
   },

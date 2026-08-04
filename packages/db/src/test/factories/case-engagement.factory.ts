@@ -75,6 +75,10 @@ export async function caseEngagementFactory(
         engagementType: 'case',
         companyId,
         expertProfileId,
+        // EXPLICIT NULL, exactly as `caseEngagementsRepository.create` does. The column
+        // DEFAULT is 2500 and `engagement_balo_fee_bps_case_null` rejects any non-NULL
+        // fee on a case, so omitting this would 23514 every case fixture.
+        baloFeeBps: null,
         activatedAt: new Date(),
         ...overrides.values,
       })
