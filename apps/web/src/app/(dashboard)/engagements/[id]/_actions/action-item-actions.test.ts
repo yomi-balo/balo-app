@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ActionItem, ProjectEngagementWithMilestones } from '@balo/db';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const ACTION_ITEM_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -54,8 +55,8 @@ const {
 });
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
-    findEngagementWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
+  projectEngagementsRepository: {
+    findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
   actionItemsRepository: {
@@ -104,7 +105,7 @@ import { updateActionItemAction } from './update-action-item';
 import { removeActionItemAction } from './remove-action-item';
 import { revalidatePath } from 'next/cache';
 
-function engagement(overrides: Record<string, unknown> = {}) {
+function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
     status: 'active',
@@ -123,7 +124,7 @@ function engagement(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function actionItem(overrides: Record<string, unknown> = {}) {
+function actionItem(overrides: Partial<ActionItem> = {}) {
   return {
     id: ACTION_ITEM_ID,
     engagementId: ENGAGEMENT_ID,

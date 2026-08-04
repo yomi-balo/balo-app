@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { ActionItem, EngagementWithMilestones } from '@balo/db';
+import type { ActionItem, ProjectEngagementWithMilestones } from '@balo/db';
 import { deriveEngagementParties } from './engagement-parties';
 import type { EngagementLens, EngagementViewerContext } from './resolve-engagement-lens';
 
@@ -82,9 +82,18 @@ function deriveAssigneeLabel(
  * panel view. SERVER-ONLY, PURE (no I/O; `@balo/db` type-only) — the returned object is
  * plain data safe to hand to the client island. `now` is injectable for deterministic
  * `isOverdue` tests (default `new Date()`).
+ *
+ * ⚠ DELIBERATELY NOT WIDENED TO THE SUPERTYPE (BAL-417), for two independent
+ * reasons. (1) It calls `deriveEngagementParties`, so it inherits that function's
+ * hydrated-relation requirement. (2) `canWrite` below reads the 4-value PROJECT
+ * delivery status: widening it to the coarse 3-label supertype status would fold
+ * `pending_acceptance` into `active` and make the panel WRITABLE while the client is
+ * reviewing delivered work — the web-side twin of the `lockActiveEngagement`
+ * regression the split had to close. Action items themselves ARE engagement-generic
+ * (a case can carry them); the CASE panel is BAL-421's, with its own view mapper.
  */
 export function mapActionItemsToView(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   actionItems: ActionItem[],
   ctx: EngagementViewerContext,
   now: Date = new Date()

@@ -2,11 +2,12 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import {
-  engagementsRepository,
+  projectEngagementsRepository,
   auditEventsRepository,
   MilestonesIncompleteError,
   InvalidEngagementTransitionError,
-  type EngagementWithMilestones,
+  type ProjectDeliveryStatus,
+  type ProjectEngagementWithMilestones,
 } from '@balo/db';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
@@ -47,11 +48,17 @@ export const REASON_REQUIRED = 'A reason is required.';
 
 /** The shared gate result — the loaded engagement or a friendly error. */
 export type GateResult =
-  | { ok: true; engagement: EngagementWithMilestones }
+  | { ok: true; engagement: ProjectEngagementWithMilestones }
   | { ok: false; error: string };
 
-/** The engagement statuses an expert lifecycle action can require. */
-export type ExpertGateStatus = 'active' | 'pending_acceptance';
+/**
+ * The PROJECT DELIVERY statuses an expert lifecycle action can require. Derived from
+ * the schema union (BAL-417) rather than re-declared, so a future label change is a
+ * compile error here instead of a silently unreachable gate. Both labels are
+ * non-terminal delivery states on `project_engagements.delivery_status` — NOT the
+ * coarse supertype `engagements.status`, which no longer carries `pending_acceptance`.
+ */
+export type ExpertGateStatus = Extract<ProjectDeliveryStatus, 'active' | 'pending_acceptance'>;
 
 // ── Date helpers (deterministic under TZ=UTC) — kept local to the actions, NOT
 //    imported from the view module (the view derives its own display copy) ─────
@@ -110,10 +117,10 @@ async function loadEngagementLens(
   user: SessionUser,
   engagementId: string
 ): Promise<
-  | { ok: true; engagement: EngagementWithMilestones; lens: 'client' | 'expert' | 'admin' }
+  | { ok: true; engagement: ProjectEngagementWithMilestones; lens: 'client' | 'expert' | 'admin' }
   | { ok: false; error: string }
 > {
-  const engagement = await engagementsRepository.findEngagementWithMilestones(engagementId);
+  const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
   if (engagement === undefined) {
     log.warn('Engagement lifecycle denied', {
       engagementId,
@@ -271,7 +278,7 @@ export async function runEngagementLifecycleAction(
   logContext: Record<string, unknown>,
   failLabel: string,
   authorize: () => Promise<GateResult>,
-  perform: (engagement: EngagementWithMilestones) => Promise<EngagementActionResult>
+  perform: (engagement: ProjectEngagementWithMilestones) => Promise<EngagementActionResult>
 ): Promise<EngagementActionResult> {
   try {
     const authorized = await authorize();

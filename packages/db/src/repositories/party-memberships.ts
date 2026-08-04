@@ -173,14 +173,26 @@ async function softRemoveDomainMatchRow(
   return row?.id;
 }
 
-/** The live role for (party, user) as a plain string, or undefined. */
+/**
+ * The live role for (party, user) as a plain string, or undefined.
+ *
+ * `exec` (BAL-417): run on the CALLER'S transaction when supplied, else the base
+ * `db`. Required so a caller that reads membership as part of a write (e.g.
+ * `caseEngagementsRepository.close`'s `closed_by_user_id`-must-be-a-live-member
+ * invariant) is atomic with its own write — on a second pooled connection the read
+ * would miss the transaction's own view (a TOCTOU against a concurrent
+ * `removeMember`) and could block the outer transaction under pool pressure while it
+ * holds row locks.
+ */
 async function selectLiveRole(
   partyType: PartyType,
   partyId: string,
-  userId: string
+  userId: string,
+  exec?: DbExecutor
 ): Promise<string | undefined> {
+  const runner = exec ?? db;
   if (partyType === 'company') {
-    const [row] = await db
+    const [row] = await runner
       .select({ role: companyMembers.role })
       .from(companyMembers)
       .where(
@@ -193,7 +205,7 @@ async function selectLiveRole(
       .limit(1);
     return row?.role;
   }
-  const [row] = await db
+  const [row] = await runner
     .select({ role: agencyMembers.role })
     .from(agencyMembers)
     .where(
@@ -393,13 +405,18 @@ export const partyMembershipsRepository = {
    * (party, user)" only holds when soft-removed rows are excluded. Without it a
    * soft-removed (escape-hatch'd) admin membership would still return its role and
    * pass the MANAGE_MEMBERS gate. Load-bearing.
+   *
+   * `exec` (BAL-417, OPTIONAL — every existing call site compiles unchanged): pass the
+   * caller's `tx` so a membership read that gates a write in the SAME transaction runs
+   * on that transaction's own connection. See `selectLiveRole`.
    */
   getMemberRole: async (
     partyType: PartyType,
     partyId: string,
-    userId: string
+    userId: string,
+    exec?: DbExecutor
   ): Promise<string | undefined> => {
-    return selectLiveRole(partyType, partyId, userId);
+    return selectLiveRole(partyType, partyId, userId, exec);
   },
 
   /**

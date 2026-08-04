@@ -92,6 +92,10 @@ export const creditSessions = pgTable(
     // Raw expert quote snapshot (reconciliation/audit). NEVER on a client view.
     expertRateMinorPerHour: integer('expert_rate_minor_per_hour').notNull(),
     // Fee snapshot (BAL-357 pattern; audience-keyed). NEVER on a client view.
+    // ⚠ THIS COLUMN IS THE SSOT FOR A CASE'S MARGIN (BAL-417 / D3) — it is the fee
+    // actually charged. `engagements.balo_fee_bps` also exists on the supertype but is
+    // NEVER charged on a case (no engagement↔credit_session join exists); that column
+    // is meaningful only for project/retainer/package engagements.
     baloFeeBps: integer('balo_fee_bps').notNull().default(2500),
     // MARKED-UP per-minute charge — drives drawdown + the widget "A$rate/min".
     clientRateMinorPerMinute: integer('client_rate_minor_per_minute').notNull(),

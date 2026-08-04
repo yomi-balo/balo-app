@@ -22,7 +22,11 @@ export type DeliveryAuditAction =
   | 'engagement.accepted'
   | 'engagement.changes_requested'
   | 'engagement.cancelled'
-  | 'engagement.milestones_snapshotted';
+  | 'engagement.milestones_snapshotted'
+  // case lifecycle (BAL-417). There is deliberately NO
+  // `engagement.resolution_requested` — the resolution-request pair is columns-only
+  // (D1) and its write path (and its audit action) belong to BAL-421.
+  | 'engagement.case_closed';
 
 export type DeliveryAuditEntityType = 'engagement' | 'engagement_milestone';
 

@@ -104,22 +104,80 @@ export const proposalChangeSectionEnum = pgEnum('proposal_change_section', [
 export const proposalDocumentKindEnum = pgEnum('proposal_document_kind', ['terms', 'ref']);
 
 /**
- * Engagement lifecycle. Greenfield seam — `active` is written in A6.5.
- * `pending_acceptance` (BAL-330 / delivery epic) is the mid-state after the expert
- * requests completion and before the client accepts; `completed`/`cancelled` are
- * terminal.
+ * Engagement product type — the supertype discriminator (BAL-417 / ADR-1045 §1).
+ * `engagements` is a SUPERTYPE; the concrete shape lives in a 1:1 child table keyed
+ * on `engagement_id`. `project` → `project_engagements`, `case` → `case_engagements`.
+ * `package` and `retainer` are DECLARED-BUT-UNBUILT: no child table, no writer, no
+ * reader. They exist so the seam is visible and so adding one later is a new table,
+ * NOT an ALTER TYPE (which would re-open the ADD-VALUE one-tx hazard).
  *
- * `pending_acceptance` was APPENDED at the END (Postgres `ADD VALUE` is
- * append-only; drizzle-kit emits a bare `ALTER TYPE ... ADD VALUE`). Enum ORDERING
- * carries NO semantics — the transition map in `repositories/engagements.ts`
- * (`ENGAGEMENT_STATUS_TRANSITIONS`) is the single source of truth for legal moves.
+ * Standalone CREATE TYPE → every label is usable as a DEFAULT / CHECK / index
+ * predicate literal in the SAME migration (no ADD-VALUE hazard).
+ */
+export const engagementTypeEnum = pgEnum('engagement_type', [
+  'case',
+  'project',
+  'package',
+  'retainer',
+]);
+
+/**
+ * SUPERTYPE engagement lifecycle (BAL-417). Reduced from four labels to three:
+ * `pending_acceptance` was a PROJECT sub-state and moved to
+ * `project_delivery_status` on `project_engagements`.
+ *
+ * These three are the coarse, TYPE-AGNOSTIC states every engagement product
+ * shares: `active` (the engagement exists and is not terminal), `completed`,
+ * `cancelled`.
+ *
+ * ⚠ `active` HERE DOES NOT MEAN "MUTABLE". For a project, mutability is
+ * `project_engagements.delivery_status = 'active'` — a project awaiting client
+ * acceptance is `active` on this column and MUST NOT accept milestone writes.
+ * `lockActiveEngagement` performs that second check; never re-derive it from this
+ * column alone.
+ *
+ * ⚠ SHRINKING this enum required a hand-written DROP TYPE / CREATE TYPE block in
+ * migration 0055 (drizzle's generated block omits the DROP DEFAULT / SET DEFAULT
+ * pair and fails on an EMPTY database). See 0055's header comment.
  */
 export const engagementStatusEnum = pgEnum('engagement_status', [
   'active',
   'completed',
   'cancelled',
-  'pending_acceptance', // APPENDED (BAL-330) — never used as a default/CHECK/index predicate (§5 enum hazard)
 ]);
+
+/**
+ * PROJECT delivery lifecycle (BAL-330, relocated to `project_engagements` by
+ * BAL-417). This is the FINE-GRAINED SSOT for a project's state; the supertype's
+ * `engagement_status` is its COARSE PROJECTION (`active|pending_acceptance` →
+ * `active`; `completed` → `completed`; `cancelled` → `cancelled`), written by the
+ * same transaction via `projectDeliveryToEngagementStatus`.
+ *
+ * ⚠ The coarse projection is NOT sufficient for "may this engagement be mutated?".
+ * `lockActiveEngagement` reads THIS column for a project (see
+ * repositories/_shared/engagement-lock.ts) — a project in `pending_acceptance` is
+ * `active` on the parent but is NOT mutable.
+ *
+ * The four labels are deliberately IDENTICAL to the pre-BAL-417
+ * `engagement_status` labels so `PROJECT_DELIVERY_TRANSITIONS` and every delivery
+ * surface's status switch survive the split as a FIELD-SOURCE change, not a
+ * semantics change.
+ */
+export const projectDeliveryStatusEnum = pgEnum('project_delivery_status', [
+  'active',
+  'pending_acceptance',
+  'completed',
+  'cancelled',
+]);
+
+/**
+ * Why a case was closed (BAL-417). `resolved` = a client-side member closed it
+ * deliberately (`closed_by_user_id` NOT NULL). `auto_inactive` = the BAL-420
+ * inactivity sweep closed it (`closed_by_user_id` NULL — no human actor; the
+ * ADR-1030 system-actor attribution exemption, same ruling as BAL-387).
+ * Enforced by CHECK `case_engagement_close_coherent`.
+ */
+export const caseCloseReasonEnum = pgEnum('case_close_reason', ['resolved', 'auto_inactive']);
 
 /**
  * Delivery milestone lifecycle (BAL-330). Standalone `CREATE TYPE` — all values

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { EngagementMilestone, ProjectEngagementWithMilestones } from '@balo/db';
+import { engagementMilestoneFixture } from '@/test/fixtures/engagement-milestone';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const MILESTONE_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -34,8 +36,8 @@ const {
 });
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
-    findEngagementWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
+  projectEngagementsRepository: {
+    findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
   EngagementNotActiveError,
@@ -79,20 +81,17 @@ const USER = {
   platformRole: 'user',
 } as unknown as Parameters<typeof authorizeExpertMilestone>[0];
 
-function milestone(overrides: Record<string, unknown> = {}) {
-  return {
+function milestone(overrides: Partial<EngagementMilestone> = {}): EngagementMilestone {
+  return engagementMilestoneFixture({
     id: MILESTONE_ID,
     title: 'Discovery',
     status: 'pending',
-    startedAt: null,
-    completedAt: null,
-    completionNote: null,
     updatedAt: new Date('2026-06-30T00:00:00Z'),
     ...overrides,
-  };
+  });
 }
 
-function engagement(overrides: Record<string, unknown> = {}) {
+function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
     status: 'active',

@@ -3,7 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { engagementsRepository, AUTO_ACCEPT_DAYS } from '@balo/db';
+import { projectEngagementsRepository, AUTO_ACCEPT_DAYS } from '@balo/db';
 import { deriveEngagementParties, personAtCompany } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -58,7 +58,7 @@ export async function requestProjectChangesAction(input: {
     'Failed to request changes',
     () => gateClientEngagement(user, engagementId),
     async (engagement) => {
-      const updated = await engagementsRepository.requestChanges({
+      const updated = await projectEngagementsRepository.requestChanges({
         engagementId,
         userId: user.id,
         note,

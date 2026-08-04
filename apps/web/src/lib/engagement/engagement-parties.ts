@@ -1,4 +1,4 @@
-import type { EngagementWithMilestones } from '@balo/db';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
 import { expertPartyDisplayName } from '@balo/shared/parties';
 import type { EngagementLens } from './resolve-engagement-lens';
 
@@ -46,8 +46,16 @@ function joinName(firstName: string | null, lastName: string | null, fallback: s
  * Derive every party / person string for an engagement from the hydrated read
  * model. `isAgencyExpert = expertProfile.type === 'agency'`; the person always comes
  * from `expertProfile.user` (gender-neutral full + first name).
+ *
+ * ⚠ DELIBERATELY NOT WIDENED TO THE SUPERTYPE (BAL-417). Unlike
+ * `resolveEngagementLens`, this reads HYDRATED RELATIONS (`expertProfile.user`,
+ * `expertProfile.agency`, `company`), not flat supertype scalars — a
+ * `CaseEngagementRow` is a flat row with no relations and could not satisfy a
+ * structural minimum anyway, and hand-writing one here would fork the repository's
+ * `columns:` allow-list into a second place that will drift. Give it a case overload
+ * only when BAL-421 supplies a hydrated case graph.
  */
-export function deriveEngagementParties(e: EngagementWithMilestones): EngagementParties {
+export function deriveEngagementParties(e: ProjectEngagementWithMilestones): EngagementParties {
   const { user, agency, headline, type } = e.expertProfile;
   const isAgencyExpert = type === 'agency';
 

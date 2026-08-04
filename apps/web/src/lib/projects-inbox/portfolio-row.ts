@@ -1,7 +1,7 @@
 import type {
   PortfolioRequestRow,
   PortfolioInvitationRow,
-  PortfolioEngagementView,
+  PortfolioProjectEngagementView,
 } from '@balo/db';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
@@ -416,7 +416,7 @@ export function needsYouForExpert(
 // ── Engagement-row deriver (post-kickoff delivery, D6) ─────────────
 
 /** The engagement status the deriver switches on (schema-derived; import type only). */
-type EngagementRowStatus = PortfolioEngagementView['status'];
+type EngagementRowStatus = PortfolioProjectEngagementView['status'];
 
 /**
  * The plain, serialisable facts a loader assembles for ONE engagement row — the

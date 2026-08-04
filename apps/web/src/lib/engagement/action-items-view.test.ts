@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { ActionItem, EngagementWithMilestones } from '@balo/db';
+import type { ActionItem, ProjectEngagementWithMilestones } from '@balo/db';
 import type { EngagementLens, EngagementViewerContext } from './resolve-engagement-lens';
 import { mapActionItemsToView } from './action-items-view';
 
@@ -7,7 +7,9 @@ import { mapActionItemsToView } from './action-items-view';
 const NOW = new Date('2026-07-07T00:00:00.000Z');
 const CREATED = new Date('2026-06-12T00:00:00.000Z');
 
-function makeEngagement(over: Partial<EngagementWithMilestones> = {}): EngagementWithMilestones {
+function makeEngagement(
+  over: Partial<ProjectEngagementWithMilestones> = {}
+): ProjectEngagementWithMilestones {
   return {
     id: 'eng-1',
     companyId: 'company-northwind',
@@ -24,7 +26,7 @@ function makeEngagement(over: Partial<EngagementWithMilestones> = {}): Engagemen
     },
     company: { id: 'company-northwind', name: 'Northwind Industrial' },
     ...over,
-  } as EngagementWithMilestones;
+  } as ProjectEngagementWithMilestones;
 }
 
 function makeActionItem(over: Partial<ActionItem> = {}): ActionItem {

@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { auditEvents, engagementMilestones, proposalMilestones, type AuditEvent } from '../schema';
-import type { EngagementStatus } from './engagements';
+import type { ProjectDeliveryStatus } from './_shared/engagement-supertype';
+import { EngagementTypeMismatchError } from './_shared/engagement-supertype';
 import {
+  caseEngagementFactory,
   engagementFactory,
   engagementMilestoneFactory,
   proposalFactory,
@@ -153,11 +155,20 @@ describe('engagementMilestonesRepository — illegal transition matrix', () => {
 });
 
 describe('engagementMilestonesRepository — engagement-active guard (EngagementNotActiveError)', () => {
-  const nonActiveStatuses: EngagementStatus[] = ['pending_acceptance', 'completed', 'cancelled'];
+  // ⚠ RE-TYPED, NOT SHORTENED (BAL-417) — see the identical note in
+  // `action-items.integration.test.ts`. The `pending_acceptance` arm is the only
+  // coverage of `lockActiveEngagement`'s child read.
+  const nonActiveStatuses: ProjectDeliveryStatus[] = [
+    'pending_acceptance',
+    'completed',
+    'cancelled',
+  ];
 
   for (const status of nonActiveStatuses) {
     it(`every mutating op throws EngagementNotActiveError when the engagement is ${status}`, async () => {
-      const { engagement } = await engagementFactory({ values: { status } });
+      const { engagement } = await engagementFactory({
+        projectValues: { deliveryStatus: status },
+      });
       const { milestone } = await engagementMilestoneFactory({
         engagementId: engagement.id,
         values: { status: 'in_progress' },
@@ -551,5 +562,72 @@ describe('snapshotFromProposalTx', () => {
     );
     expect(inserted).toEqual([]);
     expect(await engagementMilestonesRepository.listByEngagement(engagement.id)).toHaveLength(0);
+  });
+});
+
+describe('engagementMilestonesRepository — the CASE widening is BLOCKED (BAL-417 / R4)', () => {
+  it('add / reorder against a `case` engagement throw EngagementTypeMismatchError', async () => {
+    // A Case is NOT milestone-shaped, and `aggregateMilestoneProgress` must never count
+    // Case milestones — so unlike `action_items` / `transcripts` (whose widening IS
+    // intended), every milestone writer passes `{ requireType: 'project' }`. Without
+    // it a live Case, being `'active'` on the parent, would sail straight through.
+    const { engagement } = await caseEngagementFactory();
+    const user = await userFactory();
+
+    await expect(
+      engagementMilestonesRepository.add({
+        engagementId: engagement.id,
+        userId: user.id,
+        title: 'Should never exist',
+      })
+    ).rejects.toBeInstanceOf(EngagementTypeMismatchError);
+
+    await expect(
+      engagementMilestonesRepository.reorder({
+        engagementId: engagement.id,
+        userId: user.id,
+        orderedMilestoneIds: [],
+      })
+    ).rejects.toBeInstanceOf(EngagementTypeMismatchError);
+  });
+
+  it('start / complete against a milestone hanging off a `case` engagement throw EngagementTypeMismatchError', async () => {
+    // `add`/`reorder` cover only TWO of the three `lockActiveEngagement` call sites.
+    // The third — inside `lockEngagementAndMilestone` — is the one behind start /
+    // complete / revert / editDescriptive / softDelete (five of the seven writers), and
+    // it takes a MILESTONE id, so a case-id probe has to route through a seeded
+    // milestone.
+    //
+    // ⚠ `engagement_milestones.engagement_id` FKs the SUPERTYPE, so a milestone CAN be
+    // hung off a case out of band — nothing at the DB level forbids it. That is exactly
+    // why the repository guard has to hold: it is the only thing standing between a Case
+    // and the project-shaped milestone lifecycle.
+    const { engagement } = await caseEngagementFactory();
+    const user = await userFactory();
+    const { milestone } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'pending' },
+    });
+
+    await expect(
+      engagementMilestonesRepository.start({ milestoneId: milestone.id, userId: user.id })
+    ).rejects.toBeInstanceOf(EngagementTypeMismatchError);
+
+    const { milestone: inProgress } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'in_progress', sortOrder: 1, startedAt: new Date() },
+    });
+    await expect(
+      engagementMilestonesRepository.complete({ milestoneId: inProgress.id, userId: user.id })
+    ).rejects.toBeInstanceOf(EngagementTypeMismatchError);
+
+    // The guard fires BEFORE any write — both milestones are untouched.
+    const rows = await db
+      .select()
+      .from(engagementMilestones)
+      .where(eq(engagementMilestones.engagementId, engagement.id));
+    expect(rows.map((r) => r.status).sort()).toEqual(['in_progress', 'pending']);
+    expect(rows.every((r) => r.completedAt === null)).toBe(true);
+    expect(rows.every((r) => r.startedByUserId === null)).toBe(true);
   });
 });

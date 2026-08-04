@@ -96,20 +96,42 @@ export {
 export type { ProposalPaymentInstallmentInput } from './proposal-payment-installments';
 export { proposalDocumentsRepository } from './proposal-documents';
 export { proposalChangeRequestsRepository } from './proposal-change-requests';
+// ── Engagement supertype (BAL-417 / ADR-1045 §1) ───────────────────────────
+// `EngagementStatus` is deliberately NOT re-exported here — it keeps its existing
+// export path from `./proposal-types` (same `Engagement['status']` alias, narrowed
+// automatically by the enum shrink). Exporting it from both modules would be a
+// duplicate symbol.
+export { engagementsRepository } from './engagements';
 export {
-  engagementsRepository,
+  insertEngagementRowTx,
+  lockEngagementRowTx,
+  softDeleteEngagementTx,
+  projectDeliveryToEngagementStatus,
+  EngagementTypeMismatchError,
+  type EngagementType,
+  type ProjectDeliveryStatus,
+} from './_shared/engagement-supertype';
+export {
+  projectEngagementsRepository,
   KickoffGatesIncompleteError,
-  ENGAGEMENT_STATUS_TRANSITIONS,
-  isAllowedEngagementTransition,
+  PROJECT_DELIVERY_TRANSITIONS,
+  isAllowedProjectDeliveryTransition,
   InvalidEngagementTransitionError,
   MilestonesIncompleteError,
-  advanceEngagementStatus,
+  advanceProjectDelivery,
   AUTO_ACCEPT_DAYS,
-  type EngagementWithMilestones,
-  type EngagementWithProgress,
-  type PortfolioEngagementView,
-  type AdminEngagementListItem,
-} from './engagements';
+  type ProjectEngagementRow,
+  type ProjectEngagementWithMilestones,
+  type PortfolioProjectEngagementView,
+  type AdminProjectEngagementListItem,
+} from './project-engagements';
+export {
+  caseEngagementsRepository,
+  CaseCloserNotMemberError,
+  CaseAlreadyClosedError,
+  type CaseEngagementRow,
+  type CaseCloseReason,
+} from './case-engagements';
 export {
   engagementMilestonesRepository,
   snapshotFromProposalTx,
@@ -175,6 +197,10 @@ export type {
   NewProposalChangeRequest,
   Engagement,
   NewEngagement,
+  ProjectEngagement,
+  NewProjectEngagement,
+  CaseEngagement,
+  NewCaseEngagement,
   EngagementMilestone,
   NewEngagementMilestone,
   ConversationMessage,

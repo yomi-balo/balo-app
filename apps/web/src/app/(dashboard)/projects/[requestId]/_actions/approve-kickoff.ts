@@ -7,7 +7,7 @@ import { revalidatePath } from 'next/cache';
 import {
   proposalsRepository,
   projectRequestsRepository,
-  engagementsRepository,
+  projectEngagementsRepository,
   InvalidStatusTransitionError,
   KickoffGatesIncompleteError,
   EngagementTermsCoherenceError,
@@ -111,7 +111,7 @@ async function commitKickoff(
 ): Promise<{ engagementId: string } | { error: string }> {
   const { request, rel, proposal } = loaded;
   try {
-    const { engagement } = await engagementsRepository.materializeFromKickoff({
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
       requestId: request.id,
       companyId: request.companyId,
       expertProfileId: rel.expertProfileId,

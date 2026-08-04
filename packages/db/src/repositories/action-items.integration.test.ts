@@ -3,8 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { actionItems, auditEvents, type AuditEvent } from '../schema';
-import type { EngagementStatus } from './engagements';
-import { engagementFactory, actionItemFactory, userFactory } from '../test/factories';
+import type { ProjectDeliveryStatus } from './_shared/engagement-supertype';
+import {
+  caseEngagementFactory,
+  engagementFactory,
+  actionItemFactory,
+  userFactory,
+} from '../test/factories';
 import { actionItemsRepository, InvalidActionItemTransitionError } from './action-items';
 import { EngagementNotActiveError } from './engagement-milestones';
 
@@ -401,11 +406,23 @@ describe('actionItemsRepository.findById (IDOR discovery gate)', () => {
 });
 
 describe('actionItemsRepository — engagement-active guard (EngagementNotActiveError)', () => {
-  const nonActiveStatuses: EngagementStatus[] = ['pending_acceptance', 'completed', 'cancelled'];
+  // ⚠ RE-TYPED, NOT SHORTENED (BAL-417). `pending_acceptance` is no longer an
+  // `engagement_status` label — it is a PROJECT DELIVERY status on the child. Deleting
+  // that arm (the tempting "fix" for the type error) would delete the ONLY coverage of
+  // the `lockActiveEngagement` change: post-split a `pending_acceptance` project reads
+  // `'active'` on the PARENT, so without the child read the gate would silently start
+  // ADMITTING writes on work the client is reviewing.
+  const nonActiveStatuses: ProjectDeliveryStatus[] = [
+    'pending_acceptance',
+    'completed',
+    'cancelled',
+  ];
 
   for (const status of nonActiveStatuses) {
     it(`every mutating op throws EngagementNotActiveError when the engagement is ${status}`, async () => {
-      const { engagement } = await engagementFactory({ values: { status } });
+      const { engagement } = await engagementFactory({
+        projectValues: { deliveryStatus: status },
+      });
       const { actionItem } = await actionItemFactory({ engagementId: engagement.id });
       const user = await userFactory();
       const actionItemId = actionItem.id;
@@ -446,5 +463,24 @@ describe('action_items body CHECK constraint', () => {
     await expect(
       actionItemsRepository.createManual({ engagementId, userId, body: '   ' })
     ).rejects.toThrow();
+  });
+});
+
+describe('actionItemsRepository — the CASE widening is INTENDED (BAL-417 / R4)', () => {
+  it('an action item CAN be created against a `case` engagement', async () => {
+    // Action items are engagement-GENERIC (BAL-391) and a Case *is* a meeting, so
+    // `lockActiveEngagement` is deliberately called WITHOUT `{ requireType }` here.
+    // Asserting it records the intent in code — contrast `engagement_milestones`,
+    // where the same widening is structurally blocked.
+    const { engagement } = await caseEngagementFactory();
+    const user = await userFactory();
+
+    const created = await actionItemsRepository.createManual({
+      engagementId: engagement.id,
+      userId: user.id,
+      body: 'Send the flow export',
+    });
+    expect(created.engagementId).toBe(engagement.id);
+    expect(created.body).toBe('Send the flow export');
   });
 });

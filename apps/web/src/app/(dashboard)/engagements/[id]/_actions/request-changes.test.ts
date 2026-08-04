@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const COMPANY_ID = 'c0000000-0000-4000-8000-000000000003';
@@ -32,8 +33,8 @@ const { mockFindEngagement, mockRequestChanges, mockCountAudit, InvalidEngagemen
   });
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
-    findEngagementWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
+  projectEngagementsRepository: {
+    findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
     requestChanges: (...a: unknown[]) => mockRequestChanges(...a),
   },
   auditEventsRepository: { countByEntityAndAction: (...a: unknown[]) => mockCountAudit(...a) },
@@ -66,7 +67,7 @@ import { revalidatePath } from 'next/cache';
 const NOTE = 'The report export is missing the Q3 totals.';
 const INPUT = { engagementId: ENGAGEMENT_ID, note: NOTE };
 
-function engagement(overrides: Record<string, unknown> = {}) {
+function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
     status: 'pending_acceptance',

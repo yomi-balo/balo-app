@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
+import { engagementMilestoneFixture } from '@/test/fixtures/engagement-milestone';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const MILESTONE_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -37,8 +39,8 @@ const {
 });
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
-    findEngagementWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
+  projectEngagementsRepository: {
+    findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
   engagementMilestonesRepository: { revert: (...a: unknown[]) => mockRevert(...a) },
@@ -69,7 +71,7 @@ import { revalidatePath } from 'next/cache';
 
 const INPUT = { engagementId: ENGAGEMENT_ID, milestoneId: MILESTONE_ID };
 
-function engagement(overrides: Record<string, unknown> = {}) {
+function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
     status: 'active',
@@ -84,7 +86,7 @@ function engagement(overrides: Record<string, unknown> = {}) {
       type: 'freelancer',
     },
     milestones: [
-      {
+      engagementMilestoneFixture({
         id: MILESTONE_ID,
         title: 'Discovery',
         status: 'completed',
@@ -92,7 +94,7 @@ function engagement(overrides: Record<string, unknown> = {}) {
         completedAt: COMPLETED_AT_BEFORE,
         completionNote: 'Done.',
         updatedAt: COMPLETED_AT_BEFORE,
-      },
+      }),
     ],
     ...overrides,
   };
@@ -138,7 +140,7 @@ describe('revertMilestoneAction', () => {
     mockFindEngagement.mockResolvedValue(
       engagement({
         milestones: [
-          {
+          engagementMilestoneFixture({
             id: MILESTONE_ID,
             title: 'Discovery',
             status: 'in_progress',
@@ -146,7 +148,7 @@ describe('revertMilestoneAction', () => {
             completedAt: null,
             completionNote: null,
             updatedAt: new Date(),
-          },
+          }),
         ],
       })
     );
@@ -182,7 +184,7 @@ describe('revertMilestoneAction', () => {
     mockFindEngagement.mockResolvedValue(
       engagement({
         milestones: [
-          {
+          engagementMilestoneFixture({
             id: MILESTONE_ID,
             title: 'Discovery',
             status: 'completed',
@@ -190,7 +192,7 @@ describe('revertMilestoneAction', () => {
             completedAt: null,
             completionNote: null,
             updatedAt: COMPLETED_AT_BEFORE,
-          },
+          }),
         ],
       })
     );

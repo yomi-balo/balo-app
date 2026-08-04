@@ -3,7 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { engagementsRepository } from '@balo/db';
+import { projectEngagementsRepository } from '@balo/db';
 import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -32,7 +32,7 @@ const cancelSchema = z
  * ending delivery permanently. Auth/lens/status via {@link gateAdminEngagement} (admin
  * observer lens; terminal engagement → ENGAGEMENT_CLOSED). A non-empty `reason` is
  * required (the client also disables submit until non-empty). Then
- * `engagementsRepository.cancelEngagement` (D0 captures the `from` status under its
+ * `projectEngagementsRepository.cancelEngagement` (D0 captures the `from` status under its
  * lock). Fires `CANCELLED` (server) and publishes `engagement.cancelled` (client owner
  * + delivering expert, email + in-app) — fire-and-forget. No admin notification (the
  * admin is the actor).
@@ -62,7 +62,11 @@ export async function cancelEngagementAction(input: {
       // analytics literal for the `status_at_cancel` dimension.
       const statusAtCancel =
         engagement.status === 'pending_acceptance' ? 'pending_acceptance' : 'active';
-      await engagementsRepository.cancelEngagement({ engagementId, userId: user.id, reason });
+      await projectEngagementsRepository.cancelEngagement({
+        engagementId,
+        userId: user.id,
+        reason,
+      });
       const now = new Date();
 
       trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.CANCELLED, {

@@ -22,8 +22,8 @@ const { mockFindEngagement, MilestonesIncompleteError, InvalidEngagementTransiti
   });
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
-    findEngagementWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
+  projectEngagementsRepository: {
+    findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   companiesRepository: { findOwnerByCompanyId: vi.fn() },
   MilestonesIncompleteError,

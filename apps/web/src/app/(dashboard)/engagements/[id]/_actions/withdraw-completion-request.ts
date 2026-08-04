@@ -3,7 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { engagementsRepository } from '@balo/db';
+import { projectEngagementsRepository } from '@balo/db';
 import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -25,7 +25,7 @@ const withdrawSchema = z.object({ engagementId: z.uuid() }).strict();
  * The delivering expert withdraws a pending completion request (pending_acceptance →
  * active), taking the project back out of the client's review. Auth/lens/status via
  * {@link gateExpertEngagement} (`pending_acceptance` → wrong status yields
- * NOT_UNDER_REVIEW), then `engagementsRepository.withdrawCompletionRequest` (D0 clears
+ * NOT_UNDER_REVIEW), then `projectEngagementsRepository.withdrawCompletionRequest` (D0 clears
  * the completion-request stamps). Fires `COMPLETION_WITHDRAWN` (server) and publishes
  * `engagement.completion_withdrawn` (client owner + admins, in-app only) —
  * fire-and-forget. `hours_in_review` is captured from the PRE-withdraw
@@ -53,7 +53,10 @@ export async function withdrawCompletionRequestAction(input: {
     async (engagement) => {
       // Capture BEFORE the call — D0's withdraw clears `completionRequestedAt` to null.
       const requestedAt = engagement.completionRequestedAt;
-      await engagementsRepository.withdrawCompletionRequest({ engagementId, userId: user.id });
+      await projectEngagementsRepository.withdrawCompletionRequest({
+        engagementId,
+        userId: user.id,
+      });
       const nowMs = Date.now();
 
       const hoursInReview =

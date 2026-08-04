@@ -20,10 +20,12 @@ const {
 }));
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
+  // BAL-417: the project delivery lifecycle moved off `engagementsRepository` (now the
+  // type-agnostic supertype) onto `projectEngagementsRepository`.
+  projectEngagementsRepository: {
     listPendingAutoAccept: mockListPending,
     acceptCompletion: mockAccept,
-    findEngagementWithMilestones: mockFindWithMilestones,
+    findWithMilestones: mockFindWithMilestones,
   },
   companiesRepository: { findOwnerByCompanyId: mockFindOwner },
   auditEventsRepository: { countByEntityAndAction: mockCountAudit },
@@ -50,6 +52,7 @@ vi.mock('bullmq', () => ({
   Worker: class MockWorker {},
 }));
 
+import type { ProjectEngagementRow, ProjectEngagementWithMilestones } from '@balo/db';
 import {
   runDeliveryReviewSweep,
   REVIEW_REMINDER_LEAD_DAYS,
@@ -57,10 +60,14 @@ import {
 } from './auto-accept-sweep.js';
 
 // ── Fixtures ───────────────────────────────────────────────────
+// Typed `Partial<…>` against the BAL-417 shapes rather than `Record<string, unknown>`:
+// the object literals are then excess-property-checked, so a field the split renamed or
+// relocated fails here instead of silently feeding the sweep a shape production no
+// longer produces. `status` is the 4-value `ProjectDeliveryStatus`.
 const REQUESTED_07_03 = new Date('2026-07-03T00:00:00Z');
 const REQUESTED_07_06 = new Date('2026-07-06T00:00:00Z');
 
-function engRow(over: Record<string, unknown> = {}): Record<string, unknown> {
+function engRow(over: Partial<ProjectEngagementRow> = {}): Partial<ProjectEngagementRow> {
   return {
     id: 'eng-1',
     expertProfileId: 'ep-1',
@@ -74,19 +81,32 @@ function engRow(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-function hydrated(over: Record<string, unknown> = {}): Record<string, unknown> {
+/**
+ * The sweep reads only `milestones.length` (it becomes the `milestonesTotal` payload
+ * field), so a length-`n` stub is sufficient. The single cast is confined here rather
+ * than spread across the fixtures as 19-field milestone literals that would assert
+ * nothing — `engagement_milestones` is untouched by the BAL-417 split.
+ */
+function milestoneStubs(n: number): ProjectEngagementWithMilestones['milestones'] {
+  return Array.from({ length: n }) as ProjectEngagementWithMilestones['milestones'];
+}
+
+function hydrated(
+  over: Partial<ProjectEngagementWithMilestones> = {}
+): Partial<ProjectEngagementWithMilestones> {
   return {
     id: 'eng-1',
     company: { id: 'co-1', name: 'Northwind Industrial' },
     expertProfile: {
       id: 'ep-1',
       type: 'agency',
+      agencyId: 'ag-1',
       headline: null,
       user: { id: 'u-ex', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
       agency: { id: 'ag-1', name: 'CloudPeak Consulting', logoUrl: null },
     },
     projectRequest: { id: 'pr-1', title: 'CPQ implementation' },
-    milestones: [{}, {}, {}, {}],
+    milestones: milestoneStubs(4),
     ...over,
   };
 }
@@ -232,6 +252,7 @@ describe('runDeliveryReviewSweep — reminder pass', () => {
         expertProfile: {
           id: 'ep-4',
           type: 'freelancer',
+          agencyId: null,
           headline: null,
           user: { id: 'u-ex', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
           agency: null,

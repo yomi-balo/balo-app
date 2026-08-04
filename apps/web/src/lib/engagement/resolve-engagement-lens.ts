@@ -1,4 +1,3 @@
-import type { EngagementWithMilestones } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 
 /** participant = client | expert (they act on the engagement); observer = admin (monitors). */
@@ -41,16 +40,32 @@ const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin'
  * DELIBERATELY `activeMode`-AGNOSTIC: the lens keys on `platformRole` /
  * `companyId` / `expertProfileId` only — authorization derives from company
  * ownership, being the delivering expert, or platform role, NOT the viewer's
- * current UI mode. There is no `hasCapability()` yet (BAL-314) — `companyId`
- * equality IS the membership test today (`SessionUser` carries one active
- * company). IDOR-safe: every non-admin lens is gated by an ownership equality
- * against the loaded engagement; a role string alone never grants access except
- * platform admin. Client and expert lenses are mutually exclusive in practice (the
- * delivering expert's active company is never the client company).
+ * current UI mode. IDOR-safe: every non-admin lens is gated by an ownership
+ * equality against the loaded engagement; a role string alone never grants access
+ * except platform admin. Client and expert lenses are mutually exclusive in
+ * practice (the delivering expert's active company is never the client company).
+ *
+ * ⚠ THE LENS GATES *VIEW*; A CAPABILITY GATES *MUTATION*. This function answers
+ * "may this viewer see this engagement, and through which lens" — it is not, and
+ * must not become, the mutation gate. Every mutating server action additionally
+ * resolves `hasCapability(user, CAPABILITIES.PARTICIPATE, { companyId })`
+ * (`@/lib/authz`; see `_actions/engagement-lifecycle-shared.ts`). Do not read a
+ * `lens` value as authorization for a write (ADR-1029).
+ *
+ * ENGAGEMENT-TYPE-AGNOSTIC BY CONSTRUCTION (BAL-417). The parameter is the
+ * STRUCTURAL MINIMUM — the two universal supertype scalars this gate actually
+ * reads — not a concrete engagement shape. That is deliberate: the rule is already
+ * correct for every engagement product, and declaring it against the Project-shaped
+ * hydration graph would have made the IDOR gate structurally uncallable for a Case
+ * even though nothing in its logic is project-specific. `ProjectEngagementWithMilestones`,
+ * `CaseEngagementRow` and any future concrete row all satisfy it, so no overload and
+ * no cast is ever needed at a call site. Widening was safe HERE only because this
+ * function reads no hydrated relation — `deriveEngagementParties` and
+ * `mapActionItemsToView` do, and are deliberately NOT widened.
  */
 export function resolveEngagementLens(
   user: SessionUser,
-  engagement: EngagementWithMilestones
+  engagement: { companyId: string; expertProfileId: string }
 ): EngagementViewerContext | null {
   // 1. Admin → observer (precedence over ownership / delivery).
   if (ADMIN_ROLES.has(user.platformRole)) {
