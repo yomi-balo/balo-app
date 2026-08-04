@@ -407,14 +407,19 @@ describe('engagement.created audit — the project creation paths (BAL-417 post-
       engagementId: engagement.id,
     });
 
-    // The trail reads creation-then-snapshot, not the other way round. Both rows share
-    // one transaction, so compare INDEX POSITIONS in `auditEventsForEntity`'s
-    // (created_at, id) order rather than timestamps.
+    // Both audit rows are written, and BOTH are attributed to this engagement.
+    //
+    // ⚠ DO NOT assert their relative ORDER. It is not recoverable from `audit_events`:
+    // `created_at` is `defaultNow()`, which in Postgres is TRANSACTION START time, so
+    // two rows written in one transaction carry an IDENTICAL timestamp — and the
+    // tiebreaker `id` is `defaultRandom()`, not a sequence. `(created_at, id)` order is
+    // therefore a coin flip per run, not insertion order. An earlier revision of this
+    // test asserted creation-before-snapshot and passed locally purely by luck before
+    // failing in CI. Ordering the delivery trail would need a monotonic column on
+    // `audit_events` (BAL-344's table, shared by every feature) — out of scope here.
     const actions = events.map((e) => e.action);
-    expect(actions.indexOf('engagement.created')).toBeGreaterThanOrEqual(0);
-    expect(actions.indexOf('engagement.created')).toBeLessThan(
-      actions.indexOf('engagement.milestones_snapshotted')
-    );
+    expect(actions).toContain('engagement.created');
+    expect(actions).toContain('engagement.milestones_snapshotted');
   });
 });
 
