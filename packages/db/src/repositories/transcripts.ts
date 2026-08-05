@@ -17,7 +17,8 @@ import {
 export interface InsertRawTranscriptInput {
   captureId: string;
   engagementId: string;
-  meetingId?: string | null;
+  /** BAL-418: REQUIRED — `transcripts.meeting_id` is NOT NULL now (no longer a seam). */
+  meetingId: string;
   vendor: TranscriptVendor;
   canonical: CanonicalTranscript;
   recordingRef?: string | null;
@@ -46,7 +47,7 @@ export const transcriptsRepository = {
       .values({
         captureId: input.captureId,
         engagementId: input.engagementId,
-        meetingId: input.meetingId ?? null,
+        meetingId: input.meetingId,
         vendor: input.vendor,
         canonical: input.canonical,
         recordingRef: input.recordingRef ?? null,

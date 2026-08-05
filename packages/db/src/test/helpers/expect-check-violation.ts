@@ -21,3 +21,22 @@ export async function expectCheckViolation(statement: SQL): Promise<void> {
     code: '23514',
   });
 }
+
+/** The savepoint handle a probe runs on. Must be used INSTEAD of the module-level `db`. */
+type ProbeTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The Drizzle-query generalisation of `expectCheckViolation`: assert that `run` fails with
+ * a given SQLSTATE (`23505` unique, `23503` FK, `23514` CHECK, …), inside its OWN
+ * SAVEPOINT.
+ *
+ * ⚠ `run` MUST issue its statements on the supplied `tx`, never on the module-level `db`.
+ * `db` is the OUTER per-test transaction; a failure on it aborts that transaction and
+ * every later statement in the test fails `25P02` instead of the code you meant to assert.
+ */
+export async function expectConstraintViolation(
+  code: string,
+  run: (tx: ProbeTx) => Promise<unknown>
+): Promise<void> {
+  await expect(db.transaction(async (tx) => run(tx))).rejects.toMatchObject({ code });
+}

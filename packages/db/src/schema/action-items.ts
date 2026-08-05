@@ -2,14 +2,15 @@ import { pgTable, uuid, text, timestamp, index, check } from 'drizzle-orm/pg-cor
 import { relations, sql } from 'drizzle-orm';
 import { actionItemStatusEnum, actionItemSourceEnum, actionItemAssigneePartyEnum } from './enums';
 import { engagements } from './engagements';
+import { meetings } from './meetings';
 import { users } from './users';
 import { timestamps, softDelete } from './helpers';
 
 /**
  * action_items — a first-class, engagement-owned to-do produced from a meeting (ADR-1043,
  * BAL-391). Engagement-generic: the ONLY hard context is the engagement (party + capability
- * scope). `meeting_id` is a NULLABLE, NO-FK forward seam for the meetings primitive (BAL-387,
- * unbuilt) — do NOT conflate with meeting_guests.meeting_id. `body` is PLAIN TEXT (the item
+ * scope). `meeting_id` is a NULLABLE REAL FK to `meetings` (BAL-418) — a manual item has no
+ * meeting, so it stays nullable. `body` is PLAIN TEXT (the item
  * line) — no HTML, no sanitisation needed; render as text (React escapes). Person-attribution
  * FKs are ON DELETE restrict ("preserve attribution", the engagement_milestones pattern);
  * created_by is nullable so the ai_extracted pipeline (no user actor) can insert.
@@ -24,8 +25,15 @@ export const actionItems = pgTable(
       .notNull()
       .references(() => engagements.id, { onDelete: 'cascade' }),
 
-    // Forward seam (BAL-387 / meetings primitive). NULLABLE, NO FK — the table does not exist yet.
-    meetingId: uuid('meeting_id'),
+    // BAL-418: real FK now that `meetings` exists. NULLABLE and ON DELETE SET NULL — a
+    // MANUAL item has no meeting (create-action-item.ts's Zod schema is `.strict()` and
+    // carries no `meetingId`), and deleting a meeting must not delete a to-do the parties
+    // still owe.
+    // ⚠ `engagement_id` REMAINS the owning context, the capability scope, and the IDOR
+    // subject (`action-item-action-shared.ts`). BAL-418's original AC proposed dropping it;
+    // that was AMENDED (decision D1) — dropping it would delete the subject of a live
+    // security check.
+    meetingId: uuid('meeting_id').references(() => meetings.id, { onDelete: 'set null' }),
 
     body: text('body').notNull(), // the action-item text (ticket's `text` field); plain text.
     status: actionItemStatusEnum('status').notNull().default('open'),
@@ -56,7 +64,8 @@ export const actionItems = pgTable(
     index('action_item_engagement_status_idx')
       .on(t.engagementId, t.status)
       .where(sql`${t.deletedAt} IS NULL`),
-    // Forward seam read (BAL-388 recap lists by meeting). Partial on non-null meeting + live.
+    // Meeting-scoped read (BAL-388 recap lists by meeting). Partial on non-null meeting +
+    // live — the column STAYS nullable under D1, so the predicate stays correct.
     index('action_item_meeting_idx')
       .on(t.meetingId)
       .where(sql`${t.meetingId} IS NOT NULL AND ${t.deletedAt} IS NULL`),

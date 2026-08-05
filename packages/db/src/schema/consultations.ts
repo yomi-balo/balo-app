@@ -13,6 +13,16 @@ import { timestamps, softDelete } from './helpers';
  * Status carries two values: `confirmed` (busy) and `cancelled` (frees the
  * slot again). The resolver only ever sees `confirmed` rows — the repository
  * filter is the contract boundary.
+ *
+ * ⚠ CROSS-REFERENCE — `meetings` (schema/meetings.ts, BAL-418). That table stores the
+ * SAME booked-slot fact a second time (`scheduled_start`/`scheduled_end`). BAL-418 ships
+ * NO writer that creates a meeting from a booking, so there is no regression today. The
+ * regression appears the moment BAL-129 lands: a booked meeting would NOT block the
+ * expert's availability, because THIS resolver reads `consultations` only — a silent
+ * double-booking bug. RULING for BAL-129 — it must either (a) write the `consultations`
+ * row and the `meetings` row in ONE transaction, or (b) migrate the availability resolver
+ * to read `meetings` and retire this stub. It must not ship a meeting-creating path that
+ * does neither. Reschedule/cancel (BAL-409/BAL-410) must move BOTH rows.
  */
 export const consultations = pgTable(
   'consultations',

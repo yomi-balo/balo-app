@@ -262,6 +262,11 @@ function fullSession(overrides: Partial<CreditSession> = {}): CreditSession {
     billingFinalizedAt: new Date('2026-07-20T12:45:05Z'),
     finalizationPath: 'live_capture',
     stripePaymentIntentId: STRIPE_PI_SENTINEL,
+    // BAL-418 — the meeting link + the denormalised engagement. Deliberately NOT added to
+    // CLIENT_SESSION_MONEY_COLUMNS or the expert projection: neither is fee-bearing, but
+    // those allow-lists are opt-in by design (BAL-399), so both stay off every lens.
+    meetingId: null,
+    engagementId: null,
     createdAt: new Date('2026-07-20T11:00:00Z'),
     updatedAt: new Date('2026-07-20T12:45:05Z'),
     deletedAt: null,

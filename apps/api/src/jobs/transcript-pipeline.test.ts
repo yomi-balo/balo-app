@@ -112,7 +112,8 @@ describe('transcript-pipeline job', () => {
     await enqueueTranscriptPipeline({
       captureId: 'cap-abc',
       engagementId: 'eng1',
-      meetingId: null,
+      // BAL-418: `transcripts.meeting_id` is a NOT NULL FK → `meetings.id`, so this is required.
+      meetingId: '11111111-1111-4111-8111-111111111111',
       vendor: 'daily_deepgram',
       payload: dailyMultiSpeaker,
       recordingRef: null,

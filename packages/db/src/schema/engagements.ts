@@ -127,9 +127,12 @@ export const engagements = pgTable(
      * ⚠ CASE MARGIN IS NOT HERE — `credit_sessions.balo_fee_bps` IS THE SSOT FOR A
      * CASE'S MARGIN (BAL-417 / D3). That column is the value actually charged: it
      * sizes `client_rate_minor_per_minute` and `expert_rate_minor_per_minute` at
-     * `open` (see schema/credit-sessions.ts:95 and repositories/credit-sessions.ts).
-     * `credit_sessions` has NO `engagement_id` column and there is NO join between
-     * the two tables in either direction. Before the CHECK existed, an
+     * `open` (see `credit_sessions.balo_fee_bps` in schema/credit-sessions.ts and
+     * repositories/credit-sessions.ts).
+     * ⚠ UPDATED BY BAL-418: `credit_sessions.engagement_id` NOW JOINS the two tables
+     * (it did not when BAL-417 wrote this), so a reporting query CAN reach this column
+     * from a case session. The biconditional CHECK is therefore no longer a belt beside
+     * braces — it is the WHOLE of the protection. Before it existed, an
      * `engagement_type = 'case'` row sat at the bare default (2500) — a credible-but-
      * WRONG number that any raw `db.select().from(engagements)` in a reporting query,
      * an admin surface or a reconciliation script would have read straight through

@@ -30,7 +30,9 @@ const BACKOFF_DELAY_MS = 2000;
 export interface EnqueueTranscriptPipelineInput {
   captureId: string; // stable dedup id → jobId + transcripts.capture_id
   engagementId: string; // NOT NULL anchor
-  meetingId?: string | null; // nullable no-FK forward seam
+  // BAL-418: REQUIRED. `transcripts.meeting_id` is a NOT NULL FK → `meetings.id` now, so this is
+  // no longer a forward seam — the capture layer (BAL-126/BAL-140) MUST resolve the meeting first.
+  meetingId: string;
   vendor: TranscriptVendor;
   payload: VendorTranscriptPayload; // raw vendor shape
   recordingRef?: string | null; // nullable/deferred — no producer

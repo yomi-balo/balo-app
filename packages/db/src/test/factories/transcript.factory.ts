@@ -9,6 +9,7 @@ import type {
   CanonicalTranscript,
 } from '../../schema';
 import { engagementFactory } from './engagement.factory';
+import { meetingFactory } from './meeting.factory';
 
 /** A minimal, valid two-speaker canonical transcript (the NOT NULL `canonical` jsonb default). */
 function minimalCanonical(): CanonicalTranscript {
@@ -39,30 +40,40 @@ function minimalCanonical(): CanonicalTranscript {
 interface TranscriptFactoryOverrides {
   /** Reuse an existing engagement instead of seeding a fresh active one. */
   engagementId?: string;
-  /** Row-level overrides (captureId, vendor, status, meetingId, canonical, deletedAt, …). */
+  /**
+   * Reuse an existing meeting instead of seeding a fresh one. BAL-418 made
+   * `transcripts.meeting_id` NOT NULL, so a meeting is now REQUIRED — this factory seeds
+   * one by default rather than making every caller do it.
+   */
+  meetingId?: string;
+  /** Row-level overrides (captureId, vendor, status, canonical, deletedAt, …). */
   values?: Partial<NewTranscript>;
 }
 
 export interface TranscriptFactoryResult {
   transcript: Transcript;
   engagementId: string;
+  meetingId: string;
 }
 
 /**
  * Seeds one `transcripts` row (default `vendor='daily_deepgram'`, `status='processing'`,
- * a valid minimal `canonical`, a fresh unique `captureId`) under an active engagement.
- * Inserts directly via `db` (not the repository) so tests can seed ANY vendor/status/
- * deleted combination. Overrides flow through `.values(...)`.
+ * a valid minimal `canonical`, a fresh unique `captureId`) under an active engagement AND
+ * a meeting (BAL-418: `meeting_id` is NOT NULL). Inserts directly via `db` (not the
+ * repository) so tests can seed ANY vendor/status/deleted combination. Overrides flow
+ * through `.values(...)`.
  */
 export async function transcriptFactory(
   overrides: TranscriptFactoryOverrides = {}
 ): Promise<TranscriptFactoryResult> {
   const engagementId = overrides.engagementId ?? (await engagementFactory()).engagement.id;
+  const meetingId = overrides.meetingId ?? (await meetingFactory()).meeting.id;
 
   const [transcript] = await db
     .insert(transcripts)
     .values({
       engagementId,
+      meetingId,
       captureId: `capture-${randomUUID()}`,
       vendor: 'daily_deepgram',
       canonical: minimalCanonical(),
@@ -73,7 +84,7 @@ export async function transcriptFactory(
     throw new Error('transcript insert failed');
   }
 
-  return { transcript, engagementId };
+  return { transcript, engagementId, meetingId };
 }
 
 interface TranscriptArtifactFactoryOverrides {

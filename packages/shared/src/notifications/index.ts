@@ -615,7 +615,7 @@ export interface RecapReadyPayload {
   correlationId: string; // `${transcriptId}:recap_ready` → BullMQ jobId dedup
   engagementId: string; // CTA / actionUrl → /engagements/{id}
   transcriptId: string;
-  meetingId?: string | null; // nullable no-FK forward seam
+  meetingId: string; // BAL-418: REQUIRED — transcripts.meeting_id is a NOT NULL FK → meetings.id
   recipientId?: string; // client company owner user id → recipient:'client'; absent → client rule skips
   expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert'
   actionItemCount: number; // display fact (lens-safe)

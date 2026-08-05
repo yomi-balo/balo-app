@@ -535,3 +535,69 @@ export const transcriptArtifactKindEnum = pgEnum('transcript_artifact_kind', [
   'cleaned',
   'summary',
 ]);
+
+// ── Meetings primitive (BAL-418 / ADR-1045 §2/§3/§6 + ADR-1043 §1/§2) ──────
+//
+// All FOUR enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
+// VALUE`), so every label commits atomically with the type. Using a label as a column
+// DEFAULT (`meetings.status = 'scheduled'`) or inside a CHECK (`meeting_outcome_requires_ended`,
+// `meeting_context_admin_no_id`) in the SAME migration is SAFE — the enum-default-same-txn
+// hazard (memory `reference_enum_default_same_tx_migration_hazard`) applies ONLY to
+// ADD-VALUE, which none of these are. NONE appears in an INDEX PREDICATE (the house rule
+// at `action-items.ts` / `transcripts.ts`).
+
+/**
+ * BAL-134's meeting lifecycle (BAL-418 creates it; BAL-134 owns the transitions).
+ * scheduled → waiting_for_participants → in_progress → ended.
+ * WHY THE END-REASON IS NOT HERE: `missed_call` / `no_show_client` are *why* a meeting
+ * ended, not a fifth lifecycle state — BAL-134's own `meeting_ended` analytic already
+ * carries `outcome`. Modelling them as statuses would force a later ALTER TYPE … ADD
+ * VALUE, the documented one-transaction hazard. See `meetingOutcomeEnum`.
+ */
+export const meetingStatusEnum = pgEnum('meeting_status', [
+  'scheduled',
+  'waiting_for_participants',
+  'in_progress',
+  'ended',
+]);
+
+/**
+ * WHY a meeting ended. NULL unless `status = 'ended'` (CHECK `meeting_outcome_requires_ended`).
+ * `completed` = it happened. `no_show_client` = expert present, no client-side participant ever
+ * arrived (BAL-412 settles this). `missed_call` = the expert never joined (BAL-134, 2026-07-31).
+ */
+export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
+  'completed',
+  'no_show_client',
+  'missed_call',
+]);
+
+/**
+ * ADR-1045 §2 — what a meeting is FOR. `context_id` is polymorphic:
+ *   case              → engagements.id  (case_engagements.engagement_id IS engagements.id —
+ *                       the child PK is the parent's identity, so there is no ambiguity)
+ *   project_discovery → project_requests.id  (a discovery call held BEFORE kickoff
+ *                       materialises the engagement)
+ *   project_kickoff / package_session / retainer_checkin → engagements.id
+ *   admin             → NULL (no subject; CHECK `meeting_context_admin_no_id`)
+ * ADR-1045 §2 is the authoritative list (ADR-1043 §1 predates `retainer_checkin`).
+ */
+export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
+  'case',
+  'project_discovery',
+  'project_kickoff',
+  'package_session',
+  'retainer_checkin',
+  'admin',
+]);
+
+/**
+ * Which SIDE a presence interval belongs to (BAL-134's two clocks).
+ * `observer` = a Balo staffer / silent attendee: present, but NEVER makes a meeting billable.
+ * Declared now so a staff join does not later require an ALTER TYPE … ADD VALUE.
+ */
+export const meetingParticipantPartyEnum = pgEnum('meeting_participant_party', [
+  'expert',
+  'client',
+  'observer',
+]);

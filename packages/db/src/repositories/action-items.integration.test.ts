@@ -8,6 +8,7 @@ import {
   caseEngagementFactory,
   engagementFactory,
   actionItemFactory,
+  meetingFactory,
   userFactory,
 } from '../test/factories';
 import { actionItemsRepository, InvalidActionItemTransitionError } from './action-items';
@@ -102,7 +103,9 @@ describe('actionItemsRepository.createManual', () => {
 describe('actionItemsRepository.createFromExtraction', () => {
   it('bulk-inserts N ai_extracted items with a null actor and one created audit per row', async () => {
     const { engagement } = await engagementFactory();
-    const meetingId = randomUUID();
+    // BAL-418: `meeting_id` is a real (nullable) FK now — a bare `randomUUID()` violates
+    // it (23503). The column STAYS nullable under D1; only a NON-NULL value must resolve.
+    const meetingId = (await meetingFactory()).meeting.id;
 
     const inserted = await actionItemsRepository.createFromExtraction({
       engagementId: engagement.id,

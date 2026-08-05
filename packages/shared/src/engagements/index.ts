@@ -12,19 +12,27 @@
  * in `@balo/db`, which carries the documented client-bundle footgun
  * (repositories/project-engagements.ts).
  *
- * ⚠ THE CONSULTATION INPUTS ARE PARAMETERS, NOT QUERIES. There is no FK between
- * `case_engagements` and any consultation/session table yet (`credit_sessions` has
- * no `engagement_id`; `consultations` is an availability stub). The link is
- * BAL-418's `meeting_contexts` (`context_type='case'`, `context_id=engagements.id`)
- * plus `credit_sessions.meeting_id`; BAL-420 supplies both timestamps once that
- * lands. Until then `caseEngagementsRepository.listOpenCreatedBefore` returns the
- * SQL-expressible SUPERSET (creation-anchored, consultation-blind) and this
- * function refines it.
+ * ⚠ THE CONSULTATION INPUTS ARE PARAMETERS, NOT QUERIES — this module stays PURE.
+ * BAL-418 SHIPPED THE LINK: `meeting_contexts` (`context_type='case'`,
+ * `context_id=engagements.id`) plus `credit_sessions.meeting_id`, and the batched
+ * read that resolves both anchors from it:
  *
- * ⚠ DO NOT RUN A SWEEP OVER THIS BEFORE BAL-418. With no link, both timestamps can
- * only be `null`, which collapses the rule to "created ≥ 30 days ago" and would
- * auto-close a case that had a consultation yesterday and another booked tomorrow.
- * Nothing calls this in BAL-417 (D4), which is the only reason it is safe.
+ *     meetingContextsRepository.consultationTimestampsForEngagements(
+ *       engagementIds, now
+ *     ) → Map<engagementId, { lastCompletedConsultationAt, nextScheduledConsultationAt }>
+ *
+ * (`@balo/db`; rides `meeting_context_reverse_idx` on
+ * `meeting_contexts (context_type, context_id) WHERE deleted_at IS NULL`. BATCHED —
+ * a per-engagement call over a sweep candidate list is a textbook N+1. It returns an
+ * entry for EVERY requested id, so "absent" never has to be distinguished from
+ * "none".)
+ *
+ * ⚠ BAL-420's SWEEP MUST CALL THAT READ. `caseEngagementsRepository.listOpenCreatedBefore`
+ * returns only the SQL-expressible SUPERSET (creation-anchored, consultation-blind);
+ * this function refines it, and it can only refine what it is given. Passing
+ * `null, null` is now a BUG, not a gap — it collapses the rule to "created ≥ 30 days
+ * ago" and would auto-close a case that had a consultation yesterday and another
+ * booked tomorrow.
  *
  * ⚠ `caseCreatedAt` MUST be `engagements.created_at` (the PARENT) — the same column
  * `listOpenCreatedBefore` filters on, so the candidate set and the refinement cannot

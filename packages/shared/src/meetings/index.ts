@@ -1,0 +1,229 @@
+/**
+ * Meeting clocks (BAL-418 / ADR-1045 §6; BAL-134 owns the WRITES that produce the input).
+ *
+ * Two clocks fall out of `meeting_presence`'s per-interval rows:
+ *
+ *   expertPresentMs = last expert presence − FIRST expert join                 (gap-inclusive)
+ *   billableMs      = last instant both sides present − FIRST such instant     (gap-inclusive)
+ *
+ * ⚠ BOTH CLOCKS ARE SPANS, NOT SUMS. A drop+rejoin adds a second interval but does NOT
+ * move the first-join anchor and does NOT restart the timer — the span is unchanged and
+ * the gap sits INSIDE it. That is BAL-134's "rejoins must not fragment the duration or
+ * restart the billable timer". `SUM(left − joined)` would silently SHORTEN a call for
+ * every network blip, i.e. under-bill.
+ *
+ * ⚠ AND THE SAME CHOICE CUTS THE OTHER WAY — STATED EXPLICITLY SO NOBODY DISCOVERS IT VIA
+ * AN INVOICE. Gap-inclusive means a gap of ANY size is inside the span. On a 60-minute
+ * call with the expert present throughout, a client present 2→4 min and again 58→60 min
+ * yields `billableMs = 58 min` — the SPAN 2→60 — NOT the 4 min a sum-of-intervals would
+ * give. (The anchor is the FIRST both-present instant, not the call start: had that client
+ * instead joined at minute 0, the span would be the full 60.) That IS the intended
+ * semantics: the expert held the slot for the whole hour, and a rule that pauses billing
+ * during a gap is precisely the rule a party could exploit by dropping. But it is a real
+ * exposure at the long end, and a PURE function is the wrong place for policy — it reports
+ * the span faithfully and caps nothing. Both numbers are PINNED by tests in `index.test.ts`
+ * so this paragraph cannot drift from the behaviour.
+ *
+ * ⚠ THE POLICY CAP IS ASSIGNED: **BAL-412** (settlement) holds it and already carries
+ * `effectiveCeilingMinor` as the money-side backstop; **BAL-134** clamps presence to the
+ * meeting window on the write side.
+ *
+ * `observer` (a Balo staffer / silent attendee) is present but NEVER makes a meeting
+ * billable — it is excluded from the billable intersection by construction.
+ *
+ * PURE and dependency-free (no `@balo/db`, no I/O) — the `@balo/shared/engagements`
+ * precedent — so BAL-403's in-session client panel can render the clocks without the
+ * `@balo/db` client-bundle footgun (memory `reference_balo_db_client_bundle_footgun`).
+ */
+
+/** One `meeting_presence` row, reduced to what the clocks need. */
+export interface PresenceInterval {
+  party: 'expert' | 'client' | 'observer';
+  joinedAt: Date;
+  /** `null` = still present at `now`. */
+  leftAt: Date | null;
+}
+
+export interface MeetingClocks {
+  /** Span from the FIRST expert join to the last expert presence. Gap-inclusive. */
+  expertPresentMs: number;
+  /**
+   * Span from the FIRST instant the expert AND ≥1 client were both present, to the last
+   * such instant. Gap-inclusive.
+   */
+  billableMs: number;
+  /** `null` when no expert ever joined. */
+  expertFirstJoinedAt: Date | null;
+  /** `null` when the expert and a client were never in the room together. */
+  billableStartedAt: Date | null;
+}
+
+/** A half-closed-in-spirit but CLOSED-in-arithmetic presence span, in epoch ms. */
+interface Span {
+  start: number;
+  end: number;
+}
+
+/**
+ * Project one party's intervals onto closed epoch-ms spans. An OPEN interval
+ * (`leftAt === null`) runs to `now`.
+ *
+ * ⚠ AN INTERVAL WITH A NON-FINITE ENDPOINT IS SKIPPED ENTIRELY — not clamped, not
+ * zero-lengthed. An Invalid `joinedAt`/`leftAt` (or an Invalid `now` closing an open
+ * interval) yields NaN, and NaN has NO POSITION ON THE TIMELINE: it cannot be ordered.
+ * Left in, it reaches `merge`'s `(a, b) => a.start - b.start` as an INCONSISTENT
+ * COMPARATOR — every comparison involving it returns NaN, which the sort reads as "not
+ * greater than zero", so the corrupt element keeps whatever position the CALLER's array
+ * gave it. The merged spans, and therefore the clocks of the VALID rows around it, then
+ * depend on INPUT ORDER. Executed over all six orderings of the three-interval scenario in
+ * `index.test.ts`: with this guard removed, three orderings return `expertPresentMs =
+ * 20 min / billableMs = 10 min` and the other three return `NaN / 0`. SO WHAT THE GUARD
+ * BUYS IS DETERMINISM PLUS A NON-NaN RESULT — not the avoidance of one particular wrong
+ * number. A zero-length span at an unknown instant would be meaningless anyway, so the row
+ * contributes nothing at all.
+ *
+ * DEFENSIVE — BUT NOT FOR THE REASON AN EARLIER DRAFT OF THIS BLOCK GAVE. It claimed the
+ * columns are `timestamp NOT NULL` "so Postgres cannot hand us an Invalid Date". That is
+ * false twice over: `NOT NULL` governs NULL, not validity, and Postgres REPRESENTS instants
+ * JavaScript cannot. Round-tripped through Postgres 16 + postgres-js 3.4.8, `'infinity'`,
+ * `'-infinity'`, `'294276-12-31 23:59:59+00'` (pg's max) and `'4713-01-01 BC'` (pg's min)
+ * EVERY ONE parses to an Invalid Date — `getTime()` is NaN — while `'275760-09-12'`, just
+ * inside JS's ±8.64e15 ms range, parses finite. Nor does the CHECK
+ * `meeting_presence_left_after_joined` stop it: `left_at = 'infinity'` is ACCEPTED, because
+ * `infinity >= joined_at` is TRUE in Postgres.
+ *
+ * WHAT ACTUALLY KEEPS IT OFF THE LIVE PATH IS THE WRITE SIDE, at the driver. postgres-js
+ * serializes a bind parameter as `(x instanceof Date ? x : new Date(x)).toISOString()`,
+ * which THROWS `RangeError: Invalid time value` on an Invalid Date (and Postgres itself
+ * rejects a JS-max `Date` with `time zone displacement out of range`). So
+ * `meetingPresenceRepository.open()`/`close()` structurally CANNOT WRITE such a value —
+ * only raw SQL, a manual operator action, or a future non-Drizzle writer could. The
+ * conclusion ("defensive, not a live path") survives and is better founded than the claim
+ * it replaces. The other reachable source is this module's own client-bundle surface
+ * (`@balo/shared/meetings`, for BAL-403's in-session panel), where a caller constructs
+ * `Date`s with no driver in the way at all.
+ *
+ * ⚠ THE RESIDUAL, STATED RATHER THAN HIDDEN: an Invalid `now` makes EVERY still-open
+ * interval non-finite, so the guard drops them ALL and returns a plausible FINITE number
+ * where the pre-guard code returned NaN — a loud failure traded for a quiet wrong one. Not
+ * reachable in production (`resolveClockCeiling` supplies `meetings.ended_at` or
+ * `new Date()`), and PINNED by a test in `index.test.ts` so it cannot become a surprise.
+ *
+ * ⚠ SURFACING A DROPPED INTERVAL IS THE CALLER'S OBLIGATION, ASSIGNED IN WRITING — this is
+ * a PURE function: it cannot log, and throwing on a billing read is worse than dropping an
+ * uninterpretable row. **BAL-134** (which writes presence) must reject a non-finite
+ * timestamp at the webhook write seam; **BAL-412** (which settles) must not settle on
+ * intervals it did not verify. Same assignment as the window-clamp and policy-cap
+ * obligations stated at the top of this file.
+ */
+function toSpans(
+  intervals: readonly PresenceInterval[],
+  party: PresenceInterval['party'],
+  nowMs: number
+): Span[] {
+  const spans: Span[] = [];
+  for (const interval of intervals) {
+    if (interval.party !== party) {
+      continue;
+    }
+    const start = interval.joinedAt.getTime();
+    const rawEnd = interval.leftAt === null ? nowMs : interval.leftAt.getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(rawEnd)) {
+      continue;
+    }
+    // The finite guard above is what makes `Math.max` safe here — with both operands
+    // finite it cannot propagate NaN, so it is exactly a clamp of `end` up to `start`. It
+    // degrades a still-future open interval, or a malformed `leftAt < joinedAt` row that
+    // the DB CHECK `meeting_presence_left_after_joined` already rejects (so this too is
+    // defensive), to a ZERO-LENGTH span rather than a negative one.
+    spans.push({ start, end: Math.max(start, rawEnd) });
+  }
+  return spans;
+}
+
+/**
+ * Sort + coalesce overlapping OR touching spans into a disjoint, ascending list. Touching
+ * spans merge (`next.start <= current.end`): leaving and instantly rejoining is one
+ * continuous presence, not two.
+ */
+function merge(spans: Span[]): Span[] {
+  if (spans.length === 0) {
+    return [];
+  }
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const merged: Span[] = [];
+  for (const span of sorted) {
+    const current = merged.at(-1);
+    if (current === undefined || span.start > current.end) {
+      merged.push({ start: span.start, end: span.end });
+      continue;
+    }
+    if (span.end > current.end) {
+      current.end = span.end;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Two-pointer intersection of two DISJOINT ASCENDING span lists. Overlap is CLOSED
+ * (`start <= end` on both sides), so a zero-length blip — both sides present for a single
+ * instant — is a real intersection that yields `billableMs = 0` rather than being dropped.
+ */
+function intersect(a: readonly Span[], b: readonly Span[]): Span[] {
+  const out: Span[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const left = a[i];
+    const right = b[j];
+    if (left === undefined || right === undefined) {
+      break;
+    }
+    const start = Math.max(left.start, right.start);
+    const end = Math.min(left.end, right.end);
+    if (start <= end) {
+      out.push({ start, end });
+    }
+    if (left.end < right.end) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  return out;
+}
+
+/** The gap-inclusive span of a disjoint ascending list: `last.end − first.start`. */
+function spanOf(spans: readonly Span[]): { startMs: number; durationMs: number } | null {
+  const first = spans[0];
+  const last = spans.at(-1);
+  if (first === undefined || last === undefined) {
+    return null;
+  }
+  return { startMs: first.start, durationMs: last.end - first.start };
+}
+
+/**
+ * Compute both meeting clocks from a meeting's LIVE presence intervals.
+ *
+ * `now` closes any still-open interval (`leftAt === null`), so an in-progress meeting
+ * reports the clocks as at that instant. Order of `intervals` is irrelevant.
+ */
+export function computeMeetingClocks(intervals: PresenceInterval[], now: Date): MeetingClocks {
+  const nowMs = now.getTime();
+
+  const expert = merge(toSpans(intervals, 'expert', nowMs));
+  const client = merge(toSpans(intervals, 'client', nowMs));
+
+  const expertSpan = spanOf(expert);
+  // `observer` is deliberately absent from BOTH sides of this intersection.
+  const billableSpan = spanOf(intersect(expert, client));
+
+  return {
+    expertPresentMs: expertSpan?.durationMs ?? 0,
+    billableMs: billableSpan?.durationMs ?? 0,
+    expertFirstJoinedAt: expertSpan === null ? null : new Date(expertSpan.startMs),
+    billableStartedAt: billableSpan === null ? null : new Date(billableSpan.startMs),
+  };
+}

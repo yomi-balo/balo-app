@@ -58,7 +58,8 @@ export class TranscriptStageError extends Error {
 export interface TranscriptPipelineJobInput {
   captureId: string;
   engagementId: string;
-  meetingId?: string | null;
+  /** BAL-418: REQUIRED — `transcripts.meeting_id` is a NOT NULL FK → `meetings.id` (no longer a seam). */
+  meetingId: string;
   vendor: TranscriptVendor;
   payload: VendorTranscriptPayload;
   recordingRef?: string | null;
