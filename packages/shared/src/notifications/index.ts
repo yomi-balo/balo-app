@@ -128,6 +128,13 @@ export interface EngagementMilestoneRevertedPayload {
 // `recipientId` is absent for a retainer / owner-miss (the client rules skip; admins
 // still fire). Copy uses BAL-329 conventions (RETROSPECTIVE names the PERSON "@ agency"
 // on first mention).
+/**
+ * The three shapes an expert-side milestone scope change can take. Declared ONCE here
+ * rather than spelled out as an inline union at each use, so the notification payload
+ * below and the web action that builds its `changeSummary` cannot drift apart.
+ */
+export type MilestoneChangeKind = 'added' | 'edited' | 'removed';
+
 export interface EngagementScopeChangedPayload {
   correlationId: string; // dedup/debounce key — see Decision D
   engagementId: string; // CTA / actionUrl → /engagements/{id}
@@ -135,7 +142,7 @@ export interface EngagementScopeChangedPayload {
   recipientId?: string; // client company owner user id → recipient:'client'; absent → client rules skip
   actorExpertLabel: string; // {actorExpert} — retrospective person ("Priya" / "Priya @ CloudPeak")
   projectTitle: string; // {title} — subject + admin in-app body
-  changeKind: 'added' | 'edited' | 'removed';
+  changeKind: MilestoneChangeKind;
   changeSummary: string; // "added 'Data migration dry-run'" | "removed 'X'" | "updated 'Y'"
 }
 

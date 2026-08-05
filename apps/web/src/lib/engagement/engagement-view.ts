@@ -411,13 +411,12 @@ function deriveMilestones(
     // Gate on the RAW snapshotted value; client sees it grossed up by the Balo fee,
     // expert & admin see the raw payout figure.
     const rawValue = m.valueCents;
-    const valueLabel =
-      rawValue !== null && rawValue > 0
-        ? formatWholeCurrency(
-            lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue,
-            engagement.currency
-          )
-        : null;
+    let valueLabel: string | null = null;
+    if (rawValue !== null && rawValue > 0) {
+      const displayValue =
+        lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
+      valueLabel = formatWholeCurrency(displayValue, engagement.currency);
+    }
     // Plain-text of the raw description for the expert edit-form prefill — kept out
     // of the client's hands as HTML (the modal only sees text). Blank/tag-only → null.
     const descriptionText =
