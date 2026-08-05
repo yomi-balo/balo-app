@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
@@ -8,12 +8,14 @@ import {
   companies,
   engagements,
   expertProfiles,
+  projectEngagements,
   projectRequests,
   proposalMilestones,
   proposals,
   type AuditEvent,
 } from '../schema';
 import {
+  caseEngagementFactory,
   engagementFactory,
   engagementMilestoneFactory,
   expertDraftFactory,
@@ -22,12 +24,19 @@ import {
   userFactory,
 } from '../test/factories';
 import type { ProposalFactoryResult } from '../test/factories';
+import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
+import { expectCheckViolation } from '../test/helpers/expect-check-violation';
+import { engagementsRepository } from './engagements';
 import {
-  engagementsRepository,
+  projectEngagementsRepository,
   KickoffGatesIncompleteError,
   InvalidEngagementTransitionError,
   MilestonesIncompleteError,
-} from './engagements';
+} from './project-engagements';
+import {
+  projectDeliveryToEngagementStatus,
+  EngagementTypeMismatchError,
+} from './_shared/engagement-supertype';
 import { EngagementTermsCoherenceError } from './proposal-coherence';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
 
@@ -89,6 +98,41 @@ async function seedAcceptedKickoff(
   return { source, companyId: request.companyId, adminId: admin.id };
 }
 
+/** Live PARENT rows for a company — replaces the deleted `listByCompany` in rollback proofs. */
+async function liveEngagementRowsForCompany(companyId: string) {
+  return db
+    .select()
+    .from(engagements)
+    .where(and(eq(engagements.companyId, companyId), isNull(engagements.deletedAt)));
+}
+
+/** Live CHILD rows for a company — the second half of every two-table rollback proof. */
+async function liveProjectChildRowsForCompany(companyId: string) {
+  return db
+    .select({ engagementId: projectEngagements.engagementId })
+    .from(projectEngagements)
+    .innerJoin(engagements, eq(engagements.id, projectEngagements.engagementId))
+    .where(and(eq(engagements.companyId, companyId), isNull(projectEngagements.deletedAt)));
+}
+
+/**
+ * THE §1.6.1 PROJECTION INVARIANT, asserted after every transition:
+ * `engagements.status === projectDeliveryToEngagementStatus(project_engagements.delivery_status)`.
+ * The two columns drifting is R5, and this is the only thing that catches it.
+ */
+async function expectProjectionCoherent(engagementId: string): Promise<void> {
+  const [parent] = await db
+    .select({ status: engagements.status })
+    .from(engagements)
+    .where(eq(engagements.id, engagementId));
+  const [child] = await db
+    .select({ deliveryStatus: projectEngagements.deliveryStatus })
+    .from(projectEngagements)
+    .where(eq(projectEngagements.engagementId, engagementId));
+  if (child === undefined) throw new Error('expected a project child row');
+  expect(parent?.status).toBe(projectDeliveryToEngagementStatus(child.deliveryStatus));
+}
+
 /** Seed a personal company and return its id (engagements need a company party). */
 async function seedCompanyId(): Promise<string> {
   const [company] = await db
@@ -99,7 +143,7 @@ async function seedCompanyId(): Promise<string> {
   return company.id;
 }
 
-describe('engagementsRepository.create — the seam proof', () => {
+describe('projectEngagementsRepository.create — the seam proof', () => {
   it('creates WITH a source proposal: all provenance ids set, terms snapshotted, defaults applied', async () => {
     const { engagement, sourceProposal, companyId, expertProfileId } = await engagementFactory({
       withSourceProposal: true,
@@ -123,13 +167,24 @@ describe('engagementsRepository.create — the seam proof', () => {
     expect(engagement.approvalModel).toBe('admin_invoice'); // default
     expect(engagement.status).toBe('active'); // default
     expect(engagement.activatedAt).toBeInstanceOf(Date);
+
+    // BAL-417: BOTH rows exist and the parent carries the discriminator.
+    const [parent] = await db.select().from(engagements).where(eq(engagements.id, engagement.id));
+    expect(parent?.engagementType).toBe('project');
+    const [child] = await db
+      .select()
+      .from(projectEngagements)
+      .where(eq(projectEngagements.engagementId, engagement.id));
+    expect(child?.engagementType).toBe('project');
+    expect(child?.deliveryStatus).toBe('active');
+    await expectProjectionCoherent(engagement.id);
   });
 
   it('creates WITHOUT a proposal (the retainer seam): only company + expert + terms → row created', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 
-    const engagement = await engagementsRepository.create({
+    const engagement = await projectEngagementsRepository.create({
       companyId,
       expertProfileId: expert.id,
       pricingMethod: 'tm',
@@ -172,15 +227,207 @@ describe('engagementsRepository.create — the seam proof', () => {
     expect(survivor).toBeDefined();
     expect(survivor?.id).toBe(engagement.id);
     // ON DELETE SET NULL — the engagement outlives its origination proposal.
-    expect(survivor?.sourceProposalId).toBeNull();
+    // The provenance now lives on the CHILD row.
+    const [survivorChild] = await db
+      .select()
+      .from(projectEngagements)
+      .where(eq(projectEngagements.engagementId, engagement.id));
+    expect(survivorChild?.sourceProposalId).toBeNull();
   });
 });
 
-describe('engagementsRepository.create — FK / CHECK constraints', () => {
+describe('engagement_balo_fee_bps_case_null — the NULLABLE-FOR-CASES invariant (project side)', () => {
+  // The CASE half of the truth table lives in `case-engagements.integration.test.ts`.
+  // These are the PROJECT rows of it, plus the raw-write backstop that makes the
+  // constraint STRICTLY STRONGER than the `NOT NULL` it replaced.
+
+  it('(a) a project engagement created WITH a fee round-trips it (raw parent column, not just the fold)', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 3000,
+    });
+
+    expect(engagement.baloFeeBps).toBe(3000);
+    const [parent] = await db
+      .select({ baloFeeBps: engagements.baloFeeBps })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.baloFeeBps).toBe(3000);
+
+    // The hydrated workspace graph narrows `number | null` → `number` in
+    // `foldWorkspaceRow`; prove the value survives that guard rather than being
+    // replaced by it.
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.baloFeeBps).toBe(3000);
+  });
+
+  it('(d) a project engagement created WITHOUT a fee still works via the column DEFAULT', async () => {
+    // The seam writer types `baloFeeBps` OPTIONAL for the retainer/embedded product,
+    // which has no proposal to snapshot from. Keeping the DEFAULT (rather than dropping
+    // it alongside NOT NULL) is what keeps that path working.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+    });
+
+    expect(engagement.baloFeeBps).toBe(2500);
+    const [parent] = await db
+      .select({ baloFeeBps: engagements.baloFeeBps })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.baloFeeBps).toBe(2500);
+  });
+
+  it('a raw NON-case INSERT with a NULL fee is REJECTED (23514) — NOT NULL semantics survive', async () => {
+    // The direction that proves the biconditional is STRICTLY STRONGER than `NOT NULL`
+    // rather than a relaxation of it: every non-case type still cannot store NULL.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    for (const type of ['project', 'package', 'retainer'] as const) {
+      await expectCheckViolation(sql`
+        INSERT INTO engagements (engagement_type, company_id, expert_profile_id, balo_fee_bps)
+        VALUES (${type}, ${companyId}::uuid, ${expert.id}::uuid, NULL)
+      `);
+    }
+
+    // …and a raw UPDATE nulling a LIVE project's fee is rejected too.
+    const { engagement } = await engagementFactory();
+    await expectCheckViolation(sql`
+      UPDATE engagements SET balo_fee_bps = NULL WHERE id = ${engagement.id}::uuid
+    `);
+  });
+
+  it('engagement_balo_fee_bps_range still bites on a NON-NULL out-of-range fee', async () => {
+    // The range CHECK evaluates to NULL on a case row (Postgres treats that as
+    // satisfied) — the BENIGN direction, and the only reason a case insert is possible.
+    // It must still constrain a value that DOES exist; a `COALESCE` / `IS NOT DISTINCT
+    // FROM` "fix" would break every case insert, and deleting the CHECK would let an
+    // out-of-range project fee through. Both regressions are caught here.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    for (const bps of [-1, 10_001]) {
+      await expectCheckViolation(sql`
+        INSERT INTO engagements (engagement_type, company_id, expert_profile_id, balo_fee_bps)
+        VALUES ('project', ${companyId}::uuid, ${expert.id}::uuid, ${bps})
+      `);
+    }
+  });
+});
+
+describe('engagement.created audit — the project creation paths (BAL-417 post-review)', () => {
+  it('the seam writer emits exactly one engagement.created with engagement_type=project', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+    });
+
+    const createdEvents = (await auditEventsForEntity(engagement.id)).filter(
+      (e) => e.action === 'engagement.created'
+    );
+    expect(createdEvents).toHaveLength(1);
+    const [createdEvent] = createdEvents;
+    expect(createdEvent?.entityType).toBe('engagement');
+    expect(createdEvent?.entityId).toBe(engagement.id);
+    // The DISCRIMINATOR — `engagement.created` is deliberately type-agnostic, so this is
+    // the only thing separating a Project creation from a Case creation downstream.
+    expect(createdEvent?.metadata).toMatchObject({
+      engagement_type: 'project',
+      engagementId: engagement.id,
+    });
+    // ADR-1030 system-actor exemption: this seam writer has no live caller and no human
+    // actor to name, so the row is UNATTRIBUTED rather than fabricated.
+    expect(createdEvent?.actorUserId).toBeNull();
+  });
+
+  it('the seam writer attributes engagement.created when an actor is supplied', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const actor = await userFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 100_000,
+      actorUserId: actor.id,
+    });
+
+    const [createdEvent] = (await auditEventsForEntity(engagement.id)).filter(
+      (e) => e.action === 'engagement.created'
+    );
+    expect(createdEvent?.actorUserId).toBe(actor.id);
+  });
+
+  it('materializeFromKickoff emits exactly one engagement.created, attributed to the approving admin, BEFORE the snapshot', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({
+      bothGates: true,
+      milestoneCount: 2,
+    });
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 300_000,
+      baloFeeBps: 2500,
+    });
+
+    const events = await auditEventsForEntity(engagement.id);
+    const createdEvents = events.filter((e) => e.action === 'engagement.created');
+    expect(createdEvents).toHaveLength(1);
+    const [createdEvent] = createdEvents;
+    expect(createdEvent?.entityType).toBe('engagement');
+    // This path HAS a human actor (the admin approving kickoff), so no ADR-1030
+    // exemption is taken — the row is attributed.
+    expect(createdEvent?.actorUserId).toBe(adminId);
+    expect(createdEvent?.metadata).toMatchObject({
+      engagement_type: 'project',
+      engagementId: engagement.id,
+    });
+
+    // Both audit rows are written, and BOTH are attributed to this engagement.
+    //
+    // ⚠ DO NOT assert their relative ORDER. It is not recoverable from `audit_events`:
+    // `created_at` is `defaultNow()`, which in Postgres is TRANSACTION START time, so
+    // two rows written in one transaction carry an IDENTICAL timestamp — and the
+    // tiebreaker `id` is `defaultRandom()`, not a sequence. `(created_at, id)` order is
+    // therefore a coin flip per run, not insertion order. An earlier revision of this
+    // test asserted creation-before-snapshot and passed locally purely by luck before
+    // failing in CI. Ordering the delivery trail would need a monotonic column on
+    // `audit_events` (BAL-344's table, shared by every feature) — out of scope here.
+    const actions = events.map((e) => e.action);
+    expect(actions).toContain('engagement.created');
+    expect(actions).toContain('engagement.milestones_snapshotted');
+  });
+});
+
+describe('projectEngagementsRepository.create — FK / CHECK constraints', () => {
   it('throws (FK 23503) for an unknown companyId', async () => {
     const expert = await expertDraftFactory();
     await expect(
-      engagementsRepository.create({
+      projectEngagementsRepository.create({
         companyId: randomUUID(),
         expertProfileId: expert.id,
         pricingMethod: 'fixed',
@@ -192,7 +439,7 @@ describe('engagementsRepository.create — FK / CHECK constraints', () => {
   it('throws (FK 23503) for an unknown expertProfileId', async () => {
     const companyId = await seedCompanyId();
     await expect(
-      engagementsRepository.create({
+      projectEngagementsRepository.create({
         companyId,
         expertProfileId: randomUUID(),
         pricingMethod: 'fixed',
@@ -206,7 +453,7 @@ describe('engagementsRepository.create — FK / CHECK constraints', () => {
     const expert = await expertDraftFactory();
 
     await expect(
-      engagementsRepository.create({
+      projectEngagementsRepository.create({
         companyId,
         expertProfileId: expert.id,
         pricingMethod: 'fixed',
@@ -215,7 +462,7 @@ describe('engagementsRepository.create — FK / CHECK constraints', () => {
     ).rejects.toThrow();
 
     await expect(
-      engagementsRepository.create({
+      projectEngagementsRepository.create({
         companyId,
         expertProfileId: expert.id,
         pricingMethod: 'tm',
@@ -225,7 +472,7 @@ describe('engagementsRepository.create — FK / CHECK constraints', () => {
     ).rejects.toThrow();
 
     await expect(
-      engagementsRepository.create({
+      projectEngagementsRepository.create({
         companyId,
         expertProfileId: expert.id,
         pricingMethod: 'tm',
@@ -260,7 +507,7 @@ describe('engagements balo_fee_bps CHECK constraint (engagement_balo_fee_bps_ran
   });
 });
 
-describe('engagement_request_unique_idx — at most one live engagement per request', () => {
+describe('project_engagement_request_unique_idx — at most one live engagement per request', () => {
   it('rejects a SECOND live engagement for the same project_request_id (partial unique 23505)', async () => {
     const { engagement, companyId, expertProfileId } = await engagementFactory({
       withSourceProposal: true,
@@ -269,7 +516,7 @@ describe('engagement_request_unique_idx — at most one live engagement per requ
     if (requestId === null) throw new Error('expected a seeded projectRequestId');
 
     await expect(
-      engagementsRepository.create({
+      projectEngagementsRepository.create({
         companyId,
         expertProfileId,
         projectRequestId: requestId,
@@ -286,13 +533,10 @@ describe('engagement_request_unique_idx — at most one live engagement per requ
     const requestId = engagement.projectRequestId;
     if (requestId === null) throw new Error('expected a seeded projectRequestId');
 
-    await db
-      .update(engagements)
-      .set({ deletedAt: new Date() })
-      .where(eq(engagements.id, engagement.id));
+    await softDeleteEngagementFixture(engagement.id);
 
     // The unique index ignores the soft-deleted row → re-creation succeeds.
-    const replacement = await engagementsRepository.create({
+    const replacement = await projectEngagementsRepository.create({
       companyId,
       expertProfileId,
       projectRequestId: requestId,
@@ -308,7 +552,7 @@ describe('engagement_request_unique_idx — at most one live engagement per requ
     const expertA = await expertDraftFactory();
     const expertB = await expertDraftFactory();
 
-    const r1 = await engagementsRepository.create({
+    const r1 = await projectEngagementsRepository.create({
       companyId,
       expertProfileId: expertA.id,
       pricingMethod: 'tm',
@@ -316,7 +560,7 @@ describe('engagement_request_unique_idx — at most one live engagement per requ
       rateCents: 18_000,
       cadence: 'monthly',
     });
-    const r2 = await engagementsRepository.create({
+    const r2 = await projectEngagementsRepository.create({
       companyId,
       expertProfileId: expertB.id,
       pricingMethod: 'tm',
@@ -332,72 +576,44 @@ describe('engagement_request_unique_idx — at most one live engagement per requ
   });
 });
 
-describe('engagementsRepository.findById / listByCompany', () => {
-  it('findById returns a live engagement and excludes soft-deleted', async () => {
+describe('engagementsRepository.findById — the SUPERTYPE point read', () => {
+  it('returns a live engagement and excludes soft-deleted', async () => {
     const { engagement } = await engagementFactory();
 
     expect((await engagementsRepository.findById(engagement.id))?.id).toBe(engagement.id);
 
-    await db
-      .update(engagements)
-      .set({ deletedAt: new Date() })
-      .where(eq(engagements.id, engagement.id));
+    await softDeleteEngagementFixture(engagement.id);
     expect(await engagementsRepository.findById(engagement.id)).toBeUndefined();
   });
 
-  it('listByCompany returns live engagements for the company only', async () => {
-    const companyId = await seedCompanyId();
-    const otherCompanyId = await seedCompanyId();
-    const expertA = await expertDraftFactory();
-    const expertB = await expertDraftFactory();
-
-    const e1 = await engagementsRepository.create({
-      companyId,
-      expertProfileId: expertA.id,
-      pricingMethod: 'fixed',
-      priceCents: 1000,
-    });
-    const e2 = await engagementsRepository.create({
-      companyId,
-      expertProfileId: expertB.id,
-      pricingMethod: 'fixed',
-      priceCents: 2000,
-    });
-    // A different company's engagement must not appear.
-    const other = await engagementsRepository.create({
-      companyId: otherCompanyId,
-      expertProfileId: expertA.id,
-      pricingMethod: 'fixed',
-      priceCents: 3000,
-    });
-
-    const list = await engagementsRepository.listByCompany(companyId);
-    const ids = list.map((e) => e.id);
-    expect(ids).toContain(e1.id);
-    expect(ids).toContain(e2.id);
-    expect(ids).not.toContain(other.id);
-
-    // Soft-deleted excluded.
-    await db.update(engagements).set({ deletedAt: new Date() }).where(eq(engagements.id, e1.id));
-    const afterDelete = await engagementsRepository.listByCompany(companyId);
-    expect(afterDelete.map((e) => e.id)).not.toContain(e1.id);
-    expect(afterDelete.map((e) => e.id)).toContain(e2.id);
+  it('returns the small type-agnostic row — no commercial terms, no delivery lifecycle', async () => {
+    const { engagement } = await engagementFactory();
+    const row = await engagementsRepository.findById(engagement.id);
+    expect(row?.engagementType).toBe('project');
+    expect(row).not.toHaveProperty('pricingMethod');
+    expect(row).not.toHaveProperty('priceCents');
+    expect(row).not.toHaveProperty('completionRequestedAt');
+    expect(row).not.toHaveProperty('projectRequestId');
   });
 });
 
-describe('engagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', () => {
+describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', () => {
   it('returns the live engagement id for a request that has one', async () => {
     const { engagement } = await engagementFactory({ withSourceProposal: true });
     const requestId = engagement.projectRequestId;
     if (requestId === null) throw new Error('expected a seeded projectRequestId');
 
-    expect(await engagementsRepository.findIdByProjectRequestId(requestId)).toBe(engagement.id);
+    expect(await projectEngagementsRepository.findIdByProjectRequestId(requestId)).toBe(
+      engagement.id
+    );
   });
 
   it('returns undefined for a request with no engagement (and for an unknown request id)', async () => {
     const request = await projectRequestFactory();
-    expect(await engagementsRepository.findIdByProjectRequestId(request.id)).toBeUndefined();
-    expect(await engagementsRepository.findIdByProjectRequestId(randomUUID())).toBeUndefined();
+    expect(await projectEngagementsRepository.findIdByProjectRequestId(request.id)).toBeUndefined();
+    expect(
+      await projectEngagementsRepository.findIdByProjectRequestId(randomUUID())
+    ).toBeUndefined();
   });
 
   it('returns undefined when the only engagement for the request is soft-deleted', async () => {
@@ -405,12 +621,9 @@ describe('engagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', (
     const requestId = engagement.projectRequestId;
     if (requestId === null) throw new Error('expected a seeded projectRequestId');
 
-    await db
-      .update(engagements)
-      .set({ deletedAt: new Date() })
-      .where(eq(engagements.id, engagement.id));
+    await softDeleteEngagementFixture(engagement.id);
 
-    expect(await engagementsRepository.findIdByProjectRequestId(requestId)).toBeUndefined();
+    expect(await projectEngagementsRepository.findIdByProjectRequestId(requestId)).toBeUndefined();
   });
 
   it('returns the LIVE id when a soft-deleted engagement co-exists for the same request', async () => {
@@ -422,11 +635,8 @@ describe('engagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', (
 
     // Soft-delete the original, then re-create a live one for the same request
     // (the partial unique index permits this).
-    await db
-      .update(engagements)
-      .set({ deletedAt: new Date() })
-      .where(eq(engagements.id, engagement.id));
-    const replacement = await engagementsRepository.create({
+    await softDeleteEngagementFixture(engagement.id);
+    const replacement = await projectEngagementsRepository.create({
       companyId,
       expertProfileId,
       projectRequestId: requestId,
@@ -434,17 +644,17 @@ describe('engagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', (
       priceCents: 2000,
     });
 
-    const found = await engagementsRepository.findIdByProjectRequestId(requestId);
+    const found = await projectEngagementsRepository.findIdByProjectRequestId(requestId);
     expect(found).toBe(replacement.id);
     expect(found).not.toBe(engagement.id);
   });
 });
 
-describe('engagementsRepository.materializeFromKickoff — accept→approve writer', () => {
+describe('projectEngagementsRepository.materializeFromKickoff — accept→approve writer', () => {
   it('happy path: advances the request to kickoff_approved AND materialises the engagement with snapshotted terms', async () => {
     const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
 
-    const { engagement, request } = await engagementsRepository.materializeFromKickoff({
+    const { engagement, request } = await projectEngagementsRepository.materializeFromKickoff({
       requestId: source.projectRequestId,
       companyId,
       expertProfileId: source.expertProfileId,
@@ -504,18 +714,18 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
       baloFeeBps: 2500,
     };
 
-    await engagementsRepository.materializeFromKickoff(args);
+    await projectEngagementsRepository.materializeFromKickoff(args);
 
     // Second call — the request is now `kickoff_approved`, not `accepted`.
-    await expect(engagementsRepository.materializeFromKickoff(args)).rejects.toBeInstanceOf(
+    await expect(projectEngagementsRepository.materializeFromKickoff(args)).rejects.toBeInstanceOf(
       InvalidStatusTransitionError
     );
 
     // Exactly one engagement was created for this request.
     const rows = await db
       .select()
-      .from(engagements)
-      .where(eq(engagements.projectRequestId, source.projectRequestId));
+      .from(projectEngagements)
+      .where(eq(projectEngagements.projectRequestId, source.projectRequestId));
     expect(rows).toHaveLength(1);
   });
 
@@ -531,7 +741,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
     const admin = await userFactory({ platformRole: 'admin' });
 
     await expect(
-      engagementsRepository.materializeFromKickoff({
+      projectEngagementsRepository.materializeFromKickoff({
         requestId: source.projectRequestId,
         companyId: request.companyId,
         expertProfileId: source.expertProfileId,
@@ -549,8 +759,8 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
     expect(reloaded?.status).toBe('accepted');
     const rows = await db
       .select()
-      .from(engagements)
-      .where(eq(engagements.projectRequestId, source.projectRequestId));
+      .from(projectEngagements)
+      .where(eq(projectEngagements.projectRequestId, source.projectRequestId));
     expect(rows).toHaveLength(0);
   });
 
@@ -571,7 +781,7 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
     const admin = await userFactory({ platformRole: 'admin' });
 
     await expect(
-      engagementsRepository.materializeFromKickoff({
+      projectEngagementsRepository.materializeFromKickoff({
         requestId: source.projectRequestId,
         companyId: request.companyId,
         expertProfileId: source.expertProfileId,
@@ -586,20 +796,20 @@ describe('engagementsRepository.materializeFromKickoff — accept→approve writ
 
     const rows = await db
       .select()
-      .from(engagements)
-      .where(eq(engagements.projectRequestId, source.projectRequestId));
+      .from(projectEngagements)
+      .where(eq(projectEngagements.projectRequestId, source.projectRequestId));
     expect(rows).toHaveLength(0);
   });
 });
 
 // ── BAL-293: engagement-terms coherence guard (rollback proofs) ──────────────
 
-describe('engagementsRepository.create — coherence guard (BAL-293)', () => {
+describe('projectEngagementsRepository.create — coherence guard (BAL-293)', () => {
   it('rejects tm terms missing a rate (tm_missing_rate) and persists nothing', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 
-    const err = await engagementsRepository
+    const err = await projectEngagementsRepository
       .create({
         companyId,
         expertProfileId: expert.id,
@@ -611,15 +821,16 @@ describe('engagementsRepository.create — coherence guard (BAL-293)', () => {
     expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
     expect((err as EngagementTermsCoherenceError).rule).toBe('tm_missing_rate');
 
-    // No engagement row inserted for the company.
-    expect(await engagementsRepository.listByCompany(companyId)).toHaveLength(0);
+    // NEITHER table holds a row for the company (two-table atomicity).
+    expect(await liveEngagementRowsForCompany(companyId)).toHaveLength(0);
+    expect(await liveProjectChildRowsForCompany(companyId)).toHaveLength(0);
   });
 
   it('rejects a negative deposit (deposit_negative) and persists nothing', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 
-    const err = await engagementsRepository
+    const err = await projectEngagementsRepository
       .create({
         companyId,
         expertProfileId: expert.id,
@@ -631,14 +842,15 @@ describe('engagementsRepository.create — coherence guard (BAL-293)', () => {
     expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
     expect((err as EngagementTermsCoherenceError).rule).toBe('deposit_negative');
 
-    expect(await engagementsRepository.listByCompany(companyId)).toHaveLength(0);
+    expect(await liveEngagementRowsForCompany(companyId)).toHaveLength(0);
+    expect(await liveProjectChildRowsForCompany(companyId)).toHaveLength(0);
   });
 
   it('accepts coherent fixed terms (no installment requirement at the engagement seam)', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 
-    const engagement = await engagementsRepository.create({
+    const engagement = await projectEngagementsRepository.create({
       companyId,
       expertProfileId: expert.id,
       pricingMethod: 'fixed',
@@ -649,11 +861,11 @@ describe('engagementsRepository.create — coherence guard (BAL-293)', () => {
   });
 });
 
-describe('engagementsRepository.materializeFromKickoff — coherence guard (BAL-293)', () => {
+describe('projectEngagementsRepository.materializeFromKickoff — coherence guard (BAL-293)', () => {
   it('rejects incoherent tm terms (missing rate), leaving the request accepted and no engagement', async () => {
     const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
 
-    const err = await engagementsRepository
+    const err = await projectEngagementsRepository
       .materializeFromKickoff({
         requestId: source.projectRequestId,
         companyId,
@@ -675,8 +887,8 @@ describe('engagementsRepository.materializeFromKickoff — coherence guard (BAL-
     expect(reloaded?.status).toBe('accepted');
     const rows = await db
       .select()
-      .from(engagements)
-      .where(eq(engagements.projectRequestId, source.projectRequestId));
+      .from(projectEngagements)
+      .where(eq(projectEngagements.projectRequestId, source.projectRequestId));
     expect(rows).toHaveLength(0);
   });
 });
@@ -696,27 +908,29 @@ async function seedActiveEngagement(): Promise<{
 }
 
 /**
- * Seed a `pending_acceptance` engagement DIRECTLY (bypassing requestCompletion, so
- * the audit trail starts empty) with the completion-request stamps populated.
+ * Seed a `pending_acceptance` project DIRECTLY (bypassing requestCompletion, so the
+ * audit trail starts empty) with the completion-request stamps populated.
+ *
+ * Goes through `engagementFactory({ projectValues: { deliveryStatus } })` so the PARENT
+ * status is DERIVED from the child, never hand-set — a fixture must not be able to seed
+ * the impossible state the projection invariant forbids.
  */
 async function seedPendingAcceptanceEngagement(overrides?: {
   completionRequestedAt?: Date;
 }): Promise<{ engagementId: string; userId: string; requesterId: string }> {
-  const { engagement } = await engagementFactory();
   const requester = await userFactory();
   const actor = await userFactory();
-  await db
-    .update(engagements)
-    .set({
-      status: 'pending_acceptance',
+  const { engagement } = await engagementFactory({
+    projectValues: {
+      deliveryStatus: 'pending_acceptance',
       completionRequestedByUserId: requester.id,
       completionRequestedAt: overrides?.completionRequestedAt ?? new Date(),
-    })
-    .where(eq(engagements.id, engagement.id));
+    },
+  });
   return { engagementId: engagement.id, userId: actor.id, requesterId: requester.id };
 }
 
-describe('engagementsRepository.materializeFromKickoff — milestone snapshot (BAL-330)', () => {
+describe('projectEngagementsRepository.materializeFromKickoff — milestone snapshot (BAL-330)', () => {
   it('snapshots N proposal milestones → N engagement milestones (provenance + created_by=admin) + one snapshot audit', async () => {
     const { source, companyId, adminId } = await seedAcceptedKickoff({
       bothGates: true,
@@ -728,7 +942,7 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
       .where(eq(proposalMilestones.proposalId, source.proposal.id))
       .orderBy(asc(proposalMilestones.sortOrder));
 
-    const { engagement } = await engagementsRepository.materializeFromKickoff({
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
       requestId: source.projectRequestId,
       companyId,
       expertProfileId: source.expertProfileId,
@@ -740,7 +954,7 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
       baloFeeBps: 2500,
     });
 
-    const snapshot = await engagementsRepository.listMilestones(engagement.id);
+    const snapshot = await projectEngagementsRepository.listMilestones(engagement.id);
     expect(snapshot).toHaveLength(3);
     // Provenance + snapshot fields copied, order preserved, created_by=admin.
     snapshot.forEach((m, i) => {
@@ -772,7 +986,7 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
   it('zero-milestone proposal → zero engagement milestones + snapshot audit with milestone_count:0', async () => {
     const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
 
-    const { engagement } = await engagementsRepository.materializeFromKickoff({
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
       requestId: source.projectRequestId,
       companyId,
       expertProfileId: source.expertProfileId,
@@ -784,14 +998,14 @@ describe('engagementsRepository.materializeFromKickoff — milestone snapshot (B
       baloFeeBps: 2500,
     });
 
-    expect(await engagementsRepository.listMilestones(engagement.id)).toHaveLength(0);
+    expect(await projectEngagementsRepository.listMilestones(engagement.id)).toHaveLength(0);
     const events = await auditEventsForEntity(engagement.id);
     const snapshotEvent = events.find((e) => e.action === 'engagement.milestones_snapshotted');
     expect(snapshotEvent?.metadata).toMatchObject({ milestone_count: 0 });
   });
 });
 
-describe('engagementsRepository.requestCompletion', () => {
+describe('projectEngagementsRepository.requestCompletion', () => {
   it('all live milestones completed → pending_acceptance, stamps + audit', async () => {
     const { engagementId, userId } = await seedActiveEngagement();
     await engagementMilestoneFactory({
@@ -803,7 +1017,7 @@ describe('engagementsRepository.requestCompletion', () => {
       values: { status: 'completed', sortOrder: 1 },
     });
 
-    const advanced = await engagementsRepository.requestCompletion({ engagementId, userId });
+    const advanced = await projectEngagementsRepository.requestCompletion({ engagementId, userId });
     expect(advanced.status).toBe('pending_acceptance');
     expect(advanced.completionRequestedByUserId).toBe(userId);
     expect(advanced.completionRequestedAt).toBeInstanceOf(Date);
@@ -817,7 +1031,7 @@ describe('engagementsRepository.requestCompletion', () => {
 
   it('zero-milestone engagement → allowed (vacuous "all completed")', async () => {
     const { engagementId, userId } = await seedActiveEngagement();
-    const advanced = await engagementsRepository.requestCompletion({ engagementId, userId });
+    const advanced = await projectEngagementsRepository.requestCompletion({ engagementId, userId });
     expect(advanced.status).toBe('pending_acceptance');
   });
 
@@ -833,10 +1047,10 @@ describe('engagementsRepository.requestCompletion', () => {
     });
 
     await expect(
-      engagementsRepository.requestCompletion({ engagementId, userId })
+      projectEngagementsRepository.requestCompletion({ engagementId, userId })
     ).rejects.toBeInstanceOf(MilestonesIncompleteError);
 
-    const reloaded = await engagementsRepository.findById(engagementId);
+    const reloaded = await projectEngagementsRepository.findWithMilestones(engagementId);
     expect(reloaded?.status).toBe('active');
     expect(reloaded?.completionRequestedAt).toBeNull();
     // No audit event written (whole tx rolled back).
@@ -854,23 +1068,23 @@ describe('engagementsRepository.requestCompletion', () => {
       values: { status: 'in_progress', sortOrder: 1, deletedAt: new Date() },
     });
 
-    const advanced = await engagementsRepository.requestCompletion({ engagementId, userId });
+    const advanced = await projectEngagementsRepository.requestCompletion({ engagementId, userId });
     expect(advanced.status).toBe('pending_acceptance');
   });
 
   it('throws InvalidEngagementTransitionError when the engagement is not active', async () => {
     const { engagementId, userId } = await seedPendingAcceptanceEngagement();
     await expect(
-      engagementsRepository.requestCompletion({ engagementId, userId })
+      projectEngagementsRepository.requestCompletion({ engagementId, userId })
     ).rejects.toBeInstanceOf(InvalidEngagementTransitionError);
   });
 });
 
-describe('engagementsRepository.withdrawCompletionRequest', () => {
+describe('projectEngagementsRepository.withdrawCompletionRequest', () => {
   it('pending_acceptance → active, clears completion stamps + audit', async () => {
     const { engagementId, userId } = await seedPendingAcceptanceEngagement();
 
-    const advanced = await engagementsRepository.withdrawCompletionRequest({
+    const advanced = await projectEngagementsRepository.withdrawCompletionRequest({
       engagementId,
       userId,
     });
@@ -886,16 +1100,16 @@ describe('engagementsRepository.withdrawCompletionRequest', () => {
   it('illegal from active → InvalidEngagementTransitionError', async () => {
     const { engagementId, userId } = await seedActiveEngagement();
     await expect(
-      engagementsRepository.withdrawCompletionRequest({ engagementId, userId })
+      projectEngagementsRepository.withdrawCompletionRequest({ engagementId, userId })
     ).rejects.toBeInstanceOf(InvalidEngagementTransitionError);
   });
 });
 
-describe('engagementsRepository.acceptCompletion', () => {
+describe('projectEngagementsRepository.acceptCompletion', () => {
   it('client path: → completed, accepted_by=user, acceptance_method=client, actor=user audit', async () => {
     const { engagementId, userId } = await seedPendingAcceptanceEngagement();
 
-    const advanced = await engagementsRepository.acceptCompletion({
+    const advanced = await projectEngagementsRepository.acceptCompletion({
       engagementId,
       method: 'client',
       userId,
@@ -914,7 +1128,10 @@ describe('engagementsRepository.acceptCompletion', () => {
   it('auto path: → completed, accepted_by=null, acceptance_method=auto, audit actor null', async () => {
     const { engagementId } = await seedPendingAcceptanceEngagement();
 
-    const advanced = await engagementsRepository.acceptCompletion({ engagementId, method: 'auto' });
+    const advanced = await projectEngagementsRepository.acceptCompletion({
+      engagementId,
+      method: 'auto',
+    });
     expect(advanced.status).toBe('completed');
     expect(advanced.acceptedByUserId).toBeNull();
     expect(advanced.acceptanceMethod).toBe('auto');
@@ -929,16 +1146,16 @@ describe('engagementsRepository.acceptCompletion', () => {
   it('illegal from active → InvalidEngagementTransitionError', async () => {
     const { engagementId, userId } = await seedActiveEngagement();
     await expect(
-      engagementsRepository.acceptCompletion({ engagementId, method: 'client', userId })
+      projectEngagementsRepository.acceptCompletion({ engagementId, method: 'client', userId })
     ).rejects.toBeInstanceOf(InvalidEngagementTransitionError);
   });
 });
 
-describe('engagementsRepository.requestChanges', () => {
+describe('projectEngagementsRepository.requestChanges', () => {
   it('pending_acceptance → active, stores note + attribution, clears completion stamps, audit {note}', async () => {
     const { engagementId, userId } = await seedPendingAcceptanceEngagement();
 
-    const advanced = await engagementsRepository.requestChanges({
+    const advanced = await projectEngagementsRepository.requestChanges({
       engagementId,
       userId,
       note: 'Please revise the data model section.',
@@ -961,16 +1178,16 @@ describe('engagementsRepository.requestChanges', () => {
   it('illegal from active → InvalidEngagementTransitionError', async () => {
     const { engagementId, userId } = await seedActiveEngagement();
     await expect(
-      engagementsRepository.requestChanges({ engagementId, userId, note: 'x' })
+      projectEngagementsRepository.requestChanges({ engagementId, userId, note: 'x' })
     ).rejects.toBeInstanceOf(InvalidEngagementTransitionError);
   });
 });
 
-describe('engagementsRepository.cancelEngagement', () => {
+describe('projectEngagementsRepository.cancelEngagement', () => {
   it('from ACTIVE → cancelled + reason/attribution + audit', async () => {
     const { engagementId, userId } = await seedActiveEngagement();
 
-    const advanced = await engagementsRepository.cancelEngagement({
+    const advanced = await projectEngagementsRepository.cancelEngagement({
       engagementId,
       userId,
       reason: 'Client withdrew.',
@@ -993,7 +1210,7 @@ describe('engagementsRepository.cancelEngagement', () => {
   it('from PENDING_ACCEPTANCE → cancelled (two legal sources, no expectedFrom)', async () => {
     const { engagementId, userId } = await seedPendingAcceptanceEngagement();
 
-    const advanced = await engagementsRepository.cancelEngagement({
+    const advanced = await projectEngagementsRepository.cancelEngagement({
       engagementId,
       userId,
       reason: 'Scope void.',
@@ -1007,10 +1224,12 @@ describe('engagementsRepository.cancelEngagement', () => {
   });
 
   it('terminal (completed) → InvalidEngagementTransitionError', async () => {
-    const { engagement } = await engagementFactory({ values: { status: 'completed' } });
+    const { engagement } = await engagementFactory({
+      projectValues: { deliveryStatus: 'completed' },
+    });
     const user = await userFactory();
     await expect(
-      engagementsRepository.cancelEngagement({
+      projectEngagementsRepository.cancelEngagement({
         engagementId: engagement.id,
         userId: user.id,
         reason: 'nope',
@@ -1019,11 +1238,11 @@ describe('engagementsRepository.cancelEngagement', () => {
   });
 });
 
-describe('engagement transitions — missing engagement (advanceEngagementStatus not-found branch)', () => {
+describe('engagement transitions — missing engagement (advanceProjectDelivery not-found branch)', () => {
   it('withdrawCompletionRequest on a non-existent engagement throws Error(not found)', async () => {
     const user = await userFactory();
     await expect(
-      engagementsRepository.withdrawCompletionRequest({
+      projectEngagementsRepository.withdrawCompletionRequest({
         engagementId: randomUUID(),
         userId: user.id,
       })
@@ -1032,14 +1251,14 @@ describe('engagement transitions — missing engagement (advanceEngagementStatus
 
   it('acceptCompletion (auto) on a non-existent engagement throws Error(not found)', async () => {
     await expect(
-      engagementsRepository.acceptCompletion({ engagementId: randomUUID(), method: 'auto' })
+      projectEngagementsRepository.acceptCompletion({ engagementId: randomUUID(), method: 'auto' })
     ).rejects.toThrow(/Engagement not found/);
   });
 
   it('requestChanges on a non-existent engagement throws Error(not found)', async () => {
     const user = await userFactory();
     await expect(
-      engagementsRepository.requestChanges({
+      projectEngagementsRepository.requestChanges({
         engagementId: randomUUID(),
         userId: user.id,
         note: 'x',
@@ -1048,7 +1267,7 @@ describe('engagement transitions — missing engagement (advanceEngagementStatus
   });
 });
 
-describe('engagementsRepository.findEngagementWithMilestones', () => {
+describe('projectEngagementsRepository.findWithMilestones', () => {
   it('returns live milestones ordered (soft-deleted excluded) + freelancer agency=null', async () => {
     const { engagementId } = await seedActiveEngagement();
     await engagementMilestoneFactory({ engagementId, values: { title: 'B', sortOrder: 1 } });
@@ -1058,7 +1277,7 @@ describe('engagementsRepository.findEngagementWithMilestones', () => {
       values: { title: 'Gone', sortOrder: 2, deletedAt: new Date() },
     });
 
-    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagementId);
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagementId);
     expect(hydrated).toBeDefined();
     expect(hydrated?.milestones.map((m) => m.title)).toEqual(['A', 'B']); // sort_order asc, soft-deleted gone
     // The engagementFactory expert is a freelancer → agency is null; user present.
@@ -1076,7 +1295,7 @@ describe('engagementsRepository.findEngagementWithMilestones', () => {
       .where(eq(expertProfiles.id, expert.id));
 
     const { engagement } = await engagementFactory({ expertProfileId: expert.id });
-    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
     expect(hydrated?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
     expect(hydrated?.expertProfile.agency?.logoUrl).toBeDefined(); // null is fine — key present, projected
     // SECURITY (BAL-330 review): the projected shape must NOT leak secrets/PII.
@@ -1091,16 +1310,13 @@ describe('engagementsRepository.findEngagementWithMilestones', () => {
 
   it('returns undefined for a missing/soft-deleted engagement', async () => {
     const { engagement } = await engagementFactory();
-    await db
-      .update(engagements)
-      .set({ deletedAt: new Date() })
-      .where(eq(engagements.id, engagement.id));
-    expect(await engagementsRepository.findEngagementWithMilestones(engagement.id)).toBeUndefined();
-    expect(await engagementsRepository.findEngagementWithMilestones(randomUUID())).toBeUndefined();
+    await softDeleteEngagementFixture(engagement.id);
+    expect(await projectEngagementsRepository.findWithMilestones(engagement.id)).toBeUndefined();
+    expect(await projectEngagementsRepository.findWithMilestones(randomUUID())).toBeUndefined();
   });
 });
 
-describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additive projections', () => {
+describe('projectEngagementsRepository.findWithMilestones — BAL-331 additive projections', () => {
   it('hydrates the client company name and the source request title (PII-safe projections)', async () => {
     const [company] = await db
       .insert(companies)
@@ -1110,7 +1326,7 @@ describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additiv
     const expert = await expertDraftFactory();
     const request = await projectRequestFactory({ title: 'Salesforce CPQ rollout' });
 
-    const engagement = await engagementsRepository.create({
+    const engagement = await projectEngagementsRepository.create({
       companyId: company.id,
       expertProfileId: expert.id,
       projectRequestId: request.id,
@@ -1118,7 +1334,7 @@ describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additiv
       priceCents: 300_000,
     });
 
-    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
     expect(hydrated?.company.name).toBe('Northwind Industrial');
     expect(hydrated?.projectRequest?.title).toBe('Salesforce CPQ rollout');
 
@@ -1138,13 +1354,13 @@ describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additiv
     const { engagement } = await engagementFactory();
     expect(engagement.projectRequestId).toBeNull();
 
-    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
     expect(hydrated?.projectRequest).toBeNull();
   });
 
   it('acceptedBy / changeRequestedBy are null when unset', async () => {
     const { engagement } = await engagementFactory();
-    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
     expect(hydrated?.acceptedBy).toBeNull();
     expect(hydrated?.changeRequestedBy).toBeNull();
   });
@@ -1154,16 +1370,14 @@ describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additiv
     // attribution columns directly in the arrange step.
     const acceptor = await userFactory({ firstName: 'Dana', lastName: 'Client' });
     const changeRequester = await userFactory({ firstName: 'Riley', lastName: 'Buyer' });
-    const { engagement } = await engagementFactory();
-    await db
-      .update(engagements)
-      .set({
+    const { engagement } = await engagementFactory({
+      projectValues: {
         acceptedByUserId: acceptor.id,
         changeRequestedByUserId: changeRequester.id,
-      })
-      .where(eq(engagements.id, engagement.id));
+      },
+    });
 
-    const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
     expect(hydrated?.acceptedBy?.firstName).toBe('Dana');
     expect(hydrated?.acceptedBy?.lastName).toBe('Client');
     expect(hydrated?.changeRequestedBy?.firstName).toBe('Riley');
@@ -1180,83 +1394,17 @@ describe('engagementsRepository.findEngagementWithMilestones — BAL-331 additiv
   });
 });
 
-describe('engagementsRepository.listActiveWithProgress', () => {
-  it('derives counts + lastActivityAt; excludes non-active engagements and soft-deleted milestones; scoped by company', async () => {
-    const companyId = await seedCompanyId();
-    const expertA = await expertDraftFactory();
-    const { engagement: e1 } = await engagementFactory({
-      companyId,
-      expertProfileId: expertA.id,
-    });
-
-    const t2 = new Date('2026-02-02T00:00:00.000Z');
-    const t3 = new Date('2026-03-03T00:00:00.000Z');
-    await engagementMilestoneFactory({
-      engagementId: e1.id,
-      values: { status: 'completed', sortOrder: 0, completedAt: t3 },
-    });
-    await engagementMilestoneFactory({
-      engagementId: e1.id,
-      values: { status: 'in_progress', sortOrder: 1, startedAt: t2 },
-    });
-    await engagementMilestoneFactory({
-      engagementId: e1.id,
-      values: { status: 'pending', sortOrder: 2 },
-    });
-    // Soft-deleted milestone must NOT count.
-    await engagementMilestoneFactory({
-      engagementId: e1.id,
-      values: { status: 'completed', sortOrder: 3, completedAt: new Date(), deletedAt: new Date() },
-    });
-
-    // A second active engagement with zero milestones → lastActivityAt falls back.
-    const { engagement: e2 } = await engagementFactory({ companyId });
-    // A completed engagement must be excluded.
-    await engagementFactory({ companyId, values: { status: 'completed' } });
-
-    const rows = await engagementsRepository.listActiveWithProgress({ companyId });
-    const ids = rows.map((r) => r.id);
-    expect(ids).toContain(e1.id);
-    expect(ids).toContain(e2.id);
-    expect(rows).toHaveLength(2); // completed engagement excluded
-
-    const r1 = rows.find((r) => r.id === e1.id);
-    expect(r1?.totalMilestones).toBe(3); // soft-deleted excluded
-    expect(r1?.completedMilestones).toBe(1);
-    expect(r1?.inProgressMilestones).toBe(1);
-    expect(r1?.lastActivityAt?.getTime()).toBe(t3.getTime()); // MAX(GREATEST(started, completed))
-
-    const r2 = rows.find((r) => r.id === e2.id);
-    expect(r2?.totalMilestones).toBe(0);
-    expect(r2?.lastActivityAt).toBeInstanceOf(Date); // fallback to activated_at/created_at
-  });
-
-  it('scopes by expert and excludes another expert’s engagement', async () => {
-    const companyId = await seedCompanyId();
-    const expertA = await expertDraftFactory();
-    const expertB = await expertDraftFactory();
-    const { engagement: mine } = await engagementFactory({
-      companyId,
-      expertProfileId: expertA.id,
-    });
-    await engagementFactory({ companyId, expertProfileId: expertB.id });
-
-    const rows = await engagementsRepository.listActiveWithProgress({
-      expertProfileId: expertA.id,
-    });
-    expect(rows.map((r) => r.id)).toEqual([mine.id]);
-  });
-});
-
-describe('engagementsRepository.listPortfolioEngagements', () => {
+describe('projectEngagementsRepository.listPortfolio', () => {
   it('returns ALL four non-deleted statuses for one company', async () => {
     const companyId = await seedCompanyId();
     const statuses = ['active', 'pending_acceptance', 'completed', 'cancelled'] as const;
-    for (const status of statuses) {
-      await engagementFactory({ companyId, values: { status } });
+    for (const deliveryStatus of statuses) {
+      await engagementFactory({ companyId, projectValues: { deliveryStatus } });
     }
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
+    // The 4-VALUE delivery union must survive the fold — a `{...child, ...parent}`
+    // spread would silently pin every in-review project to the coarse 'active'.
     expect(new Set(rows.map((r) => r.status))).toEqual(new Set(statuses));
   });
 
@@ -1265,9 +1413,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const live = await engagementFactory({ companyId });
     const gone = await engagementFactory({ companyId, values: { deletedAt: new Date() } });
 
-    const ids = (await engagementsRepository.listPortfolioEngagements({ companyId })).map(
-      (r) => r.id
-    );
+    const ids = (await projectEngagementsRepository.listPortfolio({ companyId })).map((r) => r.id);
     expect(ids).toContain(live.engagement.id);
     expect(ids).not.toContain(gone.engagement.id);
   });
@@ -1278,7 +1424,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const a = await engagementFactory({ companyId: companyA });
     const b = await engagementFactory({ companyId: companyB });
 
-    const ids = (await engagementsRepository.listPortfolioEngagements({ companyId: companyB })).map(
+    const ids = (await projectEngagementsRepository.listPortfolio({ companyId: companyB })).map(
       (r) => r.id
     );
     expect(ids).toContain(b.engagement.id);
@@ -1292,7 +1438,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const mine = await engagementFactory({ companyId, expertProfileId: expertA.id });
     await engagementFactory({ companyId, expertProfileId: expertB.id });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({
+    const rows = await projectEngagementsRepository.listPortfolio({
       expertProfileId: expertA.id,
     });
     expect(rows.map((r) => r.id)).toEqual([mine.engagement.id]);
@@ -1304,7 +1450,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const a = await engagementFactory({ companyId: companyA });
     const b = await engagementFactory({ companyId: companyB });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ platform: true });
+    const rows = await projectEngagementsRepository.listPortfolio({ platform: true });
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(a.engagement.id);
     expect(ids).toContain(b.engagement.id);
@@ -1334,7 +1480,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
       values: { status: 'pending', sortOrder: 3 },
     });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     expect(row?.totalMilestones).toBe(4);
     expect(row?.completedMilestones).toBe(2);
@@ -1347,7 +1493,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const activatedAt = new Date('2026-01-15T00:00:00.000Z');
     const { engagement } = await engagementFactory({ companyId, values: { activatedAt } });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     expect(row?.totalMilestones).toBe(0);
     expect(row?.lastActivityAt?.getTime()).toBe(activatedAt.getTime());
@@ -1357,7 +1503,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const companyId = await seedCompanyId();
     const { engagement } = await engagementFactory({ companyId });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     expect(row?.expertProfile.type).toBe('freelancer');
     expect(row?.expertProfile.agency).toBeNull();
@@ -1376,7 +1522,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const companyId = await seedCompanyId();
     const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     expect(row?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
   });
@@ -1385,7 +1531,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const withRequest = await engagementFactory({ withSourceProposal: true });
     const retainer = await engagementFactory({ companyId: withRequest.companyId });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({
+    const rows = await projectEngagementsRepository.listPortfolio({
       companyId: withRequest.companyId,
     });
     const requestRow = rows.find((r) => r.id === withRequest.engagement.id);
@@ -1405,7 +1551,7 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
     const companyId = await seedCompanyId();
     const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     if (row === undefined) throw new Error('expected the seeded engagement row');
 
@@ -1432,34 +1578,13 @@ describe('engagementsRepository.listPortfolioEngagements', () => {
       values: { activatedAt: new Date('2026-05-01T00:00:00.000Z') },
     });
 
-    const rows = await engagementsRepository.listPortfolioEngagements({ companyId });
+    const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const ids = rows.map((r) => r.id);
     expect(ids.indexOf(newer.engagement.id)).toBeLessThan(ids.indexOf(older.engagement.id));
   });
-
-  it('listActiveWithProgress stays behaviour-preserving after the aggregate extraction', async () => {
-    const companyId = await seedCompanyId();
-    const { engagement } = await engagementFactory({ companyId });
-    const completedAt = new Date('2026-04-04T00:00:00.000Z');
-    await engagementMilestoneFactory({
-      engagementId: engagement.id,
-      values: { status: 'completed', sortOrder: 0, completedAt },
-    });
-    await engagementMilestoneFactory({
-      engagementId: engagement.id,
-      values: { status: 'in_progress', sortOrder: 1 },
-    });
-
-    const rows = await engagementsRepository.listActiveWithProgress({ companyId });
-    const row = rows.find((r) => r.id === engagement.id);
-    expect(row?.totalMilestones).toBe(2);
-    expect(row?.completedMilestones).toBe(1);
-    expect(row?.inProgressMilestones).toBe(1);
-    expect(row?.lastActivityAt?.getTime()).toBe(completedAt.getTime());
-  });
 });
 
-describe('engagementsRepository.listPendingAutoAccept', () => {
+describe('projectEngagementsRepository.listPendingAutoAccept', () => {
   it('returns only pending_acceptance with completion_requested_at <= cutoff, oldest first; excludes others + soft-deleted', async () => {
     const now = new Date();
     const tenDaysAgo = new Date(now.getTime() - 10 * 86_400_000);
@@ -1474,12 +1599,9 @@ describe('engagementsRepository.listPendingAutoAccept', () => {
     await seedActiveEngagement();
     // Soft-deleted pending_acceptance → excluded.
     const deleted = await seedPendingAcceptanceEngagement({ completionRequestedAt: tenDaysAgo });
-    await db
-      .update(engagements)
-      .set({ deletedAt: new Date() })
-      .where(eq(engagements.id, deleted.engagementId));
+    await softDeleteEngagementFixture(deleted.engagementId);
 
-    const rows = await engagementsRepository.listPendingAutoAccept(now);
+    const rows = await projectEngagementsRepository.listPendingAutoAccept(now);
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(oldest.engagementId);
     expect(ids).toContain(newer.engagementId);
@@ -1494,27 +1616,27 @@ describe('engagementsRepository.listPendingAutoAccept', () => {
   });
 });
 
-describe('engagementsRepository.listAllWithProgress', () => {
+describe('projectEngagementsRepository.listAllWithProgress', () => {
   it('returns engagements of ALL statuses; the { statuses } filter narrows correctly', async () => {
     const companyId = await seedCompanyId();
     const { engagement: active } = await engagementFactory({
       companyId,
-      values: { status: 'active' },
+      projectValues: { deliveryStatus: 'active' },
     });
     const { engagement: pending } = await engagementFactory({
       companyId,
-      values: { status: 'pending_acceptance' },
+      projectValues: { deliveryStatus: 'pending_acceptance' },
     });
     const { engagement: completed } = await engagementFactory({
       companyId,
-      values: { status: 'completed' },
+      projectValues: { deliveryStatus: 'completed' },
     });
     const { engagement: cancelled } = await engagementFactory({
       companyId,
-      values: { status: 'cancelled' },
+      projectValues: { deliveryStatus: 'cancelled' },
     });
 
-    const all = await engagementsRepository.listAllWithProgress();
+    const all = await projectEngagementsRepository.listAllWithProgress();
     const allIds = all.map((r) => r.id);
     expect(allIds).toContain(active.id);
     expect(allIds).toContain(pending.id);
@@ -1523,12 +1645,12 @@ describe('engagementsRepository.listAllWithProgress', () => {
     expect(all).toHaveLength(4); // every status, no scoping
 
     // { statuses } narrows to exactly the requested statuses.
-    const completedOnly = await engagementsRepository.listAllWithProgress({
+    const completedOnly = await projectEngagementsRepository.listAllWithProgress({
       statuses: ['completed'],
     });
     expect(completedOnly.map((r) => r.id)).toEqual([completed.id]);
 
-    const inFlight = await engagementsRepository.listAllWithProgress({
+    const inFlight = await projectEngagementsRepository.listAllWithProgress({
       statuses: ['active', 'pending_acceptance'],
     });
     const inFlightIds = inFlight.map((r) => r.id);
@@ -1564,7 +1686,7 @@ describe('engagementsRepository.listAllWithProgress', () => {
       expertProfileId: agencyExpert.id,
     });
 
-    const rows = await engagementsRepository.listAllWithProgress();
+    const rows = await projectEngagementsRepository.listAllWithProgress();
     const solo = rows.find((r) => r.id === soloEngagement.id);
     const withAgency = rows.find((r) => r.id === agencyEngagement.id);
 
@@ -1624,7 +1746,7 @@ describe('engagementsRepository.listAllWithProgress', () => {
       values: { deletedAt: new Date() },
     });
 
-    const rows = await engagementsRepository.listAllWithProgress();
+    const rows = await projectEngagementsRepository.listAllWithProgress();
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(engagement.id);
     expect(ids).not.toContain(deleted.id);
@@ -1662,7 +1784,7 @@ describe('engagementsRepository.listAllWithProgress', () => {
       values: { activatedAt },
     });
 
-    const rows = await engagementsRepository.listAllWithProgress();
+    const rows = await projectEngagementsRepository.listAllWithProgress();
     const a = rows.find((r) => r.id === withActivity.id);
     const b = rows.find((r) => r.id === noActivity.id);
 
@@ -1685,7 +1807,7 @@ describe('engagementsRepository.listAllWithProgress', () => {
       values: { activatedAt: new Date('2026-03-01T00:00:00.000Z') },
     });
 
-    const ids = (await engagementsRepository.listAllWithProgress()).map((r) => r.id);
+    const ids = (await projectEngagementsRepository.listAllWithProgress()).map((r) => r.id);
     expect(ids.indexOf(newest.id)).toBeLessThan(ids.indexOf(middle.id));
     expect(ids.indexOf(middle.id)).toBeLessThan(ids.indexOf(oldest.id));
   });
@@ -1698,8 +1820,8 @@ describe('engagementsRepository.listAllWithProgress', () => {
     // Client-accepted completed engagement → acceptedBy hydrated, method 'client'.
     const { engagement: clientAccepted } = await engagementFactory({
       companyId,
-      values: {
-        status: 'completed',
+      projectValues: {
+        deliveryStatus: 'completed',
         acceptanceMethod: 'client',
         acceptedByUserId: accepter.id,
         acceptedAt: new Date('2026-06-03T00:00:00.000Z'),
@@ -1708,8 +1830,8 @@ describe('engagementsRepository.listAllWithProgress', () => {
     // Auto-accepted completed engagement → acceptedBy is null (no actor).
     const { engagement: autoAccepted } = await engagementFactory({
       companyId,
-      values: {
-        status: 'completed',
+      projectValues: {
+        deliveryStatus: 'completed',
         acceptanceMethod: 'auto',
         acceptedAt: new Date('2026-06-04T00:00:00.000Z'),
       },
@@ -1717,15 +1839,15 @@ describe('engagementsRepository.listAllWithProgress', () => {
     // Cancelled engagement → cancelledBy hydrated.
     const { engagement: cancelled } = await engagementFactory({
       companyId,
-      values: {
-        status: 'cancelled',
+      projectValues: {
+        deliveryStatus: 'cancelled',
         cancelledByUserId: canceller.id,
         cancelledAt: new Date('2026-05-28T00:00:00.000Z'),
         cancellationReason: 'Scope void.',
       },
     });
 
-    const rows = await engagementsRepository.listAllWithProgress();
+    const rows = await projectEngagementsRepository.listAllWithProgress();
     const accepted = rows.find((r) => r.id === clientAccepted.id);
     const auto = rows.find((r) => r.id === autoAccepted.id);
     const cancelledRow = rows.find((r) => r.id === cancelled.id);
@@ -1748,5 +1870,406 @@ describe('engagementsRepository.listAllWithProgress', () => {
     expect(cancelledRow?.cancelledBy).not.toHaveProperty('email');
     expect(cancelledRow?.cancelledBy).not.toHaveProperty('workosId');
     expect(cancelledRow?.cancelledBy).not.toHaveProperty('phone');
+  });
+});
+
+// ── BAL-417: the supertype split's NEW acceptance criteria ───────────────────
+
+describe('BAL-417 — the two-table write contract', () => {
+  it('materializeFromKickoff writes BOTH rows and the parent carries engagement_type=project', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 300_000,
+      baloFeeBps: 2500,
+    });
+
+    const [parent] = await db.select().from(engagements).where(eq(engagements.id, engagement.id));
+    expect(parent?.engagementType).toBe('project');
+    expect(parent?.status).toBe('active');
+    const [child] = await db
+      .select()
+      .from(projectEngagements)
+      .where(eq(projectEngagements.engagementId, engagement.id));
+    expect(child?.deliveryStatus).toBe('active');
+    expect(child?.projectRequestId).toBe(source.projectRequestId);
+    await expectProjectionCoherent(engagement.id);
+  });
+
+  it('a coherence failure in materializeFromKickoff leaves ZERO rows in BOTH tables', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+
+    await expect(
+      projectEngagementsRepository.materializeFromKickoff({
+        requestId: source.projectRequestId,
+        companyId,
+        expertProfileId: source.expertProfileId,
+        sourceProposalId: source.proposal.id,
+        relationshipId: source.relationshipId,
+        approvingAdminUserId: adminId,
+        pricingMethod: 'tm',
+        priceCents: 250_000,
+        baloFeeBps: 2500,
+        // rateCents / cadence omitted → incoherent tm.
+      })
+    ).rejects.toBeInstanceOf(EngagementTermsCoherenceError);
+
+    expect(await liveEngagementRowsForCompany(companyId)).toHaveLength(0);
+    expect(await liveProjectChildRowsForCompany(companyId)).toHaveLength(0);
+  });
+});
+
+describe('BAL-417 — the status projection invariant (R5)', () => {
+  it('holds after every one of the five transitions', async () => {
+    // 1. requestCompletion: active → pending_acceptance (parent STAYS active).
+    const a = await seedActiveEngagement();
+    const requested = await projectEngagementsRepository.requestCompletion({
+      engagementId: a.engagementId,
+      userId: a.userId,
+    });
+    expect(requested.status).toBe('pending_acceptance');
+    await expectProjectionCoherent(a.engagementId);
+    const [afterRequest] = await db
+      .select({ status: engagements.status })
+      .from(engagements)
+      .where(eq(engagements.id, a.engagementId));
+    // The coarse projection is genuinely coarse — the parent did NOT move.
+    expect(afterRequest?.status).toBe('active');
+
+    // 2. withdrawCompletionRequest: pending_acceptance → active.
+    const b = await seedPendingAcceptanceEngagement();
+    await projectEngagementsRepository.withdrawCompletionRequest({
+      engagementId: b.engagementId,
+      userId: b.userId,
+    });
+    await expectProjectionCoherent(b.engagementId);
+
+    // 3. acceptCompletion: pending_acceptance → completed.
+    const c = await seedPendingAcceptanceEngagement();
+    await projectEngagementsRepository.acceptCompletion({
+      engagementId: c.engagementId,
+      method: 'client',
+      userId: c.userId,
+    });
+    await expectProjectionCoherent(c.engagementId);
+
+    // 4. requestChanges: pending_acceptance → active.
+    const d = await seedPendingAcceptanceEngagement();
+    await projectEngagementsRepository.requestChanges({
+      engagementId: d.engagementId,
+      userId: d.userId,
+      note: 'revise',
+    });
+    await expectProjectionCoherent(d.engagementId);
+
+    // 5. cancelEngagement: active → cancelled.
+    const e = await seedActiveEngagement();
+    await projectEngagementsRepository.cancelEngagement({
+      engagementId: e.engagementId,
+      userId: e.userId,
+      reason: 'void',
+    });
+    await expectProjectionCoherent(e.engagementId);
+  });
+
+  it('a pending_acceptance project surfaces status=pending_acceptance through ALL THREE read paths', async () => {
+    // ⚠ THE SPREAD-ORDER GUARD (R6). `{...child, ...parent}` typechecks perfectly and
+    // silently pins every in-review project to the coarse 'active'. Only a runtime
+    // assertion catches it — this is that assertion.
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const { engagement } = await engagementFactory({
+      companyId,
+      expertProfileId: expert.id,
+      projectValues: { deliveryStatus: 'pending_acceptance', completionRequestedAt: new Date() },
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.status).toBe('pending_acceptance');
+
+    for (const scope of [
+      { companyId },
+      { expertProfileId: expert.id },
+      { platform: true } as const,
+    ]) {
+      const rows = await projectEngagementsRepository.listPortfolio(scope);
+      expect(rows.find((r) => r.id === engagement.id)?.status).toBe('pending_acceptance');
+    }
+
+    const admin = await projectEngagementsRepository.listAllWithProgress();
+    expect(admin.find((r) => r.id === engagement.id)?.status).toBe('pending_acceptance');
+  });
+});
+
+describe('BAL-417 — D5: the list graphs are type-scoped to projects', () => {
+  it('listPortfolio (all three lenses) EXCLUDES a case engagement', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const { engagement: project } = await engagementFactory({
+      companyId,
+      expertProfileId: expert.id,
+    });
+    const { engagement: kase } = await caseEngagementFactory({
+      companyId,
+      expertProfileId: expert.id,
+    });
+
+    for (const scope of [
+      { companyId },
+      { expertProfileId: expert.id },
+      { platform: true } as const,
+    ]) {
+      const ids = (await projectEngagementsRepository.listPortfolio(scope)).map((r) => r.id);
+      expect(ids).toContain(project.id);
+      expect(ids).not.toContain(kase.id);
+    }
+  });
+
+  it('listAllWithProgress EXCLUDES a case engagement', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement: project } = await engagementFactory({ companyId });
+    const { engagement: kase } = await caseEngagementFactory({ companyId });
+
+    const ids = (await projectEngagementsRepository.listAllWithProgress()).map((r) => r.id);
+    expect(ids).toContain(project.id);
+    expect(ids).not.toContain(kase.id);
+  });
+
+  it('listPendingAutoAccept EXCLUDES a case engagement even when its parent is active', async () => {
+    const pending = await seedPendingAcceptanceEngagement({
+      completionRequestedAt: new Date(Date.now() - 10 * 86_400_000),
+    });
+    const { engagement: kase } = await caseEngagementFactory();
+
+    const ids = (await projectEngagementsRepository.listPendingAutoAccept(new Date())).map(
+      (r) => r.id
+    );
+    expect(ids).toContain(pending.engagementId);
+    expect(ids).not.toContain(kase.id);
+  });
+
+  it('findWithMilestones(caseId) returns undefined — the project workspace cannot half-hydrate a case', async () => {
+    const { engagement: kase } = await caseEngagementFactory();
+    expect(await projectEngagementsRepository.findWithMilestones(kase.id)).toBeUndefined();
+  });
+
+  it('requestCompletion(caseId) throws EngagementTypeMismatchError', async () => {
+    const { engagement: kase } = await caseEngagementFactory();
+    const user = await userFactory();
+    await expect(
+      projectEngagementsRepository.requestCompletion({ engagementId: kase.id, userId: user.id })
+    ).rejects.toBeInstanceOf(EngagementTypeMismatchError);
+  });
+});
+
+describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
+  // ⚠ AN ADDITION TO AN ALLOW-LIST IS COMPILE-INVISIBLE. Both graphs below use explicit
+  // `columns:` projections precisely so a Server Action can hand the shape to a client
+  // component; widening one (adding `baloFeeBps`, `deletedAt`, `workosId`, an email)
+  // changes only an inferred type, so nothing fails — and `not.toHaveProperty('x')`
+  // does not catch a leak of some OTHER field. So assert the EXACT root key set.
+  //
+  // These are the shapes as built today — this PINS them, it does not change them. A
+  // future ticket that legitimately needs a new root key updates the list DELIBERATELY,
+  // having re-checked the key is safe to ship to a browser.
+
+  it('listPortfolio rows carry exactly the A7 inbox keys — no currency, no baloFeeBps, no deletedAt', async () => {
+    const companyId = await seedCompanyId();
+    await engagementFactory({ companyId });
+
+    const [row] = await projectEngagementsRepository.listPortfolio({ companyId });
+    if (row === undefined) throw new Error('expected a portfolio row');
+
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        'acceptanceMethod',
+        'acceptedAt',
+        'activatedAt',
+        'changeRequestNote',
+        'changeRequestedAt',
+        'company',
+        'companyId',
+        'completedMilestones',
+        'completionRequestedAt',
+        'createdAt',
+        'expertProfile',
+        'expertProfileId',
+        'id',
+        'inProgressMilestones',
+        'lastActivityAt',
+        'projectRequest',
+        'projectRequestId',
+        'status',
+        'totalMilestones',
+        'updatedAt',
+      ].sort()
+    );
+    expect(Object.keys(row.company).sort()).toEqual(['id', 'name'].sort());
+    expect(Object.keys(row.expertProfile).sort()).toEqual(
+      ['agency', 'agencyId', 'id', 'type', 'user'].sort()
+    );
+    expect(Object.keys(row.expertProfile.user).sort()).toEqual(
+      ['avatarUrl', 'firstName', 'id', 'lastName'].sort()
+    );
+  });
+
+  it('listAllWithProgress rows carry exactly the admin oversight keys — currency YES, baloFeeBps NO', async () => {
+    // The admin row DOES carry `currency` (the oversight pill formats money) but must
+    // NOT carry `baloFeeBps` — the oversight row never grosses up.
+    const companyId = await seedCompanyId();
+    await engagementFactory({ companyId });
+
+    const [row] = await projectEngagementsRepository.listAllWithProgress();
+    if (row === undefined) throw new Error('expected an admin oversight row');
+
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        'acceptanceMethod',
+        'acceptedAt',
+        'acceptedBy',
+        'activatedAt',
+        'cancellationReason',
+        'cancelledAt',
+        'cancelledBy',
+        'company',
+        'companyId',
+        'completedMilestones',
+        'completionRequestedAt',
+        'createdAt',
+        'currency',
+        'expertProfile',
+        'expertProfileId',
+        'id',
+        'inProgressMilestones',
+        'lastActivityAt',
+        'priceCents',
+        'pricingMethod',
+        'projectRequest',
+        'projectRequestId',
+        'rateCents',
+        'status',
+        'totalMilestones',
+        'updatedAt',
+      ].sort()
+    );
+    expect(row).not.toHaveProperty('baloFeeBps');
+    expect(Object.keys(row.expertProfile).sort()).toEqual(
+      ['agency', 'agencyId', 'headline', 'id', 'type', 'user'].sort()
+    );
+    expect(Object.keys(row.expertProfile.user).sort()).toEqual(
+      ['avatarUrl', 'firstName', 'id', 'lastName'].sort()
+    );
+  });
+});
+
+describe('BAL-417 — the flatten guard: a project parent with no child row', () => {
+  it('throws "Project engagement child row missing" from findWithMilestones and both list folds', async () => {
+    const companyId = await seedCompanyId();
+    const { engagement } = await engagementFactory({ companyId });
+    // Hard-delete the child OUT OF BAND (only reachable by bypassing the repository).
+    await db.delete(projectEngagements).where(eq(projectEngagements.engagementId, engagement.id));
+
+    await expect(projectEngagementsRepository.findWithMilestones(engagement.id)).rejects.toThrow(
+      /Project engagement child row missing/
+    );
+    await expect(projectEngagementsRepository.listPortfolio({ companyId })).rejects.toThrow(
+      /Project engagement child row missing/
+    );
+    await expect(projectEngagementsRepository.listAllWithProgress()).rejects.toThrow(
+      /Project engagement child row missing/
+    );
+  });
+});
+
+describe('BAL-417 — the soft-delete MIRROR rule (R3)', () => {
+  it('softDeleteEngagementFixture → re-materialising for the same project_request_id SUCCEEDS', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const args = {
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed' as const,
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    };
+
+    const first = await projectEngagementsRepository.materializeFromKickoff(args);
+    // Both flags stamped in one transaction.
+    await softDeleteEngagementFixture(first.engagement.id);
+    const [parent] = await db
+      .select()
+      .from(engagements)
+      .where(eq(engagements.id, first.engagement.id));
+    const [child] = await db
+      .select()
+      .from(projectEngagements)
+      .where(eq(projectEngagements.engagementId, first.engagement.id));
+    expect(parent?.deletedAt).toBeInstanceOf(Date);
+    expect(child?.deletedAt?.getTime()).toBe(parent?.deletedAt?.getTime());
+
+    // Rewind the request so a second materialise is legal, then re-create.
+    await db
+      .update(projectRequests)
+      .set({ status: 'accepted' })
+      .where(eq(projectRequests.id, source.projectRequestId));
+
+    const second = await projectEngagementsRepository.materializeFromKickoff(args);
+    expect(second.engagement.id).not.toBe(first.engagement.id);
+    expect(second.engagement.projectRequestId).toBe(source.projectRequestId);
+  });
+
+  it('stamping ONLY engagements.deleted_at → re-materialising fails 23505 (the rule is NOT optional)', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const args = {
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed' as const,
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    };
+
+    const first = await projectEngagementsRepository.materializeFromKickoff(args);
+    // THE WRONG WAY — parent only. The child keeps occupying the partial unique index.
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, first.engagement.id));
+
+    await db
+      .update(projectRequests)
+      .set({ status: 'accepted' })
+      .where(eq(projectRequests.id, source.projectRequestId));
+
+    await expect(projectEngagementsRepository.materializeFromKickoff(args)).rejects.toMatchObject({
+      code: '23505',
+    });
+  });
+});
+
+describe('BAL-417 — the workspace root allow-list', () => {
+  it('the flattened row does NOT expose deletedAt or engagementType', async () => {
+    const { engagement } = await engagementFactory();
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated).toBeDefined();
+    expect(hydrated).not.toHaveProperty('deletedAt');
+    expect(hydrated).not.toHaveProperty('engagementType');
+    // …but the fields the workspace genuinely grosses up with ARE present.
+    expect(hydrated).toHaveProperty('baloFeeBps');
+    expect(hydrated).toHaveProperty('currency');
+    expect(hydrated).toHaveProperty('priceCents');
   });
 });

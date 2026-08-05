@@ -1,6 +1,10 @@
 import 'server-only';
 
-import { AUTO_ACCEPT_DAYS, type EngagementWithMilestones } from '@balo/db';
+import {
+  AUTO_ACCEPT_DAYS,
+  type ProjectDeliveryStatus,
+  type ProjectEngagementWithMilestones,
+} from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
@@ -42,7 +46,18 @@ export const DELIVERY_QUIET_THRESHOLD_DAYS = 14;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type EngagementWorkspaceStatus = 'active' | 'pending_acceptance' | 'completed' | 'cancelled';
+/**
+ * The workspace's status union. Re-pointed at the schema-derived
+ * `ProjectDeliveryStatus` by BAL-417 rather than re-declared as four literals, so it
+ * can never drift from the `project_delivery_status` pgEnum again.
+ *
+ * ⚠ This is the PROJECT DELIVERY status (4 labels, incl. `pending_acceptance`), NOT
+ * the coarse 3-label supertype `engagements.status`. Widening it to the supertype
+ * union would silently delete `pending_acceptance` from every switch below — the
+ * in-review state the whole review-banner / countdown / completion-card surface is
+ * built on.
+ */
+export type EngagementWorkspaceStatus = ProjectDeliveryStatus;
 
 /** Semantic tone → the component maps to `text-success` / `text-warning` / etc. */
 export type StatusTone = 'success' | 'warning' | 'neutral' | 'destructive';
@@ -316,11 +331,11 @@ function deriveStatusChip(status: EngagementWorkspaceStatus): StatusChipView {
   }
 }
 
-function pricingLabel(pricingMethod: EngagementWithMilestones['pricingMethod']): string {
+function pricingLabel(pricingMethod: ProjectEngagementWithMilestones['pricingMethod']): string {
   return pricingMethod === 'fixed' ? 'Fixed price' : 'Time & materials';
 }
 
-function cadenceLabel(cadence: NonNullable<EngagementWithMilestones['cadence']>): string {
+function cadenceLabel(cadence: NonNullable<ProjectEngagementWithMilestones['cadence']>): string {
   return cadence === 'monthly' ? 'Monthly retainer' : 'Fortnightly retainer';
 }
 
@@ -330,7 +345,7 @@ function cadenceLabel(cadence: NonNullable<EngagementWithMilestones['cadence']>)
  * "Monthly retainer"; otherwise Σ live-milestone `estimatedMinutes` → "~Nh
  * estimated"; otherwise the pill is OMITTED (the strip tolerates optional pills).
  */
-function deriveTimeframeItem(engagement: EngagementWithMilestones): TermsStripItem | null {
+function deriveTimeframeItem(engagement: ProjectEngagementWithMilestones): TermsStripItem | null {
   if (engagement.cadence !== null) {
     return { icon: 'Clock', label: 'Timeframe', value: cadenceLabel(engagement.cadence) };
   }
@@ -350,7 +365,7 @@ function deriveTimeframeItem(engagement: EngagementWithMilestones): TermsStripIt
 }
 
 function deriveTermsStrip(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens
 ): TermsStripItem[] {
   // Client sees the marked-up (grossed-up) figure, derived on read from the
@@ -382,7 +397,7 @@ function deriveTermsStrip(
 }
 
 function deriveMilestones(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
   lens: EngagementLens
 ): MilestoneNodeView[] {
@@ -444,7 +459,7 @@ function deriveMilestones(
 }
 
 function deriveProgress(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties
 ): EngagementProgressView {
@@ -465,7 +480,7 @@ function deriveProgress(
 }
 
 function deriveReviewBanner(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
   now: Date
@@ -518,7 +533,7 @@ function deriveReviewBanner(
 }
 
 function deriveChangeRequestBanner(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties
 ): ChangeRequestBannerView | null {
@@ -551,7 +566,7 @@ function completedDeliveredSuffix(total: number): string {
 }
 
 function deriveCompletedBanner(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties
 ): CompletedBannerView | null {
@@ -595,7 +610,9 @@ function deriveCompletedBanner(
   };
 }
 
-function deriveCancelledBanner(engagement: EngagementWithMilestones): CancelledBannerView | null {
+function deriveCancelledBanner(
+  engagement: ProjectEngagementWithMilestones
+): CancelledBannerView | null {
   if (engagement.status !== 'cancelled') return null;
   const cancelledAtLabel =
     engagement.cancelledAt === null ? 'an earlier date' : formatLongDate(engagement.cancelledAt);
@@ -611,7 +628,7 @@ function deriveCancelledBanner(engagement: EngagementWithMilestones): CancelledB
 }
 
 function deriveEmptyState(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties
 ): EmptyStateView | null {
@@ -641,7 +658,7 @@ function deriveEmptyState(
 }
 
 /** Latest delivery-signal timestamp: milestone starts / completions, activation, request. */
-function deriveLastActivityAt(engagement: EngagementWithMilestones): Date {
+function deriveLastActivityAt(engagement: ProjectEngagementWithMilestones): Date {
   // `createdAt` always exists, so it seeds the fold — the reduce can never run on
   // an empty array (S6959) while still yielding the max of every delivery signal.
   const candidates: Date[] = [];
@@ -658,7 +675,7 @@ function deriveLastActivityAt(engagement: EngagementWithMilestones): Date {
 }
 
 function deriveAdminOversight(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
   now: Date
@@ -684,7 +701,7 @@ function deriveAdminOversight(
  * surface and never value-imports `@balo/db`.
  */
 function deriveCompletionCard(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties
 ): CompletionCardView | null {
@@ -736,7 +753,7 @@ function deriveCompletionCard(
  * `now` is injectable for deterministic tests (default `new Date()`).
  */
 export function mapEngagementToWorkspaceView(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
   now: Date = new Date()
 ): EngagementWorkspaceView {

@@ -1,11 +1,11 @@
 import { Worker, type Job } from 'bullmq';
 import {
-  engagementsRepository,
+  projectEngagementsRepository,
   companiesRepository,
   auditEventsRepository,
   AUTO_ACCEPT_DAYS,
-  type Engagement,
-  type EngagementWithMilestones,
+  type ProjectEngagementRow,
+  type ProjectEngagementWithMilestones,
 } from '@balo/db';
 import { expertPartyDisplayName } from '@balo/shared/parties';
 import { trackServer, ENGAGEMENT_SERVER_EVENTS } from '@balo/analytics/server';
@@ -15,10 +15,16 @@ import { notificationEvents } from '../notifications/publisher.js';
 
 /**
  * BAL-338 (D7) — the delivery-review sweep: a single repeatable BullMQ job that, each
- * tick, (1) AUTO-ACCEPTS every `pending_acceptance` engagement whose review window has
- * elapsed and (2) sends the ONE T-2 review reminder to engagements approaching the
+ * tick, (1) AUTO-ACCEPTS every `pending_acceptance` PROJECT whose review window has
+ * elapsed and (2) sends the ONE T-2 review reminder to projects approaching the
  * deadline. A repeatable sweep (not per-engagement delayed jobs) — matching the ticket
  * and the only scheduled-job precedent in the codebase (availability-cache staleness).
+ *
+ * PROJECT-SCOPED BY CONSTRUCTION (BAL-417): `pending_acceptance` is a
+ * `project_engagements.delivery_status` label, and `listPendingAutoAccept` is a
+ * child-rooted read — a Case can never be selected by this sweep, structurally rather
+ * than by convention. Auto-accept is a PROJECT delivery concept; a Case's terminal
+ * state is a client-initiated close (BAL-421), never an auto-accept.
  * It self-heals across withdraw→re-request (the window is re-derived from the current
  * `completion_requested_at` every run) and tolerates a missed tick (a late accept /
  * reminder rather than a lost one).
@@ -100,7 +106,9 @@ interface DisplayFields {
  * reusing the shared BAL-329 party-label rule (`expertPartyDisplayName`) so the
  * sweep-published copy matches the web-published copy exactly.
  */
-async function deriveDisplayFields(engagement: EngagementWithMilestones): Promise<DisplayFields> {
+async function deriveDisplayFields(
+  engagement: ProjectEngagementWithMilestones
+): Promise<DisplayFields> {
   const { user, agency, type } = engagement.expertProfile;
   const expertPartyLabel = expertPartyDisplayName({
     type,
@@ -138,18 +146,18 @@ function autoAcceptDate(requestedAt: Date): Date {
  * `audit_events` row; the eventual hardening is an audit-events reconciliation / outbox
  * (deferred, tracked in the PR).
  */
-async function autoAcceptOne(engagement: Engagement, now: Date): Promise<void> {
+async function autoAcceptOne(engagement: ProjectEngagementRow, now: Date): Promise<void> {
   const requestedAt = engagement.completionRequestedAt;
   if (requestedAt === null) return; // a pending_acceptance row always has this; defensive.
 
-  const accepted = await engagementsRepository.acceptCompletion({
+  const accepted = await projectEngagementsRepository.acceptCompletion({
     engagementId: engagement.id,
     method: 'auto',
   });
   const acceptedAt = accepted.acceptedAt ?? now;
   const autoAt = autoAcceptDate(requestedAt);
 
-  const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+  const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
   if (hydrated === undefined) return;
   const fields = await deriveDisplayFields(hydrated);
   const reviewCycle = await readReviewCycle(engagement.id);
@@ -182,11 +190,11 @@ async function autoAcceptOne(engagement: Engagement, now: Date): Promise<void> {
  * no live owner (retainer / owner-miss). The correlationId dedups repeated daily
  * matches to a single nudge (see the module docstring).
  */
-async function remindOne(engagement: Engagement, now: Date): Promise<boolean> {
+async function remindOne(engagement: ProjectEngagementRow, now: Date): Promise<boolean> {
   const requestedAt = engagement.completionRequestedAt;
   if (requestedAt === null) return false;
 
-  const hydrated = await engagementsRepository.findEngagementWithMilestones(engagement.id);
+  const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
   if (hydrated === undefined) return false;
   const fields = await deriveDisplayFields(hydrated);
   if (fields.recipientId === undefined) return false; // no one to remind (retainer / owner-miss).
@@ -231,7 +239,7 @@ export async function runDeliveryReviewSweep(
   );
 
   // 1) Auto-accept everything past the window first.
-  const dueForAccept = await engagementsRepository.listPendingAutoAccept(autoAcceptCutoff);
+  const dueForAccept = await projectEngagementsRepository.listPendingAutoAccept(autoAcceptCutoff);
   let accepted = 0;
   for (const engagement of dueForAccept) {
     try {
@@ -249,7 +257,9 @@ export async function runDeliveryReviewSweep(
   //    would linger past its deadline and get a reminder whose autoDate is already in
   //    the past (daysLeft clamped to 1) — this makes the reminder robust regardless of
   //    the accept pass, and such a row is simply retried by the accept pass next tick.
-  const dueForReminder = (await engagementsRepository.listPendingAutoAccept(reminderCutoff)).filter(
+  const dueForReminder = (
+    await projectEngagementsRepository.listPendingAutoAccept(reminderCutoff)
+  ).filter(
     (engagement) =>
       engagement.completionRequestedAt !== null &&
       engagement.completionRequestedAt.getTime() > autoAcceptCutoff.getTime()

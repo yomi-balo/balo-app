@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import type { EngagementWithMilestones } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 import { resolveEngagementLens } from './resolve-engagement-lens';
 
@@ -23,13 +22,22 @@ function makeUser(over: Partial<SessionUser> = {}): SessionUser {
   };
 }
 
-/** Only `companyId` / `expertProfileId` are read by the resolver. */
-function makeEngagement(over: Partial<EngagementWithMilestones> = {}): EngagementWithMilestones {
+/**
+ * Only `companyId` / `expertProfileId` are read by the resolver, and since BAL-417
+ * that is exactly what the parameter DECLARES — so this fixture needs NO cast. The
+ * pre-split version had to `as EngagementWithMilestones` a 2-field object at a
+ * ~30-field parameter, which silenced the compiler on every field including the two
+ * that matter. This version is genuinely type-checked.
+ */
+function makeEngagement(over: Partial<{ companyId: string; expertProfileId: string }> = {}): {
+  companyId: string;
+  expertProfileId: string;
+} {
   return {
     companyId: CLIENT_COMPANY,
     expertProfileId: EXPERT_PROFILE,
     ...over,
-  } as EngagementWithMilestones;
+  };
 }
 
 describe('resolveEngagementLens', () => {
@@ -116,7 +124,7 @@ describe('resolveEngagementLens', () => {
   it('is IDOR-safe: a company mismatch never grants the client lens', () => {
     const ctx = resolveEngagementLens(
       makeUser({ companyId: 'company-attacker' }),
-      makeEngagement({ companyId: CLIENT_COMPANY } as Partial<EngagementWithMilestones>)
+      makeEngagement({ companyId: CLIENT_COMPANY })
     );
     expect(ctx).toBeNull();
   });

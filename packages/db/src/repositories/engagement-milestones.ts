@@ -97,7 +97,13 @@ async function lockEngagementAndMilestone(
     throw new Error(`Milestone not found: ${milestoneId}`);
   }
 
-  const engagement = await lockActiveEngagement(tx, discovered.engagementId);
+  // `{ requireType: 'project' }` (BAL-417): milestones are a PROJECT-shaped concept.
+  // A Case is not milestone-shaped and `aggregateMilestoneProgress` must never count
+  // Case milestones, so the widening that `action_items` / `transcripts` deliberately
+  // allow is structurally BLOCKED here.
+  const engagement = await lockActiveEngagement(tx, discovered.engagementId, {
+    requireType: 'project',
+  });
 
   const [milestone] = await tx
     .select()
@@ -113,7 +119,9 @@ async function lockEngagementAndMilestone(
 }
 
 /**
- * Shared milestone status transition writer (mirrors `advanceEngagementStatus`).
+ * Shared milestone status transition writer (mirrors `advanceProjectDelivery`, which
+ * BAL-417 renamed from `advanceEngagementStatus` when the delivery lifecycle moved to
+ * `project-engagements.ts`).
  * Validates the move against `ENGAGEMENT_MILESTONE_STATUS_TRANSITIONS`, applies
  * `{ status: to, ...set, updatedAt }`, and emits the audit event with the standard
  * `{ from, to, ...extraMetadata }` shape (the caller has already locked the
@@ -333,7 +341,7 @@ export const engagementMilestonesRepository = {
     sortOrder?: number;
   }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
-      await lockActiveEngagement(tx, input.engagementId);
+      await lockActiveEngagement(tx, input.engagementId, { requireType: 'project' });
 
       let sortOrder = input.sortOrder;
       if (sortOrder === undefined) {
@@ -445,7 +453,8 @@ export const engagementMilestonesRepository = {
     orderedMilestoneIds: string[];
   }): Promise<EngagementMilestone[]> {
     return db.transaction(async (tx) => {
-      await lockActiveEngagement(tx, input.engagementId); // engagement lock + active guard
+      // engagement lock + active guard (+ project-type guard — BAL-417)
+      await lockActiveEngagement(tx, input.engagementId, { requireType: 'project' });
 
       const live = await tx
         .select({ id: engagementMilestones.id })

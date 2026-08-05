@@ -4,10 +4,10 @@ import 'server-only';
 
 import { z } from 'zod';
 import {
-  engagementsRepository,
+  projectEngagementsRepository,
   proposalsRepository,
   AUTO_ACCEPT_DAYS,
-  type EngagementWithMilestones,
+  type ProjectEngagementWithMilestones,
 } from '@balo/db';
 import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
@@ -35,7 +35,7 @@ const requestCompletionSchema = z.object({ engagementId: z.uuid() }).strict();
  * (→ null). Wrapped so a read hiccup degrades to null rather than failing the action.
  */
 async function readProposedTimeframeWeeks(
-  engagement: EngagementWithMilestones
+  engagement: ProjectEngagementWithMilestones
 ): Promise<number | null> {
   try {
     if (engagement.sourceProposalId === null) {
@@ -51,7 +51,7 @@ async function readProposedTimeframeWeeks(
 /**
  * The delivering expert marks the WHOLE project complete (active → pending_acceptance),
  * sending it for the client's review. Auth/lens/status via {@link gateExpertEngagement}
- * (`active`), then `engagementsRepository.requestCompletion` (D0 hard-enforces the
+ * (`active`), then `projectEngagementsRepository.requestCompletion` (D0 hard-enforces the
  * all-live-milestones-complete guard under its lock; a ZERO-milestone engagement passes
  * vacuously). Fires `COMPLETION_REQUESTED` (server) and publishes
  * `engagement.completion_requested` (client owner email + in-app; admins in-app) —
@@ -77,7 +77,7 @@ export async function requestCompletionAction(input: {
     'Failed to request completion',
     () => gateExpertEngagement(user, engagementId, 'active'),
     async (engagement) => {
-      const updated = await engagementsRepository.requestCompletion({
+      const updated = await projectEngagementsRepository.requestCompletion({
         engagementId,
         userId: user.id,
       });

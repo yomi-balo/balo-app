@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import type { AdminEngagementListItem } from '@balo/db';
+import type { AdminProjectEngagementListItem } from '@balo/db';
 
 const { mockListAll } = vi.hoisted(() => ({ mockListAll: vi.fn() }));
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
+  projectEngagementsRepository: {
     listAllWithProgress: (...args: unknown[]) => mockListAll(...args),
   },
   AUTO_ACCEPT_DAYS: 7,
@@ -19,9 +19,9 @@ const day = (n: number): Date => new Date(NOW.getTime() - n * 24 * 60 * 60 * 100
 /** A minimal repo item carrying only the fields the derivers read. */
 function fakeItem(
   id: string,
-  status: AdminEngagementListItem['status'],
+  status: AdminProjectEngagementListItem['status'],
   lastActivityAt: Date | null
-): AdminEngagementListItem {
+): AdminProjectEngagementListItem {
   return {
     id,
     status,
@@ -40,7 +40,11 @@ function fakeItem(
     expertProfile: {
       id: 'ep-1',
       agencyId: null,
-      type: 'independent',
+      // `'freelancer'`, not the previous `'independent'` — that label is not in the
+      // `expert_profile_type` pgEnum and only survived because this fixture was
+      // DOUBLE-cast (`as unknown as`), which type-checks nothing. Surfaced by the
+      // BAL-417 single-cast downgrade.
+      type: 'freelancer',
       headline: null,
       user: { id: 'u-1', firstName: 'Sam', lastName: 'Expert', avatarUrl: null },
       agency: null,
@@ -52,7 +56,7 @@ function fakeItem(
     completedMilestones: 1,
     inProgressMilestones: 1,
     lastActivityAt,
-  } as unknown as AdminEngagementListItem;
+  } as AdminProjectEngagementListItem;
 }
 
 beforeEach(() => {

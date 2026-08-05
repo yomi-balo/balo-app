@@ -3,7 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { engagementsRepository } from '@balo/db';
+import { projectEngagementsRepository } from '@balo/db';
 import { deriveEngagementParties, personAtCompany } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -51,7 +51,7 @@ export async function acceptProjectAction(input: {
     'Failed to accept project',
     () => gateClientEngagement(user, engagementId),
     async (engagement) => {
-      const updated = await engagementsRepository.acceptCompletion({
+      const updated = await projectEngagementsRepository.acceptCompletion({
         engagementId,
         method: 'client',
         userId: user.id,

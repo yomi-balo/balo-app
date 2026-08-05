@@ -2,12 +2,12 @@ import 'server-only';
 
 import {
   conversationsRepository,
-  engagementsRepository,
+  projectEngagementsRepository,
   projectsInboxRepository,
   AUTO_ACCEPT_DAYS,
   type PortfolioRequestRow,
   type PortfolioInvitationRow,
-  type PortfolioEngagementView,
+  type PortfolioProjectEngagementView,
 } from '@balo/db';
 import { expertPartyDisplayName } from '@balo/shared/parties';
 import type { SessionUser } from '@/lib/auth/session';
@@ -87,7 +87,7 @@ function formatAutoAcceptLabel(completionRequestedAt: Date): string {
  * — a null must never key the dedup.
  */
 function buildEngagedRequestIds(
-  engagementRows: ReadonlyArray<PortfolioEngagementView>
+  engagementRows: ReadonlyArray<PortfolioProjectEngagementView>
 ): Set<string> {
   const ids = new Set<string>();
   for (const e of engagementRows) {
@@ -261,7 +261,7 @@ function toExpertRowView(
  * boundary. The auto-accept date is preformatted server-side (UTC-pinned).
  */
 function toEngagementRowView(
-  e: PortfolioEngagementView,
+  e: PortfolioProjectEngagementView,
   lens: 'client' | 'expert',
   now: Date
 ): PortfolioRowView {
@@ -327,7 +327,7 @@ export async function loadClientPortfolio(
 ): Promise<PortfolioDTO> {
   const [requests, engagementRows] = await Promise.all([
     projectsInboxRepository.listByCompany(user.companyId),
-    engagementsRepository.listPortfolioEngagements({ companyId: user.companyId }),
+    projectEngagementsRepository.listPortfolio({ companyId: user.companyId }),
   ]);
 
   const engagedRequestIds = buildEngagedRequestIds(engagementRows);
@@ -371,7 +371,7 @@ export async function loadExpertPortfolio(
 ): Promise<PortfolioDTO> {
   const [invitations, engagementRows] = await Promise.all([
     projectsInboxRepository.listInvitationsByExpert(user.expertProfileId),
-    engagementsRepository.listPortfolioEngagements({ expertProfileId: user.expertProfileId }),
+    projectEngagementsRepository.listPortfolio({ expertProfileId: user.expertProfileId }),
   ]);
 
   const engagedRequestIds = buildEngagedRequestIds(engagementRows);
@@ -433,7 +433,7 @@ export async function loadAdminPortfolio(
 
   const [requests, engagementRows] = await Promise.all([
     projectsInboxRepository.listAll(),
-    engagementsRepository.listPortfolioEngagements({ platform: true }),
+    projectEngagementsRepository.listPortfolio({ platform: true }),
   ]);
 
   // Triage hero = status 'requested' (+ draft), newest first.

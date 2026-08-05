@@ -16,6 +16,8 @@ export { proposalPaymentInstallmentFactory } from './proposal-payment-installmen
 export type { ProposalPaymentInstallmentFactoryResult } from './proposal-payment-installment.factory';
 export { engagementFactory } from './engagement.factory';
 export type { EngagementFactoryResult } from './engagement.factory';
+export { caseEngagementFactory } from './case-engagement.factory';
+export type { CaseEngagementFactoryResult } from './case-engagement.factory';
 export { engagementMilestoneFactory } from './engagement-milestone.factory';
 export type { EngagementMilestoneFactoryResult } from './engagement-milestone.factory';
 export { actionItemFactory } from './action-item.factory';

@@ -1,5 +1,6 @@
 import { auditEventsRepository } from '../audit-events';
 import type { DbExecutor } from './db-executor';
+import type { EngagementType } from './engagement-supertype';
 
 /**
  * The delivery audit vocabulary (BAL-330). `audit_events` (BAL-344) stores `action`
@@ -17,12 +18,25 @@ export type DeliveryAuditAction =
   | 'engagement_milestone.removed'
   | 'engagement_milestone.reordered'
   // engagement lifecycle
+  //
+  // `engagement.created` is TYPE-AGNOSTIC by design (BAL-417 post-review). Before it,
+  // creation was unaudited for BOTH products — the project trail started at
+  // `engagement.milestones_snapshotted` (kickoff only, so the seam writer left no trace
+  // at all) and the case trail started at `engagement.case_closed`. The fix is therefore
+  // ONE generic action emitted by EVERY creation path, not a case-only one; the concrete
+  // product is carried in `metadata.engagement_type` so the two are distinguishable
+  // downstream without two vocabularies. Emitted via `recordEngagementCreated` below.
+  | 'engagement.created'
   | 'engagement.completion_requested'
   | 'engagement.completion_withdrawn'
   | 'engagement.accepted'
   | 'engagement.changes_requested'
   | 'engagement.cancelled'
-  | 'engagement.milestones_snapshotted';
+  | 'engagement.milestones_snapshotted'
+  // case lifecycle (BAL-417). There is deliberately NO
+  // `engagement.resolution_requested` — the resolution-request pair is columns-only
+  // (D1) and its write path (and its audit action) belong to BAL-421.
+  | 'engagement.case_closed';
 
 export type DeliveryAuditEntityType = 'engagement' | 'engagement_milestone';
 
@@ -54,4 +68,45 @@ export async function recordDeliveryAudit(
     },
     exec
   );
+}
+
+/**
+ * Record the `engagement.created` row for ONE engagement, inside the caller's creation
+ * transaction (BAL-417 post-review). Every engagement creation path calls this — the
+ * project seam writer, the project kickoff materialisation, and the case create — so the
+ * audit trail begins at creation for BOTH products rather than at the first transition.
+ *
+ * Defined ONCE here rather than inlined at each call site: three copies of the same
+ * `recordDeliveryAudit` literal is exactly the shape Sonar's new-code duplication gate
+ * flags, and it would let the `metadata.engagement_type` key drift between products.
+ *
+ * `actorUserId` is REQUIRED but NULLABLE — pass the human who caused the creation
+ * (`materializeFromKickoff` has the approving admin), or `null` when the path genuinely
+ * has none. `null` is the ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION, the same
+ * convention `actionItemsRepository.createFromExtraction` uses for the BAL-387 transcript
+ * pipeline and `caseEngagementsRepository.close({ reason: 'auto_inactive' })` uses for the
+ * BAL-420 sweep: an unattributed row, never a fabricated actor.
+ *
+ * `entityId` IS the engagement id (it is the entity being created), and `engagementId` is
+ * folded into `metadata` by `recordDeliveryAudit` as usual — both are the same value here.
+ */
+export async function recordEngagementCreated(
+  exec: DbExecutor,
+  input: {
+    engagementId: string;
+    engagementType: EngagementType;
+    actorUserId: string | null;
+  }
+): Promise<void> {
+  await recordDeliveryAudit(exec, {
+    actorUserId: input.actorUserId,
+    action: 'engagement.created',
+    entityType: 'engagement',
+    entityId: input.engagementId,
+    engagementId: input.engagementId,
+    // THE DISCRIMINATOR ON THE AUDIT ROW. `audit_events.action` is deliberately
+    // type-agnostic, so this is the only thing that tells a downstream reader whether a
+    // Case or a Project was created.
+    metadata: { engagement_type: input.engagementType },
+  });
 }

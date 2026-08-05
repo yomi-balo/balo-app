@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
-import type { EngagementWithMilestones } from '@balo/db';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 
 // `rich-text.tsx` (reached through the workspace → milestone rail) imports
@@ -10,7 +10,7 @@ vi.mock('server-only', () => ({}));
 
 // ── Seams the page composes (mirrors the projects RSC page-test precedent) ──
 const {
-  mockFindEngagementWithMilestones,
+  mockFindWithMilestones,
   mockFindIdByProjectRequestId,
   mockListActionItems,
   mockGetCurrentUser,
@@ -20,7 +20,7 @@ const {
   mockLogError,
   mockTrackServerAndFlush,
 } = vi.hoisted(() => ({
-  mockFindEngagementWithMilestones: vi.fn(),
+  mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
   mockListActionItems: vi.fn(),
   mockGetCurrentUser: vi.fn(),
@@ -40,8 +40,8 @@ const {
 // so the real view mapper (unmocked) derives copy without a NaN/undefined leak.
 vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
-  engagementsRepository: {
-    findEngagementWithMilestones: mockFindEngagementWithMilestones,
+  projectEngagementsRepository: {
+    findWithMilestones: mockFindWithMilestones,
     findIdByProjectRequestId: mockFindIdByProjectRequestId,
   },
   // BAL-391: the page loads live action items as a separate read and maps them
@@ -70,7 +70,9 @@ const OTHER_COMPANY_ID = 'company-2';
 const EXPERT_PROFILE_ID = 'expert-1';
 const ENGAGEMENT_TITLE = 'CPQ implementation';
 
-function engagement(overrides: Partial<EngagementWithMilestones> = {}): EngagementWithMilestones {
+function engagement(
+  overrides: Partial<ProjectEngagementWithMilestones> = {}
+): ProjectEngagementWithMilestones {
   return {
     id: ENGAGEMENT_ID,
     companyId: COMPANY_ID,
@@ -118,7 +120,7 @@ function engagement(overrides: Partial<EngagementWithMilestones> = {}): Engageme
     acceptedBy: null,
     changeRequestedBy: null,
     ...overrides,
-  } as EngagementWithMilestones;
+  } as ProjectEngagementWithMilestones;
 }
 
 function user(overrides: Partial<SessionUser> = {}): SessionUser {
@@ -156,12 +158,12 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
     mockGetCurrentUser.mockResolvedValue(null);
     await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
     expect(mockRedirect).toHaveBeenCalledWith('/login');
-    expect(mockFindEngagementWithMilestones).not.toHaveBeenCalled();
+    expect(mockFindWithMilestones).not.toHaveBeenCalled();
   });
 
   it('calls notFound() when the engagement is missing (undefined)', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
-    mockFindEngagementWithMilestones.mockResolvedValue(undefined);
+    mockFindWithMilestones.mockResolvedValue(undefined);
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mockNotFound).toHaveBeenCalledTimes(1);
     expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
@@ -172,7 +174,7 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
     mockGetCurrentUser.mockResolvedValue(
       user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
     );
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mockLogWarn).toHaveBeenCalledWith(
@@ -188,7 +190,7 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
 
   it('logs an error and rethrows (to error.tsx) when the load throws', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
-    mockFindEngagementWithMilestones.mockRejectedValue(new Error('db down'));
+    mockFindWithMilestones.mockRejectedValue(new Error('db down'));
 
     await expect(renderPage()).rejects.toThrow('db down');
     expect(mockLogError).toHaveBeenCalledWith(
@@ -203,7 +205,7 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
 describe('EngagementWorkspacePage (RSC) — authorised lenses render the header title', () => {
   it('renders the client-owner view with the engagement title', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage();
     expect(
@@ -219,7 +221,7 @@ describe('EngagementWorkspacePage (RSC) — authorised lenses render the header 
         activeMode: 'expert',
       })
     );
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage();
     expect(
@@ -231,7 +233,7 @@ describe('EngagementWorkspacePage (RSC) — authorised lenses render the header 
     mockGetCurrentUser.mockResolvedValue(
       user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
     );
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage();
     expect(
@@ -243,7 +245,7 @@ describe('EngagementWorkspacePage (RSC) — authorised lenses render the header 
 describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
   it('fires engagement_workspace_viewed once with the resolved lens + status', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage('request_detail');
     expect(mockTrackServerAndFlush).toHaveBeenCalledTimes(1);
@@ -258,7 +260,7 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
 
   it('whitelists the entry: ?from=inbox passes through', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage('inbox');
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
@@ -269,7 +271,7 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
 
   it('collapses an unknown ?from to direct', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage('bogus');
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
@@ -280,7 +282,7 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
 
   it('defaults to direct when ?from is absent', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage();
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
@@ -303,14 +305,14 @@ describe('EngagementWorkspacePage — generateMetadata (no existence/title leak)
     const result = await meta();
     expect(result.title).toBe('Delivery workspace — Balo');
     expect(result.robots).toMatchObject({ index: false, follow: false });
-    expect(mockFindEngagementWithMilestones).not.toHaveBeenCalled();
+    expect(mockFindWithMilestones).not.toHaveBeenCalled();
   });
 
   it('returns the GENERIC title for an authenticated stranger (existence not confirmed)', async () => {
     mockGetCurrentUser.mockResolvedValue(
       user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
     );
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     const result = await meta();
     expect(result.title).toBe('Delivery workspace — Balo');
@@ -319,13 +321,13 @@ describe('EngagementWorkspacePage — generateMetadata (no existence/title leak)
 
   it('returns the GENERIC title when the engagement is missing', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
-    mockFindEngagementWithMilestones.mockResolvedValue(undefined);
+    mockFindWithMilestones.mockResolvedValue(undefined);
     expect((await meta()).title).toBe('Delivery workspace — Balo');
   });
 
   it('returns the REAL title only for an authorised participant', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockResolvedValue(engagement());
+    mockFindWithMilestones.mockResolvedValue(engagement());
 
     const result = await meta();
     expect(result.title).toBe(`${ENGAGEMENT_TITLE} — Balo`);
@@ -334,7 +336,7 @@ describe('EngagementWorkspacePage — generateMetadata (no existence/title leak)
 
   it('falls back to the GENERIC title (leak-free) when the load throws', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindEngagementWithMilestones.mockRejectedValue(new Error('db down'));
+    mockFindWithMilestones.mockRejectedValue(new Error('db down'));
     expect((await meta()).title).toBe('Delivery workspace — Balo');
   });
 });

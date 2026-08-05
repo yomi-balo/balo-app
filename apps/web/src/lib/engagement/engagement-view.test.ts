@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { EngagementWithMilestones } from '@balo/db';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
 import type { EngagementViewerContext, EngagementLens } from './resolve-engagement-lens';
 import { mapEngagementToWorkspaceView, DELIVERY_QUIET_THRESHOLD_DAYS } from './engagement-view';
 
@@ -7,7 +7,7 @@ import { mapEngagementToWorkspaceView, DELIVERY_QUIET_THRESHOLD_DAYS } from './e
 const NOW = new Date('2026-07-07T00:00:00.000Z');
 const KICKOFF = new Date('2026-06-12T00:00:00.000Z');
 
-type Milestone = EngagementWithMilestones['milestones'][number];
+type Milestone = ProjectEngagementWithMilestones['milestones'][number];
 
 function makeMilestone(over: Partial<Milestone> = {}): Milestone {
   return {
@@ -34,7 +34,9 @@ function makeMilestone(over: Partial<Milestone> = {}): Milestone {
   } as Milestone;
 }
 
-function makeEngagement(over: Partial<EngagementWithMilestones> = {}): EngagementWithMilestones {
+function makeEngagement(
+  over: Partial<ProjectEngagementWithMilestones> = {}
+): ProjectEngagementWithMilestones {
   return {
     id: 'eng-1',
     companyId: 'company-northwind',
@@ -83,7 +85,7 @@ function makeEngagement(over: Partial<EngagementWithMilestones> = {}): Engagemen
     acceptedBy: null,
     changeRequestedBy: null,
     ...over,
-  } as EngagementWithMilestones;
+  } as ProjectEngagementWithMilestones;
 }
 
 function ctxFor(lens: EngagementLens): EngagementViewerContext {

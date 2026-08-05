@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import type { AdminEngagementListItem } from '@balo/db';
+import type { AdminProjectEngagementListItem } from '@balo/db';
 import type { PlatformRole } from '@balo/shared/parties';
 import {
   deriveOversightCounts,
@@ -18,7 +18,7 @@ const OPTS = { autoAcceptDays: AUTO_ACCEPT_DAYS };
 const day = (n: number): Date => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000);
 
 interface ItemOpts {
-  status?: AdminEngagementListItem['status'];
+  status?: AdminProjectEngagementListItem['status'];
   companyName?: string;
   expertFirstName?: string | null;
   expertLastName?: string | null;
@@ -50,7 +50,7 @@ interface ActorOpt {
   platformRole?: PlatformRole;
 }
 
-function buildItem(opts: ItemOpts = {}): AdminEngagementListItem {
+function buildItem(opts: ItemOpts = {}): AdminProjectEngagementListItem {
   const {
     status = 'active',
     companyName = 'Northwind',
@@ -109,7 +109,7 @@ function buildItem(opts: ItemOpts = {}): AdminEngagementListItem {
     lastActivityAt,
   };
 
-  return item as unknown as AdminEngagementListItem;
+  return item as AdminProjectEngagementListItem;
 }
 
 describe('isEngagementStalled', () => {

@@ -1,4 +1,4 @@
-import type { AdminEngagementListItem } from '@balo/db';
+import type { AdminProjectEngagementListItem } from '@balo/db';
 import {
   engagementActorAttribution,
   expertPartyDisplayName,
@@ -12,10 +12,10 @@ import { DAY_MS, STALLED_AFTER_DAYS } from './oversight-constants';
  * oversight-row — the PURE, client-safe view-model layer for the admin
  * engagements oversight list (BAL-335). Holds the fully serialisable DTO types
  * (ISO strings + precomputed labels + booleans — no `Date` crosses the RSC
- * boundary) and the pure derivers that fold one `AdminEngagementListItem` into a
+ * boundary) and the pure derivers that fold one `AdminProjectEngagementListItem` into a
  * row, decide "stalled", match the status filters, and count the whole set.
  *
- * NO runtime `@balo/db` import — the `AdminEngagementListItem` reference is
+ * NO runtime `@balo/db` import — the `AdminProjectEngagementListItem` reference is
  * `import type` (erased at compile) so a `"use client"` component can import the
  * DTO types without dragging postgres-js into the browser bundle
  * (memory `reference_balo_db_client_bundle_footgun`). The `server-only` loader
@@ -24,7 +24,7 @@ import { DAY_MS, STALLED_AFTER_DAYS } from './oversight-constants';
  */
 
 /** Engagement status, sourced from the repo item (single source of truth). */
-type OversightStatus = AdminEngagementListItem['status'];
+type OversightStatus = AdminProjectEngagementListItem['status'];
 
 /**
  * The oversight status filter — reuses the analytics event's `AdminEngagementsFilter`
@@ -145,7 +145,7 @@ function money(cents: number, currency: string): string {
  * `STALLED_AFTER_DAYS` or more old. Completed/cancelled are never stalled; a
  * fresh kickoff (activity today) is never stalled.
  */
-export function isEngagementStalled(item: AdminEngagementListItem, now: Date): boolean {
+export function isEngagementStalled(item: AdminProjectEngagementListItem, now: Date): boolean {
   if (item.status !== 'active' && item.status !== 'pending_acceptance') {
     return false;
   }
@@ -164,7 +164,7 @@ export function isEngagementStalled(item: AdminEngagementListItem, now: Date): b
  * defers to that shared convention (incl. its "An expert" empty-name fallback) so
  * D5 stays consistent with the D6 inbox and the D1 workspace.
  */
-function deriveExpertLabel(item: AdminEngagementListItem): string {
+function deriveExpertLabel(item: AdminProjectEngagementListItem): string {
   const { type, user, agency } = item.expertProfile;
   const agencyName = agency?.name ?? null;
   if (agencyName !== null) {
@@ -179,7 +179,7 @@ function deriveExpertLabel(item: AdminEngagementListItem): string {
 }
 
 /** "Fixed · A$40,000" or "T&M · A$220/hr · cap A$40,000". */
-function derivePricingLabel(item: AdminEngagementListItem): string {
+function derivePricingLabel(item: AdminProjectEngagementListItem): string {
   if (item.pricingMethod === 'fixed') {
     return `Fixed · ${money(item.priceCents, item.currency)}`;
   }
@@ -188,7 +188,7 @@ function derivePricingLabel(item: AdminEngagementListItem): string {
 }
 
 /** The accept/cancel actor as projected by the repo (name + role, PII-safe). */
-type EngagementActor = NonNullable<AdminEngagementListItem['acceptedBy']>;
+type EngagementActor = NonNullable<AdminProjectEngagementListItem['acceptedBy']>;
 
 /**
  * Retrospective attribution label for an accept/cancel actor on THIS engagement —
@@ -196,7 +196,7 @@ type EngagementActor = NonNullable<AdminEngagementListItem['acceptedBy']>;
  * actor's role + identity by `@balo/shared/parties`' `engagementActorAttribution`,
  * never hard-coded, so a future client/expert cancel path (D4) reuses the one rule.
  */
-function actorLabel(item: AdminEngagementListItem, actor: EngagementActor): string {
+function actorLabel(item: AdminProjectEngagementListItem, actor: EngagementActor): string {
   return engagementActorAttribution({
     actor,
     expertUserId: item.expertProfile.user.id,
@@ -206,7 +206,7 @@ function actorLabel(item: AdminEngagementListItem, actor: EngagementActor): stri
 }
 
 /** Completed-only acceptance attribution (actor named by affiliation, or null auto). */
-function deriveAcceptance(item: AdminEngagementListItem): OversightAcceptance {
+function deriveAcceptance(item: AdminProjectEngagementListItem): OversightAcceptance {
   const method = item.acceptanceMethod ?? 'auto';
   const byLabel =
     method === 'client' && item.acceptedBy !== null ? actorLabel(item, item.acceptedBy) : null;
@@ -215,7 +215,7 @@ function deriveAcceptance(item: AdminEngagementListItem): OversightAcceptance {
 }
 
 /** Cancelled-only cancellation attribution (actor named by affiliation) + reason. */
-function deriveCancellation(item: AdminEngagementListItem): OversightCancellation {
+function deriveCancellation(item: AdminProjectEngagementListItem): OversightCancellation {
   const byLabel = item.cancelledBy === null ? null : actorLabel(item, item.cancelledBy);
   const onIso = item.cancelledAt === null ? null : item.cancelledAt.toISOString();
   return { byLabel, onIso, reason: item.cancellationReason ?? '' };
@@ -223,7 +223,7 @@ function deriveCancellation(item: AdminEngagementListItem): OversightCancellatio
 
 /** The status-specific optional fields for a row (no post-construction mutation). */
 function deriveStatusExtras(
-  item: AdminEngagementListItem,
+  item: AdminProjectEngagementListItem,
   opts: { autoAcceptDays: number }
 ): Pick<EngagementOversightRow, 'autoAcceptIso' | 'acceptance' | 'cancellation'> {
   if (item.status === 'pending_acceptance') {
@@ -249,7 +249,7 @@ function deriveStatusExtras(
  * `AUTO_ACCEPT_DAYS`) is injected so this module never value-imports `@balo/db`.
  */
 export function deriveOversightRow(
-  item: AdminEngagementListItem,
+  item: AdminProjectEngagementListItem,
   now: Date,
   opts: { autoAcceptDays: number }
 ): EngagementOversightRow {

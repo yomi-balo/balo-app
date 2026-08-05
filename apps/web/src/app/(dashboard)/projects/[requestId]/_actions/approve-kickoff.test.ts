@@ -55,7 +55,7 @@ vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
     findByIdWithRelations: (...a: unknown[]) => mockFindByIdWithRelations(...a),
   },
-  engagementsRepository: {
+  projectEngagementsRepository: {
     materializeFromKickoff: (...a: unknown[]) => mockMaterializeFromKickoff(...a),
   },
   InvalidStatusTransitionError,

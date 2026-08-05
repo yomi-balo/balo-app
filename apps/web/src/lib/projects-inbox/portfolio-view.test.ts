@@ -22,8 +22,8 @@ vi.mock('@balo/db', () => ({
     listAll: (...args: unknown[]) => mockListAll(...args),
     listInvitationsByExpert: (...args: unknown[]) => mockListInvitationsByExpert(...args),
   },
-  engagementsRepository: {
-    listPortfolioEngagements: (...args: unknown[]) => mockListPortfolioEngagements(...args),
+  projectEngagementsRepository: {
+    listPortfolio: (...args: unknown[]) => mockListPortfolioEngagements(...args),
   },
   conversationsRepository: {
     listThreadSummaries: (...args: unknown[]) => mockListThreadSummaries(...args),
@@ -86,7 +86,7 @@ function invitationRow(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-/** A hydrated `PortfolioEngagementView` mock (the shape the loaders consume). */
+/** A hydrated `PortfolioProjectEngagementView` mock (the shape the loaders consume). */
 function engagementView(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'eng-1',

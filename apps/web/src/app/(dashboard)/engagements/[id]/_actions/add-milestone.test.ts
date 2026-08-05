@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const NEW_MILESTONE_ID = 'b0000000-0000-4000-8000-000000000010';
@@ -37,8 +38,8 @@ const {
 });
 
 vi.mock('@balo/db', () => ({
-  engagementsRepository: {
-    findEngagementWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
+  projectEngagementsRepository: {
+    findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
   engagementMilestonesRepository: { add: (...a: unknown[]) => mockAdd(...a) },
@@ -85,7 +86,7 @@ const EXPERT_CTX = {
   isDeliveringExpert: true,
 };
 
-function engagement(overrides: Record<string, unknown> = {}) {
+function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
     status: 'active',

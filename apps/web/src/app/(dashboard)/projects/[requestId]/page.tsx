@@ -4,7 +4,7 @@ import { notFound, redirect } from 'next/navigation';
 import {
   projectRequestsRepository,
   companyBillingRepository,
-  engagementsRepository,
+  projectEngagementsRepository,
 } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
@@ -198,7 +198,7 @@ export default async function RequestDetailPage({
   let deliveryEngagementId: string | null = null;
   if (view.status === 'kickoff_approved') {
     deliveryEngagementId =
-      (await engagementsRepository.findIdByProjectRequestId(requestId)) ?? null;
+      (await projectEngagementsRepository.findIdByProjectRequestId(requestId)) ?? null;
   }
 
   return (

@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { engagementsRepository, actionItemsRepository } from '@balo/db';
+import { projectEngagementsRepository, actionItemsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
@@ -24,10 +24,16 @@ interface EngagementWorkspacePageProps {
  * Request-scoped memo so `generateMetadata` and the page share a single DB read
  * per render (React `cache()` dedupes within one server request) — mirrors the
  * project-request detail page.
+ *
+ * ⚠ `/engagements/[id]` IS THE *PROJECT* DELIVERY WORKSPACE (BAL-417). The loader is
+ * `projectEngagementsRepository.findWithMilestones`, whose query filters
+ * `engagement_type = 'project'`, so a CASE engagement id resolves to `undefined` here
+ * and 404s — the same leak-free copy a stranger or a missing row gets. That is correct
+ * and intended: every surface below it (milestone rail, terms strip, review/auto-accept
+ * banner, completion card) is project-shaped. The case surface is BAL-421's, on its own
+ * route with its own loader.
  */
-const loadEngagement = cache((id: string) =>
-  engagementsRepository.findEngagementWithMilestones(id)
-);
+const loadEngagement = cache((id: string) => projectEngagementsRepository.findWithMilestones(id));
 
 // Generic, leak-free metadata for any viewer who is not an authorised
 // participant/observer of this engagement (or when it is missing). It must not

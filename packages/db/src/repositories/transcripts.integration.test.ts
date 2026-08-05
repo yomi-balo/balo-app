@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { transcripts, engagements, type CanonicalTranscript } from '../schema';
+import { transcripts, engagements, projectEngagements, type CanonicalTranscript } from '../schema';
 import { engagementFactory, transcriptFactory } from '../test/factories';
 import { transcriptsRepository } from './transcripts';
 
@@ -167,5 +167,13 @@ describe('transcripts — engagement cascade', () => {
 
     const rows = await db.select().from(transcripts).where(eq(transcripts.id, created.id));
     expect(rows).toHaveLength(0);
+
+    // BAL-417: the `project_engagements` CHILD is cascaded too — the composite FK
+    // `project_engagement_parent_type_fk` carries ON DELETE cascade.
+    const childRows = await db
+      .select()
+      .from(projectEngagements)
+      .where(eq(projectEngagements.engagementId, engagement.id));
+    expect(childRows).toHaveLength(0);
   });
 });

@@ -3,12 +3,12 @@ import 'server-only';
 import { revalidatePath } from 'next/cache';
 import {
   actionItemsRepository,
-  engagementsRepository,
+  projectEngagementsRepository,
   EngagementNotActiveError,
   InvalidActionItemTransitionError,
   type ActionItem,
   type ActionItemAssigneeParty,
-  type EngagementWithMilestones,
+  type ProjectEngagementWithMilestones,
 } from '@balo/db';
 import {
   resolveEngagementLens,
@@ -57,7 +57,7 @@ export async function requireActionItemUser(): Promise<
 /** The authorized context handed to a per-action `perform` callback. */
 export interface AuthorizedActionItem {
   user: SessionUser;
-  engagement: EngagementWithMilestones;
+  engagement: ProjectEngagementWithMilestones;
   lens: EngagementLens;
   /** Present iff `opts.actionItemId` was supplied AND validated (IDOR). */
   actionItem?: ActionItem;
@@ -67,7 +67,7 @@ export interface AuthorizedActionItem {
 export type ActionItemGateResult =
   | {
       ok: true;
-      engagement: EngagementWithMilestones;
+      engagement: ProjectEngagementWithMilestones;
       lens: EngagementLens;
       actionItem?: ActionItem;
     }
@@ -104,7 +104,7 @@ export async function gateEngagementParticipant(
     return { ok: false, error };
   };
 
-  const engagement = await engagementsRepository.findEngagementWithMilestones(engagementId);
+  const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
   if (engagement === undefined) {
     return deny('engagement_not_found', NOT_FOUND);
   }
@@ -209,7 +209,7 @@ export async function runActionItemAction(
  * the engagement's delivering `expertProfileId` (→ the resolver hydrates data.expert).
  */
 export async function deriveAssigneeNotifyTargets(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   assigneeParty: ActionItemAssigneeParty
 ): Promise<{ recipientId?: string; expertProfileId?: string }> {
   if (assigneeParty === 'client') {
@@ -224,7 +224,7 @@ export async function deriveAssigneeNotifyTargets(
  * (the platform actor label).
  */
 export function deriveActorLabel(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   user: SessionUser
 ): string {
@@ -248,7 +248,7 @@ export function deriveActorLabel(
  * (a dispatcher retry dedups by jobId). A lost notification leaves a diagnosable trace.
  */
 export async function publishActionItemAssigned(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   user: SessionUser,
   actionItem: ActionItem,

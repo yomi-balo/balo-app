@@ -2,12 +2,12 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import {
-  engagementsRepository,
+  projectEngagementsRepository,
   companiesRepository,
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   type EngagementMilestoneStatus,
-  type EngagementWithMilestones,
+  type ProjectEngagementWithMilestones,
 } from '@balo/db';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import {
@@ -25,7 +25,7 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 export const HOUR_MS = 60 * 60 * 1000;
 
 /** One live milestone off the hydrated engagement graph. */
-export type EngagementMilestoneNode = EngagementWithMilestones['milestones'][number];
+export type EngagementMilestoneNode = ProjectEngagementWithMilestones['milestones'][number];
 
 /**
  * The uniform result the three expert milestone actions return. The client toasts
@@ -61,11 +61,13 @@ export const EDIT_COSMETIC_DEBOUNCE_MS = 10 * 60_000;
 
 /** The audited authorize result — the loaded engagement + the target milestone. */
 export type AuthorizeResult =
-  | { ok: true; engagement: EngagementWithMilestones; milestone: EngagementMilestoneNode }
+  | { ok: true; engagement: ProjectEngagementWithMilestones; milestone: EngagementMilestoneNode }
   | { ok: false; error: string };
 
 /** The shared expert-lens gate result — the loaded engagement or a friendly error. */
-type GateResult = { ok: true; engagement: EngagementWithMilestones } | { ok: false; error: string };
+type GateResult =
+  | { ok: true; engagement: ProjectEngagementWithMilestones }
+  | { ok: false; error: string };
 
 /**
  * The shared 3-step prefix of every expert delivery-plan action: load engagement →
@@ -88,7 +90,7 @@ async function gateExpertActiveEngagement(
     return { ok: false, error };
   };
 
-  const engagement = await engagementsRepository.findEngagementWithMilestones(engagementId);
+  const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
   if (engagement === undefined) {
     return deny('engagement_not_found', NOT_FOUND);
   }
@@ -146,7 +148,7 @@ export async function authorizeExpertMilestone(
 /** The authorized context for a status-optional engagement-scoped action. */
 export interface AuthorizedEngagement {
   user: SessionUser;
-  engagement: EngagementWithMilestones;
+  engagement: ProjectEngagementWithMilestones;
   /** Present iff `opts.milestoneId` was supplied AND validated (IDOR). */
   milestone?: EngagementMilestoneNode;
 }
@@ -164,7 +166,7 @@ export async function authorizeExpertEngagement(
   engagementId: string,
   opts?: { milestoneId?: string }
 ): Promise<
-  | { ok: true; engagement: EngagementWithMilestones; milestone?: EngagementMilestoneNode }
+  | { ok: true; engagement: ProjectEngagementWithMilestones; milestone?: EngagementMilestoneNode }
   | { ok: false; error: string }
 > {
   const gate = await gateExpertActiveEngagement(user, engagementId);
@@ -209,7 +211,7 @@ export async function resolveClientRecipientId(companyId: string): Promise<strin
  * rule (retainer-safe): the source request title, else `Delivery with {expert}`.
  */
 export function deriveEngagementTitle(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties
 ): string {
   return engagement.projectRequest?.title?.trim() || `Delivery with ${parties.expertPartyShort}`;
@@ -263,7 +265,7 @@ export async function runMilestoneTransition<T>(
 /** The authorized context handed to a per-action `perform` callback. */
 export interface AuthorizedMilestone {
   user: SessionUser;
-  engagement: EngagementWithMilestones;
+  engagement: ProjectEngagementWithMilestones;
   milestone: EngagementMilestoneNode;
 }
 
@@ -395,7 +397,7 @@ export function buildChangeSummary(kind: 'added' | 'edited' | 'removed', title: 
  * mutation is already committed; `publishNotificationEvent` logs internally).
  */
 export async function publishScopeChange(
-  engagement: EngagementWithMilestones,
+  engagement: ProjectEngagementWithMilestones,
   input: {
     changeKind: 'added' | 'edited' | 'removed';
     milestoneId: string;

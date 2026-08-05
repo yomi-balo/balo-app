@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import type { EngagementWithMilestones } from '@balo/db';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
   personAtCompany,
 } from './engagement-parties';
 
-type ExpertProfile = EngagementWithMilestones['expertProfile'];
+type ExpertProfile = ProjectEngagementWithMilestones['expertProfile'];
 type Agency = ExpertProfile['agency'];
 
 function makeAgency(over: Partial<NonNullable<Agency>> = {}): NonNullable<Agency> {
@@ -20,7 +20,7 @@ function makeEngagement(opts: {
   firstName?: string | null;
   lastName?: string | null;
   companyName?: string;
-}): EngagementWithMilestones {
+}): ProjectEngagementWithMilestones {
   const expertProfile: ExpertProfile = {
     id: 'expert-1',
     agencyId: opts.agency ? opts.agency.id : null,
@@ -37,7 +37,7 @@ function makeEngagement(opts: {
   return {
     expertProfile,
     company: { id: 'company-1', name: opts.companyName ?? 'Northwind Industrial' },
-  } as EngagementWithMilestones;
+  } as ProjectEngagementWithMilestones;
 }
 
 describe('deriveEngagementParties', () => {
