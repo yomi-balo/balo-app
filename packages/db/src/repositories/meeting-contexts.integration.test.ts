@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
+import { CASE_INACTIVITY_DAYS, isCaseInactive } from '@balo/shared/engagements';
 import { db } from '../client';
-import { creditSessions, meetingContexts } from '../schema';
+import { creditSessions, engagements, meetingContexts } from '../schema';
 import {
   caseEngagementFactory,
   creditWalletFactory,
@@ -502,5 +503,157 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
       now
     );
     expect(result.get(engagement.id)?.lastCompletedConsultationAt).toBeNull();
+  });
+});
+
+/**
+ * CASE INACTIVITY COMPOSITION (BAL-417 × BAL-418), on behalf of BAL-425.
+ *
+ * ⚠ THIS IS A COMPOSITION TEST, NOT A SWEEP. BAL-417's auto-close is a WINDOW-MATH sweep
+ * and is NOT a consumer of BAL-420's `schedule()` primitive — there is no per-instance
+ * promise to cancel, because a candidate simply stops matching the query when the case
+ * gets activity. BAL-425 stays OPEN: no sweep file, no cron registration, no feature flag,
+ * and its mid-call `in_progress` hazard decision is untouched. What this proves is only
+ * that the two SHIPPED pieces the sweep will stand on compose to the right answer:
+ *
+ *     meetingContextsRepository.consultationTimestampsForEngagements(ids, now)   [BAL-418]
+ *       ──feeds──▶  isCaseInactive({ caseCreatedAt, ...anchors, now })           [BAL-417]
+ *
+ * `caseEngagementsRepository.listOpenCreatedBefore` returns only the SQL-expressible,
+ * creation-anchored, consultation-BLIND superset; this pair is the refinement, and it can
+ * only refine what it is handed.
+ */
+describe('case inactivity composition (BAL-417 × BAL-418)', () => {
+  /** Resolve both anchors for one case and apply the rule, exactly as the sweep will. */
+  async function inactive(engagementId: string, caseCreatedAt: Date, now: Date): Promise<boolean> {
+    const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
+      [engagementId],
+      now
+    );
+    const timestamps = anchors.get(engagementId);
+    if (timestamps === undefined) {
+      throw new Error(`consultationTimestampsForEngagements dropped ${engagementId}`);
+    }
+    return isCaseInactive({
+      now,
+      caseCreatedAt,
+      lastCompletedConsultationAt: timestamps.lastCompletedConsultationAt,
+      nextScheduledConsultationAt: timestamps.nextScheduledConsultationAt,
+    });
+  }
+
+  const NOW = new Date('2026-08-05T12:00:00.000Z');
+  const daysAgo = (days: number): Date => new Date(NOW.getTime() - days * DAY_MS);
+  const daysAhead = (days: number): Date => new Date(NOW.getTime() + days * DAY_MS);
+
+  it('1 — created 31d ago with NO meeting contexts at all ⇒ INACTIVE', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(31) } });
+
+    // The map still returns an entry (both anchors null), so the rule falls back to the
+    // creation anchor — "absent" never has to be distinguished from "none".
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+  });
+
+  it('2 — last COMPLETED consultation 31d ago, none scheduled ⇒ INACTIVE', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(60) } });
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'ended', outcome: 'completed', endedAt: daysAgo(31) },
+    });
+
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+  });
+
+  it('3 — last completed 31d ago but one SCHEDULED TOMORROW ⇒ ACTIVE (a future commitment always wins)', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(60) } });
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'ended', outcome: 'completed', endedAt: daysAgo(31) },
+    });
+    const upcoming = daysAhead(1);
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { scheduledStart: upcoming, scheduledEnd: new Date(upcoming.getTime() + HOUR_MS) },
+    });
+
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
+  });
+
+  it('3b — ⚠ PASSING `null, null` FLIPS CASE 3 TO INACTIVE. That is the whole point of this test.', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(60) } });
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'ended', outcome: 'completed', endedAt: daysAgo(31) },
+    });
+    const upcoming = daysAhead(1);
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { scheduledStart: upcoming, scheduledEnd: new Date(upcoming.getTime() + HOUR_MS) },
+    });
+
+    // Skipping the BAL-418 read collapses the rule to "created ≥ 30 days ago" and would
+    // AUTO-CLOSE a case with a consultation yesterday and another booked tomorrow. It is
+    // now a BUG, not a gap — pinned here so a future sweep cannot quietly reintroduce it.
+    expect(
+      isCaseInactive({
+        now: NOW,
+        caseCreatedAt: engagement.createdAt,
+        lastCompletedConsultationAt: null,
+        nextScheduledConsultationAt: null,
+      })
+    ).toBe(true);
+    // …while the composed answer, on the same row, is the correct one.
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
+  });
+
+  it('4 — created 90d ago but last completed YESTERDAY ⇒ ACTIVE (the anchor moves off creation)', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(90) } });
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'ended', outcome: 'completed', endedAt: daysAgo(1) },
+    });
+
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
+  });
+
+  it('5 — only a PAST scheduled consultation ⇒ INACTIVE (a past schedule never blocks)', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(45) } });
+    const past = daysAgo(40);
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { scheduledStart: past, scheduledEnd: new Date(past.getTime() + HOUR_MS) },
+    });
+
+    // It contributes to NEITHER anchor: not upcoming, and never `ended`+`completed`.
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+  });
+
+  it('6 — anchor EXACTLY 30d ago ⇒ INACTIVE (the boundary is inclusive)', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(90) } });
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: {
+        status: 'ended',
+        outcome: 'completed',
+        endedAt: daysAgo(CASE_INACTIVITY_DAYS),
+      },
+    });
+
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+  });
+
+  it('THE CLOCK IS SHARED — `caseCreatedAt` is the PARENT engagements.created_at', async () => {
+    const created = daysAgo(31);
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: created } });
+
+    // `listOpenCreatedBefore` filters on the SAME column, so the candidate set and this
+    // refinement cannot diverge on two clocks. Read it back from the supertype row rather
+    // than trusting the projection.
+    const [parent] = await db
+      .select({ createdAt: engagements.createdAt })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.createdAt.getTime()).toBe(created.getTime());
+    expect(engagement.createdAt.getTime()).toBe(created.getTime());
   });
 });

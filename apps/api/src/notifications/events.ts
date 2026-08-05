@@ -328,6 +328,72 @@ export type ServerOnlyNotificationEvent =
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
 
+/**
+ * BAL-420 / ADR-1047 Decision 10 — the ONLY events `apps/web` may SCHEDULE through the
+ * (not-yet-built) HTTP seam. Must be a subset of `PublishableNotificationEvent`.
+ *
+ * Answering this HERE is what makes that route mechanical whenever it is eventually added;
+ * shipping an inert route instead would defer the question while adding surface. There is no
+ * schedule route in this PR, and there will NEVER be a cancel route (Decision 11).
+ *
+ * ⚠ THE TEST FOR ADDING ONE: could a caller holding `INTERNAL_API_SECRET` — a build-time env
+ * var present in every Vercel preview deployment — use a schedule on this event to stop Balo
+ * learning something, or to make Balo learn something false? If yes, it is API-only,
+ * PERMANENTLY.
+ *
+ *  · PARTY-FACING NUDGES pass. The worst a hostile caller achieves is nudging, or failing to
+ *    nudge, a party about their own business.
+ *  · BALO-FACING ALERTS fail, and not hypothetically: `replace_pending` IS ITSELF A
+ *    SUPPRESSION PRIMITIVE. A caller who can schedule the same event with the same key can
+ *    supersede a pending alert's `scheduled_for` and payload — pushing it arbitrarily far
+ *    out, or replacing its contents. Such an alert exists precisely because someone might
+ *    prefer Balo not to know.
+ *
+ * MECHANICAL COROLLARY, checkable rather than judged: any event whose `notificationRules`
+ * entry resolves a `recipient: 'admin'` delivery is API-only BY CONSTRUCTION. That is
+ * asserted by `web-schedulable-policy.test.ts`, not left to review.
+ *
+ * EMPTY until a web-side consumer ships. BAL-411 is the only candidate, and it may well end
+ * up API-side too.
+ */
+export type WebSchedulableNotificationEvent = never;
+
+/**
+ * The RUNTIME mirror of `WebSchedulableNotificationEvent`, kept in lockstep with it by the
+ * guards below. A `never` type cannot be iterated, and the corollary above has to be
+ * ASSERTED against something — so the list exists, and adding to the type without adding
+ * here (or vice versa) fails `tsc` rather than quietly disarming the test.
+ */
+export const WEB_SCHEDULABLE_EVENTS =
+  [] as const satisfies readonly WebSchedulableNotificationEvent[];
+
+/**
+ * Compile-time guards for the policy above, mirroring `AssertPublishCoverageComplete`'s
+ * shape in `routes/notifications/schema.ts`. Split per direction so neither branch forms a
+ * `never | never` union (S6571).
+ *
+ *  1. every web-schedulable event must also be web-PUBLISHABLE — scheduling an event
+ *     `apps/web` may not publish at all would be a strictly wider grant;
+ *  2. the type and its runtime mirror must name exactly the same events.
+ */
+type StrayWebSchedulable = Exclude<WebSchedulableNotificationEvent, PublishableNotificationEvent>;
+type MissingWebSchedulableConst = Exclude<
+  WebSchedulableNotificationEvent,
+  (typeof WEB_SCHEDULABLE_EVENTS)[number]
+>;
+type StrayWebSchedulableConst = Exclude<
+  (typeof WEB_SCHEDULABLE_EVENTS)[number],
+  WebSchedulableNotificationEvent
+>;
+
+type AssertNever<T extends never> = T;
+
+export type AssertWebSchedulableIsPublishable = AssertNever<StrayWebSchedulable>;
+export type AssertWebSchedulableConstComplete = [
+  AssertNever<MissingWebSchedulableConst>,
+  AssertNever<StrayWebSchedulableConst>,
+];
+
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;

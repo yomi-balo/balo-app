@@ -601,3 +601,63 @@ export const meetingParticipantPartyEnum = pgEnum('meeting_participant_party', [
   'client',
   'observer',
 ]);
+
+/**
+ * BAL-420 / ADR-1047 Decision 4 — the lifecycle of ONE durable "publish this event later"
+ * promise (`scheduled_notifications`).
+ *
+ *   pending   → the promise is live and will be claimed once `scheduled_for` passes.
+ *   claimed   → a dispatch tick took it (the send-once gate). Reclaimable ONLY after the
+ *               claim TTL, which is how a send that died mid-flight is reconciled.
+ *   published → terminal, happy path: the event was handed to `publish()`.
+ *   cancelled → terminal, driven internally by the code path that observes the
+ *               condition-voiding fact. A `claimed` row is deliberately NOT cancellable.
+ *   skipped   → terminal and NORMAL: the fire-time recheck said the notification is no
+ *               longer warranted (`skip_reason`). NOT a failure.
+ *   failed    → terminal FAILURE: attempts exhausted or an unregistered recheck name
+ *               (`last_error`). Deliberately a different column from `skip_reason`.
+ *
+ * ⚠ `pending` and `claimed` APPEAR IN INDEX PREDICATES (see `scheduled-notifications.ts`),
+ * a deliberate deviation from the `action-items.ts` / `transcripts.ts` house convention of
+ * predicating on `deleted_at` alone. ADR Decision 4 requires it: without the
+ * `status = 'pending'` half, the unique index would permit ONE notification per dedupe key
+ * EVER, and a key could never be re-scheduled after it fires. The residual cost is bounded
+ * and known: a future `ALTER TYPE … ADD VALUE` on this enum is still safe on its own, but
+ * the new value may not be USED (in an index predicate, a default, or a data statement) in
+ * the SAME migration transaction — split it across two migrations.
+ */
+export const scheduledNotificationStatusEnum = pgEnum('scheduled_notification_status', [
+  'pending',
+  'claimed',
+  'published',
+  'cancelled',
+  'skipped',
+  'failed',
+]);
+
+/**
+ * What a second `schedule()` on a key that already has a LIVE pending row does.
+ *
+ *   first_wins      → the existing promise STANDS UNTOUCHED, keeping its original
+ *                     `scheduled_for`, `payload`, `event` and `recheck`. The conservative
+ *                     default.
+ *   replace_pending → the new schedule SUPERSEDES all four.
+ *
+ * BOTH are expressed as `ON CONFLICT … DO UPDATE`, differing only in the `set`;
+ * `first_wins`'s is the no-op self-assignment `updated_at = updated_at`. It is deliberately
+ * NOT `DO NOTHING` — that returns zero rows on a conflict, so reporting `already_pending`
+ * would need a second, racy query for the existing row. See the repository for the full
+ * reasoning.
+ *
+ * BAL-420 ships BOTH and rules on NO window policy (ADR Decision 6) — a fixed window is
+ * `first_wins`, a sliding debounce is `replace_pending`, and BAL-424 chooses. `mode` is
+ * NOT used in any index predicate.
+ *
+ * ⚠ `replace_pending` is a SUPPRESSION primitive: a caller who can schedule key K can push
+ * a pending Balo-facing alert arbitrarily far out. That is why scheduling is API-internal
+ * only (ADR Decisions 10 and 11).
+ */
+export const scheduledNotificationModeEnum = pgEnum('scheduled_notification_mode', [
+  'first_wins',
+  'replace_pending',
+]);

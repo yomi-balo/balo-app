@@ -92,11 +92,14 @@ async function enqueueDelivery(
  * payload.recipientEmail), and dedup is preserved because the jobId stays unique
  * per invite.
  *
- * NOTE: external (non-user) email_address deliveries are intentionally NOT recorded
- * in notification_log — its recipientId is a NOT NULL FK to users.id, so an external
- * recipient has no valid key and logNotification's internal try/catch swallows the
- * failed insert. A durable external-recipient audit trail is a follow-up (BAL-341;
- * mirrors the pre-existing admin/ops-inbox literal-email limitation).
+ * AUDIT (BAL-341, shipped in BAL-420 / ADR-1047 Decision 8): external deliveries ARE
+ * now recorded in notification_log. `recipient_id` is nullable, `recipient_email`
+ * exists alongside it, and an exactly-one CHECK enforces the pair — so
+ * `logNotification` writes the invitee's address to `recipient_email` and leaves
+ * `recipient_id` NULL. The invite uuid is not lost: it is already the row's
+ * `correlation_id`. Previously that uuid was jammed into a `uuid NOT NULL` FK to
+ * users.id, threw 23503, and was swallowed — external and ops-inbox deliveries left
+ * no trace at all. Both shapes now land; see channels/log.ts for the three-shape rule.
  */
 async function dispatchExternalEmail(rule: NotificationRule, context: RuleContext): Promise<void> {
   const email = context.payload.recipientEmail;

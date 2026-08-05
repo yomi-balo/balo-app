@@ -36,6 +36,15 @@ export type {
   ProjectTagsByGroup,
 } from './reference-data';
 export { notificationLogRepository } from './notification-log';
+export {
+  scheduledNotificationsRepository,
+  ScheduledNotificationNotFoundError,
+  type ScheduleOutcome,
+  type ScheduleNotificationInput,
+  type ScheduleNotificationResult,
+  type ListDueInput,
+  type ClaimInput,
+} from './scheduled-notifications';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export { availabilityRulesRepository, type WeeklyRuleInput } from './availability-rules';

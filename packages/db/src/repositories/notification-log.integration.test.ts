@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import { notificationLog } from '../schema';
 import { userFactory } from '../test/factories';
+import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { notificationLogRepository } from './notification-log';
 import { randomUUID } from 'crypto';
 
@@ -238,5 +239,146 @@ describe('notification log soft-delete exclusion', () => {
 
     const results = await notificationLogRepository.findByRecipientId(user.id);
     expect(results).toHaveLength(0);
+  });
+});
+
+// ── BAL-341 absorption (ADR-1047 Decision 8) ────────────────────────────
+//
+// Before this change these deliveries were INVISIBLE: `logNotification` swallows its
+// errors, so the ops inbox and every external invitee produced a `22P02` / `23503` that
+// nobody ever saw. Each case below is one of the three delivery shapes the dispatcher
+// actually produces.
+
+describe('notification_log recipient shapes (BAL-341)', () => {
+  it('SHAPE 1 — a platform user: recipient_id set, recipient_email NULL', async () => {
+    const user = await userFactory({ firstName: 'Ord', lastName: 'User' });
+
+    const row = await notificationLogRepository.insert({
+      event: 'case.created',
+      correlationId: randomUUID(),
+      recipientId: user.id,
+      channel: 'email',
+      template: 'case-created',
+      status: 'sent',
+    });
+
+    expect(row.recipientId).toBe(user.id);
+    expect(row.recipientEmail).toBeNull();
+  });
+
+  it('SHAPE 2 — the Balo OPS INBOX: recipient_email set, recipient_id NULL', async () => {
+    const row = await notificationLogRepository.insert({
+      event: 'project.match_requested',
+      correlationId: randomUUID(),
+      recipientEmail: 'ops@balo.expert',
+      channel: 'email',
+      template: 'admin-project-match-requested',
+      status: 'sent',
+    });
+
+    expect(row.recipientId).toBeNull();
+    expect(row.recipientEmail).toBe('ops@balo.expert');
+  });
+
+  it('SHAPE 3 — an EXTERNAL invitee: recipient_email set, recipient_id NULL, correlation_id = the invite uuid', async () => {
+    // `dispatchExternalEmail` passes the invite row's uuid as the correlationId, which is
+    // why dropping it from `recipient_id` (where it was never a valid users.id) loses nothing.
+    const inviteId = randomUUID();
+
+    const row = await notificationLogRepository.insert({
+      event: 'expert.referral_invited',
+      correlationId: inviteId,
+      recipientEmail: 'invitee@external.example',
+      channel: 'email',
+      template: 'expert-referral-invite',
+      status: 'sent',
+    });
+
+    expect(row.recipientId).toBeNull();
+    expect(row.recipientEmail).toBe('invitee@external.example');
+    expect(row.correlationId).toBe(inviteId);
+
+    const found = await notificationLogRepository.findByRecipientEmail('invitee@external.example');
+    expect(found.map((r) => r.id)).toContain(row.id);
+  });
+
+  it('the CHECK rejects BOTH recipient columns being set', async () => {
+    const user = await userFactory({ firstName: 'Both', lastName: 'Set' });
+
+    await expectConstraintViolation('23514', (tx) =>
+      tx.insert(notificationLog).values({
+        event: 'case.created',
+        correlationId: randomUUID(),
+        recipientId: user.id,
+        recipientEmail: 'ops@balo.expert',
+        channel: 'email',
+        template: 'case-created',
+        status: 'sent',
+      })
+    );
+  });
+
+  it('the CHECK rejects NEITHER recipient column being set', async () => {
+    await expectConstraintViolation('23514', (tx) =>
+      tx.insert(notificationLog).values({
+        event: 'case.created',
+        correlationId: randomUUID(),
+        channel: 'email',
+        template: 'case-created',
+        status: 'sent',
+      })
+    );
+  });
+
+  it('findByRecipientEmail excludes soft-deleted rows and other addresses', async () => {
+    const row = await notificationLogRepository.insert({
+      event: 'case.created',
+      correlationId: randomUUID(),
+      recipientEmail: 'soft@external.example',
+      channel: 'email',
+      template: 'case-created',
+      status: 'sent',
+    });
+    await db
+      .update(notificationLog)
+      .set({ deletedAt: new Date() })
+      .where(eq(notificationLog.id, row.id));
+
+    expect(await notificationLogRepository.findByRecipientEmail('soft@external.example')).toEqual(
+      []
+    );
+    expect(await notificationLogRepository.findByRecipientEmail('nobody@external.example')).toEqual(
+      []
+    );
+  });
+});
+
+// ── correlation_id widened uuid → text (BAL-341) ────────────────────────
+
+describe('notification_log composite correlation ids', () => {
+  // The 17 SERVER-ONLY events bypass the z.uuid()-validated publish route, so this is
+  // exactly the set that mints composites. Every one of these used to throw 22P02.
+  it.each([
+    'engagement-1:review_reminder:1700000000000',
+    'session-abc:settled',
+    'u1:onboarding_reminder:1',
+    'wallet-1:dormancy_reminder:60:2027-07-12',
+  ])('persists and round-trips the composite key %s', async (correlationId) => {
+    const user = await userFactory({ firstName: 'Comp', lastName: 'Key' });
+
+    const row = await notificationLogRepository.insert({
+      event: 'engagement.review_reminder',
+      correlationId,
+      recipientId: user.id,
+      channel: 'email',
+      template: 'engagement-review-reminder',
+      status: 'sent',
+    });
+
+    expect(row.correlationId).toBe(correlationId);
+
+    const found = await notificationLogRepository.findByCorrelationId(correlationId);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.id).toBe(row.id);
   });
 });
