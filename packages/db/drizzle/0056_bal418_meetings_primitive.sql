@@ -44,11 +44,39 @@
 -- ⚠ NONE OF SECTION B IS EXERCISED BY CI (memory
 -- `reference_db_migrations_tested_against_empty_db`): the integration harness migrates an
 -- EMPTY testcontainer and the E2E job migrates a fresh service container, so every
--- DELETE / UPDATE / SET NOT NULL below is a no-op in both. Verify against the seeded dev
--- DB before merge:
---     psql "$DATABASE_URL" -c 'select count(*) from meeting_guests;'
---     psql "$DATABASE_URL" -c 'select count(*) from transcripts;'
---     psql "$DATABASE_URL" -c 'select count(*) from action_items where meeting_id is not null;'
+-- DELETE / UPDATE / SET NOT NULL below is a no-op in both.
+--
+-- AN EARLIER DRAFT OF THIS HEADER ASKED THE READER TO VERIFY THE COUNTS AGAINST THE SEEDED
+-- DEV DB. THAT WAS WRONG AND IS REMOVED — two of the three tables DO NOT EXIST on balo-dev
+-- (it sits at 43 applied migrations; `transcripts` arrives in 0051 and `action_items` in
+-- 0049, both still pending), so the commands could not run. There is also no other
+-- database: Supabase lists exactly one project org-wide, no staging, no production.
+--
+-- The correct justification is STATIC, and it is stronger than a count would have been —
+-- section B cannot fire on any environment reachable from this repo:
+--   (1) 0055 (already on main) does `ALTER TABLE engagements ADD COLUMN engagement_type
+--       NOT NULL` with NO DEFAULT — 23502 on a non-empty `engagements`, deliberately (see
+--       its own header: "the fix is to reset that database"). `action_items.engagement_id`
+--       and `transcripts.engagement_id` are both NOT NULL FKs ON DELETE cascade ->
+--       engagements, and `transcript_artifacts` cascades off `transcripts`. So ANY database
+--       that successfully applied 0055 had all three cascade-emptied on the way through.
+--       `meeting_guests` has NO INSERT anywhere in the repo (only admin-dev's delete-user
+--       action, which deletes/updates) and `seed.ts` never touches it.
+--   (2) Nothing can dirty them in the 0055 -> 0056 window either: `action_items.meeting_id`
+--       is written only by action-items.ts create/createFromExtraction — the web action is
+--       `.strict()` and REJECTS a client-supplied meetingId, and createFromExtraction is fed
+--       only by the BAL-387 pipeline, which shipped INERT (no capture producer; BAL-126/140
+--       unbuilt). Same inertness leaves `transcripts` with no producer at all.
+--   (3) The DDL itself IS covered: both CI paths migrate 0000 -> 0056 from scratch,
+--       exercising every table, FK, CHECK, partial index and the enum-default safety.
+--
+-- The ONLY way to reach a non-zero count is a hand-INSERTed fixture placed with a SQL
+-- client. If your local DB has one, these three steps are exactly what will clean it up.
+--
+-- The genuinely uncovered risk is NOT section B — it is the 14-migration catch-up
+-- 0043 -> 0056 against balo-dev in its real state (43 applied, 66 users). That belongs to
+-- 0043-0055 (most sharply 0055's engagements add), is a DEPLOY-time concern for whoever
+-- migrates balo-dev, and is not this migration's to own.
 --
 -- ENUM-DEFAULT / ENUM-LITERAL SAFETY: all four types below are STANDALONE `CREATE TYPE`s,
 -- so `meetings.status DEFAULT 'scheduled'` and the `'ended'` / `'admin'` literals inside
