@@ -96,10 +96,14 @@ export const creditSessions = pgTable(
     // Fee snapshot (BAL-357 pattern; audience-keyed). NEVER on a client view.
     // ⚠ THIS COLUMN IS THE SSOT FOR A CASE'S MARGIN (BAL-417 / D3) — it is the fee
     // actually charged. `engagements.balo_fee_bps` also exists on the supertype but is
-    // NEVER charged on a case (no engagement↔credit_session join exists); that column
-    // is meaningful only for project/retainer/package engagements and is CONSTRAINED
-    // NULL on every case row (`engagement_balo_fee_bps_case_null`), so there is no
-    // second, credible-but-wrong case margin left for a raw read to pick up.
+    // NEVER charged on a case; that column is meaningful only for
+    // project/retainer/package engagements and is CONSTRAINED NULL on every case row
+    // (`engagement_balo_fee_bps_case_null`), so there is no second, credible-but-wrong
+    // case margin left for a raw read to pick up.
+    // ⚠ BAL-417 rested that argument partly on "no engagement↔credit_session join
+    // exists". `engagement_id` below MAKES ONE, so `engagement_balo_fee_bps_case_null`
+    // is now the WHOLE of the protection against a reporting join reading a fabricated
+    // case margin. Do not relax it.
     baloFeeBps: integer('balo_fee_bps').notNull().default(2500),
     // MARKED-UP per-minute charge — drives drawdown + the widget "A$rate/min".
     clientRateMinorPerMinute: integer('client_rate_minor_per_minute').notNull(),
@@ -144,10 +148,55 @@ export const creditSessions = pgTable(
     stripePaymentIntentId: text('stripe_payment_intent_id'),
 
     // ── BAL-418 / ADR-1045 §3 — the meeting link + the denormalised engagement ──
-    // Both NULLABLE and INDEPENDENT (NO coherence CHECK between them): a
-    // `duration_source='external'` session (BAL-399/BAL-133) is a real consultation on an
-    // OUTSIDE tool, with an engagement and NO Balo meeting. BAL-401's `company_id` already
-    // carries the capability scope, so neither column is load-bearing for authorization.
+    //
+    // THEIR NULLABILITY IS INDEPENDENT — all four combinations are legal, which is why
+    // there is NO CHECK of any shape between them:
+    //   · both set        — the ordinary booked Case consultation.
+    //   · engagement only — `duration_source='external'` (BAL-399/BAL-133): a real
+    //     consultation on an OUTSIDE tool, with an engagement and NO Balo meeting.
+    //   · both NULL       — every session written today (the live `openSession` service
+    //     passes neither), so a NOT NULL or an "at least one" CHECK would break it.
+    //   · meeting only    — a meeting whose only context is `project_discovery`
+    //     (`context_id` is a `project_requests.id`, NOT an engagement) or `admin`.
+    //     Forbidding it would decide a product question this ticket does not own.
+    // BAL-401's `company_id` already carries the capability scope, so neither column is
+    // load-bearing for authorization.
+    //
+    // ⚠ INDEPENDENT NULLABILITY IS NOT INDEPENDENT VALUES. When BOTH are set, NOTHING
+    // checks that `engagement_id` is the engagement reachable via `meeting_id` →
+    // `meeting_contexts.context_id` — and the two are read by DIFFERENT consumers. Money
+    // and reporting read `engagement_id` directly; BAL-425's inactivity sweep
+    // (`meetingContextsRepository.consultationTimestampsForEngagements`) resolves through
+    // the seam instead. A divergent pair therefore bills one engagement and ages out
+    // another, silently, with no row anywhere that looks wrong.
+    //
+    // THAT COHERENCE CANNOT BE A DB CONSTRAINT, for the same reason `meeting_contexts`
+    // cannot require ≥1 context row:
+    //   · a CHECK cannot contain a subquery, and the other side of the predicate lives in
+    //     another table;
+    //   · the composite-FK trick that pins the engagement subtypes (`engagement_id_type_uq`,
+    //     BAL-417) does NOT transfer. Its semantics would fit — a composite FK is MATCH
+    //     SIMPLE, so a NULL on either side satisfies it and only the both-set case is
+    //     checked — but the TARGET cannot exist: it would need a UNIQUE constraint on
+    //     `meeting_contexts(meeting_id, context_id)`, and that table's uniqueness is
+    //     deliberately PARTIAL on `deleted_at IS NULL` (Postgres FKs cannot target a partial
+    //     index), on the TRIPLE (D3 multi-context allows several engagement-bearing rows per
+    //     meeting), over a POLYMORPHIC `context_id` that carries no FK of its own. Making it
+    //     non-partial to serve as an FK target re-introduces the documented
+    //     `reference_softdelete_nonpartial_unique_recreate` failure on detach→re-attach;
+    //   · a trigger would work, and this repository has none, in any migration, by choice.
+    //
+    // SO IT IS ENFORCED AT THE SINGLE WRITE PATH — and the write path is genuinely single:
+    // `creditSessionsRepository.open()` is the ONLY statement that ever sets either column
+    // (no UPDATE anywhere touches them; they are write-once, inside the wallet lock).
+    // OBLIGATION, CARRIED BY **BAL-400** (booking — the first caller that will pass both),
+    // with **BAL-129** (provisioning) supplying the meeting: resolve the engagement ONCE and
+    // derive `meeting_id`, `company_id` and `expert_profile_id` from THAT resolution. Never
+    // accept two independently-supplied ids, and never re-resolve per column. **BAL-412**
+    // (settlement) and every reporting reader consume `engagement_id` AS GIVEN and must not
+    // re-derive it through the seam — that would hide a divergence rather than catch it.
+    // The gap is pinned by the divergence test in credit-sessions.integration.test.ts.
+    //
     // RESTRICT on both — never orphan a money row (the rule at the top of this file).
     meetingId: uuid('meeting_id').references(() => meetings.id, { onDelete: 'restrict' }),
     // DENORMALISED DELIBERATELY (ADR-1045 §3): the money and reporting paths query this

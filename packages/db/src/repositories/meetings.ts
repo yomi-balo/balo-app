@@ -211,9 +211,16 @@ export const meetingsRepository = {
    *      `meeting_contexts.deleted_at IS NULL` independently of the parent. Leaving the
    *      children live keeps a soft-deleted meeting's context rows visible — an engagement
    *      would keep reporting a context row pointing at a meeting nobody can load.
-   *   2. RE-ATTACHING TO THE **SAME** MEETING. This is the case the triple index really
-   *      does block: with the child left live, re-attaching that exact context to that
-   *      exact meeting raises `23505`.
+   *   2. RE-ATTACHING TO THE **SAME** MEETING WOULD SILENTLY RETURN A STALE ROW. This is
+   *      the case the triple index really does block — but it does NOT surface as `23505`
+   *      through the seam (an earlier draft of this comment claimed it did). Probed on
+   *      Postgres 16: `attach` carries `onConflictDoNothing` with an arbiter matching
+   *      `meeting_context_unique_idx`, so the INSERT reports `INSERT 0 0` and returns no
+   *      row; `attach`'s follow-up SELECT (filtered `deleted_at IS NULL`) then finds the
+   *      live orphan sitting on the soft-deleted meeting and hands THAT back, as though a
+   *      fresh attachment had just succeeded. `23505` only escapes from a bare insert with
+   *      no arbiter. So the failure is not a loud error the caller can branch on — it is a
+   *      resurrected row pointing at a meeting nobody can load.
    */
   async softDelete(id: string): Promise<void> {
     await db.transaction(async (tx) => {

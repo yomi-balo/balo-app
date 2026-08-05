@@ -315,6 +315,38 @@ describe('meetingPresenceRepository.clocks', () => {
     expect(clocks.billableMs).toBeLessThan(24 * 60 * MIN);
   });
 
+  it('DOCBLOCK PIN — the dropped-webhook over-bill is 16 HOURS (anchored at the join), not 15.5', async () => {
+    // `resolveClockCeiling`'s worked example, EXECUTED so the number cannot drift: a prose
+    // example that was never run shipped the wrong number once already. The call really ran
+    // 10:00 → 10:30 but BOTH `participant-left` webhooks were lost, so both intervals are
+    // still open. A settlement job at 02:00 the next morning measures the SPAN from the
+    // FIRST both-present instant — the 10:00 JOIN — to that ceiling: SIXTEEN hours. 15.5h
+    // would be the overshoot PAST the true 10:30 end, which is not what the clock measures.
+    // The 02:00 wall clock is supplied explicitly because the real one moves; the ceiling
+    // `resolveClockCeiling` actually resolves for a terminal meeting is asserted after it.
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', outcome: 'completed', endedAt: at(30) },
+    });
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, client.id, 'client', 0);
+
+    // T0 is 10:00, so 02:00 the next morning is T0 + 16h — pinned, not assumed.
+    const twoAmNextMorning = at(16 * 60);
+    expect(twoAmNextMorning.toISOString()).toBe('2026-07-02T02:00:00.000Z');
+
+    const wallClockCeiling = await meetingPresenceRepository.clocks(meeting.id, twoAmNextMorning);
+    expect(wallClockCeiling.billableMs).toBe(16 * 60 * MIN);
+    // The anchor is the 10:00 JOIN, not the 10:30 end — that is WHY it is 16h and not 15.5h.
+    expect(wallClockCeiling.billableStartedAt).toEqual(at(0));
+
+    // What the repository does instead: `ended_at` is the ceiling ⇒ the true 30 minutes.
+    const settlementCeiling = await meetingPresenceRepository.clocks(meeting.id);
+    expect(settlementCeiling.billableMs).toBe(30 * MIN);
+  });
+
   it('a RUNNING meeting still measures open intervals to the wall clock (BAL-403 in-session)', async () => {
     // Not terminal ⇒ "to now" is the correct, wanted behaviour: an in-session panel must
     // see the clock advancing. Joins are anchored to the real clock so the assertion is

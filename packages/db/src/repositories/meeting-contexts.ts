@@ -63,8 +63,9 @@ export class MeetingAdminContextExistsError extends Error {
  * TENANT does not raise `23503` — it **succeeds silently**. `listMeetingsForContext` would
  * hand back another tenant's meetings including `join_url`/`daily_room_name` (call-join
  * credentials); `attach` would forge a context row that feeds
- * `consultationTimestampsForEngagements` and can pin a victim's case open forever via
- * `isCaseInactive`.
+ * `consultationTimestampsForEngagements` and hold a victim's case open via `isCaseInactive`
+ * for as long as that forged `scheduled_start` stays in the future — renewable at will by
+ * forging another.
  *
  * EVERY CALLER MUST resolve the context's owning party and check `hasCapability` BEFORE
  * passing `contextId` in. That check belongs in the service / server-action layer, not
@@ -223,7 +224,27 @@ export const meetingContextsRepository = {
    *    on `credit_sessions.ended_at` would make such a case look never-consulted and
    *    auto-close it.
    *  - `nextScheduledConsultationAt` = `MIN(meetings.scheduled_start)` over live meetings
-   *    with `scheduled_start > now` in a NON-TERMINAL status.
+   *    with `scheduled_start > now` AND `status IN ('scheduled',
+   *    'waiting_for_participants')` — THE TWO STATUSES NAMED, never "a non-terminal
+   *    status". `meeting_status` is `scheduled | waiting_for_participants | in_progress |
+   *    ended`, of which only `ended` is terminal, so "non-terminal" would also mean
+   *    `in_progress` — which this filter deliberately EXCLUDES. The anchor means UPCOMING,
+   *    and a meeting already running is not upcoming. Probed on Postgres 16 with one
+   *    future-dated meeting per status: `scheduled` → the timestamp,
+   *    `waiting_for_participants` → the timestamp, `in_progress` → NULL, `ended` → NULL.
+   *
+   * ⚠ THE BOUNDARY THAT FALLS OUT OF THAT, ASSIGNED TO **BAL-425/BAL-420** IN WRITING. An
+   * `in_progress` meeting contributes to NEITHER anchor — not to
+   * `nextScheduledConsultationAt` (not upcoming) and not to `lastCompletedConsultationAt`
+   * (not `ended`) — so a case whose only activity is a consultation running RIGHT NOW reads
+   * as having none. `isCaseInactive` then falls back to `caseInactivityAnchor`'s
+   * `engagements.created_at`, so a case created ≥ `CASE_INACTIVITY_DAYS` ago whose FIRST
+   * consultation is in progress is eligible for auto-close MID-CALL. Widening the filter is
+   * not this seam's call to make (the anchor's meaning is "upcoming"); the sweep must handle
+   * it — by excluding engagements with a live `in_progress` meeting from its candidate list,
+   * or by deciding explicitly that the exposure is acceptable. Stated here, in the same
+   * register as the tenancy obligation above, so it is not rediscovered as a case that
+   * closed itself while two people were talking.
    *
    * Enum literals at QUERY time are always safe — the house restriction is on index
    * predicates and CHECKs only.

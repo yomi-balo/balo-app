@@ -123,7 +123,7 @@ CREATE INDEX "meeting_presence_meeting_party_idx" ON "meeting_presence" USING bt
 CREATE INDEX "meeting_presence_open_idx" ON "meeting_presence" USING btree ("meeting_id") WHERE "meeting_presence"."left_at" IS NULL AND "meeting_presence"."deleted_at" IS NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "meeting_presence_one_open_per_user_idx" ON "meeting_presence" USING btree ("meeting_id","user_id") WHERE "meeting_presence"."left_at" IS NULL AND "meeting_presence"."deleted_at" IS NULL;--> statement-breakpoint
 
--- ── 5. ORPHAN HANDLING (meeting_guests) — see header block A. NOT emitted by drizzle. ──
+-- ── 5. ORPHAN HANDLING (meeting_guests) — see header block B. NOT emitted by drizzle. ──
 DELETE FROM "meeting_guests";--> statement-breakpoint
 
 -- ── 6. meeting_guests — the dangling no-FK stub becomes a real FK ──

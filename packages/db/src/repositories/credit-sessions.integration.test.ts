@@ -37,6 +37,7 @@ import { toClientMoneyBlock } from './_shared/credit-views';
 import { creditLedgerRepository } from './credit-ledger';
 import { creditReceivablesRepository } from './credit-receivables';
 import { creditHoldsRepository } from './credit-holds';
+import { meetingContextsRepository } from './meeting-contexts';
 import { creditWalletsRepository } from './credit-wallets';
 
 /**
@@ -1211,9 +1212,10 @@ describe('creditSessionsRepository.open — meetingId / engagementId (BAL-418)',
     expect(persisted?.engagementId).toBe(engagement.id);
   });
 
-  it('accepts EITHER column alone — the two are independent, with no coherence CHECK', async () => {
+  it('accepts EITHER column alone — their NULLABILITY is independent (no CHECK relates them)', async () => {
     // A `duration_source='external'` session is a real consultation on an outside tool:
-    // an engagement and NO Balo meeting. That combination must be storable.
+    // an engagement and NO Balo meeting. That combination must be storable. This says
+    // NOTHING about the both-set case — see the divergence test below.
     const ctx = await setup({ balanceMinor: 50_000 });
     const { engagement } = await caseEngagementFactory();
 
@@ -1265,5 +1267,58 @@ describe('creditSessionsRepository.open — meetingId / engagementId (BAL-418)',
         meetingId: randomUUID(),
       })
     ).rejects.toMatchObject({ code: '23503' });
+  });
+
+  it('DIVERGENCE IS UNDETECTED — a wrong engagementId is accepted, and the two read paths then disagree', async () => {
+    // THE GAP THIS PINS: nothing checks that `engagement_id` is the engagement reachable
+    // via `meeting_id` → `meeting_contexts.context_id`. It CANNOT be a DB constraint (the
+    // predicate is cross-table — see the ruling on schema/credit-sessions.ts), so coherence
+    // is the SINGLE WRITE PATH's obligation, carried by BAL-400 (booking) with BAL-129
+    // supplying the meeting. If a future writer establishes the invariant, DELETE this test
+    // deliberately — do not weaken it into passing.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const contextEngagement = (await caseEngagementFactory()).engagement; // the meeting's real subject
+    const otherEngagement = (await caseEngagementFactory()).engagement; // an unrelated case
+    const meetingEndedAt = new Date(BASE.getTime() - 60 * 60_000);
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: contextEngagement.id }],
+      values: {
+        status: 'ended',
+        outcome: 'completed',
+        scheduledStart: new Date(BASE.getTime() - 2 * 60 * 60_000),
+        scheduledEnd: meetingEndedAt,
+        endedAt: meetingEndedAt,
+      },
+    });
+
+    // Accepted today: both FKs resolve, and NOTHING relates the two values.
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      meetingId: meeting.id,
+      engagementId: otherEngagement.id,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.session.engagementId).toBe(otherEngagement.id);
+
+    const sessionEndedAt = new Date(BASE.getTime() + 30 * 60_000);
+    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.end(res.session.id, { now: sessionEndedAt });
+
+    // THE CONSEQUENCE, on a LIVE reader. BAL-425's sweep resolves through the seam, so this
+    // money row's `ended_at` lands on the MEETING's engagement — while money and reporting,
+    // which read `engagement_id`, attribute the very same session to the other one.
+    const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
+      [contextEngagement.id, otherEngagement.id],
+      new Date(BASE.getTime() + 60 * 60_000)
+    );
+    expect(anchors.get(contextEngagement.id)?.lastCompletedConsultationAt?.getTime()).toBe(
+      sessionEndedAt.getTime()
+    );
+    expect(anchors.get(otherEngagement.id)?.lastCompletedConsultationAt).toBeNull();
   });
 });

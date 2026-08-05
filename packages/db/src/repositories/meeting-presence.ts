@@ -36,9 +36,12 @@ function userIdMatches(userId: string | null): SQL | undefined {
  *
  * ⚠ WHY THIS IS NOT JUST `new Date()`. An interval with `left_at IS NULL` runs to whatever
  * instant it is measured against — forever. If both Daily `participant-left` webhooks are
- * dropped on a call that really ended at 10:30, a settlement job running at 02:00 the next
- * morning would compute a 15.5-hour `billableMs` instead of 30 minutes. The clock is a
- * SPAN, so that is a silent, large OVER-BILL against a real client.
+ * dropped on a call that ran 10:00 → 10:30, a settlement job running at 02:00 the next
+ * morning would compute a 16-hour `billableMs` instead of 30 minutes. SIXTEEN, not the
+ * 15.5 of overshoot past the true end: the clock is a SPAN anchored at the FIRST
+ * both-present instant — the 10:00 JOIN — so it runs 10:00 → 02:00 in full. A silent,
+ * large OVER-BILL against a real client. Both numbers are PINNED by the docblock test in
+ * `meeting-presence.integration.test.ts` so this example cannot drift.
  *
  * So: once the meeting is TERMINAL, the wall clock is no longer a legitimate ceiling —
  * `meetings.ended_at` is. Falling back to the wall clock is correct ONLY while the meeting
@@ -88,6 +91,17 @@ async function resolveClockCeiling(meetingId: string): Promise<Date> {
  * Clamping presence to the meeting window is **BAL-134's** (it owns the webhook writes) with
  * **BAL-412** holding the settlement-side cap. Assigned here in writing so it is not
  * rediscovered as a billing incident.
+ *
+ * ⚠ ADR-1030 RESIDUAL, ASSIGNED IN WRITING. The system-actor attribution exemption stated on
+ * the `meeting_presence` schema docblock covers the MACHINE path ONLY — `open`/`close` are
+ * webhook seams with no human actor, and this ticket ships no `adjust`. A HUMAN-INITIATED
+ * presence write is a different class: an admin correcting an interval to fix a disputed bill
+ * is a PERSON CHANGING A MONEY INPUT and is NOT exempt — it must carry an actor and write an
+ * `audit_events` row in the SAME transaction as the correction, per ADR-1030's floor+ceiling
+ * spine, composed at the action layer (ADR-1030 keeps repositories actor-agnostic, so the
+ * actor threads in from the caller, as `recordDeliveryAudit` does). **BAL-134 owns this if it
+ * adds a manual correction path; BAL-412 owns it if settlement does.** Assigned here so it is
+ * not rediscovered as a billing incident.
  */
 export const meetingPresenceRepository = {
   /**

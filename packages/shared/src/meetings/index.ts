@@ -13,12 +13,16 @@
  * every network blip, i.e. under-bill.
  *
  * ⚠ AND THE SAME CHOICE CUTS THE OTHER WAY — STATED EXPLICITLY SO NOBODY DISCOVERS IT VIA
- * AN INVOICE. Gap-inclusive means a gap of ANY size is inside the span. A client present
- * 0→2 min and again 58→60 min of a 60-minute call yields `billableMs = 58 min`, NOT 4.
- * That IS the intended semantics: the expert held the slot for the whole hour, and a rule
- * that pauses billing during a gap is precisely the rule a party could exploit by
- * dropping. But it is a real exposure at the long end, and a PURE function is the wrong
- * place for policy — it reports the span faithfully and caps nothing.
+ * AN INVOICE. Gap-inclusive means a gap of ANY size is inside the span. On a 60-minute
+ * call with the expert present throughout, a client present 2→4 min and again 58→60 min
+ * yields `billableMs = 58 min` — the SPAN 2→60 — NOT the 4 min a sum-of-intervals would
+ * give. (The anchor is the FIRST both-present instant, not the call start: had that client
+ * instead joined at minute 0, the span would be the full 60.) That IS the intended
+ * semantics: the expert held the slot for the whole hour, and a rule that pauses billing
+ * during a gap is precisely the rule a party could exploit by dropping. But it is a real
+ * exposure at the long end, and a PURE function is the wrong place for policy — it reports
+ * the span faithfully and caps nothing. Both numbers are PINNED by tests in `index.test.ts`
+ * so this paragraph cannot drift from the behaviour.
  *
  * ⚠ THE POLICY CAP IS ASSIGNED: **BAL-412** (settlement) holds it and already carries
  * `effectiveCeilingMinor` as the money-side backstop; **BAL-134** clamps presence to the
@@ -62,9 +66,55 @@ interface Span {
 
 /**
  * Project one party's intervals onto closed epoch-ms spans. An OPEN interval
- * (`leftAt === null`) runs to `now`. `end` is clamped to `start` so a still-future open
- * interval, or a malformed `leftAt < joinedAt` row the DB CHECK would have rejected,
- * degrades to a zero-length span instead of a negative one.
+ * (`leftAt === null`) runs to `now`.
+ *
+ * ⚠ AN INTERVAL WITH A NON-FINITE ENDPOINT IS SKIPPED ENTIRELY — not clamped, not
+ * zero-lengthed. An Invalid `joinedAt`/`leftAt` (or an Invalid `now` closing an open
+ * interval) yields NaN, and NaN has NO POSITION ON THE TIMELINE: it cannot be ordered.
+ * Left in, it reaches `merge`'s `(a, b) => a.start - b.start` as an INCONSISTENT
+ * COMPARATOR — every comparison involving it returns NaN, which the sort reads as "not
+ * greater than zero", so the corrupt element keeps whatever position the CALLER's array
+ * gave it. The merged spans, and therefore the clocks of the VALID rows around it, then
+ * depend on INPUT ORDER. Executed over all six orderings of the three-interval scenario in
+ * `index.test.ts`: with this guard removed, three orderings return `expertPresentMs =
+ * 20 min / billableMs = 10 min` and the other three return `NaN / 0`. SO WHAT THE GUARD
+ * BUYS IS DETERMINISM PLUS A NON-NaN RESULT — not the avoidance of one particular wrong
+ * number. A zero-length span at an unknown instant would be meaningless anyway, so the row
+ * contributes nothing at all.
+ *
+ * DEFENSIVE — BUT NOT FOR THE REASON AN EARLIER DRAFT OF THIS BLOCK GAVE. It claimed the
+ * columns are `timestamp NOT NULL` "so Postgres cannot hand us an Invalid Date". That is
+ * false twice over: `NOT NULL` governs NULL, not validity, and Postgres REPRESENTS instants
+ * JavaScript cannot. Round-tripped through Postgres 16 + postgres-js 3.4.8, `'infinity'`,
+ * `'-infinity'`, `'294276-12-31 23:59:59+00'` (pg's max) and `'4713-01-01 BC'` (pg's min)
+ * EVERY ONE parses to an Invalid Date — `getTime()` is NaN — while `'275760-09-12'`, just
+ * inside JS's ±8.64e15 ms range, parses finite. Nor does the CHECK
+ * `meeting_presence_left_after_joined` stop it: `left_at = 'infinity'` is ACCEPTED, because
+ * `infinity >= joined_at` is TRUE in Postgres.
+ *
+ * WHAT ACTUALLY KEEPS IT OFF THE LIVE PATH IS THE WRITE SIDE, at the driver. postgres-js
+ * serializes a bind parameter as `(x instanceof Date ? x : new Date(x)).toISOString()`,
+ * which THROWS `RangeError: Invalid time value` on an Invalid Date (and Postgres itself
+ * rejects a JS-max `Date` with `time zone displacement out of range`). So
+ * `meetingPresenceRepository.open()`/`close()` structurally CANNOT WRITE such a value —
+ * only raw SQL, a manual operator action, or a future non-Drizzle writer could. The
+ * conclusion ("defensive, not a live path") survives and is better founded than the claim
+ * it replaces. The other reachable source is this module's own client-bundle surface
+ * (`@balo/shared/meetings`, for BAL-403's in-session panel), where a caller constructs
+ * `Date`s with no driver in the way at all.
+ *
+ * ⚠ THE RESIDUAL, STATED RATHER THAN HIDDEN: an Invalid `now` makes EVERY still-open
+ * interval non-finite, so the guard drops them ALL and returns a plausible FINITE number
+ * where the pre-guard code returned NaN — a loud failure traded for a quiet wrong one. Not
+ * reachable in production (`resolveClockCeiling` supplies `meetings.ended_at` or
+ * `new Date()`), and PINNED by a test in `index.test.ts` so it cannot become a surprise.
+ *
+ * ⚠ SURFACING A DROPPED INTERVAL IS THE CALLER'S OBLIGATION, ASSIGNED IN WRITING — this is
+ * a PURE function: it cannot log, and throwing on a billing read is worse than dropping an
+ * uninterpretable row. **BAL-134** (which writes presence) must reject a non-finite
+ * timestamp at the webhook write seam; **BAL-412** (which settles) must not settle on
+ * intervals it did not verify. Same assignment as the window-clamp and policy-cap
+ * obligations stated at the top of this file.
  */
 function toSpans(
   intervals: readonly PresenceInterval[],
@@ -78,14 +128,15 @@ function toSpans(
     }
     const start = interval.joinedAt.getTime();
     const rawEnd = interval.leftAt === null ? nowMs : interval.leftAt.getTime();
-    // DO NOT "simplify" this ternary to Math.max(start, rawEnd). SonarCloud S6836 suggests
-    // it; the two are NOT equivalent on this billing path. An Invalid Date makes `start`
-    // NaN: the ternary keeps the finite `rawEnd`, Math.max propagates NaN. NaN then poisons
-    // the sort comparator in `mergeSpans`, so the corrupt row need not sort first and a
-    // *different finite* first.start survives — measured as a silent 40-minute swing in
-    // billableMs (50min vs 10min) with no NaN downstream for BAL-412 settlement to catch.
-    // Clamping instead of maxing keeps a garbage row zero-length rather than contagious.
-    spans.push({ start, end: rawEnd < start ? start : rawEnd });
+    if (!Number.isFinite(start) || !Number.isFinite(rawEnd)) {
+      continue;
+    }
+    // The finite guard above is what makes `Math.max` safe here — with both operands
+    // finite it cannot propagate NaN, so it is exactly a clamp of `end` up to `start`. It
+    // degrades a still-future open interval, or a malformed `leftAt < joinedAt` row that
+    // the DB CHECK `meeting_presence_left_after_joined` already rejects (so this too is
+    // defensive), to a ZERO-LENGTH span rather than a negative one.
+    spans.push({ start, end: Math.max(start, rawEnd) });
   }
   return spans;
 }

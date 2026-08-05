@@ -10,8 +10,14 @@ import { timestamps, softDelete } from './helpers';
  * pair), never a per-participant aggregate. This is what makes BAL-134's TWO CLOCKS
  * computable and BAL-412's settlement readable:
  *
- *   expertPresentMs = last expert leave      − FIRST expert join                 (gap-inclusive)
+ *   expertPresentMs = last expert PRESENCE   − FIRST expert join                 (gap-inclusive)
  *   billableMs      = last instant both sides present − FIRST such instant       (gap-inclusive)
+ *
+ * "last expert PRESENCE", never "last expert leave": an interval with `left_at IS NULL` has
+ * no leave, and its end is whatever instant the clock is measured against. That is exactly
+ * the dropped-leave-webhook case the over-bill hazard on `resolveClockCeiling` is about, so
+ * the wording is load-bearing — an expert whose only interval is still open, measured at
+ * minute 45, reports `expertPresentMs = 45 min`, sourced from `now`.
  *
  * WHY PER-INTERVAL. A single mutable row per participant (`joined_at`/`left_at`) has no
  * non-lossy answer to a rejoin: overwrite `joined_at` and the first interval is lost;
@@ -25,14 +31,18 @@ import { timestamps, softDelete } from './helpers';
  * restart the billable timer". `SUM(left_at − joined_at)` would silently SHORTEN a call
  * for every network blip, i.e. under-bill.
  *
- * ⚠ THE SAME CHOICE CUTS BOTH WAYS. Gap-inclusive bills a gap of ANY size: a client
- * present 0→2 min and again 58→60 min of a 60-minute call yields `billableMs = 58 min`,
- * NOT 4. That IS the intended semantics — the expert held the slot for the whole hour, and
- * a rule that pauses billing during a gap is the rule a party could exploit by dropping —
- * but it is a real exposure at the long end. The POLICY CAP is **BAL-412's** (settlement,
- * which already carries `effectiveCeilingMinor`), with **BAL-134** clamping presence to
- * the meeting window on the write side. Neither this table nor the pure clock caps
- * anything: the only DB CHECK here is `left_at >= joined_at`.
+ * ⚠ THE SAME CHOICE CUTS BOTH WAYS. Gap-inclusive bills a gap of ANY size: on a 60-minute
+ * call with the expert present throughout, a client present 2→4 min and again 58→60 min
+ * yields `billableMs = 58 min` — the SPAN 2→60 — NOT the 4 min a sum-of-intervals would
+ * give. (The anchor is the FIRST both-present instant, not the call start: had that client
+ * instead joined at minute 0, the span would be the full 60.) That IS the intended
+ * semantics — the expert held the slot for the whole hour, and a rule that pauses billing
+ * during a gap is the rule a party could exploit by dropping — but it is a real exposure at
+ * the long end. The POLICY CAP is **BAL-412's** (settlement, which already carries
+ * `effectiveCeilingMinor`), with **BAL-134** clamping presence to the meeting window on the
+ * write side. Neither this table nor the pure clock caps anything: the only DB CHECK here
+ * is `left_at >= joined_at`. Both numbers are PINNED by tests in
+ * `packages/shared/src/meetings/index.test.ts`.
  *
  * The clock computation itself is PURE and lives in `@balo/shared/meetings`
  * (`computeMeetingClocks`), NOT in `@balo/db`, so BAL-403's in-session client panel can
@@ -41,6 +51,33 @@ import { timestamps, softDelete } from './helpers';
  * the storage and the read; BAL-134 owns the WRITE logic.
  *
  * NO RLS (matching `meetings` / `meeting_contexts` and the credit precedents).
+ *
+ * ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION (owner-ruled; the same ruling as BAL-387's
+ * transcript pipeline and BAL-420's `auto_inactive` case close). Presence is a MACHINE
+ * OBSERVATION — BAL-134's Daily `participant-joined`/`participant-left` webhooks — so there
+ * is no human actor to name, and the write is exempt from durable ATTRIBUTION because all
+ * three prongs hold: (1) it changes no party's authority or capability (a presence row
+ * grants nothing; host rights are ADR-1046/BAL-413's `hasEngagementCapability`); (2) NO
+ * MONEY MOVES OR ACCRUES HERE — this table is a billing INPUT, not a money action, exactly
+ * as `credit_holds` is ("a hold moves no money; ADR-1030 audit is for money actions"), and
+ * the money event it feeds is BAL-412's settlement, which carries its own ADR-1030 floor
+ * (`credit_ledger.member_id`) and ceiling (`credit_wallet.consumed` / `.settled`); (3) it
+ * writes no party-visible domain row directly — presence reaches a party only THROUGH that
+ * settled amount, and the obligation to audit it is the settlement's, not this table's.
+ *
+ * ⚠ `user_id` IS THE SUBJECT, NOT THE ACTOR. It records who was OBSERVED in the room, never
+ * who performed a write, so ADR-1030's "actor FKs are ON DELETE restrict" convention does
+ * not govern it — and `set null` + `party` is strictly BETTER for the billing record than
+ * restrict would be: restrict would BLOCK a user hard-delete, `set null` PRESERVES the
+ * interval and its side. For the same reason NO `created_by_user_id` is added: the only
+ * honest value a webhook could write is NULL forever, and an attribution column with no
+ * writer is a worse lie than its absence.
+ *
+ * The exemption is from ATTRIBUTION, NOT from evidence. The interval rows ARE the durable,
+ * dispute-grade billing record — append-then-close, soft-delete only, surviving actor
+ * deletion — which meets ADR-1030's purpose structurally rather than with an `audit_events`
+ * row per webhook. Per-join/leave rows would be machine telemetry, which ADR-1030 routes to
+ * Pino/Axiom and explicitly keeps out of Postgres.
  */
 export const meetingPresence = pgTable(
   'meeting_presence',

@@ -38,8 +38,9 @@ import { timestamps, softDelete } from './helpers';
  *      `daily_room_name`, which are call-JOIN CREDENTIALS.
  *   2. WRITE — `attach({ contextType: 'case', contextId: <victim's engagement id> })`
  *      forges a context row that feeds `consultationTimestampsForEngagements`; one future
- *      `scheduled_start` makes `isCaseInactive` return false and pins the victim's case
- *      open indefinitely, without the attacker ever touching a row they own.
+ *      `scheduled_start` makes `isCaseInactive` return false and holds the victim's case
+ *      open for as long as that forged `scheduled_start` stays in the future — renewable at
+ *      will by forging another, without the attacker ever touching a row they own.
  *
  * THEREFORE: every caller of `meetingsRepository.create`, `meetingContextsRepository.attach`
  * / `listByMeeting` / `listMeetingsForContext` / `consultationTimestampsForEngagements`

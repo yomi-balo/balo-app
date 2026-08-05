@@ -134,11 +134,24 @@ export interface OpenSessionInput {
   baloFeeBps?: number;
   /**
    * BAL-418 seam (ADR-1045 §3) — the meeting this session bills, and the DENORMALISED
-   * engagement. BOTH OPTIONAL and INDEPENDENT (no coherence CHECK): a
-   * `duration_source='external'` session is a real consultation on an outside tool with
-   * an engagement and NO Balo meeting. Written here, at `open` (inside the wallet
-   * advisory lock), rather than left to a later `UPDATE` — which would be a SECOND write
-   * on the money path, OUTSIDE that lock.
+   * engagement. Written HERE, at `open` (inside the wallet advisory lock) and NOWHERE
+   * ELSE: no UPDATE path touches either column, so this call site is the ONLY place their
+   * coherence can be established. Leaving them to a later `UPDATE` would additionally be a
+   * SECOND write on the money path, OUTSIDE that lock.
+   *
+   * BOTH OPTIONAL, and their NULLABILITY is independent — a `duration_source='external'`
+   * session is a real consultation on an outside tool with an engagement and NO Balo
+   * meeting, and every session written today passes neither.
+   *
+   * ⚠ THEIR VALUES ARE NOT INDEPENDENT. When BOTH are supplied they MUST come from ONE
+   * resolution: `engagementId` must be the engagement reachable from `meetingId` via
+   * `meeting_contexts`, and `companyId`/`expertProfileId` must be that engagement's
+   * parties. Nothing here can check it — the predicate is cross-table and cannot be a CHECK,
+   * an FK, or (by house style) a repository gate; the full ruling is on
+   * `schema/credit-sessions.ts`. A divergent pair bills one engagement while BAL-425's
+   * sweep, which resolves through the seam, ages out another. CARRIED BY **BAL-400**
+   * (booking — the first caller to pass both) with **BAL-129** supplying the meeting;
+   * **BAL-412** and reporting consume `engagement_id` as given.
    */
   meetingId?: string | null;
   engagementId?: string | null;
