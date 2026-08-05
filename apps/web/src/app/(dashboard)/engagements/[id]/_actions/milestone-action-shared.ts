@@ -9,6 +9,7 @@ import {
   type EngagementMilestoneStatus,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
+import type { MilestoneChangeKind } from '@balo/shared/notifications';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import {
   deriveEngagementParties,
@@ -352,9 +353,9 @@ export async function runExpertEngagementAction(
   perform: (authorized: AuthorizedEngagement) => Promise<MilestoneActionResult>
 ): Promise<MilestoneActionResult> {
   const logContext: Record<string, unknown> =
-    opts.milestoneId !== undefined
-      ? { milestoneId: opts.milestoneId, userId: user.id }
-      : { userId: user.id };
+    opts.milestoneId === undefined
+      ? { userId: user.id }
+      : { milestoneId: opts.milestoneId, userId: user.id };
   return runAuthorizedEngagementAction<AuthorizedEngagement>(
     engagementId,
     logContext,
@@ -377,14 +378,14 @@ export async function runExpertEngagementAction(
  * reads as "revised" (not "updated") so the notification body — "{expert} updated the
  * delivery plan: {summary}" — doesn't double up to "updated … updated 'X'".
  */
-const CHANGE_SUMMARY_VERB: Record<'added' | 'edited' | 'removed', string> = {
+const CHANGE_SUMMARY_VERB: Record<MilestoneChangeKind, string> = {
   added: 'added',
   removed: 'removed',
   edited: 'revised',
 };
 
 /** `added 'X'` | `removed 'X'` | `revised 'X'` — the single change-summary builder. */
-export function buildChangeSummary(kind: 'added' | 'edited' | 'removed', title: string): string {
+export function buildChangeSummary(kind: MilestoneChangeKind, title: string): string {
   return `${CHANGE_SUMMARY_VERB[kind]} '${title}'`;
 }
 
@@ -399,7 +400,7 @@ export function buildChangeSummary(kind: 'added' | 'edited' | 'removed', title: 
 export async function publishScopeChange(
   engagement: ProjectEngagementWithMilestones,
   input: {
-    changeKind: 'added' | 'edited' | 'removed';
+    changeKind: MilestoneChangeKind;
     milestoneId: string;
     milestoneTitle: string;
     correlationId: string;
