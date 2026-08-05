@@ -12,7 +12,9 @@ import { relations, sql } from 'drizzle-orm';
 import { creditWallets } from './credit-wallets';
 import { creditHolds } from './credit-holds';
 import { companies } from './companies';
+import { engagements } from './engagements';
 import { expertProfiles } from './experts';
+import { meetings } from './meetings';
 import { users } from './users';
 import {
   creditSessionStatusEnum,
@@ -141,6 +143,19 @@ export const creditSessions = pgTable(
     // Settlement PaymentIntent (reconciliation; NEVER client-facing).
     stripePaymentIntentId: text('stripe_payment_intent_id'),
 
+    // ── BAL-418 / ADR-1045 §3 — the meeting link + the denormalised engagement ──
+    // Both NULLABLE and INDEPENDENT (NO coherence CHECK between them): a
+    // `duration_source='external'` session (BAL-399/BAL-133) is a real consultation on an
+    // OUTSIDE tool, with an engagement and NO Balo meeting. BAL-401's `company_id` already
+    // carries the capability scope, so neither column is load-bearing for authorization.
+    // RESTRICT on both — never orphan a money row (the rule at the top of this file).
+    meetingId: uuid('meeting_id').references(() => meetings.id, { onDelete: 'restrict' }),
+    // DENORMALISED DELIBERATELY (ADR-1045 §3): the money and reporting paths query this
+    // constantly and must not pay session → meeting → context → engagement.
+    engagementId: uuid('engagement_id').references(() => engagements.id, {
+      onDelete: 'restrict',
+    }),
+
     ...timestamps,
     ...softDelete,
   },
@@ -172,6 +187,13 @@ export const creditSessions = pgTable(
       'credit_sessions_overdraft_settled_nonneg',
       sql`${t.overdraftSettledMinor} IS NULL OR ${t.overdraftSettledMinor} >= 0`
     ),
+    // BAL-425: "last completed consultation" for a meeting. Covering (meeting_id, ended_at).
+    index('credit_sessions_meeting_idx')
+      .on(t.meetingId, t.endedAt)
+      .where(sql`${t.meetingId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+    index('credit_sessions_engagement_idx')
+      .on(t.engagementId)
+      .where(sql`${t.engagementId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
   ]
 );
 
@@ -197,6 +219,15 @@ export const creditSessionsRelations = relations(creditSessions, ({ one }) => ({
   hold: one(creditHolds, {
     fields: [creditSessions.holdId],
     references: [creditHolds.id],
+  }),
+  // BAL-418 — the meeting this session billed, and its denormalised engagement.
+  meeting: one(meetings, {
+    fields: [creditSessions.meetingId],
+    references: [meetings.id],
+  }),
+  engagement: one(engagements, {
+    fields: [creditSessions.engagementId],
+    references: [engagements.id],
   }),
 }));
 

@@ -132,6 +132,16 @@ export interface OpenSessionInput {
   estimatedMinutes: number;
   /** Fee snapshot; defaults to `DEFAULT_BALO_FEE_BPS` (BAL-378 Decision Q4). */
   baloFeeBps?: number;
+  /**
+   * BAL-418 seam (ADR-1045 §3) — the meeting this session bills, and the DENORMALISED
+   * engagement. BOTH OPTIONAL and INDEPENDENT (no coherence CHECK): a
+   * `duration_source='external'` session is a real consultation on an outside tool with
+   * an engagement and NO Balo meeting. Written here, at `open` (inside the wallet
+   * advisory lock), rather than left to a later `UPDATE` — which would be a SECOND write
+   * on the money path, OUTSIDE that lock.
+   */
+  meetingId?: string | null;
+  engagementId?: string | null;
 }
 
 /**
@@ -572,6 +582,9 @@ export const creditSessionsRepository = {
           expertRateMinorPerMinute,
           effectiveCeilingMinor,
           graceBoundMinutes: OVERDRAFT_GRACE_MINUTES,
+          // BAL-418 seam — both nullable, both optional; existing callers are unchanged.
+          meetingId: input.meetingId ?? null,
+          engagementId: input.engagementId ?? null,
         })
         .returning();
       if (session === undefined) {

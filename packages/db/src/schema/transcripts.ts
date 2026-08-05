@@ -11,6 +11,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { engagements } from './engagements';
+import { meetings } from './meetings';
 import { transcriptVendorEnum, transcriptStatusEnum, transcriptArtifactKindEnum } from './enums';
 import { timestamps, softDelete } from './helpers';
 
@@ -71,9 +72,10 @@ export interface ExtractedActionItem {
  * engagement (the only hard context — meetings deferred); the LLM-derived artifacts #2
  * (cleaned) / #3 (summary) live in `transcript_artifacts`.
  *
- * `meeting_id` is a NULLABLE, NO-FK forward seam for the meetings primitive (unbuilt) —
- * mirror `action_items.meeting_id` exactly; do NOT conflate with meeting_guests.meeting_id.
- * The FK is added in a follow-up once the table exists.
+ * `meeting_id` is a NOT NULL FK to `meetings` ON DELETE cascade (BAL-418): a transcript
+ * without a meeting is meaningless, so — unlike `action_items.meeting_id`, which stays
+ * nullable because a manual to-do has no meeting — this anchor is required. Every capture
+ * happens IN a meeting.
  *
  * Stage-gate columns (`action_items_extracted_at`, `recap_ready_published_at`) are durable
  * completion markers: a retried pipeline job short-circuits each stage on its marker so an
@@ -103,8 +105,11 @@ export const transcripts = pgTable(
       .notNull()
       .references(() => engagements.id, { onDelete: 'cascade' }),
 
-    // Forward seam (meetings primitive, unbuilt). NULLABLE, NO FK — the table does not exist yet.
-    meetingId: uuid('meeting_id'),
+    // BAL-418: NOT NULL FK. A transcript without a meeting is meaningless. CASCADE — it
+    // dies with the meeting, matching the engagement cascade above.
+    meetingId: uuid('meeting_id')
+      .notNull()
+      .references(() => meetings.id, { onDelete: 'cascade' }),
 
     // Stable vendor/capture id — the dedup key (partial-unique below) + BullMQ jobId basis.
     captureId: text('capture_id').notNull(),
@@ -143,11 +148,12 @@ export const transcripts = pgTable(
       .on(t.captureId)
       .where(sql`${t.deletedAt} IS NULL`),
     index('transcript_engagement_idx').on(t.engagementId),
-    // Forward seam read (BAL-388 recap by meeting). Partial on non-null meeting + live — mirrors
-    // `action_item_meeting_idx`. Predicate references ONLY meeting_id/deleted_at (the ADD-VALUE house rule).
+    // Meeting-scoped read (BAL-388 recap by meeting). BAL-418 dropped the now-TAUTOLOGICAL
+    // `meeting_id IS NOT NULL` half of the predicate (the column is NOT NULL). Predicate
+    // references ONLY deleted_at (never an enum literal — the ADD-VALUE house rule).
     index('transcript_meeting_idx')
       .on(t.meetingId)
-      .where(sql`${t.meetingId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+      .where(sql`${t.deletedAt} IS NULL`),
   ]
 );
 

@@ -5,7 +5,7 @@
  * `trackServer`. They must NOT be added to `AllEvents` (the client union) nor to the
  * `apps/web/src/test/setup.ts` client mock — that mock is client-only.
  *
- * NO PII: only the engagement id, the meeting id (nullable no-FK seam), the vendor/venue, counts,
+ * NO PII: only the engagement id, the meeting id (BAL-418: a real `meetings.id`), the vendor/venue, counts,
  * elapsed pipeline ms, a free-text failure reason, and a stable system `distinct_id`
  * (`'system:transcript-pipeline'`, since the producer-less pipeline has no human actor) — never a
  * party name/email or transcript content.
@@ -34,7 +34,7 @@ export interface TranscriptServerEventMap {
   };
   [TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_READY]: {
     engagement_id: string;
-    meeting_id: string | null;
+    meeting_id: string;
     vendor: 'daily_deepgram' | 'recall';
     segment_count: number;
     /** Pipeline elapsed ms — answers "how long the pipeline takes". */
@@ -43,7 +43,7 @@ export interface TranscriptServerEventMap {
   };
   [TRANSCRIPT_SERVER_EVENTS.SUMMARY_READY]: {
     engagement_id: string;
-    meeting_id: string | null;
+    meeting_id: string;
     action_item_count: number;
     /** Pipeline elapsed ms. */
     duration_ms: number | null;
@@ -56,7 +56,7 @@ export interface TranscriptServerEventMap {
   };
   [TRANSCRIPT_SERVER_EVENTS.SUMMARY_HEADLINE_SUPPRESSED]: {
     engagement_id: string;
-    meeting_id: string | null;
+    meeting_id: string;
     distinct_id: string;
   };
 }

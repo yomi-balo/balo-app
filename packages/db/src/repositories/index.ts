@@ -408,3 +408,29 @@ export type {
   NewExpertPayoutRecord,
   ExpertPayoutRecordStatus,
 } from '../schema';
+// ── Meetings primitive (BAL-418 / ADR-1045 §2/§3/§6) ───────────────────────
+export {
+  meetingsRepository,
+  MeetingContextRequiredError,
+  type CreateMeetingInput,
+  type MeetingContextInput,
+  type MeetingWithContexts,
+} from './meetings';
+export {
+  meetingContextsRepository,
+  MeetingAdminContextExistsError,
+  type ConsultationTimestamps,
+} from './meeting-contexts';
+export { meetingPresenceRepository, type OpenPresenceInput } from './meeting-presence';
+export type {
+  Meeting,
+  NewMeeting,
+  MeetingStatus,
+  MeetingOutcome,
+  MeetingContext,
+  NewMeetingContext,
+  MeetingContextType,
+  MeetingPresence,
+  NewMeetingPresence,
+  MeetingParticipantParty,
+} from '../schema';

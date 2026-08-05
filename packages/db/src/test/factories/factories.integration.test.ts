@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { userFactory, expertFactory, expertDraftFactory } from './index';
+import { userFactory, expertFactory, expertDraftFactory, meetingFactory } from './index';
 
 describe('Test factories', () => {
   it('userFactory creates a user with an id', async () => {
@@ -25,5 +25,18 @@ describe('Test factories', () => {
     expect(expert.id).toBeDefined();
     expect(expert.applicationStatus).toBe('approved');
     expect(expert.approvedAt).toBeDefined();
+  });
+
+  it('meetingFactory creates a scheduled meeting with ONE case context row', async () => {
+    const { meeting, contexts, caseEngagementId } = await meetingFactory();
+
+    expect(meeting.id).toBeDefined();
+    expect(meeting.status).toBe('scheduled');
+    expect(meeting.outcome).toBeNull();
+    expect(meeting.scheduledStart.getTime()).toBeLessThan(meeting.scheduledEnd.getTime());
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.contextType).toBe('case');
+    expect(contexts[0]?.contextId).toBe(caseEngagementId);
   });
 });

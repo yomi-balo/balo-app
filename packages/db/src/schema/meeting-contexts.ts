@@ -1,0 +1,127 @@
+import { pgTable, uuid, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { meetingContextTypeEnum } from './enums';
+import { meetings } from './meetings';
+import { timestamps, softDelete } from './helpers';
+
+/**
+ * meeting_contexts (BAL-418 / ADR-1045 §2) — THE POLYMORPHIC SEAM. It is the ONLY place
+ * that answers "what is this meeting FOR", which is exactly why `meetings` carries no
+ * context column. Structurally parallel to the `conversation_contexts` table BAL-424 will
+ * build (ADR-1045's 2026-08-03 amendment: "the seam is how ANY cross-cutting primitive
+ * attaches to a context") — copy this shape, do not invent a second one.
+ *
+ * EVERY meeting has ≥1 row here, including an `admin` meeting (whose row carries
+ * `context_type='admin', context_id = NULL`). Rejected the alternative "admin = zero rows"
+ * because it makes "admin meeting" / "context row soft-deleted" / "bug" three states that
+ * look identical to every reader, and it leaves the `admin` enum label dead.
+ *
+ * "≥1 context row" CANNOT be a DB constraint (it needs a deferrable constraint or a
+ * trigger — out of scope). It is enforced at the SINGLE write path:
+ * `meetingsRepository.create` takes a required non-empty `contexts` array and throws
+ * `MeetingContextRequiredError` on an empty one, inside the same transaction as the
+ * `meetings` insert.
+ *
+ * NO RLS (matching `meetings` and the credit/transcript precedents): the boundary is the
+ * application layer.
+ *
+ * ⚠⚠ TENANCY OBLIGATION — THE ONE THING THIS SEAM CANNOT ENFORCE FOR ITSELF.
+ *
+ * `context_id` has NO FOREIGN KEY (it is polymorphic — it targets `engagements.id` OR
+ * `project_requests.id`). That makes it UNLIKE every other id column in this schema: a
+ * uuid belonging to ANOTHER TENANT does not fail, it **succeeds silently**. There is no
+ * `23503` to catch the mistake, and there is no RLS behind it.
+ *
+ * Two concrete consequences, both reachable from a single unchecked `contextId`:
+ *   1. READ — `meetingContextsRepository.listMeetingsForContext('case', <victim's
+ *      engagement id>)` returns another tenant's meetings, INCLUDING `join_url` and
+ *      `daily_room_name`, which are call-JOIN CREDENTIALS.
+ *   2. WRITE — `attach({ contextType: 'case', contextId: <victim's engagement id> })`
+ *      forges a context row that feeds `consultationTimestampsForEngagements`; one future
+ *      `scheduled_start` makes `isCaseInactive` return false and pins the victim's case
+ *      open indefinitely, without the attacker ever touching a row they own.
+ *
+ * THEREFORE: every caller of `meetingsRepository.create`, `meetingContextsRepository.attach`
+ * / `listByMeeting` / `listMeetingsForContext` / `consultationTimestampsForEngagements`
+ * MUST first resolve the context's OWNING PARTY (engagement → `company_id` /
+ * `expert_profile_id`; project request → `company_id`) and check `hasCapability` against it
+ * before passing `contextId` in. That check belongs in the service / server-action layer,
+ * NOT here — authorization is capability-based and resolved at the call site (ADR-1029),
+ * and a gate inside a repository would be the deviation, not the fix.
+ *
+ * CARRIED BY: **BAL-129** (provisioning — the first writer of `create`/`attach`),
+ * **BAL-421** (the case surface — the first caller of `listMeetingsForContext`), and
+ * **BAL-425/BAL-420** (the inactivity sweep — the first caller of
+ * `consultationTimestampsForEngagements`, which must pass only engagement ids it already
+ * scoped). BAL-424 inherits this obligation verbatim when it copies this shape for
+ * `conversation_contexts`.
+ */
+export const meetingContexts = pgTable(
+  'meeting_contexts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    meetingId: uuid('meeting_id')
+      .notNull()
+      .references(() => meetings.id, { onDelete: 'cascade' }),
+
+    contextType: meetingContextTypeEnum('context_type').notNull(),
+
+    // POLYMORPHIC — NO FK BY DESIGN: it targets `engagements.id` OR `project_requests.id`
+    // depending on `context_type` (see `meetingContextTypeEnum`'s docblock for the map).
+    // NULL iff `context_type = 'admin'` (the biconditional CHECK below).
+    contextId: uuid('context_id'),
+
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    // MULTI-CONTEXT (decision D3). Unique on the TRIPLE, never on `meeting_id` alone: a
+    // discovery call anchored to a `project_requests.id` gains a SECOND row for the
+    // engagement at kickoff, so BAL-425's "this engagement's meetings" read finds it.
+    // PARTIAL on deleted_at — memory `reference_softdelete_nonpartial_unique_recreate`.
+    uniqueIndex('meeting_context_unique_idx')
+      .on(t.meetingId, t.contextType, t.contextId)
+      .where(sql`${t.deletedAt} IS NULL`),
+    // Postgres treats NULLs as DISTINCT in a unique index, so the triple above does NOT
+    // stop two `admin` rows on one meeting. This closes it. The predicate uses
+    // `context_id` (never an enum literal — the house rule at `action-items.ts` /
+    // `transcripts.ts`); by the biconditional CHECK below,
+    // `context_id IS NULL` ⟺ `context_type = 'admin'`, so this IS the admin guard.
+    uniqueIndex('meeting_context_admin_uq')
+      .on(t.meetingId)
+      .where(sql`${t.contextId} IS NULL AND ${t.deletedAt} IS NULL`),
+    // THE BAL-425 REVERSE READ: "every meeting for this context".
+    index('meeting_context_reverse_idx')
+      .on(t.contextType, t.contextId)
+      .where(sql`${t.deletedAt} IS NULL`),
+    index('meeting_context_meeting_idx').on(t.meetingId),
+    // NO THREE-VALUED-LOGIC HOLE (same proof as `engagement_balo_fee_bps_case_null`):
+    //   LHS `context_id IS NULL` — IS NULL is total, never yields NULL.
+    //   RHS `context_type = 'admin'` — context_type is NOT NULL and 'admin' is a literal
+    //   ⇒ never NULL.
+    // boolean = boolean over two non-NULL operands ⇒ TRUE or FALSE. It can never "pass by
+    // being unknown".
+    check(
+      'meeting_context_admin_no_id',
+      sql`(${t.contextId} IS NULL) = (${t.contextType} = 'admin')`
+    ),
+  ]
+);
+
+// ── Relations ──────────────────────────────────────────────────────────
+
+export const meetingContextsRelations = relations(meetingContexts, ({ one }) => ({
+  meeting: one(meetings, {
+    fields: [meetingContexts.meetingId],
+    references: [meetings.id],
+  }),
+}));
+
+// ── Type exports ───────────────────────────────────────────────────────
+
+export type MeetingContext = typeof meetingContexts.$inferSelect;
+export type NewMeetingContext = typeof meetingContexts.$inferInsert;
+
+/** What a meeting is FOR (schema-derived — single source of truth). */
+export type MeetingContextType = (typeof meetingContextTypeEnum.enumValues)[number];

@@ -22,6 +22,8 @@ export { engagementMilestoneFactory } from './engagement-milestone.factory';
 export type { EngagementMilestoneFactoryResult } from './engagement-milestone.factory';
 export { actionItemFactory } from './action-item.factory';
 export type { ActionItemFactoryResult } from './action-item.factory';
+export { meetingFactory } from './meeting.factory';
+export type { MeetingFactoryResult, MeetingFactoryContext } from './meeting.factory';
 export { transcriptFactory, transcriptArtifactFactory } from './transcript.factory';
 export type {
   TranscriptFactoryResult,

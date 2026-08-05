@@ -86,11 +86,14 @@ const fakeLlm: LlmClient = {
   }),
 };
 
+/** BAL-418: `transcripts.meeting_id` is a NOT NULL FK → `meetings.id`, so this is never null. */
+const MEETING_ID = '11111111-1111-4111-8111-111111111111';
+
 function makeTranscript(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'tr1',
     engagementId: 'eng1',
-    meetingId: null,
+    meetingId: MEETING_ID,
     vendor: 'daily_deepgram',
     extractedActionItems: null,
     actionItemsExtractedAt: null,
@@ -103,7 +106,7 @@ function makeTranscript(overrides: Record<string, unknown> = {}): Record<string,
 const job: TranscriptPipelineJobInput = {
   captureId: 'cap1',
   engagementId: 'eng1',
-  meetingId: null,
+  meetingId: MEETING_ID,
   vendor: 'daily_deepgram',
   payload: dailyMultiSpeaker,
   recordingRef: null,
@@ -334,7 +337,7 @@ describe('runTranscriptPipeline', () => {
     // Suppression is measurable (so false positives can be tuned).
     expect(trackServer).toHaveBeenCalledWith('summary_headline_suppressed', {
       engagement_id: 'eng1',
-      meeting_id: null,
+      meeting_id: MEETING_ID,
       distinct_id: 'system:transcript-pipeline',
     });
   });

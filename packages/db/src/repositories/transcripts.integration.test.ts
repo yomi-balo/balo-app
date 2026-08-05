@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import { transcripts, engagements, projectEngagements, type CanonicalTranscript } from '../schema';
-import { engagementFactory, transcriptFactory } from '../test/factories';
+import { engagementFactory, meetingFactory, transcriptFactory } from '../test/factories';
 import { transcriptsRepository } from './transcripts';
 
 /** A minimal, valid canonical transcript for insertRaw. */
@@ -25,7 +25,8 @@ describe('transcriptsRepository.insertRaw', () => {
   it('persists the raw canonical transcript with status=processing and filler_words=true', async () => {
     const { engagement } = await engagementFactory();
     const captureId = `capture-${randomUUID()}`;
-    const meetingId = randomUUID();
+    // BAL-418: `meeting_id` is a NOT NULL FK now — a bare `randomUUID()` violates it (23503).
+    const meetingId = (await meetingFactory()).meeting.id;
 
     const created = await transcriptsRepository.insertRaw({
       captureId,
@@ -52,16 +53,19 @@ describe('transcriptsRepository.insertRaw', () => {
   it('is idempotent on capture_id — a second insert returns the SAME row (onConflictDoNothing)', async () => {
     const { engagement } = await engagementFactory();
     const captureId = `capture-${randomUUID()}`;
+    const meetingId = (await meetingFactory()).meeting.id;
 
     const first = await transcriptsRepository.insertRaw({
       captureId,
       engagementId: engagement.id,
+      meetingId,
       vendor: 'recall',
       canonical: canonical(),
     });
     const second = await transcriptsRepository.insertRaw({
       captureId,
       engagementId: engagement.id,
+      meetingId,
       vendor: 'recall',
       canonical: canonical(),
     });
@@ -159,6 +163,7 @@ describe('transcripts — engagement cascade', () => {
     const created = await transcriptsRepository.insertRaw({
       captureId: `capture-${randomUUID()}`,
       engagementId: engagement.id,
+      meetingId: (await meetingFactory()).meeting.id,
       vendor: 'daily_deepgram',
       canonical: canonical(),
     });
