@@ -26,6 +26,9 @@ function contextIdMatches(contextId: string | null): SQL | undefined {
     : eq(meetingContexts.contextId, contextId);
 }
 
+/** An aggregate timestamp as it may actually arrive from a raw `sql` fragment. */
+type AggregateTimestamp = Date | string | null;
+
 /**
  * Normalize an aggregate timestamp back to a `Date`. The postgres-js driver parses a
  * `timestamptz` column to a `Date`, but an aggregate expression reached through a raw
@@ -33,7 +36,7 @@ function contextIdMatches(contextId: string | null): SQL | undefined {
  * asserting (memory `reference_jsonb_date_type_lie`: a type that merely CLAIMS `Date` is
  * how string-typed timestamps leak into callers).
  */
-function toDate(value: Date | string | null): Date | null {
+function toDate(value: AggregateTimestamp): Date | null {
   if (value === null) {
     return null;
   }
@@ -247,7 +250,7 @@ export const meetingContextsRepository = {
     const rows = await db
       .select({
         contextId: meetingContexts.contextId,
-        lastCompletedConsultationAt: sql<Date | string | null>`
+        lastCompletedConsultationAt: sql<AggregateTimestamp>`
           max(coalesce(${creditSessions.endedAt}, ${meetings.endedAt}))
             filter (where ${meetings.status} = 'ended' and ${meetings.outcome} = 'completed')
         `,
@@ -255,7 +258,7 @@ export const meetingContextsRepository = {
         // `sql` fragment gives postgres-js no column to infer the parameter type from, and
         // it cannot serialize a bare `Date` there ("the string argument must be of type
         // string … received an instance of Date").
-        nextScheduledConsultationAt: sql<Date | string | null>`
+        nextScheduledConsultationAt: sql<AggregateTimestamp>`
           min(${meetings.scheduledStart})
             filter (where ${meetings.scheduledStart} > ${now.toISOString()}::timestamptz
                       and ${meetings.status} in ('scheduled', 'waiting_for_participants'))

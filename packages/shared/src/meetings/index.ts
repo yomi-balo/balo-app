@@ -78,6 +78,13 @@ function toSpans(
     }
     const start = interval.joinedAt.getTime();
     const rawEnd = interval.leftAt === null ? nowMs : interval.leftAt.getTime();
+    // DO NOT "simplify" this ternary to Math.max(start, rawEnd). SonarCloud S6836 suggests
+    // it; the two are NOT equivalent on this billing path. An Invalid Date makes `start`
+    // NaN: the ternary keeps the finite `rawEnd`, Math.max propagates NaN. NaN then poisons
+    // the sort comparator in `mergeSpans`, so the corrupt row need not sort first and a
+    // *different finite* first.start survives — measured as a silent 40-minute swing in
+    // billableMs (50min vs 10min) with no NaN downstream for BAL-412 settlement to catch.
+    // Clamping instead of maxing keeps a garbage row zero-length rather than contagious.
     spans.push({ start, end: rawEnd < start ? start : rawEnd });
   }
   return spans;
@@ -95,7 +102,7 @@ function merge(spans: Span[]): Span[] {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
   const merged: Span[] = [];
   for (const span of sorted) {
-    const current = merged[merged.length - 1];
+    const current = merged.at(-1);
     if (current === undefined || span.start > current.end) {
       merged.push({ start: span.start, end: span.end });
       continue;
@@ -139,7 +146,7 @@ function intersect(a: readonly Span[], b: readonly Span[]): Span[] {
 /** The gap-inclusive span of a disjoint ascending list: `last.end − first.start`. */
 function spanOf(spans: readonly Span[]): { startMs: number; durationMs: number } | null {
   const first = spans[0];
-  const last = spans[spans.length - 1];
+  const last = spans.at(-1);
   if (first === undefined || last === undefined) {
     return null;
   }
