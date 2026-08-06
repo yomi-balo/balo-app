@@ -76,6 +76,7 @@ vi.mock('./transcript-pipeline.js', () => ({
 vi.mock('./scheduled-notification-dispatch.js', () => ({
   startScheduledNotificationDispatchWorker: () => mockStartScheduledNotificationDispatch(),
   registerScheduledNotificationDispatchCron: () => mockRegisterScheduledNotificationDispatchCron(),
+}));
 // BAL-390: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real
 // module, which constructs a Worker on a live Redis connection and hangs (5s CI timeout).
 // It stays GREEN LOCALLY if a dev Redis happens to be running, so it must land in the

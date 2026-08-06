@@ -45,4 +45,4 @@ CREATE UNIQUE INDEX "review_invite_token_hash_idx" ON "review_invite_tokens" USI
 CREATE INDEX "review_invite_token_engagement_reviewer_idx" ON "review_invite_tokens" USING btree ("engagement_id","reviewer_user_id");--> statement-breakpoint
 CREATE INDEX "review_invite_token_reviewer_idx" ON "review_invite_tokens" USING btree ("reviewer_user_id");--> statement-breakpoint
 CREATE INDEX "project_engagement_accepted_at_idx" ON "project_engagements" USING btree ("accepted_at") WHERE "project_engagements"."deleted_at" IS NULL;--> statement-breakpoint
-CREATE INDEX "case_engagement_closed_at_idx" ON "case_engagements" USING btree ("closed_at") WHERE "case_engagements"."deleted_at" IS NULL;
+CREATE INDEX "case_engagement_closed_at_idx" ON "case_engagements" USING btree ("closed_at") WHERE "case_engagements"."deleted_at" IS NULL;--> statement-breakpoint
