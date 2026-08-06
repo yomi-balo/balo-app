@@ -365,7 +365,9 @@ export const caseEngagementsRepository = {
    * has not already been rated on that engagement. The exact contract, band semantics and
    * `NOT EXISTS` suppression as `projectEngagementsRepository.listAcceptedBetween` — the
    * two are deliberately shape-identical (both return `RatingNudgeCandidate[]`) so the
-   * sweep queries both anchors every tick without branching.
+   * sweep queries both anchors every tick without branching. That includes the ratified
+   * ENGAGEMENT-level suppression (no reviewer predicate): read that method's docblock, and
+   * `review-nudge-sweep.ts`'s header, before changing this subquery.
    *
    * ⚠ THIS RETURNS `[]` TODAY, AND THAT IS EXPECTED (D5). `close()` has ZERO production
    * callers, so nothing stamps `closed_at` yet. DO NOT delete this method, its index, or

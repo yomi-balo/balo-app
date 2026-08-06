@@ -190,6 +190,18 @@ export const reviewsRepository = {
    *
    * Reads NO role string: this decides who gets EMAILED, and surfacing is not
    * authorization (D10). The capability gate runs at submit time, per submit.
+   *
+   * ⚠ THIS IS NOT THE NUDGE SUPPRESSION, AND IT IS NOT A BACKSTOP FOR IT. The sweep's
+   * candidate queries already drop an engagement the moment ANY live review exists for
+   * `(engagement, expert)` — engagement-level, no reviewer predicate, ratified 2026-08-06.
+   * So by the time this function runs, NOBODY on this engagement has rated; once someone
+   * has, the engagement never reaches it. Its only live function is the sub-second race of
+   * a review landing between the candidate SELECT and the publish inside one tick.
+   *
+   * It can only NARROW the list it is handed, never widen it — so it cannot resurrect a
+   * participant the SQL already excluded. If per-participant nudging is ever wanted, this
+   * function becomes the sole suppression (drop the readers' `NOT EXISTS`); it is already
+   * shaped for that, which is why it survives despite being near-dead today.
    */
   filterUnratedReviewers: async (input: {
     engagementId: string;

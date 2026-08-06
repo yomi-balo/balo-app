@@ -1161,6 +1161,15 @@ export const projectEngagementsRepository = {
    * review exists" true by the candidate query no longer matching, rather than by any
    * cancellation code — there are no per-engagement scheduled jobs to cancel.
    *
+   * ⚠ NOTE THE ABSENT REVIEWER PREDICATE — deliberate and RATIFIED 2026-08-06. Suppression
+   * is ENGAGEMENT-level: one person's review ends the nudges for every other unrated
+   * participant, because a rating is signal about the expert and one is enough to have it.
+   * Live today (the accept email goes to the ACTING member, who need not be the owner), and
+   * it widens to all attendees once BAL-129/134 write `meeting_presence`. Adding a
+   * `reviewer_user_id` term here is NOT the way to change it — this query does not know the
+   * reviewer set; drop the `NOT EXISTS` entirely and let `filterUnratedReviewers` suppress.
+   * Full reasoning and the worked example live in `review-nudge-sweep.ts`'s header.
+   *
    * CHILD-ROOTED so it rides `project_engagement_accepted_at_idx` and is type-scoped for
    * free. Both parent and child `deleted_at` are guarded.
    */

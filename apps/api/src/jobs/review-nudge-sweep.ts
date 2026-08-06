@@ -62,10 +62,34 @@ import { mintReviewInviteToken } from '../lib/review-token.js';
  * composite string, so the insert is rejected `22P02` and swallowed by the log channel's
  * own try/catch). Do not plan an observability check against that table.
  *
- * NUDGES STOP ONCE A REVIEW EXISTS, ALSO WITHOUT CANCELLATION CODE: the candidate
- * queries fold a `NOT EXISTS` over live reviews into SQL (engagement level) and
- * `filterUnratedReviewers` re-checks at SEND time (reviewer level). The AC is satisfied
- * by the query no longer matching, not by cancelling anything.
+ * NUDGES STOP ONCE A REVIEW EXISTS, ALSO WITHOUT CANCELLATION CODE: the candidate queries
+ * fold a `NOT EXISTS` over live reviews into SQL. The AC is satisfied by the query no
+ * longer matching, not by cancelling anything.
+ *
+ * ⚠ THAT SUPPRESSION IS ENGAGEMENT-LEVEL, AND IT IS A RATIFIED DECISION (2026-08-06), not
+ * an oversight. The `NOT EXISTS` is keyed on (engagement, expert) with NO reviewer
+ * predicate, so the FIRST review from ANYONE ends the nudges for EVERY other unrated
+ * participant on that engagement. Rationale: a rating is signal about the expert's
+ * delivery, and one is enough to have it — we are not chasing per-person completion, and
+ * emailing colleagues after someone already answered reads as nagging the company.
+ *
+ * This is LIVE TODAY; it is not waiting on unbuilt tickets. Worked example:
+ *   Northwind's admin Dana accepts the project and taps 4 stars in the accept email (that
+ *   email is addressed to the ACTING member — `recipient: 'self'` — not to the owner).
+ *   Northwind's owner Sam then receives NEITHER the +24h nor the +7d nudge, because the
+ *   engagement left the candidate set the moment Dana's row committed.
+ * When BAL-129/134 give `meeting_presence` a production writer this widens from {owner}
+ * to {every recorded attendee} — same rule, more people silenced by one answer. If that
+ * ever becomes undesirable it is a RE-DECISION, not a bug fix: drop the `NOT EXISTS` from
+ * `listAcceptedBetween` / `listClosedBetween` and let `filterUnratedReviewers` be the sole
+ * suppression. It already runs per reviewer, and THIS SWEEP NEEDS NO CHANGE — `nudgeCandidate`
+ * already returns 0 on an empty reviewer list.
+ *
+ * ⚠ CONSEQUENTLY `filterUnratedReviewers` IS NOT A SECOND LAYER OF DEFENCE. Once any review
+ * exists the engagement never reaches it, so its only live function is the sub-second race
+ * of a review landing between the candidate SELECT and the publish inside a single tick. It
+ * can only narrow a candidate set, never widen one — do not reason about it as reviewer-level
+ * coverage that backstops the SQL.
  */
 export const REVIEW_NUDGE_SWEEP_QUEUE = 'review-nudge-sweep';
 

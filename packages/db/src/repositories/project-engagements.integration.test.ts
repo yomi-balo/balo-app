@@ -2376,8 +2376,18 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     expect(ids).not.toContain(childOnly.engagement.id);
   });
 
-  it('EXCLUDES an engagement that already has a live review — the AC "nudges stop", by non-matching', async () => {
+  /**
+   * ⚠ THIS PINS CROSS-PERSON SUPPRESSION, RATIFIED 2026-08-06 — read it that way.
+   * `reviewFactory` mints its OWN reviewer (a fresh `member`, not the company owner), so
+   * this asserts that a review by ANY ONE PERSON removes the engagement for EVERYONE.
+   * That is intended: a rating is signal about the expert, and one is enough to have it.
+   * If this test ever fails because someone added a `reviewer_user_id` predicate to the
+   * candidate query, that is a product re-decision — see `review-nudge-sweep.ts`'s header
+   * for the worked Dana/Sam example and the correct way to make the change.
+   */
+  it('EXCLUDES an engagement rated by ANY member — suppression is engagement-level, not per-reviewer', async () => {
     const seeded = await seedAccepted(ANCHOR);
+    // Note: NOT the company owner — a different member entirely.
     await reviewFactory({ engagement: seeded });
 
     expect(await candidateIds()).not.toContain(seeded.engagement.id);
