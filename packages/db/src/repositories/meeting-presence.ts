@@ -253,8 +253,12 @@ export const meetingPresenceRepository = {
    * ⚠ THIS RETURNS `[]` TODAY. `meetings` has NO production writer (BAL-129/134 are
    * unbuilt), so no presence row exists for any engagement. The code is real and tested;
    * a builder running a manual end-to-end test and expecting nudges from participation
-   * will be confused unless they read this line. The sweep therefore falls back to the
-   * client company's owner until meetings ship.
+   * will be confused unless they read this line. The client company's owner is therefore
+   * the only nudge recipient today — but NOT as a fallback: the sweep unions the owner in
+   * UNCONDITIONALLY on every tick, participants or not (`review-nudge-sweep.ts`, pinned by
+   * "ALWAYS asks the company owner, even when participants were recorded"). Calling it a
+   * fallback invites precisely the "guard it on participants being empty" change that that
+   * test exists to block.
    */
   async listClientUserIdsForEngagement(engagementId: string): Promise<string[]> {
     const rows = await db

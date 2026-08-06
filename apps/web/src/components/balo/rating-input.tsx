@@ -136,51 +136,62 @@ export function RatingInput({
 
   return (
     <div className={cn('flex flex-col items-center gap-2', className)}>
-      <div
-        role="radiogroup"
-        aria-label={label}
-        className="flex items-center justify-center gap-1"
-        onMouseLeave={() => setHovered(null)}
-      >
-        {RATINGS.map((star) => {
-          const filled = shown !== null && star <= shown;
-          return (
-            <button
-              key={star}
-              ref={(node) => {
-                buttonsRef.current[star - 1] = node;
-              }}
-              type="button"
-              role="radio"
-              aria-checked={value === star}
-              aria-label={`${star} out of 5 — ${RATING_LABELS[star]}`}
-              tabIndex={star === activeStar ? 0 : -1}
-              disabled={disabled}
-              onClick={() => select(star)}
-              onKeyDown={(event) => handleKeyDown(event, star)}
-              onMouseEnter={() => setHovered(star)}
-              style={{ width: targetPx, height: targetPx }}
-              className={cn(
-                'focus-visible:ring-ring inline-flex items-center justify-center rounded-xl',
-                'focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
-                'disabled:cursor-not-allowed disabled:opacity-65'
-              )}
-            >
-              <Star
-                aria-hidden="true"
-                style={{ width: glyphPx, height: glyphPx }}
+      {/*
+        The hover-reset handler sits on a PLAIN wrapper, not on the radiogroup itself.
+        Same hit box, identical behaviour — but an interactive role carrying a handler and
+        no `tabIndex` trips SonarCloud S6852 ("elements with an interactive role must be
+        focusable"). Adding `tabIndex` to the radiogroup would be the wrong fix: this is the
+        WAI-ARIA APG roving-tabindex pattern, where the container is deliberately NOT a tab
+        stop and each `role="radio"` owns `tabIndex={0|-1}` — a focusable container would
+        add a spurious second tab stop into the widget. `onMouseLeave` is mouse-only by
+        nature (keyboard users never set `hovered`), so it needs no keyboard equivalent.
+      */}
+      <div onMouseLeave={() => setHovered(null)}>
+        <div
+          role="radiogroup"
+          aria-label={label}
+          className="flex items-center justify-center gap-1"
+        >
+          {RATINGS.map((star) => {
+            const filled = shown !== null && star <= shown;
+            return (
+              <button
+                key={star}
+                ref={(node) => {
+                  buttonsRef.current[star - 1] = node;
+                }}
+                type="button"
+                role="radio"
+                aria-checked={value === star}
+                aria-label={`${star} out of 5 — ${RATING_LABELS[star]}`}
+                tabIndex={star === activeStar ? 0 : -1}
+                disabled={disabled}
+                onClick={() => select(star)}
+                onKeyDown={(event) => handleKeyDown(event, star)}
+                onMouseEnter={() => setHovered(star)}
+                style={{ width: targetPx, height: targetPx }}
                 className={cn(
-                  'transition-transform duration-150 ease-out motion-reduce:transition-none',
-                  filled
-                    ? 'fill-warning text-warning'
-                    : 'text-muted-foreground/45 fill-transparent',
-                  hovered === star && 'scale-110',
-                  popped === star && 'scale-[1.18]'
+                  'focus-visible:ring-ring inline-flex items-center justify-center rounded-xl',
+                  'focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+                  'disabled:cursor-not-allowed disabled:opacity-65'
                 )}
-              />
-            </button>
-          );
-        })}
+              >
+                <Star
+                  aria-hidden="true"
+                  style={{ width: glyphPx, height: glyphPx }}
+                  className={cn(
+                    'transition-transform duration-150 ease-out motion-reduce:transition-none',
+                    filled
+                      ? 'fill-warning text-warning'
+                      : 'text-muted-foreground/45 fill-transparent',
+                    hovered === star && 'scale-110',
+                    popped === star && 'scale-[1.18]'
+                  )}
+                />
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/*

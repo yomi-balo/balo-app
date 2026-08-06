@@ -2,7 +2,7 @@
 
 import 'server-only';
 
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   projectEngagementsRepository,
@@ -13,6 +13,7 @@ import { deriveEngagementParties, personAtCompany } from '@/lib/engagement/engag
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
+import { sha256Hex } from '@/lib/magic-link';
 import {
   INVALID_REQUEST,
   deriveEngagementTitle,
@@ -70,8 +71,15 @@ async function resolveReviewAsk(
     if (existing !== undefined) {
       return { reviewToken: undefined, alreadyRated: true };
     }
+    // Hash via the SAME helper the VERIFIER uses (`sha256Hex`, `@/lib/magic-link`) rather
+    // than a re-inlined `createHash`. Mint and verify must agree on the algorithm forever,
+    // and while they were two independent expressions the only web-side assertion was
+    // "hash !== raw" — so switching this line to sha512/base64 would have kept every test
+    // green while silently rendering <LinkNotActive /> for every accept-email star link in
+    // production. The nudge links would keep working, making it look like an email-client
+    // fault rather than a code change.
     const rawToken = randomBytes(32).toString('base64url');
-    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const tokenHash = sha256Hex(rawToken);
     await reviewInviteTokensRepository.create({ engagementId, reviewerUserId, tokenHash });
     return { reviewToken: rawToken, alreadyRated: false };
   } catch (error) {

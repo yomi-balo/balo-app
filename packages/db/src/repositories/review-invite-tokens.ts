@@ -24,10 +24,11 @@ export interface CreateReviewInviteTokenInput {
  * so each nudge must mint a fresh one, and revoking the prior would kill the star links
  * in an email the client may not have opened yet).
  *
- * ⚠ HASHING STAYS IN THE CALLER — `createHash('sha256').update(raw).digest('hex')`,
- * exactly as the proposal-share web action does. Verified: NO production file under
- * `packages/db/src` imports `node:crypto` (only the test factory does). Do not move
- * hashing in here.
+ * ⚠ HASHING STAYS IN THE CALLER — SHA-256 hex, exactly as the proposal-share web action
+ * does. The reason is that the RAW secret must never reach the data layer, where the
+ * Drizzle query-logging hook could capture it; it is NOT that this package avoids
+ * `node:crypto` (an earlier version of this note claimed that, and it was false —
+ * `scheduled-notifications.ts` imports `randomUUID`). Do not move hashing in here.
  *
  * ⚠ NO `revoke` / `revokeAllFor` METHOD SHIPS. No caller exists and CLAUDE.md forbids
  * dead code. The `revoked_at` column and the live filter DO ship, so a future ops

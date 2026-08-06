@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
@@ -229,9 +230,19 @@ describe('acceptProjectAction', () => {
     expect(payload.clientCompanyName).toBe('Northwind Industrial');
     expect(payload.expertPartyLabel).toBe('Priya Sharma');
     // 32 random bytes → 43 base64url chars; the STORED value is its SHA-256 hex, not this.
-    expect(payload.reviewToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const { reviewToken } = payload;
+    if (reviewToken === undefined) {
+      throw new Error('expected the accept email to carry a raw review token');
+    }
+    expect(reviewToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(mint.reviewerUserId).toBe('client-1');
-    expect(mint.tokenHash).not.toBe(payload.reviewToken);
+    // Pin the ALGORITHM, not merely "it was hashed at all". `not.toBe(raw)` stays green if
+    // the mint switches to sha512 or base64 — and the verifier (`sha256Hex`, hex) would then
+    // never reproduce the stored hash, so every accept-email star link would render
+    // <LinkNotActive /> in production with CI fully green. The API side already pins this
+    // (`review-nudge-sweep.test.ts`); the web side did not, and that asymmetry WAS the drift
+    // hole the shared-helper docblock warns about.
+    expect(mint.tokenHash).toBe(createHash('sha256').update(reviewToken).digest('hex'));
   });
 
   it('omits reviewToken when the accepting member has already rated this expert', async () => {
