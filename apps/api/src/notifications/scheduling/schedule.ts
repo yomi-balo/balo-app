@@ -156,6 +156,33 @@ export type SchedulableNotificationEvent = Exclude<NotificationEvent, 'expert.re
  *
  * ⚠ NOT AN HTTP SURFACE, AND `cancel` NEVER WILL BE (Decision 11).
  *
+ * ⚠ DEDUP IS SCOPED TO THE *PENDING* WINDOW, NOT TO THE KEY'S WHOLE LIFETIME — READ THIS
+ * BEFORE BUILDING A DEBOUNCE ON TOP OF IT. The fold happens on a partial unique index over
+ * `status = 'pending'`. Once the dispatch tick CLAIMS a promise, the key's slot is open again
+ * until that send reaches its terminal mark: normally one publish, and — if a send dies holding
+ * its claim — ONE CLAIM TTL PER STRANDED ATTEMPT rather than one TTL in total, because the tick
+ * RE-CLAIMS a stranded row every TTL (spending an attempt each time) and only marks it terminal
+ * `failed` once attempts are exhausted. At the tick's current 5-minute TTL × 3 attempts that is
+ * roughly a 15-minute window, plus up to 60s of tick granularity per round. A
+ * `scheduleNotification` call landing inside that window returns `scheduled`, NOT
+ * `already_pending` — a second, independent promise — and `replace_pending` behaves the same
+ * way, because it shares the same arbiter and so cannot supersede a claimed row.
+ *
+ * That is the intended behaviour, not a leak: a fact that arrives after the claim was taken
+ * arrived too late to influence the send already in flight, and a fresh promise is the only
+ * honest response — folding would drop it into a row that has already left the queue. (The
+ * alternative, letting a schedule reach into a CLAIMED row, is the same mid-send mutation
+ * `cancelScheduledNotification` deliberately refuses; Decision 5.)
+ *
+ * THE CONSEQUENCE TO DESIGN AROUND: for a DEBOUNCE-style consumer — "one digest per
+ * conversation per 10 minutes" — two sends can land closer together than the window intends,
+ * one from the in-flight claimed row and one from the new promise, with ONLY THE FIRE-TIME
+ * `recheck` BETWEEN THEM. So such a consumer must register a `recheck` that re-reads live
+ * state ("are these messages still unread?") rather than relying on the key alone, and must
+ * not read a dedup key as a rate limit. Pinned for BOTH modes by
+ * "schedule(%s) DURING THE CLAIM WINDOW creates a SECOND promise" in
+ * `scheduled-notifications.integration.test.ts`.
+ *
  * @returns the fold outcome — `scheduled` (a new promise), `already_pending` (`first_wins`
  * found a live one and left it untouched) or `replaced` (`replace_pending` superseded it).
  */

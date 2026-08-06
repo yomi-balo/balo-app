@@ -25,15 +25,59 @@
 -- static argument, and it is the only argument there is.
 --
 --   ┌─ ALTER COLUMN "correlation_id" SET DATA TYPE text USING …::text ────────────────
---   │ A TABLE REWRITE (ACCESS EXCLUSIVE for its duration; the table is an append-only
---   │ audit log with no live reader on the request path, so the lock is not user-visible).
---   │ SAFE BECAUSE: every stored value is a uuid and uuid→text is total — no value can
---   │ fail the cast, so the statement cannot abort part-way. Nothing depends on the uuid
---   │ TYPE either: the column carries a PLAIN NON-UNIQUE index (recreated automatically by
---   │ the rewrite), participates in NO join anywhere in the repo, and its only reader
---   │ `findByCorrelationId` uses `eq()` on a `string` parameter — it has ZERO non-test
---   │ callers today. Widening is strictly permissive: every value that was legal stays
---   │ legal.
+--   │ A TABLE REWRITE (ACCESS EXCLUSIVE for its duration).
+--   │ CORRECTNESS IS UNCONDITIONAL: every stored value is a uuid and uuid→text is total —
+--   │ no value can fail the cast, so the statement cannot abort part-way. Nothing depends
+--   │ on the uuid TYPE either: the column carries a PLAIN NON-UNIQUE index (recreated
+--   │ automatically by the rewrite), participates in NO join anywhere in the repo, and its
+--   │ only reader `findByCorrelationId` uses `eq()` on a `string` parameter — it has ZERO
+--   │ non-test callers today. Widening is strictly permissive: every value that was legal
+--   │ stays legal.
+--   │
+--   │ ⚠ AVAILABILITY IS *NOT* UNCONDITIONAL — THE LOCK IS INVISIBLE TO READERS, NOT TO
+--   │ WRITERS, AND THIS TABLE HAS WRITERS. `notification_log` has no live READER on the
+--   │ request path, but `logNotification` WRITES to it from every channel worker
+--   │ (`email.adapter`, `sms.adapter`, `in-app.adapter`) on every delivery. ACCESS
+--   │ EXCLUSIVE does not make those inserts fail — it makes them BLOCK. `logNotification`'s
+--   │ swallowing catch does not help here: a blocked insert is not an error, it is a wait.
+--   │
+--   │ ⚠ AND NOT FOR THE REWRITE ALONE — THE LOCK IS HELD UNTIL THE WHOLE MIGRATION RUN
+--   │ COMMITS. drizzle-orm wraps EVERY PENDING MIGRATION in ONE transaction (0.38.4:
+--   │ `pg-core/dialect.js` `migrate()` — a single `session.transaction()` encloses the
+--   │ `for await (const migration of migrations)` loop), the same fact the ENUM HAZARDS
+--   │ section below leans on. So writers stay blocked for: this rewrite (cost proportional
+--   │ to the table's size) + the `notification_log_recipient_exactly_one` CHECK, whose
+--   │ validation is a SECOND full scan of this same table (last statement in this file) +
+--   │ every other migration still pending in the same run. Size the window off the whole
+--   │ run, never off the rewrite alone.
+--   │
+--   │ WHY A BLOCKED AUDIT WRITE CAN COST A DUPLICATE EMAIL — and note this migration does
+--   │ not CREATE that failure mode, it WIDENS a pre-existing one: the log write already
+--   │ happens AFTER the side effect (`sendTransacEmail` then `logNotification` in
+--   │ `email.adapter.ts`), so anything that re-runs a delivery job re-sends. While the
+--   │ worker process is alive its BullMQ lock keeps being renewed on a timer
+--   │ (`lockRenewTime = lockDuration / 2`), so merely waiting on Postgres does not by itself
+--   │ stall a job. The exposure comes from WHEN this runs: when the migration is applied as
+--   │ part of a deploy — the usual practice, though note nothing in this repo runs
+--   │ migrations at deploy time TODAY: there is no Railway release command, and the only
+--   │ `db:migrate` is the E2E CI job — the worker process is being replaced at that same
+--   │ moment. Shutdown makes it worse rather than better: `apps/api/src/index.ts`'s SIGTERM
+--   │ handler closes Fastify and `process.exit(0)`s WITHOUT draining BullMQ workers. A
+--   │ worker killed while its jobs sit blocked stops renewing; the locks lapse (default
+--   │ lockDuration 30s, stalledInterval 30s, maxStalledCount 1 — none overridden in
+--   │ `startEmailWorker`), BullMQ re-delivers each job as stalled, and the new process runs
+--   │ the processor FROM THE TOP. Because maxStalledCount is 1 the FIRST stall re-queues
+--   │ rather than fails, so: at most ONE duplicate, and only for a job already PAST its send
+--   │ and blocked on the audit write — a job killed BEFORE its send simply re-runs and sends
+--   │ once. Confined to the deploy window. Secondary effect: with `concurrency: 5`, five
+--   │ blocked jobs are the whole email queue, so deliveries queue up behind the rewrite.
+--   │
+--   │ ⚙ BEFORE DEPLOYING THIS MIGRATION: check the table's size —
+--   │     SELECT count(*) FROM notification_log;
+--   │   A small table (tens of thousands of rows) rewrites in well under a second and
+--   │   nothing above is observable. If it has grown large, run the deploy in a QUIET
+--   │   WINDOW — off-peak, with no notification burst in flight — so no channel job is
+--   │   mid-delivery while the rewrite holds the lock.
 --   ├─ ALTER COLUMN "recipient_id" DROP NOT NULL ─────────────────────────────────────
 --   │ Always safe — no rewrite, no validation, strictly permissive.
 --   ├─ ADD COLUMN "recipient_email" varchar(320) ─────────────────────────────────────

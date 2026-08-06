@@ -227,6 +227,82 @@ describe('scheduledNotificationsRepository.schedule', () => {
     }
   );
 
+  /**
+   * ⚠ THE CLAIM WINDOW — INTENDED, NOT AN OVERSIGHT. PINNED HERE SO A "FIX" HAS TO ARGUE
+   * WITH A TEST.
+   *
+   * The partial unique covers `status = 'pending'` only, so the moment `claim` flips a row to
+   * `claimed` the key's slot is OPEN again — and it stays open until the terminal mark
+   * (`published` / `skipped` / `failed`). Normally that is the few hundred milliseconds of one
+   * publish; under a STRANDED claim it is one claim TTL PER STRANDED ATTEMPT, not one TTL in
+   * total — the row is re-claimed every TTL, spending an attempt each time, and only on hitting
+   * the caller's ceiling is it marked terminal `failed` (≈15 minutes at the dispatch tick's
+   * 5-minute TTL × 3 attempts). A `schedule()` landing inside that window does NOT fold to
+   * `already_pending`; it INSERTS A SECOND PENDING ROW.
+   *
+   * THIS IS CORRECT. A fact that arrives after the claim was taken arrived too late to
+   * influence the send now in flight, and the only honest response is a fresh promise for it —
+   * the alternative is to fold into a row that is already gone and silently drop it. Folding
+   * would also require the arbiter to cover claimed rows, which would let a schedule mutate a
+   * promise mid-send: exactly the race `cancel` refuses for the same reason (Decision 5).
+   *
+   * ⚠ WHAT A CONSUMER MUST REASON ABOUT: for a DEBOUNCE-style consumer, two sends can land
+   * closer together than the debounce window intends — one from the in-flight claimed row, one
+   * from the new promise — with only the FIRE-TIME RECHECK between them. So a debounce-style
+   * consumer must register a recheck that re-reads live state (e.g. "are these messages still
+   * unread?"), and must not treat its dedup key as a rate limit.
+   *
+   * ⚠ BOTH MODES ARE RUN, because the prose asserts something about BOTH: `replace_pending`
+   * does not help either, since it shares the same pending-only arbiter and so inserts rather
+   * than superseding. Asserting that only for `first_wins` would leave the half of the claim
+   * that a widened `replace_pending` arbiter could silently break unpinned. Each mode starts
+   * from a clean claim window (one claimed row, NO pending row) — that is the whole scenario;
+   * appending a `replace_pending` call after the `first_wins` one would instead fold onto the
+   * pending row the first call just created and report `replaced`, proving nothing about the
+   * claimed row.
+   */
+  it.each(['first_wins', 'replace_pending'] as const)(
+    'schedule(%s) DURING THE CLAIM WINDOW creates a SECOND promise, claimed row untouched',
+    async (mode) => {
+      const dedupeKey = key();
+
+      const first = await scheduledNotificationsRepository.schedule({
+        dedupeKey,
+        event: 'meeting.participant_absent',
+        payload: { round: 1 },
+        scheduledFor: new Date(),
+      });
+      const claimed = await scheduledNotificationsRepository.claim(claimArgs(first.row.id));
+      expect(claimed?.status).toBe('claimed');
+
+      const second = await scheduledNotificationsRepository.schedule({
+        dedupeKey,
+        event: 'meeting.participant_absent',
+        payload: { round: 2 },
+        scheduledFor: new Date(),
+        mode,
+      });
+
+      // NOT `already_pending`, and NOT `replaced` — the slot was free, so this is a genuinely
+      // new promise however the caller asked for it to fold.
+      expect(second.outcome).toBe('scheduled');
+      expect(second.row.id).not.toBe(first.row.id);
+      expect(second.row.status).toBe('pending');
+
+      // The in-flight send is untouched: same status, same attempt, same payload.
+      const inFlight = await reload(first.row.id);
+      expect(inFlight?.status).toBe('claimed');
+      expect(inFlight?.attempts).toBe(1);
+      expect(inFlight?.payload).toEqual({ round: 1 });
+
+      // Two live rows for the key, but still at most ONE pending — the invariant the partial
+      // unique actually enforces.
+      const all = await scheduledNotificationsRepository.findByDedupeKey(dedupeKey);
+      expect(all).toHaveLength(2);
+      expect(all.filter((r) => r.status === 'pending')).toHaveLength(1);
+    }
+  );
+
   it('a SOFT-DELETED pending row does not block re-scheduling the key', async () => {
     const dedupeKey = key();
     const first = await scheduledNotificationFactory({ dedupeKey });
@@ -372,13 +448,22 @@ describe('scheduledNotificationsRepository.claim', () => {
   });
 
   /**
-   * ⚠ THE SEND-ONCE PROOF. The integration harness runs every test on a `max: 1` pool inside
-   * one outer transaction (`test/setup-integration.ts`), so two genuinely simultaneous
-   * connections are not expressible here. That is not a weakened test: the guarantee is a
-   * property of the conditional `UPDATE`'s own `WHERE`, and two claims against the SAME row
-   * exercise exactly the predicate that decides the race. Postgres serialises concurrent
-   * writers onto the same row lock, which reduces the concurrent case to this sequential
-   * one — the second writer re-evaluates the predicate against the winner's committed row.
+   * HALF of the send-once proof — the PREDICATE half, and only that.
+   *
+   * ⚠ THIS TEST IS NOT THE SEND-ONCE PROOF ON ITS OWN, AND MUST NOT BE READ AS ONE. The
+   * harness runs every test on a `max: 1` pool inside one outer transaction
+   * (`test/setup-integration.ts`), so two simultaneous connections are not expressible here.
+   * What these two sequential claims establish is that the conditional `UPDATE`'s `WHERE`
+   * rejects a row it can SEE is already claimed. Real contention asks a harder question the
+   * second claim never reaches from here: a claim issued BEFORE the winner commits passes the
+   * predicate on its own snapshot, blocks on the winner's row lock, and only then
+   * re-evaluates against the winner's committed version (READ COMMITTED EvalPlanQual). That
+   * blocking-then-recheck path is where a double send would actually be born.
+   *
+   * ⇒ `scheduled-notifications.concurrency.integration.test.ts` proves it, on its OWN
+   * connections outside this harness, with the interleaving forced and `pg_blocking_pids`
+   * asserted. Keep both: a read-modify-write reimplementation of `claim` passes every case in
+   * THIS file and fails there.
    */
   it('two claims of the same row → exactly ONE winner; the second returns undefined', async () => {
     const row = await scheduledNotificationFactory();

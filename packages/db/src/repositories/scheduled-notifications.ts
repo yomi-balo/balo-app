@@ -190,6 +190,34 @@ export const scheduledNotificationsRepository = {
    * row written by an earlier `replace_pending` call folds as `first_wins`, and leaves the
    * stored `mode` reading `replace_pending`. Nothing downstream (claim, recheck, dispatch)
    * consults it; it records how the row was last written, for the ops read.
+   *
+   * ⚠ THE CLAIM WINDOW — NEITHER MODE FOLDS ONTO A CLAIMED ROW, AND THAT IS INTENDED.
+   * The arbiter is `status = 'pending'`, so from the instant `claim` flips a row to `claimed`
+   * until its terminal mark the key's slot is OPEN: a `schedule()` in that window INSERTS A
+   * SECOND PENDING ROW rather than returning `already_pending` (or, for `replace_pending`,
+   * rather than superseding).
+   *
+   * HOW LONG THE WINDOW ACTUALLY IS — ONE PUBLISH normally, and when a send STRANDS its claim,
+   * ONE CLAIM TTL *PER STRANDED ATTEMPT*, NOT ONE TTL IN TOTAL. A stranded row is not terminal
+   * at the first TTL; it becomes reclaimable, is re-claimed (consuming another attempt), and
+   * only after `attempts` reaches the caller's ceiling does the caller mark it terminal
+   * `failed`. With the dispatch tick's current policy — a 5-minute TTL and 3 attempts — the
+   * slot can therefore stay open for roughly 15 minutes, plus up to the tick's 60s granularity
+   * per round. Both numbers are the CALLER'S, not this file's; the shape is what is fixed.
+   *
+   * CORRECT, because a fact that arrives after the claim arrived too late to influence the
+   * send now in flight, and a fresh promise is the only honest response — folding would drop
+   * it into a row that has already left the queue. Widening the arbiter to cover `claimed`
+   * would instead let a schedule mutate a promise mid-send, the same race `cancel` refuses
+   * (ADR Decision 5).
+   *
+   * ⚠ THE CONSEQUENCE A CONSUMER MUST REASON ABOUT: for a DEBOUNCE-style consumer, two sends
+   * can land closer together than the debounce window intends — one from the in-flight
+   * claimed row and one from the new promise — with only the FIRE-TIME RECHECK between them.
+   * Such a consumer must register a `recheck` that re-reads live state, and must not treat
+   * its dedup key as a rate limit. Pinned by
+   * "schedule(%s) DURING THE CLAIM WINDOW creates a SECOND promise" in the integration suite,
+   * which runs for BOTH modes.
    */
   async schedule(
     input: ScheduleNotificationInput,

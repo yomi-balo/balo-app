@@ -132,9 +132,25 @@ export const scheduledNotifications = pgTable(
      *
      * ⚠ THE `ON CONFLICT` ARBITER MUST REPEAT THIS PREDICATE EXACTLY (`targetWhere` in the
      * repository). Postgres cannot infer a partial index whose predicate is not implied by
-     * the `ON CONFLICT … WHERE` clause, and the upsert then throws a raw `23505` on the
-     * second schedule instead of folding. Same requirement the `conversation_read_states`
-     * upsert already meets.
+     * the `ON CONFLICT … WHERE` clause, and the upsert then fails `42P10` ("no unique or
+     * exclusion constraint matching the ON CONFLICT specification") — a PLANNING error raised
+     * on every such statement, not a `23505` raised on the second schedule: with no arbiter
+     * inferred there is no fold to attempt in the first place. Same requirement the
+     * `conversation_read_states` upsert already meets.
+     *
+     * ⚠ THE INVARIANT IS "AT MOST ONE PENDING ROW", NOT "AT MOST ONE LIVE ROW", AND THE GAP
+     * IS DELIBERATE. `claimed` is outside the predicate, so from the instant `claim` flips a
+     * row until its terminal mark the key's slot is OPEN and a `schedule()` inserts a SECOND
+     * pending row instead of folding — one publish long normally, and when a send strands its
+     * claim ONE CLAIM TTL PER STRANDED ATTEMPT (the row is re-claimed each TTL until the
+     * caller's attempt ceiling is reached and it is marked terminal `failed`), which at the
+     * dispatch tick's 5-minute TTL × 3 attempts is roughly 15 minutes. That is the intended
+     * reading: a fact arriving after
+     * the claim was taken arrived too late to change the send in flight and deserves its own
+     * promise; covering `claimed` here would instead let a schedule mutate a promise
+     * mid-send, the race `cancel` already refuses (ADR Decision 5). Consumer-facing
+     * consequence (a debounce can emit two sends inside its window) is spelled out on the
+     * repository's `schedule` docstring and pinned by an integration case.
      */
     uniqueIndex('scheduled_notification_pending_key_idx')
       .on(t.dedupeKey)
