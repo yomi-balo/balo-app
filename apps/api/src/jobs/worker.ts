@@ -23,6 +23,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startCreditSessionMeterSweepWorker, registerCreditSessionMeterSweepCron },
     { startReceivableDunningSweepWorker, registerReceivableDunningSweepCron },
     { startTranscriptPipelineWorker },
+    { startScheduledNotificationDispatchWorker, registerScheduledNotificationDispatchCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -37,6 +38,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./credit-session-meter-sweep.js'),
     import('./receivable-dunning-sweep.js'),
     import('./transcript-pipeline.js'),
+    import('./scheduled-notification-dispatch.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -65,5 +67,9 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   await registerReceivableDunningSweepCron();
   // BAL-387 (ADR-1013): the transcript pipeline worker (event-triggered — no cron).
   startTranscriptPipelineWorker();
+  // BAL-420 (ADR-1047): the per-minute scheduled-notification dispatch tick. Postgres is
+  // the clock — this cron is only the ticker, and there are no delayed BullMQ jobs anywhere.
+  startScheduledNotificationDispatchWorker();
+  await registerScheduledNotificationDispatchCron();
   logger?.info('BullMQ workers started');
 }

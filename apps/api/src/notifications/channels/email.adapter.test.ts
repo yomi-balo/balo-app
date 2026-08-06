@@ -1,8 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { getEmailTemplate } from './templates/index.js';
-import { logNotification } from './log.js';
 
 // -- Test getEmailTemplate --------------------------------------------------
+//
+// BAL-420: `logNotification`'s tests moved to ./log.test.ts, alongside the new BAL-341
+// three-recipient-shape assertions. Keeping them here would have duplicated that file's
+// `@balo/db` + `@balo/shared/logging` mock blocks verbatim across two files.
 
 describe('getEmailTemplate', () => {
   it('returns welcome template with correct subject', () => {
@@ -59,99 +62,5 @@ describe('getEmailTemplate', () => {
     expect(() => getEmailTemplate('nonexistent', {})).toThrow(
       'Unknown email template: nonexistent'
     );
-  });
-});
-
-// -- Test logNotification ----------------------------------------------------
-
-const { mockInsert } = vi.hoisted(() => ({
-  mockInsert: vi.fn().mockResolvedValue({}),
-}));
-
-vi.mock('@balo/db', () => ({
-  notificationLogRepository: { insert: mockInsert },
-}));
-
-vi.mock('@balo/shared/logging', () => ({
-  createLogger: vi.fn(() => ({
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  })),
-}));
-
-describe('logNotification', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('inserts a notification log record with correct fields', async () => {
-    await logNotification(
-      {
-        recipientId: 'user-1',
-        template: 'welcome',
-        event: 'user.welcome',
-        data: {},
-        payload: { correlationId: 'corr-1' },
-      },
-      'email',
-      'sent',
-      undefined,
-      { brevoMessageId: 'msg-123' }
-    );
-
-    expect(mockInsert).toHaveBeenCalledWith({
-      event: 'user.welcome',
-      correlationId: 'corr-1',
-      recipientId: 'user-1',
-      channel: 'email',
-      template: 'welcome',
-      status: 'sent',
-      error: null,
-      metadata: { brevoMessageId: 'msg-123' },
-    });
-  });
-
-  it('logs failed status with error message', async () => {
-    await logNotification(
-      {
-        recipientId: 'user-2',
-        template: 'welcome',
-        event: 'user.welcome',
-        data: {},
-        payload: { correlationId: 'corr-2' },
-      },
-      'email',
-      'failed',
-      'SMTP error: connection refused'
-    );
-
-    expect(mockInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: 'failed',
-        error: 'SMTP error: connection refused',
-        metadata: null,
-      })
-    );
-  });
-
-  it('does not throw when repository insert fails', async () => {
-    mockInsert.mockRejectedValueOnce(new Error('DB connection lost'));
-
-    // Should not throw -- errors are caught and logged internally
-    await expect(
-      logNotification(
-        {
-          recipientId: 'user-3',
-          template: 'welcome',
-          event: 'user.welcome',
-          data: {},
-          payload: { correlationId: 'corr-3' },
-        },
-        'email',
-        'sent'
-      )
-    ).resolves.toBeUndefined();
   });
 });

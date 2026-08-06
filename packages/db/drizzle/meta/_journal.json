@@ -400,6 +400,13 @@
       "when": 1785893901390,
       "tag": "0056_bal418_meetings_primitive",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1785931874260,
+      "tag": "0057_bal420_scheduled_notifications",
+      "breakpoints": true
     }
   ]
 }

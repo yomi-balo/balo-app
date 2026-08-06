@@ -29,6 +29,7 @@ export type {
   TranscriptFactoryResult,
   TranscriptArtifactFactoryResult,
 } from './transcript.factory';
+export { scheduledNotificationFactory } from './scheduled-notification.factory';
 export { creditWalletFactory } from './credit-wallet.factory';
 export type { CreditWalletFactoryResult } from './credit-wallet.factory';
 export { promoCodeFactory, promoRedemptionFactory } from './promo-code.factory';

@@ -23,6 +23,8 @@ const mockRegisterCreditSessionMeterSweepCron = vi.fn().mockResolvedValue(undefi
 const mockStartReceivableDunningSweep = vi.fn();
 const mockRegisterReceivableDunningSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartTranscriptPipeline = vi.fn();
+const mockStartScheduledNotificationDispatch = vi.fn();
+const mockRegisterScheduledNotificationDispatchCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -65,6 +67,14 @@ vi.mock('./receivable-dunning-sweep.js', () => ({
 vi.mock('./transcript-pipeline.js', () => ({
   startTranscriptPipelineWorker: () => mockStartTranscriptPipeline(),
 }));
+// BAL-420: mocking this is MANDATORY — otherwise the REDIS_URL-set test loads the real
+// module, which constructs a Worker on a live Redis connection and hangs (5s CI timeout).
+// Green LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in BAL-378, BAL-380 and BAL-387.
+vi.mock('./scheduled-notification-dispatch.js', () => ({
+  startScheduledNotificationDispatchWorker: () => mockStartScheduledNotificationDispatch(),
+  registerScheduledNotificationDispatchCron: () => mockRegisterScheduledNotificationDispatchCron(),
+}));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
 }));
@@ -96,6 +106,8 @@ describe('startWorkers', () => {
     expect(mockStartVerifyBeneficiary).not.toHaveBeenCalled();
     expect(mockStartInApp).not.toHaveBeenCalled();
     expect(mockStartAvailabilityCache).not.toHaveBeenCalled();
+    expect(mockStartScheduledNotificationDispatch).not.toHaveBeenCalled();
+    expect(mockRegisterScheduledNotificationDispatchCron).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -126,6 +138,8 @@ describe('startWorkers', () => {
     expect(mockStartReceivableDunningSweep).toHaveBeenCalled();
     expect(mockRegisterReceivableDunningSweepCron).toHaveBeenCalled();
     expect(mockStartTranscriptPipeline).toHaveBeenCalled();
+    expect(mockStartScheduledNotificationDispatch).toHaveBeenCalled();
+    expect(mockRegisterScheduledNotificationDispatchCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;
