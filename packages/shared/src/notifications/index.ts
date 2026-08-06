@@ -209,6 +209,20 @@ export interface EngagementCancelledPayload {
 // a one-shot terminal transition, so a single deterministic key deduplicates retries.
 // Copy uses BAL-329 conventions (RETROSPECTIVE names the PERSON "@ company" first
 // mention). Dates pre-formatted UTC.
+//
+// BAL-390 EXTENSION — the accepting client now gets a record of their own acceptance,
+// fused with the star-rating ask. Recipient 'self' via the new `userId`, MIRRORING
+// `payment.charged`: actor-gets-a-receipt is the house pattern at money moments
+// (`credit.topup.completed` and `promo.redeemed` do the same), and acceptance is the
+// trigger for the final invoice — so the client should hold written evidence of it
+// without having to log in. This DELIBERATELY OVERTURNS BAL-338's "No client recipient
+// (they just acted)" ruling, which is the outlier. The auto-accept path legitimately
+// differs (recipient 'client' via `recipientId`, because nobody acted) — that asymmetry
+// is correct; do not harmonise it.
+//
+// ⚠ Every BAL-390 field is OPTIONAL so the shipped `accept-project.ts` publisher keeps
+// compiling until it is taught to supply them; the new client rule is gated on `userId`
+// being present, so the email cannot fire half-populated in the meantime.
 export interface EngagementAcceptedPayload {
   correlationId: string; // `${engagementId}:accepted`
   engagementId: string; // CTA / actionUrl → /engagements/{id}
@@ -217,6 +231,16 @@ export interface EngagementAcceptedPayload {
   projectTitle: string; // {title} — subject + body
   acceptedOn: string; // "11 Jul 2026" (pre-formatted, UTC)
   milestonesTotal: number; // {n} — total live milestones
+  userId?: string; // BAL-390: the ACCEPTING member → recipient 'self'; absent ⇒ the client rule skips
+  clientCompanyName?: string; // BAL-390: {Client} — prospective party (email body)
+  expertPartyLabel?: string; // BAL-390: {Expert} — prospective party (email body)
+  reviewToken?: string; // BAL-390: RAW review-invite token; absent ⇒ no star block
+  // BAL-390: this member has ALREADY rated this expert on this engagement, so the email
+  // may thank them for it. ⚠ NOT inferable from `reviewToken === undefined`: the token
+  // is also absent when the mint FAILED, and a mint failure must never break an accept,
+  // so the token's absence means "no star block", never "they rated". Only the publisher
+  // knows which of the two happened — it says so here.
+  alreadyRated?: boolean;
 }
 
 // BAL-338 (D7) client requested changes instead of accepting (pending_acceptance →
@@ -249,6 +273,12 @@ export interface EngagementChangesRequestedPayload {
 // — one-shot terminal. `recipientId` absent for a retainer / owner-miss (the client
 // rule skips; expert + admins still fire). Copy uses BAL-329 conventions (PROSPECTIVE
 // names the PARTY). Dates pre-formatted UTC.
+//
+// BAL-390 EXTENSION — `reviewToken` fuses the star-rating ask into THIS existing email
+// (D7). No second project email is added on the auto path: `AutoAcceptedEmail` renders
+// the star row after its green window block when the token is present, and omits the
+// block ENTIRELY (not greyed — gone) when it is absent, which is what "already rated"
+// looks like. The rule for this event is UNCHANGED.
 export interface EngagementAutoAcceptedPayload {
   correlationId: string; // `${engagementId}:auto_accepted`
   engagementId: string; // CTA / actionUrl → /engagements/{id}
@@ -261,6 +291,7 @@ export interface EngagementAutoAcceptedPayload {
   requestedDate: string; // "4 Jul" (pre-formatted, UTC) — when completion was requested
   autoDate: string; // "11 Jul" (pre-formatted, UTC) — the auto-accept date
   reviewDays: number; // AUTO_ACCEPT_DAYS — the review window length
+  reviewToken?: string; // BAL-390: RAW review-invite token; absent ⇒ already rated ⇒ no review block
 }
 
 // BAL-338 (D7) T-2 review reminder: a `pending_acceptance` engagement nears its
@@ -621,4 +652,79 @@ export interface RecapReadyPayload {
   actionItemCount: number; // display fact (lens-safe)
   summaryHeadline?: string; // short plain-text one-liner (shared meeting context — no fee content)
   recordingRef?: string | null; // NULLABLE/deferred — no producer
+}
+
+/**
+ * BAL-390 — the star-rating nudge (+24h / +7d off the terminal anchor).
+ *
+ * ⚠ DELIBERATELY NOT `engagement.review_reminder`: that key is BAL-338/D7's project
+ * ACCEPTANCE nudge ("review the delivered work before it auto-accepts") and carries
+ * `EngagementReviewReminderPayload`. Different meaning, different payload, different
+ * template (`engagement-review-reminder-client`). Do NOT consolidate them.
+ *
+ * SERVER-ONLY (published by the API sweep). EMAIL ONLY, recipient 'self' via `userId`
+ * (the `onboarding.reminder` shape) — the ask IS the in-email star row, and an in-app
+ * copy would carry neither stars nor token.
+ *
+ * ⚠ PUBLISHED ONCE PER RECIPIENT, NEVER FANNED OUT. `reviewToken` is per-reviewer and
+ * the dispatcher shares ONE payload across a whole fan-out, so a fan-out recipient kind
+ * would put one person's magic-link token in everyone else's email. That is a
+ * correctness constraint, not a style preference.
+ *
+ * `reviewToken` is the RAW token: the deliberate secret-in-queue exception, exactly the
+ * `ProposalSharedPayload.shareToken` precedent. It appears ONLY inside the emailed URL —
+ * never stored, never logged.
+ */
+export interface ReviewReminderPayload {
+  correlationId: string; // `${engagementId}:${userId}:review_nudge:${step}`
+  engagementId: string; // CTA target → `${APP_URL}/review/{reviewToken}`
+  userId: string; // the reviewer → recipient 'self'; the resolver hydrates data.user
+  reviewToken: string; // RAW ≥256-bit token → `${APP_URL}/review/{reviewToken}?r={1..5}`
+  cadenceStep: 1 | 2; // drives the copy; there is no step 3 (window math forbids one)
+  engagementKind: 'project' | 'case';
+  engagementTitle: string;
+  expertPartyLabel: string; // retrospective attribution (BAL-329)
+  clientCompanyName: string;
+  anchorDate: string; // pre-formatted UTC, "4 Jul"
+  consultationCount?: number; // OPTIONAL — feeds step 2's regrounding. No producer today.
+  // CASE ONLY — `case_engagements.close_reason`. Step 2's regrounding paragraph states
+  // WHY the case closed, so it must not assert "things went quiet" over a deliberate
+  // `resolved` close (`CaseClosedEmail` already branches this way; the nudge now
+  // matches). OPTIONAL by design: the project arm never has one, and a job enqueued
+  // before this field existed still validates — the template falls back to the
+  // reason-blind wording when it is absent.
+  closeReason?: 'resolved' | 'auto_inactive';
+}
+
+/**
+ * BAL-390 (D4) — a case was closed; the fused close-confirmation + rating email.
+ *
+ * ⚠ INERT IN THIS PR: registered with a rule, an email template, an in-app template and
+ * a Zod publish arm, but with NO PUBLISHER. `caseEngagementsRepository.close()` has zero
+ * production callers (`resolved` is BAL-421's, `auto_inactive` is BAL-420's), and a
+ * `@balo/db` repository structurally CANNOT publish (it depends only on `@balo/shared`,
+ * `drizzle-orm` and `postgres`). Each of BAL-420/421 adds exactly ONE
+ * `publishNotificationEvent` call at its own layer. Precedent: `company.provisioned` —
+ * a rule-less publish is a correct no-op; this is the inverse.
+ *
+ * ⚠ THIS EVENT IS **PUBLISHABLE**, NOT SERVER-ONLY. BAL-421's caller is a web Server
+ * Action, which publishes over HTTP → `apps/api/src/routes/notifications/schema.ts`.
+ * Adding it to `ServerOnlyNotificationEvent` would leave it with no Zod arm and make
+ * BAL-421 physically unable to publish it.
+ *
+ * `reviewToken` ABSENT ⇒ already rated ⇒ the template omits the review block ENTIRELY
+ * (not greyed — gone), replaced by one warm line and a "View the case" link.
+ */
+export interface EngagementCaseClosedPayload {
+  correlationId: string; // `${engagementId}:case_closed` → BullMQ jobId dedup
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  recipientId?: string; // client-side reviewer → recipient 'client'; absent ⇒ the rule skips
+  expertProfileId: string; // → resolver hydrates data.expert (context; no expert rule today)
+  clientCompanyName: string; // {Client} — prospective party
+  expertPartyLabel: string; // {Expert} — prospective party (BAL-329)
+  caseTitle: string; // subject + body + in-app body
+  closedDate: string; // pre-formatted UTC
+  closeReason: 'resolved' | 'auto_inactive';
+  consultationCount?: number; // OPTIONAL — regrounding copy; BAL-420/421 must supply a source
+  reviewToken?: string; // RAW review-invite token; absent ⇒ already rated ⇒ no review block
 }

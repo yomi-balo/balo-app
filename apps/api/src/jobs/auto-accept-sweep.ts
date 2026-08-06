@@ -3,6 +3,7 @@ import {
   projectEngagementsRepository,
   companiesRepository,
   auditEventsRepository,
+  reviewsRepository,
   AUTO_ACCEPT_DAYS,
   type ProjectEngagementRow,
   type ProjectEngagementWithMilestones,
@@ -12,6 +13,7 @@ import { trackServer, ENGAGEMENT_SERVER_EVENTS } from '@balo/analytics/server';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
 import { notificationEvents } from '../notifications/publisher.js';
+import { mintReviewInviteToken } from '../lib/review-token.js';
 
 /**
  * BAL-338 (D7) — the delivery-review sweep: a single repeatable BullMQ job that, each
@@ -134,6 +136,56 @@ function autoAcceptDate(requestedAt: Date): Date {
 }
 
 /**
+ * BAL-390 (D7) — the RAW magic-link token that fuses the star-rating ask into the
+ * EXISTING auto-accept email, or `undefined`.
+ *
+ * `undefined` when there is no client recipient (retainer / owner-miss), when that
+ * person has ALREADY rated this expert on this engagement, or when the mint fails. The
+ * template treats all three identically: the star block is omitted ENTIRELY (not
+ * greyed — gone), so the email renders exactly as it did before BAL-390.
+ *
+ * ⚠ NEVER THROWS, BUT NEVER SILENT EITHER. A rating token is a nice-to-have;
+ * auto-accepting a delivered project and telling the expert and the admins about it is the
+ * money path, and a token failure must never cost that — so the failure is caught here and
+ * the email simply renders without the star row. It is REPORTED, though: the caller's per-
+ * row `log` callback is threaded in (the same callback the sweep already uses for
+ * auto-accept and reminder failures, and the same shape `review-nudge-sweep.ts` uses), so
+ * a mint that keeps failing shows up in the job log instead of being invisible. CLAUDE.md
+ * forbids the swallow this used to be.
+ *
+ * WARN, NOT ERROR — and deliberately so. The ask is not lost: `review-nudge-sweep.ts`
+ * re-mints a fresh token for this same owner at +24h and again at +7d, so a failure here
+ * costs one email's star row, not the review. (The callback carries no severity level — it
+ * writes to the BullMQ job log — so the WARNING framing lives in the wording; do not
+ * escalate this to an error-level structured log.)
+ *
+ * ⚠ NEVER LOG THE TOKEN OR ITS HASH. Ids and the error message only, exactly as the web
+ * twin (`accept-project.ts`'s `resolveReviewAsk`) does.
+ */
+async function resolveReviewToken(
+  engagementId: string,
+  expertProfileId: string,
+  reviewerUserId: string | undefined,
+  log: (message: string) => void
+): Promise<string | undefined> {
+  if (reviewerUserId === undefined) return undefined;
+  try {
+    const existing = await reviewsRepository.findLive(
+      engagementId,
+      reviewerUserId,
+      expertProfileId
+    );
+    if (existing !== undefined) return undefined;
+    return await mintReviewInviteToken({ engagementId, reviewerUserId });
+  } catch (error) {
+    log(
+      `warning: review invite token skipped for engagement ${engagementId} reviewer ${reviewerUserId} — the auto-accept email sends without the rating ask and the +24h review nudge re-mints: ${errorMessage(error)}`
+    );
+    return undefined;
+  }
+}
+
+/**
  * Auto-accept one engagement (status-guarded in the repo) and fan out the
  * `engagement.auto_accepted` notifications (client + expert + admins) plus the
  * `engagement_accepted` (method=auto) analytics.
@@ -146,7 +198,11 @@ function autoAcceptDate(requestedAt: Date): Date {
  * `audit_events` row; the eventual hardening is an audit-events reconciliation / outbox
  * (deferred, tracked in the PR).
  */
-async function autoAcceptOne(engagement: ProjectEngagementRow, now: Date): Promise<void> {
+async function autoAcceptOne(
+  engagement: ProjectEngagementRow,
+  now: Date,
+  log: (message: string) => void
+): Promise<void> {
   const requestedAt = engagement.completionRequestedAt;
   if (requestedAt === null) return; // a pending_acceptance row always has this; defensive.
 
@@ -161,6 +217,15 @@ async function autoAcceptOne(engagement: ProjectEngagementRow, now: Date): Promi
   if (hydrated === undefined) return;
   const fields = await deriveDisplayFields(hydrated);
   const reviewCycle = await readReviewCycle(engagement.id);
+  // BAL-390 (D7): ONE email, never two — the star row rides THIS payload rather than a
+  // second project email. Absent ⇒ no recipient, already rated, or a mint failure (which
+  // is the only one of the three that logs — the other two are ordinary outcomes).
+  const reviewToken = await resolveReviewToken(
+    engagement.id,
+    engagement.expertProfileId,
+    fields.recipientId,
+    log
+  );
 
   await notificationEvents.publish('engagement.auto_accepted', {
     correlationId: `${engagement.id}:auto_accepted`,
@@ -174,6 +239,7 @@ async function autoAcceptOne(engagement: ProjectEngagementRow, now: Date): Promi
     requestedDate: formatShortUtc(requestedAt),
     autoDate: formatShortUtc(autoAt),
     reviewDays: AUTO_ACCEPT_DAYS,
+    reviewToken,
   });
 
   trackServer(ENGAGEMENT_SERVER_EVENTS.ACCEPTED, {
@@ -243,7 +309,7 @@ export async function runDeliveryReviewSweep(
   let accepted = 0;
   for (const engagement of dueForAccept) {
     try {
-      await autoAcceptOne(engagement, now);
+      await autoAcceptOne(engagement, now, log);
       accepted += 1;
     } catch (error) {
       log(`auto-accept failed for engagement ${engagement.id}: ${errorMessage(error)}`);

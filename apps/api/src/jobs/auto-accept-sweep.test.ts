@@ -7,6 +7,8 @@ const {
   mockFindWithMilestones,
   mockFindOwner,
   mockCountAudit,
+  mockFindLiveReview,
+  mockCreateReviewToken,
   mockPublish,
   mockTrackServer,
 } = vi.hoisted(() => ({
@@ -15,6 +17,8 @@ const {
   mockFindWithMilestones: vi.fn(),
   mockFindOwner: vi.fn(),
   mockCountAudit: vi.fn(),
+  mockFindLiveReview: vi.fn(),
+  mockCreateReviewToken: vi.fn(),
   mockPublish: vi.fn(),
   mockTrackServer: vi.fn(),
 }));
@@ -29,6 +33,11 @@ vi.mock('@balo/db', () => ({
   },
   companiesRepository: { findOwnerByCompanyId: mockFindOwner },
   auditEventsRepository: { countByEntityAndAction: mockCountAudit },
+  // BAL-390: `autoAcceptOne` now fuses the star-rating ask into the auto-accept email,
+  // and the mint helper (`../lib/review-token.js`) imports the token repository from
+  // this same mocked module — both exports are REQUIRED here or the named import throws.
+  reviewsRepository: { findLive: mockFindLiveReview },
+  reviewInviteTokensRepository: { create: mockCreateReviewToken },
   AUTO_ACCEPT_DAYS: 7,
 }));
 
@@ -114,6 +123,9 @@ function hydrated(
 beforeEach(() => {
   vi.clearAllMocks();
   mockCountAudit.mockResolvedValue(1);
+  // BAL-390 defaults: the client recipient has not rated yet, so a token is minted.
+  mockFindLiveReview.mockResolvedValue(undefined);
+  mockCreateReviewToken.mockResolvedValue({ id: 'tok-1' });
 });
 
 describe('runDeliveryReviewSweep — auto-accept pass', () => {
@@ -193,6 +205,155 @@ describe('runDeliveryReviewSweep — auto-accept pass', () => {
     expect(mockPublish).toHaveBeenCalledWith(
       'engagement.auto_accepted',
       expect.objectContaining({ recipientId: undefined })
+    );
+  });
+});
+
+describe('runDeliveryReviewSweep — BAL-390 fused rating ask (auto-accept pass ONLY)', () => {
+  function pendingRow() {
+    mockListPending.mockResolvedValueOnce([engRow()]).mockResolvedValueOnce([]);
+    mockAccept.mockResolvedValue(
+      engRow({ status: 'completed', acceptedAt: new Date('2026-07-10T12:00:00Z') })
+    );
+    mockFindWithMilestones.mockResolvedValue(hydrated());
+    mockFindOwner.mockResolvedValue({ id: 'owner-1' });
+  }
+
+  it('mints a token for the client recipient and threads the RAW value onto the payload', async () => {
+    pendingRow();
+
+    await runDeliveryReviewSweep(new Date('2026-07-10T12:00:00Z'));
+
+    expect(mockFindLiveReview).toHaveBeenCalledWith('eng-1', 'owner-1', 'ep-1');
+    expect(mockCreateReviewToken).toHaveBeenCalledTimes(1);
+    const mint = mockCreateReviewToken.mock.calls[0]?.[0] as {
+      engagementId: string;
+      reviewerUserId: string;
+      tokenHash: string;
+    };
+    const payload = mockPublish.mock.calls[0]?.[1] as { reviewToken?: string };
+    expect(mint.engagementId).toBe('eng-1');
+    expect(mint.reviewerUserId).toBe('owner-1');
+    // 32 random bytes → 43 base64url chars; the STORED value is its SHA-256 hex, not this.
+    expect(payload.reviewToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(mint.tokenHash).not.toBe(payload.reviewToken);
+  });
+
+  it('omits reviewToken when the recipient has ALREADY rated this expert', async () => {
+    pendingRow();
+    mockFindLiveReview.mockResolvedValue({ id: 'rev-1', rating: 5 });
+
+    const result = await runDeliveryReviewSweep(new Date('2026-07-10T12:00:00Z'));
+
+    expect(result.accepted).toBe(1);
+    expect(mockCreateReviewToken).not.toHaveBeenCalled();
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.auto_accepted',
+      expect.objectContaining({ reviewToken: undefined })
+    );
+  });
+
+  /**
+   * ⚠ NEVER FAILS THE ACCEPT, AND NEVER SWALLOWS THE CAUSE. This catch used to be a bare
+   * `catch { return undefined; }` with no log at all, so a mint that failed for every row —
+   * a bad DB credential, a dropped column — was indistinguishable from "everyone had
+   * already rated": silently, nobody got a star row. CLAUDE.md forbids exactly that. The
+   * sweep's own per-row `log` callback is threaded down to report it.
+   *
+   * WARN, NOT ERROR: the ask itself is not lost, because `review-nudge-sweep.ts` re-mints a
+   * fresh token for this same owner at +24h and again at +7d.
+   */
+  it('omits reviewToken (never fails the accept) when the mint throws — and reports it', async () => {
+    pendingRow();
+    mockCreateReviewToken.mockRejectedValue(new Error('db down'));
+
+    const messages: string[] = [];
+    const result = await runDeliveryReviewSweep(new Date('2026-07-10T12:00:00Z'), (message) =>
+      messages.push(message)
+    );
+
+    expect(result.accepted).toBe(1); // the money path (expert + admin notify) still ran
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.auto_accepted',
+      expect.objectContaining({ reviewToken: undefined })
+    );
+
+    const logged = messages.join('\n');
+    // Enough context to debug: which engagement, which reviewer, what actually failed.
+    expect(logged).toContain('eng-1');
+    expect(logged).toContain('owner-1');
+    expect(logged).toContain('db down');
+    // Framed as recoverable, not as a failed row — the nudge sweep re-mints.
+    expect(logged).toMatch(/warning/i);
+    // Never the raw token (43 base64url chars) nor its SHA-256 hex.
+    expect(logged).not.toMatch(/[A-Za-z0-9_-]{43}/);
+    expect(logged).not.toMatch(/[a-f0-9]{64}/);
+  });
+
+  /**
+   * The counterpart: the two NON-failure reasons a token is absent are ordinary outcomes,
+   * not incidents. If they logged, a healthy sweep would cry wolf on every tick and the
+   * genuine mint failure above would be lost in it.
+   */
+  it.each([
+    [
+      'the recipient has already rated',
+      () => mockFindLiveReview.mockResolvedValue({ id: 'rev-1' }),
+    ],
+    [
+      'there is no client recipient',
+      () => mockFindOwner.mockRejectedValue(new Error('No owner found')),
+    ],
+  ])('stays quiet when %s — that is an outcome, not an incident', async (_name, arrange) => {
+    pendingRow();
+    arrange();
+
+    const messages: string[] = [];
+    await runDeliveryReviewSweep(new Date('2026-07-10T12:00:00Z'), (message) =>
+      messages.push(message)
+    );
+
+    expect(messages).toEqual([]);
+  });
+
+  it('omits reviewToken when there is no client recipient (retainer / owner-miss)', async () => {
+    pendingRow();
+    mockFindOwner.mockRejectedValue(new Error('No owner found'));
+
+    await runDeliveryReviewSweep(new Date('2026-07-10T12:00:00Z'));
+
+    expect(mockFindLiveReview).not.toHaveBeenCalled();
+    expect(mockCreateReviewToken).not.toHaveBeenCalled();
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.auto_accepted',
+      expect.objectContaining({ reviewToken: undefined })
+    );
+  });
+
+  /**
+   * ⚠ THE BOUNDARY, ENCODED AS A TEST. BAL-390 touched `autoAcceptOne` and NOTHING ELSE
+   * in this file. The T-2 reminder pass (`remindOne` + `runDeliveryReviewSweep`'s second
+   * pass) is CONFIRMED BROKEN — a `(now−7d, now−5d]`, i.e. 48-hour, band against an
+   * hourly cron, leaning on BullMQ jobId dedup that the shared `notification-events`
+   * queue's `removeOnComplete: { count: 100 }` cannot supply. It is ticketed separately
+   * and was deliberately NOT fixed, NOT copied, and NOT used as precedent here. If a
+   * future change makes the reminder pass mint review tokens, this fails.
+   */
+  it('leaves the T-2 reminder pass completely untouched — it mints nothing', async () => {
+    mockListPending
+      .mockResolvedValueOnce([]) // nothing to auto-accept
+      .mockResolvedValueOnce([engRow({ id: 'eng-2', completionRequestedAt: REQUESTED_07_06 })]);
+    mockFindWithMilestones.mockResolvedValue(hydrated({ id: 'eng-2' }));
+    mockFindOwner.mockResolvedValue({ id: 'owner-2' });
+
+    const result = await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
+
+    expect(result).toEqual({ accepted: 0, reminded: 1 });
+    expect(mockFindLiveReview).not.toHaveBeenCalled();
+    expect(mockCreateReviewToken).not.toHaveBeenCalled();
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.review_reminder',
+      expect.not.objectContaining({ reviewToken: expect.anything() })
     );
   });
 });

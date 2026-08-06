@@ -661,3 +661,39 @@ export const scheduledNotificationModeEnum = pgEnum('scheduled_notification_mode
   'first_wins',
   'replace_pending',
 ]);
+
+/**
+ * BAL-390 — WHERE the review was captured.
+ *   `end_of_call` — the in-app post-call control (BAL-389 mounts it; BAL-390 ships only
+ *                   the pure resolver + the submit action + the reader).
+ *   `recap`       — BAL-388's recap surface. DECLARED, NO PRODUCER: shipping the label
+ *                   now means the recap capture path never needs an ALTER TYPE … ADD VALUE.
+ *   `email`       — the magic-link landing form.
+ */
+export const reviewSurfaceEnum = pgEnum('review_surface', ['end_of_call', 'recap', 'email']);
+
+/**
+ * BAL-390 — HOW the writer authenticated.
+ *   `session`    — an authenticated iron-session request.
+ *   `magic_link` — a `review_invite_tokens` bearer.
+ *
+ * ORTHOGONAL to `review_surface`, and deliberately NOT called `source`: a column named
+ * `source` sitting next to a column named `surface` reads as two columns answering the
+ * same question. This is the axis a security reviewer reads ("show me every review
+ * written via a magic link"), and it is NOT derivable from the surface in the general
+ * case — a future emailed recap link would be `surface='recap'`, `auth_method='magic_link'`.
+ *
+ * WHY IT SHIPS NOW rather than later: pre-launch with no live data, ADDING this column
+ * later would be nearly free — but the DATA IS NOT BACKFILLABLE. You cannot retroactively
+ * determine how an existing review was authenticated. Both values occur in v1
+ * (end-of-call ⇒ `session`, email landing form ⇒ `magic_link`), so it populates
+ * meaningfully from day one, and `magic_link` is precisely the value an incident response
+ * would query against, because that token arrives in an inbox. Deferring the column would
+ * lose that signal permanently.
+ *
+ * Both new enums are standalone `CREATE TYPE` in migration 0058, so their literals would
+ * be safe inside a CHECK in that same migration (the one-transaction hazard applies only
+ * to `ALTER TYPE … ADD VALUE` — the ruling at `engagements.ts` and `case-engagements.ts`).
+ * NEITHER APPEARS IN AN INDEX PREDICATE — house rule.
+ */
+export const reviewAuthMethodEnum = pgEnum('review_auth_method', ['session', 'magic_link']);

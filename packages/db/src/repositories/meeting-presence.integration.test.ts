@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { meetingPresence, meetings, type MeetingParticipantParty } from '../schema';
-import { meetingFactory, userFactory } from '../test/factories';
+import {
+  meetingContexts,
+  meetingPresence,
+  meetings,
+  type MeetingParticipantParty,
+} from '../schema';
+import { engagementFactory, meetingFactory, userFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { meetingPresenceRepository } from './meeting-presence';
 
@@ -426,6 +431,145 @@ describe('meetingPresenceRepository.clocks', () => {
       expertFirstJoinedAt: null,
       billableStartedAt: null,
     });
+  });
+});
+
+// ── BAL-390: the participation-derived nudge recipient source ────────────────
+
+describe('meetingPresenceRepository.listClientUserIdsForEngagement', () => {
+  /** A meeting whose single context is a `case` over a fresh engagement. */
+  async function seedCaseMeeting(): Promise<{ meetingId: string; engagementId: string }> {
+    const seeded = await meetingFactory();
+    if (seeded.caseEngagementId === undefined) {
+      throw new Error('expected the default case context');
+    }
+    return { meetingId: seeded.meeting.id, engagementId: seeded.caseEngagementId };
+  }
+
+  it('returns the DISTINCT client-side attendees of an engagement’s meetings', async () => {
+    const { meetingId, engagementId } = await seedCaseMeeting();
+    const alex = await userFactory();
+    const dana = await userFactory();
+
+    await join(meetingId, alex.id, 'client', 0);
+    await join(meetingId, dana.id, 'client', 5);
+
+    const ids = await meetingPresenceRepository.listClientUserIdsForEngagement(engagementId);
+    expect(ids.sort()).toEqual([alex.id, dana.id].sort());
+  });
+
+  it('de-duplicates a client who joined, left, and rejoined the same meeting', async () => {
+    const { meetingId, engagementId } = await seedCaseMeeting();
+    const alex = await userFactory();
+
+    await join(meetingId, alex.id, 'client', 0);
+    await leave(meetingId, alex.id, 10);
+    await join(meetingId, alex.id, 'client', 20);
+
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(engagementId)
+    ).resolves.toEqual([alex.id]);
+  });
+
+  it('EXCLUDES the expert and observers — the delivering expert must never be nudged to review themselves', async () => {
+    const { meetingId, engagementId } = await seedCaseMeeting();
+    const expert = await userFactory();
+    const staffer = await userFactory();
+    const client = await userFactory();
+
+    await join(meetingId, expert.id, 'expert', 0);
+    await join(meetingId, staffer.id, 'observer', 1);
+    await join(meetingId, client.id, 'client', 2);
+
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(engagementId)
+    ).resolves.toEqual([client.id]);
+  });
+
+  it('EXCLUDES a guest (user_id IS NULL) — guests hold no capability and cannot own a review', async () => {
+    const { meetingId, engagementId } = await seedCaseMeeting();
+    const client = await userFactory();
+
+    await join(meetingId, null, 'client', 0);
+    await join(meetingId, client.id, 'client', 1);
+
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(engagementId)
+    ).resolves.toEqual([client.id]);
+  });
+
+  it('excludes soft-deleted presence rows, meetings, and context rows', async () => {
+    const softPresence = await seedCaseMeeting();
+    const presenceUser = await userFactory();
+    const opened = await join(softPresence.meetingId, presenceUser.id, 'client', 0);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, opened.id));
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(softPresence.engagementId)
+    ).resolves.toEqual([]);
+
+    const softMeeting = await seedCaseMeeting();
+    const meetingUser = await userFactory();
+    await join(softMeeting.meetingId, meetingUser.id, 'client', 0);
+    await db
+      .update(meetings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetings.id, softMeeting.meetingId));
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(softMeeting.engagementId)
+    ).resolves.toEqual([]);
+
+    const softContext = await seedCaseMeeting();
+    const contextUser = await userFactory();
+    await join(softContext.meetingId, contextUser.id, 'client', 0);
+    await db
+      .update(meetingContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingContexts.meetingId, softContext.meetingId));
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(softContext.engagementId)
+    ).resolves.toEqual([]);
+  });
+
+  it('IGNORES a project_discovery context whose context_id is not an engagement id', async () => {
+    // `context_id` is POLYMORPHIC: a discovery call points at a `project_requests.id`.
+    // Matching on the id alone would read the wrong table's key space.
+    const { engagementId } = await seedCaseMeeting();
+    const discovery = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: engagementId }],
+    });
+    const client = await userFactory();
+    await join(discovery.meeting.id, client.id, 'client', 0);
+
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(engagementId)
+    ).resolves.toEqual([]);
+  });
+
+  it('returns [] for an engagement with no meetings — the state BAL-390 actually ships in', async () => {
+    // ⚠ `meetings` has NO production writer until BAL-129/134, so this IS production
+    // today. The sweep falls back to the client company owner until then.
+    const { engagement } = await engagementFactory();
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(engagement.id)
+    ).resolves.toEqual([]);
+  });
+
+  it('spans MULTIPLE meetings held for the same engagement', async () => {
+    const first = await seedCaseMeeting();
+    const alex = await userFactory();
+    const dana = await userFactory();
+    await join(first.meetingId, alex.id, 'client', 0);
+
+    const second = await meetingFactory({
+      contexts: [{ contextType: 'project_kickoff', contextId: first.engagementId }],
+    });
+    await join(second.meeting.id, dana.id, 'client', 0);
+
+    const ids = await meetingPresenceRepository.listClientUserIdsForEngagement(first.engagementId);
+    expect(ids.sort()).toEqual([alex.id, dana.id].sort());
   });
 });
 

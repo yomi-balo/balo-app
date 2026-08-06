@@ -14,6 +14,7 @@ import type {
   EngagementCancelledPayload,
   EngagementAcceptedPayload,
   EngagementChangesRequestedPayload,
+  EngagementCaseClosedPayload,
   CompanyProvisionedPayload,
   CreditTopupRequestedPayload,
   PromoRedeemedPayload,
@@ -233,6 +234,11 @@ export type NotificationEvent =
   // ABSENT from this web union (they have no `/notifications/publish` route arm).
   | 'engagement.accepted'
   | 'engagement.changes_requested'
+  // BAL-390 (D4) — a case was closed (the fused close + rating email). PUBLISHABLE from
+  // apps/web and INERT: the rule, both templates and the Zod arm all ship, but nothing
+  // publishes it yet. BAL-420 (auto_inactive) and BAL-421 (resolved) each add exactly
+  // one publishNotificationEvent line against this key.
+  | 'engagement.case_closed'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
@@ -277,6 +283,7 @@ export interface EventPayloadMap {
   'engagement.cancelled': EngagementCancelledPayload;
   'engagement.accepted': EngagementAcceptedPayload;
   'engagement.changes_requested': EngagementChangesRequestedPayload;
+  'engagement.case_closed': EngagementCaseClosedPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;

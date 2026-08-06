@@ -36,6 +36,8 @@ import type {
   PaymentChargedPayload,
   PayoutRecordedPayload,
   RecapReadyPayload,
+  ReviewReminderPayload,
+  EngagementCaseClosedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -263,6 +265,12 @@ export type NotificationEvent =
   | 'engagement.changes_requested'
   | 'engagement.auto_accepted'
   | 'engagement.review_reminder'
+  // BAL-390 — a case was closed (fused close + rating ask). PUBLISHABLE and INERT:
+  // fully wired, no publisher until BAL-420/BAL-421.
+  | 'engagement.case_closed'
+  // BAL-390 — the star-rating nudge (+24h / +7d). SERVER-ONLY. NOT the same thing as
+  // `engagement.review_reminder` above, which is BAL-338's pre-auto-accept nudge.
+  | 'review.reminder'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'
   | 'party.join_request_approved'
@@ -323,7 +331,12 @@ export type ServerOnlyNotificationEvent =
   | 'payout.recorded'
   // BAL-387: published from the transcript pipeline worker post-`markRecapPublished` —
   // never from apps/web, so it has no publishBodySchema arm.
-  | 'recap.ready';
+  | 'recap.ready'
+  // BAL-390: the star-rating nudge is published by the API's hourly review-nudge sweep —
+  // never from apps/web, so it has no publishBodySchema arm (adding one would be a
+  // `StraySchemaArm` and fail `tsc`). ⚠ `engagement.case_closed` is deliberately NOT
+  // listed: BAL-421's publisher is a web Server Action and needs its arm.
+  | 'review.reminder';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -426,6 +439,8 @@ export interface EventPayloadMap {
   'engagement.changes_requested': EngagementChangesRequestedPayload;
   'engagement.auto_accepted': EngagementAutoAcceptedPayload;
   'engagement.review_reminder': EngagementReviewReminderPayload;
+  'engagement.case_closed': EngagementCaseClosedPayload;
+  'review.reminder': ReviewReminderPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;

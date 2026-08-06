@@ -446,6 +446,53 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('engagement-case-closed-client (BAL-390)', () => {
+    it('renders the resolved-close record, deep-linked to the engagement', () => {
+      const result = getInAppTemplate('engagement-case-closed-client', {
+        caseTitle: 'Flow interview stuck on a record-triggered loop',
+        closedDate: '3 Aug',
+        closeReason: 'resolved',
+        engagementId: 'eng-1',
+      });
+      expect(result).toEqual({
+        title: 'Case closed',
+        body: "'Flow interview stuck on a record-triggered loop' is wrapped up as of 3 Aug. Everything from it stays here whenever you need it.",
+        actionUrl: '/engagements/eng-1',
+      });
+    });
+
+    it('softens the copy when the case went quiet rather than being resolved', () => {
+      const result = getInAppTemplate('engagement-case-closed-client', {
+        caseTitle: 'Apex CPU limit',
+        closedDate: '3 Aug',
+        closeReason: 'auto_inactive',
+        engagementId: 'eng-2',
+      });
+      expect(result.body).toContain('had been quiet for a while');
+      expect(result.body).toContain('rather than leave it hanging');
+    });
+
+    it('carries NO star row and NO review token — those live in the email only', () => {
+      const result = getInAppTemplate('engagement-case-closed-client', {
+        caseTitle: 'Apex CPU limit',
+        closedDate: '3 Aug',
+        closeReason: 'resolved',
+        engagementId: 'eng-3',
+        reviewToken: 'raw-token-value-that-must-not-render',
+      });
+      expect(JSON.stringify(result)).not.toContain('raw-token-value');
+      expect(JSON.stringify(result)).not.toContain('/review/');
+    });
+
+    it('degrades gracefully with no payload fields', () => {
+      const result = getInAppTemplate('engagement-case-closed-client', {});
+      expect(result.title).toBe('Case closed');
+      expect(result.body).toContain("'Your case'");
+      expect(result.body).toContain('today');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

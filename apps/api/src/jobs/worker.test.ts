@@ -25,6 +25,8 @@ const mockRegisterReceivableDunningSweepCron = vi.fn().mockResolvedValue(undefin
 const mockStartTranscriptPipeline = vi.fn();
 const mockStartScheduledNotificationDispatch = vi.fn();
 const mockRegisterScheduledNotificationDispatchCron = vi.fn().mockResolvedValue(undefined);
+const mockStartReviewNudgeSweep = vi.fn();
+const mockRegisterReviewNudgeSweepCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -74,6 +76,14 @@ vi.mock('./transcript-pipeline.js', () => ({
 vi.mock('./scheduled-notification-dispatch.js', () => ({
   startScheduledNotificationDispatchWorker: () => mockStartScheduledNotificationDispatch(),
   registerScheduledNotificationDispatchCron: () => mockRegisterScheduledNotificationDispatchCron(),
+}));
+// BAL-390: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real
+// module, which constructs a Worker on a live Redis connection and hangs (5s CI timeout).
+// It stays GREEN LOCALLY if a dev Redis happens to be running, so it must land in the
+// same commit as the `worker.ts` registration.
+vi.mock('./review-nudge-sweep.js', () => ({
+  startReviewNudgeSweepWorker: () => mockStartReviewNudgeSweep(),
+  registerReviewNudgeSweepCron: () => mockRegisterReviewNudgeSweepCron(),
 }));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
@@ -140,6 +150,8 @@ describe('startWorkers', () => {
     expect(mockStartTranscriptPipeline).toHaveBeenCalled();
     expect(mockStartScheduledNotificationDispatch).toHaveBeenCalled();
     expect(mockRegisterScheduledNotificationDispatchCron).toHaveBeenCalled();
+    expect(mockStartReviewNudgeSweep).toHaveBeenCalled();
+    expect(mockRegisterReviewNudgeSweepCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

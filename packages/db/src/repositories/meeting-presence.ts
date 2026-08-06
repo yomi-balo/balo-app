@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, type SQL } from 'drizzle-orm';
 import {
   computeMeetingClocks,
   type MeetingClocks,
@@ -6,6 +6,7 @@ import {
 } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
+  meetingContexts,
   meetingPresence,
   meetings,
   type MeetingParticipantParty,
@@ -228,5 +229,60 @@ export const meetingPresenceRepository = {
       leftAt: row.leftAt,
     }));
     return computeMeetingClocks(intervals, now ?? (await resolveClockCeiling(meetingId)));
+  },
+
+  /**
+   * BAL-390 — the DISTINCT authenticated CLIENT-SIDE people who actually attended any
+   * live meeting held for this engagement. The review nudge's participant source: an ask
+   * goes to people who were IN THE ROOM, not to everyone with a membership.
+   *
+   * `meeting_presence ⋈ meetings ⋈ meeting_contexts`, filtered to
+   * `meeting_contexts.context_id = engagementId` over the ENGAGEMENT-SCOPED context types
+   * (ADR-1045 §2). `project_discovery` is EXCLUDED because its `context_id` is a
+   * `project_requests.id`, not an engagement id, and `admin` because its `context_id` is
+   * NULL — `context_id` is POLYMORPHIC, so matching on it alone is not sufficient. Naming
+   * the types also puts the leading column of `meeting_context_reverse_idx`
+   * (`context_type, context_id`) in the predicate, so the read rides it. Enum literals at
+   * QUERY time are safe; the house restriction is index predicates and CHECKs only.
+   *
+   * `party = 'client'` excludes the delivering expert (who must never be nudged to review
+   * themselves) and `observer` Balo staff. `user_id IS NOT NULL` drops guests, who carry
+   * no user identity until BAL-408 and therefore cannot hold a capability or a review.
+   * All three tables' `deleted_at` are guarded.
+   *
+   * ⚠ THIS RETURNS `[]` TODAY. `meetings` has NO production writer (BAL-129/134 are
+   * unbuilt), so no presence row exists for any engagement. The code is real and tested;
+   * a builder running a manual end-to-end test and expecting nudges from participation
+   * will be confused unless they read this line. The client company's owner is therefore
+   * the only nudge recipient today — but NOT as a fallback: the sweep unions the owner in
+   * UNCONDITIONALLY on every tick, participants or not (`review-nudge-sweep.ts`, pinned by
+   * "ALWAYS asks the company owner, even when participants were recorded"). Calling it a
+   * fallback invites precisely the "guard it on participants being empty" change that that
+   * test exists to block.
+   */
+  async listClientUserIdsForEngagement(engagementId: string): Promise<string[]> {
+    const rows = await db
+      .selectDistinct({ userId: meetingPresence.userId })
+      .from(meetingPresence)
+      .innerJoin(meetings, eq(meetings.id, meetingPresence.meetingId))
+      .innerJoin(meetingContexts, eq(meetingContexts.meetingId, meetings.id))
+      .where(
+        and(
+          eq(meetingContexts.contextId, engagementId),
+          inArray(meetingContexts.contextType, [
+            'case',
+            'project_kickoff',
+            'package_session',
+            'retainer_checkin',
+          ]),
+          eq(meetingPresence.party, 'client'),
+          isNotNull(meetingPresence.userId),
+          isNull(meetingPresence.deletedAt),
+          isNull(meetings.deletedAt),
+          isNull(meetingContexts.deletedAt)
+        )
+      );
+
+    return rows.flatMap((row) => (row.userId === null ? [] : [row.userId]));
   },
 };

@@ -15,6 +15,10 @@ export {
   AUTH_SERVER_EVENTS,
   PROMO_SERVER_EVENTS,
   ACTION_ITEM_SERVER_EVENTS,
+  // BAL-390 — server-only by construction: every review write happens in a Server
+  // Action, and there is deliberately NO landing-view event (Gmail's link proxy and
+  // Safe Links detonation fetch `/review/{token}` unsolicited).
+  REVIEW_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

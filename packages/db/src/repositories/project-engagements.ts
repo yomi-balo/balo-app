@@ -1,16 +1,18 @@
-import { and, asc, eq, inArray, isNull, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, notExists, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import {
   engagementMilestones,
   engagements,
   projectEngagements,
   projectRequests,
+  reviews,
   type Engagement,
   type EngagementMilestone,
   type NewProjectEngagement,
   type ProjectEngagement,
   type ProjectRequest,
 } from '../schema';
+import { UNTITLED_ENGAGEMENT_LABEL, type RatingNudgeCandidate } from './reviews';
 import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
@@ -1138,6 +1140,91 @@ export const projectEngagementsRepository = {
       .orderBy(asc(projectEngagements.completionRequestedAt));
 
     return rows.map((r) => toProjectRow(r.parent, r.child));
+  },
+
+  /**
+   * BAL-390 — the PROJECT half of the rating-nudge candidate scan: live projects whose
+   * `accepted_at` falls in the HALF-OPEN band `(after, until]` and whose delivering
+   * expert has not already been rated on that engagement.
+   *
+   * POLICY-FREE, exactly like `listPendingAutoAccept(cutoff)`: the CALLER computes the
+   * band from `reviewNudgeBands(now)` in `@balo/shared/reviews`. The band width is
+   * COUPLED to the sweep's cron period (both one hour) — see that module's warning.
+   *
+   * HALF-OPEN IS LOAD-BEARING. `>` on the lower edge and `<=` on the upper means two
+   * consecutive hourly ticks partition the timeline with neither overlap (a duplicate
+   * nudge) nor gap (a missed one). An anchor exactly at `after` belonged to the PREVIOUS
+   * tick; one exactly at `until` belongs to this one.
+   *
+   * The "already rated" suppression is folded into SQL as a `NOT EXISTS` over LIVE
+   * reviews for `(engagement, expert)`. That is what makes the AC "nudges stop once a
+   * review exists" true by the candidate query no longer matching, rather than by any
+   * cancellation code — there are no per-engagement scheduled jobs to cancel.
+   *
+   * ⚠ NOTE THE ABSENT REVIEWER PREDICATE — deliberate and RATIFIED 2026-08-06. Suppression
+   * is ENGAGEMENT-level: one person's review ends the nudges for every other unrated
+   * participant, because a rating is signal about the expert and one is enough to have it.
+   * Live today (the accept email goes to the ACTING member, who need not be the owner), and
+   * it widens to all attendees once BAL-129/134 write `meeting_presence`. Adding a
+   * `reviewer_user_id` term here is NOT the way to change it — this query does not know the
+   * reviewer set; drop the `NOT EXISTS` entirely and let `filterUnratedReviewers` suppress.
+   * Full reasoning and the worked example live in `review-nudge-sweep.ts`'s header.
+   *
+   * CHILD-ROOTED so it rides `project_engagement_accepted_at_idx` and is type-scoped for
+   * free. Both parent and child `deleted_at` are guarded.
+   */
+  async listAcceptedBetween(after: Date, until: Date): Promise<RatingNudgeCandidate[]> {
+    const rows = await db
+      .select({
+        engagementId: engagements.id,
+        companyId: engagements.companyId,
+        expertProfileId: engagements.expertProfileId,
+        anchorAt: projectEngagements.acceptedAt,
+        title: projectRequests.title,
+      })
+      .from(projectEngagements)
+      .innerJoin(engagements, eq(engagements.id, projectEngagements.engagementId))
+      // NULLABLE provenance (the retainer seam) → LEFT JOIN, and the title falls back.
+      .leftJoin(projectRequests, eq(projectRequests.id, projectEngagements.projectRequestId))
+      .where(
+        and(
+          gt(projectEngagements.acceptedAt, after),
+          lte(projectEngagements.acceptedAt, until),
+          isNull(projectEngagements.deletedAt),
+          isNull(engagements.deletedAt),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(reviews)
+              .where(
+                and(
+                  eq(reviews.engagementId, engagements.id),
+                  eq(reviews.expertProfileId, engagements.expertProfileId),
+                  isNull(reviews.deletedAt)
+                )
+              )
+          )
+        )
+      )
+      .orderBy(asc(projectEngagements.acceptedAt));
+
+    return rows.flatMap((row) => {
+      // `accepted_at` is NULLABLE on the column, but the band predicate above cannot
+      // match NULL — this guard exists to satisfy the type, never to filter.
+      if (row.anchorAt === null) {
+        return [];
+      }
+      return [
+        {
+          engagementId: row.engagementId,
+          engagementKind: 'project' as const,
+          companyId: row.companyId,
+          expertProfileId: row.expertProfileId,
+          anchorAt: row.anchorAt,
+          title: row.title ?? UNTITLED_ENGAGEMENT_LABEL,
+        },
+      ];
+    });
   },
 
   // ── Delivery lifecycle transitions (BAL-330) ───────────────────────────

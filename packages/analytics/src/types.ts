@@ -34,6 +34,7 @@ import type { ActionItemServerEventMap } from './events/action-item';
 import type { WalletEventMap } from './events/wallet';
 import type { ScheduleEventMap } from './events/schedule';
 import type { TranscriptServerEventMap } from './events/transcript';
+import type { ReviewServerEventMap } from './events/review';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -85,6 +86,7 @@ export type ServerEvents = ExpertServerEventMap &
   SessionServerEventMap &
   CaseBillingServerEventMap &
   ActionItemServerEventMap &
-  TranscriptServerEventMap;
+  TranscriptServerEventMap &
+  ReviewServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

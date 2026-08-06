@@ -443,3 +443,16 @@ export type {
   NewMeetingPresence,
   MeetingParticipantParty,
 } from '../schema';
+// ── Review & rating primitive (BAL-390) ────────────────────────────────────
+export {
+  reviewsRepository,
+  UNTITLED_ENGAGEMENT_LABEL,
+  type UpsertReviewInput,
+  type UpsertReviewResult,
+  type RatingNudgeCandidate,
+} from './reviews';
+export {
+  reviewInviteTokensRepository,
+  type CreateReviewInviteTokenInput,
+} from './review-invite-tokens';
+export type { Review, NewReview, ReviewInviteToken, NewReviewInviteToken } from '../schema';

@@ -27,4 +27,7 @@ export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
 export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';
 export type { TranscriptVenue } from '../events/transcript';
+// BAL-390 — SERVER-ONLY by design: `review_*` here always means the STAR RATING, and
+// none of these three may be added to the client `@/lib/analytics` mock export list.
+export { REVIEW_SERVER_EVENTS } from '../events/review';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';
