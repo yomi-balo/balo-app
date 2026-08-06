@@ -24,6 +24,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startReceivableDunningSweepWorker, registerReceivableDunningSweepCron },
     { startTranscriptPipelineWorker },
     { startScheduledNotificationDispatchWorker, registerScheduledNotificationDispatchCron },
+    { startReviewNudgeSweepWorker, registerReviewNudgeSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -39,6 +40,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./receivable-dunning-sweep.js'),
     import('./transcript-pipeline.js'),
     import('./scheduled-notification-dispatch.js'),
+    import('./review-nudge-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -71,5 +73,11 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // the clock — this cron is only the ticker, and there are no delayed BullMQ jobs anywhere.
   startScheduledNotificationDispatchWorker();
   await registerScheduledNotificationDispatchCron();
+  // BAL-390: the star-rating nudge sweep (+24h / +7d off accepted_at | closed_at).
+  // ⚠ HOURLY, AND NOT A FREE KNOB — the candidate band width in `@balo/shared/reviews`
+  // (REVIEW_NUDGE_WINDOW_MS) is COUPLED to this cadence, and a unit test asserts they
+  // agree. Read that constant's warning before changing either.
+  startReviewNudgeSweepWorker();
+  await registerReviewNudgeSweepCron();
   logger?.info('BullMQ workers started');
 }

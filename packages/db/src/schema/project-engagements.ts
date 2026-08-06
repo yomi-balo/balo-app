@@ -185,6 +185,13 @@ export const projectEngagements = pgTable(
     index('project_engagement_delivery_completion_idx')
       .on(t.deliveryStatus, t.completionRequestedAt)
       .where(sql`${t.deletedAt} IS NULL`),
+    // BAL-390 — the rating-nudge candidate scan: `accepted_at` inside a ONE-HOUR band
+    // (`listAcceptedBetween`). Acceptance is the PROJECT's terminal anchor, the same
+    // instant the fused acceptance email goes out. The predicate references ONLY
+    // `deleted_at`, NEVER an enum literal (that would be the ADD-VALUE one-tx hazard).
+    index('project_engagement_accepted_at_idx')
+      .on(t.acceptedAt)
+      .where(sql`${t.deletedAt} IS NULL`),
     check('project_engagement_type_is_project', sql`${t.engagementType} = 'project'`),
     check('project_engagement_price_cents_nonneg', sql`${t.priceCents} >= 0`),
     check(

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { notificationRules } from './rules.js';
+import { notificationRules, type NotificationRule } from './rules.js';
 
 describe('notificationRules', () => {
   it('has rules for user.welcome event', () => {
@@ -636,6 +636,111 @@ describe('notificationRules', () => {
       };
       expect(clientRule.condition!(toExpert)).toBe(false);
       expect(expertRule.condition!(toExpert)).toBe(true);
+    });
+  });
+
+  describe('BAL-390 review & rating', () => {
+    /** Narrow by destructure + guard — `noUncheckedIndexedAccess` is on. */
+    function rulesFor(event: string): NotificationRule[] {
+      const rules = notificationRules[event];
+      if (rules === undefined) throw new Error(`no rules registered for ${event}`);
+      return rules;
+    }
+
+    it('review.reminder: EMAIL ONLY to the reviewer (recipient self, template review-nudge)', () => {
+      const rules = rulesFor('review.reminder');
+      expect(rules).toHaveLength(1);
+      const [rule] = rules;
+      expect(rule).toMatchObject({
+        channel: 'email',
+        recipient: 'self',
+        template: 'review-nudge',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      // The ask IS the in-email star row — an in-app copy would carry neither stars
+      // nor token, so there must not be one.
+      expect(rules.some((r) => r.channel !== 'email')).toBe(false);
+      expect(rule?.condition).toBeUndefined();
+    });
+
+    it('does NOT collide with BAL-338 engagement.review_reminder', () => {
+      // The regression guard for the naming collision this ticket had to walk around:
+      // two different events, two different templates, neither consolidated.
+      const legacy = rulesFor('engagement.review_reminder');
+      for (const rule of legacy) {
+        expect(rule.template).toBe('engagement-review-reminder-client');
+      }
+      expect(legacy.map((r) => r.recipient)).toEqual(['client', 'client']);
+      for (const rule of rulesFor('review.reminder')) {
+        expect(rule.template).not.toBe('engagement-review-reminder-client');
+      }
+    });
+
+    it('engagement.case_closed: client email + in-app, gated on recipientId, no admin fan-out', () => {
+      const rules = rulesFor('engagement.case_closed');
+      expect(rules).toHaveLength(2);
+      for (const rule of rules) {
+        expect(rule.recipient).toBe('client');
+        expect(rule.template).toBe('engagement-case-closed-client');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeDefined();
+      }
+      expect(rules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      expect(rules.some((r) => r.recipient === 'admin_users')).toBe(false);
+    });
+
+    it('engagement.case_closed skips when no client-side reviewer resolved', () => {
+      const [rule] = rulesFor('engagement.case_closed');
+      const condition = rule?.condition;
+      expect(condition).toBeDefined();
+      const base = { event: 'engagement.case_closed', data: {} };
+      expect(condition?.({ ...base, payload: { recipientId: 'user-1' } })).toBe(true);
+      expect(condition?.({ ...base, payload: {} })).toBe(false);
+    });
+
+    it('engagement.accepted now emails the ACCEPTING client too (recipient self)', () => {
+      // BAL-390 deliberately overturns BAL-338's "No client recipient (they just
+      // acted)": actor-gets-a-receipt is the house pattern at money moments
+      // (payment.charged / credit.topup.completed / promo.redeemed).
+      const rules = rulesFor('engagement.accepted');
+      expect(rules).toHaveLength(5);
+      const selfRules = rules.filter((r) => r.recipient === 'self');
+      expect(selfRules).toHaveLength(1);
+      const [selfRule] = selfRules;
+      expect(selfRule).toMatchObject({
+        channel: 'email',
+        template: 'engagement-accepted-client',
+        timing: 'immediate',
+      });
+      // The expert + admin fan-out is untouched.
+      expect(rules.filter((r) => r.recipient === 'expert')).toHaveLength(2);
+      expect(rules.filter((r) => r.recipient === 'admin_users')).toHaveLength(2);
+    });
+
+    it('engagement.accepted client email is gated on payload.userId', () => {
+      const rules = rulesFor('engagement.accepted');
+      const selfRule = rules.find((r) => r.recipient === 'self');
+      const condition = selfRule?.condition;
+      expect(condition).toBeDefined();
+      const base = { event: 'engagement.accepted', data: {} };
+      expect(condition?.({ ...base, payload: { userId: 'user-1' } })).toBe(true);
+      // An older publisher that supplies no acting user must skip, not send a
+      // half-populated acceptance record.
+      expect(condition?.({ ...base, payload: {} })).toBe(false);
+    });
+
+    it('engagement.auto_accepted keeps its rule unchanged (the star row is fused, not added)', () => {
+      const rules = rulesFor('engagement.auto_accepted');
+      expect(rules).toHaveLength(6);
+      const clientRules = rules.filter((r) => r.recipient === 'client');
+      expect(clientRules).toHaveLength(2);
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('engagement-auto-accepted-client');
+      }
     });
   });
 

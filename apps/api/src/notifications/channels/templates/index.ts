@@ -26,6 +26,9 @@ import { CompletionRequestEmail } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
 import { ReviewReminderEmail } from './engagement-review-reminder.js';
 import { AutoAcceptedEmail } from './engagement-auto-accepted.js';
+import { AcceptedClientEmail } from './engagement-accepted-emails.js';
+import { CaseClosedEmail } from './engagement-case-closed.js';
+import { ReviewNudgeEmail } from './review-nudge.js';
 import {
   EngagementAcceptedExpertEmail,
   EngagementAutoAcceptedExpertEmail,
@@ -80,6 +83,38 @@ function clampCadenceStep(value: unknown): 1 | 2 | 3 {
   if (value === 2) return 2;
   if (value === 3) return 3;
   return 1;
+}
+
+/**
+ * BAL-390 — the review nudge has exactly TWO cadence steps and there cannot be a
+ * third (the sweep's band math makes an anchor older than 7d+1h unmatchable), so this
+ * is deliberately narrower than `clampCadenceStep` above. Anything else reads as step 1.
+ */
+function clampNudgeStep(value: unknown): 1 | 2 {
+  return value === 2 ? 2 : 1;
+}
+
+/** BAL-390 — the engagement supertype's two children, defaulting to `project`. */
+function engagementKindOf(value: unknown): 'project' | 'case' {
+  return value === 'case' ? 'case' : 'project';
+}
+
+/**
+ * BAL-390 — `case_engagements.close_reason`, or `undefined` when it is absent or is not
+ * one of the two enum values.
+ *
+ * ⚠ DELIBERATELY THREE-VALUED, unlike `engagement-case-closed-client`'s inline
+ * `wentQuiet ? 'auto_inactive' : 'resolved'`. That template REQUIRES a reason (its whole
+ * body branches on one), so collapsing the unknown case to `resolved` is right there.
+ * The nudge does not: `undefined` selects reason-blind wording that is true whichever
+ * way the case closed, and silently defaulting to a reason would put a specific claim in
+ * the email on no evidence.
+ */
+function closeReasonOf(value: unknown): 'resolved' | 'auto_inactive' | undefined {
+  if (value === 'resolved' || value === 'auto_inactive') {
+    return value;
+  }
+  return undefined;
 }
 
 /**
@@ -524,6 +559,9 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
 
   // BAL-338 (D7) auto-accepted — CLIENT email (VARIANT 3 AutoAcceptedEmail, verbatim).
   // Congratulatory; the green window block confirms it closed out as delivered.
+  // BAL-390 threads the RAW `reviewToken` straight through: present ⇒ the star row
+  // renders inside THIS email (D7 — one email, never two); absent ⇒ the block is gone
+  // and this renders exactly as it did before BAL-390.
   'engagement-auto-accepted-client': (data) => {
     const projectTitle = (data.projectTitle as string) ?? 'your project';
     return {
@@ -536,9 +574,98 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestedDate: (data.requestedDate as string) ?? '',
         autoDate: (data.autoDate as string) ?? '',
         reviewDays: numberCount(data.reviewDays),
+        reviewToken: data.reviewToken as string | undefined,
         engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
+    };
+  },
+
+  // BAL-390 — the client EXPLICITLY accepted: their own record of having done so, with
+  // the star-rating ask fused in. Recipient 'self' via payload.userId (the
+  // payment.charged actor-gets-a-receipt shape), EMAIL ONLY. Shares one body with
+  // `engagement-auto-accepted-client` above (see engagement-accepted-emails.tsx) — the
+  // two differ by a sentence and two templates would trip the duplication gate. Same
+  // stable "is complete 🎉" subject as the auto path; only one of the two ever fires.
+  'engagement-accepted-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    return {
+      component: React.createElement(AcceptedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'your team',
+        expertParty: (data.expertPartyLabel as string) ?? 'Your expert',
+        projectTitle,
+        milestonesTotal: numberCount(data.milestonesTotal),
+        acceptedOn: (data.acceptedOn as string) ?? '',
+        reviewToken: data.reviewToken as string | undefined,
+        // STATED by the publisher, never inferred from the missing token — the token is
+        // equally missing when the mint failed, and only the publisher knows which.
+        alreadyRated: data.alreadyRated === true,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
+    };
+  },
+
+  // BAL-390 (D4) case closed — CLIENT email. ONE fused email: close confirmation → the
+  // green record block → the star ask when `reviewToken` is present (absent ⇒ the block
+  // is gone, replaced by a short thank-you). `closeReason` switches a deliberate resolve
+  // from a quiet-case close so the notice never reads as a reprimand.
+  // ⚠ INERT: no publisher ships — BAL-420 / BAL-421 each add one publish line.
+  'engagement-case-closed-client': (data) => {
+    const caseTitle = (data.caseTitle as string) ?? 'your case';
+    const wentQuiet = data.closeReason === 'auto_inactive';
+    return {
+      component: React.createElement(CaseClosedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'your team',
+        expertParty: (data.expertPartyLabel as string) ?? 'your expert',
+        caseTitle,
+        closedDate: (data.closedDate as string) ?? '',
+        closeReason: wentQuiet ? 'auto_inactive' : 'resolved',
+        consultationCount: data.consultationCount as number | undefined,
+        reviewToken: data.reviewToken as string | undefined,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: wentQuiet
+        ? `We've closed ${sanitizeSubjectTitle(caseTitle)}`
+        : `${sanitizeSubjectTitle(caseTitle)} is wrapped up`,
+    };
+  },
+
+  // BAL-390 — the star-rating nudge (+24h / +7d), server-published by the hourly
+  // review-nudge sweep, EMAIL ONLY to the reviewer. `cadenceStep` drives the copy: step
+  // 1 is a light touch, step 2 LEADS with the regrounding and is the last ask (the band
+  // math forbids a third). ⚠ NOT `engagement-review-reminder-client`, which is BAL-338's
+  // pre-auto-accept "review the delivered work" nudge — different event and meaning.
+  'review-nudge': (data) => {
+    const engagementTitle = (data.engagementTitle as string) ?? 'your engagement';
+    const step = clampNudgeStep(data.cadenceStep);
+    const expertParty = (data.expertPartyLabel as string) ?? 'your expert';
+    return {
+      component: React.createElement(ReviewNudgeEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        cadenceStep: step,
+        engagementKind: engagementKindOf(data.engagementKind),
+        engagementTitle,
+        expertParty,
+        clientCompany: (data.clientCompanyName as string) ?? 'your team',
+        anchorDate: (data.anchorDate as string) ?? '',
+        consultationCount: data.consultationCount as number | undefined,
+        // CASE ONLY — step 2 states WHY the case closed, so a deliberate `resolved`
+        // close must never be described as having gone quiet. Absent ⇒ neutral wording.
+        closeReason: closeReasonOf(data.closeReason),
+        reviewToken: (data.reviewToken as string) ?? '',
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject:
+        step === 2
+          ? `One last look back at ${sanitizeSubjectTitle(engagementTitle)}`
+          : `How did it go with ${sanitizeSubjectTitle(expertParty)}?`,
     };
   },
 

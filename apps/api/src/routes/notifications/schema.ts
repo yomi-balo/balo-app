@@ -344,6 +344,12 @@ const engagementCancelledPayload = z.object({
 // BAL-338 (D7) client accepted the project (client → expert + admins). `correlationId`
 // = `${engagementId}:accepted` (one-shot terminal; z.string not z.uuid so the suffix
 // validates). `expertProfileId` → resolver hydrates data.expert (recipient:'expert').
+// BAL-390 adds the accepting member as a recipient in their own right: `userId` →
+// recipient:'self' (the payment.charged shape) plus the party labels, the RAW
+// review-invite token the fused rating ask needs, and `alreadyRated` — which is stated
+// rather than inferred from a missing token, because a token is ALSO missing when the
+// mint failed. All five are OPTIONAL so an older publisher still validates; the client
+// rule is gated on `userId`.
 // Mirrors packages/shared/src/notifications/index.ts.
 const engagementAcceptedPayload = z.object({
   correlationId: z.string().min(1).max(120),
@@ -353,6 +359,32 @@ const engagementAcceptedPayload = z.object({
   projectTitle: z.string().min(1).max(200),
   acceptedOn: z.string().min(1).max(40),
   milestonesTotal: z.number().int().nonnegative(),
+  userId: z.uuid().optional(),
+  clientCompanyName: z.string().min(1).max(200).optional(),
+  expertPartyLabel: z.string().min(1).max(200).optional(),
+  reviewToken: z.string().min(20).max(200).optional(),
+  alreadyRated: z.boolean().optional(),
+});
+
+// BAL-390 (D4) a case was closed — the fused close + rating email (client only).
+// `correlationId` = `${engagementId}:case_closed` (one-shot terminal; z.string not
+// z.uuid so the suffix validates). `recipientId` gates the rule (absent ⇒ skip).
+// `reviewToken` is the RAW ≥256-bit review-invite token and appears ONLY inside the
+// emailed URL — absent ⇒ already rated ⇒ the email omits the review block entirely.
+// ⚠ INERT: this arm exists so BAL-420 / BAL-421 can publish from a web Server Action
+// with one line and no schema work. Mirrors packages/shared/src/notifications/index.ts.
+const engagementCaseClosedPayload = z.object({
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid(),
+  clientCompanyName: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  caseTitle: z.string().min(1).max(200),
+  closedDate: z.string().min(1).max(40),
+  closeReason: z.enum(['resolved', 'auto_inactive']),
+  consultationCount: z.number().int().nonnegative().optional(),
+  reviewToken: z.string().min(20).max(200).optional(),
 });
 
 // BAL-338 (D7) client requested changes (client → expert + admins). `correlationId`
@@ -548,6 +580,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.changes_requested'),
     payload: engagementChangesRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.case_closed'),
+    payload: engagementCaseClosedPayload,
   }),
   z.object({
     event: z.literal('party.member_joined_via_domain'),

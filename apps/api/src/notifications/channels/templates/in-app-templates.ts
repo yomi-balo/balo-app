@@ -493,6 +493,22 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-390 (D4) case closed — CLIENT. The in-app copy carries the RECORD only: the
+  // star row and its magic-link token live in the email and nowhere else, so the bell
+  // never has to render an ask it cannot satisfy. `closeReason` distinguishes a
+  // deliberate resolve from a quiet-case close so the notice never reads as a
+  // reprimand. Copy is DRAFT pending MJ sign-off.
+  // ⚠ INERT: no publisher ships (BAL-420 / BAL-421 supply one).
+  'engagement-case-closed-client': (data) => {
+    const title = (data.caseTitle as string) ?? 'Your case';
+    const closedDate = (data.closedDate as string) ?? 'today';
+    const wentQuiet = data.closeReason === 'auto_inactive';
+    const body = wentQuiet
+      ? `'${title}' had been quiet for a while, so we closed it out on ${closedDate} rather than leave it hanging.`
+      : `'${title}' is wrapped up as of ${closedDate}. Everything from it stays here whenever you need it.`;
+    return engagementNotice('Case closed', body, data);
+  },
+
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {
     const companyName = (data.companyName as string) ?? 'a company';

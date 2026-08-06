@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { SENSITIVE_PATH_PREFIXES } from '@balo/shared/redaction';
 import {
   isPublicRoute,
   isAdminRoute,
@@ -25,6 +26,10 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('/blog/some-post')).toBe(true);
     // BAL-386 — public email-bound magic-link proposal view.
     expect(isPublicRoute('/shared/proposals/some-token')).toBe(true);
+    // BAL-390 — public token-authenticated star-rating landing. Without this the
+    // middleware 302s every emailed reviewer to /login and the feature is dead.
+    expect(isPublicRoute('/review/some-token')).toBe(true);
+    expect(isPublicRoute('/review/some-token?r=3')).toBe(true);
   });
 
   it('rejects protected routes', () => {
@@ -42,6 +47,32 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('/expertsx')).toBe(false);
     expect(isPublicRoute('/loginx')).toBe(false);
     expect(isPublicRoute('/api/cases')).toBe(false);
+    // BAL-390 — `/review/` is a prefix, so neither the bare word nor a plural
+    // sibling route opens up.
+    expect(isPublicRoute('/review')).toBe(false);
+    expect(isPublicRoute('/reviews/123')).toBe(false);
+  });
+});
+
+/**
+ * BAL-390 — the paired-registry guard. A token-in-URL route has to be BOTH public
+ * (or the recipient is bounced to /login) AND redacted (or the raw token lands in
+ * Axiom and PostHog). Registering one without the other is the defect this test
+ * exists to catch, so it asserts containment rather than a hand-listed pair.
+ */
+describe('token-in-URL routes are public AND redacted', () => {
+  it('every sensitive path prefix is also a public prefix', () => {
+    for (const prefix of SENSITIVE_PATH_PREFIXES) {
+      expect(PUBLIC_PREFIXES).toContain(prefix);
+      expect(isPublicRoute(`${prefix}a-token`)).toBe(true);
+    }
+  });
+
+  it('registers the two token-bearing landings in both registries', () => {
+    expect(SENSITIVE_PATH_PREFIXES).toContain('/shared/proposals/');
+    expect(SENSITIVE_PATH_PREFIXES).toContain('/review/');
+    expect(PUBLIC_PREFIXES).toContain('/shared/proposals/');
+    expect(PUBLIC_PREFIXES).toContain('/review/');
   });
 });
 

@@ -31,6 +31,10 @@ const autoProps = (over: Record<string, unknown> = {}) => ({
   autoDate: '11 Jul',
   reviewDays: 7,
   engagementUrl: ENGAGEMENT_URL,
+  // BAL-390: the star-rating ask is fused into this email, so the component now needs
+  // the app origin to build the /review/{token} landing URL. Without `reviewToken` the
+  // block is omitted entirely and this email renders exactly as it did before.
+  baseUrl: BASE,
   ...over,
 });
 

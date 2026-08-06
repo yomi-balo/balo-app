@@ -25,6 +25,15 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   '/blog/',
   // BAL-386 — public, no-auth, email-bound magic-link proposal view.
   '/shared/proposals/',
+  // BAL-390 — public, no-auth, token-authenticated star-rating landing
+  // (`/review/{token}`). The token NAMES the reviewer; it is not authorization — the
+  // submit Server Action still evaluates PARTICIPATE on the engagement's company.
+  // ⚠ PAIRED EDIT: `/review/` must ALSO be in SENSITIVE_PATH_PREFIXES
+  // (@balo/shared/redaction). This entry without that one puts every raw token into
+  // Axiom (Edge request logging) and PostHog ($current_url / $pathname / $referrer);
+  // that one without this 302s every emailed reviewer to /login. One without the
+  // other IS the defect — route-config.test.ts asserts the pairing.
+  '/review/',
 ];
 
 /** Admin path prefix (requires platformRole admin or super_admin) */

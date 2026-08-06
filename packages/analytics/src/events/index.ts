@@ -153,3 +153,9 @@ export {
   type TranscriptServerEventMap,
   type TranscriptVenue,
 } from './transcript';
+export {
+  REVIEW_SERVER_EVENTS,
+  type ReviewServerEventMap,
+  type ReviewEngagementKind,
+  type ReviewWriteProperties,
+} from './review';

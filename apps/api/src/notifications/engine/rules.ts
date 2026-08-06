@@ -461,10 +461,30 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // delivering EXPERT (recipient:'expert' via payload.expertProfileId → data.expert;
   // email + in-app — congratulations, Balo handles the final invoice) and the Balo
   // ADMINS (recipient:'admin_users' fan-out; email + in-app — THE MONEY TRIGGER,
-  // "Ready to invoice: final installment"). No client recipient (they just acted).
+  // "Ready to invoice: final installment").
+  //
+  // BAL-390: the ACCEPTING client now also gets a fused acceptance-confirmation +
+  // rating ask, recipient:'self' via payload.userId — MIRRORING payment.charged, where
+  // the acting member gets their own personal receipt (credit.topup.completed and
+  // promo.redeemed do the same). Acceptance is the trigger for the final invoice, so
+  // the client should hold written evidence of it without logging in. This DELIBERATELY
+  // OVERTURNS this rule's former "No client recipient (they just acted)" comment — that
+  // was the outlier, not the pattern. EMAIL ONLY: they just clicked accept, so an in-app
+  // "you accepted" is noise. Gated on payload.userId so an older publisher (or a
+  // retainer/no-actor path) skips rather than sending a half-populated email. This is
+  // the client's FIRST AND ONLY email at this moment, so D7's "one email, never two"
+  // holds.
   'engagement.accepted': [
     ...emailAndInApp('expert', 'engagement-accepted-expert'),
     ...emailAndInApp('admin_users', 'engagement-accepted-admin'),
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'engagement-accepted-client',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: (ctx) => typeof ctx.payload.userId === 'string',
+    },
   ],
   // BAL-338 (D7): the client requested changes instead of accepting — the project is
   // active again. The delivering EXPERT (recipient:'expert'; email + in-app — the
@@ -495,6 +515,38 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // owner only (recipient:'client' via payload.recipientId; email = VARIANT 2
   // ReviewReminderEmail verbatim + in-app). Skips gracefully when recipientId is absent.
   'engagement.review_reminder': emailAndInApp('client', 'engagement-review-reminder-client'),
+  // BAL-390 (D4): a CASE was closed — ONE fused email: close confirmation → case
+  // summary → the star-rating ask. Targets the client-side reviewer (recipient:'client'
+  // via payload.recipientId; email + in-app), conditioned on recipientId so a
+  // no-reviewer close skips rather than dead-lettering. NO admin fan-out — the client
+  // is the sole target, exactly like engagement.review_reminder.
+  //
+  // ⚠ INERT: this rule ships fully wired with NO PUBLISHER. `close()` has zero
+  // production callers (`resolved` is BAL-421's, `auto_inactive` is BAL-420's) and a
+  // @balo/db repository structurally cannot publish. Each of those tickets adds exactly
+  // one publishNotificationEvent line.
+  'engagement.case_closed': emailAndInApp(
+    'client',
+    'engagement-case-closed-client',
+    (ctx) => typeof ctx.payload.recipientId === 'string'
+  ),
+  // BAL-390: the star-rating nudge at +24h / +7d off the terminal anchor
+  // (server-published by the hourly review-nudge sweep). EMAIL ONLY to the reviewer
+  // (recipient:'self' via payload.userId — the onboarding.reminder shape): the ask IS
+  // the in-email star row, and an in-app copy would carry neither stars nor token.
+  // One event covers both cadence steps; the step lives in the payload, not the rule.
+  //
+  // ⚠ NOT `engagement.review_reminder` above — that is BAL-338's pre-auto-accept
+  // "review the delivered work" nudge. Different meaning, payload and template.
+  'review.reminder': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'review-nudge',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   // BAL-345 domain auto-join. `party_admins` is a fan-out recipient (one delivery
   // per admin) resolved from data.partyAdminUserIds; `self` (approve/decline)
   // resolves to payload.userId (the requester). The base-member joiner/requester

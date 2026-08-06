@@ -21,6 +21,7 @@ import {
   expertDraftFactory,
   projectRequestFactory,
   proposalFactory,
+  reviewFactory,
   userFactory,
 } from '../test/factories';
 import type { ProposalFactoryResult } from '../test/factories';
@@ -2271,5 +2272,171 @@ describe('BAL-417 — the workspace root allow-list', () => {
     expect(hydrated).toHaveProperty('baloFeeBps');
     expect(hydrated).toHaveProperty('currency');
     expect(hydrated).toHaveProperty('priceCents');
+  });
+});
+
+// ── BAL-390: the PROJECT rating-nudge candidate scan ─────────────────────────
+
+describe('projectEngagementsRepository.listAcceptedBetween', () => {
+  const ANCHOR = new Date('2026-08-01T12:00:00.000Z');
+  /** The one-hour band whose INCLUSIVE upper edge is exactly `ANCHOR`. */
+  const AFTER = new Date(ANCHOR.getTime() - 3_600_000);
+
+  /** Seed an accepted project whose `accepted_at` is exactly `acceptedAt`. */
+  async function seedAccepted(acceptedAt: Date) {
+    return engagementFactory({
+      projectValues: {
+        deliveryStatus: 'completed',
+        acceptedAt,
+        acceptanceMethod: 'auto',
+      },
+    });
+  }
+
+  /** Candidate engagement ids for the canonical band. */
+  async function candidateIds(after = AFTER, until = ANCHOR): Promise<string[]> {
+    const rows = await projectEngagementsRepository.listAcceptedBetween(after, until);
+    return rows.map((row) => row.engagementId);
+  }
+
+  it('returns the RatingNudgeCandidate shape for a project accepted inside the band', async () => {
+    const seeded = await seedAccepted(ANCHOR);
+
+    const candidates = await projectEngagementsRepository.listAcceptedBetween(AFTER, ANCHOR);
+    const found = candidates.find((c) => c.engagementId === seeded.engagement.id);
+    if (found === undefined) throw new Error('expected the accepted project to be a candidate');
+
+    expect(found.engagementKind).toBe('project');
+    expect(found.companyId).toBe(seeded.companyId);
+    expect(found.expertProfileId).toBe(seeded.expertProfileId);
+    expect(found.anchorAt.toISOString()).toBe(ANCHOR.toISOString());
+    expect(Object.keys(found).sort()).toEqual([
+      'anchorAt',
+      'companyId',
+      'engagementId',
+      'engagementKind',
+      'expertProfileId',
+      'title',
+    ]);
+    // `closeReason` is the CASE arm's field alone — a project has no close reason, and
+    // inventing one would put a specific claim in the +7d nudge on no evidence.
+    expect(found.closeReason).toBeUndefined();
+  });
+
+  it('is HALF-OPEN: an anchor exactly at `until` is INCLUDED, one exactly at `after` is EXCLUDED', async () => {
+    // The invariant that lets two consecutive hourly ticks partition the timeline with
+    // neither a duplicate nudge nor a missed one.
+    const atUntil = await seedAccepted(ANCHOR);
+    const atAfter = await seedAccepted(AFTER);
+
+    const ids = await candidateIds();
+    expect(ids).toContain(atUntil.engagement.id);
+    expect(ids).not.toContain(atAfter.engagement.id);
+  });
+
+  it('excludes an anchor one millisecond past the upper edge and one below the lower edge', async () => {
+    const tooNew = await seedAccepted(new Date(ANCHOR.getTime() + 1));
+    const tooOld = await seedAccepted(new Date(AFTER.getTime() - 1));
+
+    const ids = await candidateIds();
+    expect(ids).not.toContain(tooNew.engagement.id);
+    expect(ids).not.toContain(tooOld.engagement.id);
+  });
+
+  it('excludes a project that was never accepted (accepted_at IS NULL)', async () => {
+    const never = await engagementFactory();
+    const ids = await candidateIds(new Date(0), new Date(Date.now() + 86_400_000));
+    expect(ids).not.toContain(never.engagement.id);
+  });
+
+  it('excludes a SOFT-DELETED engagement (parent and child both stamped)', async () => {
+    const seeded = await seedAccepted(ANCHOR);
+    await softDeleteEngagementFixture(seeded.engagement.id);
+
+    expect(await candidateIds()).not.toContain(seeded.engagement.id);
+  });
+
+  it('excludes a row whose PARENT alone is soft-deleted, and one whose CHILD alone is', async () => {
+    // Both guards are asserted separately: one combined check would pass vacuously
+    // whenever the fixture happens to stamp both.
+    const parentOnly = await seedAccepted(ANCHOR);
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, parentOnly.engagement.id));
+
+    const childOnly = await seedAccepted(ANCHOR);
+    await db
+      .update(projectEngagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectEngagements.engagementId, childOnly.engagement.id));
+
+    const ids = await candidateIds();
+    expect(ids).not.toContain(parentOnly.engagement.id);
+    expect(ids).not.toContain(childOnly.engagement.id);
+  });
+
+  it('EXCLUDES an engagement that already has a live review — the AC "nudges stop", by non-matching', async () => {
+    const seeded = await seedAccepted(ANCHOR);
+    await reviewFactory({ engagement: seeded });
+
+    expect(await candidateIds()).not.toContain(seeded.engagement.id);
+  });
+
+  it('still returns an engagement whose only review is SOFT-DELETED', async () => {
+    const seeded = await seedAccepted(ANCHOR);
+    await reviewFactory({ engagement: seeded, values: { deletedAt: new Date() } });
+
+    expect(await candidateIds()).toContain(seeded.engagement.id);
+  });
+
+  it('takes the title from the source project request, and falls back when there is none', async () => {
+    const withoutRequest = await seedAccepted(ANCHOR);
+    const withRequest = await engagementFactory({
+      withSourceProposal: true,
+      projectValues: {
+        deliveryStatus: 'completed',
+        acceptedAt: ANCHOR,
+        acceptanceMethod: 'auto',
+      },
+    });
+    const requestId = withRequest.engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+    const [request] = await db
+      .select({ title: projectRequests.title })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, requestId));
+
+    const candidates = await projectEngagementsRepository.listAcceptedBetween(AFTER, ANCHOR);
+    expect(candidates.find((c) => c.engagementId === withoutRequest.engagement.id)?.title).toBe(
+      'your project'
+    );
+    expect(candidates.find((c) => c.engagementId === withRequest.engagement.id)?.title).toBe(
+      request?.title
+    );
+  });
+
+  it('NEVER returns a case engagement — the scan is child-rooted, so it is type-scoped for free', async () => {
+    const kase = await caseEngagementFactory({
+      caseValues: { closedAt: ANCHOR, closeReason: 'auto_inactive' },
+      values: { status: 'completed' },
+    });
+
+    expect(await candidateIds()).not.toContain(kase.engagement.id);
+  });
+
+  it('orders oldest anchor first and returns [] for an empty band', async () => {
+    const older = await seedAccepted(new Date(ANCHOR.getTime() - 1_800_000));
+    const newer = await seedAccepted(ANCHOR);
+
+    const ordered = (await candidateIds()).filter(
+      (id) => id === older.engagement.id || id === newer.engagement.id
+    );
+    expect(ordered).toEqual([older.engagement.id, newer.engagement.id]);
+
+    const empty = new Date('2020-01-01T00:00:00.000Z');
+    await expect(
+      projectEngagementsRepository.listAcceptedBetween(new Date(empty.getTime() - 3_600_000), empty)
+    ).resolves.toEqual([]);
   });
 });

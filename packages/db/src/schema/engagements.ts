@@ -198,6 +198,16 @@ export const engagements = pgTable(
     // uniqueIndex) because Postgres composite FKs require a constraint. Precedent:
     // `request_expert_relationship_id_request_uq` (request-origination.ts).
     unique('engagement_id_type_uq').on(t.id, t.engagementType),
+    // The SECOND composite-FK target on this table (BAL-390). `id` is already the PK so
+    // this constraint is trivially satisfied on any row set; it exists only so `reviews`
+    // can FK `(engagement_id, expert_profile_id)` and thereby be UNABLE to name an expert
+    // who did not deliver the engagement. Exactly the `engagement_id_type_uq` pattern.
+    //
+    // ⚠ SIDE EFFECT, AND IT IS THE CORRECT ONE: `engagements.expert_profile_id` can no
+    // longer be UPDATEd while any review references the row (ON UPDATE NO ACTION).
+    // Silently re-pointing one expert's reviews at another must fail loudly. No
+    // repository updates that column today (verified).
+    unique('engagement_id_expert_uq').on(t.id, t.expertProfileId),
     // Serves three readers with one index: the D5 type filters on the two list graphs
     // (leading `engagement_type`), any type-scoped supertype read
     // (`engagement_type, status`), and the case inactivity candidate scan

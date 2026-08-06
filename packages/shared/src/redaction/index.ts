@@ -1,7 +1,8 @@
 /**
- * Secret-in-URL redaction (BAL-386). Some public routes carry a high-entropy secret
- * in the URL path itself — e.g. the email-bound magic-link token behind
- * `/shared/proposals/{token}`. Platform-wide instrumentation that captures the URL
+ * Secret-in-URL redaction (BAL-386, extended by BAL-390). Some public routes carry a
+ * high-entropy secret in the URL path itself — the email-bound magic-link token behind
+ * `/shared/proposals/{token}`, and the review-invite token behind
+ * `/review/{token}`. Platform-wide instrumentation that captures the URL
  * verbatim (Edge middleware request logging → Axiom; PostHog client pageview
  * autocapture → third party) would otherwise defeat the "raw token is never logged"
  * invariant.
@@ -13,8 +14,22 @@
  * no super-linear/ReDoS surface on attacker-controlled URLs).
  */
 
-/** Path prefixes whose FOLLOWING segment is a secret and must never be logged. */
-export const SENSITIVE_PATH_PREFIXES: readonly string[] = ['/shared/proposals/'];
+/**
+ * Path prefixes whose FOLLOWING segment is a secret and must never be logged.
+ *
+ * ⚠ PAIRED with `PUBLIC_PREFIXES` in `apps/web/src/lib/auth/route-config.ts`: a
+ * token-in-URL route is by definition reachable without a session, so every entry
+ * here is also a public prefix there. Adding one registry without the other is the
+ * defect. `route-config.test.ts` asserts the containment.
+ */
+export const SENSITIVE_PATH_PREFIXES: readonly string[] = [
+  // BAL-386 — the email-bound magic-link proposal view.
+  '/shared/proposals/',
+  // BAL-390 — the star-rating landing, `/review/{token}?r={1..5}`. Only the token
+  // SEGMENT is replaced, so the `?r=3` prefill survives redaction — which is what
+  // keeps the emailed-star funnel legible without ever logging the token.
+  '/review/',
+];
 
 const REDACTED = '[redacted]';
 

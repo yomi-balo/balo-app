@@ -122,6 +122,15 @@ export const caseEngagements = pgTable(
     index('case_engagement_open_idx')
       .on(t.engagementId)
       .where(sql`${t.closedAt} IS NULL AND ${t.deletedAt} IS NULL`),
+    // BAL-390 — the rating-nudge candidate scan: `closed_at` inside a ONE-HOUR band
+    // (`listClosedBetween`). Closing is the CASE's terminal anchor. ⚠ THIS YIELDS AN
+    // EMPTY CANDIDATE SET TODAY (D5): `caseEngagementsRepository.close()` has zero
+    // production callers, so nothing stamps `closed_at`. The index and its reader ship
+    // now so the nudge self-activates with ZERO code change the moment BAL-420/BAL-421
+    // land. Predicate references ONLY `deleted_at`, never an enum literal.
+    index('case_engagement_closed_at_idx')
+      .on(t.closedAt)
+      .where(sql`${t.deletedAt} IS NULL`),
     check('case_engagement_type_is_case', sql`${t.engagementType} = 'case'`),
     check('case_engagement_title_nonempty', sql`length(btrim(${t.title})) > 0`),
     check('case_engagement_description_nonempty', sql`length(btrim(${t.description})) > 0`),

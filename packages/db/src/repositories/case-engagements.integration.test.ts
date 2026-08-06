@@ -7,6 +7,7 @@ import {
   companies,
   companyMembers,
   engagements,
+  reviews,
   type AuditEvent,
 } from '../schema';
 import {
@@ -609,6 +610,177 @@ describe('caseEngagementsRepository.listOpenCreatedBefore — the inactivity can
       expect(r.closedAt).toBeNull();
       expect(r.createdAt.getTime()).toBeLessThanOrEqual(cutoff.getTime());
     });
+  });
+});
+
+// ── BAL-390: the CASE rating-nudge candidate scan ────────────────────────────
+
+describe('caseEngagementsRepository.listClosedBetween', () => {
+  const ANCHOR = new Date('2026-08-01T12:00:00.000Z');
+  /** The one-hour band whose INCLUSIVE upper edge is exactly `ANCHOR`. */
+  const AFTER = new Date(ANCHOR.getTime() - 3_600_000);
+
+  /** Seed a case whose `closed_at` is exactly `closedAt` (the auto_inactive shape). */
+  async function seedClosed(closedAt: Date) {
+    return caseEngagementFactory({
+      values: { status: 'completed' },
+      caseValues: { closedAt, closeReason: 'auto_inactive' },
+    });
+  }
+
+  /** The `resolved` shape — a CLIENT closed it on purpose, so a member must be named. */
+  async function seedResolved(closedAt: Date) {
+    const seeded = await caseEngagementFactory({ values: { status: 'completed' } });
+    const closer = await userFactory();
+    await companyMemberFactory({ companyId: seeded.companyId, userId: closer.id });
+    await db
+      .update(caseEngagements)
+      .set({ closedAt, closeReason: 'resolved', closedByUserId: closer.id })
+      .where(eq(caseEngagements.engagementId, seeded.engagement.id));
+    return seeded;
+  }
+
+  async function candidateIds(after = AFTER, until = ANCHOR): Promise<string[]> {
+    const rows = await caseEngagementsRepository.listClosedBetween(after, until);
+    return rows.map((row) => row.engagementId);
+  }
+
+  it('returns the RatingNudgeCandidate shape for a case closed inside the band', async () => {
+    const seeded = await seedClosed(ANCHOR);
+
+    const candidates = await caseEngagementsRepository.listClosedBetween(AFTER, ANCHOR);
+    const found = candidates.find((c) => c.engagementId === seeded.engagement.id);
+    if (found === undefined) throw new Error('expected the closed case to be a candidate');
+
+    expect(found.engagementKind).toBe('case');
+    expect(found.companyId).toBe(seeded.companyId);
+    expect(found.expertProfileId).toBe(seeded.expertProfileId);
+    expect(found.anchorAt.toISOString()).toBe(ANCHOR.toISOString());
+    expect(found.title).toBe(seeded.engagement.title);
+    // Shape-identical to the PROJECT candidate apart from `closeReason`, which only a
+    // case can have — the sweep still never branches, it just forwards the field.
+    expect(Object.keys(found).sort()).toEqual([
+      'anchorAt',
+      'closeReason',
+      'companyId',
+      'engagementId',
+      'engagementKind',
+      'expertProfileId',
+      'title',
+    ]);
+  });
+
+  /**
+   * BAL-390 — the +7d nudge STATES why the case closed, so the real enum value has to
+   * reach it. Reading `auto_inactive` off every row would tell a client who deliberately
+   * resolved their own case that "things went quiet", which is the one thing BAL-329's
+   * tone ruling forbids.
+   */
+  it('carries the REAL close_reason, per row, for both enum values', async () => {
+    const quiet = await seedClosed(ANCHOR);
+    const resolved = await seedResolved(ANCHOR);
+
+    const candidates = await caseEngagementsRepository.listClosedBetween(AFTER, ANCHOR);
+    const byId = new Map(candidates.map((c) => [c.engagementId, c.closeReason]));
+
+    expect(byId.get(quiet.engagement.id)).toBe('auto_inactive');
+    expect(byId.get(resolved.engagement.id)).toBe('resolved');
+  });
+
+  it('is HALF-OPEN: an anchor exactly at `until` is INCLUDED, one exactly at `after` is EXCLUDED', async () => {
+    const atUntil = await seedClosed(ANCHOR);
+    const atAfter = await seedClosed(AFTER);
+
+    const ids = await candidateIds();
+    expect(ids).toContain(atUntil.engagement.id);
+    expect(ids).not.toContain(atAfter.engagement.id);
+  });
+
+  it('excludes an OPEN case (closed_at IS NULL) — the empty-set state BAL-390 actually ships in', async () => {
+    // ⚠ D5: `close()` has no production caller, so in production EVERY case is in this
+    // state and this reader legitimately returns nothing. It self-activates unchanged.
+    const open = await caseEngagementFactory();
+    const ids = await candidateIds(new Date(0), new Date(Date.now() + 86_400_000));
+    expect(ids).not.toContain(open.engagement.id);
+  });
+
+  it('excludes a SOFT-DELETED case, whether the parent or the child carries the stamp', async () => {
+    const both = await seedClosed(ANCHOR);
+    await softDeleteEngagementFixture(both.engagement.id);
+
+    const parentOnly = await seedClosed(ANCHOR);
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, parentOnly.engagement.id));
+
+    const childOnly = await seedClosed(ANCHOR);
+    await db
+      .update(caseEngagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(caseEngagements.engagementId, childOnly.engagement.id));
+
+    const ids = await candidateIds();
+    expect(ids).not.toContain(both.engagement.id);
+    expect(ids).not.toContain(parentOnly.engagement.id);
+    expect(ids).not.toContain(childOnly.engagement.id);
+  });
+
+  it('EXCLUDES a case that already has a live review, and still returns one whose review is soft-deleted', async () => {
+    const rated = await seedClosed(ANCHOR);
+    const ratedReviewer = await userFactory();
+    await companyMemberFactory({ companyId: rated.companyId, userId: ratedReviewer.id });
+    await db.insert(reviews).values({
+      engagementId: rated.engagement.id,
+      reviewerUserId: ratedReviewer.id,
+      expertProfileId: rated.expertProfileId,
+      rating: 5,
+      surface: 'email',
+      authMethod: 'magic_link',
+    });
+
+    const moderated = await seedClosed(ANCHOR);
+    const moderatedReviewer = await userFactory();
+    await companyMemberFactory({ companyId: moderated.companyId, userId: moderatedReviewer.id });
+    await db.insert(reviews).values({
+      engagementId: moderated.engagement.id,
+      reviewerUserId: moderatedReviewer.id,
+      expertProfileId: moderated.expertProfileId,
+      rating: 1,
+      surface: 'email',
+      authMethod: 'magic_link',
+      deletedAt: new Date(),
+    });
+
+    const ids = await candidateIds();
+    expect(ids).not.toContain(rated.engagement.id);
+    expect(ids).toContain(moderated.engagement.id);
+  });
+
+  it('NEVER returns a project engagement — the scan is child-rooted', async () => {
+    const project = await engagementFactory({
+      projectValues: {
+        deliveryStatus: 'completed',
+        acceptedAt: ANCHOR,
+        acceptanceMethod: 'auto',
+      },
+    });
+    expect(await candidateIds()).not.toContain(project.engagement.id);
+  });
+
+  it('orders oldest anchor first and returns [] for an empty band', async () => {
+    const older = await seedClosed(new Date(ANCHOR.getTime() - 1_800_000));
+    const newer = await seedClosed(ANCHOR);
+
+    const ordered = (await candidateIds()).filter(
+      (id) => id === older.engagement.id || id === newer.engagement.id
+    );
+    expect(ordered).toEqual([older.engagement.id, newer.engagement.id]);
+
+    const empty = new Date('2020-01-01T00:00:00.000Z');
+    await expect(
+      caseEngagementsRepository.listClosedBetween(new Date(empty.getTime() - 3_600_000), empty)
+    ).resolves.toEqual([]);
   });
 });
 

@@ -1,6 +1,13 @@
-import { and, asc, eq, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, lte, notExists, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { caseEngagements, engagements, type CaseEngagement, type Engagement } from '../schema';
+import {
+  caseEngagements,
+  engagements,
+  reviews,
+  type CaseEngagement,
+  type Engagement,
+} from '../schema';
+import type { RatingNudgeCandidate } from './reviews';
 import { partyMembershipsRepository } from './party-memberships';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import { insertEngagementRowTx, lockEngagementRowTx } from './_shared/engagement-supertype';
@@ -202,6 +209,27 @@ export const caseEngagementsRepository = {
    * `status = 'completed'` → `recordDeliveryAudit(tx, …)`.
    *
    * A Case's terminal state is `completed`, never `cancelled`.
+   *
+   * ⚠ BAL-390 CONTRACT — READ THIS BEFORE WIRING THE FIRST CALLER. This repository
+   * CANNOT publish notification events: `@balo/db` depends only on `@balo/shared`,
+   * `drizzle-orm` and `postgres`, so no publisher is reachable from here, and this file
+   * deliberately imports nothing from the notifications tree. Closing a case IS the
+   * terminal anchor for the review ask, so THE FIRST CALLER (BAL-420's sweep /
+   * BAL-421's server action) MUST, POST-COMMIT:
+   *   1. mint a `review_invite_tokens` row for the resolved client-side reviewer, and
+   *   2. publish `engagement.case_closed` carrying the RAW `reviewToken`, when that
+   *      reviewer has not already rated the delivering expert.
+   * The event, its rule, its email and in-app templates and its Zod publish arm ALL ship
+   * in BAL-390 with NO publisher — the caller adds exactly ONE `publishNotificationEvent`
+   * line.
+   *
+   * The NUDGE half needs no caller wiring: `listClosedBetween` below starts matching the
+   * moment `closed_at` is first stamped. It is NOT close-reason-blind, though — it reads
+   * the `close_reason` written HERE and threads it to the +7d nudge copy, which says
+   * "things went quiet … rather than leave it hanging" for `auto_inactive` and a neutral
+   * "we closed the case out on {date}" for `resolved`, mirroring `CaseClosedEmail`. So
+   * WRITE THE HONEST REASON: passing `auto_inactive` for a client-initiated close would
+   * make the nudge assert inactivity about an action the client took themselves.
    */
   async close(
     input: { engagementId: string } & (
@@ -329,5 +357,83 @@ export const caseEngagementsRepository = {
       .orderBy(asc(engagements.createdAt));
 
     return rows.map((r) => toCaseRow(r.parent, r.child));
+  },
+
+  /**
+   * BAL-390 — the CASE half of the rating-nudge candidate scan: live cases whose
+   * `closed_at` falls in the HALF-OPEN band `(after, until]` and whose delivering expert
+   * has not already been rated on that engagement. The exact contract, band semantics and
+   * `NOT EXISTS` suppression as `projectEngagementsRepository.listAcceptedBetween` — the
+   * two are deliberately shape-identical (both return `RatingNudgeCandidate[]`) so the
+   * sweep queries both anchors every tick without branching.
+   *
+   * ⚠ THIS RETURNS `[]` TODAY, AND THAT IS EXPECTED (D5). `close()` has ZERO production
+   * callers, so nothing stamps `closed_at` yet. DO NOT delete this method, its index, or
+   * the sweep's call to it on the grounds that "it always returns empty" — it
+   * SELF-ACTIVATES with zero code change the moment BAL-420/BAL-421 land, and the sweep's
+   * unit test asserts both anchors are queried precisely to stop that deletion.
+   *
+   * CHILD-ROOTED so it rides `case_engagement_closed_at_idx`; both parent and child
+   * `deleted_at` are guarded.
+   */
+  async listClosedBetween(after: Date, until: Date): Promise<RatingNudgeCandidate[]> {
+    const rows = await db
+      .select({
+        engagementId: engagements.id,
+        companyId: engagements.companyId,
+        expertProfileId: engagements.expertProfileId,
+        anchorAt: caseEngagements.closedAt,
+        title: caseEngagements.title,
+        // BAL-390 — carried so the +7d nudge can distinguish a deliberate `resolved`
+        // close from an `auto_inactive` one instead of asserting "things went quiet"
+        // over both. NULL only on a row that predates the CHECK, hence the ?? below.
+        closeReason: caseEngagements.closeReason,
+      })
+      .from(caseEngagements)
+      .innerJoin(engagements, eq(engagements.id, caseEngagements.engagementId))
+      .where(
+        and(
+          gt(caseEngagements.closedAt, after),
+          lte(caseEngagements.closedAt, until),
+          isNull(caseEngagements.deletedAt),
+          isNull(engagements.deletedAt),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(reviews)
+              .where(
+                and(
+                  eq(reviews.engagementId, engagements.id),
+                  eq(reviews.expertProfileId, engagements.expertProfileId),
+                  isNull(reviews.deletedAt)
+                )
+              )
+          )
+        )
+      )
+      .orderBy(asc(caseEngagements.closedAt));
+
+    return rows.flatMap((row) => {
+      // `closed_at` is NULLABLE on the column, but the band predicate above cannot match
+      // NULL — this guard exists to satisfy the type, never to filter.
+      if (row.anchorAt === null) {
+        return [];
+      }
+      return [
+        {
+          engagementId: row.engagementId,
+          engagementKind: 'case' as const,
+          companyId: row.companyId,
+          expertProfileId: row.expertProfileId,
+          anchorAt: row.anchorAt,
+          title: row.title,
+          // `close_reason` is NOT NULL for any closed row under
+          // `case_engagement_close_coherent`, but the COLUMN is nullable, so a NULL
+          // degrades to "reason unknown" and the nudge copy falls back to the
+          // reason-blind wording rather than guessing.
+          closeReason: row.closeReason ?? undefined,
+        },
+      ];
+    });
   },
 };

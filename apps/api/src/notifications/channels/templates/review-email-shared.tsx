@@ -262,6 +262,30 @@ export const windowTextStyle: CSSProperties = {
   lineHeight: '1.6',
 };
 
+/**
+ * Long titles overflow the hero, so the family falls back to a generic noun past
+ * this length. Lives here (BAL-390) because four templates in the family now need
+ * the same rule — it was previously a private constant in `engagement-auto-accepted`.
+ */
+export const HERO_TITLE_MAX = 42;
+
+/** `heroTitleOr('a very long title…', 'Your project')` → the fallback past 42 chars. */
+export function heroTitleOr(title: string, fallback: string): string {
+  return title.length > HERO_TITLE_MAX ? fallback : title;
+}
+
+/**
+ * BAL-390 — " across 3 consultations", or an EMPTY string when the count is absent or
+ * zero. `consultationCount` is optional on both carrying payloads and has no producer
+ * yet (BAL-420/BAL-421 must supply one), so every count-bearing sentence in the case
+ * family has to read naturally with the clause dropped entirely. Shared by
+ * `review-nudge` and `engagement-case-closed` so the two never drift.
+ */
+export function consultationClause(count: number | undefined): string {
+  if (count === undefined || count <= 0) return '';
+  return count === 1 ? ' across one consultation' : ` across ${count} consultations`;
+}
+
 interface ReviewEmailLayoutProps {
   readonly preview: string;
   readonly pill: string;
@@ -370,6 +394,23 @@ export function milestonePhrases(total: number): {
     doneClause: `All ${total} milestones are done`,
     deliveredAlongClause: `all ${total} milestones were delivered along the way`,
   };
+}
+
+/**
+ * BAL-390 — the green "what happens now / all wrapped up" record block, shared by the
+ * two terminal CLIENT emails (`ProjectAcceptedEmail` on both acceptance paths, and
+ * `CaseClosedEmail`). Extracted because the two rendered it identically apart from the
+ * body sentence, which jscpd/SonarCloud correctly read as a new-code clone. Each caller
+ * supplies only its own closing sentence.
+ */
+export function WhatHappensNowBlock({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <Section style={windowBlockStyle('success')}>
+      <p style={windowKickerStyle('success')}>What happens now</p>
+      <p style={windowHeadlineStyle}>All wrapped up</p>
+      <p style={windowTextStyle}>{children}</p>
+    </Section>
+  );
 }
 
 interface ProjectSummaryProps {
