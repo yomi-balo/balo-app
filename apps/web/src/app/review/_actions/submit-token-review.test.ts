@@ -45,7 +45,8 @@ vi.mock('@/lib/analytics/server', async () => {
   };
 });
 
-import { submitTokenReviewAction, REVIEW_SUBMIT_FAILED } from './submit-token-review';
+import { REVIEW_SUBMIT_FAILED } from '@/lib/reviews/messages';
+import { submitTokenReviewAction } from './submit-token-review';
 
 /** The resolved token row. `tokenHash` is a parameter so a mismatch case can force one. */
 function tokenRow(tokenHash: string = TOKEN_HASH): Record<string, string> {

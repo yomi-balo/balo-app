@@ -5,6 +5,12 @@ import 'server-only';
 import { z } from 'zod';
 import { REVIEW_BODY_MAX, RATING_MAX, RATING_MIN, isRating } from '@balo/shared/reviews';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import {
+  REVIEW_ENGAGEMENT_NOT_FOUND,
+  REVIEW_GENERIC_FAILURE,
+  REVIEW_INVALID_REQUEST,
+  REVIEW_NOT_SIGNED_IN,
+} from '@/lib/reviews/messages';
 import { applyReview } from '@/app/review/_actions/review-write-shared';
 
 /**
@@ -35,13 +41,14 @@ import { applyReview } from '@/app/review/_actions/review-write-shared';
  * BAL-389 mounts the UI on top of it.
  */
 
-// ── DRAFT COPY — pending MJ sign-off. Friendly, non-leaking, returned verbatim for
-//    the caller to toast.
-export const REVIEW_NOT_SIGNED_IN = 'Please sign in and try again.';
-export const REVIEW_INVALID_REQUEST = 'Invalid request.';
-/** `forbidden` collapses to this too, so the action is never an existence oracle. */
-export const REVIEW_ENGAGEMENT_NOT_FOUND = 'This engagement could not be found.';
-export const REVIEW_GENERIC_FAILURE = 'Something went wrong. Please try again.';
+// ⚠ THE FAILURE COPY LIVES IN `@/lib/reviews/messages`, NOT HERE — AND MUST NOT MOVE BACK.
+//   A `'use server'` module may only export async functions; a plain `export const` string
+//   here fails `next build` with "Only async functions are allowed to be exported in a
+//   'use server' file". These four strings previously lived in this file and built green
+//   ONLY because this action has no callers yet (see the ZERO CALLERS note above), so it
+//   never entered the client graph to be checked. Its sibling `submit-token-review.ts` —
+//   same violation, but reachable from the landing form — broke CI on PR #191. Moving
+//   these out means BAL-389 does not inherit that break when it mounts the UI.
 
 const submitEngagementReviewSchema = z
   .object({

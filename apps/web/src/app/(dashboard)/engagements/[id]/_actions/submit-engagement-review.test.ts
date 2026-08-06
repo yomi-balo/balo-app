@@ -36,12 +36,12 @@ vi.mock('@/lib/analytics/server', async () => {
 });
 
 import {
-  submitEngagementReviewAction,
   REVIEW_ENGAGEMENT_NOT_FOUND,
   REVIEW_GENERIC_FAILURE,
   REVIEW_INVALID_REQUEST,
   REVIEW_NOT_SIGNED_IN,
-} from './submit-engagement-review';
+} from '@/lib/reviews/messages';
+import { submitEngagementReviewAction } from './submit-engagement-review';
 
 function primeHappyPath(): void {
   mockRequireOnboarded.mockResolvedValue({ id: VIEWER_ID });

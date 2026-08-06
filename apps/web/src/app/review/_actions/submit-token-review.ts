@@ -9,6 +9,7 @@ import { REVIEW_BODY_MAX, RATING_MAX, RATING_MIN, isRating } from '@balo/shared/
 import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
 import { clientIp, hashesMatch, sha256Hex } from '@/lib/magic-link';
 import { log } from '@/lib/logging';
+import { REVIEW_SUBMIT_FAILED } from '@/lib/reviews/messages';
 import { applyReview } from './review-write-shared';
 
 /**
@@ -41,14 +42,12 @@ import { applyReview } from './review-write-shared';
  */
 
 /**
- * DRAFT COPY — pending MJ sign-off. ONE string for every failure mode, and deliberately
- * not the design's "looks like the connection dropped": an expired token is not a
- * dropped connection, and because we refuse to distinguish the cases the copy has to be
- * true of all of them. Warm, blameless, and it promises the draft is intact — which it
- * is, the form never clears on failure.
+ * ⚠ THE FAILURE COPY LIVES IN `@/lib/reviews/messages`, NOT HERE — AND MUST NOT MOVE BACK.
+ * A `'use server'` module may only export async functions, so a plain `export const`
+ * string in this file fails `next build` with *"Only async functions are allowed to be
+ * exported in a 'use server' file"* — invisibly to tsc, eslint and vitest, because it is
+ * a bundler rule. It broke CI on PR #191. Type-only exports stay fine.
  */
-export const REVIEW_SUBMIT_FAILED =
-  "We couldn't save your review just now. Everything you've written is still here — please try again.";
 
 /**
  * `.strict()`: any unknown key fails the parse outright. `body` is optional and trimmed;
