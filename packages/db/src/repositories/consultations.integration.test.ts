@@ -47,105 +47,62 @@ async function seedBookableExpert(): Promise<BookedExpert> {
 
 // ── listConfirmedInRange — overlap math ─────────────────────────────
 
+/**
+ * THE OVERLAP MATRIX against the fixed range `[10:00, 12:00)`. Every case is the same three
+ * steps against a different window, so it is ONE parameterized test rather than eight
+ * copy-pasted bodies (a SonarCloud "replace these N tests with a single Parameterized one"
+ * finding, and it reads better: the boundary math is now a table you can scan).
+ *
+ * ⚠ ONE GAP CLOSED IN PASSING. The eight hand-written cases this replaced included
+ * "start-inside" and "fully enclosed" — with the SAME window, `10:30–11:00`. They were two
+ * names for one fixture, which left the real "starts inside, ends AFTER the range" boundary
+ * untested. `start-inside` below is now `11:30–13:00`, and `fully-enclosed` keeps
+ * `10:30–11:00`, so the four inclusion shapes are genuinely distinct.
+ *
+ * Overlap is `startAt < rangeEnd AND endAt > rangeStart` — STRICT both ends, which is what
+ * the two touching cases pin.
+ */
+const OVERLAP_CASES: readonly {
+  label: string;
+  startAt: string;
+  endAt: string;
+  overlaps: boolean;
+}[] = [
+  // ── Included ──
+  { label: 'start-inside (ends after)', startAt: '11:30', endAt: '13:00', overlaps: true },
+  { label: 'end-inside (starts before)', startAt: '09:00', endAt: '10:30', overlaps: true },
+  { label: 'straddles the entire range', startAt: '09:00', endAt: '13:00', overlaps: true },
+  { label: 'fully enclosed by the range', startAt: '10:30', endAt: '11:00', overlaps: true },
+  // ── Excluded ──
+  { label: 'entirely before the range', startAt: '08:00', endAt: '09:00', overlaps: false },
+  { label: 'entirely after the range', startAt: '13:00', endAt: '14:00', overlaps: false },
+  // Ends AT rangeStart → `endAt > rangeStart` is false. The slot is free at that instant.
+  {
+    label: 'ends exactly at rangeStart (strict)',
+    startAt: '09:00',
+    endAt: '10:00',
+    overlaps: false,
+  },
+  // Starts AT rangeEnd → `startAt < rangeEnd` is false.
+  {
+    label: 'starts exactly at rangeEnd (strict)',
+    startAt: '12:00',
+    endAt: '13:00',
+    overlaps: false,
+  },
+];
+
 describe('consultationsRepository.listConfirmedInRange — overlap', () => {
-  it('returns a consultation whose start is inside the range (start-inside)', async () => {
+  it.each(OVERLAP_CASES)('$label → overlaps=$overlaps', async ({ startAt, endAt, overlaps }) => {
     const expert = await seedBookableExpert();
-    await expert.book('2026-06-01T10:30:00.000Z', '2026-06-01T11:00:00.000Z');
+    await expert.book(`2026-06-01T${startAt}:00.000Z`, `2026-06-01T${endAt}:00.000Z`);
 
     const rows = await consultationsRepository.listConfirmedInRange(
       expert.expertProfileId,
       RANGE_START,
       RANGE_END
     );
-    expect(rows).toHaveLength(1);
-  });
-
-  it('returns a consultation whose end is inside the range (end-inside)', async () => {
-    const expert = await seedBookableExpert();
-    await expert.book('2026-06-01T09:00:00.000Z', '2026-06-01T10:30:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toHaveLength(1);
-  });
-
-  it('returns a consultation that straddles the entire range', async () => {
-    const expert = await seedBookableExpert();
-    await expert.book('2026-06-01T09:00:00.000Z', '2026-06-01T13:00:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toHaveLength(1);
-  });
-
-  it('returns a consultation fully enclosed by the range', async () => {
-    const expert = await seedBookableExpert();
-    await expert.book('2026-06-01T10:30:00.000Z', '2026-06-01T11:00:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toHaveLength(1);
-  });
-
-  it('excludes a consultation entirely before the range', async () => {
-    const expert = await seedBookableExpert();
-    await expert.book('2026-06-01T08:00:00.000Z', '2026-06-01T09:00:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toEqual([]);
-  });
-
-  it('excludes a consultation entirely after the range', async () => {
-    const expert = await seedBookableExpert();
-    await expert.book('2026-06-01T13:00:00.000Z', '2026-06-01T14:00:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toEqual([]);
-  });
-
-  it('excludes a consultation ending exactly at rangeStart (strict inequality)', async () => {
-    const expert = await seedBookableExpert();
-
-    // Ends at 10:00, range starts at 10:00 → endAt > rangeStart is false.
-    await expert.book('2026-06-01T09:00:00.000Z', '2026-06-01T10:00:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toEqual([]);
-  });
-
-  it('excludes a consultation starting exactly at rangeEnd (strict inequality)', async () => {
-    const expert = await seedBookableExpert();
-
-    // Starts at 12:00, range ends at 12:00 → startAt < rangeEnd is false.
-    await expert.book('2026-06-01T12:00:00.000Z', '2026-06-01T13:00:00.000Z');
-
-    const rows = await consultationsRepository.listConfirmedInRange(
-      expert.expertProfileId,
-      RANGE_START,
-      RANGE_END
-    );
-    expect(rows).toEqual([]);
+    expect(rows).toHaveLength(overlaps ? 1 : 0);
   });
 });
 

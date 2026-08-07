@@ -308,11 +308,15 @@ const SEED_ALLOWED_NODE_ENVS: readonly string[] = ['development', 'test'];
 export async function truncateSeedData(tx: Tx, scope: TruncateScope): Promise<TruncateResult> {
   const nodeEnv = process.env.NODE_ENV;
   if (nodeEnv === undefined || !SEED_ALLOWED_NODE_ENVS.includes(nodeEnv)) {
+    // Both interpolated values are built FIRST rather than nested inside the template —
+    // a nested template literal is a SonarCloud maintainability finding, and the flat form
+    // reads better anyway.
+    const allowed = SEED_ALLOWED_NODE_ENVS.join(' or ');
+    const actual = nodeEnv === undefined ? 'unset' : `'${nodeEnv}'`;
     throw new Error(
-      `truncateSeedData refused: destructive seed truncation runs only under NODE_ENV=${SEED_ALLOWED_NODE_ENVS.join(
-        ' or '
-      )} (got ${nodeEnv === undefined ? 'unset' : `'${nodeEnv}'`}). ` +
-        'If this is local development, set NODE_ENV=development in apps/api/.env.local.'
+      `truncateSeedData refused: destructive seed truncation runs only under ` +
+        `NODE_ENV=${allowed} (got ${actual}). ` +
+        `If this is local development, set NODE_ENV=development in apps/api/.env.local.`
     );
   }
 
