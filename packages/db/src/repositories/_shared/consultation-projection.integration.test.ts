@@ -688,9 +688,16 @@ describe('findProjectionDrift — did availability and meetings ever disagree?',
       contexts: [{ contextType: 'case', contextId: engagement.id }],
     });
 
+    // ⚠ MOVE BOTH BOUNDS, NOT JUST `start_at`. `consultations_start_before_end_check`
+    // enforces `start_at < end_at` ON THE ROW, so shifting only the start past the
+    // untouched end raises 23514 and the test dies before asserting anything (it did
+    // exactly that on first CI run). The drift modelled here is "the projection disagrees
+    // with its MEETING" — a different thing from "the row is internally corrupt" — so the
+    // row has to stay valid on its own terms for this fixture to isolate it.
+    const movedStart = new Date(created.meeting.scheduledStart.getTime() + 100 * HOUR_MS);
     await db
       .update(consultations)
-      .set({ startAt: new Date(Date.now() + 100 * HOUR_MS) })
+      .set({ startAt: movedStart, endAt: new Date(movedStart.getTime() + HOUR_MS) })
       .where(eq(consultations.meetingId, created.meeting.id));
 
     const drift = await findProjectionDrift({ meetingIds: [created.meeting.id] });
