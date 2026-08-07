@@ -276,21 +276,43 @@ async function deleteProfileChildren(tx: Tx, profileIds: string[]): Promise<void
  * the profiles first would cascade the engagements away and leave the meetings
  * unreachable — see `deleteSeedBookings`.
  *
- * ⚠ REFUSES TO RUN UNDER `NODE_ENV=production` — DEFENCE IN DEPTH, DELIBERATELY REDUNDANT.
- * `app.ts` already gates the seed ROUTES on the same variable, so in a correct deployment
- * this throw is unreachable. That is the point: the route gate and the destructive code
- * must not share a SINGLE point of failure. The route gate is written
- * `if (NODE_ENV !== 'production')`, which FAILS OPEN on an unset variable — and
- * `apps/api` starts with a bare `node dist/index.js` that sets nothing itself (unlike
- * `apps/web`, where `next start` sets it). `railway.toml`'s `startCommand` now pins it, but
- * a startCommand overridden in the Railway dashboard would silently un-pin it with no
- * review. BAL-428 is why this is worth the redundancy: this function's blast radius grew to
- * include `meetings`, `engagements`, `transcripts`, `meeting_guests` and `audit_events`.
+ * ⚠ RUNS ONLY UNDER AN EXPLICIT `NODE_ENV` OF `development` OR `test` — AN ALLOWLIST, NOT A
+ * `!== 'production'` DENYLIST, AND THE DIFFERENCE IS THE WHOLE POINT.
+ *
+ * `app.ts` gates the seed ROUTES on `if (NODE_ENV !== 'production')`, which **fails OPEN on
+ * an unset variable**. `apps/api` starts with a bare `node dist/index.js` and sets nothing
+ * itself (unlike `apps/web`, where `next start` sets it), so unset is a reachable state.
+ * `railway.toml`'s `startCommand` pins it — but a startCommand overridden in the Railway
+ * dashboard would silently un-pin it with no review.
+ *
+ * A denylist here (`=== 'production'` → throw) would have shared that EXACT failure mode: in
+ * the un-pinned scenario `NODE_ENV` is unset, `unset === 'production'` is false, and both
+ * guards open together. Two guards, one failure mode, no defence in depth — which is what an
+ * earlier draft of this function shipped, and what this docblock then wrongly claimed to
+ * cover. An allowlist inverts it: an environment this code does not RECOGNISE is refused, so
+ * the un-pinned production box is denied by the same rule that denies anything unfamiliar.
+ *
+ * COST, ACCEPTED: a developer whose `.env.local` omits `NODE_ENV` now gets a loud, actionable
+ * throw instead of a silent seed. `apps/api/.env.example:57` already documents
+ * `NODE_ENV=development`, and vitest sets `NODE_ENV=test` itself, so the documented setups
+ * both pass. That one-time friction is the correct trade for a function whose blast radius
+ * BAL-428 grew to include `meetings`, `engagements`, `transcripts`, `meeting_guests`,
+ * `companies` and `audit_events`.
+ *
+ * Deliberately NOT keyed on `RAILWAY_*`: no such marker is referenced anywhere in this
+ * codebase today, and keying a safety guard to one vendor's injected env would make it
+ * silently useless the day the API is deployed anywhere else.
  */
+const SEED_ALLOWED_NODE_ENVS: readonly string[] = ['development', 'test'];
+
 export async function truncateSeedData(tx: Tx, scope: TruncateScope): Promise<TruncateResult> {
-  if (process.env.NODE_ENV === 'production') {
+  const nodeEnv = process.env.NODE_ENV;
+  if (nodeEnv === undefined || !SEED_ALLOWED_NODE_ENVS.includes(nodeEnv)) {
     throw new Error(
-      'truncateSeedData refused: destructive seed truncation must never run under NODE_ENV=production'
+      `truncateSeedData refused: destructive seed truncation runs only under NODE_ENV=${SEED_ALLOWED_NODE_ENVS.join(
+        ' or '
+      )} (got ${nodeEnv === undefined ? 'unset' : `'${nodeEnv}'`}). ` +
+        'If this is local development, set NODE_ENV=development in apps/api/.env.local.'
     );
   }
 

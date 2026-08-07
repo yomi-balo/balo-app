@@ -288,8 +288,25 @@ export const meetingsRepository = {
    * is read from the LIVE PROJECTION ROW, never re-resolved from the contexts; see
    * `syncProjectionScheduleTx` for why re-resolving would be a silent repoint.
    *
-   * ⚠⚠ GUARDED ON `status IN ('scheduled','waiting_for_participants')`, THE SAME WAY
-   * `cancel()` IS GUARDED, AND FOR A SHARPER REASON. Without the guard, CANCEL-THEN-
+   * ⚠ THE GUARD SETS HERE AND ON `cancel()` ARE NOT THE SAME, AND THAT ASYMMETRY IS
+   * UNDECIDED — NOT A RULING. `cancel()` allows `scheduled` ONLY; this allows `scheduled`
+   * AND `waiting_for_participants`. So once the Daily room opens, a meeting can be MOVED but
+   * not CANCELLED. Two consequences a route author will meet before anyone else does:
+   *   · rescheduling a `waiting_for_participants` meeting into next week leaves it AT
+   *     `waiting_for_participants` with a future window — nothing transitions it back to
+   *     `scheduled`, because BAL-134 owns transitions and has not landed;
+   *   · if a participant had already joined, that meeting carries an open presence interval
+   *     across the move (`meeting-presence.ts`'s `resolveClockCeiling` residual).
+   * Each guard was written for its own reason — `cancel` narrow because cancelling is what
+   * frees a slot, this one wider because a client may legitimately move a call in the minutes
+   * before it starts — so the asymmetry is an ACCIDENT OF TWO LOCAL DECISIONS, not a product
+   * position. **BAL-409/BAL-410/BAL-411 must settle it explicitly**: either widen `cancel` to
+   * `waiting_for_participants` (and revisit the presence residual, which currently leans on
+   * `cancel`'s narrowness), or narrow this one to `scheduled` and require cancel-then-rebook
+   * once the room is open. Do not let the first route to land decide it by omission.
+   *
+   * ⚠⚠ GUARDED AT ALL FOR A SHARPER REASON THAN THE ABOVE. Without any status guard,
+   * CANCEL-THEN-
    * RESCHEDULE REOPENS EXACTLY THE DOUBLE-BOOKING THIS TICKET CLOSES, in the one shape the
    * reconciliation read cannot see:
    *
