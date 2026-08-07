@@ -193,6 +193,23 @@ type ContextResolution =
   | Extract<ExpertResolution, { kind: 'match_mode' | 'unresolvable' }>;
 
 /** PURE. Walk ONE context row to its expert, through whichever table its type names. */
+/**
+ * Deterministic ordering for a set of uuids destined for an error message.
+ *
+ * ⚠ THE COMPARATOR IS NOT OPTIONAL. A bare `.sort()` coerces every element to a string and
+ * orders by UTF-16 code unit — SonarCloud rates that a RELIABILITY bug (`Provide a compare
+ * function…`), and it is right to: the default is only ever accidentally correct, and the
+ * habit is what silently mis-sorts the next array that holds numbers. These are uuids, so
+ * `localeCompare` is stable and locale-independent for the hex+hyphen alphabet.
+ *
+ * Ordering matters at all only so `MeetingExpertAmbiguousError`'s message is REPRODUCIBLE:
+ * the same two experts must render in the same order every time, or the same defect reads as
+ * two different errors in logs and in test assertions.
+ */
+function sortIds(ids: string[]): string[] {
+  return ids.sort((a, b) => a.localeCompare(b));
+}
+
 function resolveOneContext(context: ProjectionContext, maps: ContextExpertMaps): ContextResolution {
   // `admin` carries no subject, and the biconditional CHECK makes the two conditions
   // equivalent — both are spelled out so a reader does not have to know that.
@@ -248,7 +265,7 @@ function resolveExpert(
   }
 
   if (experts.size > 1) {
-    return { kind: 'ambiguous', expertProfileIds: [...experts].sort() };
+    return { kind: 'ambiguous', expertProfileIds: sortIds([...experts]) };
   }
   const [only] = [...experts];
   // `only` is undefined exactly when the set is empty (no non-admin context). At size 1 the
@@ -466,7 +483,10 @@ export async function assertProjectionExpertUnchangedTx(
   if (resolved !== null && resolved !== projection.expertProfileId) {
     // The widened set resolves to ONE expert, but not the one already booked (e.g. the
     // original context was detached first). Same defect, same named error.
-    throw new MeetingExpertAmbiguousError(meetingId, [projection.expertProfileId, resolved].sort());
+    throw new MeetingExpertAmbiguousError(
+      meetingId,
+      sortIds([projection.expertProfileId, resolved])
+    );
   }
   return projection.expertProfileId;
 }
