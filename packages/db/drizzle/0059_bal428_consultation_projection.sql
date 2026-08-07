@@ -1,0 +1,72 @@
+-- BAL-428 — `consultations` BECOMES A READ MODEL OF `meetings` (the Option C decision).
+--
+-- THIS FILE WAS HAND-EDITED after `drizzle-kit generate` (precedent for hand-edited
+-- generated SQL with an explanatory header: 0022_even_ozymandias.sql, 0030_heavy_kang.sql,
+-- 0055_bal417_engagement_supertype.sql, 0056_bal418_meetings_primitive.sql). Exactly ONE
+-- statement was added — the `DELETE FROM "consultations"` below. Nothing was reordered and
+-- nothing was removed.
+--
+-- ── A. WHY THE DELETE ────────────────────────────────────────────────────────────────
+--
+-- `meeting_id` is added NOT NULL with NO DEFAULT, so `ADD COLUMN` fails 23502 on any
+-- existing row. Every existing row must therefore go.
+--
+-- SAFE BECAUSE: `consultations` has only ever had two writers — the dev seeder
+-- (`apps/api/src/services/seed/seed-service.ts`) and one integration test. There has never
+-- been a production writer, because there has never been a booking path: BAL-418 shipped
+-- `meetingsRepository.create` with NO caller. Every surviving row is therefore a dev-seed
+-- fixture. Supabase lists exactly ONE project org-wide — no staging, no production — and
+-- the 0055/0056 pre-launch ruling ("the fix is to reset that database") already applies to
+-- this same database.
+--
+-- REJECTED — ADD NULLABLE, BACKFILL, THEN `SET NOT NULL`: the standard safe dance, and it
+-- does not apply here, because THERE IS NOTHING TO BACKFILL *FROM*. A consultation row
+-- carries no meeting reference of any kind; inventing a `meetings` row per orphan would
+-- fabricate a booking (with a context, an expert, a window) that never happened. A
+-- fabricated meeting is worse than a deleted fixture.
+--
+-- REJECTED — `NOT VALID`: unavailable for NOT NULL, and for the FK it would leave a
+-- permanently unvalidated constraint over rows we already know are wrong.
+--
+-- ⚠ THE DELETE IS NOT EXERCISED BY CI (memory
+-- `reference_db_migrations_tested_against_empty_db`). The integration harness migrates an
+-- EMPTY testcontainer and the E2E job migrates a fresh service container, so on both it
+-- deletes zero rows and proves nothing. Do not read a green CI run as evidence that this
+-- statement behaved correctly against real data — no CI job has data for it to behave on.
+--
+-- ── B. THE ENUM HAZARD, AND HOW THIS FILE OBEYS IT ───────────────────────────────────
+--
+-- Line 1 is a BARE `ALTER TYPE … ADD VALUE` — no `BEFORE`, no `AFTER`, appended last, so
+-- it matches `meetingStatusEnum`'s array order in `schema/enums.ts`.
+--
+-- Postgres permits `ADD VALUE` inside a transaction block (PG 12+) but FORBIDS *using* the
+-- new label in that same transaction, and drizzle wraps each migration file in ONE
+-- transaction. So the new label appears EXACTLY ONCE in this file, on line 1, and nowhere
+-- else — not in a DEFAULT, not in a CHECK, not in an index predicate, not even in this
+-- header. Concretely, this file deliberately does NOT:
+--   * rewrite `meeting_outcome_requires_ended` (which names 'ended', an original label),
+--   * add any CHECK constraining the new status transition,
+--   * add any partial index whose predicate mentions a `meeting_status` label.
+-- That is memory `reference_enum_default_same_tx_migration_hazard`, and the same
+-- prohibition binds every future ADD-VALUE migration on this type.
+--
+-- ── C. WHAT THE NEW SHAPE BUYS ───────────────────────────────────────────────────────
+--
+-- With `meeting_id` NOT NULL, "a booked meeting that blocks nobody's availability" — the
+-- silent double-booking BAL-418's own docblock predicted for BAL-129 — becomes
+-- UNREPRESENTABLE rather than merely discouraged. `consultations_meeting_uq` is PARTIAL on
+-- `deleted_at IS NULL` (memory `reference_softdelete_nonpartial_unique_recreate`) so a
+-- soft-deleted projection cannot permanently block re-projecting its meeting.
+--
+-- ⚠ WHAT IT DOES **NOT** BUY: there is no `btree_gist` / `tstzrange` EXCLUDE constraint
+-- here, so two simultaneous bookings for the same window can still both commit. This
+-- migration closes the STALE-AVAILABILITY double-booking, NOT the RACE. That is a
+-- follow-up ticket.
+
+ALTER TYPE "public"."meeting_status" ADD VALUE 'cancelled';--> statement-breakpoint
+-- SECTION A above. Not exercised by CI.
+DELETE FROM "consultations";--> statement-breakpoint
+ALTER TABLE "consultations" ADD COLUMN "meeting_id" uuid NOT NULL;--> statement-breakpoint
+ALTER TABLE "consultations" ADD CONSTRAINT "consultations_meeting_id_meetings_id_fk" FOREIGN KEY ("meeting_id") REFERENCES "public"."meetings"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "consultations_meeting_idx" ON "consultations" USING btree ("meeting_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "consultations_meeting_uq" ON "consultations" USING btree ("meeting_id") WHERE "consultations"."deleted_at" IS NULL;

@@ -45,6 +45,25 @@ const PINNED_REPOSITORIES: readonly string[] = [
   // The two new BAL-390 repositories: both are written to from paths that DO notify.
   'reviews.ts',
   'review-invite-tokens.ts',
+  /**
+   * BAL-428 adds the two booking repositories, for a REASON THIS FILE DID NOT PREVIOUSLY
+   * COVER. `meetingsRepository`'s docblock hands its callers a post-commit obligation of
+   * exactly the `close()` shape — enqueue an availability-cache rebuild for the
+   * `expertProfileId` it returns — and spells out WHY the repository cannot do it itself:
+   * the rebuild runs on a BullMQ queue that lives only in `apps/api`. That is the same
+   * three-reason argument documented above (dependency direction, `apps/web` bundle
+   * safety, and a pre-commit fire inside `db.transaction`), so the same mechanical guard
+   * applies. `bullmq` / `BullMQ` are already in FORBIDDEN_MARKERS, which is what makes
+   * this pin bite rather than merely document.
+   *
+   * `consultations.ts` is pinned alongside it because BAL-428 made it the availability
+   * READ MODEL of the meeting lifecycle: it is READ-ONLY (its `create()` was deleted), and
+   * its rows are written only by `_shared/consultation-projection.ts` inside a meeting
+   * mutation's transaction. A publish smuggled in here would fire from inside that
+   * transaction — the "your call is booked" email for a booking that then rolled back.
+   */
+  'meetings.ts',
+  'consultations.ts',
 ];
 
 /**

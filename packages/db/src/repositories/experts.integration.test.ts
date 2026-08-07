@@ -21,9 +21,15 @@ import {
   userFactory,
   expertDraftFactory,
   expertFactory,
+  meetingFactory,
   searchExpertFactory,
   agencyFactory,
 } from '../test/factories';
+import {
+  EXPECTED_CONSULTATION_COUNT,
+  UNCOUNTED_CONSULTATION_LABELS,
+  seedConsultationCountMatrix,
+} from '../test/helpers/consultation-count-matrix';
 import { expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
 import { usersRepository } from './users';
@@ -650,7 +656,11 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     expect(result?.workHistory[1]?.role).toBe('Senior Consultant');
   });
 
-  it('counts only live confirmed consultations in consultationCount', async () => {
+  it('counts ONLY delivered consultations in consultationCount (the hero stat)', async () => {
+    // BAL-428 CRITICAL 2 — the profile hero half of the shared count expression. The matrix
+    // (`test/helpers/consultation-count-matrix.ts`) is deliberately shared with
+    // `expert-search.integration.test.ts`: one SQL expression feeds both surfaces so that
+    // they can never disagree, and two hand-maintained fixtures would defeat that.
     const user = await userFactory();
     const username = uniq('consult-count');
     const expert = await searchExpertFactory({
@@ -659,26 +669,42 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
       searchable: true,
     });
 
-    const start = new Date('2026-01-01T10:00:00.000Z');
-    const end = new Date('2026-01-01T11:00:00.000Z');
-    await db.insert(consultations).values([
-      // 2 live confirmed → counted.
-      { expertProfileId: expert.id, startAt: start, endAt: end, status: 'confirmed' },
-      { expertProfileId: expert.id, startAt: start, endAt: end, status: 'confirmed' },
-      // 1 cancelled → excluded.
-      { expertProfileId: expert.id, startAt: start, endAt: end, status: 'cancelled' },
-      // 1 soft-deleted confirmed → excluded.
-      {
-        expertProfileId: expert.id,
-        startAt: start,
-        endAt: end,
-        status: 'confirmed',
-        deletedAt: new Date(),
-      },
-    ]);
+    await seedConsultationCountMatrix(expert.id);
 
     const result = await expertsRepository.findPublicProfileByUsername(username);
-    expect(result?.consultationCount).toBe(2);
+    // Only the two `ended` + `completed` rows. Everything in the message below has a live
+    // `confirmed` projection row and WOULD have counted before the `meetings` join landed.
+    expect(
+      result?.consultationCount,
+      `hero stat must exclude: ${UNCOUNTED_CONSULTATION_LABELS.join('; ')}`
+    ).toBe(EXPECTED_CONSULTATION_COUNT);
+    expect(EXPECTED_CONSULTATION_COUNT).toBe(2);
+  });
+
+  it('a FUTURE booking alone leaves the expert reading as NEW (zero sessions)', async () => {
+    // The self-inflation case, isolated: absence of this number is what renders an expert as
+    // "New expert", so a single client-side booking must not flip that badge off.
+    const user = await userFactory();
+    const username = uniq('consult-future');
+    const expert = await searchExpertFactory({ userId: user.id, username, searchable: true });
+    const { meeting } = await meetingFactory({
+      contexts: [],
+      values: {
+        scheduledStart: new Date(Date.now() + 7 * 24 * 3_600_000),
+        scheduledEnd: new Date(Date.now() + 7 * 24 * 3_600_000 + 3_600_000),
+        status: 'scheduled',
+      },
+    });
+    await db.insert(consultations).values({
+      meetingId: meeting.id,
+      expertProfileId: expert.id,
+      startAt: meeting.scheduledStart,
+      endAt: meeting.scheduledEnd,
+      status: 'confirmed',
+    });
+
+    const result = await expertsRepository.findPublicProfileByUsername(username);
+    expect(result?.consultationCount).toBe(0);
   });
 
   it('reports a zero consultationCount when the expert has no consultations', async () => {

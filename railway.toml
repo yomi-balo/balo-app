@@ -5,7 +5,16 @@ buildCommand = "pnpm install --frozen-lockfile && pnpm build --filter api"
 [deploy]
 # TZ=UTC pins the process timezone: the availability resolver iterates local-midnight
 # Date objects (getDay()/setDate()), which are only correct when the server runs UTC.
-startCommand = "TZ=UTC node apps/api/dist/index.js"
+#
+# NODE_ENV=production is pinned HERE, in checked-in config, rather than left to a Railway
+# dashboard variable. `apps/api`'s start path is a bare `node dist/index.js` (unlike
+# `apps/web`, where `next start` sets NODE_ENV itself), and `app.ts`'s dev-route gate is
+# `if (process.env.NODE_ENV !== 'production')` — which FAILS OPEN on an unset variable and
+# would register the BAL-239 seed routes on the deployed API. BAL-428 is what made that
+# matter: `truncateSeedData` now hard-deletes meetings, engagements, transcripts,
+# meeting_guests and audit rows that were not in its blast radius before. Do not remove
+# this without closing that gate some other way.
+startCommand = "TZ=UTC NODE_ENV=production node apps/api/dist/index.js"
 numReplicas = 1
 healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"

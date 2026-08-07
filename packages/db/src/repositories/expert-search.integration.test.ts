@@ -14,7 +14,12 @@ import {
 } from '../schema';
 import { referenceDataRepository } from './reference-data';
 import { expertsRepository } from './experts';
-import { searchExpertFactory, userFactory } from '../test/factories';
+import { meetingFactory, searchExpertFactory, userFactory } from '../test/factories';
+import {
+  EXPECTED_CONSULTATION_COUNT,
+  UNCOUNTED_CONSULTATION_LABELS,
+  seedConsultationCountMatrix,
+} from '../test/helpers/consultation-count-matrix';
 import {
   expertSearchRepository,
   buildWhereConditions,
@@ -925,48 +930,52 @@ describe('expertSearchRepository.search — base visibility', () => {
 // ── 13. consultationCount proxy ─────────────────────────────────────
 
 describe('expertSearchRepository.search — consultationCount proxy', () => {
-  it('counts confirmed non-deleted consultations; excludes cancelled/soft-deleted; degrades to 0', async () => {
+  it('counts ONLY delivered consultations; excludes future bookings, no-shows, cancelled and soft-deleted', async () => {
+    // BAL-428 CRITICAL 2 — the search-card half of the shared count expression. Same matrix
+    // as `experts.integration.test.ts`'s hero-stat assertion, from
+    // `test/helpers/consultation-count-matrix.ts`: ONE SQL expression feeds both surfaces so
+    // they can never disagree about what "consultation count" means, and two hand-maintained
+    // fixture copies would be exactly how that guarantee rotted.
     const verticalId = await getVerticalId();
     const withConsults = await searchExpertFactory({ verticalId });
     const withoutConsults = await searchExpertFactory({ verticalId });
 
-    const base = NOW.getTime();
-    await db.insert(consultations).values([
-      // confirmed → counts
-      {
-        expertProfileId: withConsults.id,
-        startAt: new Date(base + DAY),
-        endAt: new Date(base + DAY + 60 * 60 * 1000),
-        status: 'confirmed',
-      },
-      {
-        expertProfileId: withConsults.id,
-        startAt: new Date(base + 2 * DAY),
-        endAt: new Date(base + 2 * DAY + 60 * 60 * 1000),
-        status: 'confirmed',
-      },
-      // cancelled → excluded
-      {
-        expertProfileId: withConsults.id,
-        startAt: new Date(base + 3 * DAY),
-        endAt: new Date(base + 3 * DAY + 60 * 60 * 1000),
-        status: 'cancelled',
-      },
-      // confirmed but soft-deleted → excluded
-      {
-        expertProfileId: withConsults.id,
-        startAt: new Date(base + 4 * DAY),
-        endAt: new Date(base + 4 * DAY + 60 * 60 * 1000),
-        status: 'confirmed',
-        deletedAt: new Date(),
-      },
-    ]);
+    await seedConsultationCountMatrix(withConsults.id);
 
     const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
     const a = rows.find((r) => r.id === withConsults.id);
     const b = rows.find((r) => r.id === withoutConsults.id);
-    expect(a?.consultationCount).toBe(2);
+    expect(
+      a?.consultationCount,
+      `search card must exclude: ${UNCOUNTED_CONSULTATION_LABELS.join('; ')}`
+    ).toBe(EXPECTED_CONSULTATION_COUNT);
+    // …and an expert with no consultations at all still degrades to 0, not null.
     expect(b?.consultationCount).toBe(0);
+  });
+
+  it('a FUTURE booking does not inflate the search card', async () => {
+    // Isolated from the matrix on purpose: the count is also the search TIEBREAKER, so a
+    // future booking that counted would reorder the marketplace, not just mislabel a card.
+    const verticalId = await getVerticalId();
+    const expert = await searchExpertFactory({ verticalId });
+    const { meeting } = await meetingFactory({
+      contexts: [],
+      values: {
+        scheduledStart: new Date(NOW.getTime() + DAY),
+        scheduledEnd: new Date(NOW.getTime() + DAY + 60 * 60 * 1000),
+        status: 'scheduled',
+      },
+    });
+    await db.insert(consultations).values({
+      meetingId: meeting.id,
+      expertProfileId: expert.id,
+      startAt: meeting.scheduledStart,
+      endAt: meeting.scheduledEnd,
+      status: 'confirmed',
+    });
+
+    const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
+    expect(rows.find((r) => r.id === expert.id)?.consultationCount).toBe(0);
   });
 });
 

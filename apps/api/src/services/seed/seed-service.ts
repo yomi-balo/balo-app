@@ -5,10 +5,27 @@
  * deletes + inserts inside a transaction, and (for availability) runs the
  * BAL-243 resolver AFTER the transaction commits.
  *
- * TWO-PHASE (mandatory): the resolver opens its OWN reads on the global `db`
- * outside our transaction. Calling it inside would read stale (pre-insert) data
- * and risk a postgres-js pool deadlock — so we commit rules/consultations
- * FIRST, then loop experts and resolve.
+ * ⚠ THREE-PHASE SINCE BAL-428 (it was two). Each boundary is mandatory for a DIFFERENT
+ * reason, and collapsing either one breaks something:
+ *
+ *   1. TRUNCATE + RULES, in ONE transaction. Destructive, so it is atomic.
+ *   2. BOOK THE CONSULTATIONS, OUTSIDE any transaction. `consultations` is now a READ
+ *      MODEL of `meetings` with a NOT NULL `meeting_id`, so a seeded booking has to go
+ *      through `meetingsRepository.create` — and that method opens its OWN
+ *      `db.transaction`. Calling it from inside phase 1's transaction would take a SECOND
+ *      connection from the pool and commit the booking independently of the truncate,
+ *      which is neither atomic nor safe. Same for `caseEngagementsRepository.create`.
+ *   3. RESOLVE per expert. The resolver opens its own reads on the global `db`; calling it
+ *      earlier would read pre-insert data and risk a postgres-js pool deadlock.
+ *
+ * ⚠ THE SEEDER CALLS `meetingsRepository` DIRECTLY, NOT `services/meetings/
+ * meeting-availability.ts`, AND THAT IS DELIBERATE. That service exists to enqueue a BullMQ
+ * availability-cache rebuild post-commit — which is exactly what phase 3 does here instead,
+ * synchronously and with the in-memory `busyBlocks` fixture that a queued job could not
+ * reproduce. Routing the seeder through the service would fire ONE REDUNDANT REBUILD JOB PER
+ * SEEDED FIXTURE (every `create` and every `cancel`, so it scales with the expert count),
+ * each recomputing the cache WITHOUT the busy fixture and racing phase 3 to overwrite it.
+ * The seeder is the one legitimate caller that discharges the post-commit obligation itself.
  */
 import {
   db,
@@ -18,9 +35,11 @@ import {
   expertLanguages,
   expertIndustries,
   availabilityRules,
-  consultations,
+  companies,
   workHistory,
   expertCertifications,
+  caseEngagementsRepository,
+  meetingsRepository,
   referenceDataRepository,
   asc,
   eq,
@@ -32,7 +51,6 @@ import {
   type NewExpertLanguage,
   type NewExpertIndustry,
   type NewAvailabilityRule,
-  type NewConsultation,
   type NewWorkHistory,
   type NewExpertCertification,
 } from '@balo/db';
@@ -44,10 +62,15 @@ import { truncateSeedData } from './truncate.js';
 import {
   DEFAULT_EXPERT_COUNT,
   DEFAULT_SEED,
+  SEED_COMPANY_NAME,
+  SEED_COMPANY_SLUG,
+  SEED_ENGAGEMENT_DESCRIPTION,
+  seedEngagementTitle,
   SEED_EMAIL_DOMAIN,
   SEED_WORKOS_PREFIX,
 } from './constants.js';
 import type {
+  AvailabilityPlan,
   GeneratedExpert,
   RefreshSummary,
   RegenerateSummary,
@@ -318,9 +341,144 @@ function indexFromEmail(email: string): number | null {
 }
 
 /**
- * Refresh availability for all seed experts (destructive on rules/cache/
- * consultations). Seeds rules + consultations in a transaction, COMMITS, then
- * runs the resolver per expert with the in-memory busy fixture.
+ * BAL-428 — the client company every seeded booking hangs off. Keyed on the UNIQUE
+ * `companies.slug`, so a `refresh` that runs without a preceding `regenerate` adopts the
+ * existing row instead of failing `23505` or minting a duplicate.
+ *
+ * The INSERT carries `onConflictDoNothing` on that unique rather than trusting the SELECT
+ * above it: check-then-insert is a TOCTOU window, and two concurrent seed runs (two browser
+ * tabs on the `/dev` panel is all it takes) would otherwise have one die on `23505`. With
+ * the conflict clause the loser gets zero rows back and re-reads the winner's row — which is
+ * why the fallback SELECT below is not redundant.
+ *
+ * ⚠ NO `company_members` ROW IS CREATED, DELIBERATELY, and it has a visible consequence.
+ * Capability is derived from membership (ADR-1029), so NO user holds any capability on this
+ * company: its seeded case engagements are invisible and unactionable in the client UI, and
+ * `caseEngagementsRepository.close({ userId })` can never succeed for them
+ * (`CaseCloserNotMemberError`). Acceptable because these fixtures exist ONLY to make a
+ * meeting's expert resolvable for the availability projection — nobody is meant to act on
+ * them. If a future fixture must be actionable, add the membership rows THEN, knowingly.
+ *
+ * `isPersonal: false` because this is a shared workspace standing in for a client org, not
+ * one user's private space — and because `isPersonal` is the flag BAL-345's (inert) domain
+ * auto-join keys off. No `domain` is set at all; see `SEED_COMPANY_SLUG`'s docblock.
+ */
+async function ensureSeedCompanyId(): Promise<string> {
+  const [existing] = await db
+    .select({ id: companies.id })
+    .from(companies)
+    .where(eq(companies.slug, SEED_COMPANY_SLUG))
+    .limit(1);
+  if (existing !== undefined) return existing.id;
+
+  const [created] = await db
+    .insert(companies)
+    .values({ name: SEED_COMPANY_NAME, slug: SEED_COMPANY_SLUG, isPersonal: false })
+    .onConflictDoNothing({ target: companies.slug })
+    .returning({ id: companies.id });
+  if (created !== undefined) return created.id;
+
+  // Lost the race — a concurrent seed run committed first. Adopt its row.
+  const [winner] = await db
+    .select({ id: companies.id })
+    .from(companies)
+    .where(eq(companies.slug, SEED_COMPANY_SLUG))
+    .limit(1);
+  if (winner === undefined) {
+    throw new Error('Seed: failed to create or adopt the seed company');
+  }
+  return winner.id;
+}
+
+/** What phase 2 actually wrote, for the summary the /dev panel renders. */
+interface BookedSeedSlots {
+  consultationsSeeded: number;
+  consultationsCancelled: number;
+}
+
+/**
+ * BAL-428 PHASE 2 — BOOK the generated slots as real meetings.
+ *
+ * Before BAL-428 this was one bulk `INSERT INTO consultations`. It cannot be any more:
+ * `consultations` is a READ MODEL of the meeting lifecycle with a NOT NULL `meeting_id`,
+ * and its ONLY writer is the projection driven from `meetingsRepository`. A seeded slot is
+ * therefore a real booking graph — company → case engagement → meeting → `meeting_contexts`
+ * row → projection — resolved through exactly the seam a production booking will use.
+ *
+ * ⚠ THAT IS THE POINT, NOT AN INCONVENIENCE. `meetingsRepository.create` still has no
+ * production caller, so this seeder is the only thing in the repository that exercises the
+ * new write path end to end. If expert resolution through the context seam breaks, `pnpm
+ * db:seed` breaks — loudly, on a developer's machine, rather than silently in the first
+ * booking.
+ *
+ * ONE case engagement per expert WITH slots (not per expert): an expert whose archetype
+ * generated no consultations needs no engagement, and minting one would put an engagement
+ * with no meetings on the /dev panel for no reason.
+ *
+ * A `cancelled` fixture is BOOKED FIRST, THEN CANCELLED — the same two steps a real
+ * cancellation takes — so the projection ends up `status='cancelled'` via
+ * `cancelProjectionTx` rather than being written cancelled from nothing. That is what makes
+ * the seeder's booked-then-cancelled edge case a genuine rehearsal of BAL-410's path.
+ *
+ * ⚠ RUNS OUTSIDE ANY TRANSACTION. Both repositories open their own; see the module
+ * docblock. A failure part-way therefore leaves a partially-booked seed set, which the next
+ * run truncates. That is acceptable for a dev seeder and is why the destructive part
+ * (phase 1) is the part that stayed atomic.
+ */
+async function bookSeedConsultations(
+  plans: AvailabilityPlan[],
+  companyId: string
+): Promise<BookedSeedSlots> {
+  let consultationsSeeded = 0;
+  let consultationsCancelled = 0;
+
+  for (const plan of plans) {
+    if (plan.consultations.length === 0) continue;
+
+    // `CaseEngagementRow.id` IS the supertype `engagements.id` — the value
+    // `meeting_contexts.context_id` must carry for a `case` context to resolve.
+    const engagement = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: plan.expertProfileId,
+      title: seedEngagementTitle(plan.index),
+      // Already-sanitised HTML: `@balo/db` never sanitises (BAL-417 D8), the caller does.
+      description: SEED_ENGAGEMENT_DESCRIPTION,
+      // No `actorUserId`: there is no human behind a seed run (the ADR-1030 system-actor
+      // attribution exemption), and inventing one would be a fabricated attribution.
+    });
+
+    for (const slot of plan.consultations) {
+      const created = await meetingsRepository.create({
+        scheduledStart: slot.startAt,
+        scheduledEnd: slot.endAt,
+        contexts: [{ contextType: 'case', contextId: engagement.id }],
+      });
+
+      if (created.expertProfileId !== plan.expertProfileId) {
+        // Unreachable: the engagement was just created FOR this expert. Asserted anyway
+        // because a silent mismatch here means the seeder blocked somebody else's calendar.
+        throw new Error(
+          `Seed: meeting ${created.meeting.id} booked ${created.expertProfileId ?? 'nobody'}, expected ${plan.expertProfileId}`
+        );
+      }
+
+      if (slot.status === 'cancelled') {
+        await meetingsRepository.cancel(created.meeting.id);
+        consultationsCancelled += 1;
+      } else {
+        consultationsSeeded += 1;
+      }
+    }
+  }
+
+  return { consultationsSeeded, consultationsCancelled };
+}
+
+/**
+ * Refresh availability for all seed experts (destructive on rules/cache/bookings). Seeds
+ * rules in a transaction and COMMITS, books the consultations as meetings, then runs the
+ * resolver per expert with the in-memory busy fixture. See the module docblock for why
+ * those three phases cannot be merged.
  */
 export async function refreshAvailability(opts: RefreshOptions = {}): Promise<RefreshSummary> {
   const seed = opts.seed ?? DEFAULT_SEED;
@@ -332,10 +490,8 @@ export async function refreshAvailability(opts: RefreshOptions = {}): Promise<Re
   const plans = generateAvailabilityPlan({ experts, seed, baselineNow });
 
   let availabilityRulesGenerated = 0;
-  let consultationsSeeded = 0;
-  let consultationsCancelled = 0;
 
-  // ── Phase 1: truncate + insert, then COMMIT ──────────────────────
+  // ── Phase 1: truncate + insert rules, then COMMIT ────────────────
   await db.transaction(async (tx) => {
     await truncateSeedData(tx, 'availability');
 
@@ -350,24 +506,17 @@ export async function refreshAvailability(opts: RefreshOptions = {}): Promise<Re
         await tx.insert(availabilityRules).values(ruleRows);
         availabilityRulesGenerated += ruleRows.length;
       }
-
-      if (plan.consultations.length > 0) {
-        const consultRows: NewConsultation[] = plan.consultations.map((c) => ({
-          expertProfileId: plan.expertProfileId,
-          startAt: c.startAt,
-          endAt: c.endAt,
-          status: c.status,
-        }));
-        await tx.insert(consultations).values(consultRows);
-        for (const c of plan.consultations) {
-          if (c.status === 'cancelled') consultationsCancelled += 1;
-          else consultationsSeeded += 1;
-        }
-      }
     }
   });
 
-  // ── Phase 2: resolve per expert AFTER commit ─────────────────────
+  // ── Phase 2: book the slots as meetings AFTER commit ─────────────
+  const companyId = await ensureSeedCompanyId();
+  const { consultationsSeeded, consultationsCancelled } = await bookSeedConsultations(
+    plans,
+    companyId
+  );
+
+  // ── Phase 3: resolve per expert AFTER the bookings commit ────────
   let cacheRowsWritten = 0;
   let expertsWithEarliest = 0;
   let expertsNullEarliest = 0;
