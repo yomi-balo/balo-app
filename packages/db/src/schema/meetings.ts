@@ -22,21 +22,35 @@ import { meetingPresence } from './meeting-presence';
  * host authorization is ADR-1046/BAL-413's (`hasEngagementCapability`). Who actually
  * hosted is recorded by `meeting_presence` (`party='expert'`).
  *
- * ⚠ CROSS-REFERENCE — `consultations` (schema/consultations.ts). That table is the LIVE
- * availability stub the resolver subtracts from open windows
- * (`consultations_expert_status_range_idx`). A `meetings` row with
- * `scheduled_start`/`scheduled_end` stores the same fact a SECOND time. There is no
- * regression today because BAL-418 ships NO writer that creates a meeting from a booking
- * (`meetingsRepository.create` has no caller). The regression appears the moment BAL-129
- * lands: a booked meeting would NOT block the expert's availability. RULING for BAL-129 —
- * it must either (a) write the `consultations` row and the `meetings` row in ONE
- * transaction, or (b) migrate the availability resolver to read `meetings` and retire the
- * stub. It must not ship a meeting-creating path that does neither.
+ * ⚠ CROSS-REFERENCE — `consultations` (schema/consultations.ts). SETTLED BY BAL-428
+ * (Option C). BAL-418 left these as TWO INDEPENDENT RECORDS of the same booked-slot fact
+ * and handed BAL-129 a ruling to reconcile them. BAL-428 did it instead, and the answer is
+ * NOT the one BAL-418's docblock leaned toward:
+ *
+ *   `consultations` is now a READ MODEL OF THIS TABLE, not a sibling. It carries a NOT NULL
+ *   `meeting_id` FK to `meetings.id`, so a booked meeting that blocks nothing is
+ *   UNREPRESENTABLE rather than merely discouraged. `meetings` remains the source of truth
+ *   for the booked window; the projection exists so the availability resolver keeps its
+ *   narrow, index-backed read (`consultations_expert_status_range_idx`) instead of dragging
+ *   the whole meeting lifecycle into the hot path.
+ *
+ * ⚠ THIS TABLE GAINED NO COLUMN FOR ANY OF THAT, and must not. There is no
+ * `consultation_id` here and no reverse relation on `meetingsRelations` — the FK and the
+ * relation both point THIS way, from the projection to the meeting. The projection's ONLY
+ * writer is `repositories/_shared/consultation-projection.ts`, driven from
+ * `meetingsRepository` (`create` / `updateSchedule` / `cancel` / `softDelete`) and from
+ * `meetingContextsRepository.attach`, always inside their existing transactions.
+ *
+ * WHAT BAL-428 DID NOT CLOSE: two simultaneous bookings for one window can still both
+ * commit — there is no EXCLUDE constraint. It closed the STALE-AVAILABILITY
+ * double-booking, not the RACE.
  *
  * ⚠ ENUM-LITERAL CAVEAT: `'ended'` is safe inside `meeting_outcome_requires_ended` because
- * `meeting_status` is a standalone `CREATE TYPE` in the same migration (0056). A future
- * migration that `ALTER TYPE meeting_status ADD VALUE`s a label MUST NOT rewrite this CHECK
- * in that same migration (the `reference_enum_default_same_tx_migration_hazard` rule).
+ * `meeting_status`'s original four labels were created by a standalone `CREATE TYPE` in
+ * migration 0056. `'cancelled'` was added by BAL-428 via `ALTER TYPE … ADD VALUE` in 0059,
+ * which is exactly why 0059 does NOT rewrite this CHECK and adds NO CHECK naming the new
+ * label (the `reference_enum_default_same_tx_migration_hazard` rule). Any future
+ * ADD-VALUE migration inherits the same prohibition.
  *
  * NO RLS (matching the credit / action-item / transcript precedents — `transcripts.ts`,
  * `credit-sessions.ts`): access is gated at the application layer.

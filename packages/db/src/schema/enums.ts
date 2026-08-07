@@ -538,27 +538,74 @@ export const transcriptArtifactKindEnum = pgEnum('transcript_artifact_kind', [
 
 // ── Meetings primitive (BAL-418 / ADR-1045 §2/§3/§6 + ADR-1043 §1/§2) ──────
 //
-// All FOUR enums below are standalone `CREATE TYPE`s (never `ALTER TYPE ... ADD
-// VALUE`), so every label commits atomically with the type. Using a label as a column
+// All four enums below were created by 0056 as standalone `CREATE TYPE`s, so every label
+// they were BORN with commits atomically with the type. Using such a label as a column
 // DEFAULT (`meetings.status = 'scheduled'`) or inside a CHECK (`meeting_outcome_requires_ended`,
 // `meeting_context_admin_no_id`) in the SAME migration is SAFE — the enum-default-same-txn
 // hazard (memory `reference_enum_default_same_tx_migration_hazard`) applies ONLY to
-// ADD-VALUE, which none of these are. NONE appears in an INDEX PREDICATE (the house rule
-// at `action-items.ts` / `transcripts.ts`).
+// ADD-VALUE. NONE appears in an INDEX PREDICATE (the house rule at `action-items.ts` /
+// `transcripts.ts`).
+//
+// ⚠ ONE EXCEPTION, ADDED BY BAL-428: `meeting_status` gained `'cancelled'` through a bare
+// `ALTER TYPE … ADD VALUE` in migration 0059. That label is therefore subject to the
+// one-transaction hazard, and 0059 obeys it — see `meetingStatusEnum` below.
 
 /**
  * BAL-134's meeting lifecycle (BAL-418 creates it; BAL-134 owns the transitions).
- * scheduled → waiting_for_participants → in_progress → ended.
+ * scheduled → waiting_for_participants → in_progress → ended, plus the terminal
+ * `cancelled` (BAL-428).
  * WHY THE END-REASON IS NOT HERE: `missed_call` / `no_show_client` are *why* a meeting
- * ended, not a fifth lifecycle state — BAL-134's own `meeting_ended` analytic already
- * carries `outcome`. Modelling them as statuses would force a later ALTER TYPE … ADD
- * VALUE, the documented one-transaction hazard. See `meetingOutcomeEnum`.
+ * ended, not a lifecycle state — BAL-134's own `meeting_ended` analytic already
+ * carries `outcome`. See `meetingOutcomeEnum`.
+ *
+ * ⚠ `'cancelled'` (BAL-428 decision, Option C) IS APPENDED LAST, DELIBERATELY, and its
+ * position is load-bearing in two ways:
+ *
+ *   1. IT MUST STAY LAST. Migration 0059 emits a BARE `ALTER TYPE … ADD VALUE 'cancelled'`
+ *      with NO `BEFORE`/`AFTER` clause. Inserting a future label before it — or reordering
+ *      this array — makes the generated SQL disagree with the deployed type's sort order.
+ *   2. THE LITERAL MUST NOT APPEAR ANYWHERE ELSE IN 0059. Postgres permits `ADD VALUE`
+ *      inside a transaction but forbids USING the new label in that same transaction, and
+ *      drizzle wraps each migration file in one. So 0059 adds the label and nothing else
+ *      touches it: `meeting_outcome_requires_ended` is NOT rewritten, and NO CHECK
+ *      constraining the cancel transition is added there.
+ *
+ * WHY A LABEL RATHER THAN A `cancelled_at` COLUMN (BAL-428 F3): a nullable timestamp would
+ * leave a dead meeting sitting at `status='scheduled'`, forcing EVERY future status reader
+ * to remember an extra predicate. With the label,
+ * `consultationTimestampsForEngagements`'s `status IN ('scheduled',
+ * 'waiting_for_participants')` filter and `meeting_status_scheduled_start_idx` exclude a
+ * cancelled meeting with ZERO code change. `status='ended' + outcome='cancelled'` was
+ * rejected too — it overloads `ended` and reaches into BAL-412/BAL-134 semantics.
+ *
+ * ⚠⚠ EVERY `ADD VALUE` ON THIS TYPE MUST SWEEP THE READERS THAT BRANCH ON A LABEL, NOT JUST
+ * THE WRITERS. "Zero code change" above is true of the two FILTERS named there; it is NOT
+ * true of code that enumerates states. The readers that had to be revisited for `cancelled`,
+ * and that the next label must be checked against:
+ *
+ *   · `repositories/_shared/consultation-projection.ts` — `consultationStatusForMeeting`
+ *     maps the lifecycle onto `confirmed | cancelled`. A new label defaults to `confirmed`
+ *     (it BLOCKS the slot). Confirm that is right for the label, or add a case.
+ *   · `repositories/meetings.ts` — `cancel()` and `updateSchedule()` both gate on an
+ *     explicit status set. A new pre-terminal label almost certainly belongs in
+ *     `updateSchedule`'s `inArray([...])`.
+ *   · `repositories/meeting-presence.ts` — `resolveClockCeiling` treats ONLY `ended` as
+ *     supplying a ceiling; every other status measures to the wall clock. Read its
+ *     `'cancelled'` residual paragraph before adding a terminal label.
+ *   · `repositories/meeting-contexts.ts` — `consultationTimestampsForEngagements` names
+ *     `scheduled | waiting_for_participants` (upcoming) and `ended`+`completed` (delivered).
+ *   · `repositories/_shared/consultation-count.ts` — the PUBLIC "sessions" stat, gated on
+ *     `ended` + `outcome='completed'`.
+ *
+ * BAL-134 owns the transition map and will need `cancelled` as a terminal state when it
+ * lands.
  */
 export const meetingStatusEnum = pgEnum('meeting_status', [
   'scheduled',
   'waiting_for_participants',
   'in_progress',
   'ended',
+  'cancelled',
 ]);
 
 /**

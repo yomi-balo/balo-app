@@ -2,10 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../client';
-import { meetingContexts, meetings } from '../schema';
-import { caseEngagementFactory, meetingFactory, projectRequestFactory } from '../test/factories';
+import { consultations, meetingContexts, meetings } from '../schema';
+import {
+  caseEngagementFactory,
+  expertDraftFactory,
+  meetingFactory,
+  projectRequestFactory,
+} from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { meetingsRepository, MeetingContextRequiredError } from './meetings';
+import {
+  meetingsRepository,
+  MeetingContextRequiredError,
+  MeetingNotReschedulableError,
+} from './meetings';
 
 const HOUR_MS = 3_600_000;
 
@@ -64,7 +73,7 @@ describe('meetingsRepository.create', () => {
     expect(reloaded?.contexts[0]?.contextId).toBe(request.id);
   });
 
-  it('AC round-trip 3 — an ADMIN meeting has a context row with context_id = NULL', async () => {
+  it('AC round-trip 3 — an ADMIN meeting has a context row with context_id = NULL, and books NOBODY', async () => {
     const created = await meetingsRepository.create({
       ...schedule(),
       contexts: [{ contextType: 'admin', contextId: null }],
@@ -76,6 +85,16 @@ describe('meetingsRepository.create', () => {
     expect(reloaded?.contexts).toHaveLength(1);
     expect(reloaded?.contexts[0]?.contextType).toBe('admin');
     expect(reloaded?.contexts[0]?.contextId).toBeNull();
+
+    // BAL-428 AC #5: an `admin` context resolves to no expert, so the meeting projects NO
+    // `consultations` row and occupies nobody's calendar. `expertProfileId` is null, which
+    // is also how the caller learns there is no availability cache to rebuild.
+    expect(created.expertProfileId).toBeNull();
+    const projections = await db
+      .select({ id: consultations.id })
+      .from(consultations)
+      .where(eq(consultations.meetingId, created.meeting.id));
+    expect(projections).toEqual([]);
   });
 
   it('an empty contexts array throws MeetingContextRequiredError and writes NOTHING', async () => {
@@ -109,21 +128,33 @@ describe('meetingsRepository.create', () => {
   });
 
   it('a Project meeting is creatable with NO credit_sessions row (nothing couples them)', async () => {
-    const request = await projectRequestFactory();
+    // ⚠ FIXTURE CORRECTED BY BAL-428. This test used to pass a `project_requests.id` as a
+    // `project_kickoff` context. Per `meetingContextTypeEnum`'s map, `project_kickoff`
+    // resolves to `engagements.id` — and it only "worked" because `context_id` has no FK,
+    // so the wrong-table id succeeded silently. The projection resolver now reads that
+    // column for real and rejects it (`MeetingContextUnresolvableError`), which surfaced a
+    // latent modelling error in the fixture. The FIXTURE is what was wrong; the resolver is
+    // right. Do not relax the resolver to make this pass.
+    const { engagement } = await caseEngagementFactory();
 
     const { meeting } = await meetingsRepository.create({
       ...schedule(),
-      contexts: [{ contextType: 'project_kickoff', contextId: request.id }],
+      contexts: [{ contextType: 'project_kickoff', contextId: engagement.id }],
     });
 
     expect(await meetingsRepository.findById(meeting.id)).toBeDefined();
   });
 
   it('attaches MULTIPLE contexts in one create (D3 multi-context)', async () => {
-    const request = await projectRequestFactory();
-    const { engagement } = await caseEngagementFactory();
+    // ⚠ FIXTURE CORRECTED BY BAL-428. Two independent factories mean two DIFFERENT experts,
+    // so this booking named two calendars and now raises `MeetingExpertAmbiguousError`.
+    // A real multi-context meeting — a discovery call that gains an engagement row at
+    // kickoff — is ONE expert throughout, which is what this fixture now seeds.
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ expertProfileId: expert.id });
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
 
-    const { contexts } = await meetingsRepository.create({
+    const { contexts, expertProfileId } = await meetingsRepository.create({
       ...schedule(),
       contexts: [
         { contextType: 'project_discovery', contextId: request.id },
@@ -132,6 +163,7 @@ describe('meetingsRepository.create', () => {
     });
 
     expect(contexts).toHaveLength(2);
+    expect(expertProfileId).toBe(expert.id);
   });
 });
 
@@ -246,10 +278,23 @@ describe('meetingsRepository.updateSchedule', () => {
     const { meeting } = await meetingFactory();
     const next = schedule(48);
 
-    const updated = await meetingsRepository.updateSchedule(meeting.id, next);
+    // BAL-428: returns `MeetingMutationResult`, not a bare `Meeting` — the caller needs the
+    // `expertProfileId` to rebuild that expert's availability cache post-commit.
+    const { meeting: updated } = await meetingsRepository.updateSchedule(meeting.id, next);
 
     expect(updated.scheduledStart.getTime()).toBe(next.scheduledStart.getTime());
     expect(updated.scheduledEnd.getTime()).toBe(next.scheduledEnd.getTime());
+  });
+
+  it('reports NO expert for a raw meeting that carries no projection row', async () => {
+    // `meetingFactory` inserts directly, so there is no `consultations` row to read the
+    // expert from. `null` is the honest answer — and it is how the caller learns there is
+    // nothing to rebuild, rather than being handed an id it would rebuild for no reason.
+    const { meeting } = await meetingFactory();
+
+    const { expertProfileId } = await meetingsRepository.updateSchedule(meeting.id, schedule(48));
+
+    expect(expertProfileId).toBeNull();
   });
 
   it('rejects start >= end in-process, before the CHECK sees it', async () => {
@@ -261,10 +306,16 @@ describe('meetingsRepository.updateSchedule', () => {
     ).rejects.toThrow(/scheduled_start must be before scheduled_end/);
   });
 
-  it('throws on a missing meeting', async () => {
-    await expect(meetingsRepository.updateSchedule(randomUUID(), schedule())).rejects.toThrow(
-      /Meeting not found/
-    );
+  it('throws MeetingNotReschedulableError on a missing meeting', async () => {
+    // BAL-428 CHANGED THIS ERROR. `updateSchedule` is now guarded on
+    // `status IN ('scheduled','waiting_for_participants') AND deleted_at IS NULL`, so a
+    // missing row and a cancelled/ended/deleted one are indistinguishable to the UPDATE and
+    // share ONE named error. The status half of that guard — and the cancel-then-reschedule
+    // double-booking it closes — is asserted in
+    // `_shared/consultation-projection.integration.test.ts`, which owns the projection.
+    await expect(
+      meetingsRepository.updateSchedule(randomUUID(), schedule())
+    ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
   });
 });
 

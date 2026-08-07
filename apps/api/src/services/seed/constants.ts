@@ -20,6 +20,40 @@ export const MAX_EXPERT_COUNT = 500;
 export const SEED_EMAIL_DOMAIN = 'seed.balo.dev';
 export const SEED_WORKOS_PREFIX = 'seed_';
 
+/**
+ * BAL-428 — THE SEED BOOKING PARTY.
+ *
+ * A seeded consultation is no longer a bare `consultations` row: `consultations` is now a
+ * READ MODEL of `meetings` with a NOT NULL `meeting_id`, and the projection resolves its
+ * expert THROUGH the `meeting_contexts` seam. So a seeded booking needs a real graph —
+ * company → case engagement → meeting → projection — and that needs a client company.
+ *
+ * `slug` is the SCOPING KEY, not the name: `companies.slug` is UNIQUE, so this is both the
+ * idempotent upsert target for `ensureSeedCompanyId` and the exact predicate truncation
+ * deletes by. `name` is display-only and may change freely; the slug may not.
+ *
+ * NO `domain` IS SET, deliberately. A company carrying `domain = 'seed.balo.dev'` with the
+ * default `domain_join_mode = 'auto'` would make every seed user a domain auto-join
+ * candidate (BAL-345). That machinery is inert today (it is gated behind `isPersonal`), so
+ * this would be latent rather than live — which is exactly the kind of thing that wakes up
+ * unnoticed. The seeder does not need a domain, so it does not set one.
+ */
+export const SEED_COMPANY_SLUG = 'balo-seed-co';
+export const SEED_COMPANY_NAME = 'Balo Seed Co';
+
+/**
+ * The case engagement each seeded booking hangs off. Here rather than inline in
+ * `seed-service.ts` for the same reason every other seed string is (architect principle #7):
+ * the orchestrator reads as a data-driven transform, and a user-visible string is data.
+ *
+ * The description is ALREADY-SANITISED HTML — `@balo/db` never sanitises (BAL-417 D8), the
+ * caller does. Keep it a literal; do not interpolate into it.
+ */
+export const seedEngagementTitle = (expertIndex: number): string =>
+  `Seed consultation — expert #${expertIndex}`;
+export const SEED_ENGAGEMENT_DESCRIPTION =
+  '<p>Seeded case engagement backing the dev availability fixtures.</p>';
+
 /** Per-minute-cents ceiling enforced by the rate editor (PLATFORM_PRICING). */
 export const MAX_RATE_CENTS = 5000;
 

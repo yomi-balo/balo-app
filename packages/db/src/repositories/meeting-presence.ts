@@ -54,6 +54,20 @@ function userIdMatches(userId: string | null): SQL | undefined {
  * statement that sets `status='ended'`** — that is what closes this last gap. BAL-412
  * additionally holds the settlement-side policy cap (it already carries
  * `effectiveCeilingMinor`).
+ *
+ * ⚠ `'cancelled'` (added to `meeting_status` by BAL-428) IS ALSO TERMINAL, AND IS NOT
+ * HANDLED HERE — deliberately, and only because of a guard in another file. `cancel()` is
+ * gated on `status='scheduled'`, and a `scheduled` meeting has no presence intervals (the
+ * first join is what moves it to `waiting_for_participants`), so a cancelled meeting cannot
+ * carry an open interval for this function to mis-measure. THAT IS THE WHOLE ARGUMENT — it
+ * is a property of `meetingsRepository.cancel`'s guard, not of anything here. If cancel is
+ * ever widened to a state a participant can have joined from, a cancelled meeting with an
+ * open interval will measure to `new Date()` FOREVER, which is exactly the silent over-bill
+ * the paragraphs above exist to prevent. Widen this check in the same change.
+ *
+ * ⚠ AND THE GENERAL RULE THIS INSTANCE ILLUSTRATES: every `ALTER TYPE meeting_status ADD
+ * VALUE` must sweep the readers that branch on the label, not just the writers. See
+ * `schema/enums.ts`'s `meetingStatusEnum` docblock for the current list.
  */
 async function resolveClockCeiling(meetingId: string): Promise<Date> {
   const [meeting] = await db

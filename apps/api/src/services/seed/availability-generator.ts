@@ -288,16 +288,53 @@ function ruleWindowSlot(
     localCursor.setDate(localCursor.getDate() + 1);
   }
 
-  const yyyy = localCursor.getFullYear().toString().padStart(4, '0');
-  const mm = (localCursor.getMonth() + 1).toString().padStart(2, '0');
-  const dd = localCursor.getDate().toString().padStart(2, '0');
-
   // Apply the in-window offset to the rule's local start hour.
   const [startHour, startMin] = rule.startTime.split(':').map((s) => Number.parseInt(s, 10));
   const localHour = (startHour ?? 0) + offsetHours;
-  const hh = localHour.toString().padStart(2, '0');
-  const min = (startMin ?? 0).toString().padStart(2, '0');
 
+  let instant = localInstant(localCursor, localHour, startMin ?? 0, timezone);
+
+  // ⚠ MATCHING THE WEEKDAY IS NOT ENOUGH — THE INSTANT MUST ALSO BE CHECKED. The walk above
+  // lands on the rule's dayOfWeek on/after the baseline's local DATE, so on the baseline's
+  // OWN weekday it is a zero-day walk: the loop breaks immediately and the slot is placed at
+  // the rule's start hour EARLIER THE SAME DAY. Concretely, `buildWideOpen`'s window-aligned
+  // fixture uses `rules[0]` — Monday, per `WEEKDAYS = [1,2,3,4,5]` — so any seed run on a
+  // Monday after 09:00 in the expert's timezone produced a PAST-DATED slot.
+  //
+  // That was survivable while this produced a bare `consultations` stub the resolver simply
+  // ignored. BAL-428 made it consequential: it now produces a real `meetings` row stuck at
+  // `status='scheduled'` with an elapsed window, sitting on
+  // `meeting_status_scheduled_start_idx` — the index BAL-134's starting-soon scan and
+  // BAL-425's next-consultation read ride — that nothing ever transitions, and that
+  // `findProjectionDrift` cannot flag because the projection is internally CONSISTENT with
+  // its meeting. It also silently voided the fixture's own purpose: `listConfirmedInRange`
+  // never returns a past row, so the 09:00→10:00 trim it exists to demonstrate never ran.
+  //
+  // Not Monday-only in practice: `/dev/seed/availability` accepts a caller-supplied `now`
+  // (`routes/dev/seed.ts`), which reaches this on any weekday.
+  //
+  // The unit test cannot catch it by construction — `availability-generator.test.ts` pins
+  // BASELINE to a SUNDAY, so the walk always advances at least one day.
+  if (instant.getTime() < baseline.getTime()) {
+    localCursor.setDate(localCursor.getDate() + 7);
+    instant = localInstant(localCursor, localHour, startMin ?? 0, timezone);
+  }
+
+  return instant;
+}
+
+/** One local wall-clock date + time in `timezone`, rendered as a UTC instant. */
+function localInstant(
+  localDate: Date,
+  localHour: number,
+  localMinute: number,
+  timezone: string
+): Date {
+  const yyyy = localDate.getFullYear().toString().padStart(4, '0');
+  const mm = (localDate.getMonth() + 1).toString().padStart(2, '0');
+  const dd = localDate.getDate().toString().padStart(2, '0');
+  const hh = localHour.toString().padStart(2, '0');
+  const min = localMinute.toString().padStart(2, '0');
   return fromZonedTime(`${yyyy}-${mm}-${dd}T${hh}:${min}:00`, timezone);
 }
 

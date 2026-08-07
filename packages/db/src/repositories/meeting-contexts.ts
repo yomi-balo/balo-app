@@ -9,6 +9,7 @@ import {
   type MeetingContextType,
 } from '../schema';
 import { isUniqueViolation } from './experts';
+import { assertProjectionExpertUnchangedTx } from './_shared/consultation-projection';
 
 /** BAL-425's two consultation anchors for ONE case engagement. */
 export interface ConsultationTimestamps {
@@ -93,6 +94,21 @@ export const meetingContextsRepository = {
    * The insert runs in its own transaction so that conflict is contained in a SAVEPOINT: an
    * expected, named control-flow error must not poison an ambient caller transaction (which
    * a bare `23505` would, leaving every later statement failing `25P02`).
+   *
+   * ⚠ BAL-428 — THE SECOND DOOR INTO A BOOKING'S EXPERT, NOW CLOSED. `meetingsRepository`
+   * resolves the delivering expert from the contexts it is given at create time, but THIS
+   * method can widen that set afterwards. A genuinely-new context row therefore re-resolves
+   * the expert across the meeting's whole live context set and throws
+   * `MeetingExpertAmbiguousError` — rolling the attach back inside this same transaction —
+   * if the answer is no longer the one already booked. Without it, a booked meeting could
+   * gain a context naming a DIFFERENT expert while the projection kept blocking the first
+   * one's calendar.
+   *
+   * THE GUARD RUNS ONLY ON THE `inserted !== undefined` BRANCH, deliberately: the conflict
+   * branch changed nothing, so re-resolving there would be pure cost — and could start
+   * throwing for an idempotent re-attach that is by definition still consistent. It ALSO
+   * never CREATES a projection row: `attach` is not a booking path (see
+   * `assertProjectionExpertUnchangedTx`).
    */
   async attach(input: {
     meetingId: string;
@@ -117,6 +133,10 @@ export const meetingContextsRepository = {
             where: isNull(meetingContexts.deletedAt), // predicate MUST match the index exactly
           })
           .returning();
+        if (row !== undefined) {
+          // Inside the SAME transaction as the insert — a throw here rolls the attach back.
+          await assertProjectionExpertUnchangedTx(tx, input.meetingId);
+        }
         return row;
       } catch (error) {
         if (isUniqueViolation(error, 'meeting_context_admin_uq')) {
@@ -187,6 +207,25 @@ export const meetingContextsRepository = {
    * Soft-detach ONE context from a meeting. A no-op when nothing live matches. Soft, not
    * hard: `meeting_context_unique_idx` is partial on `deleted_at IS NULL`, so the same
    * context can be re-attached afterwards.
+   *
+   * ⚠⚠ BAL-428 — THIS DELIBERATELY DOES **NOT** TOUCH THE `consultations` PROJECTION, AND
+   * THAT IS NOT AN OVERSIGHT. DO NOT "FIX" IT.
+   *
+   * `attach` gained a projection guard, so the symmetric-looking change here is to free the
+   * slot when the last context is detached. That would be WRONG. Detaching a context edits
+   * what a meeting is ABOUT; it does not un-book the call. Wiring it to the projection would
+   * mean an administrative re-tagging silently hands the expert's reserved time back to the
+   * marketplace while the meeting still exists, still has a join url, and still shows on
+   * both calendars — and the first anyone hears of it is a double-booked expert.
+   *
+   * `meetingsRepository.cancel()` is the ONE thing that frees a booked slot, and
+   * `meetingsRepository.softDelete()` is the one thing that removes it. Both are explicit
+   * about ending the meeting. This is not.
+   *
+   * A detach that leaves the projection pointing at an expert the remaining contexts no
+   * longer name IS drift — and `findProjectionDrift()` reports it as `expert_mismatch`,
+   * which is the correct treatment: surface it for a human, do not let a tagging operation
+   * mutate a booking.
    */
   async detach(
     meetingId: string,

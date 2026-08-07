@@ -41,6 +41,16 @@ import { timestamps, softDelete } from './helpers';
  *      `scheduled_start` makes `isCaseInactive` return false and holds the victim's case
  *      open for as long as that forged `scheduled_start` stays in the future — renewable at
  *      will by forging another, without the attacker ever touching a row they own.
+ *   3. CALENDAR (BAL-428, the newest and most directly abusable). `context_id` is now what
+ *      the consultation projection resolves an EXPERT from
+ *      (`_shared/consultation-projection.ts`), so an unchecked id books time on a STRANGER'S
+ *      CALENDAR. `meetingsRepository.create` with `contextId = <victim expert's engagement
+ *      id>` writes a `confirmed` `consultations` row against that expert, and the
+ *      availability resolver then subtracts it from their open windows — a denial-of-service
+ *      on a marketplace expert's bookability, repeatable until their calendar reads as
+ *      fully booked, by an attacker who owns none of the rows involved. The projection is
+ *      deliberately NOT a place to fix this: it resolves the expert exactly as the seam
+ *      says to, and a gate inside a repository would be the deviation (ADR-1029).
  *
  * THEREFORE: every caller of `meetingsRepository.create`, `meetingContextsRepository.attach`
  * / `listByMeeting` / `listMeetingsForContext` / `consultationTimestampsForEngagements`
@@ -50,7 +60,11 @@ import { timestamps, softDelete } from './helpers';
  * NOT here — authorization is capability-based and resolved at the call site (ADR-1029),
  * and a gate inside a repository would be the deviation, not the fix.
  *
- * CARRIED BY: **BAL-129** (provisioning — the first writer of `create`/`attach`),
+ * CARRIED BY: **BAL-129** (provisioning — the first writer of `create`/`attach`, and
+ * therefore the first route that can trigger consequence 3),
+ * **BAL-409/BAL-410/BAL-411** (reschedule + cancel — these take a bare `meeting_id` rather
+ * than a `context_id`, so their check is "who owns THIS MEETING", resolved through this
+ * seam; see `apps/api/src/services/meetings/meeting-availability.ts`),
  * **BAL-421** (the case surface — the first caller of `listMeetingsForContext`), and
  * **BAL-425/BAL-420** (the inactivity sweep — the first caller of
  * `consultationTimestampsForEngagements`, which must pass only engagement ids it already

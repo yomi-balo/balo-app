@@ -122,6 +122,58 @@ describe('generateAvailabilityPlan — window-aligned confirmed consultation', (
 
     expect(containedInSomeWindow).toBe(true);
   });
+
+  /**
+   * REGRESSION — the window-aligned fixture must never be placed in the PAST.
+   *
+   * `ruleWindowSlot` walks to the rule's `dayOfWeek` on/after the baseline's local DATE,
+   * which on the baseline's OWN weekday is a zero-day walk. `buildWideOpen` uses `rules[0]`
+   * (Monday), so a seed run on a Monday after the rule's start hour used to emit a
+   * past-dated slot — under BAL-428 that is a `meetings` row permanently stuck at
+   * `status='scheduled'` with an elapsed window, and a fixture that demonstrates nothing
+   * because `listConfirmedInRange` never returns a past row.
+   *
+   * This suite's own `BASELINE` is deliberately a SUNDAY, so it could never catch this.
+   * These cases pin a MONDAY baseline — the exact shape that regressed — plus every other
+   * weekday, so the same class of bug cannot return on a different day.
+   */
+  /**
+   * ⚠ BASELINES ARE BUILT WITH `fromZonedTime`, NOT HAND-COMPUTED UTC LITERALS, AND THAT IS
+   * LOAD-BEARING. The condition under test is about the baseline's LOCAL weekday and LOCAL
+   * hour in the expert's timezone. A hand-written `…T23:30:00.000Z` for "Monday" is Tuesday
+   * 09:30 in Sydney (UTC+10) — which makes the walk advance six days and the assertion pass
+   * whether or not the fix is present. Verified by mutation: with the guard disabled, the
+   * hand-computed version stayed green and this version fails on the Monday case.
+   *
+   * 2026-06-01 is a Monday. 14:00 local is past every seeded rule's start hour.
+   */
+  const WEEKDAY_BASELINES: readonly { label: string; localDate: string }[] = [
+    { label: 'Monday (the regressing case)', localDate: '2026-06-01' },
+    { label: 'Tuesday', localDate: '2026-06-02' },
+    { label: 'Wednesday', localDate: '2026-06-03' },
+    { label: 'Thursday', localDate: '2026-06-04' },
+    { label: 'Friday', localDate: '2026-06-05' },
+  ];
+
+  it.each(WEEKDAY_BASELINES)(
+    'never places a consultation before the baseline — $label',
+    ({ localDate }) => {
+      const baselineNow = fromZonedTime(`${localDate}T14:00:00`, TZ);
+      const plans = generateAvailabilityPlan({
+        experts: makeExperts(60),
+        seed: DEFAULT_SEED,
+        baselineNow,
+      });
+
+      const past = plans.flatMap((p) =>
+        p.consultations
+          .filter((c) => c.startAt.getTime() < baselineNow.getTime())
+          .map((c) => `${p.archetype} ${c.status} @ ${c.startAt.toISOString()}`)
+      );
+
+      expect(past).toEqual([]);
+    }
+  );
 });
 
 describe('generateAvailabilityPlan — busy block shape', () => {

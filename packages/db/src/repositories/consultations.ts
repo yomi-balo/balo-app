@@ -1,10 +1,18 @@
 import { and, eq, gt, isNull, lt } from 'drizzle-orm';
 import { db } from '../client';
-import { consultations, type Consultation, type NewConsultation } from '../schema';
+import { consultations, type Consultation } from '../schema';
 
 /**
- * Consultation stub repository — minimum surface needed by the BAL-243
- * availability resolver and the BAL-239 dev seeder.
+ * `consultationsRepository` — READ-ONLY (BAL-428). The minimum surface the BAL-243
+ * availability resolver needs, and nothing else.
+ *
+ * ⚠ `create()` WAS DELETED HERE, DELIBERATELY. `consultations` is now a READ MODEL of the
+ * meeting lifecycle with a NOT NULL `meeting_id`, and it has exactly ONE writer:
+ * `_shared/consultation-projection.ts`, driven from `meetingsRepository` and
+ * `meetingContextsRepository` inside their transactions. A second write path is exactly how
+ * the two tables drifted apart in the first place — a consultation with no meeting, or a
+ * meeting blocking nobody's calendar. Bookings go through `meetingsRepository.create`;
+ * cancellations through `meetingsRepository.cancel`. Do not re-add a writer here.
  */
 export const consultationsRepository = {
   /**
@@ -32,11 +40,5 @@ export const consultationsRepository = {
         gt(consultations.endAt, rangeStart)
       ),
     });
-  },
-
-  /** Test + dev-seed helper (BAL-239). Not exposed to the consultations feature surface. */
-  async create(data: NewConsultation): Promise<Consultation> {
-    const [row] = await db.insert(consultations).values(data).returning();
-    return row!;
   },
 };

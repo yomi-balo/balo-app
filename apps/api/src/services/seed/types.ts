@@ -3,6 +3,7 @@
  *
  * Type-only module (no runtime exports) — excluded from coverage by intent.
  */
+import type { ConsultationStatus } from '@balo/db';
 import type { BusyBlock } from '../availability/types.js';
 
 /** Availability behaviour buckets, assigned deterministically by expert index. */
@@ -98,11 +99,17 @@ export interface NewRuleSeed {
   endTime: string;
 }
 
-/** A consultation row to insert. */
+/**
+ * A consultation row to insert.
+ *
+ * `status` is `@balo/db`'s `ConsultationStatus` (derived from `consultationStatusEnum`)
+ * rather than an inline `'confirmed' | 'cancelled'`: a restated union silently stops
+ * tracking the enum the moment a third label is added.
+ */
 export interface NewConsultationSeed {
   startAt: Date;
   endAt: Date;
-  status: 'confirmed' | 'cancelled';
+  status: ConsultationStatus;
 }
 
 /** Per-expert availability plan produced by the pure generator. */

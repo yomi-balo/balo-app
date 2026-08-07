@@ -421,10 +421,32 @@ export type {
 export {
   meetingsRepository,
   MeetingContextRequiredError,
+  MeetingNotCancellableError,
+  MeetingNotReschedulableError,
   type CreateMeetingInput,
+  type CreatedMeeting,
   type MeetingContextInput,
+  type MeetingMutationResult,
   type MeetingWithContexts,
 } from './meetings';
+// ── Consultation projection (BAL-428) — `consultations` as a read model of `meetings` ──
+// The WRITERS are deliberately NOT exported: they are transaction-scoped internals of
+// `meetingsRepository` / `meetingContextsRepository`. Only the typed errors (so callers can
+// branch), the status mapping and the reconciliation read cross the package boundary.
+export {
+  MatchModeDiscoveryNotBookableError,
+  MeetingContextUnresolvableError,
+  MeetingExpertAmbiguousError,
+  consultationStatusForMeeting,
+  findProjectionDrift,
+  findProjectionForMeeting,
+  // The UNSCOPED full-table scan, deliberately under its own name — `findProjectionDrift`
+  // now REQUIRES `meetingIds`, so an unbounded read cannot be reached by omitting an
+  // argument from a web action. See both docblocks.
+  scanAllProjectionDrift,
+  type ProjectionDrift,
+  type ProjectionDriftKind,
+} from './_shared/consultation-projection';
 export {
   meetingContextsRepository,
   MeetingAdminContextExistsError,
