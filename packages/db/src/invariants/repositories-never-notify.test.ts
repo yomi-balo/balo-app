@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments } from '../test/helpers/strip-comments';
+import { stripComments } from '@balo/shared/testing';
 
 /**
  * BAL-390 §8.7.4 — D4's contract, encoded as a TEST rather than a comment.

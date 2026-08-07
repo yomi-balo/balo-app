@@ -253,8 +253,10 @@ export const meetingPresenceRepository = {
    * `meeting_presence ⋈ meetings ⋈ meeting_contexts`, filtered to
    * `meeting_contexts.context_id = engagementId` over the ENGAGEMENT-SCOPED context types
    * (ADR-1045 §2). `project_discovery` is EXCLUDED because its `context_id` is a
-   * `project_requests.id`, not an engagement id, and `admin` because its `context_id` is
-   * NULL — `context_id` is POLYMORPHIC, so matching on it alone is not sufficient. Naming
+   * `project_requests.id`, not an engagement id; `request_interaction` (BAL-413) likewise,
+   * its `context_id` being a `request_expert_relationships.id`; and `admin` because its
+   * `context_id` is NULL — `context_id` is POLYMORPHIC, so matching on it alone is not
+   * sufficient. Naming
    * the types also puts the leading column of `meeting_context_reverse_idx`
    * (`context_type, context_id`) in the predicate, so the read rides it. Enum literals at
    * QUERY time are safe; the house restriction is index predicates and CHECKs only.
@@ -283,6 +285,12 @@ export const meetingPresenceRepository = {
       .where(
         and(
           eq(meetingContexts.contextId, engagementId),
+          // ⚠ AN ALLOW-LIST, SO A NEW `meeting_context_type` LABEL IS SILENTLY EXCLUDED —
+          // nothing here typechecks against the enum. Correct for every label added so
+          // far (only these four carry an `engagements.id`), but a future
+          // ENGAGEMENT-GRAIN label would silently drop client participants from the
+          // review-nudge fan-out with no failure anywhere. `invariants/
+          // meeting-context-type-labels.test.ts` names this line in its sweep list.
           inArray(meetingContexts.contextType, [
             'case',
             'project_kickoff',

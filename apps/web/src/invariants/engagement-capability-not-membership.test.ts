@@ -99,8 +99,12 @@ describe('the engagement axis is disjoint from the membership axis (BAL-413 / AC
   });
 
   it('pins the membership union so a widened CAPABILITIES has to edit this file', () => {
-    // A compile-time twin of the assertion above: this line stops compiling if a token is
-    // added to CAPABILITIES, which is the moment a reviewer must re-check disjointness.
+    // A RUNTIME pin, not a compile-time one: adding a token to CAPABILITIES still
+    // compiles here (a `Capability[]` literal may legally be a subset) — what fails is the
+    // `toEqual` below, when vitest runs. That is the moment a reviewer must re-check
+    // disjointness. Stated precisely because this file's whole job is telling the reader
+    // which gate holds what: the `@ts-expect-error` block above IS compile-time
+    // (`pnpm --filter web check-types`); this block is not.
     const pinned: Capability[] = [
       CAPABILITIES.PARTICIPATE,
       CAPABILITIES.MANAGE_REQUESTS,

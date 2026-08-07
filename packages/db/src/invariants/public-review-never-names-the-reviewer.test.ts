@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments } from '../test/helpers/strip-comments';
+import { stripComments } from '@balo/shared/testing';
 
 /**
  * BAL-390 D6 / §6.6 / §8.7.2 — structural invariant: **a published review is attributed

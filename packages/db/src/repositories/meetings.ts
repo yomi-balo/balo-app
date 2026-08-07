@@ -178,9 +178,11 @@ export const meetingsRepository = {
    *
    * THE EXPERT IS RESOLVED HERE, AT WRITE TIME, from the contexts (see
    * `_shared/consultation-projection.ts`). A booking that cannot name exactly one expert
-   * throws — `MeetingExpertAmbiguousError`, `MatchModeDiscoveryNotBookableError` or
-   * `MeetingContextUnresolvableError` — and the WHOLE meeting rolls back. An admin-only
-   * meeting resolves to `null`, writes no projection row, and blocks nobody.
+   * throws — `MeetingExpertAmbiguousError`, `MatchModeDiscoveryNotBookableError`,
+   * `MeetingContextUnresolvableError` or `MeetingContextNotProjectableError` (a label with
+   * no projection rule yet, i.e. `request_interaction`) — and the WHOLE meeting rolls
+   * back. An admin-only meeting resolves to `null`, writes no projection row, and blocks
+   * nobody.
    *
    * `scheduledStart < scheduledEnd` is re-asserted in-process, MIRRORING `updateSchedule`,
    * so the SAME invariant surfaces as the SAME typed error from BOTH entry points rather

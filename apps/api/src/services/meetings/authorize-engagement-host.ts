@@ -26,17 +26,31 @@
  * arrives untested arrives untrustworthy.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * ⚠ THIS FUNCTION DOES NOT AUTHORIZE THE READ.
+ * ⚠ NOTHING IN THIS FILE AUTHORIZES THE READ.
  * It answers exactly one question: "does THIS actor hold THIS engagement capability over
- * THIS already-identified context?" It returns a boolean and never a row.
- * It does NOT establish that the caller was entitled to know this context exists, to see
- * the meeting it belongs to, or to hold its join credentials. `meeting_contexts.context_id`
- * has NO FK and NO RLS (see the TENANCY OBLIGATION block in
+ * THIS already-identified context?" `hasEngagementCapability` returns a BOOLEAN and never
+ * a row — but the exported `resolveHostContext` returns delivery IDENTITY
+ * (`expertUserId`, `agencyId`) for ANY valid uuid, and it INHERITS exactly the same
+ * tenancy obligation. Unguarded, it is an identity oracle: hand it a cross-tenant
+ * `context_id` and it truthfully names another tenant's expert.
+ * Neither entry point establishes that the caller was entitled to know this context
+ * exists, to see the meeting it belongs to, or to hold its join credentials.
+ * `meeting_contexts.context_id` has NO FK and NO RLS (see the TENANCY OBLIGATION block in
  * `packages/db/src/schema/meeting-contexts.ts`): a cross-tenant uuid SUCCEEDS SILENTLY.
  * Resolving the context's owning party and checking membership `hasCapability` against it
  * is the CALLER'S obligation, per that block's CARRIED BY list (BAL-129, BAL-409/410/411,
  * BAL-421, BAL-425/BAL-420) — BAL-413 is deliberately not on it.
  * A `true` here is NEVER sufficient authorization on its own.
+ *
+ * ⚠ THE OBLIGATION LIST IS NOT EXHAUSTED BY TENANCY. ENGAGEMENT LIFECYCLE IS ALSO YOURS.
+ * `engagementsRepository.findById` filters `deleted_at` ONLY; `engagements.status` is
+ * never consulted anywhere in this file. So the delivering expert of a COMPLETED or
+ * CANCELLED engagement still holds BOTH tokens here. That is deliberate — this axis
+ * answers "who delivers this?", and post-delivery surfaces (a transcript, a review
+ * request, a late reschedule) legitimately still need a host identity — but it means a
+ * `true` does NOT mean "this engagement is still live". A caller that requires liveness
+ * (BAL-132 minting a Daily owner token, BAL-410/411 mutating a schedule) must check
+ * `engagements.status` itself.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * ⚠ OPEN QUESTION, DELIBERATELY NOT DECIDED HERE (BAL-413 flag F1). The entry point takes
@@ -79,20 +93,52 @@ export type EngagementHostSubject =
   | { readonly contextType: Exclude<MeetingContextType, 'admin'>; readonly contextId: string }
   | { readonly contextType: 'admin'; readonly contextId: null };
 
-/** Which by-id read came back empty — a log field, not a control-flow value. */
+/**
+ * Which by-id read came back empty — a log field, not a control-flow value.
+ * `invalid_context_id` is the one member that names a read never attempted: the id could
+ * not be a `uuid` at all, so no repository was called. See `isUuid`.
+ */
 type MissingRow =
   | 'engagement'
   | 'project_request'
   | 'request_expert_relationship'
-  | 'expert_profile';
+  | 'expert_profile'
+  | 'invalid_context_id';
+
+/**
+ * Canonical `uuid` shape — the ONLY thing Postgres will accept into a `uuid` column
+ * without raising `22P02 invalid input syntax for type uuid`.
+ *
+ * ⚠ WHY A GUARD AND NOT A CAST. `EngagementHostSubject.contextId` is a bare `string`
+ * (it comes from `meeting_contexts.context_id`, a polymorphic column with no FK), so a
+ * caller can hand this seam `''` or `'abc'`. Reaching `eq(table.id, contextId)` with one
+ * of those makes postgres-js infer `$1::uuid` and REJECT the query — an exception, from a
+ * function whose whole contract is that a caller never has to catch to stay safe, on an
+ * ATTACKER-SHAPED input class. Validating here turns that into an ordinary fail-closed
+ * deny with an integrity signal.
+ *
+ * DELIBERATELY LOOSER THAN `z.uuid()`, which enforces the RFC 9562 version/variant
+ * nibbles: this must accept everything Postgres accepts, or a legitimate non-v4 id would
+ * be denied. Non-canonical spellings Postgres also tolerates (brace-wrapped, unhyphenated)
+ * are rejected — nothing in this codebase mints them, and rejecting them merely denies.
+ *
+ * ⚠ ReDoS-SAFE BY CONSTRUCTION (SonarCloud S5852): fully anchored, fixed repetition
+ * counts, no nested quantifiers and no overlapping alternation — one linear pass.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
 
 /**
  * The single integrity-signal + fail-closed exit.
  *
- * A `context_id` that resolves to no LIVE row means either a soft-deleted subject or a
- * bad / cross-tenant id — worth a `warn` — and it always denies. An ordinary `false`
- * (the actor simply is not a holder) is NOT logged: that is a normal answer to a normal
- * question, and once BAL-132 wires this into a per-join check it would be high-volume noise.
+ * A `context_id` that is malformed, or that resolves to no LIVE row, means either a
+ * soft-deleted subject or a bad / cross-tenant / attacker-supplied id — worth a `warn` —
+ * and it always denies. An ordinary `false` (the actor simply is not a holder) is NOT
+ * logged: that is a normal answer to a normal question, and once BAL-132 wires this into a
+ * per-join check it would be high-volume noise.
  *
  * IDS ONLY — never a `join_url`, never a `daily_room_name`, never an email or a name.
  *
@@ -114,7 +160,7 @@ function denyMissingRow(
       missing,
       expertProfileId,
     },
-    'Engagement host context denied — the subject row is missing or soft-deleted'
+    'Engagement host context denied — the context_id is unusable, or the subject row is missing or soft-deleted'
   );
   return null;
 }
@@ -150,11 +196,15 @@ async function hostContextForExpertProfile(
 
   const { agencyId } = profile;
   if (agencyId === null) {
-    return { expertUserId: profile.userId, agency: null };
+    // `resolvedForActorId` is stamped on BOTH return paths — see `HostContext`'s docblock.
+    // It binds this context to the actor it was resolved for, so a caller cannot resolve
+    // once as a privileged actor and then check many.
+    return { resolvedForActorId: actorId, expertUserId: profile.userId, agency: null };
   }
 
   const actorRole = await partyMembershipsRepository.getMemberRole('agency', agencyId, actorId);
   return {
+    resolvedForActorId: actorId,
     expertUserId: profile.userId,
     agency: { agencyId, actorRole: actorRole ?? null },
   };
@@ -170,22 +220,43 @@ async function hostContextForExpertProfile(
  * so an EIGHTH label cannot land without failing `pnpm --filter api typecheck` here. Its
  * runtime pair is `packages/db/src/invariants/meeting-context-type-labels.test.ts`.
  *
- * Fails closed at every branch: a missing row, a `match`-routed request, a declined
- * relationship and an `admin` context all yield `null`, and `null` denies every actor.
- * This function contains no `throw`: a caller must never have to catch to stay safe.
- * (A repository REJECTION — the database being unreachable — still propagates, exactly
- * as it does in `authorize-session-expert.ts`; swallowing that would turn an outage into
- * a silent, uniform deny, which is a worse failure than a 500.)
+ * Fails closed at every branch: a MALFORMED `context_id`, a missing row, a `match`-routed
+ * request, a declined relationship and an `admin` context all yield `null`, and `null`
+ * denies every actor. This function contains no `throw`: a caller must never have to catch
+ * to stay safe. (A repository REJECTION — the database being unreachable — still
+ * propagates, exactly as it does in `authorize-session-expert.ts`; swallowing that would
+ * turn an outage into a silent, uniform deny, which is a worse failure than a 500.)
+ *
+ * ⚠ THIS INHERITS THE TENANCY OBLIGATION IN THE HEADER BLOCK, AND IT IS SHARPER HERE.
+ * `hasEngagementCapability` returns a boolean; THIS function returns delivery IDENTITY
+ * (`expertUserId`, `agencyId`) for ANY valid uuid, with no tenancy check anywhere in it —
+ * so an unauthorized caller passing a cross-tenant `context_id` gets a truthful answer
+ * about another tenant's expert. That makes it an IDENTITY ORACLE unless the caller has
+ * ALREADY established that the actor was entitled to see this context. Resolve the
+ * context's owning party and check membership `hasCapability` BEFORE calling this.
+ *
+ * ⚠ IT ALSO SAYS NOTHING ABOUT ENGAGEMENT LIFECYCLE — see the header block's obligation
+ * list. The returned identity is "who delivers this", not "this is still live".
  */
 export async function resolveHostContext(
   subject: EngagementHostSubject,
   actorId: string
 ): Promise<ResolvedHostContext> {
+  // Validated ONCE, at the seam entry, so `hasEngagementCapability` inherits it and no arm
+  // can hand a non-uuid to a repository. `admin` carries `contextId: null` by construction
+  // (the biconditional CHECK, mirrored in `EngagementHostSubject`) and is exempt.
+  if (subject.contextId !== null && !isUuid(subject.contextId)) {
+    return denyMissingRow(subject, actorId, 'invalid_context_id');
+  }
+
   switch (subject.contextType) {
     // ── Arms 1–4: engagement grain. `engagements.expert_profile_id` is NOT NULL on the
     // supertype for ALL engagement types (BAL-417), so the four labels share one branch —
     // there is no per-type difference to express, and writing them out separately would
     // be four copies of the same three lines.
+    //
+    // ⚠ `findById` filters `deleted_at` ONLY — `engagements.status` is deliberately not
+    // read here. See the ENGAGEMENT LIFECYCLE obligation in the header block.
     case 'case':
     case 'project_kickoff':
     case 'package_session':
@@ -232,6 +303,13 @@ export async function resolveHostContext(
     // sibling's row is a different subject this call never touches. There is exactly one
     // holder per meeting however many candidates exist, and nothing needs excluding
     // because nothing else is ever read.
+    //
+    // ⚠ "STRUCTURAL" IS NARROWER THAN IT SOUNDS, AND ONLY ACROSS AGENCIES. Two candidates
+    // on the same request who share ONE agency share its owner/admin bundle, so that
+    // agency's admin resolves TRUE over their own candidate's competitor's meeting. This
+    // is ADR-1046-consistent (the holder set is the delivering expert PLUS their agency
+    // owners/admins, and the agency is genuinely the same party) — but it is not the
+    // "one candidate can never reach another's call" the word structural suggests.
     //
     // A DECLINED relationship is never a holder for new grants (BAL-276 precedent).
     // Decline is checked on BOTH representations — the enum label and the timestamp — so
@@ -281,8 +359,9 @@ export async function resolveHostContext(
  * If the holder sets ever diverge they diverge in `ENGAGEMENT_ROLE_CAPABILITIES`, never
  * by a second resolver (ADR-1046).
  *
- * ⚠ A `true` here is not sufficient authorization — see the "DOES NOT AUTHORIZE THE READ"
- * block at the top of this file.
+ * ⚠ A `true` here is not sufficient authorization — see the "NOTHING IN THIS FILE
+ * AUTHORIZES THE READ" block at the top of this file, and the ENGAGEMENT LIFECYCLE
+ * obligation beside it.
  */
 export async function hasEngagementCapability(
   actor: { id: string },

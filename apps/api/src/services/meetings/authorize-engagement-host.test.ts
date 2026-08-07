@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ENGAGEMENT_CAPABILITIES, type EngagementCapability } from '@balo/shared/authz';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  ENGAGEMENT_CAPABILITIES,
+  hostContextGrants,
+  type EngagementCapability,
+} from '@balo/shared/authz';
+import { stripComments } from '@balo/shared/testing';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -24,13 +31,17 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 
 /**
- * ⚠ THIS MOCK SURFACE IS AN ASSERTION IN ITSELF (AC #5).
- * It is the COMPLETE set of repositories the resolver may touch. There is deliberately no
- * participant / presence / attendee repository here: delegates, guests and expert-side
- * colleagues merely attending are excluded STRUCTURALLY, because ADR-1044's participation
- * model is never consulted. If a future change made the resolver read a participant table,
- * this mock would not provide it and every test below would fail loudly rather than
- * silently widening the holder set. `no participant repository is reachable` pins it.
+ * ⚠ THIS MOCK SURFACE IS THE COMPLETE SET of repositories the resolver may touch. There is
+ * deliberately no participant / presence / attendee repository here: delegates, guests and
+ * expert-side colleagues merely attending are excluded STRUCTURALLY, because ADR-1044's
+ * participation model is never consulted. If a future change made the resolver read a
+ * participant table, this mock would not provide it and every test below would fail loudly
+ * rather than silently widening the holder set.
+ *
+ * ⚠ THAT IS A SAFETY NET, NOT THE ASSERTION. This factory is the TEST's own object, so
+ * asserting on its keys would assert the test against itself — and would still pass if the
+ * resolver reached a participant table through a different import path. The real assertion
+ * is the SOURCE SCAN in `the resolver reads no participation model` below.
  */
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: mockEngagementFindById },
@@ -40,7 +51,6 @@ vi.mock('@balo/db', () => ({
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
 }));
 
-import * as db from '@balo/db';
 import {
   hasEngagementCapability,
   resolveHostContext,
@@ -49,10 +59,20 @@ import {
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const ENGAGEMENT_ID = 'engagement_1';
-const REQUEST_ID = 'request_1';
-const RELATIONSHIP_ID = 'relationship_1';
-const SIBLING_RELATIONSHIP_ID = 'relationship_2';
+/**
+ * ⚠ THE CONTEXT IDS MUST BE REAL UUIDS. `resolveHostContext` validates `contextId` at the
+ * seam entry and denies anything that is not a canonical uuid, because a bare string
+ * reaching `eq(table.id, contextId)` makes Postgres raise `22P02` — a THROW from a
+ * predicate whose contract is that a caller never has to catch. Readable placeholders like
+ * `'engagement_1'` would therefore make every test below assert the deny path by accident.
+ *
+ * Actor, expert-profile and agency ids are NOT validated by the resolver (they are only
+ * ever passed to mocked repositories), so they stay readable on purpose.
+ */
+const ENGAGEMENT_ID = '11111111-1111-4111-8111-111111111111';
+const REQUEST_ID = '22222222-2222-4222-8222-222222222222';
+const RELATIONSHIP_ID = '33333333-3333-4333-8333-333333333333';
+const SIBLING_RELATIONSHIP_ID = '44444444-4444-4444-8444-444444444444';
 
 const EXPERT_PROFILE_ID = 'expert_profile_1';
 const SIBLING_EXPERT_PROFILE_ID = 'expert_profile_2';
@@ -62,6 +82,11 @@ const AGENCY_ID = 'agency_1';
 
 const EXPERT = { id: EXPERT_PROFILE_ID, userId: EXPERT_USER_ID, agencyId: AGENCY_ID };
 const INDEPENDENT_EXPERT = { id: EXPERT_PROFILE_ID, userId: EXPERT_USER_ID, agencyId: null };
+const SIBLING_EXPERT = {
+  id: SIBLING_EXPERT_PROFILE_ID,
+  userId: SIBLING_EXPERT_USER_ID,
+  agencyId: null,
+};
 
 const ALL_TOKENS: readonly EngagementCapability[] = Object.values(ENGAGEMENT_CAPABILITIES);
 
@@ -71,6 +96,13 @@ const ENGAGEMENT_GRAIN_TYPES = [
   'project_kickoff',
   'package_session',
   'retainer_checkin',
+] as const;
+
+/** Every label that CARRIES a `context_id`, i.e. everything the uuid guard applies to. */
+const NON_ADMIN_CONTEXT_TYPES = [
+  ...ENGAGEMENT_GRAIN_TYPES,
+  'project_discovery',
+  'request_interaction',
 ] as const;
 
 const CASE_SUBJECT: EngagementHostSubject = { contextType: 'case', contextId: ENGAGEMENT_ID };
@@ -94,6 +126,27 @@ function relationship(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
+/**
+ * Arm all five repositories with the HAPPY-PATH row for every arm, and the actor's agency
+ * role (`undefined` = not a member). Extracted because the both-tokens matrix has to
+ * re-arm mid-test after `vi.clearAllMocks()`, and a second verbatim copy of five
+ * `mockResolvedValue` calls is how the two silently drift apart.
+ */
+function armDefaultRepos(role?: string): void {
+  mockEngagementFindById.mockResolvedValue({
+    id: ENGAGEMENT_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+  });
+  mockProjectRequestFindById.mockResolvedValue({
+    id: REQUEST_ID,
+    sendTo: 'direct',
+    expertProfileId: EXPERT_PROFILE_ID,
+  });
+  mockRelationshipFindById.mockResolvedValue(relationship());
+  mockFindProfileById.mockResolvedValue(EXPERT);
+  mockGetMemberRole.mockResolvedValue(role);
+}
+
 /** Every repository the resolver can reach, so "no other repo was touched" is assertable. */
 function repoCallCounts(): Record<string, number> {
   return {
@@ -104,6 +157,14 @@ function repoCallCounts(): Record<string, number> {
     memberRole: mockGetMemberRole.mock.calls.length,
   };
 }
+
+const NO_REPOSITORY_CALLS: Record<string, number> = {
+  engagement: 0,
+  projectRequest: 0,
+  relationship: 0,
+  expertProfile: 0,
+  memberRole: 0,
+};
 
 /** The full ARGUMENT sequence, not just counts — what AC #12's "one resolver" really means. */
 function repoCallSequence(): Record<string, unknown[][]> {
@@ -120,18 +181,7 @@ const host = { id: EXPERT_USER_ID };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockEngagementFindById.mockResolvedValue({
-    id: ENGAGEMENT_ID,
-    expertProfileId: EXPERT_PROFILE_ID,
-  });
-  mockProjectRequestFindById.mockResolvedValue({
-    id: REQUEST_ID,
-    sendTo: 'direct',
-    expertProfileId: EXPERT_PROFILE_ID,
-  });
-  mockRelationshipFindById.mockResolvedValue(relationship());
-  mockFindProfileById.mockResolvedValue(EXPERT);
-  mockGetMemberRole.mockResolvedValue(undefined);
+  armDefaultRepos();
 });
 
 // ── The holder set (AC #3, #4, #5, #6) ───────────────────────────────────────
@@ -211,7 +261,7 @@ describe('hasEngagementCapability — the holder set', () => {
     expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, 'user_client_owner');
   });
 
-  it('DENIES a delegate / guest attendee, and no participant repository is reachable (AC #5)', async () => {
+  it('DENIES a delegate / guest attendee (AC #5)', async () => {
     mockGetMemberRole.mockResolvedValue(undefined);
     await expect(
       hasEngagementCapability(
@@ -220,15 +270,6 @@ describe('hasEngagementCapability — the holder set', () => {
         CASE_SUBJECT
       )
     ).resolves.toBe(false);
-    // The literal form of "the resolver reads no participant table": the entire @balo/db
-    // surface available to it is these five by-id reads. Nothing about attendance exists.
-    expect(Object.keys(db).sort()).toEqual([
-      'engagementsRepository',
-      'expertsRepository',
-      'partyMembershipsRepository',
-      'projectRequestsRepository',
-      'requestExpertRelationshipsRepository',
-    ]);
   });
 
   it('grants an INDEPENDENT expert (null agencyId) WITHOUT any agency lookup (AC #6)', async () => {
@@ -249,6 +290,58 @@ describe('hasEngagementCapability — the holder set', () => {
       )
     ).resolves.toBe(false);
     expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+});
+
+// ── AC #5, asserted against the PRODUCTION SOURCE rather than the mock ───────
+
+describe('the resolver reads no participation model (AC #5)', () => {
+  /**
+   * The literal form of "delegates and guests are excluded STRUCTURALLY": the resolver's
+   * own source never names a presence / participant / attendee surface, by ANY import
+   * path. Asserting on the `vi.mock` factory's keys instead — as this suite used to —
+   * asserts the test against itself: it is true by construction, and it would keep passing
+   * if the resolver reached ADR-1044's participation model through a different specifier.
+   *
+   * Comments are stripped FIRST. No docblock in that file names one of these identifiers
+   * TODAY — but the moment somebody documents the exclusion in prose ("reads no participant
+   * table"), an unstripped scan would fail on the very sentence that describes the property
+   * holding. Stripping keeps the invariant about CODE.
+   */
+  const raw = readFileSync(
+    fileURLToPath(new URL('./authorize-engagement-host.ts', import.meta.url)),
+    'utf8'
+  );
+  const source = stripComments(raw);
+
+  it('reads its own source, and the stripper really ran (non-vacuity guard)', () => {
+    expect(source).toContain('export async function resolveHostContext');
+    // If `stripComments` ever silently became a no-op, every absence scan below would
+    // still pass while proving nothing. Pinned on comment SYNTAX rather than on any
+    // particular sentence, so ordinary prose edits cannot make this guard rot.
+    expect(raw).toContain('/**');
+    expect(source).not.toContain('/**');
+    expect(source).not.toContain('//');
+  });
+
+  it.each(['presence', 'participant', 'attendee', 'Presence', 'Participant', 'Attendee'])(
+    'never names `%s` outside a comment',
+    (identifier) => {
+      expect(source).not.toContain(identifier);
+    }
+  );
+
+  it('reaches exactly the five by-id reads the holder rule needs, and no sixth', () => {
+    // The counterpart to the absence scan: the repositories that ARE named. A new import
+    // here must be a conscious edit to this list.
+    const repositories = [...source.matchAll(/\b(\w+Repository)\b/g)].map(([, name]) => name);
+    expect([...new Set(repositories)].sort()).toEqual([
+      'engagementsRepository',
+      'expertsRepository',
+      'partyMembershipsRepository',
+      'projectRequestsRepository',
+      'requestExpertRelationshipsRepository',
+    ]);
   });
 });
 
@@ -313,7 +406,7 @@ describe('hasEngagementCapability — project_discovery', () => {
     mockProjectRequestFindById.mockResolvedValue({
       id: REQUEST_ID,
       sendTo: 'match',
-      expertProfileId: SIBLING_EXPERT_PROFILE_ID, // even if a row somehow names one
+      expertProfileId: SIBLING_EXPERT_PROFILE_ID, // even if a row somehow named one
     });
     await expect(
       hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
@@ -346,16 +439,22 @@ describe('hasEngagementCapability — request_interaction', () => {
   });
 
   it('a SIBLING candidate’s relationship resolves false for the other candidate (AC #9)', async () => {
-    // Two candidates, two rows, two ids. Resolving sibling row B yields expert B only —
-    // exclusion is structural: expert A's row is simply never read.
-    mockRelationshipFindById.mockResolvedValue(
-      relationship({ id: SIBLING_RELATIONSHIP_ID, expertProfileId: SIBLING_EXPERT_PROFILE_ID })
+    // TWO CANDIDATES, TWO ROWS, TWO IDS — and the repository answers BY ID, so a resolver
+    // that hardcoded `findById(RELATIONSHIP_ID)` fails this test instead of passing it.
+    // (A blanket `mockResolvedValue` of row B for every id could not tell the two apart.)
+    mockRelationshipFindById.mockImplementation((id: string) =>
+      Promise.resolve(
+        id === SIBLING_RELATIONSHIP_ID
+          ? relationship({
+              id: SIBLING_RELATIONSHIP_ID,
+              expertProfileId: SIBLING_EXPERT_PROFILE_ID,
+            })
+          : relationship()
+      )
     );
-    mockFindProfileById.mockResolvedValue({
-      id: SIBLING_EXPERT_PROFILE_ID,
-      userId: SIBLING_EXPERT_USER_ID,
-      agencyId: null,
-    });
+    mockFindProfileById.mockImplementation((id: string) =>
+      Promise.resolve(id === SIBLING_EXPERT_PROFILE_ID ? SIBLING_EXPERT : INDEPENDENT_EXPERT)
+    );
     const siblingSubject: EngagementHostSubject = {
       contextType: 'request_interaction',
       contextId: SIBLING_RELATIONSHIP_ID,
@@ -371,6 +470,15 @@ describe('hasEngagementCapability — request_interaction', () => {
         siblingSubject
       )
     ).resolves.toBe(true);
+    // The subject's OWN id is what was read — the sibling's row was never touched.
+    expect(mockRelationshipFindById).toHaveBeenCalledWith(SIBLING_RELATIONSHIP_ID);
+    expect(mockRelationshipFindById).not.toHaveBeenCalledWith(RELATIONSHIP_ID);
+
+    // And the mirror: candidate A's own subject still resolves to candidate A.
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, INTERACTION_SUBJECT)
+    ).resolves.toBe(true);
+    expect(mockRelationshipFindById).toHaveBeenCalledWith(RELATIONSHIP_ID);
   });
 
   it('a DECLINED relationship (status = declined) resolves false (AC #10)', async () => {
@@ -413,56 +521,136 @@ describe('hasEngagementCapability — admin contexts', () => {
     for (const token of ALL_TOKENS) {
       await expect(hasEngagementCapability(host, token, ADMIN_SUBJECT)).resolves.toBe(false);
     }
-    expect(repoCallCounts()).toEqual({
-      engagement: 0,
-      projectRequest: 0,
-      relationship: 0,
-      expertProfile: 0,
-      memberRole: 0,
-    });
+    expect(repoCallCounts()).toEqual(NO_REPOSITORY_CALLS);
+  });
+});
+
+// ── The uuid guard: a malformed context_id denies, it does not throw ─────────
+
+describe('hasEngagementCapability — a malformed context_id denies without touching the DB', () => {
+  /**
+   * ⚠ WHY THIS IS A SECURITY TEST AND NOT A TIDINESS TEST. `contextId` is a bare `string`
+   * off a polymorphic column with no FK, so a caller can hand this seam anything. Before
+   * the guard, `''` or `'abc'` reached `eq(table.id, contextId)`, postgres-js inferred
+   * `$1::uuid`, and the query REJECTED with `22P02` — an exception out of a predicate
+   * whose stated contract is "contains no throw: a caller must never have to catch to stay
+   * safe". An attacker-shaped input class turning a deny into a 500 (or, in a caller that
+   * catches broadly, into an unhandled path) is the failure this closes.
+   */
+  const MALFORMED_CONTEXT_IDS: readonly [string, string][] = [
+    ['empty string', ''],
+    ['a bare word', 'abc'],
+    ['a readable placeholder id', 'engagement_1'],
+    ['a uuid one character short', '11111111-1111-4111-8111-11111111111'],
+    ['a uuid with a non-hex character', '11111111-1111-4111-8111-11111111111g'],
+    ['a braced uuid — valid to Postgres, rejected here on purpose', `{${ENGAGEMENT_ID}}`],
+    ['a SQL fragment', "' OR '1'='1"],
+    ['a uuid with trailing whitespace', `${ENGAGEMENT_ID} `],
+  ];
+
+  it.each(NON_ADMIN_CONTEXT_TYPES)(
+    'denies BOTH tokens on a %s subject for every malformed id, with ZERO repository calls',
+    async (contextType) => {
+      for (const [, contextId] of MALFORMED_CONTEXT_IDS) {
+        vi.clearAllMocks();
+        armDefaultRepos();
+        const subject: EngagementHostSubject = { contextType, contextId };
+
+        for (const token of ALL_TOKENS) {
+          await expect(hasEngagementCapability(host, token, subject)).resolves.toBe(false);
+        }
+        await expect(resolveHostContext(subject, host.id)).resolves.toBeNull();
+        // The point of validating at the SEAM ENTRY: no arm ever got the chance to hand a
+        // non-uuid to a repository.
+        expect(repoCallCounts()).toEqual(NO_REPOSITORY_CALLS);
+      }
+    }
+  );
+
+  it('logs the malformed id as its own integrity signal, distinct from a missing row', async () => {
+    await expect(
+      resolveHostContext({ contextType: 'case', contextId: 'not-a-uuid' }, host.id)
+    ).resolves.toBeNull();
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: 'case',
+        contextId: 'not-a-uuid',
+        actorId: EXPERT_USER_ID,
+        missing: 'invalid_context_id',
+      }),
+      expect.stringContaining('unusable')
+    );
+  });
+
+  it('accepts an UPPERCASE uuid — case is not a validity signal for Postgres', async () => {
+    // Guards the guard from the other side: a regex that denied valid ids would make every
+    // deny above vacuous.
+    const subject: EngagementHostSubject = {
+      contextType: 'case',
+      contextId: ENGAGEMENT_ID.toUpperCase(),
+    };
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, subject)
+    ).resolves.toBe(true);
+    expect(mockEngagementFindById).toHaveBeenCalledWith(ENGAGEMENT_ID.toUpperCase());
+  });
+
+  it('accepts a non-v4 uuid — the guard is looser than z.uuid() on purpose', async () => {
+    // A v1 uuid (version nibble `1`, variant nibble `9`) is a perfectly valid Postgres
+    // `uuid`. Denying it would be a functional regression dressed as hardening.
+    const v1 = '11111111-1111-1111-9111-111111111111';
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, {
+        contextType: 'case',
+        contextId: v1,
+      })
+    ).resolves.toBe(true);
   });
 });
 
 // ── Fail-closed contract ─────────────────────────────────────────────────────
 
 describe('hasEngagementCapability — fails closed, never throws', () => {
+  const denyEngagement = (): void => {
+    mockEngagementFindById.mockResolvedValue(undefined);
+  };
+
   const MISSING_ROW_CASES: readonly [string, EngagementHostSubject, () => void][] = [
-    [
-      'case',
-      { contextType: 'case', contextId: ENGAGEMENT_ID },
-      () => mockEngagementFindById.mockResolvedValue(undefined),
-    ],
-    [
-      'project_kickoff',
-      { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID },
-      () => mockEngagementFindById.mockResolvedValue(undefined),
-    ],
-    [
-      'package_session',
-      { contextType: 'package_session', contextId: ENGAGEMENT_ID },
-      () => mockEngagementFindById.mockResolvedValue(undefined),
-    ],
-    [
-      'retainer_checkin',
-      { contextType: 'retainer_checkin', contextId: ENGAGEMENT_ID },
-      () => mockEngagementFindById.mockResolvedValue(undefined),
-    ],
+    // The four engagement-grain labels share ONE resolver branch and therefore one arrange
+    // step — written as data rather than four near-identical tuples (CLAUDE.md's 3+ rule).
+    ...ENGAGEMENT_GRAIN_TYPES.map((contextType): [string, EngagementHostSubject, () => void] => [
+      contextType,
+      { contextType, contextId: ENGAGEMENT_ID },
+      denyEngagement,
+    ]),
     [
       'project_discovery',
       DISCOVERY_SUBJECT,
-      () => mockProjectRequestFindById.mockResolvedValue(undefined),
+      () => {
+        mockProjectRequestFindById.mockResolvedValue(undefined);
+      },
     ],
     [
       'request_interaction',
       INTERACTION_SUBJECT,
-      () => mockRelationshipFindById.mockResolvedValue(undefined),
+      () => {
+        mockRelationshipFindById.mockResolvedValue(undefined);
+      },
     ],
     [
       'the expert profile behind a case',
       CASE_SUBJECT,
-      () => mockFindProfileById.mockResolvedValue(undefined),
+      () => {
+        mockFindProfileById.mockResolvedValue(undefined);
+      },
     ],
   ];
+
+  it('covers every non-admin context type (non-vacuity guard for the cases below)', () => {
+    // Without this, dropping a label from the list above would silently shrink the suite.
+    const covered = new Set(MISSING_ROW_CASES.map(([, subject]) => subject.contextType));
+    expect([...covered].sort()).toEqual([...NON_ADMIN_CONTEXT_TYPES].sort());
+  });
 
   it.each(MISSING_ROW_CASES)(
     'a missing / soft-deleted %s row denies BOTH tokens without throwing',
@@ -502,9 +690,12 @@ describe('hasEngagementCapability — fails closed, never throws', () => {
   it('fails closed (and warns) on a context type the switch does not know', async () => {
     // The compile-time `never` in the default arm cannot be reached from typed code, so an
     // 8th DB label arriving ahead of its arm is simulated here. It must DENY, not throw.
+    // ⚠ The `contextId` is a VALID uuid on purpose: the seam-entry uuid guard runs first,
+    // so a junk id here would exercise that branch instead and leave the default arm of
+    // the switch untested.
     const unknownSubject = {
       contextType: 'workshop',
-      contextId: 'x',
+      contextId: ENGAGEMENT_ID,
     } as unknown as EngagementHostSubject;
     await expect(
       hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, unknownSubject)
@@ -513,13 +704,7 @@ describe('hasEngagementCapability — fails closed, never throws', () => {
       expect.objectContaining({ actorId: EXPERT_USER_ID }),
       expect.stringContaining('Unhandled meeting_context_type')
     );
-    expect(repoCallCounts()).toEqual({
-      engagement: 0,
-      projectRequest: 0,
-      relationship: 0,
-      expertProfile: 0,
-      memberRole: 0,
-    });
+    expect(repoCallCounts()).toEqual(NO_REPOSITORY_CALLS);
   });
 });
 
@@ -539,7 +724,7 @@ describe('both tokens route through the SAME resolver (AC #12)', () => {
   it.each(MATRIX)(
     '%s — identical repository sequence and identical answer for both tokens',
     async (_label, subject, actor, role) => {
-      mockGetMemberRole.mockResolvedValue(role);
+      armDefaultRepos(role);
 
       const hostResult = await hasEngagementCapability(
         actor,
@@ -549,18 +734,7 @@ describe('both tokens route through the SAME resolver (AC #12)', () => {
       const hostSequence = repoCallSequence();
 
       vi.clearAllMocks();
-      mockEngagementFindById.mockResolvedValue({
-        id: ENGAGEMENT_ID,
-        expertProfileId: EXPERT_PROFILE_ID,
-      });
-      mockProjectRequestFindById.mockResolvedValue({
-        id: REQUEST_ID,
-        sendTo: 'direct',
-        expertProfileId: EXPERT_PROFILE_ID,
-      });
-      mockRelationshipFindById.mockResolvedValue(relationship());
-      mockFindProfileById.mockResolvedValue(EXPERT);
-      mockGetMemberRole.mockResolvedValue(role);
+      armDefaultRepos(role);
 
       const manageResult = await hasEngagementCapability(
         actor,
@@ -580,6 +754,7 @@ describe('resolveHostContext', () => {
   it('returns the assembled context so a caller never re-derives the holder rule', async () => {
     mockGetMemberRole.mockResolvedValue('owner');
     await expect(resolveHostContext(CASE_SUBJECT, 'user_agency_owner')).resolves.toEqual({
+      resolvedForActorId: 'user_agency_owner',
       expertUserId: EXPERT_USER_ID,
       agency: { agencyId: AGENCY_ID, actorRole: 'owner' },
     });
@@ -588,6 +763,7 @@ describe('resolveHostContext', () => {
   it('reports a non-member as actorRole null rather than omitting the agency', async () => {
     mockGetMemberRole.mockResolvedValue(undefined);
     await expect(resolveHostContext(CASE_SUBJECT, 'user_stranger')).resolves.toEqual({
+      resolvedForActorId: 'user_stranger',
       expertUserId: EXPERT_USER_ID,
       agency: { agencyId: AGENCY_ID, actorRole: null },
     });
@@ -596,6 +772,7 @@ describe('resolveHostContext', () => {
   it('reports an independent expert as agency null — the context never lies about the world', async () => {
     mockFindProfileById.mockResolvedValue(INDEPENDENT_EXPERT);
     await expect(resolveHostContext(CASE_SUBJECT, EXPERT_USER_ID)).resolves.toEqual({
+      resolvedForActorId: EXPERT_USER_ID,
       expertUserId: EXPERT_USER_ID,
       agency: null,
     });
@@ -605,6 +782,7 @@ describe('resolveHostContext', () => {
     // The tempting extra short-circuit (skip the lookup when the actor IS the expert)
     // would return `agency: null` here — a context that lies. It is deliberately absent.
     await expect(resolveHostContext(CASE_SUBJECT, EXPERT_USER_ID)).resolves.toEqual({
+      resolvedForActorId: EXPERT_USER_ID,
       expertUserId: EXPERT_USER_ID,
       agency: { agencyId: AGENCY_ID, actorRole: null },
     });
@@ -613,12 +791,54 @@ describe('resolveHostContext', () => {
 
   it('returns null for an admin context with no I/O', async () => {
     await expect(resolveHostContext(ADMIN_SUBJECT, EXPERT_USER_ID)).resolves.toBeNull();
-    expect(repoCallCounts()).toEqual({
-      engagement: 0,
-      projectRequest: 0,
-      relationship: 0,
-      expertProfile: 0,
-      memberRole: 0,
+    expect(repoCallCounts()).toEqual(NO_REPOSITORY_CALLS);
+  });
+});
+
+// ── The confused-deputy brand, end to end through the async seam (BAL-413) ───
+
+describe('resolveHostContext brands the context with the actor it was resolved FOR', () => {
+  /**
+   * The pure-core half of this guard lives in `@balo/shared/authz`'s `engagement.test.ts`.
+   * THIS half proves the async resolver actually stamps the ACTOR — not the delivering
+   * expert, not the agency — so the two halves cannot pass while disagreeing about which
+   * id the brand carries. Without that, the core could be correct and the resolver could
+   * still stamp `expertUserId`, which would re-open the escalation for every caller.
+   */
+  it.each([
+    ['an agency admin', 'user_agency_admin', 'admin'],
+    ['a non-member stranger', 'user_stranger', undefined],
+    ['the delivering expert themselves', EXPERT_USER_ID, undefined],
+  ])('stamps %s’s own id on the agency path', async (_label, actorId, role) => {
+    mockGetMemberRole.mockResolvedValue(role);
+    const context = await resolveHostContext(CASE_SUBJECT, actorId);
+    expect(context?.resolvedForActorId).toBe(actorId);
+    // …and never the delivering expert's id, unless they ARE the actor.
+    expect(context?.expertUserId).toBe(EXPERT_USER_ID);
+  });
+
+  it('stamps the actor on the INDEPENDENT-expert path too (no agency lookup happens)', async () => {
+    mockFindProfileById.mockResolvedValue(INDEPENDENT_EXPERT);
+    const context = await resolveHostContext(CASE_SUBJECT, 'user_stranger');
+    expect(context).toEqual({
+      resolvedForActorId: 'user_stranger',
+      expertUserId: EXPERT_USER_ID,
+      agency: null,
     });
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('makes RESOLVE-ONCE / CHECK-MANY fail closed — the confused-deputy attack, end to end', async () => {
+    // The exact misuse `resolveHostContext` being exported invites: resolve as a
+    // privileged actor, then wave every other participant through the same context.
+    mockGetMemberRole.mockResolvedValue('owner');
+    const ownersContext = await resolveHostContext(CASE_SUBJECT, 'user_agency_owner');
+
+    for (const token of ALL_TOKENS) {
+      expect(hostContextGrants(ownersContext, { id: 'user_agency_owner' }, token)).toBe(true);
+      expect(hostContextGrants(ownersContext, { id: 'user_attacker' }, token)).toBe(false);
+      // Including the delivering expert, who would otherwise pass the identity branch.
+      expect(hostContextGrants(ownersContext, { id: EXPERT_USER_ID }, token)).toBe(false);
+    }
   });
 });

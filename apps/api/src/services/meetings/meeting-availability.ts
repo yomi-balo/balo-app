@@ -34,10 +34,11 @@ import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.j
  *      `catch` here would be a second, redundant handler around a call that cannot throw.
  *   2. The repository's TYPED errors — `MeetingExpertAmbiguousError`,
  *      `MatchModeDiscoveryNotBookableError`, `MeetingContextUnresolvableError`,
- *      `MeetingContextRequiredError`, `MeetingNotCancellableError` — MUST reach BAL-129's
- *      route intact so it can map each to its own status code. That route is the
- *      `log.error` boundary (CLAUDE.md: log where an error is turned into a user-facing
- *      message). Catching here would flatten five branchable reasons into one 500.
+ *      `MeetingContextNotProjectableError`, `MeetingContextRequiredError`,
+ *      `MeetingNotCancellableError` — MUST reach BAL-129's route intact so it can map each
+ *      to its own status code. That route is the `log.error` boundary (CLAUDE.md: log
+ *      where an error is turned into a user-facing message). Catching here would flatten
+ *      six branchable reasons into one 500.
  *
  * ⚠ THIS MODULE RESOLVES NO AUTHORIZATION, AND THE OBLIGATION HAS **TWO DIFFERENT SHAPES**
  * — do not read the first one as covering all four functions.

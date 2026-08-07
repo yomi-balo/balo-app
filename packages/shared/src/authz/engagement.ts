@@ -77,8 +77,33 @@ export type HostRole = (typeof HOST_ROLES)[keyof typeof HOST_ROLES];
 /**
  * An ALREADY-RESOLVED host context (ADR-1046 §1). Assembled by the per-app async
  * resolver; consumed purely here.
+ *
+ * ⚠ A HostContext IS AN ANSWER ABOUT ONE ACTOR, NOT A FACT ABOUT THE MEETING. It is
+ * BRANDED with `resolvedForActorId` for that reason — see that field's docblock.
  */
 export type HostContext = {
+  /**
+   * CONFUSED-DEPUTY GUARD (BAL-413 security fix) — the `users.id` this context was
+   * resolved FOR.
+   *
+   * WHY THIS FIELD EXISTS. `agency.actorRole` is the role of ONE SPECIFIC ACTOR in the
+   * delivering expert's agency; it is meaningless for anybody else. But `resolveHostRole`
+   * and `hostContextGrants` take `actor` as a SEPARATE parameter, so without this brand
+   * the natural RESOLVE-ONCE / CHECK-MANY pattern silently escalates:
+   *
+   *   const ctx = await resolveHostContext(subject, agencyOwnerId);   // actorRole: 'owner'
+   *   hostContextGrants(ctx, { id: attackerId }, 'host_meetings');    // would inherit 'owner'
+   *
+   * That shape is not contrived — "resolve the meeting's host context, then check each
+   * participant" is exactly how the `host_meetings` admit/deny surface (BAL-132) wants to
+   * use this, and `resolveHostContext` is EXPORTED to encourage reading the identity. The
+   * brand makes the misuse fail closed instead of granting: a context resolved for A is a
+   * DENIAL for every actor that is not A, on every path.
+   *
+   * A caller that legitimately needs to check several actors must RE-RESOLVE per actor —
+   * which is correct, because the agency-role lookup is per actor anyway.
+   */
+  readonly resolvedForActorId: string;
   /** `users.id` of the delivering expert (`expert_profiles.userId`, NOT NULL). */
   readonly expertUserId: string;
   /**
@@ -143,6 +168,11 @@ export function hostRoleHasCapability(
  * This function NEVER compares `role === 'owner'` / `role === 'admin'`.
  *
  * Why each deny branch matters:
+ *   · a context resolved for a DIFFERENT actor is not an answer about this one — see
+ *     `HostContext.resolvedForActorId`. This check is FIRST, before the delivering-expert
+ *     comparison, so no later branch can bypass it: it defeats the resolve-once /
+ *     check-many pattern, in which one privileged actor's context is reused to wave
+ *     through every other participant;
  *   · a null context has no holder at all (match-routed discovery, admin meetings,
  *     declined relationships, missing rows);
  *   · a null `agency` means an independent expert — nobody but that expert qualifies,
@@ -159,6 +189,11 @@ export function resolveHostRole(
   actor: { id: string }
 ): HostRole | null {
   if (hostContext === null) return null;
+
+  // FIRST, deliberately: a context is an answer about the actor it was resolved for and
+  // about nobody else. Placing this above the delivering-expert comparison is what makes
+  // it unbypassable — every grant path below is downstream of it.
+  if (hostContext.resolvedForActorId !== actor.id) return null;
 
   if (hostContext.expertUserId === actor.id) return HOST_ROLES.DELIVERING_EXPERT;
 
