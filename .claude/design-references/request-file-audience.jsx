@@ -74,7 +74,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect } from 'react';
 import {
   FileText,
   FileSpreadsheet,
@@ -88,46 +88,102 @@ import {
   Info,
   Check,
   Trash2,
-} from "lucide-react";
+} from 'lucide-react';
 
 const NOW_DAY = 10;
 const DECLINE_DAY = 8;
 
 const TRACKS = {
-  priya: { id: "priya", name: "Priya Sharma", org: "Northbridge Partners", invitedDay: 2 },
-  wei: { id: "wei", name: "Wei Zhang", org: "Clearpath Consulting", invitedDay: 2 },
-  dan: { id: "dan", name: "Dan Okafor", org: "Independent expert", invitedDay: 7 },
+  priya: { id: 'priya', name: 'Priya Sharma', org: 'Northbridge Partners', invitedDay: 2 },
+  wei: { id: 'wei', name: 'Wei Zhang', org: 'Clearpath Consulting', invitedDay: 2 },
+  dan: { id: 'dan', name: 'Dan Okafor', org: 'Independent expert', invitedDay: 7 },
 };
 
 const SEED_FILES = [
-  { id: "f1", name: "Requirements-pack-v2.pdf", kind: "pdf", size: "2.1 MB", day: 1, by: "client", audience: { type: "all" } },
-  { id: "f2", name: "Salesforce-org-inventory.xlsx", kind: "xlsx", size: "340 KB", day: 3, by: "client", audience: { type: "all" } },
-  { id: "f3", name: "Integration-vendor-contract.pdf", kind: "pdf", size: "1.4 MB", day: 4, by: "client", audience: { type: "grants", to: ["wei"] } },
-  { id: "f4", name: "Clearpath-EOI-deck.pdf", kind: "pdf", size: "5.8 MB", day: 5, by: "wei", audience: { type: "own" } },
-  { id: "f5", name: "Northbridge-approach-note.pdf", kind: "pdf", size: "900 KB", day: 5, by: "priya", audience: { type: "own" } },
-  { id: "f6", name: "Security-questionnaire.xlsx", kind: "xlsx", size: "120 KB", day: 9, by: "client", audience: { type: "all" } },
+  {
+    id: 'f1',
+    name: 'Requirements-pack-v2.pdf',
+    kind: 'pdf',
+    size: '2.1 MB',
+    day: 1,
+    by: 'client',
+    audience: { type: 'all' },
+  },
+  {
+    id: 'f2',
+    name: 'Salesforce-org-inventory.xlsx',
+    kind: 'xlsx',
+    size: '340 KB',
+    day: 3,
+    by: 'client',
+    audience: { type: 'all' },
+  },
+  {
+    id: 'f3',
+    name: 'Integration-vendor-contract.pdf',
+    kind: 'pdf',
+    size: '1.4 MB',
+    day: 4,
+    by: 'client',
+    audience: { type: 'grants', to: ['wei'] },
+  },
+  {
+    id: 'f4',
+    name: 'Clearpath-EOI-deck.pdf',
+    kind: 'pdf',
+    size: '5.8 MB',
+    day: 5,
+    by: 'wei',
+    audience: { type: 'own' },
+  },
+  {
+    id: 'f5',
+    name: 'Northbridge-approach-note.pdf',
+    kind: 'pdf',
+    size: '900 KB',
+    day: 5,
+    by: 'priya',
+    audience: { type: 'own' },
+  },
+  {
+    id: 'f6',
+    name: 'Security-questionnaire.xlsx',
+    kind: 'xlsx',
+    size: '120 KB',
+    day: 9,
+    by: 'client',
+    audience: { type: 'all' },
+  },
 ];
 
 const SEED_AUDIT = [
-  { id: "a1", day: 1, text: "Sarah Chen shared Requirements-pack-v2.pdf with everyone invited" },
-  { id: "a2", day: 3, text: "Sarah Chen shared Salesforce-org-inventory.xlsx with everyone invited" },
-  { id: "a3", day: 4, text: "Sarah Chen granted access — Integration-vendor-contract.pdf → Wei Zhang" },
-  { id: "a4", day: 9, text: "Sarah Chen shared Security-questionnaire.xlsx with everyone invited" },
+  { id: 'a1', day: 1, text: 'Sarah Chen shared Requirements-pack-v2.pdf with everyone invited' },
+  {
+    id: 'a2',
+    day: 3,
+    text: 'Sarah Chen shared Salesforce-org-inventory.xlsx with everyone invited',
+  },
+  {
+    id: 'a3',
+    day: 4,
+    text: 'Sarah Chen granted access — Integration-vendor-contract.pdf → Wei Zhang',
+  },
+  { id: 'a4', day: 9, text: 'Sarah Chen shared Security-questionnaire.xlsx with everyone invited' },
 ];
 
 let uid = 100;
 
 export default function RequestFileAudience() {
-  const [lens, setLens] = useState("client");
-  const [viewAs, setViewAs] = useState("priya");
+  const [lens, setLens] = useState('client');
+  const [viewAs, setViewAs] = useState('priya');
   const [danInvited, setDanInvited] = useState(false);
   const [weiDeclined, setWeiDeclined] = useState(false);
   const [files, setFiles] = useState(SEED_FILES);
   const [audit, setAudit] = useState(SEED_AUDIT);
   const [toast, setToast] = useState(null);
   const [shareOpen, setShareOpen] = useState(false);
-  const [shareName, setShareName] = useState("Scope-addendum.pdf");
-  const [shareMode, setShareMode] = useState("all");
+  const [shareName, setShareName] = useState('Scope-addendum.pdf');
+  const [shareMode, setShareMode] = useState('all');
   const [sharePicks, setSharePicks] = useState([]);
 
   useEffect(() => {
@@ -136,72 +192,126 @@ export default function RequestFileAudience() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const trackPresent = (id) => (id === "dan" ? danInvited : true);
-  const trackLive = (id) => trackPresent(id) && !(id === "wei" && weiDeclined);
-  const liveIds = ["priya", "wei", "dan"].filter(trackLive);
+  const trackPresent = (id) => (id === 'dan' ? danInvited : true);
+  const trackLive = (id) => trackPresent(id) && !(id === 'wei' && weiDeclined);
+  const liveIds = ['priya', 'wei', 'dan'].filter(trackLive);
 
   function canSee(trackId, file) {
     if (!trackPresent(trackId)) return false;
     if (file.deleted) return false;
     if (file.by === trackId) return true;
-    if (file.by !== "client") return false;
-    if (file.audience.type === "grants") return file.audience.to.includes(trackId);
-    if (trackId === "wei" && weiDeclined) return file.day < DECLINE_DAY;
+    if (file.by !== 'client') return false;
+    if (file.audience.type === 'grants') return file.audience.to.includes(trackId);
+    if (trackId === 'wei' && weiDeclined) return file.day < DECLINE_DAY;
     return true;
   }
 
   const visibleChips = (file) =>
-    ["priya", "wei", "dan"].filter((t) => trackPresent(t) && canSee(t, file));
+    ['priya', 'wei', 'dan'].filter((t) => trackPresent(t) && canSee(t, file));
 
   function doShare() {
-    const name = shareName.trim() || "Scope-addendum.pdf";
+    const name = shareName.trim() || 'Scope-addendum.pdf';
     const audience =
-      shareMode === "all"
-        ? { type: "all" }
-        : { type: "grants", to: sharePicks.length ? sharePicks : [] };
+      shareMode === 'all'
+        ? { type: 'all' }
+        : { type: 'grants', to: sharePicks.length ? sharePicks : [] };
     uid += 1;
-    setFiles((f) => [...f, { id: "u" + uid, name, kind: name.endsWith(".xlsx") ? "xlsx" : "pdf", size: "1.0 MB", day: NOW_DAY, by: "client", audience }]);
-    if (shareMode === "all") {
-      setAudit((a) => [...a, { id: "u" + uid + "a", day: NOW_DAY, text: `Sarah Chen shared ${name} with everyone invited` }]);
-      setToast(`Shared with ${liveIds.length} expert${liveIds.length === 1 ? "" : "s"}. A note was posted in each conversation.`);
+    setFiles((f) => [
+      ...f,
+      {
+        id: 'u' + uid,
+        name,
+        kind: name.endsWith('.xlsx') ? 'xlsx' : 'pdf',
+        size: '1.0 MB',
+        day: NOW_DAY,
+        by: 'client',
+        audience,
+      },
+    ]);
+    if (shareMode === 'all') {
+      setAudit((a) => [
+        ...a,
+        {
+          id: 'u' + uid + 'a',
+          day: NOW_DAY,
+          text: `Sarah Chen shared ${name} with everyone invited`,
+        },
+      ]);
+      setToast(
+        `Shared with ${liveIds.length} expert${liveIds.length === 1 ? '' : 's'}. A note was posted in each conversation.`
+      );
     } else {
-      const names = sharePicks.map((t) => TRACKS[t].name).join(", ") || "no one yet";
-      setAudit((a) => [...a, { id: "u" + uid + "a", day: NOW_DAY, text: `Sarah Chen granted access — ${name} → ${names}` }]);
+      const names = sharePicks.map((t) => TRACKS[t].name).join(', ') || 'no one yet';
+      setAudit((a) => [
+        ...a,
+        {
+          id: 'u' + uid + 'a',
+          day: NOW_DAY,
+          text: `Sarah Chen granted access — ${name} → ${names}`,
+        },
+      ]);
       setToast(`Shared with ${names}.`);
     }
     setShareOpen(false);
     setSharePicks([]);
-    setShareName("Scope-addendum.pdf");
+    setShareName('Scope-addendum.pdf');
   }
 
   function revoke(fileId, trackId) {
     const file = files.find((f) => f.id === fileId);
     setFiles((fs) =>
       fs.map((f) =>
-        f.id === fileId && f.audience.type === "grants"
-          ? { ...f, audience: { type: "grants", to: f.audience.to.filter((t) => t !== trackId) } }
+        f.id === fileId && f.audience.type === 'grants'
+          ? { ...f, audience: { type: 'grants', to: f.audience.to.filter((t) => t !== trackId) } }
           : f
       )
     );
-    setAudit((a) => [...a, { id: fileId + trackId + Math.random(), day: NOW_DAY, text: `Sarah Chen removed access — ${file.name} → ${TRACKS[trackId].name}` }]);
+    setAudit((a) => [
+      ...a,
+      {
+        id: fileId + trackId + Math.random(),
+        day: NOW_DAY,
+        text: `Sarah Chen removed access — ${file.name} → ${TRACKS[trackId].name}`,
+      },
+    ]);
     setToast(`Access removed. ${TRACKS[trackId].name} is not notified.`);
   }
 
   function deleteFile(fileId) {
     const file = files.find((f) => f.id === fileId);
     if (!file) return;
-    const actor = file.by === "client" ? "Sarah Chen" : TRACKS[file.by].name;
-    setFiles((fs) => fs.map((f) => (f.id === fileId ? { ...f, deleted: true, deletedDay: NOW_DAY } : f)));
-    setAudit((a) => [...a, { id: fileId + "-del-" + Math.random(), day: NOW_DAY, text: `${actor} removed ${file.name} (file retained for audit)` }]);
-    setToast("File removed. No notification is sent.");
+    const actor = file.by === 'client' ? 'Sarah Chen' : TRACKS[file.by].name;
+    setFiles((fs) =>
+      fs.map((f) => (f.id === fileId ? { ...f, deleted: true, deletedDay: NOW_DAY } : f))
+    );
+    setAudit((a) => [
+      ...a,
+      {
+        id: fileId + '-del-' + Math.random(),
+        day: NOW_DAY,
+        text: `${actor} removed ${file.name} (file retained for audit)`,
+      },
+    ]);
+    setToast('File removed. No notification is sent.');
   }
 
   function expertUpload() {
     const t = TRACKS[viewAs];
     uid += 1;
-    const name = `${t.name.split(" ")[0]}-proposal-draft.pdf`;
-    setFiles((f) => [...f, { id: "u" + uid, name, kind: "pdf", size: "760 KB", day: NOW_DAY, by: viewAs, audience: { type: "own" } }]);
-    setToast("Uploaded. Visible to Acme Corp only.");
+    const name = `${t.name.split(' ')[0]}-proposal-draft.pdf`;
+    setFiles((f) => [
+      ...f,
+      {
+        id: 'u' + uid,
+        name,
+        kind: 'pdf',
+        size: '760 KB',
+        day: NOW_DAY,
+        by: viewAs,
+        audience: { type: 'own' },
+      },
+    ]);
+    setToast('Uploaded. Visible to Acme Corp only.');
   }
 
   function reset() {
@@ -209,8 +319,8 @@ export default function RequestFileAudience() {
     setAudit(SEED_AUDIT);
     setDanInvited(false);
     setWeiDeclined(false);
-    setLens("client");
-    setViewAs("priya");
+    setLens('client');
+    setViewAs('priya');
     setToast(null);
     setShareOpen(false);
   }
@@ -232,7 +342,7 @@ export default function RequestFileAudience() {
       <div className="mx-auto max-w-3xl px-4 py-6">
         <ContextBar danInvited={danInvited} weiDeclined={weiDeclined} />
 
-        {lens === "client" && (
+        {lens === 'client' && (
           <ClientPanel
             files={files}
             audit={audit}
@@ -244,7 +354,7 @@ export default function RequestFileAudience() {
             visibleChips={visibleChips}
           />
         )}
-        {lens === "expert" && (
+        {lens === 'expert' && (
           <ExpertPanel
             files={files}
             viewAs={viewAs}
@@ -255,9 +365,7 @@ export default function RequestFileAudience() {
             deleteFile={deleteFile}
           />
         )}
-        {lens === "admin" && (
-          <AdminPanel files={files} audit={audit} visibleChips={visibleChips} />
-        )}
+        {lens === 'admin' && <AdminPanel files={files} audit={audit} visibleChips={visibleChips} />}
       </div>
 
       {shareOpen && (
@@ -290,35 +398,37 @@ function ControlStrip(p) {
     <div className="border-b border-zinc-800 bg-zinc-950 px-4 py-3 text-zinc-300">
       <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs uppercase tracking-wider text-zinc-500">Lens</span>
+          <span className="font-mono text-xs tracking-wider text-zinc-500 uppercase">Lens</span>
           <Segmented
             value={p.lens}
             onChange={p.setLens}
             options={[
-              { v: "client", label: "Client" },
-              { v: "expert", label: "Expert" },
-              { v: "admin", label: "Admin" },
+              { v: 'client', label: 'Client' },
+              { v: 'expert', label: 'Expert' },
+              { v: 'admin', label: 'Admin' },
             ]}
           />
         </div>
 
-        {p.lens === "expert" && (
+        {p.lens === 'expert' && (
           <div className="flex items-center gap-2">
-            <span className="font-mono text-xs uppercase tracking-wider text-zinc-500">Viewing as</span>
+            <span className="font-mono text-xs tracking-wider text-zinc-500 uppercase">
+              Viewing as
+            </span>
             <Segmented
               value={p.viewAs}
               onChange={p.setViewAs}
               options={[
-                { v: "priya", label: "Priya" },
-                { v: "wei", label: "Wei" },
-                { v: "dan", label: "Dan", disabled: !p.danInvited },
+                { v: 'priya', label: 'Priya' },
+                { v: 'wei', label: 'Wei' },
+                { v: 'dan', label: 'Dan', disabled: !p.danInvited },
               ]}
             />
           </div>
         )}
 
         <div className="flex items-center gap-4">
-          <span className="font-mono text-xs uppercase tracking-wider text-zinc-500">Scenario</span>
+          <span className="font-mono text-xs tracking-wider text-zinc-500 uppercase">Scenario</span>
           <MiniToggle label="Dan invited · day 7" on={p.danInvited} set={p.setDanInvited} />
           <MiniToggle label="Wei declines · day 8" on={p.weiDeclined} set={p.setWeiDeclined} />
         </div>
@@ -346,12 +456,12 @@ function Segmented({ value, onChange, options }) {
           disabled={o.disabled}
           onClick={() => onChange(o.v)}
           className={
-            "rounded px-2.5 py-1 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 " +
+            'rounded px-2.5 py-1 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ' +
             (value === o.v
-              ? "bg-zinc-100 font-medium text-zinc-900"
+              ? 'bg-zinc-100 font-medium text-zinc-900'
               : o.disabled
-              ? "cursor-not-allowed text-zinc-600"
-              : "text-zinc-300 hover:bg-zinc-800")
+                ? 'cursor-not-allowed text-zinc-600'
+                : 'text-zinc-300 hover:bg-zinc-800')
           }
         >
           {o.label}
@@ -369,8 +479,8 @@ function MiniToggle({ label, on, set }) {
     >
       <span
         className={
-          "flex h-4 w-7 items-center rounded-full p-0.5 transition-colors " +
-          (on ? "justify-end bg-emerald-500" : "justify-start bg-zinc-700")
+          'flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ' +
+          (on ? 'justify-end bg-emerald-500' : 'justify-start bg-zinc-700')
         }
       >
         <span className="h-3 w-3 rounded-full bg-white" />
@@ -385,15 +495,13 @@ function MiniToggle({ label, on, set }) {
 function ContextBar({ danInvited, weiDeclined }) {
   return (
     <div className="mb-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+      <div className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
         Project request · Acme Corp
       </div>
-      <h1 className="mt-0.5 text-lg font-semibold">
-        CPQ rollout and billing integration
-      </h1>
+      <h1 className="mt-0.5 text-lg font-semibold">CPQ rollout and billing integration</h1>
       <div className="mt-2 flex flex-wrap gap-2">
         <TrackChip t={TRACKS.priya} state="Live" />
-        <TrackChip t={TRACKS.wei} state={weiDeclined ? "Declined" : "Live"} />
+        <TrackChip t={TRACKS.wei} state={weiDeclined ? 'Declined' : 'Live'} />
         {danInvited ? (
           <TrackChip t={TRACKS.dan} state="Live" />
         ) : (
@@ -407,17 +515,19 @@ function ContextBar({ danInvited, weiDeclined }) {
 }
 
 function TrackChip({ t, state }) {
-  const declined = state === "Declined";
+  const declined = state === 'Declined';
   return (
     <span
       className={
-        "flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs " +
+        'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ' +
         (declined
-          ? "border-amber-300 bg-amber-50 text-amber-800"
-          : "border-zinc-300 bg-white text-zinc-700")
+          ? 'border-amber-300 bg-amber-50 text-amber-800'
+          : 'border-zinc-300 bg-white text-zinc-700')
       }
     >
-      <span className={"h-1.5 w-1.5 rounded-full " + (declined ? "bg-amber-500" : "bg-emerald-500")} />
+      <span
+        className={'h-1.5 w-1.5 rounded-full ' + (declined ? 'bg-amber-500' : 'bg-emerald-500')}
+      />
       {t.name} · {t.org} — {state}
     </span>
   );
@@ -425,7 +535,16 @@ function TrackChip({ t, state }) {
 
 /* ── client lens ──────────────────────────────────────────────────────────── */
 
-function ClientPanel({ files, audit, liveIds, weiDeclined, revoke, deleteFile, openShare, visibleChips }) {
+function ClientPanel({
+  files,
+  audit,
+  liveIds,
+  weiDeclined,
+  revoke,
+  deleteFile,
+  openShare,
+  visibleChips,
+}) {
   const ordered = files.filter((f) => !f.deleted).sort((a, b) => b.day - a.day);
   return (
     <div>
@@ -452,14 +571,24 @@ function ClientPanel({ files, audit, liveIds, weiDeclined, revoke, deleteFile, o
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{f.name}</div>
                 <div className="mt-0.5 text-xs text-zinc-500">
-                  {f.by === "client" ? "Sarah Chen · Acme Corp" : `${TRACKS[f.by].name} · ${TRACKS[f.by].org}`}
-                  {" · day "}{f.day}{" · "}{f.size}
+                  {f.by === 'client'
+                    ? 'Sarah Chen · Acme Corp'
+                    : `${TRACKS[f.by].name} · ${TRACKS[f.by].org}`}
+                  {' · day '}
+                  {f.day}
+                  {' · '}
+                  {f.size}
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  <AudienceBadges f={f} liveIds={liveIds} weiDeclined={weiDeclined} revoke={revoke} />
+                  <AudienceBadges
+                    f={f}
+                    liveIds={liveIds}
+                    weiDeclined={weiDeclined}
+                    revoke={revoke}
+                  />
                 </div>
               </div>
-              {f.by === "client" && (
+              {f.by === 'client' && (
                 <button
                   onClick={() => deleteFile(f.id)}
                   aria-label={`Remove ${f.name}`}
@@ -481,11 +610,13 @@ function ClientPanel({ files, audit, liveIds, weiDeclined, revoke, deleteFile, o
           Every share and removal is recorded with who did it and when.
         </div>
         <ul className="mt-2 space-y-1">
-          {[...audit].sort((a, b) => b.day - a.day).map((a) => (
-            <li key={a.id} className="text-xs text-zinc-600">
-              <span className="font-mono text-zinc-400">day {a.day}</span> · {a.text}
-            </li>
-          ))}
+          {[...audit]
+            .sort((a, b) => b.day - a.day)
+            .map((a) => (
+              <li key={a.id} className="text-xs text-zinc-600">
+                <span className="font-mono text-zinc-400">day {a.day}</span> · {a.text}
+              </li>
+            ))}
         </ul>
       </div>
     </div>
@@ -493,14 +624,14 @@ function ClientPanel({ files, audit, liveIds, weiDeclined, revoke, deleteFile, o
 }
 
 function AudienceBadges({ f, liveIds, weiDeclined, revoke }) {
-  if (f.by !== "client") {
+  if (f.by !== 'client') {
     return (
       <span className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
         <Lock size={10} /> Their conversation only
       </span>
     );
   }
-  if (f.audience.type === "all") {
+  if (f.audience.type === 'all') {
     return (
       <>
         <span className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
@@ -510,13 +641,19 @@ function AudienceBadges({ f, liveIds, weiDeclined, revoke }) {
           <span className="text-xs text-zinc-400">Wei Zhang declined — not shared</span>
         )}
         {weiDeclined && f.day < DECLINE_DAY && (
-          <span className="text-xs text-zinc-400">Wei Zhang kept access · shared before declining</span>
+          <span className="text-xs text-zinc-400">
+            Wei Zhang kept access · shared before declining
+          </span>
         )}
       </>
     );
   }
   if (f.audience.to.length === 0) {
-    return <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500">No experts have access</span>;
+    return (
+      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500">
+        No experts have access
+      </span>
+    );
   }
   return (
     <>
@@ -543,9 +680,9 @@ function AudienceBadges({ f, liveIds, weiDeclined, revoke }) {
 
 function ExpertPanel({ files, viewAs, canSee, weiDeclined, danInvited, expertUpload, deleteFile }) {
   const me = TRACKS[viewAs];
-  const declined = viewAs === "wei" && weiDeclined;
+  const declined = viewAs === 'wei' && weiDeclined;
   const mine = files.filter((f) => canSee(viewAs, f)).sort((a, b) => b.day - a.day);
-  const joinedLate = viewAs === "dan" && danInvited;
+  const joinedLate = viewAs === 'dan' && danInvited;
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white">
@@ -573,15 +710,16 @@ function ExpertPanel({ files, viewAs, canSee, weiDeclined, danInvited, expertUpl
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{f.name}</div>
               <div className="mt-0.5 text-xs text-zinc-500">
-                {f.by === "client" ? "Shared by Acme Corp" : "You uploaded"} · day {f.day} · {f.size}
+                {f.by === 'client' ? 'Shared by Acme Corp' : 'You uploaded'} · day {f.day} ·{' '}
+                {f.size}
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {f.by !== "client" && (
+                {f.by !== 'client' && (
                   <span className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
                     <Lock size={10} /> Visible to Acme Corp only
                   </span>
                 )}
-                {joinedLate && f.by === "client" && f.day < TRACKS.dan.invitedDay && (
+                {joinedLate && f.by === 'client' && f.day < TRACKS.dan.invitedDay && (
                   <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                     Shared day {f.day} · before you joined
                   </span>
@@ -611,10 +749,10 @@ function ExpertPanel({ files, viewAs, canSee, weiDeclined, danInvited, expertUpl
           onClick={expertUpload}
           disabled={declined}
           className={
-            "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 " +
+            'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 ' +
             (declined
-              ? "cursor-not-allowed bg-zinc-100 text-zinc-400"
-              : "bg-zinc-900 text-white hover:bg-zinc-800")
+              ? 'cursor-not-allowed bg-zinc-100 text-zinc-400'
+              : 'bg-zinc-900 text-white hover:bg-zinc-800')
           }
         >
           <Upload size={14} /> Upload to this conversation
@@ -651,16 +789,26 @@ function AdminPanel({ files, audit, visibleChips }) {
             <li key={f.id} className="flex items-start gap-3 px-4 py-3">
               <FileGlyph kind={f.kind} />
               <div className="min-w-0 flex-1">
-                <div className={"truncate text-sm font-medium" + (f.deleted ? " text-zinc-400 line-through" : "")}>{f.name}</div>
+                <div
+                  className={
+                    'truncate text-sm font-medium' +
+                    (f.deleted ? ' text-zinc-400 line-through' : '')
+                  }
+                >
+                  {f.name}
+                </div>
                 <div className="mt-0.5 text-xs text-zinc-500">
-                  {f.by === "client" ? "Sarah Chen · Acme Corp" : `${TRACKS[f.by].name} · ${TRACKS[f.by].org}`}
-                  {" · day "}{f.day}
-                  {" · "}
-                  {f.by !== "client"
-                    ? "expert upload, own track"
-                    : f.audience.type === "all"
-                    ? "audience: all live tracks (dynamic)"
-                    : "audience: explicit grants"}
+                  {f.by === 'client'
+                    ? 'Sarah Chen · Acme Corp'
+                    : `${TRACKS[f.by].name} · ${TRACKS[f.by].org}`}
+                  {' · day '}
+                  {f.day}
+                  {' · '}
+                  {f.by !== 'client'
+                    ? 'expert upload, own track'
+                    : f.audience.type === 'all'
+                      ? 'audience: all live tracks (dynamic)'
+                      : 'audience: explicit grants'}
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {f.deleted && (
@@ -673,7 +821,10 @@ function AdminPanel({ files, audit, visibleChips }) {
                     <span className="text-xs text-zinc-400">no experts</span>
                   )}
                   {visibleChips(f).map((t) => (
-                    <span key={t} className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+                    <span
+                      key={t}
+                      className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600"
+                    >
                       <Check size={10} className="text-emerald-500" /> {TRACKS[t].name}
                     </span>
                   ))}
@@ -689,11 +840,13 @@ function AdminPanel({ files, audit, visibleChips }) {
           <ShieldCheck size={14} className="text-zinc-400" /> audit_events
         </div>
         <ul className="mt-2 space-y-1">
-          {[...audit].sort((a, b) => b.day - a.day).map((a) => (
-            <li key={a.id} className="text-xs text-zinc-600">
-              <span className="font-mono text-zinc-400">day {a.day}</span> · {a.text}
-            </li>
-          ))}
+          {[...audit]
+            .sort((a, b) => b.day - a.day)
+            .map((a) => (
+              <li key={a.id} className="text-xs text-zinc-600">
+                <span className="font-mono text-zinc-400">day {a.day}</span> · {a.text}
+              </li>
+            ))}
         </ul>
       </div>
     </div>
@@ -729,16 +882,18 @@ function ShareSheet(p) {
 
         <div className="mt-4 space-y-2">
           <button
-            onClick={() => p.setShareMode("all")}
+            onClick={() => p.setShareMode('all')}
             className={
-              "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 " +
-              (p.shareMode === "all" ? "border-zinc-900 bg-zinc-50" : "border-zinc-200 hover:border-zinc-300")
+              'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 ' +
+              (p.shareMode === 'all'
+                ? 'border-zinc-900 bg-zinc-50'
+                : 'border-zinc-200 hover:border-zinc-300')
             }
           >
             <Users size={15} className="mt-0.5 text-blue-600" />
             <span>
               <span className="block text-sm font-medium">
-                Everyone invited · {p.liveIds.length} expert{p.liveIds.length === 1 ? "" : "s"}
+                Everyone invited · {p.liveIds.length} expert{p.liveIds.length === 1 ? '' : 's'}
               </span>
               <span className="block text-xs text-zinc-500">
                 Experts invited later will also see this file.
@@ -747,10 +902,12 @@ function ShareSheet(p) {
           </button>
 
           <button
-            onClick={() => p.setShareMode("grants")}
+            onClick={() => p.setShareMode('grants')}
             className={
-              "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 " +
-              (p.shareMode === "grants" ? "border-zinc-900 bg-zinc-50" : "border-zinc-200 hover:border-zinc-300")
+              'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 ' +
+              (p.shareMode === 'grants'
+                ? 'border-zinc-900 bg-zinc-50'
+                : 'border-zinc-200 hover:border-zinc-300')
             }
           >
             <Lock size={15} className="mt-0.5 text-violet-600" />
@@ -762,7 +919,7 @@ function ShareSheet(p) {
             </span>
           </button>
 
-          {p.shareMode === "grants" && (
+          {p.shareMode === 'grants' && (
             <div className="rounded-lg border border-zinc-200 p-2">
               {p.liveIds.map((t) => {
                 const picked = p.sharePicks.includes(t);
@@ -770,14 +927,16 @@ function ShareSheet(p) {
                   <button
                     key={t}
                     onClick={() =>
-                      p.setSharePicks(picked ? p.sharePicks.filter((x) => x !== t) : [...p.sharePicks, t])
+                      p.setSharePicks(
+                        picked ? p.sharePicks.filter((x) => x !== t) : [...p.sharePicks, t]
+                      )
                     }
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400"
                   >
                     <span
                       className={
-                        "flex h-4 w-4 items-center justify-center rounded border " +
-                        (picked ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-300")
+                        'flex h-4 w-4 items-center justify-center rounded border ' +
+                        (picked ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300')
                       }
                     >
                       {picked && <Check size={11} />}
@@ -799,12 +958,12 @@ function ShareSheet(p) {
           </button>
           <button
             onClick={p.onShare}
-            disabled={p.shareMode === "grants" && p.sharePicks.length === 0}
+            disabled={p.shareMode === 'grants' && p.sharePicks.length === 0}
             className={
-              "rounded-md px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 " +
-              (p.shareMode === "grants" && p.sharePicks.length === 0
-                ? "cursor-not-allowed bg-zinc-200 text-zinc-400"
-                : "bg-zinc-900 text-white hover:bg-zinc-800")
+              'rounded-md px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 ' +
+              (p.shareMode === 'grants' && p.sharePicks.length === 0
+                ? 'cursor-not-allowed bg-zinc-200 text-zinc-400'
+                : 'bg-zinc-900 text-white hover:bg-zinc-800')
             }
           >
             Share
@@ -820,7 +979,7 @@ function ShareSheet(p) {
 function FileGlyph({ kind }) {
   return (
     <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
-      {kind === "xlsx" ? <FileSpreadsheet size={16} /> : <FileText size={16} />}
+      {kind === 'xlsx' ? <FileSpreadsheet size={16} /> : <FileText size={16} />}
     </span>
   );
 }
