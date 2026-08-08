@@ -435,6 +435,7 @@ export {
 // branch), the status mapping and the reconciliation read cross the package boundary.
 export {
   MatchModeDiscoveryNotBookableError,
+  MeetingContextNotProjectableError,
   MeetingContextUnresolvableError,
   MeetingExpertAmbiguousError,
   consultationStatusForMeeting,

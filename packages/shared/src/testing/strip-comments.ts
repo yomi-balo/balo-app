@@ -10,6 +10,15 @@
  * Lives here rather than as a local copy in each invariant suite so there is ONE
  * implementation (a second copy is both a Sonar new-code duplication finding and a copy
  * that keeps passing after the original's scanner is fixed).
+ *
+ * ⚠ WHY `@balo/shared` AND NOT `@balo/db` (BAL-413). It started in
+ * `packages/db/src/test/helpers/`, which put it out of reach of every invariant suite
+ * OUTSIDE `@balo/db` — `@balo/db` depends on `@balo/shared`, never the reverse — so
+ * `packages/shared/src/authz/engagement.test.ts` grew a regex copy instead. That copy was
+ * exactly the `/\/\*[\s\S]*?\*\//g` super-linear shape this docblock warns about
+ * (`[\s\S]` does not exclude the terminator, so an unterminated `/*` backtracks O(n²)).
+ * Living in the LOWEST package in the graph is what makes re-use possible in both
+ * directions, so the second copy never has to be written.
  */
 export function stripComments(src: string): string {
   let out = '';

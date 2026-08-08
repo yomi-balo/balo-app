@@ -103,6 +103,32 @@ export {
 } from './platform';
 export type { PlatformCapability } from './platform';
 
+// The DISTINCT engagement-capability axis (BAL-413 / ADR-1046) — gates by DELIVERY
+// IDENTITY on ONE already-resolved meeting context, not by membership role and not by
+// platform role. Re-exported here so all THREE axes are reachable via the single
+// `@balo/shared/authz` subpath. See `./engagement.ts`.
+//
+// ⚠ `./engagement` imports `CAPABILITIES` / `roleHasCapability` back from this module
+// (it delegates the agency-admin decision rather than re-deriving it, per HARD
+// CONSTRAINT B). The resulting cycle is deliberate and value-safe — neither side calls
+// the other at module-init time. Do not "fix" it by duplicating the admin-role rule.
+export {
+  ENGAGEMENT_CAPABILITIES,
+  ENGAGEMENT_ROLE_CAPABILITIES,
+  HOST_ROLES,
+  hostRoleHasCapability,
+  resolveHostRole,
+  hostContextGrants,
+  relationshipDeniesHosting,
+} from './engagement';
+export type {
+  EngagementCapability,
+  HostRole,
+  HostContext,
+  ResolvedHostContext,
+  RelationshipHostingStatus,
+} from './engagement';
+
 /**
  * The set of roles whose bundle grants `capability` — the single source of truth
  * for admin-role fan-out queries (e.g. `listAdminUserIds`). Keeps "a role is only

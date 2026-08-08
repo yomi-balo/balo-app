@@ -627,7 +627,21 @@ export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
  *                       materialises the engagement)
  *   project_kickoff / package_session / retainer_checkin → engagements.id
  *   admin             → NULL (no subject; CHECK `meeting_context_admin_no_id`)
+ *   request_interaction → request_expert_relationships.id   (BAL-413 / ADR-1046 amendment
+ *                       2026-08-07)
  * ADR-1045 §2 is the authoritative list (ADR-1043 §1 predates `retainer_checkin`).
+ *
+ * ⚠ THE TWO REQUEST-GRAIN LABELS ARE NOT INTERCHANGEABLE — this is the single most likely
+ * future confusion, so it is written down rather than inferred:
+ *   `project_discovery`   = the EXPLORATORY call (Balo admin triage), at REQUEST grain.
+ *   `request_interaction` = CLIENT↔CANDIDATE calls, at RELATIONSHIP grain.
+ * On a `direct`-routed request the two grains coincide and resolve to the same expert; on a
+ * `match` request only `request_interaction` has a holder at all.
+ *
+ * ⚠ APPEND-ONLY. A label is added at the END of this array, never inserted mid-array — an
+ * insert changes enum ordinals and makes drizzle recreate the type instead of emitting a
+ * plain `ALTER TYPE … ADD VALUE`. See the runtime drift guard in
+ * `src/invariants/meeting-context-type-labels.test.ts` for what an 8th label must sweep.
  */
 export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
   'case',
@@ -636,6 +650,7 @@ export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
   'package_session',
   'retainer_checkin',
   'admin',
+  'request_interaction',
 ]);
 
 /**

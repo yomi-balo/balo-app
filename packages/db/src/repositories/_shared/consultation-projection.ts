@@ -39,6 +39,14 @@ import type { DbExecutor } from './db-executor';
  *   case / project_kickoff / package_session / retainer_checkin → `engagements.expert_profile_id`
  *   project_discovery                                            → `project_requests.expert_profile_id`
  *   admin                                                        → IGNORED (no expert exists)
+ *   request_interaction                                          → NOT PROJECTABLE YET (throws)
+ *
+ * ⚠ THE WALK IS EXHAUSTIVE OVER `meeting_context_type`, AND MUST STAY SO. Every label gets
+ * an arm in BOTH `loadContextExperts` and `resolveOneContext`; there is no safe default,
+ * because the fall-through arm treats a `context_id` as an `engagements.id`, and handing it
+ * some other table's id is a silent misresolution or a misdiagnosed throw. An 8th label
+ * must add an arm to both — `packages/db/src/invariants/meeting-context-type-labels.test.ts`
+ * names this module in its sweep list for exactly that reason.
  *
  * A booking that cannot name EXACTLY ONE expert throws and the transaction rolls back.
  * Zero non-admin contexts resolves to `null`, which means NO projection row at all — an
@@ -90,6 +98,44 @@ export class MeetingExpertAmbiguousError extends Error {
 }
 
 /**
+ * A context type that is REAL but has no projection rule yet (BAL-413).
+ *
+ * ⚠ NAMED DECISION, NOT A FALL-THROUGH. `request_interaction` (the client↔candidate call
+ * label added in BAL-413 / ADR-1046's 2026-08-07 amendment) anchors on
+ * `request_expert_relationships.id`, NOT on `engagements.id`. Before this class existed it
+ * fell into the engagement `else` branch, was looked up in the wrong table, resolved to
+ * nothing, and threw `MeetingContextUnresolvableError` — an error whose message
+ * ("does not resolve to a live row") would have been a LIE about a row that exists, and
+ * which would have rolled back the whole `meetingsRepository.create` transaction with a
+ * misleading diagnosis. Fail-closed, but fail-closed for the wrong stated reason is how a
+ * one-hour debug becomes a one-day one.
+ *
+ * WHY NOT JUST PROJECT IT. Resolving `request_expert_relationships → expert_profile_id`
+ * would be easy and is probably what the writer eventually wants — but BAL-413 ships the
+ * LABEL only, deliberately live-but-unwritten (F7), and inventing a projection rule the
+ * ticket never specified would put an unreviewed booking semantics into the one module
+ * allowed to write `consultations`. Whether a candidate call should occupy that
+ * candidate's calendar at all is a product decision that belongs to the BOOKING-LANE
+ * surface that writes the first `request_interaction` row (BAL-129), together with an
+ * ADR-1046 amendment. Until then this throws with an accurate name and a pointer.
+ *
+ * WHY NOT `ignored`. That is the ONE outcome that is unsafe: it would write a meeting with
+ * NO projection row, i.e. a booking blocking nobody's calendar — precisely the
+ * double-booking BAL-428 exists to close.
+ */
+export class MeetingContextNotProjectableError extends Error {
+  constructor(
+    public readonly contextType: MeetingContextType,
+    public readonly contextId: string
+  ) {
+    super(
+      `Meeting context type '${contextType}' (${contextId}) has no consultation projection rule yet — the booking-lane surface that writes this label (BAL-129) must define one, per ADR-1046`
+    );
+    this.name = 'MeetingContextNotProjectableError';
+  }
+}
+
+/**
  * A context id that resolves to NOTHING live — no such engagement, or no such project
  * request, or one that is soft-deleted.
  *
@@ -123,7 +169,9 @@ type ExpertResolution =
   | { kind: 'resolved'; expertProfileId: string }
   | { kind: 'match_mode'; projectRequestId: string }
   | { kind: 'ambiguous'; expertProfileIds: string[] }
-  | { kind: 'unresolvable'; contextType: MeetingContextType; contextId: string };
+  | { kind: 'unresolvable'; contextType: MeetingContextType; contextId: string }
+  /** A real label with no projection rule — see `MeetingContextNotProjectableError`. */
+  | { kind: 'not_projectable'; contextType: MeetingContextType; contextId: string };
 
 interface ContextExpertMaps {
   /** `engagements.id` → `expert_profile_id` (NOT NULL on that table), live rows only. */
@@ -148,6 +196,14 @@ async function loadContextExperts(
     // `admin` carries no subject, and the biconditional CHECK makes the two conditions
     // equivalent — both are spelled out so a reader does not have to know that.
     if (context.contextType === 'admin' || context.contextId === null) {
+      continue;
+    }
+    // ⚠ EXPLICIT, and it must stay above the engagement `else`. A `request_interaction`
+    // `context_id` is a `request_expert_relationships.id`; querying `engagements` with it
+    // is a guaranteed miss that `resolveOneContext` would then have to diagnose as
+    // "unresolvable". No table to load — `resolveOneContext` reports it as
+    // `not_projectable`. See `MeetingContextNotProjectableError`.
+    if (context.contextType === 'request_interaction') {
       continue;
     }
     if (context.contextType === 'project_discovery') {
@@ -190,7 +246,7 @@ async function loadContextExperts(
 type ContextResolution =
   | { kind: 'ignored' }
   | { kind: 'expert'; expertProfileId: string }
-  | Extract<ExpertResolution, { kind: 'match_mode' | 'unresolvable' }>;
+  | Extract<ExpertResolution, { kind: 'match_mode' | 'unresolvable' | 'not_projectable' }>;
 
 /** PURE. Walk ONE context row to its expert, through whichever table its type names. */
 /**
@@ -221,6 +277,19 @@ function resolveOneContext(context: ProjectionContext, maps: ContextExpertMaps):
     contextType: context.contextType,
     contextId: context.contextId,
   } as const;
+
+  // ⚠ EXPLICIT ARM, above the engagement fall-through — the whole point of this branch is
+  // that `request_interaction` must NOT be treated as an `engagements.id`. Reported as a
+  // named "no projection rule yet" decision rather than a misdiagnosed "unresolvable"
+  // row. See `MeetingContextNotProjectableError` for why it throws instead of projecting
+  // or being ignored, and who owns defining the rule.
+  if (context.contextType === 'request_interaction') {
+    return {
+      kind: 'not_projectable',
+      contextType: context.contextType,
+      contextId: context.contextId,
+    };
+  }
 
   if (context.contextType === 'project_discovery') {
     // `has` vs `get`, DELIBERATELY: the map stores `string | null`, so a MISSING key (no such
@@ -256,7 +325,11 @@ function resolveExpert(
 
   for (const context of contexts) {
     const resolved = resolveOneContext(context, maps);
-    if (resolved.kind === 'unresolvable' || resolved.kind === 'match_mode') {
+    if (
+      resolved.kind === 'unresolvable' ||
+      resolved.kind === 'match_mode' ||
+      resolved.kind === 'not_projectable'
+    ) {
       return resolved;
     }
     if (resolved.kind === 'expert') {
@@ -287,6 +360,8 @@ function expertOrThrow(resolution: ExpertResolution, meetingId: string | null): 
       throw new MeetingExpertAmbiguousError(meetingId, resolution.expertProfileIds);
     case 'unresolvable':
       throw new MeetingContextUnresolvableError(resolution.contextType, resolution.contextId);
+    case 'not_projectable':
+      throw new MeetingContextNotProjectableError(resolution.contextType, resolution.contextId);
   }
 }
 
@@ -751,5 +826,7 @@ function describeResolution(resolution: ExpertResolution): string {
       return `${resolution.expertProfileIds.length} experts (${resolution.expertProfileIds.join(', ')})`;
     case 'unresolvable':
       return `an unresolvable ${resolution.contextType} context (${resolution.contextId})`;
+    case 'not_projectable':
+      return `a ${resolution.contextType} context (${resolution.contextId}), which has no projection rule yet`;
   }
 }
