@@ -51,6 +51,13 @@
  * `true` does NOT mean "this engagement is still live". A caller that requires liveness
  * (BAL-132 minting a Daily owner token, BAL-410/411 mutating a schedule) must check
  * `engagements.status` itself.
+ *
+ * ⚠ THIS IS A CALL-TIME ANSWER, NOT AN EVENT. It reads state and returns a boolean; it
+ * writes nothing, sweeps nothing and cascades to nothing. So the relationship-status gate
+ * on arm 5 does NOT void meetings already booked before a decline — a call booked while
+ * the expert was a holder stays booked, and only the NEXT question about it answers
+ * `false`. Revoking or cancelling already-booked calls on decline is booking-lane scope
+ * (BAL-129 / BAL-410), deliberately not this resolver's.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * ⚠ OPEN QUESTION, DELIBERATELY NOT DECIDED HERE (BAL-413 flag F1). The entry point takes
@@ -76,6 +83,7 @@ import {
 } from '@balo/db';
 import {
   hostContextGrants,
+  relationshipDeniesHosting,
   type EngagementCapability,
   type ResolvedHostContext,
 } from '@balo/shared/authz';
@@ -211,6 +219,96 @@ async function hostContextForExpertProfile(
 }
 
 /**
+ * ARM 5 — `project_discovery`: the EXPLORATORY call, split by route, then GATED ON
+ * RELATIONSHIP STATUS. Extracted from the switch so `resolveHostContext` stays under the
+ * cognitive-complexity ceiling; it is one arm's body and has no other caller.
+ *
+ * `send_to='direct'` ⇒ the request names a target expert. `send_to='match'` ⇒ NO HOLDER,
+ * and we stop before any expert lookup.
+ *
+ * Guarded on `!== 'direct'` rather than `=== 'match'` so a future third routing value also
+ * fails closed. A match request has no target expert BY CONSTRUCTION (CHECK
+ * `project_requests_direct_requires_expert` makes `expert_profile_id` a biconditional on
+ * `send_to`), and the exploratory call is `requireAdmin()`-gated triage that happens
+ * UPSTREAM of `experts_invited` — normally before any expert is on the request at all.
+ * Candidate-set resolution was considered and REJECTED (ADR-1046 amendment 2026-08-07):
+ * the set is empty at call time and would grant meeting powers to non-winners. The admin
+ * running triage is authorized on the PLATFORM axis, exactly as an `admin` context is.
+ *
+ * ⚠ GATED ON RELATIONSHIP STATUS (BAL-413 / ADR-1046 §3, amended 2026-08-08). A bare read
+ * of `project_requests.expert_profile_id` is NOT enough. That column SURVIVES A DECLINE
+ * FOREVER — the CHECK forbids nulling it while `send_to='direct'` — so an expert who
+ * declined the request would otherwise keep LIVE HOST RIGHTS over its discovery meetings
+ * indefinitely. ADR-1046's "a declined relationship is never a holder for new grants" is
+ * ARM-UNSCOPED, so it binds here exactly as it binds arm 6.
+ *
+ * ONE PREDICATE, TWO ARMS: `relationshipDeniesHosting` is the single definition of
+ * "declined" on this axis (see its docblock in `@balo/shared/authz`). It is why the two
+ * arms coincide on direct routes BY CONSTRUCTION rather than by agreement.
+ *
+ * ⚠ DENY ON EVIDENCE, NEVER ON ABSENCE. No relationship row for the target expert leaves
+ * this arm UNGATED and the target still resolves as holder. That is deliberate, not an
+ * oversight: on a `direct` request the exploratory call legitimately PRECEDES any formal
+ * invite, so "no relationship yet" is the normal early state and must not deny. Only
+ * positive evidence on an EXISTING row denies. Do not "tighten" this into a deny-on-absence
+ * — the test `an ABSENT relationship row still resolves TRUE` pins it.
+ *
+ * ⚠ KNOWN LIMITATION — THE SOFT-DELETE SUB-CASE IS NOT OBSERVABLE HERE, AND THIS SAYS SO
+ * RATHER THAN PRETENDING OTHERWISE. §3's evidence list names soft-deleted rows, but EVERY
+ * existing read of `request_expert_relationships` that projects `status` / `declinedAt`
+ * filters `deleted_at IS NULL` (`findById`, `listByRequest`,
+ * `projectRequestsRepository.findByIdWithRelations`'s `relationships` child,
+ * `projectsInboxRepository`). The one read that DOES reach soft-deleted rows —
+ * `conversationsRepository`'s summary join — is keyed by relationship ID (which this arm
+ * does not have; it has the request + the expert) and projects NONE of the columns needed.
+ * So a soft-deleted relationship is INDISTINGUISHABLE FROM ABSENT here, and absent means
+ * ungated. Closing that would need a NEW repository method, which BAL-413's scope forbids
+ * adding on speculation.
+ * The residual is narrow: soft-delete means "removed from the request's invite list", and
+ * on a `direct` request the target is named by the REQUEST, not by the relationship —
+ * removing the invite row does not un-name them as the direct target, and the partial
+ * unique index on `deleted_at IS NULL` exists precisely so a removed expert can be
+ * RE-INVITED. A removed-then-not-re-invited direct target is therefore closer to "no
+ * invite yet" (ungated, by the rule above) than to "declined". A DECLINE — the case that
+ * actually motivated this gate — is a status transition on a LIVE row and IS caught. The
+ * test `a SOFT-DELETED relationship is INVISIBLE to this arm` pins the ACTUAL behaviour so
+ * this limitation cannot be silently mistaken for coverage.
+ */
+async function hostContextForDiscoveryRequest(
+  requestId: string,
+  actorId: string,
+  subject: EngagementHostSubject
+): Promise<ResolvedHostContext> {
+  const request = await projectRequestsRepository.findById(requestId);
+  if (request === undefined) {
+    return denyMissingRow(subject, actorId, 'project_request');
+  }
+  if (request.sendTo !== 'direct') return null;
+
+  // Belt-and-braces: unreachable while the CHECK holds. It is what keeps this arm correct
+  // — rather than crashing or widening — if the CHECK is ever relaxed.
+  const { expertProfileId } = request;
+  if (expertProfileId === null) return null;
+
+  // The lookup grain differs from arm 6's on purpose: this arm holds the REQUEST id and
+  // the TARGET expert, never a relationship id. `listByRequest` is an EXISTING read (no
+  // new repository surface), and the partial unique index
+  // `request_expert_relationship_unique_idx WHERE deleted_at IS NULL` guarantees AT MOST
+  // ONE live row per (request, expert) — so this `find` is unambiguous, not a "first match
+  // wins" heuristic. Siblings on the same request are excluded by `expertProfileId`: a
+  // competing candidate's decline must never gate the target.
+  const liveRelationships = await requestExpertRelationshipsRepository.listByRequest(requestId);
+  const targetRelationship = liveRelationships.find(
+    (candidate) => candidate.expertProfileId === expertProfileId
+  );
+  if (targetRelationship !== undefined && relationshipDeniesHosting(targetRelationship)) {
+    return null;
+  }
+
+  return hostContextForExpertProfile(expertProfileId, actorId, subject);
+}
+
+/**
  * Assembles the host context for one meeting context, or `null` when the context has NO
  * HOLDER. Exported because BAL-132 needs the host IDENTITY (whose Daily owner token),
  * not just a boolean — making it re-derive the holder rule is the exact drift ADR-1029
@@ -221,9 +319,9 @@ async function hostContextForExpertProfile(
  * runtime pair is `packages/db/src/invariants/meeting-context-type-labels.test.ts`.
  *
  * Fails closed at every branch: a MALFORMED `context_id`, a missing row, a `match`-routed
- * request, a declined relationship and an `admin` context all yield `null`, and `null`
- * denies every actor. This function contains no `throw`: a caller must never have to catch
- * to stay safe. (A repository REJECTION — the database being unreachable — still
+ * request, a declined relationship (on EITHER request-grain arm — 5 and 6 share one
+ * predicate) and an `admin` context all yield `null`, and `null` denies every actor. This
+ * function contains no `throw`: a caller must never have to catch to stay safe. (A repository REJECTION — the database being unreachable — still
  * propagates, exactly as it does in `authorize-session-expert.ts`; swallowing that would
  * turn an outage into a silent, uniform deny, which is a worse failure than a 500.)
  *
@@ -268,33 +366,12 @@ export async function resolveHostContext(
       return hostContextForExpertProfile(engagement.expertProfileId, actorId, subject);
     }
 
-    // ── Arm 5: request grain — the EXPLORATORY call, split by route.
-    // `send_to='direct'` ⇒ the request names a target expert. `send_to='match'` ⇒ NO
-    // HOLDER, and we stop before any expert lookup.
-    //
-    // Guarded on `!== 'direct'` rather than `=== 'match'` so a future third routing value
-    // also fails closed. A match request has no target expert BY CONSTRUCTION (CHECK
-    // `project_requests_direct_requires_expert` makes `expert_profile_id` a biconditional
-    // on `send_to`), and the exploratory call is `requireAdmin()`-gated triage that
-    // happens UPSTREAM of `experts_invited` — normally before any expert is on the request
-    // at all. Candidate-set resolution was considered and REJECTED (ADR-1046 amendment
-    // 2026-08-07): the set is empty at call time and would grant meeting powers to
-    // non-winners. The admin running triage is authorized on the PLATFORM axis, exactly as
-    // an `admin` context is.
-    case 'project_discovery': {
-      const request = await projectRequestsRepository.findById(subject.contextId);
-      if (request === undefined) {
-        return denyMissingRow(subject, actorId, 'project_request');
-      }
-      if (request.sendTo !== 'direct') return null;
-
-      // Belt-and-braces: unreachable while the CHECK holds. It is what keeps this arm
-      // correct — rather than crashing or widening — if the CHECK is ever relaxed.
-      const { expertProfileId } = request;
-      if (expertProfileId === null) return null;
-
-      return hostContextForExpertProfile(expertProfileId, actorId, subject);
-    }
+    // ── Arm 5: request grain — the EXPLORATORY call, split by route. Extracted whole
+    // into `hostContextForDiscoveryRequest` (see its docblock): it is the only arm with
+    // two sequential reads and a gate, and inlining it pushed this switch past the
+    // SonarCloud cognitive-complexity ceiling.
+    case 'project_discovery':
+      return hostContextForDiscoveryRequest(subject.contextId, actorId, subject);
 
     // ── Arm 6: relationship grain — CLIENT↔CANDIDATE calls (BAL-413's new label).
     //
@@ -311,16 +388,27 @@ export async function resolveHostContext(
     // owners/admins, and the agency is genuinely the same party) — but it is not the
     // "one candidate can never reach another's call" the word structural suggests.
     //
-    // A DECLINED relationship is never a holder for new grants (BAL-276 precedent).
-    // Decline is checked on BOTH representations — the enum label and the timestamp — so
-    // the resolver fails closed if the two ever disagree. `findById` already guards
-    // `deleted_at IS NULL`, so a removed candidate needs no predicate here.
+    // A DECLINED relationship is never a holder for new grants (BAL-276 precedent), via
+    // the SHARED `relationshipDeniesHosting` predicate — the single definition of
+    // "declined" on this axis, which arm 5 also consults. Both representations (the enum
+    // label and the timestamp) are checked inside it, so the resolver fails closed if the
+    // two ever disagree. `findById` already guards `deleted_at IS NULL`, so a removed
+    // candidate needs no predicate here — unlike arm 5, where the same soft-delete is
+    // invisible for a different reason (see that arm's LIMITATION block).
+    //
+    // ⚠ GRAIN OVERLAP ON DIRECT ROUTES IS NOW TRUE BY CONSTRUCTION, NOT BY COINCIDENCE.
+    // On a `send_to='direct'` request, arm 5 and this arm name the same expert and reach
+    // the same verdict because they consult ONE predicate over the SAME row — arm 5 finds
+    // it by `(projectRequestId, expertProfileId)`, this arm by its id. Before the
+    // 2026-08-08 amendment arm 5 read the request column bare, so the two arms genuinely
+    // could disagree: declined here, still a holder there. Do not reintroduce a
+    // second decline test in either arm.
     case 'request_interaction': {
       const relationship = await requestExpertRelationshipsRepository.findById(subject.contextId);
       if (relationship === undefined) {
         return denyMissingRow(subject, actorId, 'request_expert_relationship');
       }
-      if (relationship.status === 'declined' || relationship.declinedAt !== null) return null;
+      if (relationshipDeniesHosting(relationship)) return null;
       return hostContextForExpertProfile(relationship.expertProfileId, actorId, subject);
     }
 

@@ -119,12 +119,14 @@ export {
   hostRoleHasCapability,
   resolveHostRole,
   hostContextGrants,
+  relationshipDeniesHosting,
 } from './engagement';
 export type {
   EngagementCapability,
   HostRole,
   HostContext,
   ResolvedHostContext,
+  RelationshipHostingStatus,
 } from './engagement';
 
 /**

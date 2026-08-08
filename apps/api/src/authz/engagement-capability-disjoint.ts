@@ -35,7 +35,7 @@
  *
  * The captured failing output for this PR is in `.proof-bal-413.md` and the PR description.
  *
- * ⚠ THE LITERAL AC #1 / AC #11 SUBJECT LIVES ELSEWHERE, ON PURPOSE. `hasCapability`
+ * ⚠ THE LITERAL AC #1 / AC #12 SUBJECT LIVES ELSEWHERE, ON PURPOSE. `hasCapability`
  * itself is `apps/web`-only and `import 'server-only'`, so it is unreachable from here.
  * What IS asserted here is the same `Capability` TYPE that `hasCapability`'s `capability`
  * parameter is declared as — so these lines are load-bearing for that call site too. The
@@ -56,7 +56,7 @@ import {
 /** Compiles only while `T` is exactly `never`. */
 type AssertNever<T extends never> = T;
 
-/** AC #13 — WHOLE-UNION disjointness, generalised: fails if ANY token leaks either way. */
+/** AC #14 — WHOLE-UNION disjointness, generalised: fails if ANY token leaks either way. */
 export type _EngagementTokensAreNotCapabilities = AssertNever<
   Extract<EngagementCapability, Capability>
 >;
@@ -65,14 +65,14 @@ export type _CapabilitiesAreNotEngagementTokens = AssertNever<
 >;
 
 /**
- * AC #1 / AC #11 — the call-site form, expressed against the exact types the real seams
+ * AC #1 / AC #12 — the call-site form, expressed against the exact types the real seams
  * consume. NEVER CALLED: it exists only so the compiler sees the expressions.
  * ⚠ Keep each asserted call on ONE line — `@ts-expect-error` applies to the next line only.
  */
 export function __engagementCapabilityTypeInvariants(): void {
   // @ts-expect-error AC #1 — 'host_meetings' is NOT a membership Capability.
   roleHasCapability('owner', ENGAGEMENT_CAPABILITIES.HOST_MEETINGS);
-  // @ts-expect-error AC #11 — 'manage_engagement' is NOT a membership Capability.
+  // @ts-expect-error AC #12 — 'manage_engagement' is NOT a membership Capability.
   roleHasCapability('owner', ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT);
   // @ts-expect-error The reverse — a membership token is not an EngagementCapability.
   hostRoleHasCapability(HOST_ROLES.DELIVERING_EXPERT, CAPABILITIES.MANAGE_MEMBERS);

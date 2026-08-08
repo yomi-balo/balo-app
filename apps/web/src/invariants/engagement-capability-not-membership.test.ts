@@ -5,7 +5,7 @@ import {
   type Capability,
   type EngagementCapability,
 } from '@balo/shared/authz';
-// TYPE-ONLY on purpose — see `__acOneAndEleven` below. `@/lib/authz` is `server-only` and
+// TYPE-ONLY on purpose — see `__acOneAndTwelve` below. `@/lib/authz` is `server-only` and
 // value-imports `@balo/db`; a value import here would break this file at runtime (jsdom)
 // and is exactly the client-bundle footgun the seam's own docblock warns about. A type
 // import is fully erased, so `tsc` still resolves the real signature while vitest loads
@@ -13,7 +13,7 @@ import {
 import type { hasCapability } from '@/lib/authz';
 
 /**
- * BAL-413 / ADR-1046 §6 — AC #1 and AC #11, asserted LITERALLY.
+ * BAL-413 / ADR-1046 §6 — AC #1 and AC #12, asserted LITERALLY.
  *
  * AC #1 is worded against the WEB membership seam: "`hasCapability(actor, 'host_meetings', ...)`
  * fails to compile". `hasCapability` lives only in `apps/web` (`import 'server-only'`) and is
@@ -61,18 +61,18 @@ export type _WebSeamRejectsEngagementTokens = AssertNever<
  * no value import is needed. It exists only so the compiler sees the call expressions.
  * ⚠ Keep each asserted call on ONE line — `@ts-expect-error` applies to the next line only.
  */
-export async function __acOneAndEleven(seam: typeof hasCapability): Promise<void> {
+export async function __acOneAndTwelve(seam: typeof hasCapability): Promise<void> {
   const actor = { id: 'user_1' };
   const scope = { companyId: 'company_1' };
   // @ts-expect-error AC #1 — hasCapability(actor, 'host_meetings', …) must not compile.
   await seam(actor, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, scope);
-  // @ts-expect-error AC #11 — hasCapability(actor, 'manage_engagement', …) must not compile.
+  // @ts-expect-error AC #12 — hasCapability(actor, 'manage_engagement', …) must not compile.
   await seam(actor, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, scope);
 }
 
 // ── The runtime half (held by vitest, not by tsc) ────────────────────────────
 
-describe('the engagement axis is disjoint from the membership axis (BAL-413 / AC #1, #11, #13)', () => {
+describe('the engagement axis is disjoint from the membership axis (BAL-413 / AC #1, #12, #14)', () => {
   const membershipTokens: readonly string[] = Object.values(CAPABILITIES);
   const engagementTokens: readonly string[] = Object.values(ENGAGEMENT_CAPABILITIES);
 

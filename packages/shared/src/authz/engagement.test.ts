@@ -11,11 +11,22 @@ import {
   HOST_ROLES,
   hostContextGrants,
   hostRoleHasCapability,
+  relationshipDeniesHosting,
   resolveHostRole,
   type EngagementCapability,
   type HostContext,
   type HostRole,
+  type RelationshipHostingStatus,
 } from './engagement';
+
+/**
+ * This module's own source, comment-free. Read ONCE at module scope because two
+ * describe blocks scan it: the dependency-freedom checks (AC #2) and the
+ * "one decline definition" check (AC #11).
+ */
+const source = stripComments(
+  readFileSync(fileURLToPath(new URL('./engagement.ts', import.meta.url)), 'utf8')
+);
 
 /**
  * Unit tests for the ENGAGEMENT-capability axis pure core (BAL-413 / ADR-1046).
@@ -265,7 +276,7 @@ describe('hostContextGrants', () => {
   });
 });
 
-// ── The one-holder-set invariant (AC #12) ────────────────────────────────────
+// ── The one-holder-set invariant (AC #13) ────────────────────────────────────
 
 describe('ENGAGEMENT_ROLE_CAPABILITIES', () => {
   it('maps each token to its snake_case wire value', () => {
@@ -273,7 +284,7 @@ describe('ENGAGEMENT_ROLE_CAPABILITIES', () => {
     expect(ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT).toBe('manage_engagement');
   });
 
-  it('gives delivering_expert and agency_admin the IDENTICAL holder bundle (AC #12)', () => {
+  it('gives delivering_expert and agency_admin the IDENTICAL holder bundle (AC #13)', () => {
     // Pins the ADR-1046 2026-07-31 amendment. If the holder sets ever diverge they
     // diverge HERE, in the map — never by a second resolver — and this is the test a
     // divergence must consciously edit.
@@ -282,7 +293,7 @@ describe('ENGAGEMENT_ROLE_CAPABILITIES', () => {
     );
   });
 
-  it('covers EVERY EngagementCapability token — a third token cannot be silently unmapped (AC #12)', () => {
+  it('covers EVERY EngagementCapability token — a third token cannot be silently unmapped (AC #13)', () => {
     expect(ALL_TOKENS.length).toBeGreaterThan(0); // non-vacuity
     for (const hostRole of Object.values(HOST_ROLES)) {
       expect([...ENGAGEMENT_ROLE_CAPABILITIES[hostRole]].sort()).toEqual([...ALL_TOKENS].sort());
@@ -295,13 +306,60 @@ describe('ENGAGEMENT_ROLE_CAPABILITIES', () => {
   });
 });
 
+// ── The shared relationship-status predicate (AC #11) ───────────────────────
+
+describe('relationshipDeniesHosting — the SINGLE definition of "declined"', () => {
+  /**
+   * ONE predicate, consumed by BOTH request-grain arms of the async resolver
+   * (`project_discovery` arm 5 and `request_interaction` arm 6). Its correctness is
+   * pinned here, in the pure module; that the two arms actually AGREE is pinned in
+   * `apps/api/src/services/meetings/authorize-engagement-host.test.ts`.
+   */
+  const DECLINED_AT = new Date('2026-08-01T00:00:00.000Z');
+
+  const DENIES: readonly [string, RelationshipHostingStatus][] = [
+    ['both representations agree', { status: 'declined', declinedAt: DECLINED_AT }],
+    ['the enum label alone (timestamp never stamped)', { status: 'declined', declinedAt: null }],
+    // The asymmetric case is the one a re-inlined second definition would get wrong.
+    [
+      'the timestamp alone (label went stale)',
+      { status: 'proposal_submitted', declinedAt: DECLINED_AT },
+    ],
+  ];
+
+  it.each(DENIES)('denies hosting on %s', (_label, relationship) => {
+    expect(relationshipDeniesHosting(relationship)).toBe(true);
+  });
+
+  it.each(['invited', 'eoi_submitted', 'proposal_requested', 'proposal_submitted', 'accepted'])(
+    'permits hosting on a live `%s` relationship — non-vacuity for the denials above',
+    (status) => {
+      expect(relationshipDeniesHosting({ status, declinedAt: null })).toBe(false);
+    }
+  );
+
+  it('reads ONLY the two decline representations — no other status is special', () => {
+    // A future enum member must not accidentally deny (or accidentally permit) because
+    // the predicate grew an unrelated branch.
+    expect(relationshipDeniesHosting({ status: 'some_future_status', declinedAt: null })).toBe(
+      false
+    );
+    expect(relationshipDeniesHosting({ status: '', declinedAt: null })).toBe(false);
+  });
+
+  it('is defined exactly ONCE — the literal lives here and nowhere else', () => {
+    // Constraint (a), asserted where the definition actually lives. Its mirror — that the
+    // async resolver names no decline literal of its own and calls this predicate from
+    // BOTH arms — is in `authorize-engagement-host.test.ts`. Together they make a second
+    // definition of "declined" impossible to add without failing a test.
+    expect(source).toContain('export function relationshipDeniesHosting');
+    expect([...source.matchAll(/'declined'/g)]).toHaveLength(1);
+  });
+});
+
 // ── AC #2: the pure core stays importable from apps/api ──────────────────────
 
 describe('the pure core is dependency-free (AC #2)', () => {
-  const source = stripComments(
-    readFileSync(fileURLToPath(new URL('./engagement.ts', import.meta.url)), 'utf8')
-  );
-
   it('reads its own source (non-vacuity guard for the scans below)', () => {
     expect(source).toContain('export function resolveHostRole');
   });

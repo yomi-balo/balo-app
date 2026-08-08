@@ -127,6 +127,49 @@ export type HostContext = {
 export type ResolvedHostContext = HostContext | null;
 
 /**
+ * The two `request_expert_relationships` columns this axis reads. STRUCTURAL on
+ * purpose — typing it against `@balo/db`'s `RequestExpertRelationship` would drag a
+ * DB dependency into a module whose whole contract is that it has none. Any row with
+ * these two fields satisfies it, and the real Drizzle row does.
+ */
+export type RelationshipHostingStatus = {
+  readonly status: string;
+  readonly declinedAt: Date | null;
+};
+
+/**
+ * ⚠ THE SINGLE DEFINITION OF "this relationship denies hosting" (BAL-413 / ADR-1046 §3,
+ * amended 2026-08-08). There must never be a second definition of "declined" on this axis.
+ *
+ * BOTH call sites live in `apps/api/src/services/meetings/authorize-engagement-host.ts`:
+ *   · arm 5 `project_discovery` — the `send_to='direct'` target expert's relationship on
+ *     that request, looked up by `(projectRequestId, expertProfileId)`;
+ *   · arm 6 `request_interaction` — the subject relationship itself, looked up by id.
+ * That shared consumption is what makes the two arms' claim to "coincide on direct
+ * routes" true BY CONSTRUCTION rather than by two rules that happen to agree today.
+ *
+ * WHY BOTH REPRESENTATIONS. `advanceRelationshipStatus` writes the enum label and the
+ * timestamp together, so they agree in practice. Checking both means the predicate fails
+ * CLOSED if they ever disagree — a partial write, a manual backfill, a future status added
+ * to the enum without a `declinedAt` stamp. Never trust the label alone.
+ *
+ * ⚠ "WITHDRAWN" IS NOT A SEPARATE STATE HERE. `request_expert_relationship_status` is
+ * (`invited`, `eoi_submitted`, `proposal_requested`, `proposal_submitted`, `accepted`,
+ * `declined`) — there is no `withdrawn` member on THIS table (proposals and
+ * party_join_requests have one; they are different tables). The withdrawal of an expert
+ * from a request is a SOFT DELETE, which this predicate cannot observe — see the
+ * SOFT-DELETE LIMITATION block on arm 5 in the resolver.
+ *
+ * ⚠ EVIDENCE, NOT ABSENCE. This predicate answers a question about a row that EXISTS.
+ * "There is no relationship row" is not this function's business and must never be routed
+ * through it as a `true`: a caller with no row leaves its arm UNGATED (on a `direct`
+ * request the exploratory call can legitimately precede any formal invite).
+ */
+export function relationshipDeniesHosting(relationship: RelationshipHostingStatus): boolean {
+  return relationship.status === 'declined' || relationship.declinedAt !== null;
+}
+
+/**
  * Both tokens over the same holder set — the ADR-1046 2026-07-31 amendment, pinned
  * as data rather than prose.
  */

@@ -14,6 +14,7 @@ const {
   mockEngagementFindById,
   mockProjectRequestFindById,
   mockRelationshipFindById,
+  mockRelationshipListByRequest,
   mockFindProfileById,
   mockGetMemberRole,
   mockWarn,
@@ -21,6 +22,7 @@ const {
   mockEngagementFindById: vi.fn(),
   mockProjectRequestFindById: vi.fn(),
   mockRelationshipFindById: vi.fn(),
+  mockRelationshipListByRequest: vi.fn(),
   mockFindProfileById: vi.fn(),
   mockGetMemberRole: vi.fn(),
   mockWarn: vi.fn(),
@@ -46,7 +48,10 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: mockEngagementFindById },
   projectRequestsRepository: { findById: mockProjectRequestFindById },
-  requestExpertRelationshipsRepository: { findById: mockRelationshipFindById },
+  requestExpertRelationshipsRepository: {
+    findById: mockRelationshipFindById,
+    listByRequest: mockRelationshipListByRequest,
+  },
   expertsRepository: { findProfileById: mockFindProfileById },
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
 }));
@@ -127,10 +132,14 @@ function relationship(overrides: Record<string, unknown> = {}): Record<string, u
 }
 
 /**
- * Arm all five repositories with the HAPPY-PATH row for every arm, and the actor's agency
+ * Arm all six reads with the HAPPY-PATH row for every arm, and the actor's agency
  * role (`undefined` = not a member). Extracted because the both-tokens matrix has to
- * re-arm mid-test after `vi.clearAllMocks()`, and a second verbatim copy of five
+ * re-arm mid-test after `vi.clearAllMocks()`, and a second verbatim copy of six
  * `mockResolvedValue` calls is how the two silently drift apart.
+ *
+ * ⚠ The discovery arm's default is a LIVE, NON-DECLINED relationship for the target
+ * expert — the ordinary post-invite state. Its declined and absent variants are arranged
+ * per-test in the `project_discovery — the relationship-status gate` block below.
  */
 function armDefaultRepos(role?: string): void {
   mockEngagementFindById.mockResolvedValue({
@@ -143,6 +152,7 @@ function armDefaultRepos(role?: string): void {
     expertProfileId: EXPERT_PROFILE_ID,
   });
   mockRelationshipFindById.mockResolvedValue(relationship());
+  mockRelationshipListByRequest.mockResolvedValue([relationship()]);
   mockFindProfileById.mockResolvedValue(EXPERT);
   mockGetMemberRole.mockResolvedValue(role);
 }
@@ -153,6 +163,7 @@ function repoCallCounts(): Record<string, number> {
     engagement: mockEngagementFindById.mock.calls.length,
     projectRequest: mockProjectRequestFindById.mock.calls.length,
     relationship: mockRelationshipFindById.mock.calls.length,
+    relationshipsByRequest: mockRelationshipListByRequest.mock.calls.length,
     expertProfile: mockFindProfileById.mock.calls.length,
     memberRole: mockGetMemberRole.mock.calls.length,
   };
@@ -162,16 +173,18 @@ const NO_REPOSITORY_CALLS: Record<string, number> = {
   engagement: 0,
   projectRequest: 0,
   relationship: 0,
+  relationshipsByRequest: 0,
   expertProfile: 0,
   memberRole: 0,
 };
 
-/** The full ARGUMENT sequence, not just counts — what AC #12's "one resolver" really means. */
+/** The full ARGUMENT sequence, not just counts — what AC #13's "one resolver" really means. */
 function repoCallSequence(): Record<string, unknown[][]> {
   return {
     engagement: mockEngagementFindById.mock.calls,
     projectRequest: mockProjectRequestFindById.mock.calls,
     relationship: mockRelationshipFindById.mock.calls,
+    relationshipsByRequest: mockRelationshipListByRequest.mock.calls,
     expertProfile: mockFindProfileById.mock.calls,
     memberRole: mockGetMemberRole.mock.calls,
   };
@@ -206,6 +219,7 @@ describe('hasEngagementCapability — the holder set', () => {
         engagement: 1,
         projectRequest: 0,
         relationship: 0,
+        relationshipsByRequest: 0,
         expertProfile: 1,
         memberRole: 1,
       });
@@ -295,6 +309,22 @@ describe('hasEngagementCapability — the holder set', () => {
 
 // ── AC #5, asserted against the PRODUCTION SOURCE rather than the mock ───────
 
+/**
+ * The resolver's own source, raw and comment-free. Read ONCE at module scope because two
+ * describe blocks scan it: the participation-model absence checks (AC #5) and the
+ * "one decline definition" checks (AC #11).
+ *
+ * Comments are stripped FIRST. No docblock in that file names one of the scanned
+ * identifiers TODAY — but the moment somebody documents an exclusion in prose ("reads no
+ * participant table", "a declined relationship"), an unstripped scan would fail on the
+ * very sentence describing the property holding. Stripping keeps the invariants about CODE.
+ */
+const raw = readFileSync(
+  fileURLToPath(new URL('./authorize-engagement-host.ts', import.meta.url)),
+  'utf8'
+);
+const source = stripComments(raw);
+
 describe('the resolver reads no participation model (AC #5)', () => {
   /**
    * The literal form of "delegates and guests are excluded STRUCTURALLY": the resolver's
@@ -302,18 +332,7 @@ describe('the resolver reads no participation model (AC #5)', () => {
    * path. Asserting on the `vi.mock` factory's keys instead — as this suite used to —
    * asserts the test against itself: it is true by construction, and it would keep passing
    * if the resolver reached ADR-1044's participation model through a different specifier.
-   *
-   * Comments are stripped FIRST. No docblock in that file names one of these identifiers
-   * TODAY — but the moment somebody documents the exclusion in prose ("reads no participant
-   * table"), an unstripped scan would fail on the very sentence that describes the property
-   * holding. Stripping keeps the invariant about CODE.
    */
-  const raw = readFileSync(
-    fileURLToPath(new URL('./authorize-engagement-host.ts', import.meta.url)),
-    'utf8'
-  );
-  const source = stripComments(raw);
-
   it('reads its own source, and the stripper really ran (non-vacuity guard)', () => {
     expect(source).toContain('export async function resolveHostContext');
     // If `stripComments` ever silently became a no-op, every absence scan below would
@@ -331,9 +350,11 @@ describe('the resolver reads no participation model (AC #5)', () => {
     }
   );
 
-  it('reaches exactly the five by-id reads the holder rule needs, and no sixth', () => {
+  it('reaches exactly the five repositories the holder rule needs, and no sixth', () => {
     // The counterpart to the absence scan: the repositories that ARE named. A new import
-    // here must be a conscious edit to this list.
+    // here must be a conscious edit to this list. (Five REPOSITORIES, six READS — the
+    // relationships repository is reached two ways: `findById` for arm 6's subject row,
+    // `listByRequest` for arm 5's (request, expert) lookup.)
     const repositories = [...source.matchAll(/\b(\w+Repository)\b/g)].map(([, name]) => name);
     expect([...new Set(repositories)].sort()).toEqual([
       'engagementsRepository',
@@ -342,6 +363,36 @@ describe('the resolver reads no participation model (AC #5)', () => {
       'projectRequestsRepository',
       'requestExpertRelationshipsRepository',
     ]);
+  });
+});
+
+// ── ONE decline predicate, not two (AC #11) ──────────────────────────────────
+
+describe('the resolver defines "declined" NOWHERE — there is one shared predicate', () => {
+  /**
+   * The structural half of constraint (a): arms 5 and 6 must consult ONE definition of
+   * "declined". The behavioural half (both arms return the same verdict for the same
+   * relationship state) is `both request-grain arms agree…` further down; this half stops
+   * the two from drifting by making a SECOND definition impossible to add unnoticed.
+   *
+   * Asserted as an ABSENCE in the resolver rather than as a count: after the 2026-08-08
+   * amendment the literal `'declined'` and the `declinedAt` column both live exclusively
+   * in `@balo/shared/authz`'s `relationshipDeniesHosting`. If a future edit re-inlines
+   * either test into an arm — the exact regression the constraint forbids — these fail.
+   *
+   * The matching "…and it is defined exactly once over there" assertion lives in
+   * `packages/shared/src/authz/engagement.test.ts`, so each file scans its OWN source
+   * rather than reaching across a package boundary with a relative path.
+   */
+  it('names no decline literal and reads no decline column of its own', () => {
+    expect(source).not.toContain("'declined'");
+    expect(source).not.toContain('declinedAt');
+  });
+
+  it('consults the shared predicate from BOTH request-grain arms — twice, not once', () => {
+    // Two call sites exactly: arm 5 (`project_discovery`) and arm 6 (`request_interaction`).
+    // One would mean an arm silently lost its gate; three would mean a new ungoverned one.
+    expect([...source.matchAll(/relationshipDeniesHosting\(/g)]).toHaveLength(2);
   });
 });
 
@@ -413,6 +464,9 @@ describe('hasEngagementCapability — project_discovery', () => {
     ).resolves.toBe(false);
     expect(mockFindProfileById).not.toHaveBeenCalled();
     expect(mockGetMemberRole).not.toHaveBeenCalled();
+    // The relationship gate is downstream of the route split, so it is never reached
+    // either — a match request has no target expert to look one up for.
+    expect(mockRelationshipListByRequest).not.toHaveBeenCalled();
   });
 
   it('a future third routing value also fails closed (guarded on !== direct)', async () => {
@@ -425,6 +479,207 @@ describe('hasEngagementCapability — project_discovery', () => {
       hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
     ).resolves.toBe(false);
     expect(mockFindProfileById).not.toHaveBeenCalled();
+  });
+});
+
+// ── Arm 5's relationship-status gate (AC #11, added 2026-08-08) ──────────────
+
+describe('hasEngagementCapability — project_discovery, the relationship-status gate', () => {
+  /**
+   * WHY THIS GATE EXISTS. `project_requests.expert_profile_id` SURVIVES A DECLINE FOREVER
+   * — CHECK `project_requests_direct_requires_expert` forbids nulling it while
+   * `send_to='direct'` — so the pre-2026-08-08 bare column read left an expert who had
+   * DECLINED the request holding live `host_meetings` + `manage_engagement` over its
+   * discovery meetings indefinitely. ADR-1046's "a declined relationship is never a holder
+   * for new grants" is arm-unscoped; it binds here exactly as it binds arm 6.
+   *
+   * ⚠ The whole holder set collapses, not just the expert: a declined relationship yields
+   * NO HOLDER, so the agency owner/admin who would otherwise inherit the bundle goes with
+   * them. Anything less would leave the agency able to host the call its expert declined.
+   */
+  const DECLINED_AT = new Date('2026-08-01T00:00:00.000Z');
+
+  /** Every actor in the holder set, so "the set collapses" is asserted, not assumed. */
+  const HOLDER_SET: readonly [string, { id: string }, string | undefined][] = [
+    ['the target expert themselves', host, undefined],
+    ['their agency owner', { id: 'user_agency_owner' }, 'owner'],
+    ['their agency admin', { id: 'user_agency_admin' }, 'admin'],
+  ];
+
+  const DECLINE_EVIDENCE: readonly [string, Record<string, unknown>][] = [
+    [
+      'status = declined (both representations agree)',
+      { status: 'declined', declinedAt: DECLINED_AT },
+    ],
+    ['status = declined with a null declinedAt (stale timestamp)', { status: 'declined' }],
+    // The mirror of arm 6's `declinedAt`-alone case. Proving BOTH arms fail closed on the
+    // timestamp alone is what shows they share one predicate rather than two that agree
+    // on the easy case.
+    [
+      'declinedAt alone, status still says proposal_submitted (stale label)',
+      { status: 'proposal_submitted', declinedAt: DECLINED_AT },
+    ],
+  ];
+
+  it.each(DECLINE_EVIDENCE)(
+    'DENIES the WHOLE holder set on a direct request — %s (AC #11)',
+    async (_label, overrides) => {
+      for (const [, actor, role] of HOLDER_SET) {
+        vi.clearAllMocks();
+        armDefaultRepos(role);
+        mockRelationshipListByRequest.mockResolvedValue([relationship(overrides)]);
+
+        for (const token of ALL_TOKENS) {
+          await expect(hasEngagementCapability(actor, token, DISCOVERY_SUBJECT)).resolves.toBe(
+            false
+          );
+        }
+      }
+    }
+  );
+
+  it('is a NON-VACUOUS denial — the same holder set resolves TRUE on a live relationship', async () => {
+    // Guards the guard: without this, the denials above would also pass if the discovery
+    // arm had simply been broken into denying everyone.
+    for (const [, actor, role] of HOLDER_SET) {
+      vi.clearAllMocks();
+      armDefaultRepos(role);
+      for (const token of ALL_TOKENS) {
+        await expect(hasEngagementCapability(actor, token, DISCOVERY_SUBJECT)).resolves.toBe(true);
+      }
+    }
+  });
+
+  it('looks the relationship up by REQUEST id and performs NO expert lookup when declined (AC #11)', async () => {
+    mockRelationshipListByRequest.mockResolvedValue([relationship({ status: 'declined' })]);
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
+    ).resolves.toBe(false);
+    expect(mockRelationshipListByRequest).toHaveBeenCalledWith(REQUEST_ID);
+    // Mirrors arm 6: the decline short-circuits ahead of the holder-set assembly.
+    expect(mockFindProfileById).not.toHaveBeenCalled();
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('an ABSENT relationship row still resolves TRUE — deny on EVIDENCE, never on ABSENCE (AC #11)', async () => {
+    /**
+     * ⚠ THIS TEST IS A FENCE, NOT A HAPPY PATH. Constraint (b) of the 2026-08-08 decision:
+     * on a `direct` request the exploratory call can legitimately PRECEDE any formal
+     * invite, so "no relationship row yet" is the normal early state and must NOT deny.
+     * A future refactor that "tightens" this arm into deny-on-absence would lock the
+     * target expert out of their own discovery call before anyone had invited them. If
+     * you are here because this test failed, that is the change you just made.
+     */
+    mockRelationshipListByRequest.mockResolvedValue([]);
+    for (const token of ALL_TOKENS) {
+      await expect(hasEngagementCapability(host, token, DISCOVERY_SUBJECT)).resolves.toBe(true);
+    }
+    // …and the arm still assembled the holder set from the request's target expert.
+    expect(mockFindProfileById).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+  });
+
+  it('a SIBLING candidate’s decline never gates the target expert', async () => {
+    // The request names EXPERT_PROFILE_ID as its direct target. A DIFFERENT expert on the
+    // same request having declined is irrelevant — the `find` must match on
+    // expertProfileId, not take the first row.
+    mockRelationshipListByRequest.mockResolvedValue([
+      relationship({
+        id: SIBLING_RELATIONSHIP_ID,
+        expertProfileId: SIBLING_EXPERT_PROFILE_ID,
+        status: 'declined',
+        declinedAt: DECLINED_AT,
+      }),
+      relationship(),
+    ]);
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
+    ).resolves.toBe(true);
+  });
+
+  it('a SOFT-DELETED relationship is INVISIBLE to this arm — the documented limitation, pinned as behaviour', async () => {
+    /**
+     * ⚠ THIS ENCODES A KNOWN LIMITATION, NOT A DESIRED PROPERTY. §3's evidence list names
+     * soft-deleted rows, but every existing read that projects `status`/`declinedAt`
+     * filters `deleted_at IS NULL`, so `listByRequest` returns a soft-deleted row as
+     * ABSENT — and absent means ungated. Closing it would need a new repository method,
+     * which this ticket's scope forbids adding on speculation.
+     *
+     * The residual is narrow: soft-delete means "removed from the invite list", and on a
+     * direct request the target is named by the REQUEST, not by the relationship — so a
+     * removed-then-not-re-invited target is closer to "not invited yet" (ungated by
+     * design) than to "declined". A DECLINE is a status transition on a LIVE row and IS
+     * caught, which is the case that motivated the gate.
+     *
+     * Written against `listByRequest`'s OBSERVABLE contract — a soft-deleted row is simply
+     * not in the array — so if a future read ever does surface soft-deleted rows, this
+     * test describes the old world honestly instead of silently passing.
+     */
+    mockRelationshipListByRequest.mockResolvedValue([]); // what the live read returns for one
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
+    ).resolves.toBe(true);
+  });
+});
+
+// ── Constraint (a): the two request-grain arms share ONE predicate (AC #11) ──
+
+describe('both request-grain arms agree, for every relationship state (AC #11)', () => {
+  /**
+   * The BEHAVIOURAL half of "one predicate, not two" — the structural half is the source
+   * scan above. On a `direct` request arms 5 and 6 name the same expert, so ADR-1046's
+   * amended §3 claim that they "resolve identically, true BY CONSTRUCTION" is only true
+   * while both consult the same rule. This drives the SAME relationship state through both
+   * arms and requires the same verdict.
+   *
+   * ⚠ A second decline definition would most likely differ on the STALE cases (a resolver
+   * author re-inlining `status === 'declined'` and forgetting `declinedAt`), which is
+   * exactly why those rows are here and not just the agreeing one.
+   */
+  const RELATIONSHIP_STATES: readonly [string, Record<string, unknown>][] = [
+    ['live — proposal_submitted', {}],
+    ['live — invited', { status: 'invited' }],
+    ['declined, both representations', { status: 'declined', declinedAt: new Date() }],
+    ['declined label only', { status: 'declined' }],
+    ['declinedAt timestamp only', { status: 'proposal_submitted', declinedAt: new Date() }],
+  ];
+
+  it.each(RELATIONSHIP_STATES)(
+    '%s — discovery and interaction return the same verdict',
+    async (_label, overrides) => {
+      for (const token of ALL_TOKENS) {
+        vi.clearAllMocks();
+        armDefaultRepos();
+        mockRelationshipListByRequest.mockResolvedValue([relationship(overrides)]);
+        const viaDiscovery = await hasEngagementCapability(host, token, DISCOVERY_SUBJECT);
+
+        vi.clearAllMocks();
+        armDefaultRepos();
+        mockRelationshipFindById.mockResolvedValue(relationship(overrides));
+        const viaInteraction = await hasEngagementCapability(host, token, INTERACTION_SUBJECT);
+
+        expect(viaDiscovery).toBe(viaInteraction);
+      }
+    }
+  );
+
+  it('the two arms are not BOTH stuck on one answer (non-vacuity)', async () => {
+    // Without this, the parity above would hold trivially if some unrelated breakage made
+    // every case false. Pins that the table really spans both verdicts.
+    armDefaultRepos();
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
+    ).resolves.toBe(true);
+
+    vi.clearAllMocks();
+    armDefaultRepos();
+    mockRelationshipListByRequest.mockResolvedValue([relationship({ status: 'declined' })]);
+    mockRelationshipFindById.mockResolvedValue(relationship({ status: 'declined' }));
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, DISCOVERY_SUBJECT)
+    ).resolves.toBe(false);
+    await expect(
+      hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, INTERACTION_SUBJECT)
+    ).resolves.toBe(false);
   });
 });
 
@@ -708,9 +963,9 @@ describe('hasEngagementCapability — fails closed, never throws', () => {
   });
 });
 
-// ── AC #12: ONE resolver, both tokens ────────────────────────────────────────
+// ── AC #13: ONE resolver, both tokens ────────────────────────────────────────
 
-describe('both tokens route through the SAME resolver (AC #12)', () => {
+describe('both tokens route through the SAME resolver (AC #13)', () => {
   const MATRIX: readonly [string, EngagementHostSubject, { id: string }, string | undefined][] = [
     ['case / delivering expert', CASE_SUBJECT, host, undefined],
     ['case / agency owner', CASE_SUBJECT, { id: 'user_agency_owner' }, 'owner'],
