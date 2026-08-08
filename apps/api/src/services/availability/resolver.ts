@@ -5,6 +5,7 @@ import type {
   ResolverInput,
   ResolverResult,
   ResolverRule,
+  WindowBookableInput,
 } from './types.js';
 
 /**
@@ -99,6 +100,94 @@ export function resolve(input: ResolverInput): ResolverResult {
   }
   // Defensive clamp in case step 1's ceil didn't catch a sub-rangeStart head.
   return { earliestAvailableAt: laterOf(head.startAt, now) };
+}
+
+/**
+ * BAL-129 (§2a) — MAY THIS EXACT WINDOW BE BOOKED? `true` only when `[start, end)` lies
+ * WHOLLY inside availability the expert PUBLISHED and is free of every busy interval.
+ *
+ * ⚠⚠ THIS IS AN AVAILABILITY-DoS CONTROL, NOT A CONVENIENCE CHECK, AND IT IS THE LOAD-BEARING
+ * HALF OF THE AGGREGATE BOUND. `@balo/shared/meetings`'s constants cap the shape of ONE window
+ * (duration, horizon) and nothing else; before this existed, `POST /meetings` accepted ~1,095
+ * consecutive 8-hour windows — a year of any reachable expert's calendar — and accepted
+ * mutually OVERLAPPING windows too, with every request passing authorization. Both matter most
+ * for `project_kickoff` / `project_discovery`, which carry no credit hold, so nothing charges
+ * for the slot either.
+ *
+ * WHAT MAKES IT BOUND THE AGGREGATE: a caller can only consume slots the expert actually
+ * published, and every booking writes a `confirmed` consultation that this function then reads
+ * as busy — so each success REMOVES one slot from what the next call may take. The ceiling is
+ * therefore the expert's own published calendar, which they control, rather than attacker
+ * effort. Rate limiting (`routes/meetings/index.ts`) bounds how fast that calendar can be
+ * walked.
+ *
+ * ⚠ PURE — NO DB, NO CLOCK, NO WRITE. `now` is injected. It shares every interval primitive
+ * with `resolve()` below so "free" cannot mean two different things in the same process, and
+ * it is deliberately NOT built on `resolveAndCacheAvailability`, which WRITES
+ * `availability_cache` as a side effect: a read-only authorization check must not mutate a
+ * cache, and `resolve()` answers a different question anyway ("when is this expert NEXT
+ * free?", bounded by a 14-day display horizon).
+ *
+ * ⚠ IT IS A CHECK, NOT A LOCK. Two concurrent bookings of the same free slot can both pass —
+ * there is no exclusion constraint on `consultations` and this function takes none. That
+ * residual is unchanged from every other read-then-write path in the booking lane and is
+ * bounded by the same thing: the loser has still consumed a slot the expert published, which
+ * is the property the DoS control needs. A true overlap constraint is a schema change
+ * (BAL-400's idempotency-key migration is the natural home).
+ *
+ * FAIL-CLOSED at every degenerate input: a non-finite instant, an inverted window, no
+ * published rules at all, or a window straddling the edge of published availability all return
+ * `false`.
+ */
+export function isWindowBookable(input: WindowBookableInput): boolean {
+  const startMs = input.start.getTime();
+  const endMs = input.end.getTime();
+  const nowMs = input.now.getTime();
+
+  // A NaN endpoint has no position on the timeline, so every comparison below would be
+  // NaN-blind and silently permissive — the same trap `validateBookingWindow` guards.
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(nowMs)) {
+    return false;
+  }
+  if (endMs <= startMs) {
+    return false;
+  }
+
+  const minimumNoticeMs = (input.minimumNoticeMinutes ?? 0) * 60 * 1000;
+  if (startMs < nowMs + minimumNoticeMs) {
+    return false;
+  }
+
+  const rulesByDow = groupRulesByDayOfWeek(input.rules);
+  if (rulesByDow.size === 0) {
+    // An expert who has published NO weekly availability is bookable at no time at all.
+    return false;
+  }
+
+  // Expand only over the proposed window (`expandRulesInRange` already steps back one local
+  // day, so a rule that crosses midnight into the window is still seen), then clip to it: a
+  // clipped-and-merged segment covering `[start, end]` IS the "wholly inside" predicate.
+  const expanded = expandRulesInRange(rulesByDow, input.start, input.end, input.timezone);
+  const clipped = clipToWindow(expanded, input.start, input.end);
+  if (clipped.length === 0) {
+    return false;
+  }
+
+  const busy = combineBusyIntervals(
+    input.baloConsultations,
+    [...input.busyBlocks, ...input.overrideBlocks],
+    (input.bufferBeforeMinutes ?? 0) * 60 * 1000,
+    (input.bufferAfterMinutes ?? 0) * 60 * 1000
+  );
+
+  for (const window of mergeOverlapping(clipped)) {
+    for (const free of subtractBusy(window, busy)) {
+      if (free.startAt.getTime() <= startMs && free.endAt.getTime() >= endMs) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // ── Step helpers ───────────────────────────────────────────────

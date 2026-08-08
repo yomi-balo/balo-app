@@ -16,6 +16,21 @@ export interface OpenSessionServiceInput {
    * `company_selection_required` when more than one is.
    */
   companyId?: string;
+  /**
+   * BAL-129 (D5) — the Balo meeting this session bills. OPTIONAL; nothing sends it yet
+   * (**BAL-400** wires it when it books a Case consultation), and a `duration_source =
+   * 'external'` session legitimately has an engagement and NO Balo meeting.
+   *
+   * ⚠ THE CLIENT NEVER SENDS `engagementId`, AND THAT IS THE WHOLE POINT.
+   * `OpenSessionInput`'s docblock states the coherence obligation — `engagementId` must be
+   * the engagement reachable from `meetingId` via `meeting_contexts`, and
+   * `companyId`/`expertProfileId` must be that engagement's parties — and concedes that
+   * nothing in the repository can check it (the predicate is cross-table and cannot be a
+   * CHECK, an FK, or by house style a repository gate). The only way to make a DIVERGENT
+   * PAIR UNCONSTRUCTIBLE is to make it underivable from client input: ONE resolution, ONE
+   * source. `openSession` derives `engagementId` from this id, server-side.
+   */
+  meetingId?: string;
 }
 
 /** Gate outcomes surfaced as a discriminated union — the route maps codes to 403 / 409. */
@@ -26,7 +41,23 @@ export type OpenSessionServiceErrorCode =
   | 'session_in_progress' // a live session already exists on the wallet → 409 (one live session/wallet)
   | 'settlement_pending' // a prior session's overdraft settlement is still in flight (balance < 0) → 409
   | 'insufficient_no_mandate' // can't fund the estimate and no mandate → 409
-  | 'expert_rate_missing'; // the expert has no rate → 409
+  | 'expert_rate_missing' // the expert has no rate → 409
+  /**
+   * BAL-129 (D5) — the supplied `meetingId` does not resolve to a Case engagement this
+   * caller may bill → 409.
+   *
+   * ⚠ ONE LITERAL FOR ALL SIX FAILURE SHAPES (meeting missing/soft-deleted, zero `case`
+   * contexts, >1 `case` context, engagement missing, company mismatch, expert mismatch).
+   * Distinguishing them would tell a caller whether a guessed uuid EXISTS — the same reason
+   * `authorize-session-actor` collapses to `not_found`/`forbidden`. Which shape it was goes
+   * to the LOG, not the wire.
+   *
+   * ⚠ 409, NOT 403, DELIBERATELY: reusing `forbidden` would conflate a meeting-coherence
+   * failure with the membership gate, and the two want different client behaviour. The
+   * existing `openErrorStatus` already maps everything except `forbidden` to 409, so this
+   * needs no change there.
+   */
+  | 'meeting_not_bookable';
 
 export type OpenSessionServiceResult =
   | { ok: true; sessionId: string; status: 'pending'; holdId: string | null }

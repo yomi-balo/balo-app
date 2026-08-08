@@ -116,8 +116,16 @@ export class MeetingExpertAmbiguousError extends Error {
  * ticket never specified would put an unreviewed booking semantics into the one module
  * allowed to write `consultations`. Whether a candidate call should occupy that
  * candidate's calendar at all is a product decision that belongs to the BOOKING-LANE
- * surface that writes the first `request_interaction` row (BAL-129), together with an
+ * surface that writes the first `request_interaction` row (BAL-283), together with an
  * ADR-1046 amendment. Until then this throws with an accurate name and a pointer.
+ *
+ * ⚠ RE-ASSIGNED FROM BAL-129 TO BAL-283 (2026-08-08, BAL-129 decision D3). BAL-129 is the
+ * booking-lane surface that landed first, and it EXPLICITLY DECLINED to define this rule:
+ * its context list predates the label, the projection module is BAL-428's, and whether a
+ * client↔candidate call blocks the candidate's calendar is an unmade product ruling. BAL-283
+ * books exactly this context and already carries the identical unanswered question for
+ * money. BAL-129 excludes `request_interaction` at its Zod boundary, so this error is
+ * structurally unreachable from `POST /meetings`.
  *
  * WHY NOT `ignored`. That is the ONE outcome that is unsafe: it would write a meeting with
  * NO projection row, i.e. a booking blocking nobody's calendar — precisely the
@@ -129,7 +137,7 @@ export class MeetingContextNotProjectableError extends Error {
     public readonly contextId: string
   ) {
     super(
-      `Meeting context type '${contextType}' (${contextId}) has no consultation projection rule yet — the booking-lane surface that writes this label (BAL-129) must define one, per ADR-1046`
+      `Meeting context type '${contextType}' (${contextId}) has no consultation projection rule yet — the booking-lane surface that writes this label (BAL-283) must define one, per ADR-1046`
     );
     this.name = 'MeetingContextNotProjectableError';
   }

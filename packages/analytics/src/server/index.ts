@@ -30,4 +30,9 @@ export type { TranscriptVenue } from '../events/transcript';
 // BAL-390 — SERVER-ONLY by design: `review_*` here always means the STAR RATING, and
 // none of these three may be added to the client `@/lib/analytics` mock export list.
 export { REVIEW_SERVER_EVENTS } from '../events/review';
+// BAL-129 — THE STEP CLAUDE.md's analytics checklist OMITS, and the one whose absence
+// `@balo/analytics`'s own gates cannot see (it has no typecheck and no test script): these
+// are emitted from `apps/api`, which imports from `@balo/analytics/server` ONLY.
+export { MEETING_SERVER_EVENTS } from '../events/meeting';
+export type { MeetingBookingContextType } from '../events/meeting';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';

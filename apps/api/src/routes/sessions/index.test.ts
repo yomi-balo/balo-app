@@ -96,6 +96,7 @@ import { sessionsRoutes } from './index.js';
 const EXPERT_ID = '11111111-1111-4111-8111-111111111111';
 const SESSION_ID = '22222222-2222-4222-8222-222222222222';
 const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
+const MEETING_ID = '44444444-4444-4444-8444-444444444444';
 const DRAWDOWN = { key: 'healthy', lens: 'client' };
 
 describe('sessions routes', () => {
@@ -185,6 +186,69 @@ describe('sessions routes', () => {
       });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toEqual({ code: 'company_selection_required', companies });
+    });
+
+    it('forwards a valid meetingId to the service (BAL-129 / D5)', async () => {
+      mockOpenSession.mockResolvedValue({
+        ok: true,
+        sessionId: SESSION_ID,
+        status: 'pending',
+        holdId: 'hold_1',
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, meetingId: MEETING_ID },
+      });
+      expect(res.statusCode).toBe(201);
+      // ⚠ NO `engagementId` — the service derives it from the meeting alone. If one ever
+      // appears on this call, the divergent-pair hazard is back.
+      expect(mockOpenSession).toHaveBeenCalledWith({
+        initiatingMemberId: 'user_1',
+        expertProfileId: EXPERT_ID,
+        estimatedMinutes: 30,
+        meetingId: MEETING_ID,
+      });
+    });
+
+    it('omits meetingId entirely when absent — not an explicit undefined (BAL-129)', async () => {
+      mockOpenSession.mockResolvedValue({
+        ok: true,
+        sessionId: SESSION_ID,
+        status: 'pending',
+        holdId: 'hold_1',
+      });
+      await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
+      });
+      const [call] = mockOpenSession.mock.calls;
+      expect(call?.[0]).not.toHaveProperty('meetingId');
+    });
+
+    it('400s on a non-uuid meetingId without calling the service (BAL-129)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, meetingId: 'not-a-uuid' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_request');
+      expect(mockOpenSession).not.toHaveBeenCalled();
+    });
+
+    it('409s on the meeting_not_bookable rejection (BAL-129 / D5)', async () => {
+      // 409, not 403 — `openErrorStatus` already routes everything but `forbidden` there,
+      // and conflating this with the membership gate would want different client behaviour.
+      mockOpenSession.mockResolvedValue({ ok: false, code: 'meeting_not_bookable' });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, meetingId: MEETING_ID },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ code: 'meeting_not_bookable' });
     });
 
     it('400s on a non-uuid companyId without calling the service (BAL-401)', async () => {

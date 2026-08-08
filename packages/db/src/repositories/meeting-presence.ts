@@ -266,8 +266,11 @@ export const meetingPresenceRepository = {
    * no user identity until BAL-408 and therefore cannot hold a capability or a review.
    * All three tables' `deleted_at` are guarded.
    *
-   * ⚠ THIS RETURNS `[]` TODAY. `meetings` has NO production writer (BAL-129/134 are
-   * unbuilt), so no presence row exists for any engagement. The code is real and tested;
+   * ⚠ THIS RETURNS `[]` TODAY — the conclusion still holds, but the reason has narrowed.
+   * BAL-129 HAS shipped `POST /meetings`, so `meetings` now has a production WRITER; what it
+   * has no production PRODUCER for is that route (it ships INERT — no UI calls it until
+   * BAL-400) and, more decisively, presence rows are BAL-134's and BAL-134 is unbuilt. So no
+   * `meeting_presence` row exists for any engagement either way. The code is real and tested;
    * a builder running a manual end-to-end test and expecting nudges from participation
    * will be confused unless they read this line. The client company's owner is therefore
    * the only nudge recipient today — but NOT as a fallback: the sweep unions the owner in

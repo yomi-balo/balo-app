@@ -165,9 +165,14 @@ async function updateLiveMeeting(
  * would commit a booking and leave every expert-facing surface advertising a slot that is
  * already taken. Booking goes through the API service layer.
  *
- * ⚠ AND THE INVERSE: none of these methods notifies. Booking confirmations are BAL-129's,
- * cancellations BAL-410's, reschedules BAL-409/BAL-411's. Publishing from here would fire
- * on a dev seed run, since the seeder is a live caller of `create` and `cancel`.
+ * ⚠ AND THE INVERSE: none of these methods notifies. Booking confirmations are **BAL-400's**
+ * (amended by BAL-129: it built `POST /meetings` and deliberately publishes NOTHING — the
+ * route resolves a company and a context row, but `booking.confirmed`'s rules address
+ * `recipient: 'expert'` and its templates need a name and a local time this route cannot
+ * resolve). The `'booking.confirmed'` rule in `apps/api/src/notifications/engine/rules.ts`
+ * is therefore a DOCUMENTED orphan — rules and templates with no publisher — and wiring it
+ * is BAL-400's. Cancellations are BAL-410's, reschedules BAL-409/BAL-411's. Publishing from
+ * here would fire on a dev seed run, since the seeder is a live caller of `create`/`cancel`.
  */
 export const meetingsRepository = {
   /**

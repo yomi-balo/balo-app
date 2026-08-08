@@ -1,9 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockFindWithCompany, mockFindWalletByCompany, mockRepoOpen } = vi.hoisted(() => ({
+const {
+  mockFindWithCompany,
+  mockFindWalletByCompany,
+  mockRepoOpen,
+  mockFindWithContexts,
+  mockEngagementFindById,
+} = vi.hoisted(() => ({
   mockFindWithCompany: vi.fn(),
   mockFindWalletByCompany: vi.fn(),
   mockRepoOpen: vi.fn(),
+  mockFindWithContexts: vi.fn(),
+  mockEngagementFindById: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -15,6 +23,8 @@ vi.mock('@balo/db', () => ({
   usersRepository: { findWithCompany: mockFindWithCompany },
   creditWalletsRepository: { findByCompanyId: mockFindWalletByCompany },
   creditSessionsRepository: { open: mockRepoOpen },
+  meetingsRepository: { findWithContexts: mockFindWithContexts },
+  engagementsRepository: { findById: mockEngagementFindById },
 }));
 
 import { openSession } from './open-session.js';
@@ -196,5 +206,180 @@ describe('openSession', () => {
     mockRepoOpen.mockResolvedValue({ ok: false, code: 'account_hold' });
     const result = await openSession(INPUT);
     expect(result).toEqual({ ok: false, code: 'account_hold' });
+  });
+});
+
+/**
+ * BAL-129 (D5) — the `meetingId` seam. The client sends a meeting; the SERVICE derives the
+ * engagement. Every failure shape collapses to ONE literal so a caller cannot learn whether
+ * a guessed uuid exists.
+ */
+describe('openSession — the BAL-129 meetingId seam', () => {
+  const MEETING_ID = 'meeting_1';
+  const ENGAGEMENT_ID = 'engagement_1';
+
+  /** A live meeting carrying exactly one `case` context. */
+  function meetingWithCaseContext(contextId: string | null = ENGAGEMENT_ID): unknown {
+    return { meeting: { id: MEETING_ID }, contexts: [{ contextType: 'case', contextId }] };
+  }
+
+  /** The engagement that meeting resolves to — coherent with `INPUT` by default. */
+  function coherentEngagement(overrides: Record<string, unknown> = {}): unknown {
+    return {
+      id: ENGAGEMENT_ID,
+      engagementType: 'case',
+      // BAL-129 fix round: the resolver now requires the coarse supertype status to be
+      // `active`, so a `completed` case stops being a permanent billing handle.
+      status: 'active',
+      companyId: 'company_1',
+      expertProfileId: 'expert_1',
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindWithCompany.mockResolvedValue(singleEligible());
+    mockFindWalletByCompany.mockResolvedValue({ id: 'wallet_1' });
+    mockRepoOpen.mockResolvedValue({ ok: true, session: { id: 'session_1', holdId: 'hold_1' } });
+    mockFindWithContexts.mockResolvedValue(meetingWithCaseContext());
+    mockEngagementFindById.mockResolvedValue(coherentEngagement());
+  });
+
+  it('REGRESSION GUARD: omitting meetingId calls `open` byte-identically to before', async () => {
+    // Neither key may appear — not even as an explicit `undefined`. A future change that
+    // starts passing `meetingId: undefined` would break `exactOptionalPropertyTypes` callers
+    // and silently widen what the repository sees.
+    await openSession(INPUT);
+
+    expect(mockRepoOpen).toHaveBeenCalledWith({
+      walletId: 'wallet_1',
+      companyId: 'company_1',
+      expertProfileId: 'expert_1',
+      initiatingMemberId: 'user_1',
+      estimatedMinutes: 30,
+    });
+    expect(mockFindWithContexts).not.toHaveBeenCalled();
+  });
+
+  it('passes BOTH meetingId and the RESOLVED engagementId when the pair is coherent', async () => {
+    const result = await openSession({ ...INPUT, meetingId: MEETING_ID });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(mockRepoOpen).toHaveBeenCalledWith({
+      walletId: 'wallet_1',
+      companyId: 'company_1',
+      expertProfileId: 'expert_1',
+      initiatingMemberId: 'user_1',
+      estimatedMinutes: 30,
+      meetingId: MEETING_ID,
+      engagementId: ENGAGEMENT_ID,
+    });
+  });
+
+  it('resolves the engagement id from the CONTEXT, never from client input', async () => {
+    mockFindWithContexts.mockResolvedValue(meetingWithCaseContext('engagement_from_context'));
+    mockEngagementFindById.mockResolvedValue(coherentEngagement({ id: 'engagement_from_context' }));
+
+    await openSession({ ...INPUT, meetingId: MEETING_ID });
+
+    expect(mockEngagementFindById).toHaveBeenCalledWith('engagement_from_context');
+    expect(mockRepoOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ engagementId: 'engagement_from_context' })
+    );
+  });
+
+  it.each([
+    {
+      label: 'the meeting is missing or soft-deleted',
+      arrange: () => mockFindWithContexts.mockResolvedValue(undefined),
+    },
+    {
+      label: 'the meeting has NO case context',
+      arrange: () =>
+        mockFindWithContexts.mockResolvedValue({
+          meeting: { id: MEETING_ID },
+          contexts: [{ contextType: 'project_kickoff', contextId: ENGAGEMENT_ID }],
+        }),
+    },
+    {
+      label: 'the meeting has TWO case contexts (ambiguous)',
+      arrange: () =>
+        mockFindWithContexts.mockResolvedValue({
+          meeting: { id: MEETING_ID },
+          contexts: [
+            { contextType: 'case', contextId: ENGAGEMENT_ID },
+            { contextType: 'case', contextId: 'engagement_2' },
+          ],
+        }),
+    },
+    {
+      label: 'the case context carries a null contextId',
+      arrange: () => mockFindWithContexts.mockResolvedValue(meetingWithCaseContext(null)),
+    },
+    {
+      label: 'the engagement does not resolve',
+      arrange: () => mockEngagementFindById.mockResolvedValue(undefined),
+    },
+    {
+      label: 'the engagement is not a case',
+      arrange: () =>
+        mockEngagementFindById.mockResolvedValue(coherentEngagement({ engagementType: 'project' })),
+    },
+    {
+      // ⚠ A CLOSED CASE IS NOT A BILLING HANDLE. `caseEngagementsRepository.close()` writes
+      // `completed` and nothing clears it, so without this guard a client could keep drawing
+      // credits down against a case that finished months ago — and block the expert's calendar
+      // doing it. Mirrors the identical guard in `authorize-meeting-booking.ts`.
+      label: 'the engagement is COMPLETED',
+      arrange: () =>
+        mockEngagementFindById.mockResolvedValue(coherentEngagement({ status: 'completed' })),
+    },
+    {
+      label: 'the engagement is CANCELLED',
+      arrange: () =>
+        mockEngagementFindById.mockResolvedValue(coherentEngagement({ status: 'cancelled' })),
+    },
+    {
+      label: 'IDOR: the engagement belongs to a DIFFERENT company',
+      arrange: () =>
+        mockEngagementFindById.mockResolvedValue(coherentEngagement({ companyId: 'company_99' })),
+    },
+    {
+      label: 'IDOR: the engagement names a DIFFERENT expert',
+      arrange: () =>
+        mockEngagementFindById.mockResolvedValue(
+          coherentEngagement({ expertProfileId: 'expert_99' })
+        ),
+    },
+  ])('meeting_not_bookable when $label — and NO session is opened', async ({ arrange }) => {
+    arrange();
+
+    const result = await openSession({ ...INPUT, meetingId: MEETING_ID });
+
+    // ONE literal for every shape: distinguishing them would tell a caller whether a guessed
+    // uuid exists.
+    expect(result).toEqual({ ok: false, code: 'meeting_not_bookable' });
+    expect(mockRepoOpen).not.toHaveBeenCalled();
+  });
+
+  it('runs the coherence check AFTER the capability gate — a non-member never reaches it', async () => {
+    // Placement matters: `chosenCompanyId` must already be capability-gated when the
+    // equality check runs, or the "company mismatch" arm would be comparing against a
+    // company the caller never proved anything about.
+    mockFindWithCompany.mockResolvedValue({ companyMemberships: [] });
+
+    const result = await openSession({ ...INPUT, meetingId: MEETING_ID });
+
+    expect(result).toEqual({ ok: false, code: 'forbidden' });
+    expect(mockFindWithContexts).not.toHaveBeenCalled();
+  });
+
+  it('resolves the meeting BEFORE the wallet lookup', async () => {
+    mockFindWithContexts.mockResolvedValue(undefined);
+
+    await openSession({ ...INPUT, meetingId: MEETING_ID });
+
+    expect(mockFindWalletByCompany).not.toHaveBeenCalled();
   });
 });

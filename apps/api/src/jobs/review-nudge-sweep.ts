@@ -78,8 +78,10 @@ import { mintReviewInviteToken } from '../lib/review-token.js';
  *   email is addressed to the ACTING member — `recipient: 'self'` — not to the owner).
  *   Northwind's owner Sam then receives NEITHER the +24h nor the +7d nudge, because the
  *   engagement left the candidate set the moment Dana's row committed.
- * When BAL-129/134 give `meeting_presence` a production writer this widens from {owner}
- * to {every recorded attendee} — same rule, more people silenced by one answer. If that
+ * When BAL-134 gives `meeting_presence` a production writer this widens from {owner}
+ * to {every recorded attendee} — same rule, more people silenced by one answer.
+ * (BAL-129 is NOT a co-owner of that: it shipped `POST /meetings`, so `meetings` has a
+ * writer, but presence rows are BAL-134's alone and BAL-129 writes none.) If that
  * ever becomes undesirable it is a RE-DECISION, not a bug fix: drop the `NOT EXISTS` from
  * `listAcceptedBetween` / `listClosedBetween` and let `filterUnratedReviewers` be the sole
  * suppression. It already runs per reviewer, and THIS SWEEP NEEDS NO CHANGE — `nudgeCandidate`
@@ -165,10 +167,11 @@ async function resolveDisplayFields(
  * WHO gets asked about this engagement — a DELIBERATELY NARROW set:
  *
  *  (a) PARTICIPATION — client-side people observed in a live meeting for this
- *      engagement. ⚠ EMPTY TODAY: BAL-418 shipped the `meetings` table but there is no
- *      production writer (BAL-129/134 unbuilt), so this is a real, tested FORWARD SEAM
- *      that self-widens the instant meetings ship. Do not expect nudges from it in a
- *      manual test.
+ *      engagement. ⚠ EMPTY TODAY, and the reason has narrowed: BAL-129 HAS shipped a
+ *      production writer for `meetings` (`POST /meetings`), but `meeting_presence` rows
+ *      are BAL-134's and BAL-134 is unbuilt — so no presence row exists for any
+ *      engagement and this stays a real, tested FORWARD SEAM that self-widens the instant
+ *      BAL-134 lands. Do not expect nudges from it in a manual test.
  *  (b) THE CLIENT COMPANY'S OWNER — ALWAYS, on every tick, NOT a fallback. The owner is
  *      unioned into (a) unconditionally and the `Set` drops the duplicate when they were
  *      also in the meeting; the union is never guarded on (a) being empty. That is

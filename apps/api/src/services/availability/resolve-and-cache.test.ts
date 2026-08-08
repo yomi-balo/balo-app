@@ -44,8 +44,27 @@ vi.mock('./resolver.js', () => ({
 }));
 
 import { resolveAndCacheAvailability } from './resolve-and-cache';
+// ⚠ NOT mocked — spied per test. The property under test is that this module reads the SHARED
+// port object, which a module mock would hide behind an equally shared fake.
+import { vendorBusyProvider } from './vendor-busy.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * BAL-129 — the consultation read is padded by `CONSULTATION_LOAD_PAD_MS` (one day) on BOTH
+ * sides, the SAME pad `window-availability.ts` applies. Before that, this path loaded a bare
+ * `[now, horizonEnd]` while the booking gate padded, so a consultation ending just before
+ * `now` was invisible here and blocking there once grown by `bufferAfterMinutes`.
+ */
+const LOAD_PAD_MS = DAY_MS;
+
+/** The padded `[from, to)` this function must ask `listConfirmedInRange` for. */
+function expectedLoadRange(now: Date, horizonDays: number): [Date, Date] {
+  return [
+    new Date(now.getTime() - LOAD_PAD_MS),
+    new Date(now.getTime() + horizonDays * DAY_MS + LOAD_PAD_MS),
+  ];
+}
 
 /** Full resolver settings as returned by `findResolverSettings`. */
 const settings = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -95,11 +114,11 @@ describe('resolveAndCacheAvailability', () => {
 
     expect(mockFindResolverSettings).toHaveBeenCalledWith(EXPERT_ID);
     expect(mockListRules).toHaveBeenCalledWith(EXPERT_ID);
-    // No env/option → the default 14-day horizon → consultations query spans 14 days.
+    // No env/option → the default 14-day horizon → consultations query spans 14 days, padded
+    // by a day on each side so a buffered neighbour outside the horizon is still seen.
     expect(mockListConsultations).toHaveBeenCalledWith(
       EXPERT_ID,
-      NOW,
-      new Date(NOW.getTime() + DEFAULT_HORIZON_DAYS * DAY_MS)
+      ...expectedLoadRange(NOW, DEFAULT_HORIZON_DAYS)
     );
     expect(mockListUpcoming).toHaveBeenCalledWith(EXPERT_ID);
     expect(mockResolve).toHaveBeenCalledWith({
@@ -215,8 +234,7 @@ describe('resolveAndCacheAvailability', () => {
 
     expect(mockListConsultations).toHaveBeenCalledWith(
       EXPERT_ID,
-      customNow,
-      new Date(customNow.getTime() + 3 * DAY_MS)
+      ...expectedLoadRange(customNow, 3)
     );
     expect(mockResolve).toHaveBeenCalledWith(
       expect.objectContaining({ now: customNow, horizonDays: 3, minMinutes: 45 })
@@ -271,22 +289,62 @@ describe('resolveAndCacheAvailability', () => {
 
     // Non-numeric env is ignored → the 14-day default is used, and the
     // consultations query gets a finite horizonEnd (not Invalid Date).
-    const expectedEnd = new Date(NOW.getTime() + DEFAULT_HORIZON_DAYS * DAY_MS);
-    expect(mockListConsultations).toHaveBeenCalledWith(EXPERT_ID, NOW, expectedEnd);
+    const [expectedFrom, expectedEnd] = expectedLoadRange(NOW, DEFAULT_HORIZON_DAYS);
+    expect(mockListConsultations).toHaveBeenCalledWith(EXPERT_ID, expectedFrom, expectedEnd);
     expect(Number.isFinite(expectedEnd.getTime())).toBe(true);
     expect(mockResolve).toHaveBeenCalledWith(
       expect.objectContaining({ horizonDays: DEFAULT_HORIZON_DAYS, minMinutes: 15 })
     );
   });
 
-  it('defaults busyBlocks to [] when none are supplied', async () => {
+  it('reads busyBlocks from the SHARED vendor port when none are supplied', async () => {
+    // ⚠ BAL-129: NOT an inline `[]`. The booking gate reads vendor free/busy from the SAME
+    // `vendorBusyProvider`, so BAL-194/195 wiring Cronofy in that one place reaches BOTH the
+    // advertised answer and the accept check. The spy is what makes "shared" a test rather than
+    // a comment: an inlined default here would never call it.
     mockFindResolverSettings.mockResolvedValue(settings());
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);
     mockResolve.mockReturnValue({ earliestAvailableAt: null });
 
+    const vendorBlock = {
+      startAt: new Date('2026-06-02T01:00:00.000Z'),
+      endAt: new Date('2026-06-02T02:00:00.000Z'),
+    };
+    const spy = vi
+      .spyOn(vendorBusyProvider, 'listBusyBlocks')
+      .mockResolvedValue([vendorBlock] as never);
+
     await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
-    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ busyBlocks: [] }));
+    const [from, to] = expectedLoadRange(NOW, DEFAULT_HORIZON_DAYS);
+    expect(spy).toHaveBeenCalledWith(EXPERT_ID, from, to);
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ busyBlocks: [vendorBlock] })
+    );
+
+    spy.mockRestore();
+  });
+
+  it('an explicit busyBlocks option is a SEED-ONLY override — the vendor port is not consulted', async () => {
+    // The seeder injects synthetic vendor busy; nothing in production does. Documented in
+    // `ResolveAndCacheOptions.busyBlocks` as the one place advertise and accept still diverge.
+    mockFindResolverSettings.mockResolvedValue(settings());
+    mockListRules.mockResolvedValue([]);
+    mockListConsultations.mockResolvedValue([]);
+    mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+    const spy = vi.spyOn(vendorBusyProvider, 'listBusyBlocks');
+    const seeded = {
+      startAt: new Date('2026-06-03T01:00:00.000Z'),
+      endAt: new Date('2026-06-03T02:00:00.000Z'),
+    };
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW, busyBlocks: [seeded] });
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ busyBlocks: [seeded] }));
+
+    spy.mockRestore();
   });
 });

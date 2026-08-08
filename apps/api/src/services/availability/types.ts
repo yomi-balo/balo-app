@@ -69,3 +69,43 @@ export interface ResolverInput {
 export interface ResolverResult {
   earliestAvailableAt: Date | null;
 }
+
+/**
+ * Input to `isWindowBookable` (BAL-129 §2a) — "may THIS exact window be booked?", as opposed
+ * to `ResolverInput`'s "when is this expert next free?".
+ *
+ * ⚠ IT DELIBERATELY CARRIES NO `horizonDays` AND NO `minMinutes`, and that is a semantic
+ * difference, not an omission:
+ *
+ *   · `horizonDays` (14 by default) bounds how far the EARLIEST-AVAILABLE SCAN looks ahead so
+ *     a search result can be computed cheaply. The BOOKING horizon is a different, wider
+ *     product number — `MAX_BOOKING_HORIZON_DAYS = 365` in `@balo/shared/meetings` — and it is
+ *     enforced by `validateBookingWindow` before this check runs. Applying the display horizon
+ *     here would refuse every legitimate booking more than a fortnight out.
+ *   · `minMinutes` discards sub-windows too short to be worth ADVERTISING. The proposed
+ *     window's own duration floor/ceiling is likewise `validateBookingWindow`'s
+ *     (`MIN_MEETING_MINUTES` / `MAX_MEETING_MINUTES`).
+ */
+export interface WindowBookableInput {
+  rules: ResolverRule[];
+  /** Only `confirmed` consultations — the repository filter is the boundary. */
+  baloConsultations: ResolverConsultation[];
+  /** Vendor free/busy windows; `[]` is valid until BAL-194/195 wires Cronofy. */
+  busyBlocks: BusyBlock[];
+  /** Full-day time-off blocks, already expanded to UTC intervals. */
+  overrideBlocks: BusyBlock[];
+  /** IANA timezone name from `expert_profiles.timezone`. */
+  timezone: string;
+  /** UTC instant; injected for testability. */
+  now: Date;
+  /** The proposed booking window's start (UTC). */
+  start: Date;
+  /** The proposed booking window's end (UTC). */
+  end: Date;
+  /** Minutes of buffer reserved BEFORE each busy interval. Default 0. */
+  bufferBeforeMinutes?: number;
+  /** Minutes of buffer reserved AFTER each busy interval. Default 0. */
+  bufferAfterMinutes?: number;
+  /** The window must start at least this many minutes after `now`. Default 0. */
+  minimumNoticeMinutes?: number;
+}

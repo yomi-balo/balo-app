@@ -36,6 +36,18 @@
  * `@balo/db` client-bundle footgun (memory `reference_balo_db_client_bundle_footgun`).
  */
 
+// BAL-129 — the other three members of this subpath. All PURE and dependency-free for the
+// same reason the clocks are: `apps/api` (booking + provisioning), `@balo/analytics`,
+// `@balo/db`'s webhook resolver consumers and an `apps/web` join surface must all reach ONE
+// definition without value-importing `@balo/db`.
+//
+// ⚠ EXPLICIT `.js` EXTENSIONS. This package compiles under `moduleResolution: nodenext`,
+// where an extensionless relative specifier is TS2835. The rest of `packages/shared`
+// predates that and is already red for it; new code here does not add to the pile.
+export * from './bookable-contexts.js';
+export * from './bounds.js';
+export * from './room-name.js';
+
 /** One `meeting_presence` row, reduced to what the clocks need. */
 export interface PresenceInterval {
   party: 'expert' | 'client' | 'observer';

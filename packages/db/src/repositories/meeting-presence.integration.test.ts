@@ -549,8 +549,10 @@ describe('meetingPresenceRepository.listClientUserIdsForEngagement', () => {
   });
 
   it('returns [] for an engagement with no meetings — the state BAL-390 actually ships in', async () => {
-    // ⚠ `meetings` has NO production writer until BAL-129/134, so this IS production
-    // today. The sweep falls back to the client company owner until then.
+    // ⚠ THIS IS STILL PRODUCTION TODAY, for a narrower reason than it used to be. BAL-129
+    // shipped a `meetings` writer (`POST /meetings`), but it ships INERT — no UI calls it
+    // until BAL-400 — and PRESENCE rows are BAL-134's, which is unbuilt. Either way no
+    // presence row exists, so the sweep falls back to the client company owner.
     const { engagement } = await engagementFactory();
     await expect(
       meetingPresenceRepository.listClientUserIdsForEngagement(engagement.id)

@@ -60,8 +60,19 @@ import { timestamps, softDelete } from './helpers';
  * NOT here — authorization is capability-based and resolved at the call site (ADR-1029),
  * and a gate inside a repository would be the deviation, not the fix.
  *
- * CARRIED BY: **BAL-129** (provisioning — the first writer of `create`/`attach`, and
- * therefore the first route that can trigger consequence 3),
+ * ✅ DISCHARGED FOR BOOKING BY **BAL-129**, WHICH IS NOW THE WORKING PRECEDENT — read it
+ * before writing the next one. `apps/api/src/services/meetings/authorize-meeting-booking.ts`
+ * is this obligation in code for `meetingsRepository.create`: it resolves the owning party per
+ * context label (engagement → `company_id`; project request → `company_id`), checks
+ * `hasCapability`-equivalent `PARTICIPATE` on the MEMBERSHIP axis against THAT company, runs
+ * the membership check BEFORE any coherence check so the gate is not a cross-tenant existence
+ * oracle, and collapses "no such row" and "not your company" into ONE `404` literal. It also
+ * threads the resolved `expert_profile_id` back, so the caller's aggregate bounds (availability
+ * validation + rate limiting, `routes/meetings/index.ts`) act on the same expert the
+ * projection will resolve. Consequence 3 above is closed for `POST /meetings` and for nothing
+ * else.
+ *
+ * STILL CARRIED BY:
  * **BAL-409/BAL-410/BAL-411** (reschedule + cancel — these take a bare `meeting_id` rather
  * than a `context_id`, so their check is "who owns THIS MEETING", resolved through this
  * seam; see `apps/api/src/services/meetings/meeting-availability.ts`),

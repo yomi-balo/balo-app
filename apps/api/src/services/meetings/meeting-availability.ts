@@ -66,14 +66,26 @@ import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.j
  * actionable. Map each error to a status code and a fixed literal, the way `app.ts`'s error
  * handler does — do not pass the message to the client.
  *
- * ⚠ AND IT NOTIFIES NOTHING. Booking confirmations are BAL-129's, cancellations
- * BAL-410's, reschedules BAL-409/BAL-411's. Publishing from here would also fire on a dev
- * seed run, since the seeder is a live caller of `create` and `cancel`.
+ * ⚠ AND IT NOTIFIES NOTHING. Booking confirmations are **BAL-400's** (amended by BAL-129,
+ * which built the booking route and deliberately publishes nothing — see below),
+ * cancellations BAL-410's, reschedules BAL-409/BAL-411's. Publishing from here would also
+ * fire on a dev seed run, since the seeder is a live caller of `create` and `cancel`.
+ *
+ * ⚠ THE `booking.confirmed` RULE IS A DOCUMENTED ORPHAN, AND IT IS BAL-400'S TO WIRE.
+ * `apps/api/src/notifications/engine/rules.ts` already defines `'booking.confirmed'` with an
+ * SMS rule (gated on `phoneVerifiedAt`) and an in-app rule (recipient `expert`), and
+ * `rules.test.ts` exercises them — but NOTHING publishes the event anywhere in the repo.
+ * BAL-129 left it that way on purpose: its route resolves a COMPANY and a CONTEXT ROW, while
+ * the projection returns only an `expertProfileId` — no expert user id, no name, no timezone
+ * — so publishing an event this route cannot populate would produce a broken email, not a
+ * notification. The surface that knows enough to fire it is the booking UX. **BAL-400.**
  *
  * TODAY'S CALLERS: the dev seeder (`services/seed/seed-service.ts`) reaches the same
- * repository methods directly, and BAL-129 is the first route. Everything here is a seam
- * shipped ahead of that route, exercised by
- * `services/availability/booking-availability.integration.test.ts`.
+ * repository methods directly, and BAL-129's `POST /meetings`
+ * (`services/meetings/provision-meeting.ts` → `routes/meetings/`) is the first route — it
+ * ships INERT, with no live producer until BAL-400. Exercised by
+ * `services/availability/booking-availability.integration.test.ts` and
+ * `services/meetings/book-and-provision.integration.test.ts`.
  */
 
 /** The window a meeting occupies. Mirrors `meetingsRepository.updateSchedule`'s input. */
