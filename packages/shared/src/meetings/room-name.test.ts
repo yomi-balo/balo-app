@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dailyRoomNameForMeeting } from './room-name.js';
+import { dailyRoomNameForMeeting } from './room-name';
 
 /**
  * BAL-129 — THE PIN. `provision-meeting.ts`'s entire idempotency argument (no `ON CONFLICT`,

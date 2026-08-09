@@ -4,7 +4,7 @@ import {
   MAX_MEETING_MINUTES,
   MIN_MEETING_MINUTES,
   validateBookingWindow,
-} from './bounds.js';
+} from './bounds';
 
 /**
  * BAL-129 / D10. Every case injects `now` explicitly — the module reads no clock, and a

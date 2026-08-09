@@ -44,9 +44,9 @@
 // ⚠ EXPLICIT `.js` EXTENSIONS. This package compiles under `moduleResolution: nodenext`,
 // where an extensionless relative specifier is TS2835. The rest of `packages/shared`
 // predates that and is already red for it; new code here does not add to the pile.
-export * from './bookable-contexts.js';
-export * from './bounds.js';
-export * from './room-name.js';
+export * from './bookable-contexts';
+export * from './bounds';
+export * from './room-name';
 
 /** One `meeting_presence` row, reduced to what the clocks need. */
 export interface PresenceInterval {

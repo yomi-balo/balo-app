@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOOKABLE_CONTEXT_TYPES } from './bookable-contexts.js';
+import { BOOKABLE_CONTEXT_TYPES } from './bookable-contexts';
 
 /**
  * BAL-129 — the pin for the list `apps/api`'s Zod enum, its tenancy gate and
