@@ -15,6 +15,7 @@ import {
   syncProjectionScheduleTx,
 } from './_shared/consultation-projection';
 import type { DbExecutor } from './_shared/db-executor';
+import { recordMeetingBooked } from './_shared/meeting-audit';
 
 /**
  * Thrown by `create` when the `contexts` array is empty.
@@ -72,6 +73,17 @@ export interface CreateMeetingInput {
   contexts: MeetingContextInput[];
   dailyRoomName?: string | null;
   joinUrl?: string | null;
+  /**
+   * The human who booked, written into the `meeting.booked` audit row in the SAME transaction
+   * (ADR-1044 §5 → ADR-1030: "state change and audit event in the same transaction").
+   *
+   * OPTIONAL and NULLABLE. An omitted/`null` value is the ADR-1030 SYSTEM-ACTOR ATTRIBUTION
+   * EXEMPTION — an unattributed row, never a fabricated actor — and the dev seeder
+   * (`services/seed/seed-service.ts`) relies on it, exactly as it already does for
+   * `caseEngagementsRepository.create`. The production booking surface (`POST /meetings` →
+   * `bookAndProvisionMeeting`) passes the authenticated user.
+   */
+  actorUserId?: string | null;
 }
 
 export interface MeetingWithContexts {
@@ -165,9 +177,14 @@ async function updateLiveMeeting(
  * would commit a booking and leave every expert-facing surface advertising a slot that is
  * already taken. Booking goes through the API service layer.
  *
- * ⚠ AND THE INVERSE: none of these methods notifies. Booking confirmations are BAL-129's,
- * cancellations BAL-410's, reschedules BAL-409/BAL-411's. Publishing from here would fire
- * on a dev seed run, since the seeder is a live caller of `create` and `cancel`.
+ * ⚠ AND THE INVERSE: none of these methods notifies. Booking confirmations are **BAL-400's**
+ * (amended by BAL-129: it built `POST /meetings` and deliberately publishes NOTHING — the
+ * route resolves a company and a context row, but `booking.confirmed`'s rules address
+ * `recipient: 'expert'` and its templates need a name and a local time this route cannot
+ * resolve). The `'booking.confirmed'` rule in `apps/api/src/notifications/engine/rules.ts`
+ * is therefore a DOCUMENTED orphan — rules and templates with no publisher — and wiring it
+ * is BAL-400's. Cancellations are BAL-410's, reschedules BAL-409/BAL-411's. Publishing from
+ * here would fire on a dev seed run, since the seeder is a live caller of `create`/`cancel`.
  */
 export const meetingsRepository = {
   /**
@@ -188,6 +205,29 @@ export const meetingsRepository = {
    * so the SAME invariant surfaces as the SAME typed error from BOTH entry points rather
    * than a raw `23514` from one and a named error from the other. The CHECK
    * `meeting_scheduled_start_before_end` remains the backstop.
+   *
+   * ⚠ EMITS ONE `meeting.booked` AUDIT ROW ON THE SAME `tx` (BAL-129), so the booking and the
+   * record of WHO MADE IT commit or roll back together — ADR-1030's rule, reasserted by
+   * ADR-1044 §5 over this exact fan-out ("booking row … Daily room … state change and audit
+   * event in the same transaction"). Before this, a committed booking was recorded in THREE
+   * tables (`meetings`, `meeting_contexts`, `consultations`) and NONE of them named a person:
+   * the route's `userId` reached only PostHog and the Pino/Axiom log, and `trackServer` is a
+   * silent no-op without `POSTHOG_API_KEY`. The party stayed recoverable through
+   * `meeting_contexts` → engagement → `company_id`; the individual did not.
+   *
+   * ⚠ WHY AN AUDIT ROW SHIPS HERE BUT AN ATTRIBUTION COLUMN DOES NOT — the ceiling/floor split,
+   * recorded so the next reader does not "finish the job" by adding a column. ADR-1030's floor
+   * for a money-or-authority action is a DURABLE ATTRIBUTION COLUMN on the row itself
+   * (`credit_ledger.member_id`); its ceiling is an `audit_events` row in the same transaction.
+   * The ceiling is reachable in this PR because `audit_events.action`/`entityType` are open
+   * TEXT — "the audit vocabulary is open-ended and grows without a migration per event"
+   * (`schema/audit-events.ts`) — so it costs no schema change. A `booked_by_user_id` column on
+   * `meetings` IS a migration, and this branch deliberately ships none; it rides **BAL-400**'s
+   * idempotency-key migration (D2), which must alter this same table anyway. Shipping the
+   * ceiling now and the floor with that migration is strictly better than shipping neither,
+   * and it is NOT the failure mode `schema/meeting-presence.ts` warns about ("an attribution
+   * column with no writer is a worse lie than its absence") — that rules against an EMPTY
+   * COLUMN, whereas this is a WRITTEN ROW with no column yet.
    */
   async create(input: CreateMeetingInput): Promise<CreatedMeeting> {
     if (input.contexts.length === 0) {
@@ -224,6 +264,20 @@ export const meetingsRepository = {
       }
 
       const expertProfileId = await projectNewMeetingTx(tx, meeting, input.contexts);
+
+      // LAST, and on `tx` — never the base `db`. Written after the projection because
+      // `expertProfileId` (whose calendar this booking blocked) is resolved there and is not
+      // re-derivable later. Passing `db` here would leave an audit row behind after a
+      // rolled-back booking, which is worse than no row: it would attest to a booking that
+      // never existed.
+      await recordMeetingBooked(tx, {
+        meetingId: meeting.id,
+        actorUserId: input.actorUserId ?? null,
+        contexts: input.contexts,
+        scheduledStart: meeting.scheduledStart,
+        scheduledEnd: meeting.scheduledEnd,
+        expertProfileId,
+      });
 
       return { meeting, contexts, expertProfileId };
     });

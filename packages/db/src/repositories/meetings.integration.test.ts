@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../client';
-import { consultations, meetingContexts, meetings } from '../schema';
+import { auditEvents, consultations, meetingContexts, meetings, type AuditEvent } from '../schema';
 import {
   caseEngagementFactory,
   expertDraftFactory,
   meetingFactory,
   projectRequestFactory,
+  userFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import {
@@ -21,6 +22,15 @@ const HOUR_MS = 3_600_000;
 function schedule(offsetHours = 1): { scheduledStart: Date; scheduledEnd: Date } {
   const start = Date.now() + offsetHours * HOUR_MS;
   return { scheduledStart: new Date(start), scheduledEnd: new Date(start + HOUR_MS) };
+}
+
+/** Audit rows for one entity (BAL-344 generic table, ordered createdAt asc). */
+async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(eq(auditEvents.entityId, entityId))
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
 }
 
 describe('meetingsRepository.create', () => {
@@ -164,6 +174,129 @@ describe('meetingsRepository.create', () => {
 
     expect(contexts).toHaveLength(2);
     expect(expertProfileId).toBe(expert.id);
+  });
+});
+
+/**
+ * BAL-129 — THE ADR-1030 AUDIT ROW, against a real database (ADR-1044 §5: "state change and
+ * audit event in the same transaction").
+ *
+ * These are the claims a mocked test CANNOT make: that a row genuinely lands in
+ * `audit_events`, that its `actor_user_id` FK is genuinely enforced, and that a failure of the
+ * audit insert genuinely takes the whole booking down with it. The complementary claim — that
+ * the row is written on the booking's `tx` and not the base `db` — is indistinguishable here
+ * (both spellings look the same on the happy path) and lives in `meetings.test.ts`.
+ */
+describe('meetingsRepository.create — the meeting.booked audit row', () => {
+  it('writes EXACTLY ONE meeting.booked row naming the booking user', async () => {
+    const actor = await userFactory();
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const window = schedule();
+
+    const created = await meetingsRepository.create({
+      ...window,
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      actorUserId: actor.id,
+    });
+
+    const rows = await auditEventsForEntity(created.meeting.id);
+    const booked = rows.filter((row) => row.action === 'meeting.booked');
+    expect(booked).toHaveLength(1);
+
+    const [event] = booked;
+    expect(event?.entityType).toBe('meeting');
+    expect(event?.entityId).toBe(created.meeting.id);
+    // THE WHOLE POINT OF THE TICKET: the individual, not merely the party. The company was
+    // always recoverable through `meeting_contexts` → engagement → `company_id`.
+    expect(event?.actorUserId).toBe(actor.id);
+    expect(event?.metadata).toEqual({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      scheduledStart: window.scheduledStart.toISOString(),
+      scheduledEnd: window.scheduledEnd.toISOString(),
+      // Whose calendar this booking blocked, resolved at write time.
+      expertProfileId,
+    });
+  });
+
+  it('writes the row with a NULL actor when none is passed — the dev seeder’s path', async () => {
+    // ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION. `services/seed/seed-service.ts` passes no
+    // actor because a seed run has no human behind it; `actor_user_id` is a nullable FK, so
+    // the row is UNATTRIBUTED rather than carrying a fabricated user.
+    const { engagement } = await caseEngagementFactory();
+
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    const booked = (await auditEventsForEntity(created.meeting.id)).filter(
+      (row) => row.action === 'meeting.booked'
+    );
+    expect(booked).toHaveLength(1);
+    expect(booked[0]?.actorUserId).toBeNull();
+  });
+
+  it('audits an ADMIN meeting too, with a null expert — it blocks nobody but somebody booked it', async () => {
+    const actor = await userFactory();
+
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'admin', contextId: null }],
+      actorUserId: actor.id,
+    });
+
+    const [event] = (await auditEventsForEntity(created.meeting.id)).filter(
+      (row) => row.action === 'meeting.booked'
+    );
+    expect(event?.actorUserId).toBe(actor.id);
+    expect(event?.metadata).toMatchObject({
+      contexts: [{ contextType: 'admin', contextId: null }],
+      expertProfileId: null,
+    });
+  });
+
+  it('ROLLS BACK THE WHOLE BOOKING when the audit insert fails — zero audit rows, zero meetings', async () => {
+    // ⚠ THE ATOMICITY CLAIM, PROVED IN THE ONLY DIRECTION A REAL DATABASE CAN PROVE IT.
+    // `audit_events.actor_user_id` is an FK to `users` (ON DELETE restrict), so an actor id
+    // that names no user makes the AUDIT INSERT — the last statement in `create`'s
+    // transaction — fail 23503. Everything before it (the meeting, its context row, the
+    // `consultations` projection) is already written at that point, so if the audit row were
+    // NOT part of this transaction the booking would survive and only the audit would be lost.
+    // Asserting the meeting is gone is therefore what proves the two share a transaction.
+    //
+    // `create` opens its own `db.transaction`, which is a SAVEPOINT inside the harness's
+    // per-test transaction — so this rollback is contained and the reads below still run.
+    const { engagement } = await caseEngagementFactory();
+    const orphanActorId = randomUUID();
+    const window = schedule();
+
+    const before = await db.select({ id: meetings.id }).from(meetings);
+
+    await expect(
+      meetingsRepository.create({
+        ...window,
+        contexts: [{ contextType: 'case', contextId: engagement.id }],
+        actorUserId: orphanActorId,
+      })
+    ).rejects.toMatchObject({ code: '23503' });
+
+    // No audit row survived the rollback…
+    const orphanAudit = await db
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(eq(auditEvents.actorUserId, orphanActorId));
+    expect(orphanAudit).toEqual([]);
+
+    // …and neither did the booking it would have attested to.
+    const after = await db.select({ id: meetings.id }).from(meetings);
+    expect(after).toHaveLength(before.length);
+
+    // Nor the projection — the slot was never blocked.
+    const projections = await db
+      .select({ id: consultations.id })
+      .from(consultations)
+      .where(eq(consultations.startAt, window.scheduledStart));
+    expect(projections).toEqual([]);
   });
 });
 

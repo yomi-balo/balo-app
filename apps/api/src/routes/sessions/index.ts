@@ -15,6 +15,8 @@ import { createLogger } from '@balo/shared/logging';
 import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import { requireAuth } from '../../lib/require-auth.js';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
+// BAL-129 extracted this out of THIS file — it was byte-identical to the meetings route's copy.
+import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
 import {
   connectSession,
   endSession,
@@ -45,16 +47,6 @@ function sessionActorErrorStatus(code: SessionActorErrorCode): number {
   return code === 'not_found' ? 404 : 403;
 }
 
-/** Resolve the authed user id, or 401 (defensive — `requireAuth` populates it). */
-function resolveUserId(request: FastifyRequest, reply: FastifyReply): string | null {
-  const userId = request.userId;
-  if (userId === undefined) {
-    reply.code(401).send({ error: 'Unauthorized' });
-    return null;
-  }
-  return userId;
-}
-
 /** Parse the `:id` param, or send 400 and return null. */
 function parseSessionId(request: FastifyRequest, reply: FastifyReply): string | null {
   const parsed = sessionIdParamsSchema.safeParse(request.params);
@@ -80,20 +72,17 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
     const userId = resolveUserId(request, reply);
     if (userId === null) return;
 
-    const parsed = openSessionBodySchema.safeParse(request.body);
-    if (!parsed.success) {
-      reply.code(400).send({
-        error: 'invalid_request',
-        details: parsed.error.issues.map((issue) => issue.message),
-      });
-      return;
-    }
+    const parsed = parseBodyOr400(openSessionBodySchema, request, reply);
+    if (parsed === null) return;
 
     const result = await openSession({
       initiatingMemberId: userId,
-      expertProfileId: parsed.data.expertProfileId,
-      estimatedMinutes: parsed.data.estimatedMinutes,
-      ...(parsed.data.companyId === undefined ? {} : { companyId: parsed.data.companyId }),
+      expertProfileId: parsed.expertProfileId,
+      estimatedMinutes: parsed.estimatedMinutes,
+      ...(parsed.companyId === undefined ? {} : { companyId: parsed.companyId }),
+      // BAL-129 (D5) — the service resolves the engagement from this alone; the client
+      // never sends one.
+      ...(parsed.meetingId === undefined ? {} : { meetingId: parsed.meetingId }),
     });
 
     if (!result.ok) {
@@ -281,23 +270,17 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const sessionId = parseSessionId(request, reply);
       if (sessionId === null) return;
-      const parsed = finalizeDurationBodySchema.safeParse(request.body);
-      if (!parsed.success) {
-        reply.code(400).send({
-          error: 'invalid_request',
-          details: parsed.error.issues.map((issue) => issue.message),
-        });
-        return;
-      }
+      const parsed = parseBodyOr400(finalizeDurationBodySchema, request, reply);
+      if (parsed === null) return;
 
       try {
         const result = await finalizeExternalDuration({
           sessionId,
-          minutes: parsed.data.minutes,
-          path: parsed.data.path,
-          ...(parsed.data.settledByUserId === undefined
+          minutes: parsed.minutes,
+          path: parsed.path,
+          ...(parsed.settledByUserId === undefined
             ? {}
-            : { settledByUserId: parsed.data.settledByUserId }),
+            : { settledByUserId: parsed.settledByUserId }),
         });
         reply.code(200).send(result);
       } catch (error) {

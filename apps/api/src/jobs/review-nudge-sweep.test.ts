@@ -386,7 +386,7 @@ describe('review-nudge sweep — recipients', () => {
   /**
    * ⚠ THE COMPANY OWNER IS UNIONED IN ON EVERY TICK — NOT a fallback for an empty
    * participant set. The module doc used to call it one; it never was, and the guard that
-   * word implies would be a REGRESSION, not a tidy-up: the moment BAL-129/134 record a
+   * word implies would be a REGRESSION, not a tidy-up: the moment BAL-134 records a
    * single meeting attendee, a conditional union would silently stop asking the person
    * accountable for the engagement. This test pins the union so that "fix" cannot land
    * quietly — today it is the only thing standing between the doc and the code.

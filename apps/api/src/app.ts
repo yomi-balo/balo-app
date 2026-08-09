@@ -9,6 +9,7 @@ import { expertsRoutes } from './routes/experts/index.js';
 import { stripeRoutes } from './routes/stripe/index.js';
 import { sessionsRoutes } from './routes/sessions/index.js';
 import { creditRoutes } from './routes/credit/index.js';
+import { meetingsRoutes } from './routes/meetings/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   // `trustProxy: 1` trusts exactly one proxy hop (the Railway edge), so
@@ -46,6 +47,9 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await fastify.register(sessionsRoutes);
   // Internal credit intent-creation routes (BAL-377) — secret-gated (requireInternalAuth).
   await fastify.register(creditRoutes);
+  // Meeting booking + Daily room provisioning (BAL-129). Ships INERT — no live producer
+  // until BAL-400's booking UI calls it.
+  await fastify.register(meetingsRoutes);
 
   // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
   // and @faker-js/faker never load in production.

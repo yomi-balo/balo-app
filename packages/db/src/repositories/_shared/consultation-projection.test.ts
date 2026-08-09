@@ -96,7 +96,7 @@ describe('resolveMeetingExpertTx — the request_interaction arm (BAL-413)', () 
     ).rejects.toThrow(/request_interaction/);
     await expect(
       resolveMeetingExpertTx(UNUSED_EXECUTOR, [INTERACTION_CONTEXT], 'meeting_1')
-    ).rejects.toThrow(/BAL-129/);
+    ).rejects.toThrow(/BAL-283/);
   });
 
   it.each([

@@ -5,10 +5,16 @@ import {
   consultationsRepository,
   expertsRepository,
 } from '@balo/db';
-import { fromZonedTime } from 'date-fns-tz';
 import { createLogger } from '@balo/shared/logging';
+import {
+  CONSULTATION_LOAD_PAD_MS,
+  expandOverrideBlocks,
+  toResolverConsultations,
+  toResolverRules,
+} from './resolver-inputs.js';
 import { resolve } from './resolver.js';
 import type { BusyBlock } from './types.js';
+import { vendorBusyProvider } from './vendor-busy.js';
 
 const log = createLogger('availability-resolve-and-cache');
 
@@ -16,7 +22,18 @@ const DEFAULT_HORIZON_DAYS = 14;
 const DEFAULT_MIN_MINUTES = 15;
 
 export interface ResolveAndCacheOptions {
-  /** Vendor free/busy windows. Defaults to `[]` until BAL-194/195 wires Cronofy. */
+  /**
+   * ⚠ A SEED/TEST-ONLY OVERRIDE OF VENDOR FREE/BUSY — **NOT** the production source, which is
+   * `vendorBusyProvider` (`./vendor-busy.ts`) and is shared with the booking gate. When this is
+   * supplied the provider is not consulted at all.
+   *
+   * ⚠ AND IT IS THE ONE PLACE ADVERTISE AND ACCEPT CAN STILL DIVERGE, deliberately and with a
+   * named consequence: `apps/api/src/services/seed/seed-service.ts` passes SYNTHETIC busy
+   * blocks here, so in a seeded environment the advertised `earliest_available_at` accounts for
+   * them and `isWindowAvailableForExpert` does not. That is acceptable because the blocks are
+   * fixture data with no vendor behind them — but it is why "the two reads agree" is a claim
+   * about PRODUCTION, not about a dev seed. A real vendor belongs in the provider, never here.
+   */
   busyBlocks?: BusyBlock[];
   /** UTC instant; injected for testability. Defaults to `new Date()`. */
   now?: Date;
@@ -64,35 +81,42 @@ export async function resolveAndCacheAvailability(
     options.minMinutes ?? Number.parseInt(process.env.MIN_CONSULTATION_MINUTES ?? '15', 10),
     DEFAULT_MIN_MINUTES
   );
-  const busyBlocks = options.busyBlocks ?? [];
-
   const horizonEnd = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
 
-  const [rules, baloConsultations, overrides] = await Promise.all([
+  // ⚠ THE SAME `CONSULTATION_LOAD_PAD_MS` `window-availability.ts` PADS ITS WINDOW WITH, and
+  // BAL-129 added it here to CLOSE A DIVERGENCE: this read used to be bare `[now, horizonEnd]`,
+  // so a consultation that ended just before `now` was invisible to the advertised answer while
+  // the booking gate loaded it, grew it by `bufferAfterMinutes` and refused the slot. Direction
+  // was safe (accept stricter than advertise ⇒ a 409 on a slot we had shown as free), but a 409
+  // on an advertised slot is still a bug the user experiences. Both ranges now pad identically.
+  const loadFrom = new Date(now.getTime() - CONSULTATION_LOAD_PAD_MS);
+  const loadTo = new Date(horizonEnd.getTime() + CONSULTATION_LOAD_PAD_MS);
+
+  // Vendor free/busy comes from the SHARED port unless a caller overrode it (seed only) — see
+  // `ResolveAndCacheOptions.busyBlocks` and `./vendor-busy.ts`.
+  const busyBlocksSource =
+    options.busyBlocks === undefined
+      ? vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo)
+      : Promise.resolve(options.busyBlocks);
+
+  const [rules, baloConsultations, overrides, busyBlocks] = await Promise.all([
     availabilityRulesRepository.listByExpertProfileId(expertProfileId),
-    consultationsRepository.listConfirmedInRange(expertProfileId, now, horizonEnd),
+    consultationsRepository.listConfirmedInRange(expertProfileId, loadFrom, loadTo),
     availabilityOverridesRepository.listUpcoming(expertProfileId),
+    busyBlocksSource,
   ]);
 
-  // Expand each `[startDate, endDate]` date-only block to an END-INCLUSIVE whole
-  // -day UTC interval in the expert's own timezone. `endDate` is inclusive, so
-  // the interval runs to midnight of the day AFTER `endDate`. Same `fromZonedTime`
-  // approach the resolver uses for rules, so DST is handled identically.
-  const overrideBlocks: BusyBlock[] = overrides.map((o) => ({
-    startAt: fromZonedTime(`${o.startDate}T00:00:00`, timezone),
-    endAt: fromZonedTime(`${nextDayIso(o.endDate)}T00:00:00`, timezone),
-  }));
+  // ⚠ ALL THREE ROW PROJECTIONS ARE SHARED WITH BAL-129's `window-availability.ts` (see
+  // `./resolver-inputs.ts`), as are the load pad above and the vendor-busy port. What this
+  // function computes is what every surface ADVERTISES; what that one computes is what a
+  // booking is ACCEPTED against. If the two ever read the same rows differently, the platform
+  // would accept a booking for a window it advertises as blocked, or refuse one it advertises
+  // as free.
+  const overrideBlocks: BusyBlock[] = expandOverrideBlocks(overrides, timezone);
 
   const result = resolve({
-    rules: rules.map((r) => ({
-      dayOfWeek: r.dayOfWeek,
-      startTime: r.startTime,
-      endTime: r.endTime,
-    })),
-    baloConsultations: baloConsultations.map((c) => ({
-      startAt: c.startAt,
-      endAt: c.endAt,
-    })),
+    rules: toResolverRules(rules),
+    baloConsultations: toResolverConsultations(baloConsultations),
     busyBlocks,
     overrideBlocks,
     timezone,
@@ -119,20 +143,6 @@ export async function resolveAndCacheAvailability(
   );
 
   return { earliestAvailableAt: result.earliestAvailableAt };
-}
-
-/** `'YYYY-MM-DD'` → the next calendar day `'YYYY-MM-DD'` (UTC arithmetic, tz-agnostic). */
-function nextDayIso(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (y === undefined || m === undefined || d === undefined) {
-    // Input always comes from a Postgres DATE column (guaranteed YYYY-MM-DD),
-    // so this is unreachable. Throw rather than silently returning `iso`: that
-    // would yield a zero-length override interval and drop the block, leaving
-    // the expert bookable during their own leave — the wrong failure mode for
-    // a booking-integrity value.
-    throw new Error(`nextDayIso: invalid date string "${iso}" — expected YYYY-MM-DD`);
-  }
-  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
 function guardedNumber(n: unknown, fallback: number): number {

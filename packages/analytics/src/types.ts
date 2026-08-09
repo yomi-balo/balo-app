@@ -35,6 +35,7 @@ import type { WalletEventMap } from './events/wallet';
 import type { ScheduleEventMap } from './events/schedule';
 import type { TranscriptServerEventMap } from './events/transcript';
 import type { ReviewServerEventMap } from './events/review';
+import type { MeetingServerEventMap } from './events/meeting';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -87,6 +88,8 @@ export type ServerEvents = ExpertServerEventMap &
   CaseBillingServerEventMap &
   ActionItemServerEventMap &
   TranscriptServerEventMap &
-  ReviewServerEventMap;
+  ReviewServerEventMap &
+  // BAL-129 — SERVER-ONLY: deliberately absent from `AllEvents` above.
+  MeetingServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

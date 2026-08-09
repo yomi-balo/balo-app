@@ -72,8 +72,15 @@ export async function enqueueAvailabilityCacheRebuild(
  * rules + confirmed consultations, run the pure resolver, upsert the cache).
  * The worker stays thin: invoke, emit analytics, log.
  *
- * BAL-243: `busyBlocks` defaults to `[]` inside the service — BAL-194/195
- * will wire Cronofy free/busy through this same call site.
+ * BAL-243: this passes no `busyBlocks`, so the service reads vendor free/busy
+ * from the SHARED port (`services/availability/vendor-busy.ts`), which answers
+ * `[]` until BAL-194/195 wires Cronofy.
+ *
+ * ⚠ BAL-194/195 MUST WIRE CRONOFY IN THAT PORT, **NOT** BY PASSING `busyBlocks`
+ * FROM HERE (BAL-129). The `busyBlocks` option is a seed-only override; the
+ * booking gate `isWindowAvailableForExpert` never sees it, so wiring a vendor
+ * through this call site would leave bookings double-booking over an expert's
+ * real external commitments with no type, test or helper failing.
  */
 export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData> {
   const worker = new Worker<AvailabilityCacheJobData>(

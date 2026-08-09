@@ -452,6 +452,10 @@ async function bookSeedConsultations(
         scheduledStart: slot.startAt,
         scheduledEnd: slot.endAt,
         contexts: [{ contextType: 'case', contextId: engagement.id }],
+        // No `actorUserId`, for the same reason as the `caseEngagementsRepository.create`
+        // above: no human is behind a seed run, so the `meeting.booked` audit row is
+        // UNATTRIBUTED (the ADR-1030 system-actor exemption) rather than naming a fabricated
+        // booker. `audit_events.actor_user_id` is a nullable FK, so this is representable.
       });
 
       if (created.expertProfileId !== plan.expertProfileId) {

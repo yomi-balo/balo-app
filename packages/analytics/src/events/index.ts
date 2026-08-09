@@ -159,3 +159,8 @@ export {
   type ReviewEngagementKind,
   type ReviewWriteProperties,
 } from './review';
+export {
+  MEETING_SERVER_EVENTS,
+  type MeetingServerEventMap,
+  type MeetingBookingContextType,
+} from './meeting';
