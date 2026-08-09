@@ -6,7 +6,8 @@
  *
  * ── THE ORDER IS FORCED, NOT CHOSEN ──────────────────────────────────────────
  *
- *   bookMeeting(...)                    // repo tx: meetings + contexts + projection,
+ *   bookMeeting(...)                    // repo tx: meetings + contexts + projection +
+ *                                       // the `meeting.booked` audit row (ADR-1044 §5),
  *                                       // then enqueue the availability-cache rebuild
  *      ↓  COMMITTED — the expert's calendar is already blocked
  *   dailyRoomNameForMeeting(meeting.id)
@@ -334,6 +335,12 @@ export async function bookAndProvisionMeeting(
       scheduledStart: input.scheduledStart,
       scheduledEnd: input.scheduledEnd,
       contexts: [{ contextType: input.contextType, contextId: input.contextId }],
+      // ⚠ THE ONLY DURABLE RECORD OF WHO BOOKED (BAL-129, ADR-1044 §5). `userId` is otherwise
+      // spent entirely on PostHog's `distinct_id` and the Pino/Axiom log — and `trackServer` is
+      // a silent no-op without `POSTHOG_API_KEY`, so on a deployment without analytics the
+      // booking actor would reach NO durable store at all. `create` folds this into a
+      // `meeting.booked` audit row on the booking's own transaction.
+      actorUserId: input.userId,
     },
     log
   );

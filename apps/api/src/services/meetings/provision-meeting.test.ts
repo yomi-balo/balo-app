@@ -166,9 +166,37 @@ describe('bookAndProvisionMeeting — the ordering', () => {
         scheduledStart: START,
         scheduledEnd: END,
         contexts: [{ contextType: 'project_kickoff', contextId: CONTEXT_ID }],
+        actorUserId: USER_ID,
       },
       log
     );
+  });
+
+  it('passes the AUTHENTICATED user to bookMeeting as actorUserId (ADR-1044 §5)', async () => {
+    // ⚠ THE POINT IS THAT `userId` REACHES A DATABASE WRITE, not just telemetry. Before
+    // BAL-129 closed this, the route's authenticated user was spent entirely on PostHog's
+    // `distinct_id` and the Pino log — and `trackServer` is a SILENT NO-OP without
+    // `POSTHOG_API_KEY`, so on a deployment without analytics a committed booking named
+    // nobody in any durable store. `create` folds this value into a `meeting.booked` audit
+    // row on the booking's own transaction.
+    //
+    // Asserted on the `bookMeeting` INPUT rather than by spying on analytics precisely so
+    // this test keeps passing for the right reason if the analytics call is ever removed.
+    await bookAndProvisionMeeting(
+      {
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: 'case',
+        userId: USER_ID,
+      },
+      log,
+      { provisioner: fakeProvisioner() }
+    );
+
+    const [bookInput] = mockBookMeeting.mock.calls[0] ?? [];
+    expect((bookInput as { actorUserId: unknown }).actorUserId).toBe(USER_ID);
   });
 
   it('propagates the repository’s TYPED errors unwrapped — the route maps each one', async () => {

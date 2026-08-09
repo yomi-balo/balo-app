@@ -40,6 +40,7 @@ vi.mock('../../lib/queue.js', () => ({ getQueue: mockGetQueue }));
 
 import {
   MatchModeDiscoveryNotBookableError,
+  auditEvents,
   consultations,
   db,
   engagements,
@@ -90,6 +91,16 @@ const failingProvisioner: RoomProvisioner = {
   },
 };
 
+/**
+ * The actor for `provisionMeeting`'s ANALYTICS context ONLY — `MeetingProvisionContext.userId`
+ * is PostHog's `distinct_id` and reaches no table, so an opaque marker is honest here.
+ *
+ * ⚠ EVERY `bookAndProvisionMeeting` CALL BELOW USES `parties.memberUserId` INSTEAD, and must
+ * keep doing so. Since BAL-129 closed the ADR-1030 gap, the booking actor is written to
+ * `audit_events.actor_user_id` — an FK to `users` — so a booking naming a non-existent user now
+ * fails 23503 and takes the whole transaction with it. That is the behaviour under test in
+ * `packages/db`'s `meetings.integration.test.ts`; here it would just be a broken fixture.
+ */
 const USER_ID = 'booking-actor';
 
 beforeEach(() => {
@@ -110,7 +121,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
         scheduledStart: START,
         scheduledEnd: END,
         engagementType: 'case',
-        userId: USER_ID,
+        userId: parties.memberUserId,
       },
       log,
       { provisioner }
@@ -147,6 +158,22 @@ describe('BAL-129 — book and provision, against a real database', () => {
     expect(projection?.startAt.toISOString()).toBe(START.toISOString());
     expect(projection?.endAt.toISOString()).toBe(END.toISOString());
 
+    // ONE `meeting.booked` audit row NAMING THE PERSON WHO BOOKED (BAL-129 / ADR-1044 §5).
+    // ⚠ ASSERTED AT THIS LAYER, not only in `packages/db`, because the repository test can
+    // only prove `create` writes whatever actor it is HANDED. This proves the actor the ROUTE
+    // authenticated is the one that reaches the table — the seam where it was previously lost
+    // to PostHog and the Pino log, both of which a deployment can silently disable.
+    const auditRows = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.entityId, result.meeting.id));
+    const booked = auditRows.filter((row) => row.action === 'meeting.booked');
+    expect(booked).toHaveLength(1);
+    expect(booked[0]).toMatchObject({
+      entityType: 'meeting',
+      actorUserId: parties.memberUserId,
+    });
+
     // AC #8 — the two representations agree.
     expect(await findProjectionDrift({ meetingIds: [result.meeting.id] })).toEqual([]);
   });
@@ -166,7 +193,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
           scheduledStart: start,
           scheduledEnd: end,
           engagementType: 'case',
-          userId: USER_ID,
+          userId: parties.memberUserId,
         },
         log,
         { provisioner }
@@ -209,7 +236,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
         scheduledStart: START,
         scheduledEnd: END,
         engagementType: null,
-        userId: USER_ID,
+        userId: parties.memberUserId,
       },
       log,
       { provisioner }
@@ -245,7 +272,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
         scheduledStart: START,
         scheduledEnd: END,
         engagementType: 'case',
-        userId: USER_ID,
+        userId: parties.memberUserId,
       },
       log,
       { provisioner }
@@ -283,7 +310,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
         scheduledStart: START,
         scheduledEnd: END,
         engagementType: 'case',
-        userId: USER_ID,
+        userId: parties.memberUserId,
       },
       log,
       { provisioner: recordingProvisioner() }
@@ -317,7 +344,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
           scheduledStart: START,
           scheduledEnd: END,
           engagementType: null,
-          userId: USER_ID,
+          userId: parties.memberUserId,
         },
         log,
         { provisioner }
@@ -342,7 +369,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
         scheduledStart: START,
         scheduledEnd: END,
         engagementType: 'case',
-        userId: USER_ID,
+        userId: parties.memberUserId,
       },
       log,
       { provisioner: failingProvisioner }
@@ -499,7 +526,7 @@ describe('BAL-129 — book and provision, against a real database', () => {
         scheduledStart: START,
         scheduledEnd: END,
         engagementType: 'case',
-        userId: USER_ID,
+        userId: parties.memberUserId,
       },
       log,
       { provisioner: recordingProvisioner() }
