@@ -744,6 +744,102 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-408 / ADR-1044 guest participation', () => {
+    /** Narrow by destructure + guard — `noUncheckedIndexedAccess` is on. */
+    function guestRulesFor(event: string): NotificationRule[] {
+      const rules = notificationRules[event];
+      if (rules === undefined) throw new Error(`no rules registered for ${event}`);
+      return rules;
+    }
+
+    it('meeting.guest_invited: EMAIL ONLY, to the external `email_address`', () => {
+      // ⚠ The recipient is an EXTERNAL person with no Balo user row, so there is no `self` /
+      // `client` / `expert` to hydrate and no in-app surface to render on. The dispatcher
+      // reads `payload.recipientEmail` — the `expert.referral_invited` / `proposal.shared`
+      // path. ⚠ AND EXACTLY ONE RULE: the payload carries that guest's RAW join token, and a
+      // second rule (or a fan-out recipient kind) would share one payload across recipients.
+      const rules = guestRulesFor('meeting.guest_invited');
+
+      expect(rules).toHaveLength(1);
+      const [rule] = rules;
+      expect(rule).toMatchObject({
+        channel: 'email',
+        recipient: 'email_address',
+        template: 'meeting-guest-invited',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      expect(rule?.condition).toBeUndefined();
+    });
+
+    it('meeting.guest_added: IN-APP ONLY, to `meeting_party_participants`', () => {
+      // ⚠ THE ID LIST IS RESOLVED BY THE PUBLISHER (`payload.recipientUserIds`), never by
+      // `engine/resolver.ts` — which is what keeps a `meeting_guests` read out of the
+      // notification engine. IN-APP only: an email per added colleague would be noise.
+      const rules = guestRulesFor('meeting.guest_added');
+
+      expect(rules).toHaveLength(1);
+      const [rule] = rules;
+      expect(rule).toMatchObject({
+        channel: 'in-app',
+        recipient: 'meeting_party_participants',
+        template: 'meeting-guest-added',
+        timing: 'immediate',
+      });
+      // Deliberately NOT critical, and deliberately not emailed.
+      expect(rules.some((r) => r.channel === 'email')).toBe(false);
+    });
+
+    it('meeting.guest_removed: EMAIL ONLY, to that person and only that person', () => {
+      const rules = guestRulesFor('meeting.guest_removed');
+
+      expect(rules).toHaveLength(1);
+      const [rule] = rules;
+      expect(rule).toMatchObject({
+        channel: 'email',
+        recipient: 'email_address',
+        template: 'meeting-guest-removed',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      // ⚠ No same-party FYI on removal. Adding one would tell the roster about a colleague's
+      // withdrawal, which is the inviter's business to communicate, not the engine's.
+      expect(rules.some((r) => r.recipient === 'meeting_party_participants')).toBe(false);
+    });
+
+    it('⚠ there is NO rule key for admit or deny — and that is a product decision', () => {
+      // The person is standing in the lobby watching the UI: an email after a DENY is
+      // hostile, and one after an ADMIT is redundant with the door opening in front of them.
+      // A rule added here would be a regression, not a gap.
+      const guestKeys = Object.keys(notificationRules)
+        .filter((key) => key.startsWith('meeting.guest'))
+        .sort((a, b) => a.localeCompare(b));
+
+      expect(guestKeys).toEqual([
+        'meeting.guest_added',
+        'meeting.guest_invited',
+        'meeting.guest_removed',
+      ]);
+      for (const key of [
+        'meeting.guest_admitted',
+        'meeting.guest_denied',
+        'meeting.guest_admission_decided',
+      ]) {
+        expect(notificationRules[key]).toBeUndefined();
+      }
+    });
+
+    it('⚠ `meeting_party_participants` is used by the guest FYI and by nothing else yet', () => {
+      // A new fan-out KIND is a dispatcher branch; pinning its only consumer means a future
+      // reuse has to come past this test and state itself.
+      const users = Object.entries(notificationRules)
+        .filter(([, rules]) => rules.some((r) => r.recipient === 'meeting_party_participants'))
+        .map(([event]) => event);
+
+      expect(users).toEqual(['meeting.guest_added']);
+    });
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

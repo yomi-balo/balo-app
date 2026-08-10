@@ -38,6 +38,9 @@ import type {
   RecapReadyPayload,
   ReviewReminderPayload,
   EngagementCaseClosedPayload,
+  MeetingGuestInvitedPayload,
+  MeetingGuestAddedPayload,
+  MeetingGuestRemovedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -294,7 +297,14 @@ export type NotificationEvent =
   | 'payment.charged'
   | 'payout.recorded'
   | 'action_item.assigned'
-  | 'recap.ready';
+  | 'recap.ready'
+  // BAL-408 — the guest participation model. All three are SERVER-ONLY (see below): the
+  // invite/remove mutations are `apps/api` routes, because admit/deny needs the engagement
+  // axis (which is api-only) and because the invite email carries the guest's ONLY join
+  // credential — `apps/web`'s publisher is fire-and-forget and swallows a non-2xx.
+  | 'meeting.guest_invited'
+  | 'meeting.guest_added'
+  | 'meeting.guest_removed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -336,7 +346,16 @@ export type ServerOnlyNotificationEvent =
   // never from apps/web, so it has no publishBodySchema arm (adding one would be a
   // `StraySchemaArm` and fail `tsc`). ⚠ `engagement.case_closed` is deliberately NOT
   // listed: BAL-421's publisher is a web Server Action and needs its arm.
-  | 'review.reminder';
+  | 'review.reminder'
+  // BAL-408: all three are published by `apps/api`'s guest-participation service
+  // (`services/meetings/guest-participation.ts`) — never from apps/web, so none has a
+  // `publishBodySchema` arm. Adding one would be a `StraySchemaArm` and fail `tsc`.
+  // ⚠ `meeting.guest_invited` MUST stay server-only for a second, independent reason: it
+  // carries the RAW join token, and minting in `apps/api` keeps that secret inside ONE
+  // process from creation to enqueue rather than crossing a service boundary.
+  | 'meeting.guest_invited'
+  | 'meeting.guest_added'
+  | 'meeting.guest_removed';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -465,4 +484,7 @@ export interface EventPayloadMap {
   'payout.recorded': PayoutRecordedPayload;
   'action_item.assigned': ActionItemAssignedPayload;
   'recap.ready': RecapReadyPayload;
+  'meeting.guest_invited': MeetingGuestInvitedPayload;
+  'meeting.guest_added': MeetingGuestAddedPayload;
+  'meeting.guest_removed': MeetingGuestRemovedPayload;
 }

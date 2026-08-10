@@ -47,10 +47,20 @@
 export * from './bookable-contexts';
 export * from './bounds';
 export * from './room-name';
+// BAL-408 — the guest participation model's pure core (the meetingId→context combining
+// rule, THE MONEY RULE, the retrospective read predicate, counterparty concealment).
+export * from './guest-participation';
+
+import type { MeetingPresenceParty } from './guest-participation';
 
 /** One `meeting_presence` row, reduced to what the clocks need. */
 export interface PresenceInterval {
-  party: 'expert' | 'client' | 'observer';
+  /**
+   * ⚠ BAL-408: a GUEST's row must derive this through `presencePartyForGuest`, never from
+   * the guest's own `party` column — an expert-side guest written as `'expert'` would put a
+   * NON-DELIVERING attendee on the billable clock below. See THE MONEY RULE.
+   */
+  party: MeetingPresenceParty;
   joinedAt: Date;
   /** `null` = still present at `now`. */
   leftAt: Date | null;

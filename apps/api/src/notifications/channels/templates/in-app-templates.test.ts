@@ -493,6 +493,84 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  /**
+   * BAL-408 — the same-party "a guest was added" FYI.
+   *
+   * ⚠⚠ THE POINT OF THIS BLOCK IS THAT A MISSING IN-APP TEMPLATE DOES NOT THROW. `getInAppTemplate`
+   * returns the generic `{ title: 'Notification', body: 'You have a new notification' }`
+   * fallback for any unregistered name, so a rule that names a template nobody wrote ships
+   * green through typecheck, lint and the rules test — and degrades silently in production
+   * into a notification bell that says nothing. Asserting the REAL strings (and explicitly
+   * refuting the fallback) is the only thing that catches it.
+   */
+  describe('meeting-guest-added (BAL-408)', () => {
+    const FALLBACK = { title: 'Notification', body: 'You have a new notification' };
+
+    it('⚠ returns the REAL title and body — NOT the generic missing-template fallback', () => {
+      const result = getInAppTemplate('meeting-guest-added', {
+        guestDisplayName: 'Dana',
+        meetingTitle: 'CPQ implementation',
+      });
+
+      expect(result).toEqual({
+        title: 'Someone new is joining',
+        body: 'Dana was added to CPQ implementation.',
+      });
+      expect(result).not.toEqual(FALLBACK);
+      expect(result.title).not.toBe(FALLBACK.title);
+      expect(result.body).not.toBe(FALLBACK.body);
+    });
+
+    it('falls back to the neutral noun for a nameless guest — NEVER to an address', () => {
+      // `announceInvites` already substitutes "A guest" for a null name; this is the second
+      // line of the same defence, for a publisher that omits the key entirely.
+      const result = getInAppTemplate('meeting-guest-added', {
+        meetingTitle: 'CPQ implementation',
+      });
+
+      expect(result.body).toBe('Someone was added to CPQ implementation.');
+      expect(result.body).not.toContain('@');
+    });
+
+    it('falls back to a generic meeting noun when the title did not resolve', () => {
+      const result = getInAppTemplate('meeting-guest-added', { guestDisplayName: 'Dana' });
+
+      expect(result.body).toBe('Dana was added to your consultation.');
+      expect(result).not.toEqual(FALLBACK);
+    });
+
+    it('degrades on an entirely empty payload without reaching the fallback', () => {
+      const result = getInAppTemplate('meeting-guest-added', {});
+
+      expect(result.body).toBe('Someone was added to your consultation.');
+      expect(result).not.toEqual(FALLBACK);
+    });
+
+    it('⚠ carries NO actionUrl — there is no meeting surface to deep-link to yet', () => {
+      // BAL-421 / BAL-132 own that surface. A link to nowhere is worse than none.
+      const result = getInAppTemplate('meeting-guest-added', {
+        guestDisplayName: 'Dana',
+        meetingTitle: 'CPQ implementation',
+      });
+
+      expect(result.actionUrl).toBeUndefined();
+    });
+
+    it('⚠ never renders an email address or a join token, even when handed one', () => {
+      // The publisher does not send either; this pins that a future one that did would not
+      // have them surface on a shared, same-party in-app card.
+      const result = getInAppTemplate('meeting-guest-added', {
+        guestDisplayName: 'Dana',
+        meetingTitle: 'CPQ implementation',
+        recipientEmail: 'dana@northwind.example',
+        joinToken: 'raw-token-value-that-must-not-render',
+      });
+
+      expect(JSON.stringify(result)).not.toContain('dana@northwind.example');
+      expect(JSON.stringify(result)).not.toContain('raw-token-value');
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

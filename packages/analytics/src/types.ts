@@ -36,6 +36,7 @@ import type { ScheduleEventMap } from './events/schedule';
 import type { TranscriptServerEventMap } from './events/transcript';
 import type { ReviewServerEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
+import type { GuestServerEventMap } from './events/guest';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -90,6 +91,9 @@ export type ServerEvents = ExpertServerEventMap &
   TranscriptServerEventMap &
   ReviewServerEventMap &
   // BAL-129 — SERVER-ONLY: deliberately absent from `AllEvents` above.
-  MeetingServerEventMap;
+  MeetingServerEventMap &
+  // BAL-408 — SERVER-ONLY for the same reason: every producer is an `apps/api` route or the
+  // `apps/web` `/join/[token]` RSC. Deliberately absent from `AllEvents`.
+  GuestServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

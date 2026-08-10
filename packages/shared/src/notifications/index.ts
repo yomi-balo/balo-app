@@ -728,3 +728,105 @@ export interface EngagementCaseClosedPayload {
   consultationCount?: number; // OPTIONAL — regrounding copy; BAL-420/421 must supply a source
   reviewToken?: string; // RAW review-invite token; absent ⇒ already rated ⇒ no review block
 }
+
+/**
+ * BAL-408 / ADR-1044 — a guest was invited to a meeting.
+ *
+ * EXTERNAL `email_address` path (the `expert.referral_invited` / `proposal.shared`
+ * precedent): there is no Balo user row to hydrate, so the address rides in the payload.
+ * `recipientEmail` + `joinToken` are the deliberate PII-in-queue exception — `joinToken` is
+ * the RAW ≥256-bit magic-link token and appears ONLY inside the emailed URL
+ * (`${APP_URL}/join/{joinToken}`); it is never stored, never logged, never recoverable.
+ *
+ * ⚠ SERVER-ONLY: published by `apps/api`'s invite service, never through the internal
+ * `/notifications/publish` route — so it has NO `publishBodySchema` arm (adding one is a
+ * `StraySchemaArm` and fails `tsc`) and NO mirror in `apps/web/src/lib/notifications/types.ts`.
+ *
+ * ⚠ PUBLISHED ONCE PER GUEST, NEVER FANNED OUT. `joinToken` is per-guest and the dispatcher
+ * shares ONE payload across a whole fan-out, so a fan-out recipient kind would put one
+ * person's join credential in everyone else's email. A correctness constraint, not a style
+ * preference — the same one `ReviewReminderPayload` carries.
+ *
+ * ⚠⚠ NO BILLING LINE, EVER. A guest never sees the rate, the duration price, the balance or
+ * any money figure. The AC is "billing unaffected — per-minute of expert time, never
+ * per-seat", and the email is where a stray figure would leak it to an outsider.
+ *
+ * ⚠ COUNTERPARTY CONCEALMENT APPLIES HERE TOO: names cross the party boundary, EMAIL
+ * ADDRESSES NEVER. Hence `inviterName` / `inviterOrgLabel` are NAME/ORG labels and there is
+ * deliberately no counterparty email field of any kind.
+ *
+ * ⚠⚠ `correlationId` IS THE ROW ID AND IS **NOT** AN ANTI-ABUSE KEY — READ THIS BEFORE
+ * "HARMONISING" IT WITH `CreditTopupRequestedPayload`'s HOUR BUCKET.
+ * That payload buckets on `{companyId}:{userId}:{hourBucket}` because a re-nudge is
+ * CONTENT-IDENTICAL: collapsing a burst loses nothing. THIS email is not — every invite
+ * carries a DIFFERENT `joinToken`, and the previous one has just been revoked. Bucketing it
+ * would make credential delivery non-deterministic (jobs are retained only
+ * `removeOnComplete: { count: 100 }` deep, so the collision is a coin flip), and the
+ * failure mode is a guest holding a dead link with no resend affordance.
+ *
+ * The amplification this would have been reaching for — invite → remove → invite emits two
+ * emails per cycle to any address the actor names, unbounded because the
+ * `(meeting, party, email)` unique is PARTIAL and `revoke` vacates it — is bounded instead
+ * at the ROUTE, by the Redis fixed windows in `routes/meetings/guests.ts`. That is a hard
+ * bound rather than a best-effort collapse, it refuses LOUDLY with a `429` instead of
+ * silently swallowing a credential, and it also covers the removal half transitively (a
+ * removal email can fire at most once per guest ROW — `revoke` is idempotent and publishes
+ * nothing on the second call — and rows only come from the rate-limited invite route).
+ */
+export interface MeetingGuestInvitedPayload {
+  correlationId: string; // = meeting_guests.id → BullMQ jobId dedup (exactly-once per guest)
+  recipientEmail: string; // the invited external address (delivery + dedup identity)
+  joinToken: string; // RAW ≥256-bit token → `${APP_URL}/join/{joinToken}`
+  guestName?: string; // absent ⇒ the template greets generically, never with the local part
+  inviterName: string; // retrospective PERSON ("Dana")
+  inviterOrgLabel: string; // "Northwind Industrial" / "CloudPeak" — the org, on first mention
+  meetingTitle: string; // what the meeting is ABOUT — ⚠ never a money figure
+  scheduledStartIso: string;
+  scheduledEndIso: string;
+  accessScope: 'meeting' | 'engagement'; // drives the disclosure paragraph
+  expiresOn: string; // pre-formatted UTC date — helpful-fact framing, never a countdown
+}
+
+/**
+ * BAL-408 — FYI to the guest's OWN party that the meeting roster changed. In-app only: it
+ * is a low-signal roster change, and an email per added colleague would be noise.
+ *
+ * ⚠ `recipientUserIds` IS RESOLVED BY THE PUBLISHER, NOT BY THE ENGINE. The invite service
+ * already holds the party and its members; making `engine/resolver.ts` work it out would
+ * put a `meeting_guests` read inside the notification engine, which is exactly the coupling
+ * the engine exists to avoid. The dispatcher's new `meeting_party_participants` fan-out kind
+ * reads this array and nothing else.
+ *
+ * ⚠ `guestDisplayName` IS A NAME ONLY — never the guest's email address. This event goes to
+ * the guest's OWN party, but the field is still name-only so that a future cross-party
+ * variant cannot be created by changing one rule line.
+ */
+export interface MeetingGuestAddedPayload {
+  correlationId: string; // `${meetingId}:${guestId}` — one FYI per added guest
+  recipientUserIds: string[]; // publisher-resolved same-party members → fan-out
+  guestDisplayName: string; // NAME only — ⚠ never the guest's email
+  meetingTitle: string;
+  scheduledStartIso: string;
+}
+
+/**
+ * BAL-408 — a guest's access was revoked. Email to THAT PERSON ONLY.
+ *
+ * ⚠ THE CALENDAR HALF OF THE AC IS DEFERRED, AND THIS EVENT IS THE WHOLE OF THE SHIPPED
+ * REMOVAL NOTICE. The AC line "Removing a guest … sends `METHOD:CANCEL` to that person only"
+ * cannot be satisfied: no meeting has a calendar event to cancel. Verified against this
+ * checkout — no `SEQUENCE` / `METHOD:CANCEL` / `VEVENT` literal exists anywhere in `apps/**`
+ * or `packages/**`, no `ics` / `ical-generator` / `node-ical` dependency exists, and
+ * `lib/cronofy.ts` exports only the two client getters (all calendar traffic is READ:
+ * free/busy → the availability cache). BAL-129 provisions a Daily room and writes no
+ * calendar event. A NEW TICKET owns meeting calendar-event writing + `SEQUENCE` fan-out, as
+ * a shared dependency of BAL-408/409/410/411 — see the plan's §14.2. Revocation itself IS
+ * immediate and total: every read path re-checks `revoked_at IS NULL`.
+ */
+export interface MeetingGuestRemovedPayload {
+  correlationId: string; // = meeting_guests.id (stable: one removal per guest row)
+  recipientEmail: string; // that person, and only that person
+  guestName?: string;
+  meetingTitle: string;
+  scheduledStartIso: string;
+}

@@ -4,6 +4,7 @@ import { meetingStatusEnum, meetingOutcomeEnum } from './enums';
 import { timestamps, softDelete } from './helpers';
 import { meetingContexts } from './meeting-contexts';
 import { meetingPresence } from './meeting-presence';
+import { meetingGuests } from './guests';
 
 /**
  * meetings (BAL-418 / ADR-1045 §2 + ADR-1043 §1) — the cross-cutting Meeting primitive.
@@ -109,6 +110,10 @@ export const meetings = pgTable(
 export const meetingsRelations = relations(meetings, ({ many }) => ({
   contexts: many(meetingContexts),
   presence: many(meetingPresence),
+  // BAL-408. ⚠ `reference_drizzle_with_hydration_leaks_secrets`: a bare
+  // `with: { guests: true }` hydrates `token_hash` and every guest's `email`. Any read that
+  // can reach a route MUST pass an explicit `columns:` projection.
+  guests: many(meetingGuests),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

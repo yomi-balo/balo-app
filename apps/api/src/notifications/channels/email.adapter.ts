@@ -130,7 +130,23 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
     await logNotification(payload, 'email', 'sent', undefined, {
       brevoMessageId: messageId,
     });
-    log.info({ template: payload.template, to: toEmail, messageId }, 'Email sent');
+    // ⚠ NEVER LOG `toEmail`. For an EXTERNAL recipient (`payload.recipientEmail`) that is a
+    // NON-USER THIRD PARTY's address — a meeting guest, a referral invitee, a proposal
+    // share recipient — i.e. exactly the PII class the dispatcher's own external-recipient
+    // block exists to keep out of the structured log ("the invitee's raw address never
+    // lands in the structured dispatcher log or the BullMQ jobId"). This line used to
+    // reintroduce it one hop later, on the success path, for every external send.
+    // `recipientId` IS the correlationId on that path, so a support case is still
+    // traceable to the exact row without the address.
+    log.info(
+      {
+        template: payload.template,
+        recipientId: payload.recipientId,
+        external: payload.recipientEmail !== undefined,
+        messageId,
+      },
+      'Email sent'
+    );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     await logNotification(payload, 'email', 'failed', errorMessage);

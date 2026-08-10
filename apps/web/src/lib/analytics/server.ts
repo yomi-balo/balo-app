@@ -19,6 +19,11 @@ export {
   // Action, and there is deliberately NO landing-view event (Gmail's link proxy and
   // Safe Links detonation fetch `/review/{token}` unsolicited).
   REVIEW_SERVER_EVENTS,
+  // BAL-408 — server-only. `apps/web` emits exactly ONE of these, `GUEST_INVITE_OPENED`,
+  // from the `/join/{token}` RSC; the invite / remove / admit / deny events all fire in
+  // `apps/api`. ⚠ NOT in the client `@/lib/analytics` barrel and NOT in
+  // `src/test/setup.ts`'s client `vi.mock` list — that mock is client-only.
+  GUEST_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

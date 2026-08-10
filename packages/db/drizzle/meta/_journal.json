@@ -428,6 +428,13 @@
       "when": 1786119308905,
       "tag": "0060_bal413_request_interaction_context",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1786319483744,
+      "tag": "0061_bal408_guest_participation",
+      "breakpoints": true
     }
   ]
 }

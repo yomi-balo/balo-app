@@ -70,7 +70,20 @@ function setupUserLookup(user: Record<string, unknown> | null): void {
 // cleaned up, and return the queued select results in call order.
 interface TxRecorder {
   deletes: unknown[];
-  updates: unknown[];
+  updates: { table: unknown; values: Record<string, unknown> }[];
+  /**
+   * Every mutation in CALL ORDER, as `delete:{table}` / `update:{table}:{columns}`.
+   *
+   * BAL-408 needs this: `meeting_guests` gained THREE `ON DELETE restrict` attribution FKs,
+   * and the null-outs are only correct if they run AFTER the `invitedById` delete and
+   * BEFORE the `users` delete. A set-membership assertion cannot see that.
+   */
+  order: string[];
+}
+
+/** The sentinel name a mocked table token carries (see the `@balo/db` factory above). */
+function tableName(table: unknown): string {
+  return (table as Record<string, string>).__table ?? 'unknown';
 }
 
 function makeTx(
@@ -80,7 +93,7 @@ function makeTx(
   tx: Record<string, unknown>;
   recorder: TxRecorder;
 } {
-  const recorder: TxRecorder = { deletes: [], updates: [] };
+  const recorder: TxRecorder = { deletes: [], updates: [], order: [] };
   const selectResults = [profileRows, personalCompanyRows];
   let selectIdx = 0;
 
@@ -101,13 +114,15 @@ function makeTx(
     delete: (table: unknown) => ({
       where: () => {
         recorder.deletes.push(table);
+        recorder.order.push(`delete:${tableName(table)}`);
         return Promise.resolve(undefined);
       },
     }),
     update: (table: unknown) => ({
-      set: () => ({
+      set: (values: Record<string, unknown>) => ({
         where: () => {
-          recorder.updates.push(table);
+          recorder.updates.push({ table, values });
+          recorder.order.push(`update:${tableName(table)}:${Object.keys(values).join(',')}`);
           return Promise.resolve(undefined);
         },
       }),
@@ -217,6 +232,46 @@ describe('deleteUserAction', () => {
       const deletedTableNames = recorder.deletes.map((t) => (t as Record<string, string>).__table);
       expect(deletedTableNames).toContain('companies');
       expect(deletedTableNames).toContain('companyMembers');
+    });
+  });
+
+  describe('meeting_guests attribution FKs (BAL-408 — ON DELETE restrict)', () => {
+    it('NULLs admittedByUserId and revokedByUserId as well as userId/convertedToUserId', () => {
+      // ⚠ REGRESSION GUARD FOR A REAL 23503. BAL-408 turned `invited_by_id`,
+      // `revoked_by_user_id` and `admitted_by_user_id` into `restrict` FKs. Phase 4 only
+      // knew about the inviter, so a user who ADMITTED or REVOKED a guest they did not
+      // INVITE would make this whole transaction fail with a foreign-key violation — a
+      // guest row can name three different people and only one of them is the inviter.
+      const recorder = setupTransaction([], []);
+      return deleteUserAction(USER_ID).then(() => {
+        const guestUpdateColumns = recorder.updates
+          .filter((update) => tableName(update.table) === 'meetingGuests')
+          .map((update) => Object.keys(update.values).join(','));
+        expect(guestUpdateColumns).toEqual([
+          'userId',
+          'convertedToUserId',
+          'admittedByUserId',
+          'revokedByUserId',
+        ]);
+      });
+    });
+
+    it('runs the null-outs AFTER the invitedById delete and BEFORE the users delete', async () => {
+      // Order is load-bearing: nulling first would touch rows about to be removed anyway,
+      // and nulling after the user row is gone is too late to satisfy `restrict`.
+      const recorder = setupTransaction([], []);
+      await deleteUserAction(USER_ID);
+
+      const guestDelete = recorder.order.indexOf('delete:meetingGuests');
+      const nullAdmitted = recorder.order.indexOf('update:meetingGuests:admittedByUserId');
+      const nullRevoked = recorder.order.indexOf('update:meetingGuests:revokedByUserId');
+      const userDelete = recorder.order.indexOf('delete:users');
+
+      expect(guestDelete).toBeGreaterThanOrEqual(0);
+      expect(userDelete).toBeGreaterThanOrEqual(0);
+      expect(nullAdmitted).toBeGreaterThan(guestDelete);
+      expect(nullRevoked).toBeGreaterThan(nullAdmitted);
+      expect(nullRevoked).toBeLessThan(userDelete);
     });
   });
 

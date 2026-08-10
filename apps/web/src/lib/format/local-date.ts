@@ -66,3 +66,33 @@ export function formatUtcLongDate(value: Date | string): string {
   const date = value instanceof Date ? value : new Date(value);
   return `${date.getUTCDate()} ${LONG_MONTHS[date.getUTCMonth()] ?? ''} ${date.getUTCFullYear()}`;
 }
+
+const WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+
+/**
+ * "Tuesday, 1 September 2026" in UTC — {@link formatUtcLongDate} with the WEEKDAY.
+ *
+ * ⚠ THE WEEKDAY IS THE POINT, NOT DECORATION. On a surface where the reader is deciding
+ * whether they are free (the `/join/{token}` guest landing), the day of the week is the
+ * token people actually reason with — nobody holds "1 September" and "next Tuesday" in the
+ * same frame. The guest invite EMAIL already renders one (`Tue, 1 Sep 2026 · 10:00–11:00
+ * (UTC)`), so the landing dropping it made the two descriptions of the same instant
+ * disagree on the most useful field.
+ *
+ * Hand-rolled and UTC for the same two reasons as `formatUtcLongDate`: no `Intl` locale
+ * drift, and an identical string on the server and on first client render.
+ */
+export function formatUtcLongDateWithWeekday(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  const weekday = WEEKDAYS[date.getUTCDay()];
+  const longDate = formatUtcLongDate(date);
+  return weekday === undefined ? longDate : `${weekday}, ${longDate}`;
+}

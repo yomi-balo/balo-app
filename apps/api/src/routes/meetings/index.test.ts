@@ -84,7 +84,14 @@ vi.mock('../../services/meetings/provision-meeting.js', () => ({
 // The rate limiter is faked at the `checkRateLimit` seam, not at Redis: the assertions are
 // about WHICH keys the route consumes and how it behaves on `allowed: false` / a throw, none
 // of which needs a real Redis. `getRedis` is stubbed only so it cannot demand `REDIS_URL`.
-vi.mock('../../lib/rate-limiter.js', () => ({ checkRateLimit: mockCheckRateLimit }));
+//
+// ⚠ SPREADS THE REAL MODULE rather than replacing it wholesale — a bare factory would drop
+// `RATE_LIMIT_DEADLINE_MS`, and an `undefined` deadline makes `setTimeout` fire on the next
+// tick, timing out every booking in this file for a reason that looks nothing like the cause.
+vi.mock('../../lib/rate-limiter.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/rate-limiter.js')>()),
+  checkRateLimit: mockCheckRateLimit,
+}));
 vi.mock('../../lib/redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../../services/availability/window-availability.js', () => ({
   isWindowAvailableForExpert: mockIsWindowAvailableForExpert,

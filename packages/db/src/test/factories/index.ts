@@ -24,6 +24,8 @@ export { actionItemFactory } from './action-item.factory';
 export type { ActionItemFactoryResult } from './action-item.factory';
 export { meetingFactory } from './meeting.factory';
 export type { MeetingFactoryResult, MeetingFactoryContext } from './meeting.factory';
+export { meetingGuestFactory } from './meeting-guest.factory';
+export type { MeetingGuestFactoryResult } from './meeting-guest.factory';
 export { transcriptFactory, transcriptArtifactFactory } from './transcript.factory';
 export type {
   TranscriptFactoryResult,

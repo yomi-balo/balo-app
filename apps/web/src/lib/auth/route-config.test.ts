@@ -30,6 +30,10 @@ describe('isPublicRoute', () => {
     // middleware 302s every emailed reviewer to /login and the feature is dead.
     expect(isPublicRoute('/review/some-token')).toBe(true);
     expect(isPublicRoute('/review/some-token?r=3')).toBe(true);
+    // BAL-408 — public token-authenticated guest join landing. Without this the
+    // middleware 302s every invited guest to /login, and a guest has no account to
+    // log in WITH, so the feature is not merely degraded — it is unreachable.
+    expect(isPublicRoute('/join/some-token')).toBe(true);
   });
 
   it('rejects protected routes', () => {
@@ -51,6 +55,9 @@ describe('isPublicRoute', () => {
     // sibling route opens up.
     expect(isPublicRoute('/review')).toBe(false);
     expect(isPublicRoute('/reviews/123')).toBe(false);
+    // BAL-408 — same treatment for `/join/`.
+    expect(isPublicRoute('/join')).toBe(false);
+    expect(isPublicRoute('/joins/123')).toBe(false);
   });
 });
 
@@ -68,11 +75,13 @@ describe('token-in-URL routes are public AND redacted', () => {
     }
   });
 
-  it('registers the two token-bearing landings in both registries', () => {
+  it('registers the three token-bearing landings in both registries', () => {
     expect(SENSITIVE_PATH_PREFIXES).toContain('/shared/proposals/');
     expect(SENSITIVE_PATH_PREFIXES).toContain('/review/');
+    expect(SENSITIVE_PATH_PREFIXES).toContain('/join/');
     expect(PUBLIC_PREFIXES).toContain('/shared/proposals/');
     expect(PUBLIC_PREFIXES).toContain('/review/');
+    expect(PUBLIC_PREFIXES).toContain('/join/');
   });
 });
 

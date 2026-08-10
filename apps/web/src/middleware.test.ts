@@ -171,6 +171,37 @@ describe('middleware — unauthenticated access', () => {
     const res = await middleware(createRequest('/dashboard'));
     expect(res.headers.get('x-request-id')).toBeTruthy();
   });
+
+  /**
+   * ⚠ DEFENCE IN DEPTH, AND THE DEPENDENCY IS THE POINT. `redirectToLogin` is unreachable
+   * for the three token landings today because each is registered in `PUBLIC_PREFIXES` and
+   * the middleware returns before it. That makes the ONLY thing between a raw guest token
+   * and the `Location:` header a registry entry in a different file, held up by a single
+   * containment test — thin cover for a credential that stays replayable for 7 days.
+   *
+   * These tests call the redaction directly on the `returnTo` path so the guarantee no
+   * longer depends on the public-route classification staying correct.
+   */
+  describe('returnTo never carries a URL secret, even off the public-route path', () => {
+    const TOKEN = 'RAWTOKEN_do_not_log_9f3a';
+
+    it.each([
+      ['/join/', 'BAL-408 guest join'],
+      ['/review/', 'BAL-390 review invite'],
+      ['/shared/proposals/', 'BAL-386 proposal share'],
+    ])('redacts the token segment of %s (%s)', async (prefix) => {
+      const res = await middleware(createRequest(`${prefix}${TOKEN}`));
+
+      // Whatever the routing decision is, the raw token must not reach the header.
+      const location = res.headers.get('location') ?? '';
+      expect(location).not.toContain(TOKEN);
+      expect(location).not.toContain(encodeURIComponent(`${prefix}${TOKEN}`));
+    });
+
+    it('still round-trips an ordinary protected path unchanged', async () => {
+      await expectLoginRedirect('/dashboard?tab=billing', '/dashboard?tab=billing');
+    });
+  });
 });
 
 describe('middleware — authenticated access', () => {
@@ -341,6 +372,50 @@ describe('middleware — fail-closed onboarding gate (BAL-361)', () => {
     expect(location.pathname).toBe('/onboarding');
     expect(location.searchParams.get('forced')).toBe('1');
     expect(location.searchParams.get('from')).toBe('/dashboard');
+  });
+
+  /**
+   * ⚠ THE FAIL-CLOSED GATE RUNS ON THE TOKEN-IN-URL LANDINGS TOO. `/join/{token}`,
+   * `/review/{token}` and `/shared/proposals/{token}` are PUBLIC, but an authenticated
+   * un-onboarded visitor with a session cookie leaves the anonymous fast path and hits
+   * this redirect — which used to copy the raw secret verbatim into `?from=`, and from
+   * there into the `Location:` header (edge/CDN access logs), the `/onboarding` address
+   * bar (no `no-referrer` there) and a custom PostHog property the analytics sanitizer
+   * does not touch.
+   *
+   * `from` is documented as an analytics string that is never used for navigation, so
+   * the redacted value buckets identically — the prefix is what the funnel reads.
+   */
+  describe('the ?from= tag never carries a URL secret', () => {
+    const TOKEN = 'RAWTOKEN_do_not_log_9f3a';
+    const SECRET_LANDINGS = [
+      { prefix: '/join/', label: 'BAL-408 guest join' },
+      { prefix: '/review/', label: 'BAL-390 review invite' },
+      { prefix: '/shared/proposals/', label: 'BAL-386 proposal share' },
+    ] as const;
+
+    for (const { prefix, label } of SECRET_LANDINGS) {
+      it(`redacts the token segment for ${label}`, async () => {
+        setupAuthenticatedSession({ onboardingCompleted: false });
+        const res = await middleware(createRequestWithCookie(`${prefix}${TOKEN}`));
+        expect(res.status).toBe(307);
+
+        const location = getRedirectUrl(res);
+        expect(location.pathname).toBe('/onboarding');
+        expect(location.searchParams.get('from')).toBe(`${prefix}[redacted]`);
+        // The decoded value is redacted AND the raw header carries no encoded copy.
+        expect(res.headers.get('location') ?? '').not.toContain(TOKEN);
+        expect(res.headers.get('location') ?? '').not.toContain(
+          encodeURIComponent(`${prefix}${TOKEN}`)
+        );
+      });
+    }
+
+    it('leaves a non-secret origin path exactly as-is', async () => {
+      setupAuthenticatedSession({ onboardingCompleted: false });
+      const res = await middleware(createRequestWithCookie('/experts/dana'));
+      expect(getRedirectUrl(res).searchParams.get('from')).toBe('/experts/dana');
+    });
   });
 });
 

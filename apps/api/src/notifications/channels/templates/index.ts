@@ -54,6 +54,7 @@ import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
 import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
+import { MeetingGuestInvitedEmail, MeetingGuestRemovedEmail } from './meeting-guest-emails.js';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 import { ActionItemAssignedEmail } from './action-item-assigned.js';
 import { RecapReadyEmail } from './recap-ready.js';
@@ -1128,6 +1129,76 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       subject: `${sanitizeSubjectTitle(sharerName)} shared a proposal with you`,
     };
   },
+
+  // BAL-408 — an EXTERNAL person was invited to a consultation (external `email_address`
+  // path — no user row to hydrate). The magic-link CTA is the ONLY link and the raw token
+  // is never rendered as copyable text (the `proposal-shared` rule). The subject names the
+  // inviter retrospectively, sanitized against header injection.
+  // ⚠ NO BILLING LINE — see the file docblock on `meeting-guest-emails.tsx`.
+  'meeting-guest-invited': (data) => {
+    const inviterName = (data.inviterName as string) ?? 'A colleague';
+    const joinToken = (data.joinToken as string) ?? '';
+    /**
+     * ⚠⚠ A MALFORMED `accessScope` DEGRADES TO THE **WIDER** DISCLOSURE, `engagement`.
+     * This block previously degraded to `meeting` while its own comment said the opposite;
+     * the comment was right and the code was wrong, and the direction matters:
+     *
+     *   · This is a CONSENT DISCLOSURE, not a permission. It grants nothing — the grant is
+     *     already stored on `meeting_guests.access_scope` and is enforced (by BAL-388)
+     *     from the row, never from this string. So the only thing at stake here is what
+     *     the person is TOLD.
+     *   · Rendering the narrow copy for a row that actually holds `engagement` hides a
+     *     RETROSPECTIVE grant from the very person it is about — the exact failure the
+     *     whole disclosure exists to prevent, and unrecoverable (they have no account in
+     *     which to discover it later).
+     *   · Rendering the wide copy for a `meeting`-scoped row over-states what they can
+     *     read. Nothing is exposed; the worst case is a guest who expects more history
+     *     than they get.
+     *
+     * Over-disclose, never under-disclose. `meeting-guest-emails.test.ts` states the same
+     * rule, and the landing's `AccessScopeDisclosure` takes the enum directly from the row
+     * so it has no equivalent fallback to keep in step.
+     */
+    const accessScope = data.accessScope === 'meeting' ? 'meeting' : 'engagement';
+    // ⚠ NO `'their team'` PLACEHOLDER. `personWithOrgLabel` drops the "@ org" clause when
+    // the label is absent or IS the person (an independent expert), so the honest fallback
+    // is the inviter's own name, not a stand-in that reads like an unsubstituted variable.
+    const inviterOrgLabel = (data.inviterOrgLabel as string) ?? inviterName;
+    return {
+      component: React.createElement(MeetingGuestInvitedEmail, {
+        guestName: data.guestName as string | undefined,
+        inviterName,
+        inviterOrgLabel,
+        // Engagement-type-agnostic: the service already resolves a real title or a
+        // context-specific label ('a discovery call', 'a project kickoff'), so this
+        // fallback fires only on a malformed payload and must not name a case.
+        meetingTitle: (data.meetingTitle as string) ?? 'a call',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        scheduledEndIso: (data.scheduledEndIso as string) ?? '',
+        accessScope,
+        expiresOn: (data.expiresOn as string) ?? '',
+        joinUrl: `${BASE_URL}/join/${joinToken}`,
+        // ⚠ THE SHELL'S FOOTER BASE, DELIBERATELY SEPARATE FROM `joinUrl`. `EmailShell`
+        // concatenates `/legal/privacy` onto whatever it is given, so passing the join URL
+        // here minted `…/join/{RAW_TOKEN}/legal/privacy` — a dead link AND a second copy of
+        // the credential in the most-forwarded message on the platform.
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(inviterName)} invited you to a video call`,
+    };
+  },
+
+  // BAL-408 — a guest's access was revoked. To that person ONLY, no CTA (their link is
+  // dead and there is nothing else an external non-user may open).
+  'meeting-guest-removed': (data) => ({
+    component: React.createElement(MeetingGuestRemovedEmail, {
+      guestName: data.guestName as string | undefined,
+      meetingTitle: (data.meetingTitle as string) ?? 'a call',
+      scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+      baseUrl: BASE_URL,
+    }),
+    subject: 'Your call invitation has been withdrawn',
+  }),
 };
 
 export function getEmailTemplate(
