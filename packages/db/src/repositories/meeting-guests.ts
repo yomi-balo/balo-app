@@ -376,10 +376,25 @@ export const meetingGuestsRepository = {
    * The `admission = 'pending'` predicate makes this a compare-and-set, so two racing hosts
    * cannot both record a decision.
    *
-   * NO `audit_events` ROW, deliberately: the decision is ALREADY durably attributed ON THE
-   * ROW itself (`admission` + `admission_decided_at` + `admitted_by_user_id`, held together
-   * by the two CHECKs), which meets ADR-1030 structurally. A second copy in `audit_events`
-   * would be a record that can drift from the row it describes.
+   * NO `audit_events` ROW — accepted ONLY for the inert window below, and NOT a standing
+   * exemption. The decision is durably attributed on the row itself (`admission` +
+   * `admission_decided_at` + `admitted_by_user_id`, held together by the two CHECKs), and the
+   * compare-and-set makes the transition irreversible and once-only, so who/what/when is
+   * already recorded.
+   *
+   * ⚠⚠ RULED 2026-08-10 (BAL-408 review, by the ticket owner): that is NOT sufficient, and
+   * BAL-132 MUST add the `audit_events` write when it makes admit/deny reachable. Do not read
+   * this docblock as a blessed deviation — ADR-1030 is deliberately NOT being amended. Two
+   * reasons the on-row triple does not close it:
+   *   1. `revoke` (below) and `createMany` (above) — the sibling acts in this same guest
+   *      lifecycle, carrying the same shape of attribution columns — BOTH write
+   *      `audit_events`. Admit/deny being the only silent transition is an inconsistency,
+   *      not a design.
+   *   2. An on-row triple is STATE, not HISTORY. An admin reconstructing a disputed call
+   *      queries `audit_events`; an admission that never appears there is invisible to
+   *      exactly the review that matters most.
+   * Write it inside this transaction, matching `revoke`'s shape, distinguishing `admitted`
+   * from `denied`.
    *
    * ⚠ INERT IN BAL-408: nothing produces an `admission = 'pending'` row. BAL-132 owns the
    * lobby (anonymous visitor → name capture → bot protection → share-link proof).
