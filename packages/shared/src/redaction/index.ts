@@ -66,12 +66,21 @@ const REDACTED = '[redacted]';
  * Deliberately no regex, matching the rest of this module: attacker-controlled URLs must not
  * meet a pattern with a super-linear worst case (SonarCloud S5852).
  */
+const ASCII_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const ASCII_LOWER = 'abcdefghijklmnopqrstuvwxyz';
+
 function toAsciiLowerCase(value: string): string {
   let folded = '';
   for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    // 65..90 === 'A'..'Z'; +32 reaches 'a'..'z'.
-    folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : value.charAt(i);
+    const char = value.charAt(i);
+    // Table lookup rather than arithmetic on char codes. SonarCloud pushes `charCodeAt` →
+    // `codePointAt` (S7728) as a blanket ES2015 preference, but that swap would be WRONG
+    // here and silently so: this loop walks CODE UNITS on purpose, and `codePointAt` at a
+    // high surrogate returns the combined code point, breaking the one-to-one index
+    // correspondence that `toAsciiLowerCase(v).length === v.length` depends on. Indexing a
+    // 26-char table sidesteps the whole argument — no char codes, same guarantee.
+    const upperIndex = ASCII_UPPER.indexOf(char);
+    folded += upperIndex === -1 ? char : ASCII_LOWER.charAt(upperIndex);
   }
   return folded;
 }

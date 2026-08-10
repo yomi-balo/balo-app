@@ -71,12 +71,12 @@ const log = createLogger('guest-participation');
  * most, and a sixth label added later would fall outside it too. Naming what is CLOSED means
  * a new label defaults to OPEN, which is the correct direction for a roster action.
  *
- * ⚠ TYPED AS `MeetingStatus[]`, NOT `string[]`. A bare `readonly string[]` accepts any
- * literal, so a typo (`'endeed'`) or a renamed `meeting_status` pgEnum label would silently
- * OPEN the gate with no typecheck failure — the one direction a fail-closed check must never
- * drift in. The schema-derived type makes both a compile error.
+ * ⚠ TYPED AS `MeetingStatus`, NOT `string`. A bare `string` collection accepts any literal,
+ * so a typo (`'endeed'`) or a renamed `meeting_status` pgEnum label would silently OPEN the
+ * gate with no typecheck failure — the one direction a fail-closed check must never drift
+ * in. The schema-derived type makes both a compile error.
  */
-const MEETING_CLOSED_TO_GUESTS: readonly MeetingStatus[] = ['ended', 'cancelled'];
+const MEETING_CLOSED_TO_GUESTS: ReadonlySet<MeetingStatus> = new Set(['ended', 'cancelled']);
 
 /** Every wire literal this service can produce. All fixed; none derived from an error message. */
 export type GuestServiceErrorCode =
@@ -271,7 +271,7 @@ async function authorizeMutation(
   if (!authorized.ok) {
     return { ok: false, code: authorized.code };
   }
-  if (MEETING_CLOSED_TO_GUESTS.includes(authorized.meeting.status)) {
+  if (MEETING_CLOSED_TO_GUESTS.has(authorized.meeting.status)) {
     log.info(
       { meetingId, actorUserId, status: authorized.meeting.status },
       'Guest mutation refused — meeting is closed to guests'

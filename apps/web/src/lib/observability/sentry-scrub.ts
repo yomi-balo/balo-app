@@ -190,15 +190,18 @@ export function scrubSentryBreadcrumb<T>(breadcrumb: T): T {
  * exposed callback. Exclusion is the only airtight answer; this hook is the second layer.
  */
 export function scrubReplayRecordingEvent<T>(frame: T): T {
-  if (!isRecord(frame)) return frame;
-  const data = frame.data;
-  if (!isRecord(data)) return frame;
-  const payload = data.payload;
-  if (!isRecord(payload)) return frame;
+  // Resolved as one expression rather than four guard-clause `return frame`s: every path
+  // returned the identical value, which reads as a function whose result carries
+  // information when it does not (SonarCloud S3516). The redaction is the MUTATION; the
+  // return exists only because the SDK hook contract hands the frame back.
+  const payload = isRecord(frame) && isRecord(frame.data) ? frame.data.payload : undefined;
 
-  redactStringAt(payload, 'description');
-  redactStringAt(payload, 'message');
-  redactUrlKeys(payload.data);
+  if (isRecord(payload)) {
+    redactStringAt(payload, 'description');
+    redactStringAt(payload, 'message');
+    redactUrlKeys(payload.data);
+  }
+
   return frame;
 }
 

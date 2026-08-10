@@ -199,11 +199,18 @@ describe('JoinLandingPage', () => {
   });
 
   // ── Attribution ────────────────────────────────────────────────────────────
-  it('names the inviter retrospectively as person @ org', async () => {
+  // Parameterized because these two are the SAME test with a different needle — same
+  // fixture, same render, one `toContain`. The degradation case below is deliberately NOT
+  // folded in: it has its own fixture and five assertions, and collapsing it here would
+  // hide which behaviour broke behind a shared test name.
+  it.each([
+    ['names the inviter retrospectively as person @ org', 'Dana Okoro @ Northwind Industrial'],
+    ['shows the expert party label to a client-side guest', 'CloudPeak Consulting'],
+  ])('%s', async (_case, expected) => {
     primeHappyPath();
     const container = await renderPage();
 
-    expect(container.textContent).toContain('Dana Okoro @ Northwind Industrial');
+    expect(container.textContent).toContain(expected);
   });
 
   it('drops the "@ org" clause rather than inventing one when the org is unresolvable', async () => {
@@ -221,13 +228,6 @@ describe('JoinLandingPage', () => {
     // …and it still renders. A thin unrelated read must NEVER become the not-active card.
     expect(screen.getByRole('heading', { name: "You're invited" })).toBeInTheDocument();
     expect(container.textContent).toContain('Discovery call');
-  });
-
-  it('shows the expert party label to a client-side guest', async () => {
-    primeHappyPath();
-    const container = await renderPage();
-
-    expect(container.textContent).toContain('CloudPeak Consulting');
   });
 
   it('mirrors the sides for an expert-side guest (org = the agency, counterparty = the company)', async () => {
@@ -377,7 +377,7 @@ describe('JoinLandingPage', () => {
     const terms = [...container.querySelectorAll('dt')].map((node) => node.textContent);
     expect(terms).toContain('When');
     expect(terms).toContain('Invited by');
-    expect(container.querySelectorAll('dd').length).toBe(terms.length);
+    expect(container.querySelectorAll('dd')).toHaveLength(terms.length);
   });
 
   /**
