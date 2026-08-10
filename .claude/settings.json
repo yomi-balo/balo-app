@@ -1,9 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "WebFetch(domain:ably.com)",
-      "WebFetch(domain:help.ably.io)",
-      "WebSearch"
-    ]
+    "allow": ["WebFetch(domain:ably.com)", "WebFetch(domain:help.ably.io)", "WebSearch"]
   }
 }
