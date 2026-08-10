@@ -68,7 +68,7 @@ balo-app/                          Turborepo monorepo
 
 ## Skills — READ BEFORE CODING
 
-Skills define exact patterns for this codebase. Balo-specific skills live in `.claude/skills/`, vendor skills (e.g., Vercel React best practices) live in `.agents/skills/`. **Always read relevant skills before writing code.** Do not improvise patterns that a skill already defines.
+Skills define exact patterns for this codebase. Balo-specific skills live in `.claude/skills/`, vendor skills (e.g., Vercel React best practices, Ably) live in `.agents/skills/`. **Always read relevant skills before writing code.** Do not improvise patterns that a skill already defines. Vendor skills are copied verbatim from upstream — vendored folders carry an `UPSTREAM.md` pinning the source commit; refresh by re-copying, never by hand-editing. Their sample code is generic: where it overlaps Balo conventions or ADRs (auth and token issuance, notification dispatch, repository access), Balo skills and ADRs win.
 
 | Skill                       | When to read                                                    |
 | --------------------------- | --------------------------------------------------------------- |
