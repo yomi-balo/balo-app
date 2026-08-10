@@ -4,6 +4,7 @@ import {
   expertPartyDisplayName,
   isPlatformAdminRole,
   personDisplayName,
+  personWithOrgLabel,
   PLATFORM_ADMIN_ROLES,
   type EngagementActorAttributionInput,
 } from './index';
@@ -203,5 +204,40 @@ describe('engagementActorAttribution', () => {
     expect(engagementActorAttribution(input(), 'external')).toBe(
       'Dana Client @ Northwind Industrial'
     );
+  });
+});
+
+describe('personWithOrgLabel', () => {
+  it('joins a person and a distinct org with the "@" clause', () => {
+    expect(personWithOrgLabel('Dana Okoro', 'Northwind Industrial')).toBe(
+      'Dana Okoro @ Northwind Industrial'
+    );
+  });
+
+  /**
+   * ⚠ THE INDEPENDENT-EXPERT CASE, WHICH TWO SHIPPED SURFACES GOT WRONG BY CONCATENATING
+   * UNCONDITIONALLY. A freelancer has no agency, so callers legitimately set the org label
+   * to the person ("the person IS the party") — and the guest invite email and the
+   * `/join/{token}` landing both rendered "Dana Okoro @ Dana Okoro". CLAUDE.md: "independent
+   * experts keep their own name."
+   */
+  it('drops the clause when the org label IS the person', () => {
+    expect(personWithOrgLabel('Dana Okoro', 'Dana Okoro')).toBe('Dana Okoro');
+  });
+
+  it('compares trimmed and case-insensitively — the halves come from different reads', () => {
+    expect(personWithOrgLabel('Dana Okoro', '  dana okoro ')).toBe('Dana Okoro');
+  });
+
+  it.each([null, undefined, '', '   '])('drops the clause for an org label of %p', (org) => {
+    expect(personWithOrgLabel('Dana Okoro', org)).toBe('Dana Okoro');
+  });
+
+  it('never substitutes a placeholder — a bare name beats "@ their team"', () => {
+    expect(personWithOrgLabel('Dana Okoro', null)).not.toContain('@');
+  });
+
+  it('lets the org stand alone when the person name is missing', () => {
+    expect(personWithOrgLabel('  ', 'Northwind Industrial')).toBe('Northwind Industrial');
   });
 });

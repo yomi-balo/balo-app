@@ -22,6 +22,8 @@ const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
   'admin_users',
   'party_admins',
   'company_billing_admins',
+  // BAL-408 — the same-party participants of one meeting (`meeting.guest_added`).
+  'meeting_party_participants',
 ]);
 
 /**
@@ -214,6 +216,14 @@ function resolveRecipientIds(
       // BAL-380: the company's MANAGE_BILLING holders (owner/admin), hydrated by the
       // resolver from partyMembershipsRepository.listBillingUserIds.
       source = context.data.billingUserIds;
+      break;
+    case 'meeting_party_participants':
+      // BAL-408: read from the PAYLOAD, not from `context.data` — unlike every kind above,
+      // this list is resolved by the PUBLISHER (the invite service, which already holds the
+      // meeting's party and its members) rather than hydrated by `engine/resolver.ts`. That
+      // is deliberate: hydrating it here would put a `meeting_guests` / membership read
+      // inside the notification engine, which is the coupling the engine exists to avoid.
+      source = context.payload.recipientUserIds;
       break;
     default:
       return [];

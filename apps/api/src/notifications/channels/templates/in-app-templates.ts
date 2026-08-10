@@ -789,6 +789,32 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
         : `Your session summary is ready${countSuffix}.`;
     return engagementNotice('Session recap ready', body, data);
   },
+
+  /**
+   * BAL-408 — a guest joined YOUR side of a meeting. A low-signal roster FYI, fanned out
+   * over the publisher-resolved `recipientUserIds` (in-app only; an email per added
+   * colleague would be noise).
+   *
+   * ⚠ THIS ENTRY IS LOAD-BEARING IN A WAY A MISSING EMAIL TEMPLATE IS NOT. `getInAppTemplate`
+   * does NOT throw on an unknown name — it silently returns the generic
+   * "You have a new notification". So an absent template here degrades to a meaningless
+   * notification with a green CI, which is why `in-app-templates.test.ts` asserts the REAL
+   * title and body rather than merely that something rendered.
+   *
+   * ⚠ NAME ONLY, NEVER AN EMAIL ADDRESS — `guestDisplayName` is already name-only by payload
+   * contract, and the fallback is the neutral "Someone", never an address or a local part.
+   *
+   * NO `actionUrl`: there is no meeting surface to deep-link to yet (BAL-421 / BAL-132 own
+   * it), and a link to nowhere is worse than none.
+   */
+  'meeting-guest-added': (data) => {
+    const guest = (data.guestDisplayName as string) ?? 'Someone';
+    const title = (data.meetingTitle as string) ?? 'your consultation';
+    return {
+      title: 'Someone new is joining',
+      body: `${guest} was added to ${title}.`,
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

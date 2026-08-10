@@ -100,9 +100,14 @@ import {
 import { validateBookingWindow, type BookingWindowViolation } from '@balo/shared/meetings';
 import { createLogger } from '@balo/shared/logging';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { checkRateLimit, type RateLimitConfig } from '../../lib/rate-limiter.js';
+import {
+  checkRateLimit,
+  RATE_LIMIT_DEADLINE_MS,
+  type RateLimitConfig,
+} from '../../lib/rate-limiter.js';
 import { getRedis } from '../../lib/redis.js';
 import { requireAuth } from '../../lib/require-auth.js';
+import { withDeadline } from '../../lib/with-deadline.js';
 import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
 import { isWindowAvailableForExpert } from '../../services/availability/window-availability.js';
 import { authorizeMeetingBooking } from '../../services/meetings/authorize-meeting-booking.js';
@@ -111,6 +116,7 @@ import {
   type BookAndProvisionInput,
 } from '../../services/meetings/provision-meeting.js';
 import { createMeetingBodySchema } from './schema.js';
+import { meetingGuestRoutes } from './guests.js';
 
 const log = createLogger('meetings-route');
 
@@ -191,6 +197,13 @@ function bookingErrorResponse(error: unknown): { status: number; error: string }
  * path that blocks a marketplace expert's calendar, so an outage must not become an
  * unmetered booking window. `routes/experts/search.ts` fails OPEN on purpose and documents
  * why; do not copy that decision here.
+ *
+ * ⚠⚠ THE DEADLINE IS LOAD-BEARING, not a tidy-up. `maxRetriesPerRequest: null` (required by
+ * BullMQ) stops ioredis ever failing a pending command, and the offline queue parks it — so
+ * an unbounded `checkRateLimit` NEVER SETTLES during an outage and this `catch` never runs.
+ * The request would then hang on a Fastify connection until an upstream proxy killed it,
+ * instead of answering the `503` below. Same exposure and same fix as the guest-invite
+ * limiter in `guests.ts`. See `with-deadline.ts` for the verified ioredis mechanism.
  */
 async function enforceBookingRateLimit(
   config: RateLimitConfig,
@@ -198,7 +211,10 @@ async function enforceBookingRateLimit(
   reply: FastifyReply
 ): Promise<boolean> {
   try {
-    const result = await checkRateLimit(getRedis(), config, identifier);
+    const result = await withDeadline(() => checkRateLimit(getRedis(), config, identifier), {
+      deadlineMs: RATE_LIMIT_DEADLINE_MS,
+      label: `rate limit ${config.keyPrefix}`,
+    });
     if (result.allowed) {
       return false;
     }
@@ -370,6 +386,11 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
       reply.code(mapped.status).send({ error: mapped.error });
     }
   });
+
+  // BAL-408 — the guest participation surface (invite / list / remove / admit / deny). A
+  // sibling registration rather than a separate plugin so every `/meetings` route shares one
+  // prefix and one `requireAuth` idiom.
+  await meetingGuestRoutes(fastify);
 
   log.info('Registered meeting routes');
 }

@@ -466,6 +466,26 @@ export type {
   NewMeetingPresence,
   MeetingParticipantParty,
 } from '../schema';
+// ── Guest participation model (BAL-408 / ADR-1044) ─────────────────────────
+export {
+  meetingGuestsRepository,
+  type MeetingGuestParty,
+  type MeetingGuestAdmissionDecision,
+  type CreateMeetingGuestInput,
+  type CreateMeetingGuestsInput,
+  type RevokeMeetingGuestInput,
+  type DecideMeetingGuestAdmissionInput,
+  type MeetingGuestWithMeeting,
+  type MeetingGuestPublic,
+} from './meeting-guests';
+export type {
+  MeetingGuest,
+  NewMeetingGuest,
+  MeetingParticipationRole,
+  GuestAccessScope,
+  MeetingGuestInviteChannel,
+  MeetingGuestAdmission,
+} from '../schema';
 // ── Review & rating primitive (BAL-390) ────────────────────────────────────
 export {
   reviewsRepository,

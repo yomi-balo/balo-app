@@ -13,7 +13,13 @@ export interface NotificationRule {
     | 'billing_creator'
     | 'party_admins'
     | 'company_billing_admins'
-    | 'owner';
+    | 'owner'
+    // BAL-408 — the live participants of ONE SIDE of a meeting. None of the shipped kinds
+    // expressed "the same-party members of this meeting": `party_admins` is admin-only and
+    // party-scoped, `client`/`expert` are single recipients. The id list is resolved by the
+    // PUBLISHER (`payload.recipientUserIds`), never by the resolver — that is what keeps a
+    // `meeting_guests` read out of the notification engine.
+    | 'meeting_party_participants';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -716,5 +722,55 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   'recap.ready': [
     ...emailAndInApp('client', 'recap-ready', (ctx) => !!ctx.payload.recipientId),
     ...emailAndInApp('expert', 'recap-ready'),
+  ],
+
+  // ── BAL-408 / ADR-1044 — the guest participation model ────────────────────────────
+  //
+  // ⚠ `admit` AND `deny` PUBLISH NOTHING, DELIBERATELY. The person is standing in the
+  // lobby watching the UI: an email arriving after a DENY is hostile, and one after an
+  // ADMIT is redundant with the door opening in front of them. There is no rule key for
+  // either, and adding one would be a product regression rather than a gap.
+
+  // The guest themselves — an EXTERNAL address with no Balo user row, so the dispatcher
+  // reads it straight off `payload.recipientEmail` (the `expert.referral_invited` /
+  // `proposal.shared` path). EMAIL ONLY: there is no in-app surface for a non-user.
+  // ⚠ ONE PUBLISH PER GUEST, never a fan-out — the payload carries that guest's RAW join
+  // token, and the dispatcher shares one payload across a fan-out.
+  'meeting.guest_invited': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'meeting-guest-invited',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
+
+  // The guest's OWN party — a roster-changed FYI. IN-APP ONLY: low signal, and an email
+  // per added colleague would be noise. `meeting_party_participants` reads the
+  // publisher-resolved `payload.recipientUserIds`; resolving WHO they are is the invite
+  // service's job (it already holds the party), which keeps `engine/resolver.ts` free of
+  // any `meeting_guests` read.
+  'meeting.guest_added': [
+    {
+      channel: 'in-app',
+      recipient: 'meeting_party_participants',
+      template: 'meeting-guest-added',
+      timing: 'immediate',
+    },
+  ],
+
+  // That person, and only that person. Email only, same external path as the invite.
+  // ⚠ This is the WHOLE of the shipped removal notice — the AC's `METHOD:CANCEL` half is
+  // deferred because no meeting has a calendar event to cancel. See
+  // `MeetingGuestRemovedPayload`'s docblock for the verification.
+  'meeting.guest_removed': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'meeting-guest-removed',
+      timing: 'immediate',
+      priority: 'normal',
+    },
   ],
 };

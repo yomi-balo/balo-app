@@ -2,6 +2,7 @@ import { pgTable, uuid, timestamp, index, uniqueIndex, check } from 'drizzle-orm
 import { relations, sql } from 'drizzle-orm';
 import { meetingParticipantPartyEnum } from './enums';
 import { meetings } from './meetings';
+import { meetingGuests } from './guests';
 import { users } from './users';
 import { timestamps, softDelete } from './helpers';
 
@@ -78,6 +79,35 @@ import { timestamps, softDelete } from './helpers';
  * deletion — which meets ADR-1030's purpose structurally rather than with an `audit_events`
  * row per webhook. Per-join/leave rows would be machine telemetry, which ADR-1030 routes to
  * Pino/Axiom and explicitly keeps out of Postgres.
+ *
+ * ── ⚠⚠ BAL-408: THE GUEST GAP IS CLOSED, AND THE WRITE CONTRACT BAL-134 MUST HONOUR ────
+ *
+ * BAL-418 left a documented hole: `meeting_presence_one_open_per_user_idx` keys on
+ * `user_id`, which is NULL for a guest, and NULLs are DISTINCT in a unique index — so a
+ * duplicate guest join webhook could open a SECOND open interval and double-count the
+ * clocks. BAL-408 lands guest identity, so the gap is closed HERE, by
+ * `meeting_guest_id` + `meeting_presence_one_open_per_guest_idx` +
+ * `meeting_presence_identity_not_both`. The column, index and CHECK ship INERT: this PR
+ * writes no presence row.
+ *
+ * **BAL-134 OWNS THE WRITE, AND OWES THIS TABLE EXACTLY TWO THINGS:**
+ *
+ *   1. FOR A TOKEN-AUTHENTICATED GUEST, SET `meeting_guest_id` — NEVER `user_id`. A guest
+ *      is not a Balo user; writing `user_id` would both violate the identity CHECK (if both
+ *      were set) and silently re-open the duplicate-interval gap (if only `user_id` were).
+ *
+ *   2. ⚠ THE MONEY RULE — DERIVE `party` VIA `presencePartyForGuest` (`@balo/shared/meetings`),
+ *      NEVER FROM THE GUEST ROW'S `party` DIRECTLY. `computeMeetingClocks` reads
+ *      `expertPresentMs` (and anchors `billableMs`) off `party='expert'` rows as
+ *      GAP-INCLUSIVE SPANS. An EXPERT-SIDE GUEST written as `party='expert'` would
+ *      therefore put a NON-DELIVERING attendee on the billable clock: an agency colleague
+ *      present 0→60 while the delivering expert is present only 10→20 yields
+ *      `expertPresentMs = 60 min` and a `billableMs` span anchored on the GUEST — the
+ *      client billed for a guest's time, in direct violation of "per-minute of expert time,
+ *      never per-seat". The mapping is `client → client`, `expert → observer`, and
+ *      `observer` was declared for exactly this class of attendee. A client-side guest DOES
+ *      map to `client`, on purpose: the client party is genuinely represented, so the
+ *      billable intersection should continue if the booker drops but their colleague stays.
  */
 export const meetingPresence = pgTable(
   'meeting_presence',
@@ -88,11 +118,24 @@ export const meetingPresence = pgTable(
       .notNull()
       .references(() => meetings.id, { onDelete: 'cascade' }),
 
-    // NULL for a guest (`meeting_guests` carries no user until conversion). SET NULL, not
+    // NULL for a guest (a guest's identity is `meeting_guest_id` below). SET NULL, not
     // restrict: `admin-dev/_actions/delete-user.ts` HARD-deletes users, and a presence
     // interval is a BILLING input (BAL-412) that must survive the actor row. `party`
     // preserves the side even after the user is gone.
     userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+
+    /**
+     * BAL-408 — the GUEST identity for this interval, mutually exclusive with `user_id`
+     * (`meeting_presence_identity_not_both`). NULL for an authenticated participant.
+     *
+     * `set null` for the SAME reason `user_id` is, not because guests are cheap: a presence
+     * interval is a BILLING input that must survive the identity row, and `party` preserves
+     * the side regardless. `restrict` would let a guest row block a settlement-bearing
+     * interval from ever being cleaned up.
+     */
+    meetingGuestId: uuid('meeting_guest_id').references(() => meetingGuests.id, {
+      onDelete: 'set null',
+    }),
 
     party: meetingParticipantPartyEnum('party').notNull(),
 
@@ -112,19 +155,41 @@ export const meetingPresence = pgTable(
     index('meeting_presence_open_idx')
       .on(t.meetingId)
       .where(sql`${t.leftAt} IS NULL AND ${t.deletedAt} IS NULL`),
+    // BAL-408 — the guest FK's own read path (and its `set null` delete-time scan).
+    index('meeting_presence_guest_idx').on(t.meetingGuestId),
     // At most ONE open interval per authenticated participant — a duplicate join webhook
     // cannot create a second open interval that would double-count the clocks.
-    // ⚠ GUEST GAP: `user_id` is NULL for a guest and NULLs are DISTINCT in a unique index,
-    // so a guest is NOT covered. Accepted here (guests carry no presence identity until
-    // BAL-408); BAL-134/BAL-408 must add the guest-keyed equivalent when guest identity
-    // lands.
+    // ⚠ THE GUEST GAP BAL-418 LEFT HERE IS CLOSED BY THE SIBLING INDEX BELOW, not by this
+    // one: `user_id` is NULL for a guest and NULLs are DISTINCT in a unique index, so this
+    // index never covered a guest and — because `meeting_guest_id` is a SEPARATE column —
+    // still does not. The two indexes are complementary, not redundant.
     uniqueIndex('meeting_presence_one_open_per_user_idx')
       .on(t.meetingId, t.userId)
       .where(sql`${t.leftAt} IS NULL AND ${t.deletedAt} IS NULL`),
+    // BAL-408 — the guest-keyed equivalent, closing the gap above now that guest identity
+    // exists. `meeting_guest_id IS NOT NULL` is required in the predicate for the same
+    // reason the gap existed at all: without it, every authenticated row (guest id NULL)
+    // would collide as a single indistinct NULL group... which it would not, because NULLs
+    // are distinct — but the predicate keeps the index SMALL and states the intent. The
+    // predicate names COLUMNS ONLY, never an enum literal (the house rule at
+    // `action-items.ts` / `transcripts.ts`).
+    uniqueIndex('meeting_presence_one_open_per_guest_idx')
+      .on(t.meetingId, t.meetingGuestId)
+      .where(
+        sql`${t.meetingGuestId} IS NOT NULL AND ${t.leftAt} IS NULL AND ${t.deletedAt} IS NULL`
+      ),
     // `>=` not `>`: a zero-length join blip is a real event, not a data error.
     check(
       'meeting_presence_left_after_joined',
       sql`${t.leftAt} IS NULL OR ${t.leftAt} >= ${t.joinedAt}`
+    ),
+    // BAL-408 — AT MOST ONE identity per interval. Deliberately NOT "exactly one": BAL-134
+    // may legitimately observe a raw Daily participant it cannot map to either table, and
+    // forcing it to write a lie is worse than allowing a NULL identity with a known `party`.
+    // Three-valued-logic safe: both operands are total `IS NOT NULL` tests.
+    check(
+      'meeting_presence_identity_not_both',
+      sql`NOT (${t.userId} IS NOT NULL AND ${t.meetingGuestId} IS NOT NULL)`
     ),
   ]
 );
@@ -139,6 +204,13 @@ export const meetingPresenceRelations = relations(meetingPresence, ({ one }) => 
   user: one(users, {
     fields: [meetingPresence.userId],
     references: [users.id],
+  }),
+  // ⚠ `reference_drizzle_with_hydration_leaks_secrets`: hydrating this relation with a bare
+  // `with: { guest: true }` pulls the guest's `token_hash` and `email`. Any read that can
+  // reach a route MUST pass an explicit `columns:` projection.
+  guest: one(meetingGuests, {
+    fields: [meetingPresence.meetingGuestId],
+    references: [meetingGuests.id],
   }),
 }));
 

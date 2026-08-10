@@ -1,6 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { memberNamesOf, resolveRouteDir, scanRouteSources } from './_source-scan';
 
 /**
  * BAL-390 §8.7.1 — structural invariant for **THE STAR LINK PREFILLS, IT NEVER WRITES.**
@@ -39,19 +38,13 @@ import { describe, expect, it } from 'vitest';
  */
 
 /**
- * CI runs web vitest from the REPO ROOT (`pnpm test:coverage`) while a developer runs it
- * from `apps/web`, so a single cwd-relative path resolves to nothing in one of the two —
- * and a walk that finds nothing passes every assertion below for the wrong reason. A
- * candidate list covers both (`reference_web_server_disk_asset_cwd`), and the empty
- * fallback is caught loudly by the non-vacuity test rather than silently.
- *
- * (`import.meta.url` is NOT usable here: under vitest's jsdom environment it is an
- * `http://` URL, so `fileURLToPath` throws "The URL must be of scheme file".)
+ * ⚠ The scanning primitives moved to `./_source-scan` when BAL-408 added the second
+ * route-level source invariant (`join-link-never-writes.test.ts`); a verbatim second copy of
+ * them in this same directory is exactly what SonarCloud's duplication gate exists to catch.
+ * The behaviour is unchanged — including the repo-root-vs-apps/web cwd handling, which is
+ * documented on `resolveRouteDir`.
  */
-const REVIEW_DIR =
-  ['src/app/review', 'apps/web/src/app/review']
-    .map((candidate) => path.resolve(process.cwd(), candidate))
-    .find((candidate) => existsSync(candidate)) ?? '';
+const REVIEW_DIR = resolveRouteDir(['src/app/review', 'apps/web/src/app/review']);
 
 /**
  * The GET/render path, pinned. Relative to `app/review`, POSIX separators. Pinning is the
@@ -74,89 +67,13 @@ const PINNED_GET_PATH_FILES: readonly string[] = [
 const ALLOWED_REVIEWS_REPOSITORY_MEMBERS: readonly string[] = ['findLandingContext', 'findLive'];
 
 /**
- * Drop whole comment lines. Line-oriented, so there is no regex anywhere (the SonarCloud
- * S5852 ReDoS gate) and no character-level state machine to get wrong.
- *
- * Comments MUST NOT count: `page.tsx`'s docblock NAMES `reviewsRepository.upsert` while
- * explaining that it is never called, and that explanation must not trip the invariant it
- * documents. A TRAILING `// …` after real code is deliberately kept — the failure mode is
- * then a false ALARM (someone writes a forbidden name in an end-of-line comment and this
- * test complains), never a false pass, which is the correct direction for a security
- * invariant to be wrong in.
+ * The POST path. `submit-token-review.ts` / `review-write-shared.ts` legitimately write;
+ * scanning them would make this invariant impossible to satisfy.
  */
-function codeLinesOf(source: string): string {
-  const kept: string[] = [];
-  let inBlock = false;
-  for (const raw of source.split('\n')) {
-    const line = raw.trim();
-    if (inBlock) {
-      inBlock = !line.includes('*/');
-      continue;
-    }
-    if (line.startsWith('/*')) {
-      inBlock = !line.includes('*/');
-      continue;
-    }
-    if (line.startsWith('//') || line.startsWith('*')) continue;
-    kept.push(raw);
-  }
-  return kept.join('\n');
-}
-
-/**
- * Every `<object>.<member>` name used on `object`, in source order. indexOf scan, never a
- * regex. A marker with no parseable member yields `<unparsed>` so a malformed reference
- * FAILS the allow-list loudly rather than vanishing from the results.
- */
-function memberNamesOf(source: string, object: string): string[] {
-  const names: string[] = [];
-  const marker = `${object}.`;
-  let i = source.indexOf(marker);
-  while (i !== -1) {
-    let end = i + marker.length;
-    while (end < source.length) {
-      const ch = source.charAt(end);
-      const word =
-        (ch >= 'a' && ch <= 'z') ||
-        (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') ||
-        ch === '_';
-      if (!word) break;
-      end += 1;
-    }
-    const name = source.slice(i + marker.length, end);
-    names.push(name.length === 0 ? '<unparsed>' : name);
-    i = source.indexOf(marker, i + marker.length);
-  }
-  return names;
-}
-
-interface ScannedFile {
-  readonly rel: string;
-  readonly code: string;
-}
-
-/** Every non-test source file under `app/review`, minus the `_actions` POST path. */
-function scanGetPath(dir: string, prefix: string): ScannedFile[] {
-  const found: ScannedFile[] = [];
-  if (dir === '' || !existsSync(dir)) return found;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
-    if (entry.isDirectory()) {
-      // The POST path. `submit-token-review.ts` / `review-write-shared.ts` legitimately
-      // write; scanning them would make this invariant impossible to satisfy.
-      if (entry.name !== '_actions') found.push(...scanGetPath(`${dir}/${entry.name}`, rel));
-      continue;
-    }
-    const isSource = entry.name.endsWith('.ts') || entry.name.endsWith('.tsx');
-    if (!isSource || entry.name.includes('.test.')) continue;
-    found.push({ rel, code: codeLinesOf(readFileSync(`${dir}/${entry.name}`, 'utf8')) });
-  }
-  return found;
-}
+const EXCLUDED_DIRS: readonly string[] = ['_actions'];
 
 describe('invariant: the /review/{token} GET path never writes a review (BAL-390 §8.7.1)', () => {
-  const scanned = scanGetPath(REVIEW_DIR, '');
+  const scanned = scanRouteSources(REVIEW_DIR, '', EXCLUDED_DIRS);
   const scannedPaths = scanned.map((file) => file.rel);
 
   it('collects the pinned GET-path files (guards against a vacuous pass)', () => {

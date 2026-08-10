@@ -87,12 +87,36 @@ export async function deleteUserAction(userId: string): Promise<DeleteUserResult
         .where(eq(agencyMembers.invitedById, userId));
 
       // ── Phase 4: Guest records ────────────────────────────────────
+      // ⚠ BAL-408 made THREE of these FKs `ON DELETE restrict` (ADR-1030 attribution:
+      // `invited_by_id`, `revoked_by_user_id`, `admitted_by_user_id`). Order is
+      // load-bearing:
+      //
+      //   1. DELETE the rows this user INVITED first, so the null-outs below do not touch
+      //      rows that are about to disappear anyway.
+      //   2. THEN null every remaining pointer at this user. Without steps 2c/2d a user who
+      //      ADMITTED or REVOKED a guest they did not INVITE makes this whole transaction
+      //      fail with 23503 — a guest row can name three different people, and only one of
+      //      them is the inviter.
+      //
+      // Nulling attribution on a SURVIVING guest row is the right trade here (the same call
+      // `meeting_presence.user_id` makes with `set null`): deleting the row would destroy a
+      // participation record for a meeting this user may have had nothing to do with beyond
+      // pressing Admit. `meeting_guests`' two attribution CHECKs are one-directional
+      // implications precisely so these null-outs are legal — see `schema/guests.ts`.
       await tx.delete(meetingGuests).where(eq(meetingGuests.invitedById, userId));
       await tx.update(meetingGuests).set({ userId: null }).where(eq(meetingGuests.userId, userId));
       await tx
         .update(meetingGuests)
         .set({ convertedToUserId: null })
         .where(eq(meetingGuests.convertedToUserId, userId));
+      await tx
+        .update(meetingGuests)
+        .set({ admittedByUserId: null })
+        .where(eq(meetingGuests.admittedByUserId, userId));
+      await tx
+        .update(meetingGuests)
+        .set({ revokedByUserId: null })
+        .where(eq(meetingGuests.revokedByUserId, userId));
 
       // ── Phase 5: Memberships + personal companies ─────────────────
       const personalCompanyRows = await tx

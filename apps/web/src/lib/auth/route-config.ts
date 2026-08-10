@@ -34,6 +34,14 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   // that one without this 302s every emailed reviewer to /login. One without the
   // other IS the defect — route-config.test.ts asserts the pairing.
   '/review/',
+  // BAL-408 / ADR-1044 — public, no-auth, token-authenticated guest join landing
+  // (`/join/{token}`). The token is an IDENTITY CLAIM ("who the visitor says they
+  // are"), never an authorization grant: every read re-checks the guest row's live
+  // state and the meeting's own state, so revocation is immediate and total.
+  // ⚠ SAME PAIRED EDIT: `/join/` must ALSO be in SENSITIVE_PATH_PREFIXES
+  // (@balo/shared/redaction). A guest token is deliberately NOT single-use, so a
+  // single logged copy stays replayable for the whole 7-day window.
+  '/join/',
 ];
 
 /** Admin path prefix (requires platformRole admin or super_admin) */

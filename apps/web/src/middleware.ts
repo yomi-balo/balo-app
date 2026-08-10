@@ -152,6 +152,22 @@ function redirectWithCookies(url: URL, source: NextResponse): NextResponse {
  * BAL-361: redirect an un-onboarded authenticated user to the wizard, tagging the
  * origin so the landing can emit analytics (Edge can't run posthog-node). The `from`
  * value is an analytics string only — it is never used for navigation.
+ *
+ * ⚠ REDACTED BEFORE IT IS STASHED, AND THAT IS NOT BELT-AND-BRACES. The gate above is
+ * fail-closed for EVERY non-API route, including the public token-in-URL landings
+ * (`/join/{token}`, `/review/{token}`, `/shared/proposals/{token}`). An authenticated
+ * but un-onboarded visitor who opens one of those would otherwise have the raw secret
+ * copied into this query value, from where it reaches (1) the `Location:` header and so
+ * every edge/CDN access log, (2) the browser address bar on `/onboarding`, which is NOT
+ * covered by the `referrer: 'no-referrer'` that only the landing's own layout sets, and
+ * (3) PostHog — `onboarding-wizard.tsx` reads `?from=` back and passes it as a CUSTOM
+ * property to `track()`, and `sanitizeAnalyticsEvent` only rewrites `$current_url` /
+ * `$pathname` / `$referrer`, never custom properties.
+ *
+ * Redaction costs nothing precisely because the value is analytics-only: the wizard
+ * buckets on the PREFIX, and `/join/[redacted]` buckets identically to `/join/{token}`.
+ * (`redactSensitivePath` also matches the percent-encoded form, so the encoding
+ * `URLSearchParams` applies below cannot reintroduce the leak.)
  */
 function redirectToOnboarding(
   fromPathname: string,
@@ -160,13 +176,31 @@ function redirectToOnboarding(
 ): NextResponse {
   const url = new URL(ONBOARDING_PATH, baseUrl);
   url.searchParams.set('forced', '1');
-  url.searchParams.set('from', fromPathname);
+  url.searchParams.set('from', redactSensitivePath(fromPathname));
   return redirectWithCookies(url, source);
 }
 
+/**
+ * ⚠ `returnTo` IS REDACTED FOR THE SAME REASON `from` IS, one function up.
+ *
+ * This is UNREACHABLE TODAY and the redaction is still correct. All three token-in-URL
+ * landings are registered in `PUBLIC_PREFIXES`, so `middleware` returns before this function
+ * on any of them — meaning the only thing standing between a raw guest token and the
+ * `Location:` header is a route-registry entry in a DIFFERENT file, guarded by one
+ * containment test (`route-config.test.ts`). That is a thin guarantee for a live credential:
+ * de-register `/join/` as public, or add a fourth sensitive prefix and forget the public
+ * entry, and this line starts copying the token into the login URL, the CDN access log and
+ * the browser address bar — with nothing failing to say so.
+ *
+ * Redaction costs nothing here because `returnTo` only has to survive `isValidReturnTo` and
+ * name a destination; and a redacted `/join/[redacted]` is not a valid destination anyway,
+ * which is the honest outcome — a guest link cannot be resumed through a login round-trip,
+ * so the correct behaviour is to send them to `/login` plainly rather than to leak the token
+ * in the attempt.
+ */
 async function redirectToLogin(request: NextRequest, pathname: string): Promise<NextResponse> {
   const loginUrl = new URL('/login', request.url);
-  const returnTo = pathname + request.nextUrl.search;
+  const returnTo = redactSensitivePath(pathname + request.nextUrl.search);
   if (isValidReturnTo(returnTo)) {
     loginUrl.searchParams.set('returnTo', returnTo);
   }

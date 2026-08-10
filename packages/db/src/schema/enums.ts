@@ -759,3 +759,87 @@ export const reviewSurfaceEnum = pgEnum('review_surface', ['end_of_call', 'recap
  * NEITHER APPEARS IN AN INDEX PREDICATE — house rule.
  */
 export const reviewAuthMethodEnum = pgEnum('review_auth_method', ['session', 'magic_link']);
+
+// ── BAL-408 / ADR-1044 — the guest participation model (schema/guests.ts) ──────────────
+//
+// ALL FOUR ENUMS BELOW ARE STANDALONE `CREATE TYPE`s IN MIGRATION 0061, so every label
+// they are BORN with commits atomically with the type. Naming such a label inside a CHECK
+// in that SAME migration is therefore SAFE — `meeting_guest_party_two_sided` and
+// `meeting_guest_delegate_is_client_side` both do it, on the identical footing as
+// `meeting_outcome_requires_ended` (0056). Memory
+// `reference_enum_default_same_tx_migration_hazard` binds only `ALTER TYPE … ADD VALUE`,
+// which 0061 performs on NO type. Any FUTURE label added to one of these inherits that
+// prohibition: add it in one migration, use it in a default/CHECK in the next.
+//
+// NONE of the four appears in an INDEX PREDICATE (the house rule at `action-items.ts` /
+// `transcripts.ts`) — the guest partial uniques predicate on `deleted_at` / `revoked_at`
+// COLUMNS only.
+
+/**
+ * BAL-408 — guest vs delegate. A DELEGATE attends INSTEAD of the booker (replacement
+ * semantics); a GUEST attends alongside.
+ *
+ * ⚠ EXPERT SUBSTITUTION IS OUT OF SCOPE AND IS MADE UNREPRESENTABLE, not merely
+ * discouraged: `meeting_guest_delegate_is_client_side` refuses `participation_role =
+ * 'delegate'` on the expert side at the DATABASE. An expert-side delegate IS substitution
+ * by definition (the booker a delegate replaces is the client), so no future service
+ * branch can reintroduce it by accident.
+ *
+ * NO `observer` / `co_host` LABEL. This axis answers "alongside or instead of", nothing
+ * else — WHICH SIDE is `party`, and WHETHER THEY MAY HOST is ADR-1046's engagement axis,
+ * which reads no participant table at all.
+ */
+export const meetingParticipationRoleEnum = pgEnum('meeting_participation_role', [
+  'guest',
+  'delegate',
+]);
+
+/**
+ * BAL-408 / ADR-1044 — what a guest may READ afterwards.
+ *
+ *   `meeting`    — the safe default: this ONE meeting and its artefacts.
+ *   `engagement` — the whole envelope, RETROSPECTIVELY (consultations held before the
+ *                  guest was invited are included — that is the decision, and it is why
+ *                  the invite UI carries an explicit disclosure sentence).
+ *
+ * ⚠ THE LABEL IS `engagement`, NOT `case`, DELIBERATELY. It names the ADR-1045 SUPERTYPE:
+ * a guest on a `project_kickoff`, `package_session` or `retainer_checkin` meeting gets the
+ * identical whole-envelope grant, and `case` is only one of four `engagement_type` values.
+ * UI copy still renders "Whole case" when the engagement IS a case — a rendering concern,
+ * not a schema one.
+ *
+ * ⚠ BAL-408 RECORDS THE GRANT; IT DOES NOT ENFORCE THE READ. The surfaces that would
+ * enforce it do not exist for a guest yet (the recap is BAL-388; transcripts BAL-387 and
+ * action items BAL-391 ship inert). The pure predicate BAL-388 must call is
+ * `guestMayReadMeeting` in `@balo/shared/meetings`.
+ */
+export const guestAccessScopeEnum = pgEnum('guest_access_scope', ['meeting', 'engagement']);
+
+/**
+ * BAL-408 — HOW the guest reached the meeting.
+ *   `email` ⇒ someone with rights named this address ⇒ trust-by-default (BAL-134).
+ *   `link`  ⇒ the link was forwarded / shared ⇒ the waiting-to-join queue.
+ * ORTHOGONAL to `admission`: the channel is the FACT, the admission is the DECISION.
+ */
+export const meetingGuestInviteChannelEnum = pgEnum('meeting_guest_invite_channel', [
+  'email',
+  'link',
+]);
+
+/**
+ * BAL-408 — the admit/deny lifecycle.
+ *   `pre_admitted` — an email-invited guest; no host decision is required or recorded.
+ *   `pending`      — the waiting-to-join queue. ⚠ NO PRODUCER SHIPS IN BAL-408: the lobby
+ *                    identity model (anonymous visitor → name capture, bot protection,
+ *                    share-link proof) is BAL-132's design, so admit/deny ships INERT.
+ *   `admitted` / `denied` — terminal. Both are stamped (`admission_decided_at`) and
+ *                    attributed (`admitted_by_user_id`); `meeting_guest_admission_terminal_stamped`
+ *                    makes an unstamped terminal state — and a stamped non-terminal one —
+ *                    impossible.
+ */
+export const meetingGuestAdmissionEnum = pgEnum('meeting_guest_admission', [
+  'pre_admitted',
+  'pending',
+  'admitted',
+  'denied',
+]);

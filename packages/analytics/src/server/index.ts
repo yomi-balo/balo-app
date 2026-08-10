@@ -35,4 +35,9 @@ export { REVIEW_SERVER_EVENTS } from '../events/review';
 // are emitted from `apps/api`, which imports from `@balo/analytics/server` ONLY.
 export { MEETING_SERVER_EVENTS } from '../events/meeting';
 export type { MeetingBookingContextType } from '../events/meeting';
+// BAL-408 — THE SAME FOURTH STEP. `apps/api`'s guest routes and the `apps/web` join landing
+// both import from `@balo/analytics/server`; omitting this line makes the constants
+// unimportable and fails `apps/api`'s typecheck, not this package's (it has neither).
+export { GUEST_SERVER_EVENTS } from '../events/guest';
+export type { GuestInviteEntryPoint } from '../events/guest';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';

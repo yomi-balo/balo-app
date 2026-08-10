@@ -50,6 +50,39 @@ export function expertPartyDisplayName(party: ExpertPartyNameInput): string {
   return personDisplayName(party.firstName, party.lastName, 'An expert');
 }
 
+/**
+ * `"Dana @ Northwind Industrial"` — or just `"Dana"` when there is no SEPARATE party to
+ * name. The one place the "@ org" clause is decided, so no surface has to re-derive it.
+ *
+ * ⚠ THE CLAUSE IS DROPPED, NEVER FILLED WITH A PLACEHOLDER, in three cases:
+ *   · the org label is absent or blank — CLAUDE.md's attribution rule says name the party
+ *     you know, not a stand-in. `"Dana @ their team"` reads like an unsubstituted template
+ *     variable, which is worse than the bare name it was trying to improve on;
+ *   · the org label IS the person's name. An INDEPENDENT expert has no agency, so callers
+ *     legitimately set the org label to the person ("the person IS the party") — and a
+ *     naive concatenation then renders `"Dana Okoro @ Dana Okoro"`. CLAUDE.md states the
+ *     rule directly: "independent experts keep their own name";
+ *   · the person's own name is missing, in which case the org label stands alone.
+ *
+ * Comparison is trimmed and case-insensitive: the two halves reach this function from
+ * different reads (a `users` row and a `companies`/`agencies` row), so they can differ only
+ * in casing or padding and still be the same party.
+ *
+ * `engagementActorAttribution` below applies the same rule for its own inputs; this is the
+ * primitive for callers that have already resolved the two strings themselves.
+ */
+export function personWithOrgLabel(
+  personName: string,
+  orgLabel: string | null | undefined
+): string {
+  const person = personName.trim();
+  const org = orgLabel?.trim() ?? '';
+  if (org.length === 0) return person;
+  if (person.length === 0) return org;
+  if (person.toLowerCase() === org.toLowerCase()) return person;
+  return `${person} @ ${org}`;
+}
+
 /** A person's platform role — mirrors `users.platformRole` without importing `@balo/db`. */
 export type PlatformRole = 'user' | 'admin' | 'super_admin';
 
@@ -113,7 +146,8 @@ export function engagementActorAttribution(
     return audience === 'external' ? 'Balo' : `${name} @ Balo`;
   }
   if (actor.id === expertUserId) {
-    return expertAgencyName !== null ? `${name} @ ${expertAgencyName}` : name;
+    // Freelancer (null agency) → bare name; agency expert → "{name} @ {agency}".
+    return personWithOrgLabel(name, expertAgencyName);
   }
-  return `${name} @ ${companyName}`;
+  return personWithOrgLabel(name, companyName);
 }
