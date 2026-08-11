@@ -175,32 +175,62 @@ describe('POST /notifications/publish', () => {
     expect(mockPublish).toHaveBeenCalledWith('expert.approved', payload);
   });
 
-  it('returns 200 and publishes project.message_posted (expert recipient)', async () => {
+  it('returns 200 and publishes conversation.message_posted (expert recipient)', async () => {
     const payload = {
       correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      conversationId: '550e8400-e29b-41d4-a716-446655440005',
+      contextType: 'relationship',
+      contextId: '550e8400-e29b-41d4-a716-446655440002',
       projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
-      relationshipId: '550e8400-e29b-41d4-a716-446655440002',
       title: 'CPQ implementation',
       senderName: 'Dana Whitfield',
       recipientRole: 'expert',
       expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
       preview: 'Quick question about the price migration',
+      sentDuringMeeting: false,
     };
 
     const res = await inject(
-      { event: 'project.message_posted', payload },
+      { event: 'conversation.message_posted', payload },
       { 'x-internal-api-key': TEST_SECRET }
     );
 
     expect(res.statusCode).toBe(200);
-    expect(mockPublish).toHaveBeenCalledWith('project.message_posted', payload);
+    expect(mockPublish).toHaveBeenCalledWith('conversation.message_posted', payload);
   });
 
-  it('returns 200 and publishes project.file_shared (client recipient)', async () => {
+  /** BAL-424: the ENGAGEMENT arm carries no `projectRequestId` at all — a Case has no request. */
+  it('returns 200 for an ENGAGEMENT-anchored message with no projectRequestId', async () => {
     const payload = {
       correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      conversationId: '550e8400-e29b-41d4-a716-446655440005',
+      contextType: 'engagement',
+      contextId: '550e8400-e29b-41d4-a716-446655440006',
+      engagementId: '550e8400-e29b-41d4-a716-446655440006',
+      title: 'Salesforce CPQ',
+      senderName: 'Dana Whitfield',
+      recipientRole: 'expert',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
+      preview: 'On the migration plan',
+      sentDuringMeeting: true,
+    };
+
+    const res = await inject(
+      { event: 'conversation.message_posted', payload },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPublish).toHaveBeenCalledWith('conversation.message_posted', payload);
+  });
+
+  it('returns 200 and publishes conversation.file_shared (client recipient)', async () => {
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      conversationId: '550e8400-e29b-41d4-a716-446655440005',
+      contextType: 'relationship',
+      contextId: '550e8400-e29b-41d4-a716-446655440002',
       projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
-      relationshipId: '550e8400-e29b-41d4-a716-446655440002',
       title: 'CPQ implementation',
       senderName: 'Priya Nair',
       recipientRole: 'client',
@@ -209,12 +239,42 @@ describe('POST /notifications/publish', () => {
     };
 
     const res = await inject(
-      { event: 'project.file_shared', payload },
+      { event: 'conversation.file_shared', payload },
       { 'x-internal-api-key': TEST_SECRET }
     );
 
     expect(res.statusCode).toBe(200);
-    expect(mockPublish).toHaveBeenCalledWith('project.file_shared', payload);
+    expect(mockPublish).toHaveBeenCalledWith('conversation.file_shared', payload);
+  });
+
+  /**
+   * ⚠ SERVER-ONLY. The debounced digest is published EXCLUSIVELY by the BAL-420 dispatch
+   * tick; `scheduleNotification` is in-process and ADR-1047 Decision 11 keeps the
+   * schedule/cancel seam off HTTP entirely. It therefore has no `publishBodySchema` arm and
+   * the route must refuse it.
+   */
+  it('returns 400 for the SERVER-ONLY conversation.unread_digest_due', async () => {
+    const res = await inject(
+      {
+        event: 'conversation.unread_digest_due',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440000',
+          conversationId: '550e8400-e29b-41d4-a716-446655440005',
+          contextType: 'engagement',
+          contextId: '550e8400-e29b-41d4-a716-446655440006',
+          recipientUserId: '550e8400-e29b-41d4-a716-446655440004',
+          recipientRole: 'client',
+          title: 'Salesforce CPQ',
+          senderName: 'Priya',
+          unreadMessageCount: 2,
+          unreadFileCount: 0,
+          latestActivityAtIso: '2026-08-11T10:00:00.000Z',
+        },
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+    expect(mockPublish).not.toHaveBeenCalled();
   });
 
   it('returns 200 and publishes project.proposal_requested (BAL-272 round-trip)', async () => {
@@ -342,17 +402,42 @@ describe('POST /notifications/publish', () => {
     expect(mockPublish).not.toHaveBeenCalled();
   });
 
-  it('returns 400 when project.message_posted is missing its recipientRole', async () => {
+  it('returns 400 when conversation.message_posted is missing its recipientRole', async () => {
     const res = await inject(
       {
-        event: 'project.message_posted',
+        event: 'conversation.message_posted',
         payload: {
           correlationId: '550e8400-e29b-41d4-a716-446655440000',
+          conversationId: '550e8400-e29b-41d4-a716-446655440005',
+          contextType: 'relationship',
+          contextId: '550e8400-e29b-41d4-a716-446655440002',
           projectRequestId: '550e8400-e29b-41d4-a716-446655440001',
-          relationshipId: '550e8400-e29b-41d4-a716-446655440002',
           title: 'CPQ implementation',
           senderName: 'Dana Whitfield',
           preview: 'hello',
+          sentDuringMeeting: false,
+        },
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+  });
+
+  /** The anchor is the seam, so a payload without it cannot be routed. */
+  it('returns 400 when conversation.message_posted is missing its contextType', async () => {
+    const res = await inject(
+      {
+        event: 'conversation.message_posted',
+        payload: {
+          correlationId: '550e8400-e29b-41d4-a716-446655440000',
+          conversationId: '550e8400-e29b-41d4-a716-446655440005',
+          contextId: '550e8400-e29b-41d4-a716-446655440002',
+          title: 'CPQ implementation',
+          senderName: 'Dana Whitfield',
+          recipientRole: 'expert',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440003',
+          preview: 'hello',
+          sentDuringMeeting: false,
         },
       },
       { 'x-internal-api-key': TEST_SECRET }

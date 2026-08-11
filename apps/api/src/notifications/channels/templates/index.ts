@@ -58,6 +58,10 @@ import { MeetingGuestInvitedEmail, MeetingGuestRemovedEmail } from './meeting-gu
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 import { ActionItemAssignedEmail } from './action-item-assigned.js';
 import { RecapReadyEmail } from './recap-ready.js';
+import {
+  ConversationUnreadDigestEmail,
+  unreadDigestSummary,
+} from './conversation-unread-digest.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -151,6 +155,28 @@ export function sanitizeSubjectTitle(title: string): string {
       .trim()
       .slice(0, SUBJECT_TITLE_MAX_LENGTH)
   );
+}
+
+/**
+ * BAL-424 — the in-app path for a conversation notice, CHOSEN BY THE ANCHOR. Mirrors
+ * `conversationActionUrl` in `in-app-templates.ts`; kept a separate two-line helper rather
+ * than a shared import because the email variant returns a REQUIRED path (the CTA button
+ * always renders) while the in-app one returns `string | undefined`.
+ *
+ * ⚠ TODO(BAL-421) — `/engagements/[id]` CURRENTLY FILTERS `engagement_type = 'project'`, so
+ * this path 404s for a case / package / retainer thread. UNREACHABLE TODAY: all producers
+ * (`post-conversation-message.ts`, `confirm-conversation-file-upload.ts`, and the digest that
+ * rides them) hard-code `contextType: 'relationship'`, so only the `/projects/{id}` branch is
+ * ever taken. BAL-421 ships the case surface and owns widening that route — the link is
+ * written to the shape the plan specified rather than redesigned here.
+ */
+function conversationPath(data: Record<string, unknown>): string {
+  if (data.contextType === 'engagement') {
+    const engagementId = (data.engagementId ?? data.contextId) as string | undefined;
+    return engagementId ? `/engagements/${engagementId}` : '/dashboard';
+  }
+  const projectRequestId = data.projectRequestId as string | undefined;
+  return projectRequestId ? `/projects/${projectRequestId}` : '/dashboard';
 }
 
 const templates: Record<string, (data: Record<string, unknown>) => TemplateOutput> = {
@@ -1109,6 +1135,41 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     }),
     subject: 'Your session recap is ready',
   }),
+
+  /**
+   * BAL-424 — the debounced unread digest. The CTA is ANCHOR-AWARE (`/engagements/{id}` for
+   * an engagement thread, `/projects/{id}` for a relationship thread); the subject names the
+   * counterparty, which ADR-1044 permits for a NAME and never for an address.
+   */
+  'conversation-unread-digest': (data) => {
+    // ⚠ `senderName` IS NULLABLE BY CONTRACT: the fire-time guard sets it to `null` when the
+    // coalesced window spans MORE THAN ONE sender, and the copy then names the THREAD rather
+    // than misattributing everything to whoever happened to write last. A `?? 'Someone'`
+    // would paper over that deliberate null with a fake attribution.
+    const rawSender = data.senderName;
+    const senderName = typeof rawSender === 'string' && rawSender.length > 0 ? rawSender : null;
+    const title = (data.title as string) ?? 'your conversation';
+    const unreadMessageCount = numberCount(data.unreadMessageCount);
+    const unreadFileCount = numberCount(data.unreadFileCount);
+    const summary = unreadDigestSummary(unreadMessageCount, unreadFileCount);
+    return {
+      component: React.createElement(ConversationUnreadDigestEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        senderName,
+        title,
+        unreadMessageCount,
+        unreadFileCount,
+        preview: data.preview as string | undefined,
+        fileName: data.fileName as string | undefined,
+        conversationUrl: `${BASE_URL}${conversationPath(data)}`,
+        baseUrl: BASE_URL,
+      }),
+      subject:
+        senderName === null
+          ? `${summary} on ${sanitizeSubjectTitle(title)}`
+          : `${summary} from ${sanitizeSubjectTitle(senderName)}`,
+    };
+  },
 
   // BAL-386 — a client member shared a submitted proposal with an EXTERNAL colleague
   // (external `email_address` path — no user row to hydrate). The magic-link CTA is

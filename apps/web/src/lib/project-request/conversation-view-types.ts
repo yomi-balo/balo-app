@@ -1,4 +1,5 @@
 import type { RequestExpertRelationship } from '@balo/db';
+import { PREVIEW_MAX_CHARS, previewOfPlainText } from '@balo/shared/notifications';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import type { ProjectRequestStatus } from './resolve-request-lens';
 
@@ -15,14 +16,12 @@ import type { ProjectRequestStatus } from './resolve-request-lens';
 /** Max PLAIN-TEXT chars per message (UX limit; the server re-enforces after strip). */
 export const MESSAGE_MAX_TEXT = 4000;
 
-/** Preview length cap — the single source of the 140-char truncation rule. */
-export const PREVIEW_MAX_CHARS = 140;
-
-/** Truncate plain text to the preview rule: ≤140 chars, ellipsis on overflow. */
-export function previewOfPlainText(text: string): string {
-  if (text.length <= PREVIEW_MAX_CHARS) return text;
-  return `${text.slice(0, PREVIEW_MAX_CHARS - 1).trimEnd()}…`;
-}
+/**
+ * BAL-424: the 140-char truncation rule now lives in `@balo/shared/notifications`, so the
+ * API's conversation-unread digest rebuilds an identical preview at fire time. Re-exported
+ * here so every existing call site is unchanged.
+ */
+export { PREVIEW_MAX_CHARS, previewOfPlainText };
 
 /** Plain-text preview of a sanitised HTML body — null when effectively empty. */
 export function previewOfHtml(bodyHtml: string): string | null {
@@ -84,7 +83,18 @@ export function deriveThreadStage(
 }
 
 export interface ConversationThreadView {
+  /**
+   * The UI's thread identity, and the id every Server Action still takes as its CLAIM.
+   * BAL-424 re-anchored the DB tables onto `conversations` but deliberately left the
+   * action surface speaking relationship ids — the IDOR gate keeps its exact shape.
+   */
   relationshipId: string;
+  /**
+   * BAL-424 — the thread this relationship anchors. The Ably CHANNEL and every realtime
+   * payload key on this, never on `relationshipId`: a Case has no relationship at all, and a
+   * project thread that carries over at kickoff must not change channel mid-life.
+   */
+  conversationId: string;
   expertProfileId: string;
   /** Full name (fallback 'Invited expert', mirrors `relationshipName()`). */
   expertName: string;
@@ -112,9 +122,15 @@ export interface ConversationThreadView {
   eoiSubmittedAtIso: string | null;
 }
 
+/**
+ * ⚠ THIS IS THE ABLY WIRE PAYLOAD. It carries `conversationId`, NOT `relationshipId`
+ * (BAL-424) — the channel is keyed on the conversation, and the client hook's structural
+ * type guard requires this exact field. The island maps back to a thread via
+ * `threads.find((t) => t.conversationId === …)`.
+ */
 export interface ConversationMessageView {
   id: string;
-  relationshipId: string;
+  conversationId: string;
   /** Sanitised at ingest (plain text → escaped HTML → sanitizeProjectHtml). */
   bodyHtml: string;
   senderUserId: string;
@@ -122,9 +138,10 @@ export interface ConversationMessageView {
   createdAtIso: string;
 }
 
+/** Also an Ably wire payload — see {@link ConversationMessageView}. */
 export interface ConversationFileView {
   id: string;
-  relationshipId: string;
+  conversationId: string;
   fileName: string;
   contentType: string;
   sizeBytes: number;

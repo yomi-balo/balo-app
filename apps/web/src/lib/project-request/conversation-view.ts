@@ -1,8 +1,10 @@
 import 'server-only';
 
 import {
+  conversationContextKey,
   conversationsRepository,
   expertsRepository,
+  type ConversationContextRef,
   type ConversationFile,
   type ConversationMessage,
   type ProjectRequestWithRelations,
@@ -33,6 +35,11 @@ type Relationship = ProjectRequestWithRelations['relationships'][number];
 
 const FIRST_PAGE_SIZE = 30;
 
+/** BAL-424 — the `conversation_contexts` anchor a project thread's relationship names. */
+function conversationRefForRelationship(relationshipId: string): ConversationContextRef {
+  return { contextType: 'relationship', contextId: relationshipId };
+}
+
 function fullName(
   firstName: string | null | undefined,
   lastName: string | null | undefined,
@@ -59,7 +66,7 @@ export function mapMessageRowToView(
 ): ConversationMessageView {
   return {
     id: row.id,
-    relationshipId: row.relationshipId,
+    conversationId: row.conversationId,
     bodyHtml: row.body,
     senderUserId: row.senderUserId,
     senderName: fullName(row.senderFirstName, row.senderLastName, 'Participant'),
@@ -99,7 +106,7 @@ export function mapFileRowToView(
   else if (row.uploadedByUserId === names.expertUserId) uploadedByName = names.expertName;
   return {
     id: row.id,
-    relationshipId: row.relationshipId,
+    conversationId: row.conversationId,
     fileName: row.fileName,
     contentType: row.contentType,
     sizeBytes: row.sizeBytes,
@@ -150,20 +157,54 @@ export async function loadConversationView(
   ctx: RequestViewerContext,
   user: SessionUser
 ): Promise<ConversationView> {
-  const openRelationships = request.relationships
+  const candidateRelationships = request.relationships
     .filter((r) => isThreadOpenStatus(r.status))
     .filter((r) => ctx.lens !== 'expert' || r.id === ctx.relationshipId)
     .sort((a, b) => a.invitedAt.getTime() - b.invitedAt.getTime() || a.id.localeCompare(b.id));
 
-  const relationshipIds = openRelationships.map((r) => r.id);
-  const [summaries, usernames] = await Promise.all([
-    conversationsRepository.listThreadSummaries({ relationshipIds, viewerUserId: user.id }),
-    hydrateUsernames(openRelationships, ctx.lens),
-  ]);
-  const summaryById = new Map(summaries.map((s) => [s.relationshipId, s]));
+  /**
+   * BAL-424 — relationship → conversation, resolved ONCE for the whole view.
+   *
+   * ⚠ `ensureManyForContexts` (a WRITE) rather than the read-only
+   * `conversationIdsForContexts`: this loader also decides which Ably channels the island
+   * subscribes to, and a thread whose conversation did not yet exist would silently drop out
+   * of that list. Idempotent; one row per thread ever. `invite()` provisions eagerly, so in
+   * practice every entry is a read hit — the repository ensures every miss, so an unresolved
+   * relationship below is an impossible state, logged and dropped rather than rendered as a
+   * thread that could neither be read nor posted to.
+   */
+  const conversationIdByRelationship = await conversationsRepository.ensureManyForContexts(
+    candidateRelationships.map((r) => conversationRefForRelationship(r.id))
+  );
 
-  const threads: ConversationThreadView[] = openRelationships.map((relationship) => {
-    const summary = summaryById.get(relationship.id);
+  const openThreads = candidateRelationships.flatMap((relationship) => {
+    const conversationId = conversationIdByRelationship.get(
+      conversationContextKey(conversationRefForRelationship(relationship.id))
+    );
+    if (conversationId === undefined) {
+      log.error('Conversation thread dropped — no conversation resolved for relationship', {
+        requestId: request.id,
+        relationshipId: relationship.id,
+      });
+      return [];
+    }
+    return [{ relationship, conversationId }];
+  });
+
+  const [summaries, usernames] = await Promise.all([
+    conversationsRepository.listThreadSummaries({
+      conversationIds: openThreads.map((t) => t.conversationId),
+      viewerUserId: user.id,
+    }),
+    hydrateUsernames(
+      openThreads.map((t) => t.relationship),
+      ctx.lens
+    ),
+  ]);
+  const summaryById = new Map(summaries.map((s) => [s.conversationId, s]));
+
+  const threads: ConversationThreadView[] = openThreads.map(({ relationship, conversationId }) => {
+    const summary = summaryById.get(conversationId);
     const expertUser = relationship.expertProfile.user;
     const latestMessage = summary?.latestMessage ?? null;
     const latestInboundAt = summary?.latestInboundActivityAt ?? null;
@@ -177,6 +218,7 @@ export async function loadConversationView(
 
     return {
       relationshipId: relationship.id,
+      conversationId,
       expertProfileId: relationship.expertProfileId,
       expertName,
       expertFirstName: firstWord ?? expertName,
@@ -204,16 +246,20 @@ export async function loadConversationView(
   let initialHasEarlier = false;
   let initialFiles: ConversationFileView[] = [];
 
-  const defaultRelationship = openRelationships.find((r) => r.id === defaultThreadId);
-  if (defaultThreadId !== null && defaultRelationship !== undefined) {
+  // `defaultThreadId` is a RELATIONSHIP id — the UI's thread identity is unchanged by
+  // BAL-424; only the repository reads move to the conversation.
+  const defaultThread = openThreads.find((t) => t.relationship.id === defaultThreadId);
+  if (defaultThreadId !== null && defaultThread !== undefined) {
     const [page, files] = await Promise.all([
       conversationsRepository.listMessagesPage({
-        relationshipId: defaultThreadId,
+        conversationId: defaultThread.conversationId,
+        // Both parties read the whole thread; `{ kind: 'meeting' }` is the guest scope.
+        scope: { kind: 'full' },
         limit: FIRST_PAGE_SIZE,
       }),
-      conversationsRepository.listFiles(defaultThreadId),
+      conversationsRepository.listFiles(defaultThread.conversationId, { kind: 'full' }),
     ]);
-    const names = participantNames(request, defaultRelationship);
+    const names = participantNames(request, defaultThread.relationship);
     initialMessages = page.messages.map(mapMessageRowToView);
     initialHasEarlier = page.hasEarlier;
     // Repo returns oldest-first; the Files panel reads newest-first.

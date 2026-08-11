@@ -36,6 +36,30 @@ function partyMemberName(data: Record<string, unknown>): string {
   return name.length > 0 ? name : 'A teammate';
 }
 
+/**
+ * BAL-424 — the deep link for a conversation notice, CHOSEN BY THE ANCHOR.
+ *
+ * `relationship` → the project request; `engagement` → the delivery workspace. A Case has NO
+ * request, so the old unconditional `/projects/${projectRequestId}` would have produced a
+ * dead link (or none at all) for exactly the surface this ticket generalises the event for.
+ * Falls back to no link rather than to a wrong one.
+ *
+ * ⚠ TODO(BAL-421) — `/engagements/[id]` CURRENTLY FILTERS `engagement_type = 'project'`, so
+ * this path 404s for a case / package / retainer thread. UNREACHABLE TODAY: all four
+ * producers (`post-conversation-message.ts`, `confirm-conversation-file-upload.ts`, and the
+ * digest's two arms) hard-code `contextType: 'relationship'`, so only the `/projects/{id}`
+ * branch is ever taken. BAL-421 ships the case surface and owns widening that route — the
+ * link is written to the shape the plan specified rather than redesigned here.
+ */
+function conversationActionUrl(data: Record<string, unknown>): string | undefined {
+  if (data.contextType === 'engagement') {
+    const engagementId = (data.engagementId ?? data.contextId) as string | undefined;
+    return engagementId ? `/engagements/${engagementId}` : undefined;
+  }
+  const projectRequestId = data.projectRequestId as string | undefined;
+  return projectRequestId ? `/projects/${projectRequestId}` : undefined;
+}
+
 /** BAL-345 — human noun for the party type carried in `data.partyType`. */
 function partyTypeNoun(data: Record<string, unknown>): string {
   if (data.partyType === 'company') return 'company';
@@ -520,25 +544,23 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
-  'project-message-posted': (data) => {
+  'conversation-message-posted': (data) => {
     const senderName = (data.senderName as string) ?? 'Someone';
     const preview = (data.preview as string) ?? 'sent you a message';
-    const projectRequestId = data.projectRequestId as string | undefined;
     return {
       title: 'New message',
       body: `${senderName}: ${preview}`,
-      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+      actionUrl: conversationActionUrl(data),
     };
   },
 
-  'project-file-shared': (data) => {
+  'conversation-file-shared': (data) => {
     const senderName = (data.senderName as string) ?? 'Someone';
     const fileName = (data.fileName as string) ?? 'a file';
-    const projectRequestId = data.projectRequestId as string | undefined;
     return {
       title: 'New file shared',
       body: `${senderName} shared ${fileName}`,
-      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+      actionUrl: conversationActionUrl(data),
     };
   },
 

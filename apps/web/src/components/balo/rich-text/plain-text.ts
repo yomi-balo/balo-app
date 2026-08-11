@@ -1,9 +1,16 @@
+import { htmlToPlainText } from '@balo/shared/notifications';
+
 /**
  * Pure, client-safe helpers for validating rich-text HTML by its PLAIN-TEXT
  * content length (not the HTML length) so an "empty" editor that still emits
  * `<p></p>` is correctly treated as empty.
  *
  * No DOM, no React — trivially unit-testable and safe in any runtime.
+ *
+ * BAL-424: `htmlToPlainText` (and the linear, S5852-safe tag scan behind it) now
+ * lives in `@balo/shared/notifications`, because `apps/api`'s conversation-unread
+ * digest rebuilds a message preview at fire time and neither app may import the
+ * other. It is RE-EXPORTED here so every existing call site is unchanged.
  */
 
 /** Min plain-text length for a valid brief (design §2.3). */
@@ -11,44 +18,7 @@ export const DESCRIPTION_MIN_TEXT = 10;
 /** Max plain-text length for a brief (design §2.3 — UX limit, separate from the server DoS bound). */
 export const DESCRIPTION_MAX_TEXT = 4000;
 
-/**
- * Strip HTML tags with a single linear scan (no regex) — each `<…>` span is
- * replaced with a space to preserve word boundaries. Avoids the
- * backtracking-prone `/<[^>]*>/g` pattern (SonarCloud S5852); provably O(n).
- * Input is sanitised/Tiptap HTML, where a literal `>` in text is already an
- * entity, so raw `>` only ever closes a tag.
- */
-function stripHtmlTags(html: string): string {
-  let out = '';
-  let inTag = false;
-  for (const ch of html) {
-    if (ch === '<') {
-      inTag = true;
-    } else if (ch === '>' && inTag) {
-      inTag = false;
-      out += ' ';
-    } else if (!inTag) {
-      out += ch;
-    }
-  }
-  return out;
-}
-
-/**
- * Strip tags + decode the handful of entities Tiptap emits, collapse runs of
- * whitespace, and trim. Returns the human-visible text of a fragment of HTML.
- */
-export function htmlToPlainText(html: string): string {
-  return stripHtmlTags(html)
-    .replaceAll('&nbsp;', ' ')
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+export { htmlToPlainText };
 
 /** Plain-text length of an HTML fragment (used for min/max validation). */
 export function plainTextLength(html: string): number {

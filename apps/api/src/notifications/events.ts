@@ -41,6 +41,9 @@ import type {
   MeetingGuestInvitedPayload,
   MeetingGuestAddedPayload,
   MeetingGuestRemovedPayload,
+  ConversationMessagePostedPayload,
+  ConversationFileSharedPayload,
+  ConversationUnreadDigestDuePayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -164,29 +167,12 @@ export interface ProjectKickoffApprovedPayload {
   clientCompanyName: string; // client's company name — email/in-app body
 }
 
-export interface ProjectMessagePostedPayload {
-  correlationId: string; // message id — dedup per message (dispatcher jobId)
-  projectRequestId: string;
-  relationshipId: string;
-  title: string; // request title
-  senderName: string;
-  recipientRole: 'client' | 'expert'; // rule condition routes on this
-  recipientId?: string; // set when recipientRole==='client' (= createdByUserId) → dispatcher 'client' path
-  expertProfileId?: string; // set when recipientRole==='expert' → resolver hydrates data.expert
-  preview: string; // plain-text snippet ≤140 (htmlToPlainText)
-}
-
-export interface ProjectFileSharedPayload {
-  correlationId: string; // file id — dedup per share
-  projectRequestId: string;
-  relationshipId: string;
-  title: string;
-  senderName: string;
-  recipientRole: 'client' | 'expert';
-  recipientId?: string;
-  expertProfileId?: string;
-  fileName: string;
-}
+// BAL-424: `ProjectMessagePostedPayload` / `ProjectFileSharedPayload` were declared here.
+// They are now `ConversationMessagePostedPayload` / `ConversationFileSharedPayload` in
+// `@balo/shared/notifications` (imported above) — re-anchored off
+// `request_expert_relationships` onto the ADR-1045 §2 context seam, so one event serves a
+// project relationship AND a case. Declaring them in both catalogs would trip the SonarCloud
+// new-code duplication gate.
 
 // BAL-324 admin-initiated billing reminder (kickoff board → outstanding
 // client-billing gate). `correlationId` is minted PER CLICK (crypto.randomUUID)
@@ -253,8 +239,6 @@ export type NotificationEvent =
   | 'project.kickoff_approved'
   | 'project.changes_requested'
   | 'project.proposal_resubmitted'
-  | 'project.message_posted'
-  | 'project.file_shared'
   | 'project.billing_reminder'
   | 'proposal.shared'
   | 'billing.details_confirmed'
@@ -304,7 +288,16 @@ export type NotificationEvent =
   // credential — `apps/web`'s publisher is fire-and-forget and swallows a non-2xx.
   | 'meeting.guest_invited'
   | 'meeting.guest_added'
-  | 'meeting.guest_removed';
+  | 'meeting.guest_removed'
+  // BAL-424 — the conversation primitive, re-anchored off `request_expert_relationships`
+  // onto the ADR-1045 §2 context seam. RENAMED from `project.message_posted` /
+  // `project.file_shared`: the payload had to change anyway (the anchor became the seam),
+  // and a `project.` prefix on an event that fires for a Case would make
+  // `notification_log.event`, every Axiom query and every future rule condition read
+  // `project.*` for a message with no project.
+  | 'conversation.message_posted'
+  | 'conversation.file_shared'
+  | 'conversation.unread_digest_due';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -355,7 +348,15 @@ export type ServerOnlyNotificationEvent =
   // process from creation to enqueue rather than crossing a service boundary.
   | 'meeting.guest_invited'
   | 'meeting.guest_added'
-  | 'meeting.guest_removed';
+  | 'meeting.guest_removed'
+  // BAL-424: the debounced unread digest is published EXCLUSIVELY by the BAL-420 dispatch
+  // tick (`jobs/scheduled-notification-dispatch.ts`) — `scheduleNotification` is an
+  // in-process `apps/api` function and ADR-1047 Decision 11 keeps the schedule/cancel seam
+  // off HTTP entirely. So it has no `publishBodySchema` arm; adding one would be a
+  // `StraySchemaArm` and fail `tsc`. ⚠ `conversation.message_posted` /
+  // `conversation.file_shared` are deliberately NOT listed: both are published by web
+  // Server Actions and need their arms.
+  | 'conversation.unread_digest_due';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -443,8 +444,6 @@ export interface EventPayloadMap {
   'project.kickoff_approved': ProjectKickoffApprovedPayload;
   'project.changes_requested': ProjectChangesRequestedPayload;
   'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
-  'project.message_posted': ProjectMessagePostedPayload;
-  'project.file_shared': ProjectFileSharedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
   'proposal.shared': ProposalSharedPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;
@@ -487,4 +486,7 @@ export interface EventPayloadMap {
   'meeting.guest_invited': MeetingGuestInvitedPayload;
   'meeting.guest_added': MeetingGuestAddedPayload;
   'meeting.guest_removed': MeetingGuestRemovedPayload;
+  'conversation.message_posted': ConversationMessagePostedPayload;
+  'conversation.file_shared': ConversationFileSharedPayload;
+  'conversation.unread_digest_due': ConversationUnreadDigestDuePayload;
 }

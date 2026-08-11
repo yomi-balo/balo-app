@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const READ_AT = new Date('2026-06-10T10:00:00Z');
 
 vi.mock('server-only', () => ({}));
@@ -33,7 +34,7 @@ describe('markThreadReadAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRequireUser.mockResolvedValue(USER);
-    mockResolveAccess.mockResolvedValue({ ok: true });
+    mockResolveAccess.mockResolvedValue({ ok: true, conversationId: CONVERSATION_ID });
     mockMarkThreadRead.mockResolvedValue({ lastReadAt: READ_AT });
   });
 
@@ -59,7 +60,7 @@ describe('markThreadReadAction', () => {
     const result = await markThreadReadAction(VALID_INPUT);
     expect(result).toEqual({ success: true, lastReadAtIso: READ_AT.toISOString() });
     expect(mockMarkThreadRead).toHaveBeenCalledWith({
-      relationshipId: REL_ID,
+      conversationId: CONVERSATION_ID,
       userId: USER.id,
       at: expect.any(Date),
     });

@@ -11,6 +11,7 @@ import {
   projectRequestProducts,
   projectRequestDocuments,
   expressionsOfInterest,
+  conversationContexts,
   conversationMessages,
   requestExpertRelationships,
   auditEvents,
@@ -184,12 +185,20 @@ describe('projectRequestsRepository.createProjectRequest', () => {
       .where(eq(requestExpertRelationships.projectRequestId, row.id));
     expect(relationships).toHaveLength(0);
 
+    // BAL-424: messages reach the relationship through `conversation_contexts`, not an FK.
     const messages = await db
       .select({ id: conversationMessages.id })
       .from(conversationMessages)
       .innerJoin(
+        conversationContexts,
+        and(
+          eq(conversationContexts.conversationId, conversationMessages.conversationId),
+          eq(conversationContexts.contextType, 'relationship')
+        )
+      )
+      .innerJoin(
         requestExpertRelationships,
-        eq(conversationMessages.relationshipId, requestExpertRelationships.id)
+        eq(requestExpertRelationships.id, conversationContexts.contextId)
       )
       .where(eq(requestExpertRelationships.projectRequestId, row.id));
     expect(messages).toHaveLength(0);
@@ -642,7 +651,7 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
       throw new Error('expected a direct request with a target expert');
     }
 
-    const { relationship } = await requestExpertRelationshipFactory({
+    const { relationship, conversationId } = await requestExpertRelationshipFactory({
       projectRequestId: request.id,
       expertProfileId: request.expertProfileId,
     });
@@ -664,16 +673,18 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
       submittedAt: newer,
     });
 
-    // Messages are 1:many — two live messages, only the newest should hydrate.
+    // Messages are 1:many — two live messages, only the newest should hydrate. BAL-424:
+    // they hang off the relationship's CONVERSATION and are grafted back on, so this test
+    // is also the shape-preservation guard for that graft.
     await db.insert(conversationMessages).values([
       {
-        relationshipId: relationship.id,
+        conversationId,
         senderUserId: sender.id,
         body: '<p>Older.</p>',
         createdAt: older,
       },
       {
-        relationshipId: relationship.id,
+        conversationId,
         senderUserId: sender.id,
         body: '<p>Newer.</p>',
         createdAt: newer,
@@ -701,7 +712,7 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
       throw new Error('expected a direct request with a target expert');
     }
 
-    const { relationship } = await requestExpertRelationshipFactory({
+    const { relationship, conversationId } = await requestExpertRelationshipFactory({
       projectRequestId: request.id,
       expertProfileId: request.expertProfileId,
     });
@@ -725,13 +736,13 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     // Messages are 1:many — the NEWER message is soft-deleted → the older live one wins.
     await db.insert(conversationMessages).values([
       {
-        relationshipId: relationship.id,
+        conversationId,
         senderUserId: sender.id,
         body: '<p>Live.</p>',
         createdAt: live,
       },
       {
-        relationshipId: relationship.id,
+        conversationId,
         senderUserId: sender.id,
         body: '<p>Removed.</p>',
         createdAt: deletedNewer,

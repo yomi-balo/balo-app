@@ -85,31 +85,45 @@ const projectEoiSubmittedPayload = z.object({
   expertName: z.string().min(1).max(120),
 });
 
-// BAL-271 conversation events. `recipientId` is set when recipientRole==='client'
-// (dispatcher 'client' path); `expertProfileId` when recipientRole==='expert'
-// (resolver hydrates data.expert). Mirrors apps/web/src/lib/notifications/types.ts.
-const projectMessagePostedPayload = z.object({
+// BAL-271 conversation events, re-anchored by BAL-424 onto the ADR-1045 §2 context seam.
+// `recipientId` is set when recipientRole==='client' (dispatcher 'client' path);
+// `expertProfileId` when recipientRole==='expert' (resolver hydrates data.expert).
+//
+// ⚠ `contextType` + `contextId` ARE THE AUTHORITATIVE ANCHOR and are both required.
+// `projectRequestId` and `engagementId` are BOTH OPTIONAL — the `relationship` arm carries
+// the request, the `engagement` arm carries the engagement, and a Case has no request at
+// all. They exist only so the in-app template can build a deep link, so the pair is
+// deliberately not cross-validated here.
+// Mirrors apps/web/src/lib/notifications/types.ts.
+const conversationMessagePostedPayload = z.object({
   correlationId: z.uuid(), // message id — dedup per message
-  projectRequestId: z.uuid(),
-  relationshipId: z.uuid(),
+  conversationId: z.uuid(),
+  contextType: z.enum(['relationship', 'engagement']),
+  contextId: z.uuid(),
   title: z.string().min(1),
   senderName: z.string().min(1),
   recipientRole: z.enum(['client', 'expert']),
   recipientId: z.uuid().optional(),
   expertProfileId: z.uuid().optional(),
   preview: z.string().max(200),
+  projectRequestId: z.uuid().optional(),
+  engagementId: z.uuid().optional(),
+  sentDuringMeeting: z.boolean(),
 });
 
-const projectFileSharedPayload = z.object({
+const conversationFileSharedPayload = z.object({
   correlationId: z.uuid(), // file id — dedup per share
-  projectRequestId: z.uuid(),
-  relationshipId: z.uuid(),
+  conversationId: z.uuid(),
+  contextType: z.enum(['relationship', 'engagement']),
+  contextId: z.uuid(),
   title: z.string().min(1),
   senderName: z.string().min(1),
   recipientRole: z.enum(['client', 'expert']),
   recipientId: z.uuid().optional(),
   expertProfileId: z.uuid().optional(),
   fileName: z.string().min(1).max(255),
+  projectRequestId: z.uuid().optional(),
+  engagementId: z.uuid().optional(),
 });
 
 // BAL-272 proposal request (client → expert). `correlationId` is the
@@ -530,12 +544,12 @@ export const publishBodySchema = z.discriminatedUnion('event', [
     payload: projectProposalResubmittedPayload,
   }),
   z.object({
-    event: z.literal('project.message_posted'),
-    payload: projectMessagePostedPayload,
+    event: z.literal('conversation.message_posted'),
+    payload: conversationMessagePostedPayload,
   }),
   z.object({
-    event: z.literal('project.file_shared'),
-    payload: projectFileSharedPayload,
+    event: z.literal('conversation.file_shared'),
+    payload: conversationFileSharedPayload,
   }),
   z.object({
     event: z.literal('project.billing_reminder'),

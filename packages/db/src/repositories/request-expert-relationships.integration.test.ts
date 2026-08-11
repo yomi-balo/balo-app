@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { requestExpertRelationships } from '../schema';
+import { conversationContexts, conversations, requestExpertRelationships } from '../schema';
 import {
   userFactory,
   expertDraftFactory,
@@ -14,6 +14,7 @@ import {
   InvalidRelationshipTransitionError,
 } from './request-expert-relationships';
 import { projectRequestsRepository } from './project-requests';
+import { conversationsRepository } from './conversations';
 
 describe('requestExpertRelationshipsRepository.invite', () => {
   it('creates an invited relationship row', async () => {
@@ -120,6 +121,70 @@ describe('requestExpertRelationshipsRepository.invite', () => {
         invitedByUserId: randomUUID(),
       })
     ).rejects.toThrow();
+  });
+
+  // ── BAL-424 eager conversation provisioning ──────────────────────────
+
+  it('provisions EXACTLY ONE conversation for the new relationship', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const admin = await userFactory({ platformRole: 'admin' });
+    const expertId = request.expertProfileId;
+    if (expertId === null) throw new Error('seeded request has no expert');
+
+    const row = await requestExpertRelationshipsRepository.invite({
+      projectRequestId: request.id,
+      expertProfileId: expertId,
+      invitedByUserId: admin.id,
+    });
+    if (row === undefined) throw new Error('expected invite to create a row');
+
+    const contexts = await db
+      .select()
+      .from(conversationContexts)
+      .where(eq(conversationContexts.contextId, row.id));
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.contextType).toBe('relationship');
+
+    const conversation = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: row.id,
+    });
+    expect(conversation?.id).toBe(contexts[0]?.conversationId);
+  });
+
+  it('provisions NOTHING on a conflicting re-invite (the idempotent skip)', async () => {
+    const { projectRequestId, expertProfileId, invitedByUserId } =
+      await requestExpertRelationshipFactory();
+
+    const before = await db.select({ id: conversations.id }).from(conversations);
+
+    const dup = await requestExpertRelationshipsRepository.invite({
+      projectRequestId,
+      expertProfileId,
+      invitedByUserId,
+    });
+    expect(dup).toBeUndefined();
+
+    const after = await db.select({ id: conversations.id }).from(conversations);
+    expect(after).toHaveLength(before.length);
+  });
+
+  it('softDelete leaves the conversation LIVE (history is preserved, Q3)', async () => {
+    const { relationship, conversationId } = await requestExpertRelationshipFactory();
+
+    await requestExpertRelationshipsRepository.softDelete(relationship.id);
+
+    const [conversation] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(conversation?.deletedAt).toBeNull();
+
+    const [context] = await db
+      .select()
+      .from(conversationContexts)
+      .where(eq(conversationContexts.contextId, relationship.id));
+    expect(context?.deletedAt).toBeNull();
   });
 });
 

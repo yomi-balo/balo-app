@@ -46,7 +46,7 @@ export async function markThreadReadAction(
     }
 
     const state = await conversationsRepository.markThreadRead({
-      relationshipId,
+      conversationId: access.conversationId,
       userId: user.id,
       at: new Date(),
     });

@@ -79,8 +79,28 @@ import { timestamps, softDelete } from './helpers';
  * **BAL-421** (the case surface — the first caller of `listMeetingsForContext`), and
  * **BAL-425/BAL-420** (the inactivity sweep — the first caller of
  * `consultationTimestampsForEngagements`, which must pass only engagement ids it already
- * scoped). BAL-424 inherits this obligation verbatim when it copies this shape for
- * `conversation_contexts`.
+ * scoped).
+ *
+ * ── BAL-424 HAS NOW COPIED THIS SHAPE, AND DISCHARGED THE OBLIGATION ──────────────────
+ * `conversation_contexts` (`schema/conversations.ts`) is the second cross-cutting primitive
+ * on this seam. The tenancy obligation transferred VERBATIM and is STRICTLY WORSE there: a
+ * cross-tenant `context_id` on a conversation is direct MESSAGE DISCLOSURE, not merely join
+ * credentials or calendar exposure. It is discharged at the service / server-action layer by
+ * two gates, both following BAL-129's ordering rule (authorization before any coherence or
+ * state check; every denial collapsed into ONE literal; the distinguishing shape to the log
+ * only):
+ *   · `apps/web/src/lib/conversations/authorize-conversation-context.ts` — the ENGAGEMENT arm;
+ *   · `apps/web/src/lib/project-request/resolve-conversation-access.ts` — the RELATIONSHIP
+ *     arm (it resolves the owning company through the request graph).
+ *
+ * ⚠ THREE DELIBERATE DEVIATIONS, recorded so the two seams do not read as accidental
+ * divergence — each is argued in full on `conversation_contexts` itself: (1) NO `admin`
+ * context type, therefore (2) its `context_id` is `NOT NULL`, with no biconditional CHECK
+ * and no admin-only partial unique, and (3) it is unique on `(context_type, context_id)`
+ * ALONE — 1:1, not this table's 1:N triple — because "two threads for one case" is the state
+ * that seam exists to make unrepresentable. A fourth difference is in the LABELS: they name
+ * the ANCHOR TABLE (`relationship`, `engagement`), never a purpose, because a conversation
+ * has no purpose axis.
  */
 export const meetingContexts = pgTable(
   'meeting_contexts',

@@ -29,6 +29,7 @@ export * from './engagement-milestones';
 export * from './action-items';
 export * from './transcripts';
 export * from './meetings';
+export * from './conversations';
 export * from './meeting-contexts';
 export * from './meeting-presence';
 export * from './party-domains';

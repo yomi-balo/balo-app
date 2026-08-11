@@ -82,7 +82,7 @@ function emit(channelName: string, event: string, data: unknown): void {
 function messagePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'm-1',
-    relationshipId: 'rel-1',
+    conversationId: 'conv-1',
     bodyHtml: '<p>hi</p>',
     senderUserId: 'user-2',
     senderName: 'Priya Nair',
@@ -94,7 +94,7 @@ function messagePayload(overrides: Record<string, unknown> = {}): Record<string,
 function filePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'f-1',
-    relationshipId: 'rel-1',
+    conversationId: 'conv-1',
     fileName: 'x.pdf',
     contentType: 'application/pdf',
     sizeBytes: 1234,
@@ -103,6 +103,12 @@ function filePayload(overrides: Record<string, unknown> = {}): Record<string, un
     createdAtIso: '2026-06-10T10:00:00.000Z',
     ...overrides,
   };
+}
+
+/** The PRE-BAL-424 wire shape: `relationshipId` where `conversationId` now lives. */
+function asLegacyPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const entries = Object.entries(payload).filter(([key]) => key !== 'conversationId');
+  return { ...Object.fromEntries(entries), relationshipId: 'rel-1' };
 }
 
 describe('useConversationRealtime', () => {
@@ -118,7 +124,7 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: false,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1'],
+        conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
       })
@@ -132,7 +138,7 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: [],
+        conversationIds: [],
         onMessage: vi.fn(),
         onFile: vi.fn(),
       })
@@ -145,16 +151,16 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1', 'rel-2'],
+        conversationIds: ['conv-1', 'conv-2'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
       })
     );
     await waitFor(() => expect(state.clients).toHaveLength(1));
-    expect(state.channels.has('conversation:rel-1')).toBe(true);
-    expect(state.channels.has('conversation:rel-2')).toBe(true);
-    expect(state.channels.get('conversation:rel-1')?.listeners.get('message')).toHaveLength(1);
-    expect(state.channels.get('conversation:rel-1')?.listeners.get('file')).toHaveLength(1);
+    expect(state.channels.has('conversation:conv-1')).toBe(true);
+    expect(state.channels.has('conversation:conv-2')).toBe(true);
+    expect(state.channels.get('conversation:conv-1')?.listeners.get('message')).toHaveLength(1);
+    expect(state.channels.get('conversation:conv-1')?.listeners.get('file')).toHaveLength(1);
   });
 
   it('moves connecting → connected → connecting with the connection lifecycle', async () => {
@@ -162,7 +168,7 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1'],
+        conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
       })
@@ -184,38 +190,77 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1'],
+        conversationIds: ['conv-1'],
         onMessage,
         onFile,
       })
     );
-    await waitFor(() => expect(state.channels.has('conversation:rel-1')).toBe(true));
+    await waitFor(() => expect(state.channels.has('conversation:conv-1')).toBe(true));
 
     const message = messagePayload();
-    act(() => emit('conversation:rel-1', 'message', message));
+    act(() => emit('conversation:conv-1', 'message', message));
     expect(onMessage).toHaveBeenCalledWith(message);
 
     const file = filePayload();
-    act(() => emit('conversation:rel-1', 'file', file));
+    act(() => emit('conversation:conv-1', 'file', file));
     expect(onFile).toHaveBeenCalledWith(file);
 
     // Every consumed field is type-checked — partial shapes never reach the island.
-    act(() => emit('conversation:rel-1', 'message', 'garbage'));
-    act(() => emit('conversation:rel-1', 'message', { nope: true }));
+    act(() => emit('conversation:conv-1', 'message', 'garbage'));
+    act(() => emit('conversation:conv-1', 'message', { nope: true }));
     act(() =>
-      emit('conversation:rel-1', 'message', {
+      emit('conversation:conv-1', 'message', {
         id: 'm-2',
-        relationshipId: 'rel-1',
+        conversationId: 'conv-1',
         bodyHtml: '<p>x</p>',
       })
     );
-    act(() => emit('conversation:rel-1', 'message', messagePayload({ senderName: 42 })));
+    act(() => emit('conversation:conv-1', 'message', messagePayload({ senderName: 42 })));
     expect(onMessage).toHaveBeenCalledTimes(1);
 
     act(() =>
-      emit('conversation:rel-1', 'file', { id: 'f-2', relationshipId: 'rel-1', fileName: 'y.pdf' })
+      emit('conversation:conv-1', 'file', {
+        id: 'f-2',
+        conversationId: 'conv-1',
+        fileName: 'y.pdf',
+      })
     );
-    act(() => emit('conversation:rel-1', 'file', filePayload({ sizeBytes: 'big' })));
+    act(() => emit('conversation:conv-1', 'file', filePayload({ sizeBytes: 'big' })));
+    expect(onFile).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * BAL-424 REGRESSION GUARD. Both payload type guards are STRUCTURAL: had either kept
+   * requiring `relationshipId` after the Ably re-key, EVERY realtime message would be
+   * silently dropped and `tsc` would still be green — the payload arrives as `unknown` from
+   * a third-party transport. This is the only thing that catches a half-finished re-key.
+   */
+  it('rejects a legacy payload carrying relationshipId instead of conversationId', async () => {
+    const onMessage = vi.fn();
+    const onFile = vi.fn();
+    renderHook(() =>
+      useConversationRealtime({
+        enabled: true,
+        requestId: REQUEST_ID,
+        conversationIds: ['conv-1'],
+        onMessage,
+        onFile,
+      })
+    );
+    await waitFor(() => expect(state.channels.has('conversation:conv-1')).toBe(true));
+
+    const legacyMessage = asLegacyPayload(messagePayload());
+    const legacyFile = asLegacyPayload(filePayload());
+
+    act(() => emit('conversation:conv-1', 'message', legacyMessage));
+    act(() => emit('conversation:conv-1', 'file', legacyFile));
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onFile).not.toHaveBeenCalled();
+
+    // …and the CURRENT shape IS accepted, so the assertions above cannot pass vacuously.
+    act(() => emit('conversation:conv-1', 'message', messagePayload()));
+    act(() => emit('conversation:conv-1', 'file', filePayload()));
+    expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onFile).toHaveBeenCalledTimes(1);
   });
 
@@ -225,17 +270,17 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1'],
+        conversationIds: ['conv-1'],
         onMessage,
         onFile: vi.fn(),
       })
     );
-    await waitFor(() => expect(state.channels.has('conversation:rel-1')).toBe(true));
+    await waitFor(() => expect(state.channels.has('conversation:conv-1')).toBe(true));
 
     const hostile = messagePayload({
       bodyHtml: '<p>hi</p><img src=x onerror=alert(1)><script>alert(2)</script>',
     });
-    act(() => emit('conversation:rel-1', 'message', hostile));
+    act(() => emit('conversation:conv-1', 'message', hostile));
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         bodyHtml:
@@ -249,7 +294,7 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1'],
+        conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
       })
@@ -301,7 +346,7 @@ describe('useConversationRealtime', () => {
       useConversationRealtime({
         enabled: true,
         requestId: REQUEST_ID,
-        relationshipIds: ['rel-1'],
+        conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
       })

@@ -113,7 +113,7 @@ describe('projectsInboxRepository.listByCompany', () => {
       throw new Error('expected a direct request with a target expert');
     }
 
-    const { relationship } = await requestExpertRelationshipFactory({
+    const { relationship, conversationId } = await requestExpertRelationshipFactory({
       projectRequestId: request.id,
       expertProfileId: request.expertProfileId,
     });
@@ -130,15 +130,17 @@ describe('projectsInboxRepository.listByCompany', () => {
       message: '<p>The pitch.</p>',
       submittedAt: eoiAt,
     });
+    // BAL-424: messages hang off the relationship's CONVERSATION; `queryPortfolioRequests`
+    // grafts the newest one back into the same `{ id, createdAt }[]` shape.
     await db.insert(conversationMessages).values([
       {
-        relationshipId: relationship.id,
+        conversationId,
         senderUserId: sender.id,
         body: '<p>Old.</p>',
         createdAt: olderMsg,
       },
       {
-        relationshipId: relationship.id,
+        conversationId,
         senderUserId: sender.id,
         body: '<p>New.</p>',
         createdAt: newerMsg,

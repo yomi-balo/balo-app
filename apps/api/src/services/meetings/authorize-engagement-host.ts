@@ -258,12 +258,15 @@ async function hostContextForExpertProfile(
  * existing read of `request_expert_relationships` that projects `status` / `declinedAt`
  * filters `deleted_at IS NULL` (`findById`, `listByRequest`,
  * `projectRequestsRepository.findByIdWithRelations`'s `relationships` child,
- * `projectsInboxRepository`). The one read that DOES reach soft-deleted rows —
- * `conversationsRepository`'s summary join — is keyed by relationship ID (which this arm
- * does not have; it has the request + the expert) and projects NONE of the columns needed.
- * So a soft-deleted relationship is INDISTINGUISHABLE FROM ABSENT here, and absent means
- * ungated. Closing that would need a NEW repository method, which BAL-413's scope forbids
- * adding on speculation.
+ * `projectsInboxRepository`).
+ *
+ * ⚠ AFTER BAL-424, THERE IS **NO** READ OF `request_expert_relationships` ON THIS PLATFORM
+ * THAT REACHES SOFT-DELETED ROWS. The one that used to — `conversationsRepository`'s summary
+ * join — now drives from `conversations` and does not touch that table at all, because
+ * messaging was re-anchored onto the ADR-1045 §2 context seam. That STRENGTHENS this
+ * limitation rather than weakening it. So a soft-deleted relationship is INDISTINGUISHABLE
+ * FROM ABSENT here, and absent means ungated. Closing that would need a NEW repository
+ * method, which BAL-413's scope forbids adding on speculation.
  * The residual is narrow: soft-delete means "removed from the request's invite list", and
  * on a `direct` request the target is named by the REQUEST, not by the relationship —
  * removing the invite row does not un-name them as the direct target, and the partial

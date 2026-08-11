@@ -26,7 +26,11 @@ vi.mock('@/lib/auth/session', () => ({
 
 const mockResolveAccess = vi.fn();
 vi.mock('@/lib/project-request/resolve-conversation-access', () => ({
-  resolveConversationAccess: (...args: unknown[]) => mockResolveAccess(...args),
+  // BAL-424: this action is on `READ_ONLY_ALLOWLIST`, so it must use the READ-ONLY sibling
+  // (findByContext) — never `resolveConversationAccess`, which get-or-CREATES. Its lens
+  // check runs AFTER access resolution, so the writing variant would have let an
+  // un-onboarded CLIENT-lens member insert both rows before being rejected.
+  readConversationAccess: (...args: unknown[]) => mockResolveAccess(...args),
 }));
 
 const mockPresignDownload = vi.fn();

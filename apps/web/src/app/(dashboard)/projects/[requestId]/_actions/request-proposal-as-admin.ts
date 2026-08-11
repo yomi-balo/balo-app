@@ -79,6 +79,27 @@ async function advanceRelationshipGuarded(
 }
 
 /**
+ * BAL-424: activity is counted on the CONVERSATION the relationship anchors. This action is
+ * the ADMIN path and so does NOT go through `resolveConversationAccess` (which denies admin
+ * observers outright — A4 has no admin chat); the caller has already proven the relationship
+ * belongs to the request. A READ, never `ensureForContext` — an analytics count must not mint
+ * a thread — so a relationship with no conversation reports zeros. Split out to keep the
+ * action's cognitive complexity under the gate.
+ */
+async function threadActivityForRelationship(
+  relationshipId: string
+): Promise<{ messageCount: number; fileCount: number }> {
+  const conversation = await conversationsRepository.findByContext({
+    contextType: 'relationship',
+    contextId: relationshipId,
+  });
+  if (conversation === undefined) {
+    return { messageCount: 0, fileCount: 0 };
+  }
+  return conversationsRepository.countThreadActivity(conversation.id);
+}
+
+/**
  * Friendly stale-UI pre-check on the loaded relationship status (the transition
  * map remains the authoritative gate). Returns an error result to short-circuit
  * with, or `null` when the relationship is requestable. Split out to keep the
@@ -170,8 +191,8 @@ export async function requestProposalAsAdmin(
     const requestTransition =
       transitioned && after !== undefined ? { from: beforeStatus, to: after.status } : null;
 
-    const { messageCount, fileCount } =
-      await conversationsRepository.countThreadActivity(relationshipId);
+    // BAL-424 — see {@link threadActivityForRelationship}.
+    const { messageCount, fileCount } = await threadActivityForRelationship(relationshipId);
 
     log.info('Admin requested proposal', {
       requestId,

@@ -20,6 +20,8 @@ import type {
   PromoRedeemedPayload,
   ProposalSharedPayload,
   ActionItemAssignedPayload,
+  ConversationMessagePostedPayload,
+  ConversationFileSharedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -134,29 +136,13 @@ export interface ProjectKickoffApprovedPayload {
   clientCompanyName: string; // client's company name — email/in-app body
 }
 
-export interface ProjectMessagePostedPayload {
-  correlationId: string; // message id — dedup per message (dispatcher jobId)
-  projectRequestId: string;
-  relationshipId: string;
-  title: string; // request title
-  senderName: string;
-  recipientRole: 'client' | 'expert'; // rule condition routes on this
-  recipientId?: string; // set when recipientRole==='client' (= createdByUserId) → dispatcher 'client' path
-  expertProfileId?: string; // set when recipientRole==='expert' → resolver hydrates data.expert
-  preview: string; // plain-text snippet ≤140 (htmlToPlainText)
-}
-
-export interface ProjectFileSharedPayload {
-  correlationId: string; // file id — dedup per share
-  projectRequestId: string;
-  relationshipId: string;
-  title: string;
-  senderName: string;
-  recipientRole: 'client' | 'expert';
-  recipientId?: string;
-  expertProfileId?: string;
-  fileName: string;
-}
+// BAL-424: `ProjectMessagePostedPayload` / `ProjectFileSharedPayload` were declared here.
+// They are now `ConversationMessagePostedPayload` / `ConversationFileSharedPayload` in
+// `@balo/shared/notifications` (imported above) — one declaration for both apps.
+//
+// ⚠ `conversation.unread_digest_due` is deliberately ABSENT from this file. It is SERVER-ONLY
+// (scheduled and published entirely inside `apps/api`), and this web union omits server-only
+// events by design — exactly as it omits `calendar.auth_error`.
 
 // BAL-324 admin-initiated billing reminder (kickoff board → outstanding
 // client-billing gate). `correlationId` is minted PER CLICK (crypto.randomUUID)
@@ -218,8 +204,8 @@ export type NotificationEvent =
   | 'project.kickoff_approved'
   | 'project.changes_requested'
   | 'project.proposal_resubmitted'
-  | 'project.message_posted'
-  | 'project.file_shared'
+  | 'conversation.message_posted'
+  | 'conversation.file_shared'
   | 'project.billing_reminder'
   | 'proposal.shared'
   | 'billing.details_confirmed'
@@ -270,8 +256,8 @@ export interface EventPayloadMap {
   'project.kickoff_approved': ProjectKickoffApprovedPayload;
   'project.changes_requested': ProjectChangesRequestedPayload;
   'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
-  'project.message_posted': ProjectMessagePostedPayload;
-  'project.file_shared': ProjectFileSharedPayload;
+  'conversation.message_posted': ConversationMessagePostedPayload;
+  'conversation.file_shared': ConversationFileSharedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
   'proposal.shared': ProposalSharedPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;

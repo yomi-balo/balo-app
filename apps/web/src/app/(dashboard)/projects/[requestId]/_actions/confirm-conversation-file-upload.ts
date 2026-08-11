@@ -20,7 +20,8 @@ import {
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import type { ConversationFileView } from '@/lib/project-request/conversation-view-types';
 
-// conversation-files/{relationshipId uuid}/{userId uuid}/{uuid}
+// conversation-files/{conversationId uuid}/{userId uuid}/{uuid} — BAL-424 moved the first
+// segment off the relationship id (a Case has no relationship). Shape is unchanged.
 const CONVERSATION_FILE_KEY_PATTERN =
   /^conversation-files\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/;
 
@@ -48,12 +49,12 @@ function isUniqueViolation(error: unknown): boolean {
   return 'code' in error && error.code === '23505';
 }
 
-/** Key shape + provenance: relationship from VALIDATED access, user from session. */
-function validateUploadKey(key: string, relationshipId: string, userId: string): string | null {
+/** Key shape + provenance: conversation from VALIDATED access, user from session. */
+function validateUploadKey(key: string, conversationId: string, userId: string): string | null {
   if (!CONVERSATION_FILE_KEY_PATTERN.test(key)) {
     return 'Invalid upload key.';
   }
-  const expectedPrefix = `${CONVERSATION_FILE_PREFIX}${relationshipId}/${userId}/`;
+  const expectedPrefix = `${CONVERSATION_FILE_PREFIX}${conversationId}/${userId}/`;
   if (!key.startsWith(expectedPrefix)) {
     return 'Invalid upload key.';
   }
@@ -97,16 +98,16 @@ async function verifyUploadedObject(
 /** Sharing = you've seen your own activity. Never fail the share over it. */
 async function advanceReadWatermark(
   requestId: string,
-  relationshipId: string,
+  conversationId: string,
   userId: string,
   at: Date
 ): Promise<void> {
   try {
-    await conversationsRepository.markThreadRead({ relationshipId, userId, at });
+    await conversationsRepository.markThreadRead({ conversationId, userId, at });
   } catch (error) {
     log.warn('Failed to advance read watermark after file share', {
       requestId,
-      relationshipId,
+      conversationId,
       userId,
       error: error instanceof Error ? error.message : String(error),
     });
@@ -146,8 +147,9 @@ export async function confirmConversationFileUploadAction(
       return { success: false, error: access.error };
     }
 
-    // 1. Key shape + provenance: relationship from VALIDATED access, user from session.
-    const keyError = validateUploadKey(key, relationshipId, user.id);
+    // 1. Key shape + provenance: conversation from VALIDATED access, user from session.
+    const { conversationId } = access;
+    const keyError = validateUploadKey(key, conversationId, user.id);
     if (keyError !== null) {
       return { success: false, error: keyError };
     }
@@ -160,7 +162,7 @@ export async function confirmConversationFileUploadAction(
 
     // 3. The share IS the event — insert the row now (standalone, no wider tx).
     const row = await conversationsRepository.addFile({
-      relationshipId,
+      conversationId,
       uploadedByUserId: user.id,
       r2Key: key,
       fileName,
@@ -172,7 +174,7 @@ export async function confirmConversationFileUploadAction(
       [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'Participant';
     const fileView: ConversationFileView = {
       id: row.id,
-      relationshipId,
+      conversationId,
       fileName: row.fileName,
       contentType: row.contentType,
       sizeBytes: row.sizeBytes,
@@ -181,18 +183,23 @@ export async function confirmConversationFileUploadAction(
       createdAtIso: row.createdAt.toISOString(),
     };
 
-    await advanceReadWatermark(requestId, relationshipId, user.id, row.createdAt);
+    await advanceReadWatermark(requestId, conversationId, user.id, row.createdAt);
 
     // BAL-279: both publishes are deferred to Next's `after()` inside their
     // publishers — they run after the response flushes but before the function can
     // freeze, so neither the ephemeral realtime ping nor the durable notification
     // is cut short, and neither adds latency to this action. Both never throw.
-    void publishConversationEvent(relationshipId, CONVERSATION_EVENT_FILE, fileView);
+    void publishConversationEvent(conversationId, CONVERSATION_EVENT_FILE, fileView);
 
-    publishNotificationEvent('project.file_shared', {
+    // BAL-424: `conversation.file_shared` (was `project.file_shared`). It rides the SAME
+    // 10-minute unread-digest promise as `conversation.message_posted`, on the same dedupe
+    // key, so a message plus a file inside one window is ONE email.
+    publishNotificationEvent('conversation.file_shared', {
       correlationId: row.id,
+      conversationId,
+      contextType: 'relationship',
+      contextId: relationshipId,
       projectRequestId: requestId,
-      relationshipId,
       title: access.request.title,
       senderName: uploadedByName,
       recipientRole: access.recipient.role,
@@ -207,6 +214,7 @@ export async function confirmConversationFileUploadAction(
     log.info('Conversation file shared', {
       requestId,
       relationshipId,
+      conversationId,
       userId: user.id,
       fileId: row.id,
       sizeBytes: verified.sizeBytes,

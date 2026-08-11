@@ -4,6 +4,72 @@
  * migrate opportunistically.
  */
 
+// ── Preview text (BAL-424) ─────────────────────────────────────────────────────────────
+//
+// HOISTED HERE FROM `apps/web` BECAUSE BOTH APPS NOW NEED IT AND NEITHER MAY IMPORT THE
+// OTHER. `apps/web` derives a message preview at publish time; `apps/api`'s
+// `conversation_unread` recheck REBUILDS one at fire time from the newest unread body it
+// just read. Two copies would be two truncation rules — and would trip the SonarCloud
+// new-code duplication gate. `apps/web`'s `conversation-view-types.ts` and
+// `rich-text/plain-text.ts` both delegate here rather than keeping their own copies.
+
+/** Preview length cap — the single source of the 140-char truncation rule. */
+export const PREVIEW_MAX_CHARS = 140;
+
+/**
+ * Strip HTML tags with a single LINEAR SCAN (no regex) — each `<…>` span becomes a space so
+ * word boundaries survive. Deliberately not `/<[^>]*>/g`: that pattern re-scans overlapping
+ * start positions and is a SonarCloud S5852 super-linear-regex hotspot. Provably O(n).
+ *
+ * Input is sanitised/Tiptap HTML, where a literal `>` in text is already an entity, so a raw
+ * `>` only ever closes a tag.
+ */
+export function stripHtmlTags(html: string): string {
+  let out = '';
+  let inTag = false;
+  for (const ch of html) {
+    if (ch === '<') {
+      inTag = true;
+    } else if (ch === '>' && inTag) {
+      inTag = false;
+      out += ' ';
+    } else if (!inTag) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Strip tags + decode the handful of entities the editor emits, collapse whitespace runs, and
+ * trim. Returns the human-visible text of a fragment of HTML.
+ */
+export function htmlToPlainText(html: string): string {
+  return stripHtmlTags(html)
+    .replaceAll('&nbsp;', ' ')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Truncate plain text to the preview rule: ≤140 chars, ellipsis on overflow. */
+export function previewOfPlainText(text: string): string {
+  if (text.length <= PREVIEW_MAX_CHARS) return text;
+  return `${text.slice(0, PREVIEW_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+/**
+ * Sanitised-HTML → notification preview, in one hop: the shape both the web publisher and the
+ * API recheck need. Returns `''` for an effectively empty body.
+ */
+export function previewOfHtmlBody(bodyHtml: string): string {
+  return previewOfPlainText(htmlToPlainText(bodyHtml));
+}
+
 // BAL-386 — a file attachment carried by a notification email. The engine resolves
 // the bytes at delivery time (the worker reads from R2 by key), keeping the BullMQ
 // payload light. `source: 'r2'` is the only backend today; the discriminant leaves
@@ -553,8 +619,9 @@ export interface CreditTopupCompletedPayload {
 }
 
 // BAL-391 (ADR-1043) — an action item was assigned to a SIDE of the engagement. One
-// event, two conditioned rules keyed on `assigneeParty` (the project.message_posted
-// routing precedent): 'client' → recipient:'client' via `recipientId` (the client
+// event, two conditioned rules keyed on `assigneeParty` (the conversation.message_posted
+// routing precedent — renamed off `project.` by BAL-424): 'client' → recipient:'client'
+// via `recipientId` (the client
 // company owner); 'expert' → recipient:'expert' via `expertProfileId` → the resolver
 // hydrates data.expert. Email + in-app to the assigned side; NO admin fan-out. Defined
 // ONCE here (not inlined in the api + web catalogs) to avoid the SonarCloud new-code
@@ -829,4 +896,127 @@ export interface MeetingGuestRemovedPayload {
   guestName?: string;
   meetingTitle: string;
   scheduledStartIso: string;
+}
+
+// ── BAL-424 conversation events ────────────────────────────────────────────────────────
+//
+// ⚠ DECLARED ONCE, HERE. `apps/api/src/notifications/events.ts` and
+// `apps/web/src/lib/notifications/types.ts` both IMPORT these — inlining them into both
+// catalogs is what the SonarCloud new-code duplication gate exists to catch.
+//
+// ⚠ THE ANCHOR IS THE SEAM. `conversationId` + `(contextType, contextId)` is what makes one
+// event serve a project relationship AND a case: `projectRequestId` is now OPTIONAL because
+// a Case has no request, and `engagementId` carries the other arm.
+
+/**
+ * BAL-424 — a message was posted to a conversation. Cross-cutting: the anchor is the seam.
+ *
+ * Renamed from `project.message_posted` when messaging was re-anchored off
+ * `request_expert_relationships` — a `project.` prefix on an event that fires for a Case
+ * would make `notification_log.event`, every Axiom query and every future rule condition
+ * read `project.*` for a message with no project.
+ */
+export interface ConversationMessagePostedPayload {
+  correlationId: string; // = message id — dedup per message (dispatcher jobId)
+  conversationId: string;
+  contextType: 'relationship' | 'engagement';
+  contextId: string;
+  /** Thread title for the body — the request title, or the case title. */
+  title: string;
+  senderName: string;
+  recipientRole: 'client' | 'expert'; // rule condition routes on this
+  recipientId?: string; // set when recipientRole==='client' → dispatcher 'client' path
+  expertProfileId?: string; // set when recipientRole==='expert' → resolver hydrates data.expert
+  preview: string; // plain-text snippet ≤140
+  /** Present ONLY on the `relationship` arm, so the in-app actionUrl can deep-link the request. */
+  projectRequestId?: string;
+  /** Present ONLY on the `engagement` arm — equals `contextId`; kept explicit for the template. */
+  engagementId?: string;
+  /** True when the message was sent from the in-call panel. Analytics + copy, never routing. */
+  sentDuringMeeting: boolean;
+}
+
+/**
+ * BAL-424 — a file was shared into a conversation. Same anchor fields as
+ * {@link ConversationMessagePostedPayload}, with `fileName` in place of `preview`.
+ */
+export interface ConversationFileSharedPayload {
+  correlationId: string; // = file id — dedup per share
+  conversationId: string;
+  contextType: 'relationship' | 'engagement';
+  contextId: string;
+  title: string;
+  senderName: string;
+  recipientRole: 'client' | 'expert';
+  recipientId?: string;
+  expertProfileId?: string;
+  fileName: string;
+  projectRequestId?: string;
+  engagementId?: string;
+}
+
+/**
+ * BAL-424 — the 10-minute debounced unread digest is due.
+ *
+ * ⚠ IT COVERS MESSAGES **AND** FILE SHARES ON ONE PROMISE (owner ruling, 2026-08-11). Both
+ * `conversation.message_posted` and `conversation.file_shared` schedule this event on the
+ * SAME dedupe key, so a message plus a file inside one window folds into ONE email. It is
+ * named `unread_digest_due`, not `unread_messages_due`, for exactly that reason.
+ *
+ * ⚠ SERVER-ONLY. It is published EXCLUSIVELY by the BAL-420 dispatch tick, never through
+ * `/notifications/publish`, so it belongs in `ServerOnlyNotificationEvent` and MUST NOT get a
+ * `publishBodySchema` arm — one would be a `StraySchemaArm` and fail `tsc`.
+ *
+ * ⚠ `recipientUserId` IS RESOLVED AT SCHEDULE TIME AND STORED. The fire-time recheck reads
+ * `conversation_read_states` by (conversation, user), and an `expertProfileId` cannot be
+ * resolved to a user inside a recheck without a second hydration. The two counts, `preview`,
+ * `fileName` and `latestActivityAtIso` are all REBUILT by the recheck from live state — the
+ * stored values are only the default answer if the guard is ever removed.
+ *
+ * ⚠ THE TWO COUNTS ARE SEPARATE, NOT SUMMED. The subject line differs materially between
+ * "3 new messages", "a new file" and "3 new messages and a file", and a single `unreadCount`
+ * cannot express the third. Mirrors `unreadSummaryFor`'s return shape exactly.
+ *
+ * ⚠ `senderName` IS THE ONLY COUNTERPARTY IDENTITY THIS PAYLOAD CARRIES, and it is a NAME.
+ * ADR-1044's concealment rule — names cross the party boundary, email addresses never — is
+ * why there is no address field of any kind here.
+ */
+export interface ConversationUnreadDigestDuePayload {
+  /**
+   * ⚠ AN OCCURRENCE ID, MINTED PER PROMISE (`randomUUID`) — NOT a value derived from
+   * (conversation, recipient). `publisher.publish` derives the BullMQ jobId from it and
+   * completed jobs are retained `{ count: 100 }` on one shared queue, so a value stable per
+   * PAIR would make every digest after the first a silent `queue.add` no-op WHILE the row is
+   * marked `published`. Stable across the recheck's REBUILD of one promise (the guard spreads
+   * the stored payload); unique across promises. Full argument in
+   * `scheduling/conversation-unread.ts`.
+   */
+  correlationId: string;
+  conversationId: string;
+  contextType: 'relationship' | 'engagement';
+  contextId: string;
+  recipientUserId: string;
+  recipientRole: 'client' | 'expert';
+  title: string;
+  /**
+   * Author of the newest unread activity — REBUILT by the fire-time guard, never inherited
+   * from schedule time (by fire time the window may have coalesced a DIFFERENT author).
+   * `null` when the digest spans MORE THAN ONE sender: naming only the newest would
+   * misattribute the rest, so the template says "your conversation" instead of a name.
+   */
+  senderName: string | null;
+  unreadMessageCount: number;
+  unreadFileCount: number;
+  /**
+   * Newest unread MESSAGE preview. Absent on a file-only exchange — the guard CLEARS the leg
+   * that no longer applies rather than letting a stale schedule-time value survive its
+   * rebuild. ⚠ The TEMPLATE branches on the COUNTS, not on this field's presence.
+   */
+  preview?: string;
+  /** Newest unread FILE name. Absent when the newest unread activity is a message. */
+  fileName?: string;
+  /** max(newest unread message, newest unread file) — the `latestInboundActivityAt` rule. */
+  latestActivityAtIso: string;
+  projectRequestId?: string;
+  engagementId?: string;
 }

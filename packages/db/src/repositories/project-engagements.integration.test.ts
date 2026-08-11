@@ -6,6 +6,7 @@ import {
   agencies,
   auditEvents,
   companies,
+  conversations,
   engagements,
   expertProfiles,
   projectEngagements,
@@ -20,6 +21,7 @@ import {
   engagementMilestoneFactory,
   expertDraftFactory,
   projectRequestFactory,
+  requestExpertRelationshipFactory,
   proposalFactory,
   reviewFactory,
   userFactory,
@@ -40,6 +42,7 @@ import {
 } from './_shared/engagement-supertype';
 import { EngagementTermsCoherenceError } from './proposal-coherence';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
+import { conversationsRepository } from './conversations';
 
 /**
  * Read delivery audit rows for one entity from main's generic `audit_events` table
@@ -179,6 +182,79 @@ describe('projectEngagementsRepository.create — the seam proof', () => {
     expect(child?.engagementType).toBe('project');
     expect(child?.deliveryStatus).toBe('active');
     await expectProjectionCoherent(engagement.id);
+  });
+
+  /**
+   * BAL-424 — the seam writer must PROVISION THE DELIVERY THREAD, exactly as
+   * `caseEngagementsRepository.create()` does. Without it, an engagement created this way is
+   * PERMANENTLY thread-less: the `engagement` arm of the conversation gate resolves the
+   * thread with a READ (a gate must not mint rows) and there is no heal path anywhere —
+   * `attachContext` runs only on the kickoff CARRY-OVER, which this writer never reaches.
+   */
+  it('BAL-424: create() provisions an engagement-anchored conversation, with no relationship context', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 2500,
+    });
+
+    const conversation = await conversationsRepository.findByContext({
+      contextType: 'engagement',
+      contextId: engagement.id,
+    });
+    expect(conversation).toBeDefined();
+
+    // ONE context, and it is the engagement — this engagement has no relationship at all.
+    const contexts = await conversationsRepository.listContexts(conversation!.id);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.contextType).toBe('engagement');
+    expect(contexts[0]?.contextId).toBe(engagement.id);
+  });
+
+  /**
+   * BAL-424 / NEW-4 — `create()` accepts an OPTIONAL originating relationship and writes it as
+   * provenance, so when one is supplied its pre-sales thread must be CARRIED OVER, not
+   * shadowed by a second empty one. Unreachable from a live caller today (this seam has none),
+   * which is precisely why it is pinned: the retainer / embedded product will take it up.
+   */
+  it('BAL-424: create() CARRIES OVER the relationship thread when a relationshipId is supplied', async () => {
+    const companyId = await seedCompanyId();
+    const { relationship, conversationId, expertProfileId } =
+      await requestExpertRelationshipFactory();
+    const conversationsBefore = await db.select({ id: conversations.id }).from(conversations);
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId,
+      relationshipId: relationship.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 2500,
+    });
+
+    // SAME conversation, reachable from BOTH anchors — no second thread minted.
+    const byEngagement = await conversationsRepository.findByContext({
+      contextType: 'engagement',
+      contextId: engagement.id,
+    });
+    expect(byEngagement?.id).toBe(conversationId);
+    const byRelationship = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: relationship.id,
+    });
+    expect(byRelationship?.id).toBe(conversationId);
+
+    const conversationsAfter = await db.select({ id: conversations.id }).from(conversations);
+    expect(conversationsAfter).toHaveLength(conversationsBefore.length);
+
+    // Two LIVE contexts on one thread; the relationship one is NOT removed.
+    const contexts = await conversationsRepository.listContexts(conversationId);
+    expect(contexts.map((c) => c.contextType).sort()).toEqual(['engagement', 'relationship']);
   });
 
   it('creates WITHOUT a proposal (the retainer seam): only company + expert + terms → row created', async () => {
@@ -698,6 +774,83 @@ describe('projectEngagementsRepository.materializeFromKickoff — accept→appro
     // Persisted (not just returned).
     const persisted = await engagementsRepository.findById(engagement.id);
     expect(persisted?.id).toBe(engagement.id);
+  });
+
+  it('BAL-424 carry-over: the relationship thread gains an engagement context, keeps the relationship one, and no second conversation is minted', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+
+    const before = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: source.relationshipId,
+    });
+    if (before === undefined) throw new Error('expected the relationship to have a thread');
+    const conversationsBefore = await db.select({ id: conversations.id }).from(conversations);
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    });
+
+    // SAME conversation, reachable from BOTH anchors.
+    const byEngagement = await conversationsRepository.findByContext({
+      contextType: 'engagement',
+      contextId: engagement.id,
+    });
+    expect(byEngagement?.id).toBe(before.id);
+    const byRelationship = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: source.relationshipId,
+    });
+    expect(byRelationship?.id).toBe(before.id);
+
+    // Two LIVE contexts on one thread — the relationship one is NOT removed.
+    const contexts = await conversationsRepository.listContexts(before.id);
+    expect(contexts.map((c) => c.contextType).sort()).toEqual(['engagement', 'relationship']);
+
+    // No second, empty thread was minted.
+    const conversationsAfter = await db.select({ id: conversations.id }).from(conversations);
+    expect(conversationsAfter).toHaveLength(conversationsBefore.length);
+  });
+
+  it('BAL-424 defensive arm: a relationship with NO conversation still kicks off, minting one for the engagement', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+
+    // Simulate a pre-BAL-424 row: hard-remove the relationship's thread entirely.
+    const orphaned = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: source.relationshipId,
+    });
+    if (orphaned === undefined) throw new Error('expected the relationship to have a thread');
+    await db.delete(conversations).where(eq(conversations.id, orphaned.id));
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    });
+
+    const minted = await conversationsRepository.findByContext({
+      contextType: 'engagement',
+      contextId: engagement.id,
+    });
+    expect(minted).toBeDefined();
+    if (minted === undefined) throw new Error('expected a fresh thread for the engagement');
+    const contexts = await conversationsRepository.listContexts(minted.id);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.contextType).toBe('engagement');
   });
 
   it('double-call: the second call throws InvalidStatusTransitionError and only ONE engagement exists', async () => {

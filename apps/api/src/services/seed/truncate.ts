@@ -26,6 +26,9 @@ import {
   engagements,
   meetings,
   meetingContexts,
+  conversations,
+  conversationMessages,
+  conversationFiles,
   and,
   eq,
   inArray,
@@ -228,6 +231,62 @@ async function deleteSeedBookings(tx: Tx, profileIds: string[]): Promise<void> {
   await tx.delete(engagements).where(inArray(engagements.id, scopedIds));
 }
 
+/**
+ * BAL-424 — delete the conversation subtree the seed users authored.
+ *
+ * ⚠⚠ THIS SWEEP EXISTS BECAUSE THE RE-ANCHOR REMOVED THE OLD CASCADE, AND NOTHING REPLACED
+ * IT. Before BAL-424 all three messaging tables FK'd `request_expert_relationships`, which
+ * FK'd `project_requests`, which cascades from `companies` — so deleting the seed company
+ * swept every message, file and read state for free. Migration 0062 drops those FKs, and the
+ * new anchor (`conversation_contexts.context_id`) has NO FK BY DESIGN (it is polymorphic), so
+ * NOTHING cascades from the anchor side any more.
+ *
+ * That is not merely untidy, it BREAKS THE SEEDER: `conversation_messages.sender_user_id` and
+ * `conversation_files.uploaded_by_user_id` are `ON DELETE RESTRICT` (authorship is preserved
+ * deliberately), so `DELETE FROM users` now raises `23503` where the old cascade had already
+ * cleared the children. Hence this runs BEFORE the `users` delete.
+ *
+ * KEYED ON AUTHORSHIP, NOT ON THE ANCHOR. The anchor cannot be trusted here: a seed
+ * conversation's `context_id` may name a relationship whose row has ALREADY been cascaded
+ * away by the `companies` delete, leaving a live conversation pointing at nothing. Authorship
+ * is the edge that actually blocks the delete, so sweeping by it is both necessary and
+ * sufficient. Deleting the `conversations` parent cascades contexts, messages, files and read
+ * states in one step.
+ *
+ * ⚠ KNOWN RESIDUAL, ACCEPTED: a thread PROVISIONED BY `invite()` BUT NEVER WRITTEN TO carries
+ * no message and no file, so authorship does not reach it and its `conversations` +
+ * `conversation_contexts` rows survive a re-seed. Harmless by construction — the context has
+ * NO FK to cascade from and no RESTRICT to block, `conversations.id` is a fresh uuid so
+ * nothing collides, and `conversation_context_subject_idx` is keyed on the SUBJECT (itself a
+ * freshly-minted relationship id each seed), so a leftover can never trip the partial unique.
+ * Sweeping these would mean keying on the ANCHOR — exactly what the paragraph above rejects
+ * as unreliable. A few inert rows in a developer database is the right trade against a sweep
+ * that misses the rows which actually break the delete.
+ */
+async function deleteSeedConversations(tx: Tx, userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+
+  const conversationIds = new Set<string>();
+  const [messageRows, fileRows] = await Promise.all([
+    tx
+      .selectDistinct({ conversationId: conversationMessages.conversationId })
+      .from(conversationMessages)
+      .where(inArray(conversationMessages.senderUserId, userIds)),
+    tx
+      .selectDistinct({ conversationId: conversationFiles.conversationId })
+      .from(conversationFiles)
+      .where(inArray(conversationFiles.uploadedByUserId, userIds)),
+  ]);
+  for (const row of messageRows) conversationIds.add(row.conversationId);
+  for (const row of fileRows) conversationIds.add(row.conversationId);
+
+  if (conversationIds.size > 0) {
+    // CASCADE from the parent clears `conversation_contexts`, `conversation_messages`,
+    // `conversation_files` and `conversation_read_states` together.
+    await tx.delete(conversations).where(inArray(conversations.id, [...conversationIds]));
+  }
+}
+
 /** Delete every child row that references the given expert profile ids. */
 async function deleteProfileChildren(tx: Tx, profileIds: string[]): Promise<void> {
   if (profileIds.length === 0) return;
@@ -341,6 +400,9 @@ export async function truncateSeedData(tx: Tx, scope: TruncateScope): Promise<Tr
   }
 
   // scope === 'experts'
+  // ⚠ BEFORE the `users` delete below, and the ordering is load-bearing — see
+  // `deleteSeedConversations`.
+  await deleteSeedConversations(tx, userIds);
   await deleteProfileChildren(tx, profileIds);
   if (profileIds.length > 0) {
     await tx.delete(expertProfiles).where(inArray(expertProfiles.id, profileIds));

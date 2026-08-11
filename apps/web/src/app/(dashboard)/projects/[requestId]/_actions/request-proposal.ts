@@ -154,8 +154,10 @@ export async function requestProposalAction(
       1;
     const firstEoiAt = firstEoiSubmittedAt(access.request);
     const timeFromFirstEoiMs = firstEoiAt === null ? null : Date.now() - firstEoiAt.getTime();
-    const { messageCount, fileCount } =
-      await conversationsRepository.countThreadActivity(relationshipId);
+    // BAL-424: activity is counted on the CONVERSATION the relationship anchors.
+    const { messageCount, fileCount } = await conversationsRepository.countThreadActivity(
+      access.conversationId
+    );
 
     log.info('Proposal requested', {
       requestId,

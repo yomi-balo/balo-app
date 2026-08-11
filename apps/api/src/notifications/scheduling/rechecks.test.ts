@@ -25,16 +25,40 @@ function row(overrides: Partial<ScheduledNotification> = {}): ScheduledNotificat
   };
 }
 
+/**
+ * The registry's BUILT-IN entries, snapshotted before any test registers an ad-hoc guard.
+ *
+ * ⚠ RESTORED (not emptied) in `afterEach`. BAL-424 registered the first real consumer, so a
+ * blanket delete of every key would strip `conversation_unread` for the rest of the file.
+ */
+const BUILT_IN_RECHECKS = { ...SCHEDULED_RECHECKS };
+
 afterEach(() => {
   // The registry is module-level state; a test that registers must not leak into the next.
   for (const key of Object.keys(SCHEDULED_RECHECKS)) {
     delete SCHEDULED_RECHECKS[key];
   }
+  Object.assign(SCHEDULED_RECHECKS, BUILT_IN_RECHECKS);
 });
 
 describe('SCHEDULED_RECHECKS', () => {
-  it('ships EMPTY — BAL-420 ships the primitive inert; consumers register in their own PR', () => {
-    expect(Object.keys(SCHEDULED_RECHECKS)).toEqual([]);
+  /**
+   * BAL-420 shipped this registry EMPTY, naming BAL-424 (conversation unread) as a
+   * PROSPECTIVE consumer "if it takes the dependency at all". It took it — this is the
+   * registry's first entry, and the primitive is no longer inert.
+   */
+  it('carries exactly one guard: BAL-424 conversation_unread', () => {
+    expect(Object.keys(BUILT_IN_RECHECKS)).toEqual(['conversation_unread']);
+  });
+
+  it('dispatches a conversation_unread row to that guard', async () => {
+    // The guard reads live state; here it only has to be REACHED, so a payload with no
+    // `conversationId` is the cheapest terminal answer that proves dispatch happened.
+    const subject = row({ recheck: 'conversation_unread', payload: { correlationId: 'c-1' } });
+    await expect(runRecheck(subject)).resolves.toEqual({
+      publish: false,
+      reason: 'malformed_payload',
+    });
   });
 });
 

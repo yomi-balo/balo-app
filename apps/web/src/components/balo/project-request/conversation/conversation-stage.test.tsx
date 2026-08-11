@@ -79,7 +79,7 @@ vi.mock('@/components/balo/document-uploader/upload-file', () => ({
 interface RealtimeInput {
   enabled: boolean;
   requestId: string;
-  relationshipIds: string[];
+  conversationIds: string[];
   onMessage: (m: unknown) => void;
   onFile: (f: unknown) => void;
 }
@@ -125,7 +125,8 @@ function view(overrides: Partial<ConversationView> = {}): ConversationView {
 function message(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id,
-    relationshipId: 'rel-1',
+    // BAL-424: an Ably payload names the CONVERSATION, never the relationship.
+    conversationId: 'conv-1',
     bodyHtml: `<p>msg ${id}</p>`,
     senderUserId: 'user-expert',
     senderName: 'Priya Nair',
@@ -137,7 +138,7 @@ function message(id: string, overrides: Record<string, unknown> = {}): Record<st
 function fileView(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id,
-    relationshipId: 'rel-1',
+    conversationId: 'conv-1',
     fileName: `${id}.pdf`,
     contentType: 'application/pdf',
     sizeBytes: 1234,
@@ -227,11 +228,19 @@ describe('ConversationStage — default tab + mount behaviour', () => {
   it('subscribes realtime across ALL open threads, not just the active one', () => {
     renderStage(
       view({
-        threads: [thread(), thread({ relationshipId: 'rel-2', expertFirstName: 'Marcus' })],
+        threads: [
+          thread(),
+          thread({
+            relationshipId: 'rel-2',
+            conversationId: 'conv-2',
+            expertFirstName: 'Marcus',
+          }),
+        ],
       })
     );
     expect(realtimeCapture.input?.enabled).toBe(true);
-    expect(realtimeCapture.input?.relationshipIds).toEqual(['rel-1', 'rel-2']);
+    // BAL-424: channels key on the CONVERSATION, so this is what the hook subscribes.
+    expect(realtimeCapture.input?.conversationIds).toEqual(['conv-1', 'conv-2']);
   });
 
   it('disables realtime when the server said so', () => {
@@ -381,20 +390,38 @@ describe('ConversationStage — realtime ingestion', () => {
 
   it('flags a NON-active thread unread on incoming activity', async () => {
     renderStage(
-      view({ threads: [thread(), thread({ relationshipId: 'rel-2', expertFirstName: 'Marcus' })] })
+      view({
+        threads: [
+          thread(),
+          thread({
+            relationshipId: 'rel-2',
+            conversationId: 'conv-2',
+            expertFirstName: 'Marcus',
+          }),
+        ],
+      })
     );
     expect(screen.queryByText('Unread activity')).not.toBeInTheDocument();
-    act(() => realtimeCapture.input?.onMessage(message('m-88', { relationshipId: 'rel-2' })));
+    act(() => realtimeCapture.input?.onMessage(message('m-88', { conversationId: 'conv-2' })));
     expect(await screen.findByText('Unread activity')).toBeInTheDocument();
   });
 
   it('never flags own multi-device messages unread', () => {
     renderStage(
-      view({ threads: [thread(), thread({ relationshipId: 'rel-2', expertFirstName: 'Marcus' })] })
+      view({
+        threads: [
+          thread(),
+          thread({
+            relationshipId: 'rel-2',
+            conversationId: 'conv-2',
+            expertFirstName: 'Marcus',
+          }),
+        ],
+      })
     );
     act(() =>
       realtimeCapture.input?.onMessage(
-        message('m-99', { relationshipId: 'rel-2', senderUserId: VIEWER_ID })
+        message('m-99', { conversationId: 'conv-2', senderUserId: VIEWER_ID })
       )
     );
     expect(screen.queryByText('Unread activity')).not.toBeInTheDocument();
@@ -652,9 +679,18 @@ describe('ConversationStage — downloads + load earlier + realtime files', () =
 
   it('flags a NON-active thread unread on an incoming file (file-only activity counts)', async () => {
     renderStage(
-      view({ threads: [thread(), thread({ relationshipId: 'rel-2', expertFirstName: 'Marcus' })] })
+      view({
+        threads: [
+          thread(),
+          thread({
+            relationshipId: 'rel-2',
+            conversationId: 'conv-2',
+            expertFirstName: 'Marcus',
+          }),
+        ],
+      })
     );
-    act(() => realtimeCapture.input?.onFile(fileView('f-x', { relationshipId: 'rel-2' })));
+    act(() => realtimeCapture.input?.onFile(fileView('f-x', { conversationId: 'conv-2' })));
     expect(await screen.findByText('Unread activity')).toBeInTheDocument();
   });
 });

@@ -16,6 +16,7 @@ import { UNTITLED_ENGAGEMENT_LABEL, type RatingNudgeCandidate } from './reviews'
 import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
+import { conversationsRepository } from './conversations';
 import { listByProposalTx } from './proposal-milestones';
 import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
@@ -208,6 +209,69 @@ function toProjectRow(parent: Engagement, child: ProjectEngagement): ProjectEnga
  * Throws `Error` (missing/soft-deleted parent, missing child) /
  * `EngagementTypeMismatchError` (the id is not a project).
  */
+/**
+ * BAL-424 — GIVE A NEWLY-CREATED PROJECT ENGAGEMENT ITS DELIVERY THREAD, in the caller's
+ * transaction.
+ *
+ * ⚠ SHARED BY BOTH PROJECT-ENGAGEMENT WRITERS (`create` and `materializeFromKickoff`) so they
+ * cannot drift. Two hand-maintained copies of a three-branch rule is exactly how one of them
+ * ends up minting a second empty thread.
+ *
+ * THE RULE, in precedence order:
+ *
+ *  1. AN ORIGINATING RELATIONSHIP WITH A THREAD ⇒ CARRY IT OVER (`attachContext`). That
+ *     conversation gains a SECOND context row naming the engagement, and the `relationship`
+ *     context is NOT removed — so the pre-sales history continues into delivery and the thread
+ *     reads correctly from either end. ⚠ `ensureForContext` here would mint a SECOND, EMPTY
+ *     thread and orphan the history at the exact moment work starts.
+ *  2. AN ORIGINATING RELATIONSHIP WITH NO THREAD ⇒ defensive `ensureForContext` on the
+ *     engagement. A relationship predating BAL-424's migration has no conversation, and
+ *     kickoff must not fail over a chat thread.
+ *  3. NO ORIGINATING RELATIONSHIP AT ALL (the retainer / embedded seam, where
+ *     `relationshipId` is legitimately null) ⇒ `ensureForContext` on the engagement. There is
+ *     no pre-sales thread to carry.
+ *
+ * ⚠ WITHOUT THIS CALL AN ENGAGEMENT IS PERMANENTLY THREAD-LESS. The `engagement` arm of the
+ * conversation gate (`apps/web/src/lib/conversations/authorize-conversation-context.ts`)
+ * resolves the thread with a READ — a gate must not mint rows — so it answers `no_thread` and
+ * denies, and no heal path exists anywhere.
+ *
+ * ⚠ NOT LOGGED HERE, and the plan's §11 "Conversation carried over at kickoff" business event
+ * belongs at the CALLER. `@balo/db` is not a logging layer — exactly one of ~40 repositories
+ * imports `createLogger`, and every other business event is emitted from `apps/web` /
+ * `apps/api` where the request context (requestId, userId) is in scope via AsyncLocalStorage.
+ * A line here would carry no context and would put a second logging convention in the data
+ * layer. All three branches are pinned by `project-engagements.integration.test.ts`, and the
+ * Drizzle query logger already records the statements.
+ */
+async function provisionEngagementConversationTx(
+  tx: DbTx,
+  input: { engagementId: string; relationshipId?: string | null }
+): Promise<void> {
+  const relationshipId = input.relationshipId ?? null;
+  if (relationshipId !== null) {
+    const existing = await conversationsRepository.findByContext(
+      { contextType: 'relationship', contextId: relationshipId },
+      tx
+    );
+    if (existing !== undefined) {
+      await conversationsRepository.attachContext(
+        {
+          conversationId: existing.id,
+          contextType: 'engagement',
+          contextId: input.engagementId,
+        },
+        tx
+      );
+      return;
+    }
+  }
+  await conversationsRepository.ensureForContext(
+    { contextType: 'engagement', contextId: input.engagementId },
+    tx
+  );
+}
+
 async function lockProjectPairTx(
   tx: DbTx,
   engagementId: string
@@ -839,6 +903,22 @@ export const projectEngagementsRepository = {
         actorUserId: input.actorUserId ?? null,
       });
 
+      /**
+       * BAL-424 — PROVISION THE DELIVERY THREAD, in this transaction, exactly as
+       * `caseEngagementsRepository.create()` and `materializeFromKickoff` do.
+       *
+       * ⚠ IT HONOURS `input.relationshipId`. This seam accepts an OPTIONAL originating
+       * relationship and writes it as provenance, so when one is supplied its pre-sales
+       * thread must be CARRIED OVER, not shadowed by a second empty one — the same rule
+       * kickoff follows, which is why both writers share
+       * `provisionEngagementConversationTx` rather than each spelling it out. The retainer /
+       * embedded seam passes no relationship and simply gets a fresh thread.
+       */
+      await provisionEngagementConversationTx(tx, {
+        engagementId: parent.id,
+        relationshipId: input.relationshipId,
+      });
+
       return toProjectRow(parent, child);
     });
   },
@@ -971,6 +1051,20 @@ export const projectEngagementsRepository = {
         entityId: parent.id,
         engagementId: parent.id,
         metadata: { milestone_count: sources.length, source_proposal_id: input.sourceProposalId },
+      });
+
+      /**
+       * BAL-424 CARRY-OVER — THE PRE-SALES THREAD CONTINUES INTO DELIVERY.
+       * `input.relationshipId` is the originating relationship (the provenance column
+       * `project_engagements.relationship_id` this row is being written with — NOT
+       * `engagements.relationship_id`, which does not exist), and kickoff ALWAYS supplies it,
+       * so branch 1 of the shared rule is the live path here. The full rule, including why
+       * `attachContext` rather than `ensureForContext` and why the fallback is not logged,
+       * lives on `provisionEngagementConversationTx`.
+       */
+      await provisionEngagementConversationTx(tx, {
+        engagementId: parent.id,
+        relationshipId: input.relationshipId,
       });
 
       return { engagement: toProjectRow(parent, child), request };

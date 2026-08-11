@@ -2,19 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const { mockListThreadSummaries, mockListMessagesPage, mockListFiles, mockFindProfileById } =
-  vi.hoisted(() => ({
-    mockListThreadSummaries: vi.fn(),
-    mockListMessagesPage: vi.fn(),
-    mockListFiles: vi.fn(),
-    mockFindProfileById: vi.fn(),
-  }));
+const {
+  mockListThreadSummaries,
+  mockListMessagesPage,
+  mockListFiles,
+  mockEnsureManyForContexts,
+  mockFindProfileById,
+} = vi.hoisted(() => ({
+  mockListThreadSummaries: vi.fn(),
+  mockListMessagesPage: vi.fn(),
+  mockListFiles: vi.fn(),
+  mockEnsureManyForContexts: vi.fn(),
+  mockFindProfileById: vi.fn(),
+}));
 
 vi.mock('@balo/db', () => ({
+  conversationContextKey: (ref: { contextType: string; contextId: string }) =>
+    `${ref.contextType}:${ref.contextId}`,
   conversationsRepository: {
     listThreadSummaries: (...args: unknown[]) => mockListThreadSummaries(...args),
     listMessagesPage: (...args: unknown[]) => mockListMessagesPage(...args),
     listFiles: (...args: unknown[]) => mockListFiles(...args),
+    ensureManyForContexts: (...args: unknown[]) => mockEnsureManyForContexts(...args),
   },
   expertsRepository: {
     findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
@@ -87,9 +96,24 @@ const EXPERT_CTX: RequestViewerContext = {
 
 const USER = { id: VIEWER_ID } as Parameters<typeof loadConversationView>[2];
 
+/** BAL-424: every relationship in these fixtures anchors a conversation named `conv-{relId}`. */
+function convIdFor(relationshipId: string): string {
+  return `conv-${relationshipId}`;
+}
+
+/** The default `ensureManyForContexts` stub: resolve every requested ref via `convIdFor`. */
+function stubEnsureMany(): void {
+  mockEnsureManyForContexts.mockImplementation(
+    (refs: { contextType: string; contextId: string }[]) =>
+      Promise.resolve(
+        new Map(refs.map((r) => [`${r.contextType}:${r.contextId}`, convIdFor(r.contextId)]))
+      )
+  );
+}
+
 function summary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    relationshipId: 'rel-1',
+    conversationId: convIdFor('rel-1'),
     latestMessage: null,
     latestInboundActivityAt: null,
     fileCount: 0,
@@ -102,6 +126,7 @@ describe('loadConversationView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsRealtimeConfigured.mockReturnValue(true);
+    stubEnsureMany();
     mockListThreadSummaries.mockResolvedValue([summary()]);
     mockListMessagesPage.mockResolvedValue({ messages: [], hasEarlier: false });
     mockListFiles.mockResolvedValue([]);
@@ -116,17 +141,23 @@ describe('loadConversationView', () => {
     ]);
     const view = await loadConversationView(req as never, CLIENT_CTX, USER);
     expect(view.threads.map((t) => t.relationshipId)).toEqual(['rel-1']);
+    // BAL-424: summaries are batched over CONVERSATION ids; the relationship→conversation
+    // mapping is resolved once, up front, with an idempotent ensure.
+    expect(mockEnsureManyForContexts).toHaveBeenCalledWith([
+      { contextType: 'relationship', contextId: 'rel-1' },
+    ]);
     expect(mockListThreadSummaries).toHaveBeenCalledWith({
-      relationshipIds: ['rel-1'],
+      conversationIds: [convIdFor('rel-1')],
       viewerUserId: VIEWER_ID,
     });
+    expect(view.threads[0]?.conversationId).toBe(convIdFor('rel-1'));
   });
 
   it('orders threads by invite time (id tiebreak) and never by activity', async () => {
     mockListThreadSummaries.mockResolvedValue([
-      summary({ relationshipId: 'rel-old' }),
+      summary({ conversationId: convIdFor('rel-old') }),
       summary({
-        relationshipId: 'rel-new',
+        conversationId: convIdFor('rel-new'),
         latestMessage: {
           id: 'm-9',
           body: '<p>hot thread</p>',
@@ -223,7 +254,7 @@ describe('loadConversationView', () => {
       messages: [
         {
           id: 'm-1',
-          relationshipId: 'rel-1',
+          conversationId: convIdFor('rel-1'),
           body: '<p>hello</p>',
           senderUserId: EXPERT_USER_ID,
           createdAt: new Date('2026-06-08T00:00:00Z'),
@@ -238,7 +269,7 @@ describe('loadConversationView', () => {
     mockListFiles.mockResolvedValue([
       {
         id: 'f-old',
-        relationshipId: 'rel-1',
+        conversationId: convIdFor('rel-1'),
         uploadedByUserId: VIEWER_ID,
         r2Key: 'k1',
         fileName: 'old.pdf',
@@ -250,7 +281,7 @@ describe('loadConversationView', () => {
       },
       {
         id: 'f-new',
-        relationshipId: 'rel-1',
+        conversationId: convIdFor('rel-1'),
         uploadedByUserId: EXPERT_USER_ID,
         r2Key: 'k2',
         fileName: 'new.pdf',
@@ -267,6 +298,15 @@ describe('loadConversationView', () => {
       expect.objectContaining({ id: 'm-1', bodyHtml: '<p>hello</p>', senderName: 'Priya Nair' }),
     ]);
     expect(view.initialHasEarlier).toBe(true);
+    // ⚠ BAL-424: both reads key on the CONVERSATION and STATE `{ kind: 'full' }`. A
+    // repository default would put the meeting-level guest filter one forgotten argument
+    // away from handing a guest the whole thread.
+    expect(mockListMessagesPage).toHaveBeenCalledWith({
+      conversationId: convIdFor('rel-1'),
+      scope: { kind: 'full' },
+      limit: 30,
+    });
+    expect(mockListFiles).toHaveBeenCalledWith(convIdFor('rel-1'), { kind: 'full' });
     expect(view.initialFiles.map((f) => f.id)).toEqual(['f-new', 'f-old']);
     expect(view.initialFiles[0]?.uploadedByName).toBe('Priya Nair');
     expect(view.initialFiles[1]?.uploadedByName).toBe('Dana Whitfield');

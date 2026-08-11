@@ -28,13 +28,21 @@ import { timestamps, softDelete } from './helpers';
 /**
  * Request origination spine (BAL-267 / epic BAL-266). The graph that sits behind
  * a submitted project request: per-expert relationships, expressions of interest,
- * proposals, and a per-relationship conversation (messages + files).
+ * and proposals.
+ *
+ * ⚠ MESSAGING LIVES IN `schema/conversations.ts` AS OF BAL-424, not here. The three
+ * messaging tables shipped in this file anchored on `request_expert_relationships.id`,
+ * which is exactly why a directory scan for "conversations" missed them. They are now
+ * anchored on `conversations` through the polymorphic `conversation_contexts` seam, so a
+ * Case — which has no relationship row anywhere — gets a thread too. A relationship's
+ * thread is reached via `conversationsRepository.findByContext({ contextType:
+ * 'relationship', contextId })`, never by an FK from here.
  *
  * `request_expert_relationships` is the per-expert spine: one row per
  * (request, expert), created at admin invite (`invited`), carrying that single
- * expert's own status. EOIs, proposals, messages, and files all FK to the
- * relationship and carry a denormalised `project_request_id` (and, where useful,
- * `expert_profile_id`) for indexed request-scoped reads.
+ * expert's own status. EOIs and proposals FK to the relationship and carry a
+ * denormalised `project_request_id` (and, where useful, `expert_profile_id`) for
+ * indexed request-scoped reads.
  *
  * Rich text authored by users (`message`, `overview`, `body`) is server-sanitised
  * HTML — same contract as `project_requests.description`; sanitisation happens in
@@ -410,102 +418,6 @@ export const proposalChangeRequests = pgTable(
   ]
 );
 
-/**
- * conversation_messages — the per-relationship thread (each expert ↔ client has
- * its own thread, not per request). `senderUserId` RESTRICT (preserve authorship;
- * sender is a client member, the expert's user, or an admin — role is derived at
- * read time, not baked into the row).
- */
-export const conversationMessages = pgTable(
-  'conversation_messages',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    relationshipId: uuid('relationship_id')
-      .notNull()
-      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
-    senderUserId: uuid('sender_user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'restrict' }),
-    // Sanitised HTML message body.
-    body: text('body').notNull(),
-    ...timestamps,
-    ...softDelete,
-  },
-  (t) => [
-    index('conversation_message_relationship_idx').on(t.relationshipId),
-    index('conversation_message_sender_idx').on(t.senderUserId),
-    // Chronological thread fetch — partial on live rows.
-    index('conversation_message_thread_idx')
-      .on(t.relationshipId, t.createdAt)
-      .where(sql`${t.deletedAt} IS NULL`),
-  ]
-);
-
-/**
- * conversation_files — files shared inside one expert's conversation (distinct
- * from the request-level brief attachments in project_request_documents). Same R2
- * column contract. `uploadedByUserId` RESTRICT (attribution).
- */
-export const conversationFiles = pgTable(
-  'conversation_files',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    relationshipId: uuid('relationship_id')
-      .notNull()
-      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
-    uploadedByUserId: uuid('uploaded_by_user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'restrict' }),
-    r2Key: text('r2_key').notNull(),
-    fileName: text('file_name').notNull(),
-    contentType: text('content_type').notNull(),
-    sizeBytes: integer('size_bytes').notNull(),
-    ...timestamps,
-    ...softDelete,
-  },
-  (t) => [
-    uniqueIndex('conversation_file_key_idx').on(t.r2Key),
-    index('conversation_file_relationship_idx').on(t.relationshipId),
-    index('conversation_file_uploaded_by_idx').on(t.uploadedByUserId),
-  ]
-);
-
-/**
- * conversation_read_states — per-(relationship, user) read watermark (BAL-271).
- * One LIVE row per viewer per thread; `lastReadAt` only ever moves FORWARD
- * (repo upsert uses GREATEST). Unread is DERIVED at read time — newest live
- * inbound message/file `created_at` vs this watermark — never stored per
- * message. Both FKs CASCADE (a read state is meaningless without the thread
- * or the viewer).
- */
-export const conversationReadStates = pgTable(
-  'conversation_read_states',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    relationshipId: uuid('relationship_id')
-      .notNull()
-      .references(() => requestExpertRelationships.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    lastReadAt: timestamp('last_read_at', { withTimezone: true }).notNull(),
-    ...timestamps,
-    ...softDelete,
-  },
-  (t) => [
-    // One LIVE read-state per (relationship, user). PARTIAL on `deleted_at IS
-    // NULL` — hard-learned convention (mirrors the relationship/EOI unique
-    // indexes above): soft-delete + a NON-partial unique index makes any
-    // re-create silently fail, and the repo upsert's `targetWhere` arbiter
-    // must match THIS predicate exactly.
-    uniqueIndex('conversation_read_state_unique_idx')
-      .on(t.relationshipId, t.userId)
-      .where(sql`${t.deletedAt} IS NULL`),
-    index('conversation_read_state_user_idx').on(t.userId),
-    index('conversation_read_state_relationship_idx').on(t.relationshipId),
-  ]
-);
-
 // ── Relations ──────────────────────────────────────────────────────────
 
 export const requestExpertRelationshipsRelations = relations(
@@ -525,9 +437,15 @@ export const requestExpertRelationshipsRelations = relations(
     }),
     expressionsOfInterest: many(expressionsOfInterest),
     proposals: many(proposals),
-    conversationMessages: many(conversationMessages),
-    conversationFiles: many(conversationFiles),
-    conversationReadStates: many(conversationReadStates),
+    // ⚠ NO `conversationMessages` / `conversationFiles` / `conversationReadStates` EDGES
+    // (BAL-424). The three messaging tables no longer FK this row — they hang off
+    // `conversations`, reached through the polymorphic, FK-less `conversation_contexts`
+    // seam, which Drizzle's relational `with:` cannot traverse. The two reads that used
+    // those edges (`projectRequestsRepository.findByIdWithRelations` and
+    // `projects-inbox.ts`'s `queryPortfolioRequests`) now graft the same shape back on from
+    // `conversationsRepository.latestMessagesForRelationships`. Re-adding an edge here is
+    // not possible and would not be correct: a conversation can outlive, precede, and be
+    // shared by more than one anchor.
   })
 );
 
@@ -604,39 +522,6 @@ export const proposalChangeRequestsRelations = relations(proposalChangeRequests,
   }),
 }));
 
-export const conversationMessagesRelations = relations(conversationMessages, ({ one }) => ({
-  relationship: one(requestExpertRelationships, {
-    fields: [conversationMessages.relationshipId],
-    references: [requestExpertRelationships.id],
-  }),
-  sender: one(users, {
-    fields: [conversationMessages.senderUserId],
-    references: [users.id],
-  }),
-}));
-
-export const conversationFilesRelations = relations(conversationFiles, ({ one }) => ({
-  relationship: one(requestExpertRelationships, {
-    fields: [conversationFiles.relationshipId],
-    references: [requestExpertRelationships.id],
-  }),
-  uploadedBy: one(users, {
-    fields: [conversationFiles.uploadedByUserId],
-    references: [users.id],
-  }),
-}));
-
-export const conversationReadStatesRelations = relations(conversationReadStates, ({ one }) => ({
-  relationship: one(requestExpertRelationships, {
-    fields: [conversationReadStates.relationshipId],
-    references: [requestExpertRelationships.id],
-  }),
-  user: one(users, {
-    fields: [conversationReadStates.userId],
-    references: [users.id],
-  }),
-}));
-
 // ── Type exports ───────────────────────────────────────────────────────
 
 export type RequestExpertRelationship = typeof requestExpertRelationships.$inferSelect;
@@ -653,9 +538,5 @@ export type ProposalDocument = typeof proposalDocuments.$inferSelect;
 export type NewProposalDocument = typeof proposalDocuments.$inferInsert;
 export type ProposalChangeRequest = typeof proposalChangeRequests.$inferSelect;
 export type NewProposalChangeRequest = typeof proposalChangeRequests.$inferInsert;
-export type ConversationMessage = typeof conversationMessages.$inferSelect;
-export type NewConversationMessage = typeof conversationMessages.$inferInsert;
-export type ConversationFile = typeof conversationFiles.$inferSelect;
-export type NewConversationFile = typeof conversationFiles.$inferInsert;
-export type ConversationReadState = typeof conversationReadStates.$inferSelect;
-export type NewConversationReadState = typeof conversationReadStates.$inferInsert;
+// The six conversation message/file/read-state types MOVED to `schema/conversations.ts`
+// with their tables (BAL-424).

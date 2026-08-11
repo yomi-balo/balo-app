@@ -69,7 +69,7 @@ describe('ably-server', () => {
   it('defers the publish via runAfterResponse rather than publishing inline', async () => {
     process.env.ABLY_API_KEY = 'app.key:secret';
     const { publishConversationEvent } = await import('./ably-server');
-    publishConversationEvent('rel-1', 'file', { id: 'f-1' });
+    publishConversationEvent('conv-1', 'file', { id: 'f-1' });
 
     expect(runAfterResponseMock).toHaveBeenCalledWith('Ably publish', expect.any(Function));
     expect(mockChannelsGet).not.toHaveBeenCalled();
@@ -77,13 +77,13 @@ describe('ably-server', () => {
 
   it('the deferred work no-ops with a single warn when unconfigured', async () => {
     const { publishConversationEvent } = await import('./ably-server');
-    publishConversationEvent('rel-1', 'message', { id: 'm-1' });
+    publishConversationEvent('conv-1', 'message', { id: 'm-1' });
     await getScheduled()?.();
 
     expect(mockChannelsGet).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       'Realtime disabled (no ABLY_API_KEY) — skipping publish',
-      expect.objectContaining({ channel: 'conversation:rel-1', name: 'message' })
+      expect.objectContaining({ channel: 'conversation:conv-1', name: 'message' })
     );
   });
 
@@ -91,10 +91,10 @@ describe('ably-server', () => {
     process.env.ABLY_API_KEY = 'app.key:secret';
     mockPublish.mockResolvedValue(undefined);
     const { publishConversationEvent } = await import('./ably-server');
-    publishConversationEvent('rel-1', 'file', { id: 'f-1' });
+    publishConversationEvent('conv-1', 'file', { id: 'f-1' });
     await getScheduled()?.();
 
-    expect(mockChannelsGet).toHaveBeenCalledWith('conversation:rel-1');
+    expect(mockChannelsGet).toHaveBeenCalledWith('conversation:conv-1');
     expect(mockPublish).toHaveBeenCalledWith('file', { id: 'f-1' });
   });
 
@@ -102,12 +102,12 @@ describe('ably-server', () => {
     process.env.ABLY_API_KEY = 'app.key:secret';
     mockPublish.mockRejectedValue(new Error('socket down'));
     const { publishConversationEvent } = await import('./ably-server');
-    publishConversationEvent('rel-1', 'message', { id: 'm-1' });
+    publishConversationEvent('conv-1', 'message', { id: 'm-1' });
 
     await expect(getScheduled()?.()).resolves.toBeUndefined();
     expect(log.error).toHaveBeenCalledWith(
       'Ably publish failed',
-      expect.objectContaining({ channel: 'conversation:rel-1', error: 'socket down' })
+      expect.objectContaining({ channel: 'conversation:conv-1', error: 'socket down' })
     );
   });
 });

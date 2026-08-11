@@ -1,6 +1,7 @@
 import 'server-only';
 
 import {
+  conversationContextKey,
   conversationsRepository,
   projectEngagementsRepository,
   projectsInboxRepository,
@@ -184,16 +185,48 @@ function foldSignal(
   };
 }
 
-/** Batch-load + index thread summaries for a set of relationship ids. */
+/**
+ * Batch-load + index thread summaries for a set of relationship ids.
+ *
+ * ⚠ BAL-424: the SIGNATURE IS UNCHANGED and the returned Map is still keyed by RELATIONSHIP
+ * id — the whole conversation→relationship mapping is PRIVATE to this function, so
+ * `PortfolioDTO` and every caller stay untouched.
+ *
+ * ⚠ `conversationIdsForContexts` (a READ), NEVER `ensureManyForContexts`. A portfolio list
+ * must not write; a relationship with no conversation simply has no summary, which
+ * `resolveSummaries` already logs and copes with.
+ */
 async function loadSummaryIndex(
   relationshipIds: string[],
   viewerUserId: string
 ): Promise<Map<string, ThreadSummary>> {
+  const conversationIdByRelationship = await conversationsRepository.conversationIdsForContexts(
+    relationshipIds.map((id) => ({ contextType: 'relationship' as const, contextId: id }))
+  );
+
+  const relationshipIdByConversation = new Map<string, string>();
+  for (const relationshipId of relationshipIds) {
+    const conversationId = conversationIdByRelationship.get(
+      conversationContextKey({ contextType: 'relationship', contextId: relationshipId })
+    );
+    if (conversationId !== undefined) {
+      relationshipIdByConversation.set(conversationId, relationshipId);
+    }
+  }
+
   const summaries = await conversationsRepository.listThreadSummaries({
-    relationshipIds,
+    conversationIds: [...relationshipIdByConversation.keys()],
     viewerUserId,
   });
-  return new Map(summaries.map((s) => [s.relationshipId, s]));
+
+  const byRelationship = new Map<string, ThreadSummary>();
+  for (const summary of summaries) {
+    const relationshipId = relationshipIdByConversation.get(summary.conversationId);
+    if (relationshipId !== undefined) {
+      byRelationship.set(relationshipId, summary);
+    }
+  }
+  return byRelationship;
 }
 
 /** Build a participant request row view from a hydrated request + its signal. */

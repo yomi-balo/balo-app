@@ -7,6 +7,7 @@ import {
   requestExpertRelationships,
 } from '../schema';
 import type { ProjectRequestStatus } from './project-requests';
+import { conversationsRepository } from './conversations';
 
 /**
  * projects-inbox — aggregation-only READ repository for the A7 tri-lens portfolio
@@ -16,10 +17,19 @@ import type { ProjectRequestStatus } from './project-requests';
  *
  * Query strategy (the resolver's N+1 decision): each lens is ONE hydrated
  * `db.query` `with:` graph (or one flat `innerJoin` for the expert-invitations
- * lens) — Drizzle emits a bounded set of selects, NOT N per row. The web loader
- * then runs ONE batched `conversationsRepository.listThreadSummaries(...)` over the
- * union of relationship ids for the unread + freshest-message signals; that join
- * lives in the web view-model layer, never here.
+ * lens) — Drizzle emits a bounded set of selects, NOT N per row — plus ONE batched
+ * `conversationsRepository.latestMessagesForRelationships(...)` for the newest-message
+ * recency signal (see below). The web loader then runs ONE batched
+ * `conversationsRepository.listThreadSummaries(...)` over the union of CONVERSATION ids for
+ * the unread + freshest-message signals; that join lives in the web view-model layer, never
+ * here.
+ *
+ * ⚠ `conversationMessages` IS GRAFTED, NOT HYDRATED (BAL-424). Messages no longer FK the
+ * relationship — they hang off `conversations` through the polymorphic, FK-less
+ * `conversation_contexts` seam, which Drizzle's relational `with:` cannot traverse. The
+ * array is rebuilt in the EXACT shape the `with:` produced (`{ id, createdAt }[]` of length
+ * ≤ 1) so `PortfolioRequestRow` — which is INFERRED from this function — is unchanged and
+ * `portfolio-row.ts`'s `relationshipLastActivityAt` needs no edit.
  *
  * Soft-delete-aware at EVERY level — the top request, each relationship, each
  * newest EOI/message, the engagement, and the joined company all filter
@@ -51,7 +61,7 @@ async function queryPortfolioRequests(filter: {
   companyId?: string;
   statusFilter?: ProjectRequestStatus;
 }) {
-  return db.query.projectRequests.findMany({
+  const rows = await db.query.projectRequests.findMany({
     where: and(
       isNull(projectRequests.deletedAt),
       filter.companyId === undefined ? undefined : eq(projectRequests.companyId, filter.companyId),
@@ -90,19 +100,28 @@ async function queryPortfolioRequests(filter: {
             orderBy: (t, { desc: childDesc }) => [childDesc(t.submittedAt)],
             limit: 1,
           },
-          // Newest live conversation message per relationship — its `createdAt` is
-          // the "talking" recency signal.
-          conversationMessages: {
-            where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
-            columns: { id: true, createdAt: true },
-            orderBy: (t, { desc: childDesc }) => [childDesc(t.createdAt)],
-            limit: 1,
-          },
         },
       },
     },
     orderBy: desc(projectRequests.createdAt),
   });
+
+  // SHAPE-PRESERVING GRAFT (BAL-424) — see the module docblock. ONE batched call over EVERY
+  // relationship across ALL rows; never one per row, or the inbox becomes an N+1.
+  const latestByRelationship = await conversationsRepository.latestMessagesForRelationships(
+    rows.flatMap((row) => row.relationships.map((relationship) => relationship.id))
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    relationships: row.relationships.map((relationship) => {
+      const latest = latestByRelationship.get(relationship.id);
+      return {
+        ...relationship,
+        conversationMessages: latest === undefined ? [] : [latest],
+      };
+    }),
+  }));
 }
 
 /**

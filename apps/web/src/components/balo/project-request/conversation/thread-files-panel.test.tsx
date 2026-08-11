@@ -11,7 +11,7 @@ import type { ConversationFileView } from '@/lib/project-request/conversation-vi
 function file(overrides: Partial<ConversationFileView> = {}): ConversationFileView {
   return {
     id: 'f-1',
-    relationshipId: 'rel-1',
+    conversationId: 'conv-1',
     fileName: 'price-book-export.xlsx',
     contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     sizeBytes: 2 * 1024 * 1024,

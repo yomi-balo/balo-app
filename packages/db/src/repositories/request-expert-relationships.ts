@@ -6,6 +6,7 @@ import {
   type RequestExpertRelationship,
 } from '../schema';
 import { deriveRequestStatus } from './_shared/derive-request-status';
+import { conversationsRepository } from './conversations';
 
 export type RelationshipStatus = RequestExpertRelationship['status'];
 
@@ -182,29 +183,52 @@ export const requestExpertRelationshipsRepository = {
    * means a genuine failure (FK / connection) still throws and is never masked.
    * A previously REMOVED (soft-deleted) expert is outside the partial index, so
    * re-inviting them inserts a fresh `invited` row.
+   *
+   * ⚠ THE CONVERSATION IS PROVISIONED EAGERLY, IN THIS TRANSACTION (BAL-424). Lazy creation
+   * would leave the Ably token action with nothing to grant a channel on until the first
+   * message existed, so the FIRST message of every thread would be invisible to the
+   * counterparty until their 15-minute token refreshed. One row per relationship, written
+   * once, closes that. Nothing is provisioned on the conflict (no-op) branch — that
+   * relationship already has its thread.
+   *
+   * ⚠ SOFT-DELETING A RELATIONSHIP DOES NOT TOUCH ITS CONVERSATION, DELIBERATELY.
+   * `softDelete` means "removed from the request's invite list"; the history stays, and the
+   * read path already gates on `isThreadOpenStatus`. Re-inviting the same expert inserts a
+   * FRESH relationship row (the partial unique permits it), which gets a FRESH conversation
+   * — the old thread is not resurrected. That matches the pre-BAL-424 behaviour, where
+   * messages keyed to the dead relationship id.
    */
   async invite(input: {
     projectRequestId: string;
     expertProfileId: string;
     invitedByUserId: string;
   }): Promise<RequestExpertRelationship | undefined> {
-    const [row] = await db
-      .insert(requestExpertRelationships)
-      .values({
-        projectRequestId: input.projectRequestId,
-        expertProfileId: input.expertProfileId,
-        invitedByUserId: input.invitedByUserId,
-      })
-      .onConflictDoNothing({
-        target: [
-          requestExpertRelationships.projectRequestId,
-          requestExpertRelationships.expertProfileId,
-        ],
-        // The arbiter is the PARTIAL unique index, so its predicate must be given.
-        where: isNull(requestExpertRelationships.deletedAt),
-      })
-      .returning();
-    return row;
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(requestExpertRelationships)
+        .values({
+          projectRequestId: input.projectRequestId,
+          expertProfileId: input.expertProfileId,
+          invitedByUserId: input.invitedByUserId,
+        })
+        .onConflictDoNothing({
+          target: [
+            requestExpertRelationships.projectRequestId,
+            requestExpertRelationships.expertProfileId,
+          ],
+          // The arbiter is the PARTIAL unique index, so its predicate must be given.
+          where: isNull(requestExpertRelationships.deletedAt),
+        })
+        .returning();
+
+      if (row !== undefined) {
+        await conversationsRepository.ensureForContext(
+          { contextType: 'relationship', contextId: row.id },
+          tx
+        );
+      }
+      return row;
+    });
   },
 
   /**

@@ -18,7 +18,7 @@ const VIEWER_ID = 'user-viewer';
 function msg(id: string, at: string, sender = 'user-expert'): ConversationMessageView {
   return {
     id,
-    relationshipId: 'rel-1',
+    conversationId: 'conv-1',
     bodyHtml: `<p>body ${id}</p>`,
     senderUserId: sender,
     senderName: 'Priya Nair',
@@ -29,7 +29,7 @@ function msg(id: string, at: string, sender = 'user-expert'): ConversationMessag
 function file(id: string, at: string, uploader = 'user-expert'): ConversationFileView {
   return {
     id,
-    relationshipId: 'rel-1',
+    conversationId: 'conv-1',
     fileName: `${id}.pdf`,
     contentType: 'application/pdf',
     sizeBytes: 2048,

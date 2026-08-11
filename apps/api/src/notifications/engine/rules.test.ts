@@ -250,8 +250,8 @@ describe('notificationRules', () => {
   });
 
   describe.each([
-    ['project.message_posted', 'project-message-posted'],
-    ['project.file_shared', 'project-file-shared'],
+    ['conversation.message_posted', 'conversation-message-posted'],
+    ['conversation.file_shared', 'conversation-file-shared'],
   ] as const)('%s rules', (event, template) => {
     it('is in-app only — one conditioned rule per recipient role', () => {
       const rules = notificationRules[event];
@@ -281,6 +281,59 @@ describe('notificationRules', () => {
       const toExpert = { event, payload: { recipientRole: 'expert' }, data: {} };
       expect(clientRule.condition!(toExpert)).toBe(false);
       expect(expertRule.condition!(toExpert)).toBe(true);
+    });
+
+    /**
+     * ⚠⚠ THE FOLLOW-UP HOOK DEPENDS ON THIS. `processNotificationEvent` RETURNS EARLY on an
+     * event with no rules, and the hook that schedules the 10-minute unread digest runs AFTER
+     * that lookup — so emptying either array would silently disable the unread email for that
+     * half of the exchange, with nothing else failing.
+     */
+    it('keeps at least one rule, or the unread-digest follow-up never runs', () => {
+      expect(notificationRules[event]?.length ?? 0).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  /** BAL-424 — the debounced unread digest. EMAIL only; the in-app notice already fired. */
+  describe('conversation.unread_digest_due rules', () => {
+    it('is email-only, one conditioned rule per recipient role', () => {
+      const rules = notificationRules['conversation.unread_digest_due'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.channel).toBe('email');
+        expect(rule.template).toBe('conversation-unread-digest');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeDefined();
+        // Both arms resolve the SAME stored `recipientUserId` — it was already resolved to a
+        // user id at SCHEDULE time, because the fire-time recheck reads the watermark by user.
+        expect(rule.recipient).toBe('self');
+      }
+    });
+
+    it('routes by payload.recipientRole — exactly one rule fires per publish', () => {
+      const rules = notificationRules['conversation.unread_digest_due']!;
+      const [clientRule, expertRule] = rules;
+      const toClient = {
+        event: 'conversation.unread_digest_due',
+        payload: { recipientRole: 'client' },
+        data: {},
+      };
+      expect(clientRule!.condition!(toClient)).toBe(true);
+      expect(expertRule!.condition!(toClient)).toBe(false);
+
+      const toExpert = {
+        event: 'conversation.unread_digest_due',
+        payload: { recipientRole: 'expert' },
+        data: {},
+      };
+      expect(clientRule!.condition!(toExpert)).toBe(false);
+      expect(expertRule!.condition!(toExpert)).toBe(true);
+    });
+
+    it('never sends the digest in-app — the immediate events already did', () => {
+      const rules = notificationRules['conversation.unread_digest_due']!;
+      expect(rules.some((r) => r.channel === 'in-app')).toBe(false);
     });
   });
 

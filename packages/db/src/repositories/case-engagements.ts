@@ -9,6 +9,7 @@ import {
 } from '../schema';
 import type { RatingNudgeCandidate } from './reviews';
 import { partyMembershipsRepository } from './party-memberships';
+import { conversationsRepository } from './conversations';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import { insertEngagementRowTx, lockEngagementRowTx } from './_shared/engagement-supertype';
 
@@ -116,6 +117,12 @@ export const caseEngagementsRepository = {
    * Emits ONE `engagement.created` audit row in the SAME transaction (see
    * `recordEngagementCreated`), so a Case's trail starts at creation and not at close.
    *
+   * ⚠ PROVISIONS THE CASE'S CONVERSATION IN THIS SAME TRANSACTION (BAL-424), anchored to the
+   * SUPERTYPE id on the `engagement` label. This is what makes "a Case engagement has a
+   * conversation with NO relationship row anywhere" true by construction rather than by
+   * convention: a Case never passes through request origination, so there is nothing for the
+   * old per-relationship model to key on.
+   *
    * CONTRACT — bare INSERT. Raw FK violation (23503) on an unknown `companyId` /
    * `expertProfileId`; CHECK (23514) on a blank `title` / `description`.
    */
@@ -164,6 +171,13 @@ export const caseEngagementsRepository = {
         engagementType: 'case',
         actorUserId: input.actorUserId ?? null,
       });
+
+      // BAL-424 — the case's thread, anchored to the SUPERTYPE id. Same transaction: a case
+      // that exists without a thread would be a case whose parties cannot talk.
+      await conversationsRepository.ensureForContext(
+        { contextType: 'engagement', contextId: parent.id },
+        tx
+      );
 
       return toCaseRow(parent, child);
     });

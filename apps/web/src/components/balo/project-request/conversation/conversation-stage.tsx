@@ -369,6 +369,31 @@ export function ConversationStage({
     return true;
   }, []);
 
+  /**
+   * BAL-424 — Ably payloads carry a `conversationId`; the island's thread identity is still
+   * the RELATIONSHIP id. This is the ONE place the two are reconciled. Built from `view` (the
+   * server-rendered prop), not from `threads` state, so the mapping is stable across every
+   * optimistic update.
+   */
+  const threadIdByConversationId = useMemo(
+    () => new Map(view.threads.map((t) => [t.conversationId, t.relationshipId])),
+    [view.threads]
+  );
+
+  /**
+   * The forward direction, for the analytics anchor. Every BAL-424 conversation event carries
+   * `conversation_id` + `context_type`; on THIS surface the anchor is always `relationship`
+   * (the Case surface is BAL-421's), and `request_id` / `relationship_id` remain present.
+   */
+  const conversationIdByThreadId = useMemo(
+    () => new Map(view.threads.map((t) => [t.relationshipId, t.conversationId])),
+    [view.threads]
+  );
+  const conversationIdOf = useCallback(
+    (relationshipId: string): string => conversationIdByThreadId.get(relationshipId) ?? '',
+    [conversationIdByThreadId]
+  );
+
   const activeThread = threads.find((t) => t.relationshipId === activeThreadId) ?? null;
   const activeData: ThreadData =
     (activeThreadId === null ? undefined : threadData[activeThreadId]) ?? EMPTY_THREAD_DATA;
@@ -433,6 +458,7 @@ export function ConversationStage({
       track(CONVERSATION_EVENTS.CONVERSATION_THREAD_SELECTED, {
         request_id: requestId,
         relationship_id: threadId,
+        conversation_id: conversationIdOf(threadId),
         method,
         was_unread: thread?.unread ?? false,
         thread_count: threads.length,
@@ -447,7 +473,7 @@ export function ConversationStage({
         fetchThread(threadId);
       }
     },
-    [threads, threadData, requestId, clearUnread, markReadSafe, fetchThread]
+    [threads, threadData, requestId, clearUnread, markReadSafe, fetchThread, conversationIdOf]
   );
 
   const handleTabSelect = useCallback(
@@ -468,6 +494,7 @@ export function ConversationStage({
     track(CONVERSATION_EVENTS.CONVERSATION_THREAD_SELECTED, {
       request_id: requestId,
       relationship_id: view.defaultThreadId,
+      conversation_id: defaultThread?.conversationId ?? '',
       method: 'auto',
       was_unread: defaultThread?.unread ?? false,
       thread_count: view.threads.length,
@@ -497,7 +524,8 @@ export function ConversationStage({
   // replay per hook in declaration order under batching.
   const handleRealtimeMessage = useCallback(
     (message: ConversationMessageView): void => {
-      const threadId = message.relationshipId;
+      const threadId = threadIdByConversationId.get(message.conversationId);
+      if (threadId === undefined) return;
       const fromViewer = message.senderUserId === viewerUserId;
       const activeVisible =
         threadId === activeThreadIdRef.current && document.visibilityState === 'visible';
@@ -527,12 +555,13 @@ export function ConversationStage({
       );
       if (!fromViewer && activeVisible) markReadSafe(threadId);
     },
-    [viewerUserId, markReadSafe]
+    [viewerUserId, markReadSafe, threadIdByConversationId]
   );
 
   const handleRealtimeFile = useCallback(
     (file: ConversationFileView): void => {
-      const threadId = file.relationshipId;
+      const threadId = threadIdByConversationId.get(file.conversationId);
+      if (threadId === undefined) return;
       const fromViewer = file.uploadedByUserId === viewerUserId;
       const activeVisible =
         threadId === activeThreadIdRef.current && document.visibilityState === 'visible';
@@ -566,14 +595,16 @@ export function ConversationStage({
       );
       if (!fromViewer && activeVisible) markReadSafe(threadId);
     },
-    [viewerUserId, markReadSafe, rememberFile]
+    [viewerUserId, markReadSafe, rememberFile, threadIdByConversationId]
   );
 
-  const relationshipIds = useMemo(() => view.threads.map((t) => t.relationshipId), [view.threads]);
+  // BAL-424 — channels are keyed on the CONVERSATION, so a Case (which has no relationship)
+  // and a thread that carries over at kickoff both keep one stable channel for life.
+  const conversationIds = useMemo(() => view.threads.map((t) => t.conversationId), [view.threads]);
   const { status: realtimeStatus } = useConversationRealtime({
-    enabled: view.realtimeEnabled && relationshipIds.length > 0,
+    enabled: view.realtimeEnabled && conversationIds.length > 0,
     requestId,
-    relationshipIds,
+    conversationIds,
     onMessage: handleRealtimeMessage,
     onFile: handleRealtimeFile,
   });
@@ -631,10 +662,14 @@ export function ConversationStage({
         track(CONVERSATION_EVENTS.CONVERSATION_MESSAGE_SENT, {
           request_id: requestId,
           relationship_id: threadId,
+          conversation_id: conversationIdOf(threadId),
+          context_type: 'relationship',
           lens,
           body_length: text.trim().length,
           thread_count: threads.length,
           is_first_message_in_thread: wasFirst,
+          // This composer is the project-request stage, never the in-call panel (BAL-132).
+          during_meeting: false,
         });
         toast.success('Message sent');
         return true;
@@ -645,7 +680,7 @@ export function ConversationStage({
         setSending(false);
       }
     },
-    [activeThreadId, requestId, lens, threads.length, threadData]
+    [activeThreadId, requestId, lens, threads.length, threadData, conversationIdOf]
   );
 
   // ── Composer: attach (presign → XHR PUT → confirm) ─────────────────────
@@ -707,6 +742,8 @@ export function ConversationStage({
         track(CONVERSATION_EVENTS.CONVERSATION_FILE_SHARED, {
           request_id: requestId,
           relationship_id: threadId,
+          conversation_id: conversationIdOf(threadId),
+          context_type: 'relationship',
           lens,
           content_type: file.type,
           size_bytes: file.size,
@@ -720,7 +757,7 @@ export function ConversationStage({
         })
         .finally(() => setUploading(null));
     },
-    [activeThreadId, uploading, requestId, lens, rememberFile]
+    [activeThreadId, uploading, requestId, lens, rememberFile, conversationIdOf]
   );
 
   // ── Call CTA (mock seam) ───────────────────────────────────────────────
@@ -903,12 +940,13 @@ export function ConversationStage({
       track(CONVERSATION_EVENTS.CONVERSATION_FILES_OPENED, {
         request_id: requestId,
         relationship_id: activeThreadId,
+        conversation_id: conversationIdOf(activeThreadId),
         surface,
         file_count: activeFileCount,
       });
       setFilesOpen(true);
     },
-    [activeThreadId, requestId, activeFileCount]
+    [activeThreadId, requestId, activeFileCount, conversationIdOf]
   );
   const handleHeaderFilesToggle = useCallback((): void => {
     if (filesOpen) setFilesOpen(false);
@@ -918,10 +956,14 @@ export function ConversationStage({
 
   const handleDownload = useCallback(
     (file: ConversationFileView): void => {
+      // BAL-424: `ConversationFileView` is an Ably wire payload and no longer carries a
+      // relationship id. The Files panel only ever renders the ACTIVE thread's files, so the
+      // thread the action must validate against is the active one.
+      if (activeThreadId === null) return;
       setDownloadingFileId(file.id);
       getConversationFileDownloadAction({
         requestId,
-        relationshipId: file.relationshipId,
+        relationshipId: activeThreadId,
         fileId: file.id,
       })
         .then((result) => {
@@ -933,7 +975,7 @@ export function ConversationStage({
         .catch(() => toast.error('Could not download this file. Please try again.'))
         .finally(() => setDownloadingFileId(null));
     },
-    [requestId]
+    [requestId, activeThreadId]
   );
 
   // ── Load earlier (keyset) ──────────────────────────────────────────────
