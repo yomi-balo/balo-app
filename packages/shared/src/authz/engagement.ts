@@ -226,6 +226,11 @@ export function hostRoleHasCapability(
  *     never in that agency, so it is never consulted;
  *   · agency role `expert` maps to the base member bundle, which does not contain
  *     `MANAGE_MEMBERS` — so a delivering expert's agency colleague resolves false.
+ *     ⚠ That colleague DOES hold expert-side **visibility** — see
+ *     `actorHasExpertSideVisibility` in `./expert-side-visibility`. Two rules,
+ *     deliberately (ADR-1046 §7): visibility is delivering expert ∪ ANY live agency
+ *     member; act is delivering expert ∪ agency `owner`/`admin`. NOT drift, and not to
+ *     be "aligned" — `expert-side-visibility.test.ts` pins both over ONE table.
  */
 export function resolveHostRole(
   hostContext: ResolvedHostContext,

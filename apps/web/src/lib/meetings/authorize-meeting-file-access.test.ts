@@ -608,13 +608,20 @@ describe('authorizeMeetingFileAccess', () => {
  * indexOf scan with zero ReDoS surface.
  */
 describe('axis discipline', () => {
-  const code = stripComments(
-    readFileSync(join(import.meta.dirname, 'authorize-meeting-file-access.ts'), 'utf8')
-  );
+  const raw = readFileSync(join(import.meta.dirname, 'authorize-meeting-file-access.ts'), 'utf8');
+  const code = stripComments(raw);
 
-  it('reads its own source (guards against a vacuous pass)', () => {
-    // If the read or the strip ever broke, every assertion below would pass for free.
+  it('reads its own source, and the stripper really ran (guards against a vacuous pass)', () => {
+    // If the read ever broke, every assertion below would pass for free — and so would they
+    // if `stripComments` silently became a no-op, because this module's docblocks NAME the
+    // identifiers scanned below (`hasEngagementCapability`, `guestMayReadMeeting`,
+    // `agencyRole`), precisely to explain why they are absent from the code. Pinned on comment
+    // SYNTAX rather than on any particular sentence, so ordinary prose edits cannot make this
+    // guard rot.
     expect(code).toContain('export async function authorizeMeetingFileAccess');
+    expect(raw).toContain('/**');
+    expect(code).not.toContain('/**');
+    expect(code).not.toContain('//');
   });
 
   it('never reaches for the engagement-capability axis', () => {
@@ -638,5 +645,25 @@ describe('axis discipline', () => {
     expect(code).toContain('relationshipDeniesHosting');
     expect(code).not.toContain("'declined'");
     expect(code).not.toContain('declinedAt');
+  });
+
+  /**
+   * ⚠ ONE DEFINITION OF EXPERT-SIDE VISIBILITY, PINNED THE SAME WAY (BAL-419 / ADR-1046 §7).
+   * `actorIsOnExpertSide` must CONSUME `actorHasExpertSideVisibility` from `@balo/shared/authz`
+   * — the single definition — rather than re-deriving `agencyRole !== undefined` locally, which
+   * could silently diverge from the answer `authorizeSessionExpertVisibility` and
+   * `authorizeEngagementConversation` give about the SAME agency colleague. A drift alarm, not
+   * the guarantee: the guarantee is the visibility-vs-act table in
+   * `packages/shared/src/authz/expert-side-visibility.test.ts`.
+   *
+   * ⚠ THE CALL, NOT MERELY THE SYMBOL. `toContain('actorHasExpertSideVisibility')` alone stays
+   * green if the CALL is deleted and the IMPORT left behind. Matching on the open paren, and
+   * counting it, means one call site exactly: zero would be a re-inlined local rule, two an
+   * ungoverned second consumer.
+   */
+  it('delegates the agency arm to the shared predicate — exactly one CALL site', () => {
+    expect([...code.matchAll(/actorHasExpertSideVisibility\(/g)]).toHaveLength(1);
+    // The `agencyRole !== undefined` line lives in `@balo/shared/authz` and ONLY there.
+    expect(code).not.toContain('agencyRole');
   });
 });

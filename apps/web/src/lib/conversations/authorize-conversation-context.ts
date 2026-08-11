@@ -7,7 +7,7 @@ import {
   partyMembershipsRepository,
   type EngagementStatus,
 } from '@balo/db';
-import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
+import { actorHasExpertSideVisibility, CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import type { EngagementStatusLabel } from '@balo/shared/conversations';
 import { log } from '@/lib/logging';
 
@@ -62,8 +62,8 @@ import { log } from '@/lib/logging';
  * ──────────────────────────────────────────────────────────────────────────────
  * ⚠⚠ (b) THE EXPERT ARM CONSUMES THE SHIPPED **VISIBILITY** RULE — IT DOES NOT INVENT ONE.
  * ──────────────────────────────────────────────────────────────────────────────
- * The rule is `apps/api/src/services/credit-session/authorize-session-expert.ts`'s,
- * mirrored: THE DELIVERING EXPERT ∪ ANY LIVE MEMBER OF THAT EXPERT'S AGENCY (any agency role,
+ * The rule is `actorHasExpertSideVisibility` (`@balo/shared/authz`) — **consumed, not mirrored**
+ * (BAL-419): THE DELIVERING EXPERT ∪ ANY LIVE MEMBER OF THAT EXPERT'S AGENCY (any agency role,
  * including `expert`). Rights sit on agency membership (ADR-1029); an independent expert
  * (`agencyId === null`) short-circuits on `profile.userId === userId` with NO agency lookup.
  * Membership EXISTING grants — never a role comparison, never `roleHasCapability` — because
@@ -76,9 +76,11 @@ import { log } from '@/lib/logging';
  * is visibility. Reusing it is what satisfies BAL-424's Access section — consume what the
  * platform already settles, do not invent a fourth rule.
  *
- * ⚠ BAL-419 MAY STILL NARROW OR CONFIRM THE AGENCY-COLLEAGUE ARM, AND THE
- * `agencyRole !== undefined` BRANCH BELOW IS **THE LINE TO CHANGE WHEN IT DOES** — and the
- * only one. Leave `authorize-session-expert.ts` alone: ADR-1046 §7 forbids narrowing THAT one.
+ * ⚠ BAL-419 SETTLED IT: **CONFIRMED, NOT NARROWED**, and the rule now has exactly ONE
+ * definition — `actorHasExpertSideVisibility` — which this module and the other two visibility
+ * gates all CONSUME. There is no longer a local `agencyRole !== undefined` branch here to
+ * change; the single line lives in `packages/shared/src/authz/expert-side-visibility.ts`, and
+ * ADR-1046 §7 forbids narrowing it. Do not reintroduce a second definition anywhere.
  *
  * ⚠ WRITE RIGHTS ARE NOT DECIDED HERE. This returns a SIDE and the engagement's status; the
  * caller composes it with `engagementConversationIsWritable` (`@balo/shared/conversations`)
@@ -190,23 +192,19 @@ async function resolveSide(
     return { ok: false, denial: deny('no_expert_profile', { expertProfileId, userId }) };
   }
 
-  // Independent expert — the authenticated user owns the profile. No agency lookup at all.
-  if (profile.userId === userId) {
+  // ⚠ THE SHARED VISIBILITY RULE — delegated to `actorHasExpertSideVisibility`; the
+  // membership-existing branch now lives there and ONLY there. The delivering expert and an
+  // INDEPENDENT expert both resolve with NO agency lookup at all (the callback is never
+  // invoked) — asserted by call-count in this module's test, for BOTH profile shapes.
+  //
+  // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
+  // can never answer for an actor other than the one being authorized (the confused-deputy
+  // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
+  const onExpertSide = await actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
+    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
+  );
+  if (onExpertSide) {
     return { ok: true, side: 'expert' };
-  }
-
-  if (profile.agencyId !== null) {
-    // ⚠ MEMBERSHIP EXISTING GRANTS. No role comparison, no `roleHasCapability` — the rule is
-    // "is this person inside the agency", exactly as `authorize-session-expert.ts` resolves
-    // it. This is the single branch BAL-419 would change if it narrows the colleague arm.
-    const agencyRole = await partyMembershipsRepository.getMemberRole(
-      'agency',
-      profile.agencyId,
-      userId
-    );
-    if (agencyRole !== undefined) {
-      return { ok: true, side: 'expert' };
-    }
   }
 
   return { ok: false, denial: deny('cross_tenant', { expertProfileId, userId }) };

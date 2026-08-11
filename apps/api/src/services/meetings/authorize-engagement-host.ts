@@ -325,8 +325,14 @@ async function hostContextForDiscoveryRequest(
  * request, a declined relationship (on EITHER request-grain arm — 5 and 6 share one
  * predicate) and an `admin` context all yield `null`, and `null` denies every actor. This
  * function contains no `throw`: a caller must never have to catch to stay safe. (A repository REJECTION — the database being unreachable — still
- * propagates, exactly as it does in `authorize-session-expert.ts`; swallowing that would
- * turn an outage into a silent, uniform deny, which is a worse failure than a 500.)
+ * propagates, exactly as it does in `authorize-session-expert-visibility.ts`; swallowing that
+ * would turn an outage into a silent, uniform deny, which is a worse failure than a 500.)
+ *
+ * ⚠ RECIPROCAL POINTER (ADR-1046 §7). That file gates the OTHER axis: expert-side
+ * VISIBILITY, whose rule is `actorHasExpertSideVisibility` (`@balo/shared/authz`) — the
+ * delivering expert ∪ ANY live agency member, INCLUDING agency role `expert`. THIS resolver
+ * is the ACT axis and excludes role `expert`. Two rules, deliberately; do not widen this one
+ * to that predicate's set, and do not narrow that one to this holder set.
  *
  * ⚠ THIS INHERITS THE TENANCY OBLIGATION IN THE HEADER BLOCK, AND IT IS SHARPER HERE.
  * `hasEngagementCapability` returns a boolean; THIS function returns delivery IDENTITY

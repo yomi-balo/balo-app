@@ -129,6 +129,19 @@ export type {
   RelationshipHostingStatus,
 } from './engagement';
 
+// The expert-side VISIBILITY rule (BAL-419 / ADR-1046 §7) — the counterpart to `./engagement`'s
+// ACT rule, deliberately WIDER (it includes agency role `expert`). NOT a fourth axis: no token,
+// no role→capability map. See `./expert-side-visibility.ts`.
+export { actorHasExpertSideVisibility } from './expert-side-visibility';
+// ⚠ KEPT DESPITE HAVING NO IMPORTER TODAY — and NOT the same call as dropping
+// `apps/api/src/services/credit-session/index.ts`'s re-export. That is an app-INTERNAL barrel
+// whose modules stay directly importable, so dropping it removed a second reachable name for
+// one rule. THIS file is the package's only entry point: `@balo/shared/authz` is a subpath
+// export and `./expert-side-visibility` is unreachable from outside the package, so without
+// these two lines the exported function's own parameter types could not be NAMED by any
+// consumer (`const lookup: AgencyRoleLookup = …` would not compile).
+export type { ExpertSideVisibilityProfile, AgencyRoleLookup } from './expert-side-visibility';
+
 /**
  * The set of roles whose bundle grants `capability` — the single source of truth
  * for admin-role fan-out queries (e.g. `listAdminUserIds`). Keeps "a role is only

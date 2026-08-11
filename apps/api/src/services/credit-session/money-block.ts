@@ -2,7 +2,7 @@
  * BAL-399 (ADR-1040 / ADR-1043) — the money-block LENS RESOLVER (the fee-concealment boundary at
  * the route). `GET /sessions/:id/money-block` resolves the lens fail-closed:
  *  1. company member (`authorizeSessionActor`) → CLIENT lens (all-in charge, no expert/margin);
- *  2. else the session's expert (`authorizeSessionExpert`) → EXPERT lens (own earnings only);
+ *  2. else the session's expert (`authorizeSessionExpertVisibility`) → EXPERT lens (own earnings);
  *  3. else `not_found` (hides existence).
  * The ADMIN (margin-bearing) lens is served ONLY by `resolveAdminMoneyBlock`, behind the
  * `hasPlatformCapability` route gate — never reachable by a company member or an expert.
@@ -22,7 +22,7 @@ import type { ClientMoneyBlock, ExpertMoneyBlock, AdminMoneyBlock } from '@balo/
 import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
 import { authorizeSessionActor } from './authorize-session-actor.js';
-import { authorizeSessionExpert } from './authorize-session-expert.js';
+import { authorizeSessionExpertVisibility } from './authorize-session-expert-visibility.js';
 
 const log = createLogger('credit-session');
 
@@ -58,7 +58,7 @@ export async function resolveSessionMoneyBlock(
 
   // 2. The session's expert (or their agency) → EXPERT lens. `forbidden` on the actor gate means
   //    "not a company member" — fall through to the expert gate rather than leaking a 403.
-  const expert = await authorizeSessionExpert({ sessionId, userId });
+  const expert = await authorizeSessionExpertVisibility({ sessionId, userId });
   if (expert.ok) {
     const view = await creditSessionsRepository.findForExpertView(sessionId);
     if (view === undefined) {

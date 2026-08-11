@@ -9,6 +9,20 @@
  * expert) OR is a live member of the expert's agency (rights sit on agency membership, ADR-1029).
  * Fail-closed: `not_found` when the session is missing/soft-deleted; `forbidden` otherwise (logged
  * as a cross-tenant attempt, mirroring `authorizeSessionActor`).
+ *
+ * ⚠⚠ BAL-419 — THE NAME SAYS **VISIBILITY**, AND THE RULE IS CONSUMED, NOT DEFINED HERE. The
+ * grant decision is `actorHasExpertSideVisibility` (`@balo/shared/authz`), the single definition
+ * on the platform, shared with `authorizeEngagementConversation` and `authorizeMeetingFileAccess`
+ * in `apps/web`. It grants the delivering expert ∪ ANY live agency member, INCLUDING agency role
+ * `expert`.
+ *
+ * ⚠ THAT IS DELIBERATELY WIDER THAN THE ACT AXIS (`resolveHostRole` /
+ * `hasEngagementCapability`, which excludes agency role `expert`), and the width is the point.
+ * ADR-1046 §7, resolved 2026-08-03: "visibility and act rights are different rules by design. Do
+ * not narrow it." Reading one's own earnings on a session is visibility, not an act. The two
+ * predicates are pinned side by side over one role table in
+ * `packages/shared/src/authz/expert-side-visibility.test.ts` — that is where an "alignment"
+ * fails.
  */
 import {
   creditSessionsRepository,
@@ -16,11 +30,12 @@ import {
   partyMembershipsRepository,
   type CreditSession,
 } from '@balo/db';
+import { actorHasExpertSideVisibility } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
 
 const log = createLogger('credit-session');
 
-export type AuthorizeSessionExpertResult =
+export type AuthorizeSessionExpertVisibilityResult =
   | { ok: true; session: CreditSession; expertProfileId: string }
   | { ok: false; code: 'not_found' | 'forbidden' };
 
@@ -28,10 +43,10 @@ export type AuthorizeSessionExpertResult =
  * Fail-closed expert-vs-session authorization. Returns the loaded session + the session's
  * `expertProfileId` on success (so the caller never re-reads for the projection lookup).
  */
-export async function authorizeSessionExpert(input: {
+export async function authorizeSessionExpertVisibility(input: {
   sessionId: string;
   userId: string;
-}): Promise<AuthorizeSessionExpertResult> {
+}): Promise<AuthorizeSessionExpertVisibilityResult> {
   const { sessionId, userId } = input;
 
   const session = await creditSessionsRepository.findById(sessionId);
@@ -48,17 +63,19 @@ export async function authorizeSessionExpert(input: {
     return { ok: false, code: 'forbidden' };
   }
 
-  // Independent expert: the authenticated user owns the profile.
-  if (profile.userId === userId) {
+  // The delivering expert ∪ ANY live member of their agency — the SHARED visibility rule, not a
+  // local one. The delivering expert and an INDEPENDENT expert both resolve with NO agency
+  // lookup at all (the callback is never invoked); that short-circuit is asserted by call-count
+  // in this module's own test suite, for BOTH profile shapes.
+  //
+  // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
+  // can never answer for an actor other than the one being authorized (the confused-deputy
+  // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
+  const onExpertSide = await actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
+    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
+  );
+  if (onExpertSide) {
     return { ok: true, session, expertProfileId: session.expertProfileId };
-  }
-
-  // Agency-based expert: a LIVE agency membership grants access (rights sit on membership).
-  if (profile.agencyId !== null) {
-    const role = await partyMembershipsRepository.getMemberRole('agency', profile.agencyId, userId);
-    if (role !== undefined) {
-      return { ok: true, session, expertProfileId: session.expertProfileId };
-    }
   }
 
   log.warn(

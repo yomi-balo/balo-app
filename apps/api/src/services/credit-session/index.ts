@@ -11,7 +11,6 @@ export { driveSession } from './meter-driver.js';
 export { getSessionDrawdownState } from './drawdown.js';
 export { nudgeAdminForTopup } from './nudge.js';
 export { authorizeSessionActor } from './authorize-session-actor.js';
-export { authorizeSessionExpert } from './authorize-session-expert.js';
 export { finalizeBilling } from './finalize-billing.js';
 export {
   finalizeExternalDuration,
