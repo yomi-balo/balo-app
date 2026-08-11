@@ -9,7 +9,12 @@ import {
   resolveMeetingContextOwner,
   type Meeting,
 } from '@balo/db';
-import { CAPABILITIES, relationshipDeniesHosting, roleHasCapability } from '@balo/shared/authz';
+import {
+  actorHasExpertSideVisibility,
+  CAPABILITIES,
+  relationshipDeniesHosting,
+  roleHasCapability,
+} from '@balo/shared/authz';
 import {
   selectPrimaryMeetingContext,
   type MeetingGuestSide,
@@ -68,8 +73,9 @@ import { log } from '@/lib/logging';
  * ⚠⚠ (b) THE EXPERT ARM CONSUMES THE SHIPPED **VISIBILITY** RULE — IT DOES NOT INVENT ONE,
  *        AND IT IS DELIBERATELY WIDER THAN THE ENGAGEMENT AXIS'S HOLDER SET.
  * ──────────────────────────────────────────────────────────────────────────────
- * The rule is `apps/api/src/services/credit-session/authorize-session-expert.ts`'s, mirrored,
- * and the same one `authorizeEngagementConversation` uses: THE DELIVERING EXPERT ∪ ANY LIVE
+ * The rule is `actorHasExpertSideVisibility` (`@balo/shared/authz`) — **consumed, not mirrored**
+ * (BAL-419) — the same one `authorizeEngagementConversation` and
+ * `authorizeSessionExpertVisibility` use: THE DELIVERING EXPERT ∪ ANY LIVE
  * MEMBER OF THAT EXPERT'S AGENCY (any agency role, INCLUDING `expert`). Membership EXISTING
  * grants — never a role comparison, never `roleHasCapability` — because the question is "is
  * this person inside the agency", not "does their role carry a token" (ADR-1029). An
@@ -83,9 +89,10 @@ import { log } from '@/lib/logging';
  * CORRECTION applied to `apps/api`'s otherwise identically-shaped gate — two gates, two axes,
  * same shape, exactly the split ADR-1046 §7 mandates. Do not "align" them.
  *
- * ⚠ BAL-419 MAY STILL NARROW OR CONFIRM THE AGENCY-COLLEAGUE ARM, AND THE
- * `agencyRole !== undefined` BRANCH BELOW IS THE LINE TO CHANGE WHEN IT DOES — and the only
- * one. Leave `authorize-session-expert.ts` alone: ADR-1046 §7 forbids narrowing THAT one.
+ * ⚠ BAL-419 SETTLED IT: **CONFIRMED, NOT NARROWED**, and the rule now has exactly ONE
+ * definition — `actorHasExpertSideVisibility` — consumed by all three visibility gates. There
+ * is no longer a local `agencyRole !== undefined` branch here; the single line lives in
+ * `packages/shared/src/authz/expert-side-visibility.ts`, and ADR-1046 §7 forbids narrowing it.
  *
  * ──────────────────────────────────────────────────────────────────────────────
  * ⚠⚠ (c) THE EXPERT ARM IS GATED ON **DECLINE STATE**, ON THE TWO REQUEST-GRAIN ARMS ONLY.
@@ -224,21 +231,17 @@ async function actorIsOnExpertSide(expertProfileId: string, userId: string): Pro
   const profile = await expertsRepository.findProfileById(expertProfileId);
   if (profile === undefined) return false;
 
-  // The delivering expert themselves — no agency lookup on either profile shape.
-  if (profile.userId === userId) return true;
-
-  // An INDEPENDENT expert has no agency for anyone to be a colleague of.
-  if (profile.agencyId === null) return false;
-
-  // ⚠ MEMBERSHIP EXISTING GRANTS. No role comparison — the rule is "is this person inside
-  // the agency", and it includes agency role `expert`. This is the single branch BAL-419
-  // would change if it ever narrows the colleague arm.
-  const agencyRole = await partyMembershipsRepository.getMemberRole(
-    'agency',
-    profile.agencyId,
-    userId
+  // ⚠ THE SHARED VISIBILITY RULE, CONSUMED — never re-derived. `actorHasExpertSideVisibility`
+  // is the single definition on the platform (BAL-419); the delivering expert and an
+  // INDEPENDENT expert both return before the callback is ever invoked, preserving the
+  // no-agency-lookup guarantee this docblock asserts by call-count.
+  //
+  // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
+  // can never answer for an actor other than the one being authorized (the confused-deputy
+  // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
+  return actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
+    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
   );
-  return agencyRole !== undefined;
 }
 
 /**

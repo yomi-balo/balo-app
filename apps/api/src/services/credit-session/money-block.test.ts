@@ -38,7 +38,9 @@ vi.mock('@balo/db', () => ({
 }));
 // The real pure platform-authz map — `admin`/`super_admin` hold MANAGE_PLATFORM_FEES; `user` none.
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorizeActor }));
-vi.mock('./authorize-session-expert.js', () => ({ authorizeSessionExpert: mockAuthorizeExpert }));
+vi.mock('./authorize-session-expert-visibility.js', () => ({
+  authorizeSessionExpertVisibility: mockAuthorizeExpert,
+}));
 
 import { resolveSessionMoneyBlock, resolveAdminMoneyBlock } from './money-block.js';
 

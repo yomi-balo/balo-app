@@ -33,9 +33,11 @@
  *     CONSEQUENCE, STATED SO NOBODY READS IT AS A MISS: an agency colleague whose agency
  *     role is `expert` CANNOT INVITE. The holder set is the delivering expert plus their
  *     agency `owner`/`admin`, and that is the correct, deliberate answer.
- *     ⚠ DO NOT WIDEN THIS TO `authorize-session-expert.ts`'s "any live agency member" set.
- *     CLAUDE.md is explicit (ADR-1046 §7, resolved 2026-08-03) that the wider set is a
- *     VISIBILITY rule and the narrow set is the ACT rule. Inviting is an act.
+ *     ⚠ DO NOT WIDEN THIS TO `actorHasExpertSideVisibility`'s (`@balo/shared/authz`) "any
+ *     live agency member" set — the rule behind `authorizeSessionExpertVisibility` and the
+ *     two `apps/web` visibility gates. CLAUDE.md is explicit (ADR-1046 §7, resolved
+ *     2026-08-03) that the wider set is a VISIBILITY rule and the narrow set is the ACT
+ *     rule. Inviting is an act.
  *
  *   · NEITHER → `meeting_not_found`.
  *

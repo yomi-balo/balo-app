@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { stripComments } from '@balo/shared/testing';
 
 vi.mock('server-only', () => ({}));
 
@@ -131,23 +132,36 @@ describe('authorizeEngagementConversation', () => {
       expect(mockGetMemberRole).toHaveBeenCalledWith('company', COMPANY_ID, EXPERT_USER_ID);
     });
 
-    it('grants the delivering expert of an agency-based profile', async () => {
+    /**
+     * ⚠ THE SHORT-CIRCUIT CASE A LAZY→EAGER REFACTOR ACTUALLY BREAKS. The independent-expert
+     * test above cannot catch one: with `agencyId === null` no lookup is POSSIBLE either way.
+     * Here `profile.agencyId` is a real id, so a predicate that resolved the agency role
+     * eagerly would issue a DB round-trip that today never happens — while still answering
+     * `true`, and so passing every other assertion in this file. The COUNT is therefore the
+     * assertion, not the verdict: exactly ONE membership read, the company arm that ran before
+     * the expert arm was reached. (Mutation-verified in the BAL-419 review, where this suite
+     * was one of the two that let the eager mutant through.)
+     */
+    it('grants the delivering expert of an agency-based profile, with NO agency lookup', async () => {
       const result = await authorizeEngagementConversation({
         engagementId: ENGAGEMENT_ID,
         userId: EXPERT_USER_ID,
       });
       expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(mockGetMemberRole).toHaveBeenCalledTimes(1);
+      expect(mockGetMemberRole).toHaveBeenCalledWith('company', COMPANY_ID, EXPERT_USER_ID);
     });
 
     /**
      * ⚠⚠ THIS TEST IS THE 2026-08-11 RULING, PINNED. The expert arm consumes the SHIPPED
-     * VISIBILITY rule (`authorize-session-expert.ts`): the delivering expert ∪ ANY live
-     * agency member, INCLUDING agency role `expert`. That set is deliberately WIDER than the
+     * VISIBILITY rule (`actorHasExpertSideVisibility`, `@balo/shared/authz`): the delivering
+     * expert ∪ ANY live agency member, INCLUDING agency role `expert`. That set is WIDER than the
      * ADR-1046 engagement-axis holder set (which excludes role `expert`), because visibility
      * and act rights are different rules by design — ADR-1046 §7, "Do not narrow it".
      *
-     * If BAL-419 later narrows the colleague arm, THIS is the test to change, alongside the
-     * single `agencyRole !== undefined` branch in the module.
+     * BAL-419 SETTLED IT — confirmed, not narrowed. The single `agencyRole !== undefined`
+     * branch now lives in `@balo/shared/authz`'s `actorHasExpertSideVisibility`, which this
+     * module CONSUMES (pinned by the delegation scan in `axis discipline` below).
      */
     it.each(['owner', 'admin', 'expert'])(
       'grants an agency colleague with role %s — membership EXISTING is the rule',
@@ -280,14 +294,50 @@ describe('authorizeEngagementConversation', () => {
  * the `apps/web` engagement-axis seam (CLAUDE.md records that as landing with BAL-410/411).
  */
 describe('axis discipline', () => {
+  /**
+   * ⚠ `stripComments` COMES FROM `@balo/shared/testing`, NOT A LOCAL REGEX. The naive
+   * `/\/\*[\s\S]*?\*\//g` shape this suite used before is super-linear (SonarCloud S5852 —
+   * `[\s\S]` does not exclude the terminator, so an unterminated block comment backtracks
+   * O(n²)). The shared helper is an indexOf scan with zero ReDoS surface, and hoisting it to
+   * describe scope lets both assertions below share one read.
+   */
+  const raw = readFileSync(join(import.meta.dirname, 'authorize-conversation-context.ts'), 'utf8');
+  const code = stripComments(raw);
+
+  it('reads its own source, and the stripper really ran (guards against a vacuous pass)', () => {
+    // If the read ever broke, every assertion below would pass for free — and so would they
+    // if `stripComments` silently became a no-op, because this module's docblocks NAME the
+    // identifiers scanned below (`hasEngagementCapability`, `agencyRole`), precisely to
+    // explain why they are absent from the code. Pinned on comment SYNTAX rather than on any
+    // particular sentence, so ordinary prose edits cannot make this guard rot.
+    expect(code).toContain('export async function authorizeEngagementConversation');
+    expect(raw).toContain('/**');
+    expect(code).not.toContain('/**');
+    expect(code).not.toContain('//');
+  });
+
   it('never imports hasEngagementCapability', () => {
-    const source = readFileSync(
-      join(import.meta.dirname, 'authorize-conversation-context.ts'),
-      'utf8'
-    );
-    const code = source.replaceAll(/\/\*[\s\S]*?\*\//g, '');
     expect(code).not.toContain('hasEngagementCapability');
     expect(code).not.toContain('HOST_MEETINGS');
     expect(code).not.toContain('MANAGE_ENGAGEMENT');
+  });
+
+  /**
+   * ⚠ ONE DEFINITION OF EXPERT-SIDE VISIBILITY, PINNED MECHANICALLY (BAL-419 / ADR-1046 §7).
+   * The expert arm must CONSUME `actorHasExpertSideVisibility` from `@balo/shared/authz` —
+   * the single definition on this platform — rather than re-deriving `agencyRole !== undefined`
+   * locally, which could silently diverge from the answer the other two gates give about the
+   * SAME agency colleague. A drift alarm, not the guarantee: the guarantee is the
+   * visibility-vs-act table in `packages/shared/src/authz/expert-side-visibility.test.ts`.
+   *
+   * ⚠ THE CALL, NOT MERELY THE SYMBOL. `toContain('actorHasExpertSideVisibility')` alone stays
+   * green if the CALL is deleted and the IMPORT left behind. Matching on the open paren, and
+   * counting it, means one call site exactly: zero would be a re-inlined local rule, two an
+   * ungoverned second consumer.
+   */
+  it('delegates the agency arm to the shared predicate — exactly one CALL site', () => {
+    expect([...code.matchAll(/actorHasExpertSideVisibility\(/g)]).toHaveLength(1);
+    // The `agencyRole !== undefined` line lives in `@balo/shared/authz` and ONLY there.
+    expect(code).not.toContain('agencyRole');
   });
 });
