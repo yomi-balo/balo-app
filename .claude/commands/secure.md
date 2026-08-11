@@ -13,7 +13,7 @@ You audit code changes for security vulnerabilities on the Balo platform. You ar
 ## Platform Context
 
 - **Auth:** WorkOS AuthKit — all routes must authenticate unless explicitly public
-- **Database:** Supabase with RLS — every table must have policies
+- **Database:** Supabase (managed Postgres), Drizzle ORM. NO RLS — auth is WorkOS so `auth.uid()` is meaningless; the security boundary is the application layer (ADR-1029): authorization gates run before any state read, by-id repository lookups carry their scope in the WHERE clause, denials collapse to one opaque literal.
 - **Payments:** Stripe (single account — client charges only): webhooks verify signatures, amounts calculated server-side. Expert payouts via Airwallex: webhook signature verification, beneficiary/payout validation.
 - **Users:** Two roles (client, expert) — check for privilege escalation between them
 - **Marketplace:** Multi-party — check for horizontal access (user A seeing user B's data)
@@ -23,7 +23,7 @@ You audit code changes for security vulnerabilities on the Balo platform. You ar
 **Always read these skills first:**
 
 - `.claude/skills/workos-auth/SKILL.md` — Expected auth patterns
-- `.claude/skills/drizzle-schema/SKILL.md` — Expected RLS patterns (see references/rls-patterns.md)
+- `.claude/skills/drizzle-schema/SKILL.md` — Expected schema & repository patterns (containment, soft-delete filtering)
 
 **Also read when relevant:**
 
@@ -47,7 +47,7 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 5. **Secret exposure** — API keys, tokens in client bundles or error messages?
 6. **Payment manipulation** — can amounts, recipients, or credit balances be tampered?
 7. **Data leakage** — do API responses expose fields they shouldn't?
-8. **Missing RLS** — is there a table without row-level security?
+8. **Ungated reads** — can any new read path be reached before an authorization gate resolves the actor? Does any by-id lookup lack its scoping term?
 9. **Webhook spoofing** — can fake webhooks trigger actions?
 10. **ReDoS** — can user-controlled input feed a super-linear regex and stall the event loop?
 
@@ -61,13 +61,13 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 - Check for privilege escalation: can a client user access expert-only endpoints?
 - Check for horizontal access: can user A access user B's resources?
 
-### 2. Row-Level Security
+### 2. Data-Layer Access Control (no RLS on this platform)
 
-- Every new Supabase table MUST have RLS enabled
-- RLS policies must enforce user-scoped access (per drizzle-schema skill, rls-patterns.md)
-- Service role bypass must only be used in server-side code, never client
-- Check that RLS policies cover SELECT, INSERT, UPDATE, DELETE appropriately
-- Verify no table has RLS disabled or overly permissive policies
+- Postgres RLS is NOT used and MUST NOT be requested: WorkOS auth means `auth.uid()` resolves nothing, so policies would be dead code implying a boundary that isn't there. Do not file "missing RLS" findings; treat a PR that introduces RLS policies as a finding in itself.
+- Every by-id read on a scoped table carries its scope in the WHERE clause (e.g. `{ meetingId, fileId }`) — a bare `findById` on a scoped table is an IDOR-containment finding.
+- Authorization gates run BEFORE any coherence or state check, and every denial collapses to a single opaque literal — distinct pre-authorization denial codes are an existence oracle.
+- Soft-deleted rows are filtered (`deleted_at IS NULL`) in every finder, so missing and deleted are indistinguishable on the wire.
+- Cross-tenant containment: the owning party is resolved from the subject row itself, never inferred from caller-supplied input.
 
 ### 3. Input Validation
 
@@ -125,8 +125,8 @@ Any code that DEVIATES from skill-defined patterns is a finding.
   Issue: [description]
   Fix: [specific remediation]
 
-**RLS Coverage:**
-[List all new tables and whether they have complete RLS policies]
+**Containment Coverage:**
+[List all new tables/repositories and whether every by-id read is scope-contained and every read path runs through an authorization gate]
 
 **Auth Coverage:**
 [List all new endpoints/actions and whether they check auth]
