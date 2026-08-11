@@ -32,6 +32,7 @@ export * from './meetings';
 export * from './conversations';
 export * from './meeting-contexts';
 export * from './meeting-presence';
+export * from './meeting-files';
 export * from './party-domains';
 export * from './audit-events';
 export * from './party-join-requests';

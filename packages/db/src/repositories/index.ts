@@ -472,6 +472,25 @@ export {
   type ConsultationTimestamps,
 } from './meeting-contexts';
 export { meetingPresenceRepository, type OpenPresenceInput } from './meeting-presence';
+// ── Meeting files (BAL-423) — the FOURTH file scope, anchored on `meetings.id` ──────────
+export {
+  meetingFilesRepository,
+  isTwoSidedParty,
+  MEETING_FILE_LIST_LIMIT,
+  type MeetingFileParty,
+  type AddMeetingFileInput,
+  type SoftDeleteMeetingFileInput,
+  type FindMeetingFileInput,
+} from './meeting-files';
+/**
+ * The judgement-free "who owns this meeting context" READ (BAL-423). Exported because BOTH
+ * apps must resolve tenancy from ONE definition — it is NOT a gate, and every caller still
+ * runs its own capability check against what it returns. See the module docblock.
+ */
+export {
+  resolveMeetingContextOwner,
+  type MeetingContextOwner,
+} from './_shared/meeting-context-owner';
 export type {
   Meeting,
   NewMeeting,
@@ -483,6 +502,9 @@ export type {
   MeetingPresence,
   NewMeetingPresence,
   MeetingParticipantParty,
+  MeetingFile,
+  NewMeetingFile,
+  MeetingFileSource,
 } from '../schema';
 // ── Guest participation model (BAL-408 / ADR-1044) ─────────────────────────
 export {

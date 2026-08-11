@@ -93,7 +93,10 @@ import {
 import { CAPABILITIES, ENGAGEMENT_CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
 import {
+  resolveContextOwner,
   selectPrimaryMeetingContext,
+  type MeetingContextOwner,
+  type MeetingContextOwnerReads,
   type PrimaryMeetingContext,
   type MeetingContextTypeLabel,
   type MeetingGuestSide,
@@ -154,74 +157,92 @@ type DenialReason =
   | 'cross_tenant'
   | 'no_capability';
 
-/** The owning party of one resolved context. Judgement-free: what the row says, nothing more. */
-interface OwningParty {
-  companyId: string;
-  /** `null` only for a `match`-routed project request. */
-  expertProfileId: string | null;
-}
+/**
+ * THE REPOSITORY BINDING for the shared owning-party rule.
+ *
+ * ⚠ THESE ARE THE SAME THREE `@balo/db` FINDERS THIS MODULE ALREADY IMPORTED, PASSED IN
+ * RATHER THAN IMPORTED ANEW — and that is deliberate, not incidental. This gate's test mocks
+ * `@balo/db` with a FACTORY LITERAL naming exactly six repositories, and a vitest factory
+ * mock throws on any export the factory omits. Importing a ready-bound
+ * `resolveMeetingContextOwner` from `@balo/db` would therefore turn all 27 of its tests red
+ * for a refactor that changes no behaviour. Injecting the already-mocked functions is what
+ * lets `authorize-meeting-participation.test.ts` stay green COMPLETELY UNCHANGED — which is
+ * the behaviour-preservation proof for this delegation.
+ *
+ * Each finder already filters `deleted_at IS NULL`, discharging the obligation
+ * `MeetingContextOwnerReads` assigns to its injector.
+ */
+const OWNING_PARTY_READS = {
+  findEngagement: (engagementId: string) => engagementsRepository.findById(engagementId),
+  findProjectRequest: (projectRequestId: string) =>
+    projectRequestsRepository.findById(projectRequestId),
+  findRelationship: (relationshipId: string) =>
+    requestExpertRelationshipsRepository.findById(relationshipId),
+} satisfies MeetingContextOwnerReads;
 
 /**
  * Per-context-type LOAD of the owning party — TOTAL over the six non-`admin` labels.
  *
- * Deliberately judgement-free (the `loadSubject` precedent): it reports which company owns
- * the row and says nothing about whether the caller may see it. Every repository read below
- * already filters `deleted_at IS NULL`, so `undefined` (missing OR soft-deleted) is the
- * single not-found outcome.
+ * ⚠ THE SWITCH ITSELF NOW LIVES IN `@balo/shared/meetings`'s `resolveContextOwner`, ONCE.
+ * `@balo/db`'s `resolveMeetingContextOwner` delegates to the SAME core, so "which party owns
+ * this meeting context" has exactly one definition across both apps — CLAUDE.md's
+ * `relationshipDeniesHosting` discipline ("never write a second definition") applied to a
+ * second rule. What stays here is what must: the LOGGING (a service concern — a repository
+ * that notified would read against `repositories-never-notify.test.ts`'s spirit) and the
+ * COMPILE-TIME WITNESS (below).
  *
- * ⚠ `request_interaction` COSTS TWO READS, and there is no shortcut. A
- * `request_expert_relationships` row names an expert and a REQUEST, not a company — the
- * company lives on the request. Reading the relationship alone and inferring tenancy from
- * the expert would authorize by DELIVERY IDENTITY on the membership axis, which is the axis
- * confusion CLAUDE.md forbids.
+ * Deliberately judgement-free (the `loadSubject` precedent): it reports which company owns
+ * the row and says nothing about whether the caller may see it. The injected reads all
+ * filter `deleted_at IS NULL`, so `undefined` (missing OR soft-deleted) is the single
+ * not-found outcome.
+ *
+ * ⚠ `request_interaction` COSTS TWO READS, and there is no shortcut — see the core's
+ * docblock. A `request_expert_relationships` row names an expert and a REQUEST, not a
+ * company; inferring tenancy from the expert would authorize by DELIVERY IDENTITY on the
+ * membership axis, which is the axis confusion CLAUDE.md forbids.
  */
-async function loadOwningParty(subject: PrimaryMeetingContext): Promise<OwningParty | undefined> {
-  switch (subject.contextType) {
-    // Engagement grain — `engagements.company_id` / `.expert_profile_id` are both NOT NULL
-    // on the supertype (BAL-417), so the four labels share one branch.
-    case 'case':
-    case 'project_kickoff':
-    case 'package_session':
-    case 'retainer_checkin': {
-      const engagement = await engagementsRepository.findById(subject.contextId);
-      if (engagement === undefined) return undefined;
-      return {
-        companyId: engagement.companyId,
-        expertProfileId: engagement.expertProfileId,
-      };
-    }
+async function loadOwningParty(
+  subject: PrimaryMeetingContext
+): Promise<MeetingContextOwner | undefined> {
+  const result = await resolveContextOwner(subject, OWNING_PARTY_READS);
 
-    // Request grain — the request itself carries the company.
-    case 'project_discovery': {
-      const request = await projectRequestsRepository.findById(subject.contextId);
-      if (request === undefined) return undefined;
-      return { companyId: request.companyId, expertProfileId: request.expertProfileId };
-    }
+  switch (result.outcome) {
+    case 'resolved':
+      return result.owner;
 
-    // Relationship grain — the company is one hop away, on the request.
-    case 'request_interaction': {
-      const relationship = await requestExpertRelationshipsRepository.findById(subject.contextId);
-      if (relationship === undefined) return undefined;
-      const request = await projectRequestsRepository.findById(relationship.projectRequestId);
-      if (request === undefined) return undefined;
-      return { companyId: request.companyId, expertProfileId: relationship.expertProfileId };
-    }
+    // Missing OR soft-deleted, indistinguishable by construction.
+    case 'not_found':
+      return undefined;
 
     default: {
-      // Compile-time exhaustiveness over the SIX holder-bearing labels. `admin` cannot reach
-      // here — `PrimaryMeetingContext.contextType` is `MeetingContextTypeWithHolder`, and
-      // `selectPrimaryMeetingContext` drops admin rows — so this arm is unreachable today,
-      // but a SEVENTH non-admin label stops typechecking right here until an arm is
-      // consciously written.
+      // Compile-time exhaustiveness over the SIX holder-bearing labels, KEPT AT THIS GATE
+      // ON PURPOSE. `admin` cannot reach here — `PrimaryMeetingContext.contextType` is
+      // `MeetingContextTypeWithHolder`, and `selectPrimaryMeetingContext` drops admin rows —
+      // so this arm is unreachable today, but a SEVENTH non-admin label widens
+      // `UnhandledMeetingContextType` away from `never` and stops `pnpm --filter api
+      // typecheck` right here until an arm is consciously written.
       //
-      // ⚠ THE WITNESS IS `subject.contextType`, NOT `subject`. `PrimaryMeetingContext` is a
-      // plain interface rather than a discriminated union, so TS narrows the FIELD to
-      // `never` in this arm but leaves the OBJECT fully typed. Asserting the object was the
-      // first attempt and it does not compile.
+      // ⚠ WHY THE WITNESS LIVES HERE: **LOGGING LOCALITY**, not a gap in CI coverage.
+      // An earlier version of this comment claimed a witness planted in `@balo/shared` /
+      // `@balo/db` "would fail SILENTLY". That is FALSE, and it was verified false by probe:
+      // both packages' `main`/`types`/`exports` point at RAW `./src/*.ts`, so THIS app's
+      // `tsc --noEmit` compiles them as part of its own program. A deliberate type error added
+      // to `packages/shared/src/meetings/context-owner.ts` or to
+      // `packages/db/src/repositories/_shared/meeting-context-owner.ts` is reported verbatim
+      // by `pnpm --filter api typecheck` (and by `apps/web`'s `check-types` for the shared
+      // one). The witness sits here because the `log.warn` beside it does — logging is a
+      // service concern, and the core stays pure.
+      //
+      // ⚠ SCOPE, SO THIS IS NOT OVERCORRECTED: only files REACHABLE FROM THIS APP'S IMPORT
+      // GRAPH are pulled in. `@balo/db`'s 29 pre-existing baseline errors do not fail this
+      // command because all four of their files are test-only and unimported here. An
+      // imported production module IS checked; an unimported file is checked by nothing
+      // (neither package has its own `typecheck` script — memory
+      // `reference_db_shared_no_typecheck_lint_scripts`).
       //
       // Fails CLOSED rather than throwing: this module is an authorization gate, and a
       // caller must never have to catch to stay safe.
-      const exhaustive: never = subject.contextType;
+      const exhaustive: never = result.contextType;
       log.warn({ contextType: exhaustive }, 'Unhandled meeting context type — failing closed');
       return undefined;
     }

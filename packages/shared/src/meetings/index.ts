@@ -50,6 +50,12 @@ export * from './room-name';
 // BAL-408 — the guest participation model's pure core (the meetingId→context combining
 // rule, THE MONEY RULE, the retrospective read predicate, counterparty concealment).
 export * from './guest-participation';
+// BAL-423 — the ONE definition of "who owns this meeting context", as a pure rule over
+// INJECTED reads. `apps/api`'s gate and `@balo/db`'s repository wrapper both delegate to it,
+// which is what stops the mapping existing twice. Pure by construction: no `@balo/db`
+// import, and deliberately NO `server-only` (that subpath crash-loops `apps/api`'s tsup
+// bundle — the PR #191 hazard).
+export * from './context-owner';
 
 import type { MeetingPresenceParty } from './guest-participation';
 
