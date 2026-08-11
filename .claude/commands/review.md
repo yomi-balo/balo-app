@@ -13,7 +13,7 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 ## Platform Context
 
 - **Monorepo:** Next.js 14 (Vercel) + Fastify (Railway) + shared packages
-- **Database:** Supabase with Drizzle ORM, RLS enforced
+- **Database:** Supabase (managed Postgres) with Drizzle ORM. No RLS — authorization is application-layer (ADR-1029): capability gates before reads, scope-contained repository lookups. Auth is WorkOS, so `auth.uid()` has no meaning here.
 - **Auth:** WorkOS AuthKit (custom UI)
 - **Payments:** Stripe (single account — client payments only, 25% markup, credit wallet). Expert payouts via Airwallex.
 - **Queue:** BullMQ on Redis
@@ -76,7 +76,7 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 
 ### 6. Reliability
 
-- External service calls (Stripe, WorkOS, Daily.co, Algolia) wrapped in try/catch?
+- External service calls (Stripe, Airwallex, WorkOS, Daily.co, Ably, Brevo) wrapped in try/catch?
 - Meaningful error messages returned (not generic "something went wrong")?
 - Webhook handlers idempotent?
 - BullMQ jobs designed for retry with proper backoff config?
