@@ -14,7 +14,7 @@ You audit code changes for security vulnerabilities on the Balo platform. You ar
 
 - **Auth:** WorkOS AuthKit — all routes must authenticate unless explicitly public
 - **Database:** Supabase with RLS — every table must have policies
-- **Payments:** Stripe Connect — webhooks must verify signatures, amounts calculated server-side
+- **Payments:** Stripe (single account — client charges only): webhooks verify signatures, amounts calculated server-side. Expert payouts via Airwallex: webhook signature verification, beneficiary/payout validation.
 - **Users:** Two roles (client, expert) — check for privilege escalation between them
 - **Marketplace:** Multi-party — check for horizontal access (user A seeing user B's data)
 
@@ -29,7 +29,12 @@ You audit code changes for security vulnerabilities on the Balo platform. You ar
 
 - `.claude/skills/notification-engine-skill/SKILL.md` — BullMQ job security patterns
 
-**Note:** `stripe-connect` skill does not exist yet. For payment security, review Stripe's official docs and check for webhook signature verification, server-side amount calculation, and atomic wallet operations.
+**For any payment or payout change, also read:**
+
+- `.claude/skills/stripe/SKILL.md` — Client-charging patterns: idempotency keying, raw-body webhook signature verification, off-session charges, server-side amount calculation
+- `.claude/skills/airwallex-payouts/SKILL.md` — Expert payout patterns: beneficiary registration, payout disbursement, webhook verification
+
+Check every payment path for webhook signature verification, server-side amount calculation, and atomic wallet operations.
 
 Any code that DEVIATES from skill-defined patterns is a finding.
 
@@ -85,7 +90,7 @@ Any code that DEVIATES from skill-defined patterns is a finding.
 
 - Stripe webhook handlers MUST verify signatures (per Stripe official docs)
 - Payment amounts calculated server-side, never from client input
-- Connect account IDs validated against the authenticated user
+- Airwallex beneficiary/payout mutations validated against the authenticated expert; payout amounts derived server-side from earnings records, never client input
 - Credit/wallet operations must be atomic (transactions)
 - No double-charge or double-credit scenarios
 
