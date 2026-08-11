@@ -19,7 +19,11 @@ export interface UseConversationRealtimeInput {
   /** Server said realtime is on AND there are channels to join. */
   enabled: boolean;
   requestId: string;
-  relationshipIds: string[];
+  /**
+   * BAL-424 — CONVERSATION ids, not relationship ids. The channel name, the token's
+   * capability list and both wire payloads all key on the conversation.
+   */
+  conversationIds: string[];
   onMessage: (message: ConversationMessageView) => void;
   onFile: (file: ConversationFileView) => void;
 }
@@ -33,11 +37,17 @@ function hasStringFields<K extends string>(
   return keys.every((key) => typeof record[key] === 'string');
 }
 
-/** Full structural guard over every message field the island consumes. */
+/**
+ * Full structural guard over every message field the island consumes.
+ *
+ * ⚠ `conversationId` (BAL-424), NOT `relationshipId`. This guard is STRUCTURAL: naming the
+ * wrong field here rejects every inbound message SILENTLY — a green typecheck cannot catch
+ * it, because the payload arrives as `unknown` from a third-party transport.
+ */
 export function isConversationMessagePayload(data: unknown): data is ConversationMessageView {
   return hasStringFields(data, [
     'id',
-    'relationshipId',
+    'conversationId',
     'bodyHtml',
     'senderUserId',
     'senderName',
@@ -45,12 +55,12 @@ export function isConversationMessagePayload(data: unknown): data is Conversatio
   ]);
 }
 
-/** Full structural guard over every file field the island consumes. */
+/** Full structural guard over every file field the island consumes — see the note above. */
 export function isConversationFilePayload(data: unknown): data is ConversationFileView {
   return (
     hasStringFields(data, [
       'id',
-      'relationshipId',
+      'conversationId',
       'fileName',
       'contentType',
       'uploadedByUserId',
@@ -139,7 +149,7 @@ export function sanitizeRealtimeBodyHtml(html: string): string {
 export function useConversationRealtime(input: UseConversationRealtimeInput): {
   status: ConversationRealtimeStatus;
 } {
-  const { enabled, requestId, relationshipIds, onMessage, onFile } = input;
+  const { enabled, requestId, conversationIds, onMessage, onFile } = input;
   const [status, setStatus] = useState<ConversationRealtimeStatus>(
     enabled ? 'connecting' : 'disabled'
   );
@@ -154,8 +164,8 @@ export function useConversationRealtime(input: UseConversationRealtimeInput): {
 
   // Stable identity for the channel set (order-insensitive).
   const channelsKey = useMemo(
-    () => [...relationshipIds].sort((a, b) => a.localeCompare(b)).join(','),
-    [relationshipIds]
+    () => [...conversationIds].sort((a, b) => a.localeCompare(b)).join(','),
+    [conversationIds]
   );
 
   useEffect(() => {
@@ -190,8 +200,8 @@ export function useConversationRealtime(input: UseConversationRealtimeInput): {
         if (!disposed) setStatus('connecting');
       });
 
-      for (const relationshipId of channelsKey.split(',')) {
-        const channel = client.channels.get(conversationChannelName(relationshipId));
+      for (const conversationId of channelsKey.split(',')) {
+        const channel = client.channels.get(conversationChannelName(conversationId));
         channel
           .subscribe(CONVERSATION_EVENT_MESSAGE, (msg: Ably.InboundMessage) => {
             if (!disposed && isConversationMessagePayload(msg.data)) {

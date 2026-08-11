@@ -22,6 +22,16 @@ vi.mock('@balo/shared/logging', () => ({
   })),
 }));
 
+/**
+ * ⚠ THE FOLLOW-UP MODULE MUST BE MOCKED. `scheduleConversationUnreadDigest` reaches
+ * `scheduleNotification` → `@balo/db`, and the worker imports it at module scope: leaving it
+ * real makes CI hang on a live Redis/Postgres connection.
+ */
+const mockScheduleDigest = vi.fn();
+vi.mock('../scheduling/conversation-unread.js', () => ({
+  scheduleConversationUnreadDigest: (...args: unknown[]) => mockScheduleDigest(...args),
+}));
+
 import { processNotificationEvent } from './worker.js';
 
 function makeJob(data: Record<string, unknown>): Job {
@@ -98,5 +108,136 @@ describe('processNotificationEvent', () => {
 
     // Restore
     notificationRules['user.welcome'] = originalRules!;
+  });
+
+  // ── BAL-424: the deferred follow-up hook ────────────────────────────
+  describe('conversation unread digest follow-up', () => {
+    function conversationJob(event: string, payload: Record<string, unknown>): Job {
+      return makeJob({ event, payload, publishedAt: '2026-08-11T00:00:00Z' });
+    }
+
+    const clientPayload = {
+      correlationId: 'm-1',
+      conversationId: 'conv-1',
+      contextType: 'relationship',
+      contextId: 'rel-1',
+      title: 'CPQ implementation',
+      senderName: 'Priya',
+      recipientRole: 'client',
+      recipientId: 'user-client',
+      projectRequestId: 'req-1',
+      preview: 'hello',
+      sentDuringMeeting: false,
+    };
+
+    beforeEach(() => {
+      mockScheduleDigest.mockResolvedValue(undefined);
+    });
+
+    it('schedules the digest after dispatch, resolving the CLIENT recipient from the payload', async () => {
+      mockResolveContext.mockResolvedValue({
+        event: 'conversation.message_posted',
+        payload: clientPayload,
+        data: {},
+      });
+      await processNotificationEvent(conversationJob('conversation.message_posted', clientPayload));
+
+      expect(mockDispatch).toHaveBeenCalled();
+      expect(mockScheduleDigest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          contextType: 'relationship',
+          contextId: 'rel-1',
+          recipientUserId: 'user-client',
+          recipientRole: 'client',
+          projectRequestId: 'req-1',
+          preview: 'hello',
+        })
+      );
+    });
+
+    /**
+     * ⚠ THIS IS WHY THE HOOK RUNS AFTER `resolveContext`. The expert arm carries an
+     * `expertProfileId` on the wire; the recheck reads `conversation_read_states` by
+     * (conversation, USER) and cannot hydrate a profile inside the guard.
+     */
+    it('resolves the EXPERT recipient from the hydrated data.expert.user.id', async () => {
+      const expertPayload = {
+        ...clientPayload,
+        recipientRole: 'expert',
+        recipientId: undefined,
+        expertProfileId: 'exp-1',
+      };
+      mockResolveContext.mockResolvedValue({
+        event: 'conversation.message_posted',
+        payload: expertPayload,
+        data: { expert: { user: { id: 'user-expert' } } },
+      });
+      await processNotificationEvent(conversationJob('conversation.message_posted', expertPayload));
+
+      expect(mockScheduleDigest).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientUserId: 'user-expert', recipientRole: 'expert' })
+      );
+    });
+
+    /**
+     * ⚠⚠ BOTH EVENTS DISPATCH TO THE SAME HELPER — which uses the same dedupe key. That is
+     * what makes a message plus a file inside one 10-minute window ONE email.
+     */
+    it('routes conversation.file_shared to the SAME helper, seeding fileName not preview', async () => {
+      const filePayload = {
+        ...clientPayload,
+        correlationId: 'f-1',
+        preview: undefined,
+        fileName: 'price-book.xlsx',
+      };
+      mockResolveContext.mockResolvedValue({
+        event: 'conversation.file_shared',
+        payload: filePayload,
+        data: {},
+      });
+      await processNotificationEvent(conversationJob('conversation.file_shared', filePayload));
+
+      expect(mockScheduleDigest).toHaveBeenCalledTimes(1);
+      const [input] = mockScheduleDigest.mock.calls[0] ?? [];
+      expect(input).toMatchObject({ conversationId: 'conv-1', fileName: 'price-book.xlsx' });
+      expect(input).not.toHaveProperty('preview');
+    });
+
+    it('does not schedule when the recipient cannot be resolved', async () => {
+      const orphan = { ...clientPayload, recipientId: undefined };
+      mockResolveContext.mockResolvedValue({
+        event: 'conversation.message_posted',
+        payload: orphan,
+        data: {},
+      });
+      await processNotificationEvent(conversationJob('conversation.message_posted', orphan));
+      expect(mockScheduleDigest).not.toHaveBeenCalled();
+    });
+
+    /** A scheduling hiccup must never fail the immediate in-app notification. */
+    it('swallows a throwing follow-up', async () => {
+      mockScheduleDigest.mockRejectedValue(new Error('redis down'));
+      mockResolveContext.mockResolvedValue({
+        event: 'conversation.message_posted',
+        payload: clientPayload,
+        data: {},
+      });
+      await expect(
+        processNotificationEvent(conversationJob('conversation.message_posted', clientPayload))
+      ).resolves.toBeUndefined();
+      expect(mockDispatch).toHaveBeenCalled();
+    });
+
+    it('never fires a follow-up for an unrelated event', async () => {
+      await processNotificationEvent(
+        makeJob({
+          event: 'user.welcome',
+          payload: { correlationId: 'c-1', userId: 'u-1' },
+          publishedAt: '2026-01-01T00:00:00Z',
+        })
+      );
+      expect(mockScheduleDigest).not.toHaveBeenCalled();
+    });
   });
 });

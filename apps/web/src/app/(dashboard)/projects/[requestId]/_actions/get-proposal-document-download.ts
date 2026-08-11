@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { proposalsRepository, proposalDocumentsRepository } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
+import { readConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { createPresignedProposalDocumentDownload } from '@/lib/storage/proposal-document';
 
 const inputSchema = z.object({
@@ -39,6 +39,16 @@ const GENERIC_FAILURE = 'Could not download this document. Please try again.';
  * the client path. Written lens-extensibly: the gate is a single explicit check
  * so the client arm is a one-line relaxation later. The proposal need NOT be a
  * draft (the author may download their attachments after submit too).
+ *
+ * ⚠ GENUINELY READ-ONLY, AND IT MUST STAY THAT WAY. It authenticates with bare
+ * `requireUser()` and sits on `onboarding-mutation-gate.test.ts`'s `READ_ONLY_ALLOWLIST`, so
+ * it uses `readConversationAccess` (which `findByContext`s) rather than
+ * `resolveConversationAccess` (which get-or-CREATES). That gate test reads THIS file's source
+ * and cannot see a write reached through an import — and the lens check below runs AFTER
+ * access resolution, so the writing variant would have let an un-onboarded CLIENT-lens member
+ * of the owning company insert both rows before being rejected on `lens !== 'expert'`.
+ * `conversation-access-read-only.test.ts` derives its subject list from the allowlist so this
+ * cannot be missed again.
  */
 export async function getProposalDocumentDownloadAction(
   input: GetProposalDocumentDownloadInput
@@ -57,7 +67,7 @@ export async function getProposalDocumentDownloadAction(
   const { requestId, relationshipId, proposalId, documentId } = parsed.data;
 
   try {
-    const access = await resolveConversationAccess(user, requestId, relationshipId);
+    const access = await readConversationAccess(user, requestId, relationshipId);
     if (!access.ok) {
       return { success: false, error: access.error };
     }

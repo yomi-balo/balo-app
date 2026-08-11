@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import type * as Ably from 'ably';
-import { projectRequestsRepository } from '@balo/db';
+import { conversationsRepository, projectRequestsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
@@ -34,6 +34,11 @@ export type CreateConversationRealtimeTokenResult =
  *  - admin/observer → denied (pure observer, no live chat in A4).
  * `clientId = user.id`; explicit 15-min TTL — ably-js re-invokes `authCallback`
  * on expiry, so entitlement staleness is bounded by `TOKEN_TTL_MS`.
+ *
+ * ⚠ BAL-424: entitlement is still resolved over RELATIONSHIPS (that is what the
+ * request graph and the lens speak), but the granted channels are keyed on the
+ * CONVERSATION each one anchors. Capabilities stay subscribe-only over an
+ * explicit channel list — never a wildcard.
  */
 export async function createConversationRealtimeTokenAction(
   input: z.infer<typeof inputSchema>
@@ -68,12 +73,12 @@ export async function createConversationRealtimeTokenAction(
       return { success: false, error: 'You do not have access to this conversation.' };
     }
 
-    const entitledIds = request.relationships
+    const entitledRelationshipIds = request.relationships
       .filter((r) => isThreadOpenStatus(r.status))
       .filter((r) => ctx.lens !== 'expert' || r.id === ctx.relationshipId)
       .map((r) => r.id);
 
-    if (entitledIds.length === 0) {
+    if (entitledRelationshipIds.length === 0) {
       log.warn('Realtime token denied', {
         requestId,
         userId: user.id,
@@ -94,11 +99,27 @@ export async function createConversationRealtimeTokenAction(
       return { success: false, disabled: true };
     }
 
+    /**
+     * ⚠ ENSURE, NOT FIND (BAL-424). A thread whose conversation did not yet exist would
+     * silently drop out of the capability list, and the first message posted to it would be
+     * invisible to the counterparty until their token refreshed (≤ `TOKEN_TTL_MS`).
+     * Idempotent — one row per thread, ever — and the write runs AFTER the participant lens
+     * is proven, never before.
+     */
+    const conversationIdByRelationship = await conversationsRepository.ensureManyForContexts(
+      entitledRelationshipIds.map((id) => ({ contextType: 'relationship' as const, contextId: id }))
+    );
+
     const tokenRequest = await rest.auth.createTokenRequest({
       clientId: user.id,
       ttl: TOKEN_TTL_MS,
       capability: JSON.stringify(
-        Object.fromEntries(entitledIds.map((id) => [conversationChannelName(id), ['subscribe']]))
+        Object.fromEntries(
+          [...conversationIdByRelationship.values()].map((conversationId) => [
+            conversationChannelName(conversationId),
+            ['subscribe'],
+          ])
+        )
       ),
     });
 

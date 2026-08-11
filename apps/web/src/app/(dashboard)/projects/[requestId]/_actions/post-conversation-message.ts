@@ -81,8 +81,9 @@ export async function postConversationMessageAction(
       };
     }
 
+    const { conversationId } = access;
     const row = await conversationsRepository.postMessage({
-      relationshipId,
+      conversationId,
       senderUserId: user.id,
       body: html,
     });
@@ -91,7 +92,7 @@ export async function postConversationMessageAction(
       [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'Participant';
     const messageView: ConversationMessageView = {
       id: row.id,
-      relationshipId,
+      conversationId,
       bodyHtml: row.body,
       senderUserId: user.id,
       senderName,
@@ -102,7 +103,7 @@ export async function postConversationMessageAction(
     // posted message over a watermark hiccup.
     try {
       await conversationsRepository.markThreadRead({
-        relationshipId,
+        conversationId,
         userId: user.id,
         at: row.createdAt,
       });
@@ -110,6 +111,7 @@ export async function postConversationMessageAction(
       log.warn('Failed to advance read watermark after post', {
         requestId,
         relationshipId,
+        conversationId,
         userId: user.id,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -119,12 +121,17 @@ export async function postConversationMessageAction(
     // publishers — they run after the response flushes but before the function can
     // freeze, so neither the ephemeral realtime ping nor the durable notification
     // is cut short, and neither adds latency to this action. Both never throw.
-    void publishConversationEvent(relationshipId, CONVERSATION_EVENT_MESSAGE, messageView);
+    void publishConversationEvent(conversationId, CONVERSATION_EVENT_MESSAGE, messageView);
 
-    publishNotificationEvent('project.message_posted', {
+    // BAL-424: `conversation.message_posted` (was `project.message_posted`) — the anchor is
+    // the seam, so this same event serves a Case with no request. This is the RELATIONSHIP
+    // arm, hence `projectRequestId` is set and `engagementId` is not.
+    publishNotificationEvent('conversation.message_posted', {
       correlationId: row.id,
+      conversationId,
+      contextType: 'relationship',
+      contextId: relationshipId,
       projectRequestId: requestId,
-      relationshipId,
       title: access.request.title,
       senderName,
       recipientRole: access.recipient.role,
@@ -132,6 +139,8 @@ export async function postConversationMessageAction(
       expertProfileId:
         access.recipient.role === 'expert' ? access.recipient.expertProfileId : undefined,
       preview: previewOfPlainText(plainText),
+      // This composer is the project-request stage, never the in-call panel (BAL-132).
+      sentDuringMeeting: false,
     }).catch(() => {
       // publishNotificationEvent logs internally.
     });
@@ -139,6 +148,7 @@ export async function postConversationMessageAction(
     log.info('Conversation message posted', {
       requestId,
       relationshipId,
+      conversationId,
       userId: user.id,
       messageId: row.id,
     });

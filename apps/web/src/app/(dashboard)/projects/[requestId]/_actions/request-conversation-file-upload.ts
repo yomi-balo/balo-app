@@ -24,9 +24,10 @@ export type RequestConversationFileUploadResult =
 
 /**
  * Presign a PUT for one conversation file (BAL-271 / A4 — D5, step 1 of
- * presign → PUT → confirm). The key is scoped to the VALIDATED relationship +
- * the session user — never client-supplied. The client PUTs directly with XHR
- * for progress, then calls the confirm action which inserts the row.
+ * presign → PUT → confirm). The key is scoped to the VALIDATED thread's
+ * CONVERSATION + the session user — never client-supplied (BAL-424). The client
+ * PUTs directly with XHR for progress, then calls the confirm action which
+ * inserts the row.
  */
 export async function requestConversationFileUploadAction(
   input: z.infer<typeof inputSchema>
@@ -55,7 +56,7 @@ export async function requestConversationFileUploadAction(
     }
 
     const { presignedUrl, key } = await createPresignedConversationFileUpload(
-      relationshipId,
+      access.conversationId,
       user.id,
       contentType
     );

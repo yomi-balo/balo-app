@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { READ_ONLY_ALLOWLIST } from './_read-only-actions';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -42,20 +43,6 @@ function resolveSrcDir(): string {
 }
 
 const SRC_DIR = resolveSrcDir();
-
-/**
- * Server Actions that read the session via bare `requireUser()` and are allowed to,
- * because they perform NO writes/side-effects and stay IDOR-guarded independently of
- * onboarding. Paths are relative to `apps/web/src`, POSIX separators.
- */
-const READ_ONLY_ALLOWLIST: readonly string[] = [
-  // Lists conversation messages/files — pure read.
-  'app/(dashboard)/projects/[requestId]/_actions/fetch-thread.ts',
-  // Mints a short-lived presigned GET URL for a conversation file — no mutation.
-  'app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download.ts',
-  // Mints a short-lived presigned GET URL for a proposal document — no mutation.
-  'app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download.ts',
-];
 
 /** Recursively collect non-test .ts/.tsx files under `dir`. */
 function collectSourceFiles(dir: string): string[] {

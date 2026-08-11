@@ -15,6 +15,7 @@
     "./credit": "./src/credit/index.ts",
     "./engagements": "./src/engagements/index.ts",
     "./meetings": "./src/meetings/index.ts",
+    "./conversations": "./src/conversations/index.ts",
     "./domains": "./src/domains/index.ts",
     "./parties": "./src/parties/index.ts",
     "./authz": "./src/authz/index.ts",

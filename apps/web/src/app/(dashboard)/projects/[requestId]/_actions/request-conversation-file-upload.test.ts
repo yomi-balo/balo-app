@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 
 vi.mock('server-only', () => ({}));
 
@@ -36,10 +37,10 @@ describe('requestConversationFileUploadAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRequireUser.mockResolvedValue(USER);
-    mockResolveAccess.mockResolvedValue({ ok: true });
+    mockResolveAccess.mockResolvedValue({ ok: true, conversationId: CONVERSATION_ID });
     mockCreatePresigned.mockResolvedValue({
       presignedUrl: 'https://signed.example/put',
-      key: `conversation-files/${REL_ID}/${USER.id}/abc`,
+      key: `conversation-files/${CONVERSATION_ID}/${USER.id}/abc`,
     });
   });
 
@@ -70,14 +71,16 @@ describe('requestConversationFileUploadAction', () => {
     expect(mockCreatePresigned).not.toHaveBeenCalled();
   });
 
-  it('presigns scoped to the validated relationship + session user', async () => {
+  // BAL-424: the key is scoped to the validated thread's CONVERSATION, not its relationship
+  // — a Case has no relationship row, so a relationship-scoped layout cannot express one.
+  it('presigns scoped to the validated conversation + session user', async () => {
     const result = await requestConversationFileUploadAction(VALID_INPUT);
     expect(result).toEqual({
       success: true,
       presignedUrl: 'https://signed.example/put',
-      key: `conversation-files/${REL_ID}/${USER.id}/abc`,
+      key: `conversation-files/${CONVERSATION_ID}/${USER.id}/abc`,
     });
-    expect(mockCreatePresigned).toHaveBeenCalledWith(REL_ID, USER.id, 'application/pdf');
+    expect(mockCreatePresigned).toHaveBeenCalledWith(CONVERSATION_ID, USER.id, 'application/pdf');
   });
 
   it('maps presign failures (e.g. R2 unconfigured) to a friendly error', async () => {

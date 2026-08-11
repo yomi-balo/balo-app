@@ -31,17 +31,22 @@ const DOWNLOAD_TTL_SECONDS = 300;
 
 // ── Key generation ──
 /**
- * Keys are scoped to relationship + uploader so the confirm action can verify
+ * Keys are scoped to CONVERSATION + uploader so the confirm action can verify
  * provenance from the session alone. Shape:
- * `conversation-files/{relationshipId}/{userId}/{uuid}`.
+ * `conversation-files/{conversationId}/{userId}/{uuid}`.
+ *
+ * ⚠ BAL-424 MOVED THIS OFF THE RELATIONSHIP ID. A Case has no relationship row at all, so a
+ * relationship-scoped key layout could not express a case attachment. Objects written under
+ * the OLD layout are orphaned — pre-launch and dev-only, and migration 0062 truncates the
+ * rows that referenced them; there is deliberately no compat read path.
  */
-export function generateConversationFileKey(relationshipId: string, userId: string): string {
-  return `${CONVERSATION_FILE_PREFIX}${relationshipId}/${userId}/${crypto.randomUUID()}`;
+export function generateConversationFileKey(conversationId: string, userId: string): string {
+  return `${CONVERSATION_FILE_PREFIX}${conversationId}/${userId}/${crypto.randomUUID()}`;
 }
 
 // ── Presigned PUT (server-only) ──
 export async function createPresignedConversationFileUpload(
-  relationshipId: string,
+  conversationId: string,
   userId: string,
   contentType: string
 ): Promise<{ presignedUrl: string; key: string }> {
@@ -49,7 +54,7 @@ export async function createPresignedConversationFileUpload(
     throw new Error(`Invalid content type: ${contentType}`);
   }
 
-  const key = generateConversationFileKey(relationshipId, userId);
+  const key = generateConversationFileKey(conversationId, userId);
   const command = new PutObjectCommand({
     Bucket: R2_BUCKET,
     Key: key,

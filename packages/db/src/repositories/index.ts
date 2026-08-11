@@ -186,7 +186,16 @@ export type {
   ProposalDocumentKind,
   EngagementStatus,
 } from './proposal-types';
-export { conversationsRepository } from './conversations';
+export {
+  conversationsRepository,
+  conversationContextKey,
+  ConversationContextTakenError,
+} from './conversations';
+export type {
+  ConversationContextRef,
+  ConversationThreadSummary,
+  ConversationUnreadSummary,
+} from './conversations';
 export { projectsInboxRepository } from './projects-inbox';
 export type { PortfolioRequestRow, PortfolioInvitationRow } from './projects-inbox';
 export type {
@@ -212,10 +221,19 @@ export type {
   NewCaseEngagement,
   EngagementMilestone,
   NewEngagementMilestone,
+  Conversation,
+  NewConversation,
+  ConversationContext,
+  NewConversationContext,
+  ConversationContextType,
   ConversationMessage,
   NewConversationMessage,
   ConversationFile,
   NewConversationFile,
+  // BAL-424: the read-state types were previously NOT re-exported (`portfolio-view.ts`
+  // inferred them). The API-side unread recheck needs to name them.
+  ConversationReadState,
+  NewConversationReadState,
   ExpertReferralInvite,
   NewExpertReferralInvite,
 } from '../schema';

@@ -8,6 +8,8 @@ export { projectRequestFactory } from './project-request.factory';
 export { projectTagFactory, projectTagGroupFactory } from './project-tag.factory';
 export { requestExpertRelationshipFactory } from './request-expert-relationship.factory';
 export type { RequestExpertRelationshipFactoryResult } from './request-expert-relationship.factory';
+export { conversationFactory } from './conversation.factory';
+export type { ConversationFactoryResult } from './conversation.factory';
 export { proposalFactory } from './proposal.factory';
 export type { ProposalFactoryResult } from './proposal.factory';
 export { proposalShareLinkFactory } from './proposal-share-link.factory';

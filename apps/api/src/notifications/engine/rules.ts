@@ -318,38 +318,86 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
-  // BAL-271 conversation events: IN-APP ONLY (per-message email = spam; a
-  // digest is a future engine feature). One event, two conditioned rules —
-  // the payload's recipientRole routes to exactly one of them.
-  'project.message_posted': [
+  // BAL-271 conversation events (BAL-424 renamed them off the `project.` prefix — the
+  // anchor is now the ADR-1045 §2 seam, so the same event fires for a Case with no
+  // project). BOTH STAY IN-APP ONLY AND IMMEDIATE: a per-message email is spam. The EMAIL is
+  // the separate, DEBOUNCED `conversation.unread_digest_due` below, scheduled +10 minutes by
+  // the worker's follow-up hook. One event, two conditioned rules — the payload's
+  // recipientRole routes to exactly one of them.
+  //
+  // ⚠⚠ EACH OF THESE TWO EVENTS MUST KEEP AT LEAST ONE RULE. `processNotificationEvent`
+  // RETURNS EARLY on an event with no rules, and the follow-up hook that schedules the
+  // digest runs AFTER that lookup — so emptying either array would silently disable the
+  // unread email for that half of the exchange.
+  'conversation.message_posted': [
     {
       channel: 'in-app',
       recipient: 'client',
-      template: 'project-message-posted',
+      template: 'conversation-message-posted',
       timing: 'immediate',
       condition: (ctx) => ctx.payload.recipientRole === 'client',
     },
     {
       channel: 'in-app',
       recipient: 'expert',
-      template: 'project-message-posted',
+      template: 'conversation-message-posted',
       timing: 'immediate',
       condition: (ctx) => ctx.payload.recipientRole === 'expert',
     },
   ],
-  'project.file_shared': [
+  'conversation.file_shared': [
     {
       channel: 'in-app',
       recipient: 'client',
-      template: 'project-file-shared',
+      template: 'conversation-file-shared',
       timing: 'immediate',
       condition: (ctx) => ctx.payload.recipientRole === 'client',
     },
     {
       channel: 'in-app',
       recipient: 'expert',
-      template: 'project-file-shared',
+      template: 'conversation-file-shared',
       timing: 'immediate',
+      condition: (ctx) => ctx.payload.recipientRole === 'expert',
+    },
+  ],
+  /**
+   * BAL-424 — the 10-minute debounced unread digest. EMAIL ONLY (the in-app notice already
+   * fired immediately, above), routed by `recipientRole` exactly like the two events that
+   * schedule it.
+   *
+   * ⚠ ONE PROMISE COVERS MESSAGES **AND** FILE SHARES. Both publishers call the same
+   * scheduler on the same dedupe key
+   * `conversation-unread:{conversationId}:{recipientUserId}`, so a message at T+0 and a file
+   * at T+3min fold into ONE email.
+   *
+   * ⚠ IT IS GUARDED. `conversation_unread` re-reads live state at fire time and skips when
+   * the recipient's `conversation_read_states` watermark has passed every unread message AND
+   * file — the dedupe key is NOT a rate limit (ADR-1047 Decision 5).
+   *
+   * ⚠ BOTH ARMS RESOLVE `recipient: 'self'`, UNLIKE THE TWO IMMEDIATE EVENTS ABOVE. Those
+   * split `client` / `expert` because the two sides resolve their user id from DIFFERENT
+   * payload fields (`recipientId` vs a hydrated `expertProfileId`). Here the recipient was
+   * ALREADY resolved to a user id at SCHEDULE time and stored as `recipientUserId` — the
+   * recheck needs a user id to read the watermark by — so both arms name the same field. The
+   * pair is kept, conditioned on `recipientRole`, so exactly one rule fires per publish and
+   * the two sides can diverge in copy or priority later without restructuring the event.
+   */
+  'conversation.unread_digest_due': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'conversation-unread-digest',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: (ctx) => ctx.payload.recipientRole === 'client',
+    },
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'conversation-unread-digest',
+      timing: 'immediate',
+      priority: 'normal',
       condition: (ctx) => ctx.payload.recipientRole === 'expert',
     },
   ],
@@ -697,7 +745,8 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   'payout.recorded': emailAndInApp('expert', 'payout-recorded'),
   // BAL-391 (ADR-1043): an action item was assigned to a SIDE of the engagement. One
   // event, two conditioned rules keyed on payload.assigneeParty (the
-  // project.message_posted routing precedent) — the assigned side only gets email +
+  // conversation.message_posted routing precedent, renamed off `project.` by BAL-424) —
+  // the assigned side only gets email +
   // in-app: 'client' → recipient:'client' via payload.recipientId (client company
   // owner; skips gracefully when absent); 'expert' → recipient:'expert' via
   // payload.expertProfileId → the resolver hydrates data.expert. NO admin fan-out

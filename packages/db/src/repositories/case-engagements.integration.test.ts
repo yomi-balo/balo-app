@@ -6,6 +6,7 @@ import {
   caseEngagements,
   companies,
   companyMembers,
+  conversationContexts,
   engagements,
   reviews,
   type AuditEvent,
@@ -24,6 +25,7 @@ import {
   CaseCloserNotMemberError,
 } from './case-engagements';
 import { EngagementTypeMismatchError } from './_shared/engagement-supertype';
+import { conversationsRepository } from './conversations';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
 import { expectCheckViolation } from '../test/helpers/expect-check-violation';
 
@@ -76,6 +78,42 @@ describe('caseEngagementsRepository.create', () => {
       .where(eq(caseEngagements.engagementId, created.id));
     expect(child?.engagementType).toBe('case');
     expect(child?.title).toBe('Flow fails on record update');
+  });
+
+  it('BAL-424 — provisions an engagement-anchored conversation with NO relationship row anywhere', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const created = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      title: 'A case can be talked about',
+      description: '<p>x</p>',
+    });
+
+    const conversation = await conversationsRepository.findByContext({
+      contextType: 'engagement',
+      contextId: created.id,
+    });
+    if (conversation === undefined) throw new Error('expected a provisioned conversation');
+
+    // The AC, asserted directly: exactly one live context, on the `engagement` label, and
+    // the thread names no relationship at all — a Case never passes through origination.
+    const contexts = await conversationsRepository.listContexts(conversation.id);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.contextType).toBe('engagement');
+    expect(contexts[0]?.contextId).toBe(created.id);
+
+    const relationshipContexts = await db
+      .select({ id: conversationContexts.id })
+      .from(conversationContexts)
+      .where(
+        and(
+          eq(conversationContexts.conversationId, conversation.id),
+          eq(conversationContexts.contextType, 'relationship')
+        )
+      );
+    expect(relationshipContexts).toHaveLength(0);
   });
 
   it('(b) the PARENT row it writes has balo_fee_bps IS NULL — read RAW, not through the strip', async () => {

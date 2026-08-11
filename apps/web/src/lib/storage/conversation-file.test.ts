@@ -53,7 +53,7 @@ import {
   MAX_CONVERSATION_FILE_BYTES,
 } from './conversation-file';
 
-const REL = 'rel-1';
+const CONVERSATION = 'conv-1';
 const USER = 'user-1';
 
 describe('conversation-file storage', () => {
@@ -62,14 +62,16 @@ describe('conversation-file storage', () => {
   });
 
   describe('generateConversationFileKey', () => {
-    it('scopes the key to relationship + uploader under the conversation-files prefix', () => {
-      const key = generateConversationFileKey(REL, USER);
-      expect(key.startsWith(`${CONVERSATION_FILE_PREFIX}${REL}/${USER}/`)).toBe(true);
+    // BAL-424: the key is scoped to the CONVERSATION, not the relationship — a Case has no
+    // relationship row, so a relationship-scoped layout could not express a case attachment.
+    it('scopes the key to conversation + uploader under the conversation-files prefix', () => {
+      const key = generateConversationFileKey(CONVERSATION, USER);
+      expect(key.startsWith(`${CONVERSATION_FILE_PREFIX}${CONVERSATION}/${USER}/`)).toBe(true);
     });
 
     it('generates a unique suffix per call', () => {
-      expect(generateConversationFileKey(REL, USER)).not.toBe(
-        generateConversationFileKey(REL, USER)
+      expect(generateConversationFileKey(CONVERSATION, USER)).not.toBe(
+        generateConversationFileKey(CONVERSATION, USER)
       );
     });
   });
@@ -96,15 +98,17 @@ describe('conversation-file storage', () => {
   describe('createPresignedConversationFileUpload', () => {
     it('presigns an allowed content type and returns url + key', async () => {
       mockGetSignedUrl.mockResolvedValue('https://signed.example/put');
-      const result = await createPresignedConversationFileUpload(REL, USER, 'text/csv');
+      const result = await createPresignedConversationFileUpload(CONVERSATION, USER, 'text/csv');
       expect(result.presignedUrl).toBe('https://signed.example/put');
-      expect(result.key.startsWith(`${CONVERSATION_FILE_PREFIX}${REL}/${USER}/`)).toBe(true);
+      expect(result.key.startsWith(`${CONVERSATION_FILE_PREFIX}${CONVERSATION}/${USER}/`)).toBe(
+        true
+      );
       expect(mockGetSignedUrl).toHaveBeenCalledOnce();
     });
 
     it('rejects a disallowed content type without presigning', async () => {
       await expect(
-        createPresignedConversationFileUpload(REL, USER, 'application/x-msdownload')
+        createPresignedConversationFileUpload(CONVERSATION, USER, 'application/x-msdownload')
       ).rejects.toThrow(/Invalid content type/);
       expect(mockGetSignedUrl).not.toHaveBeenCalled();
     });
@@ -135,14 +139,14 @@ describe('conversation-file storage', () => {
 
     it('deletes a conversation-files key', async () => {
       mockSend.mockResolvedValue({});
-      await deleteConversationFileFromR2(`${CONVERSATION_FILE_PREFIX}${REL}/${USER}/abc`);
+      await deleteConversationFileFromR2(`${CONVERSATION_FILE_PREFIX}${CONVERSATION}/${USER}/abc`);
       expect(mockSend).toHaveBeenCalledOnce();
     });
 
     it('warns (never throws) when deletion fails', async () => {
       mockSend.mockRejectedValue(new Error('boom'));
       await expect(
-        deleteConversationFileFromR2(`${CONVERSATION_FILE_PREFIX}${REL}/${USER}/abc`)
+        deleteConversationFileFromR2(`${CONVERSATION_FILE_PREFIX}${CONVERSATION}/${USER}/abc`)
       ).resolves.toBeUndefined();
       expect(mockWarn).toHaveBeenCalled();
     });

@@ -654,6 +654,55 @@ export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
 ]);
 
 /**
+ * BAL-424 / ADR-1045 §2 — what a CONVERSATION is anchored to (schema/conversations.ts).
+ *
+ * STANDALONE `CREATE TYPE` in migration 0062, so every label it is BORN with commits
+ * atomically with the type; naming one inside a CHECK in that same migration would be safe
+ * (memory `reference_enum_default_same_tx_migration_hazard` binds only `ALTER TYPE … ADD
+ * VALUE`). It appears in NO index predicate — the house rule at `action-items.ts` /
+ * `transcripts.ts`.
+ *
+ *   `relationship` — `request_expert_relationships.id`. The pre-sales thread.
+ *   `engagement`   — `engagements.id` (the ADR-1045 SUPERTYPE, so one label serves case,
+ *                    project, package and retainer). The delivery thread.
+ *
+ * ⚠ THE LABELS NAME THE ANCHOR TABLE, NOT A PURPOSE — DELIBERATELY UNLIKE
+ * `meeting_context_type`, whose seven labels name what a MEETING IS FOR
+ * (`case`/`project_discovery`/`project_kickoff`/…). A conversation has no purpose axis: it
+ * is one continuous thread between two parties, and the only question the seam answers is
+ * "whose thread is this". Collapsing the four engagement-grain meeting labels into one
+ * `engagement` label here is what makes kickoff carry-over a single row rather than four.
+ *
+ * ⚠ NO `admin` LABEL, AND `context_id` IS THEREFORE `NOT NULL` (scope decision 1,
+ * 2026-08-10). `meeting_contexts` carries an `admin` label with a NULLABLE `context_id`, a
+ * biconditional CHECK and a second admin-only partial unique. THIS SEAM INHERITS NONE OF
+ * THAT APPARATUS. There is no admin chat and none is ticketed —
+ * `resolve-conversation-access.ts` denies admin observers in writing ("A4 has no admin
+ * chat"). Copying the label would put every admin thread in ONE `context_id = NULL` bucket
+ * that cannot name its counterparty, and would leave a dead enum label. Add it when a real
+ * admin-chat feature exists AND can say what it points at.
+ *
+ * ⚠ NO `direct` LABEL — deferred to BAL-255 (scope decision 2). Cold-profile messaging has
+ * no producer and no actor today: the expert profile's booking card renders "Send a message
+ * first" unconditionally, its CTAs route to a "Coming soon" toast, `/experts/` is a PUBLIC
+ * route so the CTA renders to LOGGED-OUT visitors (no authenticated actor, no company to
+ * gate `PARTICIPATE` against), and `/messages` is an unwired placeholder. Structurally,
+ * `(company, expert_profile)` is a PAIR and `context_id` is ONE uuid — `direct` needs its
+ * own anchor table, which is a real design that must land with its consumer. BAL-255 must
+ * also first reconcile its own wrinkle: its ask is anchored to a QUICK START PACKAGE, a
+ * fifth context, not the `(company, expert_profile)` pair. Recorded here so the gap is not
+ * rediscovered as an oversight.
+ *
+ * ⚠ APPEND-ONLY, for the same reason `meeting_context_type` is: a label goes at the END of
+ * this array, never mid-array — an insert changes ordinals and makes drizzle recreate the
+ * type instead of emitting a plain `ALTER TYPE … ADD VALUE`.
+ */
+export const conversationContextTypeEnum = pgEnum('conversation_context_type', [
+  'relationship',
+  'engagement',
+]);
+
+/**
  * Which SIDE a presence interval belongs to (BAL-134's two clocks).
  * `observer` = a Balo staffer / silent attendee: present, but NEVER makes a meeting billable.
  * Declared now so a staff join does not later require an ALTER TYPE … ADD VALUE.

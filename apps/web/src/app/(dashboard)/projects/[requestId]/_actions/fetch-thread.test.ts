@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const MSG_ID = 'd0000000-0000-4000-8000-000000000004';
 
 vi.mock('server-only', () => ({}));
@@ -25,7 +26,9 @@ vi.mock('@/lib/auth/session', () => ({
 
 const mockResolveAccess = vi.fn();
 vi.mock('@/lib/project-request/resolve-conversation-access', () => ({
-  resolveConversationAccess: (...args: unknown[]) => mockResolveAccess(...args),
+  // BAL-424: this action is on `READ_ONLY_ALLOWLIST`, so it must use the READ-ONLY
+  // sibling (findByContext) — never `resolveConversationAccess`, which get-or-CREATES.
+  readConversationAccess: (...args: unknown[]) => mockResolveAccess(...args),
 }));
 
 vi.mock('@/lib/realtime/ably-server', () => ({
@@ -39,6 +42,7 @@ const USER = { id: 'user-client' };
 
 const ACCESS_OK = {
   ok: true,
+  conversationId: CONVERSATION_ID,
   ctx: { lens: 'client' },
   request: {
     id: REQUEST_ID,
@@ -59,7 +63,7 @@ const ACCESS_OK = {
 function messageRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: MSG_ID,
-    relationshipId: REL_ID,
+    conversationId: CONVERSATION_ID,
     senderUserId: 'user-expert',
     body: '<p>hello</p>',
     createdAt: new Date('2026-06-09T10:00:00Z'),
@@ -135,7 +139,10 @@ describe('fetchThreadAction', () => {
       includeFiles: false,
     });
     expect(mockListMessagesPage).toHaveBeenCalledWith({
-      relationshipId: REL_ID,
+      conversationId: CONVERSATION_ID,
+      // ⚠ BAL-424: `scope` is REQUIRED and STATED. Both parties read the whole thread;
+      // `{ kind: 'meeting' }` is the guest scope and must never be reached by defaulting.
+      scope: { kind: 'full' },
       before: { createdAt: new Date('2026-06-09T10:00:00.000Z'), id: MSG_ID },
       limit: 30,
     });
@@ -145,7 +152,7 @@ describe('fetchThreadAction', () => {
     mockListFiles.mockResolvedValue([
       {
         id: 'f-old',
-        relationshipId: REL_ID,
+        conversationId: CONVERSATION_ID,
         uploadedByUserId: 'user-client',
         r2Key: 'k1',
         fileName: 'old.pdf',
@@ -157,7 +164,7 @@ describe('fetchThreadAction', () => {
       },
       {
         id: 'f-new',
-        relationshipId: REL_ID,
+        conversationId: CONVERSATION_ID,
         uploadedByUserId: 'user-expert',
         r2Key: 'k2',
         fileName: 'new.pdf',
@@ -179,6 +186,25 @@ describe('fetchThreadAction', () => {
       expect(result.files?.[0]?.uploadedByName).toBe('Priya Nair');
       expect(result.files?.[1]?.uploadedByName).toBe('Dana Whitfield');
     }
+    // BAL-424: files are read on the CONVERSATION, with the scope stated explicitly.
+    expect(mockListFiles).toHaveBeenCalledWith(CONVERSATION_ID, { kind: 'full' });
+  });
+
+  /**
+   * BAL-424 — a relationship whose thread was never provisioned reads as EMPTY, not as an
+   * error, and above all is NOT provisioned on the way past: this action authenticates with
+   * bare `requireUser()` and must never write.
+   */
+  it('returns an empty thread (and touches no repo) when no conversation exists yet', async () => {
+    mockResolveAccess.mockResolvedValue({ ...ACCESS_OK, conversationId: undefined });
+    const result = await fetchThreadAction({
+      requestId: REQUEST_ID,
+      relationshipId: REL_ID,
+      includeFiles: true,
+    });
+    expect(result).toEqual({ success: true, messages: [], hasEarlier: false, files: [] });
+    expect(mockListMessagesPage).not.toHaveBeenCalled();
+    expect(mockListFiles).not.toHaveBeenCalled();
   });
 
   it('maps repo failures to a friendly error and logs', async () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-000000000003';
 const MESSAGE_ID = 'd0000000-0000-4000-8000-000000000004';
 const CREATED_AT = new Date('2026-06-10T10:00:00Z');
@@ -50,6 +51,7 @@ const USER = {
 
 const ACCESS_OK = {
   ok: true,
+  conversationId: CONVERSATION_ID,
   ctx: { lens: 'client' },
   request: { id: REQUEST_ID, title: 'CPQ implementation', createdByUserId: 'user-client' },
   relationship: { id: REL_ID, expertProfileId: EXPERT_PROFILE_ID },
@@ -66,7 +68,7 @@ describe('postConversationMessageAction', () => {
     mockPostMessage.mockImplementation((input: { body: string }) =>
       Promise.resolve({
         id: MESSAGE_ID,
-        relationshipId: REL_ID,
+        conversationId: CONVERSATION_ID,
         senderUserId: USER.id,
         body: input.body,
         createdAt: CREATED_AT,
@@ -143,24 +145,28 @@ describe('postConversationMessageAction', () => {
       success: true,
       message: {
         id: MESSAGE_ID,
-        relationshipId: REL_ID,
+        conversationId: CONVERSATION_ID,
         bodyHtml: '<p>Hello Priya</p>',
         senderUserId: USER.id,
         senderName: 'Dana Whitfield',
         createdAtIso: CREATED_AT.toISOString(),
       },
     });
+    // BAL-424: the Ably channel keys on the CONVERSATION, never the relationship.
     expect(mockPublishConversation).toHaveBeenCalledWith(
-      REL_ID,
+      CONVERSATION_ID,
       'message',
       expect.objectContaining({ id: MESSAGE_ID })
     );
     expect(mockPublishNotification).toHaveBeenCalledWith(
-      'project.message_posted',
+      'conversation.message_posted',
       expect.objectContaining({
         correlationId: MESSAGE_ID,
+        conversationId: CONVERSATION_ID,
+        contextType: 'relationship',
+        contextId: REL_ID,
         projectRequestId: REQUEST_ID,
-        relationshipId: REL_ID,
+        sentDuringMeeting: false,
         recipientRole: 'expert',
         expertProfileId: EXPERT_PROFILE_ID,
         recipientId: undefined,
@@ -169,7 +175,7 @@ describe('postConversationMessageAction', () => {
       })
     );
     expect(mockMarkThreadRead).toHaveBeenCalledWith({
-      relationshipId: REL_ID,
+      conversationId: CONVERSATION_ID,
       userId: USER.id,
       at: CREATED_AT,
     });
@@ -184,7 +190,7 @@ describe('postConversationMessageAction', () => {
     });
     await postConversationMessageAction(VALID_INPUT);
     expect(mockPublishNotification).toHaveBeenCalledWith(
-      'project.message_posted',
+      'conversation.message_posted',
       expect.objectContaining({
         recipientRole: 'client',
         recipientId: 'user-client',

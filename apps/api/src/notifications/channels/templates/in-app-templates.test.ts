@@ -295,11 +295,12 @@ describe('getInAppTemplate', () => {
     });
   });
 
-  describe('project-message-posted', () => {
-    it('renders sender + preview with the request action url', () => {
-      const result = getInAppTemplate('project-message-posted', {
+  describe('conversation-message-posted', () => {
+    it('renders sender + preview with the REQUEST action url on the relationship arm', () => {
+      const result = getInAppTemplate('conversation-message-posted', {
         senderName: 'Priya Nair',
         preview: 'Quick question about the CPQ scope',
+        contextType: 'relationship',
         projectRequestId: 'req-1',
       });
       expect(result).toEqual({
@@ -309,18 +310,42 @@ describe('getInAppTemplate', () => {
       });
     });
 
+    /**
+     * ⚠ BAL-424: the deep link is CHOSEN BY THE ANCHOR. A Case has no request, so the old
+     * unconditional `/projects/${projectRequestId}` produced a dead link for exactly the
+     * surface this event was generalised for.
+     */
+    it('deep-links the ENGAGEMENT on the engagement arm', () => {
+      const result = getInAppTemplate('conversation-message-posted', {
+        senderName: 'Priya Nair',
+        preview: 'On the migration plan',
+        contextType: 'engagement',
+        engagementId: 'eng-1',
+      });
+      expect(result.actionUrl).toBe('/engagements/eng-1');
+    });
+
+    it('falls back to contextId when the engagement arm omits engagementId', () => {
+      const result = getInAppTemplate('conversation-message-posted', {
+        contextType: 'engagement',
+        contextId: 'eng-2',
+      });
+      expect(result.actionUrl).toBe('/engagements/eng-2');
+    });
+
     it('falls back when fields are missing and omits the url without an id', () => {
-      const result = getInAppTemplate('project-message-posted', {});
+      const result = getInAppTemplate('conversation-message-posted', {});
       expect(result.body).toBe('Someone: sent you a message');
       expect(result.actionUrl).toBeUndefined();
     });
   });
 
-  describe('project-file-shared', () => {
-    it('renders sender + file name with the request action url', () => {
-      const result = getInAppTemplate('project-file-shared', {
+  describe('conversation-file-shared', () => {
+    it('renders sender + file name with the REQUEST action url on the relationship arm', () => {
+      const result = getInAppTemplate('conversation-file-shared', {
         senderName: 'Dana Whitfield',
         fileName: 'price-book-export.xlsx',
+        contextType: 'relationship',
         projectRequestId: 'req-1',
       });
       expect(result).toEqual({
@@ -330,8 +355,18 @@ describe('getInAppTemplate', () => {
       });
     });
 
+    it('deep-links the ENGAGEMENT on the engagement arm', () => {
+      const result = getInAppTemplate('conversation-file-shared', {
+        senderName: 'Dana Whitfield',
+        fileName: 'notes.pdf',
+        contextType: 'engagement',
+        engagementId: 'eng-1',
+      });
+      expect(result.actionUrl).toBe('/engagements/eng-1');
+    });
+
     it('falls back when fields are missing and omits the url without an id', () => {
-      const result = getInAppTemplate('project-file-shared', {});
+      const result = getInAppTemplate('conversation-file-shared', {});
       expect(result.body).toBe('Someone shared a file');
       expect(result.actionUrl).toBeUndefined();
     });

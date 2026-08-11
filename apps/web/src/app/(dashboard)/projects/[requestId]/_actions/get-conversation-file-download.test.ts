@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const FILE_ID = 'd0000000-0000-4000-8000-000000000007';
 
 vi.mock('server-only', () => ({}));
@@ -20,7 +21,9 @@ vi.mock('@/lib/auth/session', () => ({
 
 const mockResolveAccess = vi.fn();
 vi.mock('@/lib/project-request/resolve-conversation-access', () => ({
-  resolveConversationAccess: (...args: unknown[]) => mockResolveAccess(...args),
+  // BAL-424: this action is on `READ_ONLY_ALLOWLIST`, so it must use the READ-ONLY
+  // sibling (findByContext) — never `resolveConversationAccess`, which get-or-CREATES.
+  readConversationAccess: (...args: unknown[]) => mockResolveAccess(...args),
 }));
 
 const mockPresignDownload = vi.fn();
@@ -38,7 +41,7 @@ describe('getConversationFileDownloadAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRequireUser.mockResolvedValue(USER);
-    mockResolveAccess.mockResolvedValue({ ok: true });
+    mockResolveAccess.mockResolvedValue({ ok: true, conversationId: CONVERSATION_ID });
     mockListFiles.mockResolvedValue([
       { id: FILE_ID, r2Key: 'conversation-files/x/y/z', fileName: 'scope.pdf' },
     ]);
@@ -84,5 +87,17 @@ describe('getConversationFileDownloadAction', () => {
       'Failed to presign conversation file download',
       expect.any(Object)
     );
+  });
+
+  /**
+   * BAL-424 — no conversation ⇒ no files ⇒ the claimed fileId cannot belong to this thread.
+   * Same copy as a foreign or soft-deleted id, so probing still learns nothing; and no
+   * thread is provisioned on the way past (this action must stay read-only).
+   */
+  it('reports the file unavailable when no conversation exists yet, without provisioning one', async () => {
+    mockResolveAccess.mockResolvedValue({ ok: true, conversationId: undefined });
+    const result = await getConversationFileDownloadAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+    expect(mockListFiles).not.toHaveBeenCalled();
   });
 });

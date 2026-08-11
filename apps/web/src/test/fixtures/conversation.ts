@@ -8,6 +8,8 @@ import type { ConversationThreadView } from '@/lib/project-request/conversation-
 export function thread(overrides: Partial<ConversationThreadView> = {}): ConversationThreadView {
   return {
     relationshipId: 'rel-1',
+    // BAL-424 — the Ably channel + every wire payload key on this, not on `relationshipId`.
+    conversationId: 'conv-1',
     expertProfileId: 'exp-1',
     expertName: 'Priya Nair',
     expertFirstName: 'Priya',

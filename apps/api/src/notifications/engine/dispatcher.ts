@@ -239,7 +239,15 @@ function resolveRecipient(
   switch (recipient) {
     case 'self': {
       const userId = context.payload.userId;
-      return typeof userId === 'string' ? userId : undefined;
+      if (typeof userId === 'string') return userId;
+      // BAL-424: a payload whose recipient was ALREADY RESOLVED TO A USER ID at schedule
+      // time names it `recipientUserId` — the debounced conversation digest must store a
+      // user id (never an `expertProfileId`), because its fire-time recheck reads
+      // `conversation_read_states` by (conversation, USER) and cannot hydrate a profile
+      // into a user inside the guard. Additive and inert for every shipped event: no other
+      // payload in `EventPayloadMap` carries this field.
+      const recipientUserId = context.payload.recipientUserId;
+      return typeof recipientUserId === 'string' ? recipientUserId : undefined;
     }
     case 'expert': {
       const expert = context.data.expert as { user?: { id?: string } } | undefined;

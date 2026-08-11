@@ -1,5 +1,5 @@
 import { db } from '../../client';
-import { requestExpertRelationships } from '../../schema';
+import { conversationContexts, conversations, requestExpertRelationships } from '../../schema';
 import type { RequestExpertRelationship, NewRequestExpertRelationship } from '../../schema';
 import { userFactory } from './user.factory';
 import { projectRequestFactory } from './project-request.factory';
@@ -20,13 +20,20 @@ export interface RequestExpertRelationshipFactoryResult {
   projectRequestId: string;
   expertProfileId: string;
   invitedByUserId: string;
+  /**
+   * The relationship's thread (BAL-424). Provisioned here because production `invite()`
+   * provisions eagerly — a fixture without one would not resemble any row the app can
+   * produce, and both rewritten recency hops plus `listThreadSummaries` need it to exist.
+   */
+  conversationId: string;
 }
 
 /**
  * Seeds a live project request (via `projectRequestFactory`, which also creates a
  * target expert), an admin inviter user, then inserts an `invited`
- * `request_expert_relationships` row. Returns the relationship plus its
- * request/expert/inviter ids for cross-table assertions.
+ * `request_expert_relationships` row PLUS its `relationship`-anchored conversation.
+ * Returns the relationship plus its request/expert/inviter/conversation ids for
+ * cross-table assertions.
  */
 export async function requestExpertRelationshipFactory(
   overrides: RequestExpertRelationshipFactoryOverrides = {}
@@ -63,10 +70,24 @@ export async function requestExpertRelationshipFactory(
     throw new Error('request expert relationship insert failed');
   }
 
+  // RAW inserts, deliberately — the factory must be able to seed shapes the repository
+  // refuses (e.g. a pre-soft-deleted relationship), so it does not route through
+  // `conversationsRepository.ensureForContext`.
+  const [conversation] = await db.insert(conversations).values({}).returning();
+  if (conversation === undefined) {
+    throw new Error('conversation insert failed');
+  }
+  await db.insert(conversationContexts).values({
+    conversationId: conversation.id,
+    contextType: 'relationship',
+    contextId: relationship.id,
+  });
+
   return {
     relationship,
     projectRequestId,
     expertProfileId,
     invitedByUserId,
+    conversationId: conversation.id,
   };
 }

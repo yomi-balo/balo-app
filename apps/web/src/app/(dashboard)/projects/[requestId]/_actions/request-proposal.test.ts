@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const RELATIONSHIP_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const OTHER_RELATIONSHIP_ID = 'b0000000-0000-4000-8000-000000000003';
 const EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-000000000004';
 
@@ -90,6 +91,7 @@ function access(opts: AccessOptions = {}): Record<string, unknown> {
   };
   return {
     ok: true,
+    conversationId: CONVERSATION_ID,
     ctx: { lens },
     request: {
       id: REQUEST_ID,
@@ -184,7 +186,8 @@ describe('requestProposalAction', () => {
     // BAL-295: the action no longer issues a request transition — the relationship
     // transition derives it. It re-reads the stored status to source `transitioned`.
     expect(mockFindById).toHaveBeenCalledWith(REQUEST_ID);
-    expect(mockCountThreadActivity).toHaveBeenCalledWith(RELATIONSHIP_ID);
+    // BAL-424: interaction depth is counted on the CONVERSATION the relationship anchors.
+    expect(mockCountThreadActivity).toHaveBeenCalledWith(CONVERSATION_ID);
 
     expect(result.success).toBe(true);
     if (result.success) {

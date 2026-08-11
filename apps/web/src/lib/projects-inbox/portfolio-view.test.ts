@@ -8,12 +8,14 @@ const {
   mockListInvitationsByExpert,
   mockListPortfolioEngagements,
   mockListThreadSummaries,
+  mockConversationIdsForContexts,
 } = vi.hoisted(() => ({
   mockListByCompany: vi.fn(),
   mockListAll: vi.fn(),
   mockListInvitationsByExpert: vi.fn(),
   mockListPortfolioEngagements: vi.fn(),
   mockListThreadSummaries: vi.fn(),
+  mockConversationIdsForContexts: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -25,8 +27,11 @@ vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
     listPortfolio: (...args: unknown[]) => mockListPortfolioEngagements(...args),
   },
+  conversationContextKey: (ref: { contextType: string; contextId: string }) =>
+    `${ref.contextType}:${ref.contextId}`,
   conversationsRepository: {
     listThreadSummaries: (...args: unknown[]) => mockListThreadSummaries(...args),
+    conversationIdsForContexts: (...args: unknown[]) => mockConversationIdsForContexts(...args),
   },
   // Server-only window const; the real `@balo/shared/parties` helper runs unmocked.
   AUTO_ACCEPT_DAYS: 7,
@@ -119,14 +124,27 @@ function engagementView(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
+/** BAL-424: every relationship in these fixtures anchors a conversation named `conv-{relId}`. */
+function convIdFor(relationshipId: string): string {
+  return `conv-${relationshipId}`;
+}
+
 beforeEach(() => {
   mockListByCompany.mockReset();
   mockListAll.mockReset();
   mockListInvitationsByExpert.mockReset();
   mockListPortfolioEngagements.mockReset();
   mockListThreadSummaries.mockReset();
+  mockConversationIdsForContexts.mockReset();
   mockListPortfolioEngagements.mockResolvedValue([]);
   mockListThreadSummaries.mockResolvedValue([]);
+  // The read-only relationship→conversation resolution the portfolio loaders use.
+  mockConversationIdsForContexts.mockImplementation(
+    (refs: { contextType: string; contextId: string }[]) =>
+      Promise.resolve(
+        new Map(refs.map((r) => [`${r.contextType}:${r.contextId}`, convIdFor(r.contextId)]))
+      )
+  );
 });
 
 describe('loadClientPortfolio', () => {
@@ -139,8 +157,10 @@ describe('loadClientPortfolio', () => {
     expect(mockListByCompany).toHaveBeenCalledWith('company-1');
     expect(mockListPortfolioEngagements).toHaveBeenCalledWith({ companyId: 'company-1' });
     // No open relationships → summaries called with an empty id list.
+    // BAL-424: with no open relationships there is nothing to map, so the summary batch is
+    // called with an empty CONVERSATION id list.
     expect(mockListThreadSummaries).toHaveBeenCalledWith({
-      relationshipIds: [],
+      conversationIds: [],
       viewerUserId: 'user-1',
     });
   });
@@ -167,7 +187,7 @@ describe('loadClientPortfolio', () => {
     mockListByCompany.mockResolvedValue([quiet, needs]);
     mockListThreadSummaries.mockResolvedValue([
       {
-        relationshipId: 'rel-needs',
+        conversationId: convIdFor('rel-needs'),
         latestMessage: {
           id: 'm1',
           body: '<p>Are you keeping Zendesk?</p>',
@@ -191,8 +211,13 @@ describe('loadClientPortfolio', () => {
     expect(dto.rows[1]?.id).toBe('quiet');
     expect(dto.tiles.needs).toBe(1);
     expect(dto.allowedLenses).toEqual(['client', 'admin']);
+    // ⚠ BAL-424: a portfolio list is a READ — it resolves relationship→conversation with
+    // `conversationIdsForContexts` and must never `ensure` (which writes).
+    expect(mockConversationIdsForContexts).toHaveBeenCalledWith([
+      { contextType: 'relationship', contextId: 'rel-needs' },
+    ]);
     expect(mockListThreadSummaries).toHaveBeenCalledWith({
-      relationshipIds: ['rel-needs'],
+      conversationIds: [convIdFor('rel-needs')],
       viewerUserId: 'user-1',
     });
   });
@@ -218,7 +243,7 @@ describe('loadClientPortfolio', () => {
     mockListByCompany.mockResolvedValue([needs]);
     mockListThreadSummaries.mockResolvedValue([
       {
-        relationshipId: 'rel-needs',
+        conversationId: convIdFor('rel-needs'),
         latestMessage: {
           id: 'm1',
           body: '<p>Are you keeping Zendesk?</p>',

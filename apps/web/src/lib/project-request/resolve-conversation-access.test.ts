@@ -3,13 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 const mockFindByIdWithRelations = vi.fn();
+const mockEnsureForContext = vi.fn();
+const mockFindByContext = vi.fn();
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
     findByIdWithRelations: (...args: unknown[]) => mockFindByIdWithRelations(...args),
   },
+  conversationsRepository: {
+    ensureForContext: (...args: unknown[]) => mockEnsureForContext(...args),
+    findByContext: (...args: unknown[]) => mockFindByContext(...args),
+  },
 }));
 
-import { resolveConversationAccess } from './resolve-conversation-access';
+import { readConversationAccess, resolveConversationAccess } from './resolve-conversation-access';
 import { log } from '@/lib/logging';
 import type { SessionUser } from '@/lib/auth/session';
 
@@ -18,6 +24,7 @@ const REL_ID = 'b0000000-0000-4000-8000-000000000002';
 const OTHER_REL_ID = 'b0000000-0000-4000-8000-000000000099';
 const EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-000000000003';
 const CLIENT_USER_ID = 'user-client';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const DENIED = 'You do not have access to this conversation.';
 
 function relationship(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -76,6 +83,11 @@ describe('resolveConversationAccess', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindByIdWithRelations.mockResolvedValue(requestGraph());
+    mockEnsureForContext.mockResolvedValue({
+      conversation: { id: CONVERSATION_ID },
+      created: false,
+    });
+    mockFindByContext.mockResolvedValue({ id: CONVERSATION_ID });
   });
 
   it('denies when the request does not exist (generic copy)', async () => {
@@ -168,5 +180,121 @@ describe('resolveConversationAccess', () => {
       expect(result.ctx.lens).toBe('expert');
       expect(result.recipient).toEqual({ role: 'client', userId: CLIENT_USER_ID });
     }
+  });
+
+  // ── BAL-424: the conversation seam ────────────────────────────────────
+  describe('conversationId (BAL-424)', () => {
+    it('returns the relationship-anchored conversation id on the ok path', async () => {
+      const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.conversationId).toBe(CONVERSATION_ID);
+      }
+      expect(mockEnsureForContext).toHaveBeenCalledWith({
+        contextType: 'relationship',
+        contextId: REL_ID,
+      });
+    });
+
+    /**
+     * ⚠ THE ORDERING RULE. `ensureForContext` WRITES. If it ran before the lens/status
+     * guards, an unauthenticated or non-participant caller could make this function mint a
+     * row for any relationship id they guessed — and the denial would then differ
+     * observably from a genuine miss.
+     */
+    it.each([
+      ['a missing request', undefined, () => user(), REL_ID],
+      [
+        'an admin observer',
+        requestGraph(),
+        () => user({ platformRole: 'admin', companyId: 'x' }),
+        REL_ID,
+      ],
+      ['a stranger', requestGraph(), () => user({ companyId: 'unrelated-co' }), REL_ID],
+      ['a foreign relationship claim', requestGraph(), () => user(), OTHER_REL_ID],
+      [
+        'a thread that is not open',
+        requestGraph({ relationships: [relationship({ status: 'invited' })] }),
+        () => user(),
+        REL_ID,
+      ],
+    ])('never touches the conversation seam for %s', async (_label, graph, actor, relId) => {
+      mockFindByIdWithRelations.mockResolvedValue(graph);
+      const result = await resolveConversationAccess(actor(), REQUEST_ID, relId);
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('conversationId');
+      expect(mockEnsureForContext).not.toHaveBeenCalled();
+    });
+
+    /** The denial log must not confirm a thread's existence either. */
+    it('logs no conversationId on a denial', async () => {
+      mockFindByIdWithRelations.mockResolvedValue(undefined);
+      await resolveConversationAccess(user(), REQUEST_ID, REL_ID);
+      expect(log.warn).toHaveBeenCalledWith(
+        'Conversation access denied',
+        expect.not.objectContaining({ conversationId: expect.anything() })
+      );
+    });
+  });
+});
+
+/**
+ * BAL-424 — the READ-ONLY sibling. `fetch-thread.ts` and `get-conversation-file-download.ts`
+ * authenticate with bare `requireUser()` and sit on `READ_ONLY_ALLOWLIST`; once
+ * `resolveConversationAccess` began get-or-creating, using it there would have made them
+ * TRANSITIVE writers reachable by an un-onboarded member — invisibly, because the invariant
+ * test reads the action's own source.
+ */
+describe('readConversationAccess', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByIdWithRelations.mockResolvedValue(requestGraph());
+    mockFindByContext.mockResolvedValue({ id: CONVERSATION_ID });
+    mockEnsureForContext.mockResolvedValue({
+      conversation: { id: CONVERSATION_ID },
+      created: false,
+    });
+  });
+
+  it('returns the conversation id without ever writing', async () => {
+    const result = await readConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.conversationId).toBe(CONVERSATION_ID);
+    }
+    expect(mockFindByContext).toHaveBeenCalledWith({
+      contextType: 'relationship',
+      contextId: REL_ID,
+    });
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it('reports undefined rather than provisioning when no thread exists yet', async () => {
+    mockFindByContext.mockResolvedValue(undefined);
+    const result = await readConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.conversationId).toBeUndefined();
+    }
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it('runs the SAME authorization as the writing variant — denials match literal for literal', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestGraph({ relationships: [relationship({ status: 'invited' })] })
+    );
+    const read = await readConversationAccess(user(), REQUEST_ID, REL_ID);
+    const write = await resolveConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(read).toEqual({ ok: false, error: DENIED });
+    expect(write).toEqual({ ok: false, error: DENIED });
+    // Neither touches the seam on a denial.
+    expect(mockFindByContext).not.toHaveBeenCalled();
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it('denies an expert claiming a FOREIGN relationship id, exactly as the writer does', async () => {
+    const result = await readConversationAccess(EXPERT_USER, REQUEST_ID, OTHER_REL_ID);
+    expect(result).toEqual({ ok: false, error: DENIED });
+    expect(mockFindByContext).not.toHaveBeenCalled();
   });
 });

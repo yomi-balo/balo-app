@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const USER_ID = 'e0000000-0000-4000-8000-000000000005';
 const FILE_UUID = 'f0000000-0000-4000-8000-000000000006';
 const FILE_ID = 'd0000000-0000-4000-8000-000000000007';
 const EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-000000000003';
-const KEY = `conversation-files/${REL_ID}/${USER_ID}/${FILE_UUID}`;
+// BAL-424: the key's first segment is the CONVERSATION id, not the relationship id.
+const KEY = `conversation-files/${CONVERSATION_ID}/${USER_ID}/${FILE_UUID}`;
 const CREATED_AT = new Date('2026-06-10T10:00:00Z');
 
 vi.mock('server-only', () => ({}));
@@ -73,6 +75,7 @@ const USER = { id: USER_ID, firstName: 'Dana', lastName: 'Whitfield' };
 
 const ACCESS_OK = {
   ok: true,
+  conversationId: CONVERSATION_ID,
   ctx: { lens: 'client' },
   request: { id: REQUEST_ID, title: 'CPQ implementation', createdByUserId: USER_ID },
   relationship: { id: REL_ID, expertProfileId: EXPERT_PROFILE_ID },
@@ -96,7 +99,7 @@ describe('confirmConversationFileUploadAction', () => {
     mockSend.mockResolvedValue({ ContentLength: 1234, ContentType: 'application/pdf' });
     mockAddFile.mockResolvedValue({
       id: FILE_ID,
-      relationshipId: REL_ID,
+      conversationId: CONVERSATION_ID,
       uploadedByUserId: USER_ID,
       r2Key: KEY,
       fileName: 'scope.pdf',
@@ -126,8 +129,8 @@ describe('confirmConversationFileUploadAction', () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 
-  it('rejects a key scoped to another relationship or user', async () => {
-    const foreign = `conversation-files/${REL_ID}/a0000000-0000-4000-8000-00000000dead/${FILE_UUID}`;
+  it('rejects a key scoped to another conversation or user', async () => {
+    const foreign = `conversation-files/${CONVERSATION_ID}/a0000000-0000-4000-8000-00000000dead/${FILE_UUID}`;
     const result = await confirmConversationFileUploadAction({ ...VALID_INPUT, key: foreign });
     expect(result).toEqual({ success: false, error: 'Invalid upload key.' });
     expect(mockAddFile).not.toHaveBeenCalled();
@@ -180,29 +183,34 @@ describe('confirmConversationFileUploadAction', () => {
       }),
     });
     expect(mockAddFile).toHaveBeenCalledWith({
-      relationshipId: REL_ID,
+      conversationId: CONVERSATION_ID,
       uploadedByUserId: USER_ID,
       r2Key: KEY,
       fileName: 'scope.pdf',
       contentType: 'application/pdf',
       sizeBytes: 1234,
     });
+    // BAL-424: the Ably channel keys on the CONVERSATION, never the relationship.
     expect(mockPublishConversation).toHaveBeenCalledWith(
-      REL_ID,
+      CONVERSATION_ID,
       'file',
       expect.objectContaining({ id: FILE_ID })
     );
     expect(mockPublishNotification).toHaveBeenCalledWith(
-      'project.file_shared',
+      'conversation.file_shared',
       expect.objectContaining({
         correlationId: FILE_ID,
+        conversationId: CONVERSATION_ID,
+        contextType: 'relationship',
+        contextId: REL_ID,
+        projectRequestId: REQUEST_ID,
         recipientRole: 'expert',
         expertProfileId: EXPERT_PROFILE_ID,
         fileName: 'scope.pdf',
       })
     );
     expect(mockMarkThreadRead).toHaveBeenCalledWith({
-      relationshipId: REL_ID,
+      conversationId: CONVERSATION_ID,
       userId: USER_ID,
       at: CREATED_AT,
     });

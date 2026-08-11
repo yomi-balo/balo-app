@@ -1,4 +1,5 @@
 import type { ScheduledNotification, ScheduledNotificationPayload } from '@balo/db';
+import { CONVERSATION_UNREAD_RECHECK, conversationUnreadRecheck } from './conversation-unread.js';
 
 /**
  * What a fire-time guard decides.
@@ -34,17 +35,22 @@ export type ScheduledRecheck = (row: ScheduledNotification) => Promise<RecheckRe
  * serialized function cannot. The name is the contract; the function is whatever the
  * currently-deployed build binds to it.
  *
- * ⚠ SHIPS EMPTY, ON PURPOSE. BAL-420 ships the primitive INERT: no consumer calls it in
- * this PR. Consumers register their own guard here in their OWN PR, alongside their event,
- * rules and template — BAL-411 (reschedule-proposal unanswered), BAL-134 (client/expert
- * absent) and, if it takes the dependency at all, BAL-424 (conversation unread). Adding a
- * key here without a consumer would be dead code; adding a consumer's guard here from this
- * PR would be building that consumer.
+ * ⚠ IT SHIPPED EMPTY, ON PURPOSE — BAL-420 landed the primitive INERT, naming BAL-424
+ * (conversation unread) as a PROSPECTIVE consumer "if it takes the dependency at all".
+ * **BAL-424 TOOK IT.** `conversation_unread` below is the registry's FIRST entry and the
+ * primitive is no longer inert. Every later consumer registers its own guard here in its OWN
+ * PR, alongside its event, rules and template — BAL-411 (reschedule-proposal unanswered) and
+ * BAL-134 (client/expert absent) are still outstanding. Adding a key here without a consumer
+ * would be dead code; adding a consumer's guard from another PR would be building that
+ * consumer.
  *
  * Registering a guard is additive and needs nothing else: a row whose `recheck` names a key
  * in this record is guarded; a row whose `recheck` is NULL is not.
  */
-export const SCHEDULED_RECHECKS: Record<string, ScheduledRecheck> = {};
+export const SCHEDULED_RECHECKS: Record<string, ScheduledRecheck> = {
+  // BAL-424 — "are these messages/files still unread?" See `conversation-unread.ts`.
+  [CONVERSATION_UNREAD_RECHECK]: conversationUnreadRecheck,
+};
 
 /**
  * A row names a `recheck` that no longer exists in this build — the DEPLOY-SKEW case: a row

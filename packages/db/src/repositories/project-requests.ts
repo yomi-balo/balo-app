@@ -9,6 +9,7 @@ import {
   type NewProjectRequest,
 } from '../schema';
 import { auditEventsRepository } from './audit-events';
+import { conversationsRepository } from './conversations';
 
 export type ProjectRequestStatus = ProjectRequest['status'];
 
@@ -154,9 +155,17 @@ export const projectRequestsRepository = {
    * hydrate into the view-model. `users.email` is selected solely as a
    * contact-name fallback and is dropped server-side in the mapper before any
    * contact-gated payload reaches the client.
+   *
+   * ⚠ `conversationMessages` IS GRAFTED, NOT HYDRATED (BAL-424). Messages no longer FK the
+   * relationship — they hang off `conversations`, reached through the polymorphic, FK-less
+   * `conversation_contexts` seam, which Drizzle's relational `with:` cannot traverse. The
+   * array is rebuilt below from `conversationsRepository.latestMessagesForRelationships` in
+   * ONE extra round trip, in the EXACT shape the `with:` produced (`{ id, createdAt }[]` of
+   * length ≤ 1). That is deliberate and load-bearing: `ProjectRequestWithRelations` is
+   * INFERRED from this function, so a shape change would ripple through the whole web app.
    */
   async findByIdWithRelations(id: string) {
-    return db.query.projectRequests.findFirst({
+    const row = await db.query.projectRequests.findFirst({
       where: and(eq(projectRequests.id, id), isNull(projectRequests.deletedAt)),
       columns: {
         id: true,
@@ -223,18 +232,31 @@ export const projectRequestsRepository = {
               orderBy: (t, { desc: childDesc }) => [childDesc(t.submittedAt)],
               limit: 1,
             },
-            // Newest live conversation message per relationship — its `createdAt`
-            // is the "talking" recency signal. `limit: 1` newest-first, soft-delete-aware.
-            conversationMessages: {
-              where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
-              columns: { id: true, createdAt: true },
-              orderBy: (t, { desc: childDesc }) => [childDesc(t.createdAt)],
-              limit: 1,
-            },
           },
         },
       },
     });
+
+    if (row === undefined) {
+      return undefined;
+    }
+
+    // SHAPE-PRESERVING GRAFT — see the docblock. One batched round trip over every
+    // relationship on this request; never one per relationship.
+    const latestByRelationship = await conversationsRepository.latestMessagesForRelationships(
+      row.relationships.map((relationship) => relationship.id)
+    );
+
+    return {
+      ...row,
+      relationships: row.relationships.map((relationship) => {
+        const latest = latestByRelationship.get(relationship.id);
+        return {
+          ...relationship,
+          conversationMessages: latest === undefined ? [] : [latest],
+        };
+      }),
+    };
   },
 
   /**

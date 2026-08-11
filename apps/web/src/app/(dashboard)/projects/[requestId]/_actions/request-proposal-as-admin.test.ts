@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const RELATIONSHIP_ID = 'b0000000-0000-4000-8000-000000000002';
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
 const OTHER_RELATIONSHIP_ID = 'b0000000-0000-4000-8000-000000000003';
 const EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-000000000004';
 const CREATED_BY_USER_ID = 'd0000000-0000-4000-8000-000000000005';
@@ -28,6 +29,7 @@ const mockFindByIdWithRelations = vi.fn();
 const mockFindById = vi.fn();
 const mockTransition = vi.fn();
 const mockCountThreadActivity = vi.fn();
+const mockFindByContext = vi.fn();
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
     findByIdWithRelations: (...args: unknown[]) => mockFindByIdWithRelations(...args),
@@ -40,6 +42,7 @@ vi.mock('@balo/db', () => ({
   },
   conversationsRepository: {
     countThreadActivity: (...args: unknown[]) => mockCountThreadActivity(...args),
+    findByContext: (...args: unknown[]) => mockFindByContext(...args),
   },
   InvalidRelationshipTransitionError,
 }));
@@ -99,6 +102,7 @@ describe('requestProposalAsAdmin', () => {
     mockTransition.mockResolvedValue({ id: RELATIONSHIP_ID });
     // Default re-read: the rollup advanced experts_invited → proposal_requested.
     mockFindById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_requested' });
+    mockFindByContext.mockResolvedValue({ id: CONVERSATION_ID });
     mockCountThreadActivity.mockResolvedValue({ messageCount: 4, fileCount: 1 });
     mockPublish.mockResolvedValue(undefined);
   });
@@ -175,7 +179,13 @@ describe('requestProposalAsAdmin', () => {
     // Admin full bypass — NO expectedFrom (a deep-equal match excludes it).
     expect(mockTransition).toHaveBeenCalledWith({ id: RELATIONSHIP_ID, to: 'proposal_requested' });
     expect(mockFindById).toHaveBeenCalledWith(REQUEST_ID);
-    expect(mockCountThreadActivity).toHaveBeenCalledWith(RELATIONSHIP_ID);
+    // BAL-424: the ADMIN path does not go through `resolveConversationAccess` (which denies
+    // admin observers), so it resolves the thread with a READ — never `ensureForContext`.
+    expect(mockFindByContext).toHaveBeenCalledWith({
+      contextType: 'relationship',
+      contextId: RELATIONSHIP_ID,
+    });
+    expect(mockCountThreadActivity).toHaveBeenCalledWith(CONVERSATION_ID);
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -194,6 +204,19 @@ describe('requestProposalAsAdmin', () => {
       'Admin requested proposal',
       expect.objectContaining({ requestId: REQUEST_ID, adminUserId: 'admin-1', transitioned: true })
     );
+  });
+
+  // BAL-424: a relationship with no conversation reports zeros rather than minting a thread
+  // — an analytics count must never be a write path.
+  it('reports zero interaction depth when the relationship has no conversation', async () => {
+    mockFindByContext.mockResolvedValue(undefined);
+    const result = await requestProposalAsAdmin(VALID_INPUT);
+    expect(mockCountThreadActivity).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.analytics.messageCount).toBe(0);
+      expect(result.analytics.fileCount).toBe(0);
+    }
   });
 
   it('happy path (eoi_submitted): also transitions without expectedFrom', async () => {

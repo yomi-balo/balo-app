@@ -37,6 +37,10 @@ export function getAblyRest(): Ably.Rest | null {
 /**
  * Publish a persisted conversation event to the thread's channel.
  *
+ * ⚠ THE FIRST ARGUMENT IS A `conversations.id` (BAL-424), never a relationship id — see
+ * `channels.ts`. Passing the wrong one publishes to a channel nobody subscribes to, which
+ * fails SILENTLY: this function never throws.
+ *
  * NEVER throws to the caller: a publish failure is logged and swallowed — the
  * mutation already succeeded and must not fail because the live transport
  * hiccuped.
@@ -50,13 +54,13 @@ export function getAblyRest(): Ably.Rest | null {
  * resolves eagerly (work deferred); it is kept only for signature stability.
  */
 export function publishConversationEvent(
-  relationshipId: string,
+  conversationId: string,
   name: 'message' | 'file',
   data: unknown
 ): Promise<void> {
   runAfterResponse('Ably publish', async () => {
     const client = getAblyRest();
-    const channel = conversationChannelName(relationshipId);
+    const channel = conversationChannelName(conversationId);
     if (client === null) {
       log.warn('Realtime disabled (no ABLY_API_KEY) — skipping publish', { channel, name });
       return;

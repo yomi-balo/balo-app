@@ -1,5 +1,11 @@
 import { db } from '../../client';
-import { caseEngagements, companies, engagements } from '../../schema';
+import {
+  caseEngagements,
+  companies,
+  conversationContexts,
+  conversations,
+  engagements,
+} from '../../schema';
 import type { NewCaseEngagement, NewEngagement } from '../../schema';
 import { toCaseRow, type CaseEngagementRow } from '../../repositories/case-engagements';
 import { companyMemberFactory } from './company.factory';
@@ -35,6 +41,13 @@ export interface CaseEngagementFactoryResult {
   expertProfileId: string;
   /** Present only when `withClientMember` was set. */
   clientMemberUserId?: string;
+  /**
+   * The case's thread, anchored on the `engagement` label (BAL-424). Provisioned here
+   * because production `caseEngagementsRepository.create` provisions it in the same
+   * transaction. NO `relationship` context row exists anywhere for a Case — that is the
+   * ticket's acceptance criterion, asserted directly in the integration tests.
+   */
+  conversationId: string;
 }
 
 async function seedPersonalCompanyId(): Promise<string> {
@@ -68,7 +81,7 @@ export async function caseEngagementFactory(
     clientMemberUserId = member.id;
   }
 
-  const engagement = await db.transaction(async (tx) => {
+  const { engagement, conversationId } = await db.transaction(async (tx) => {
     const [parent] = await tx
       .insert(engagements)
       .values({
@@ -104,12 +117,25 @@ export async function caseEngagementFactory(
       throw new Error('case engagement insert failed');
     }
 
+    // BAL-424 — the case's thread, on the `engagement` label. RAW inserts (the factory
+    // must be able to seed shapes the repository refuses, e.g. a pre-closed or
+    // pre-soft-deleted case).
+    const [conversation] = await tx.insert(conversations).values({}).returning();
+    if (conversation === undefined) {
+      throw new Error('conversation insert failed');
+    }
+    await tx.insert(conversationContexts).values({
+      conversationId: conversation.id,
+      contextType: 'engagement',
+      contextId: parent.id,
+    });
+
     // PRODUCTION fold — deliberately NOT re-implemented here. A duplicated destructure
     // would keep this factory (and every assertion made against it) green after the
     // production strip in `toCaseRow` was deleted, silently re-admitting the raw
     // `baloFeeBps` margin into the case projection.
-    return toCaseRow(parent, child);
+    return { engagement: toCaseRow(parent, child), conversationId: conversation.id };
   });
 
-  return { engagement, companyId, expertProfileId, clientMemberUserId };
+  return { engagement, companyId, expertProfileId, clientMemberUserId, conversationId };
 }
