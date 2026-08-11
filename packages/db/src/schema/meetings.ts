@@ -5,6 +5,7 @@ import { timestamps, softDelete } from './helpers';
 import { meetingContexts } from './meeting-contexts';
 import { meetingPresence } from './meeting-presence';
 import { meetingGuests } from './guests';
+import { meetingFiles } from './meeting-files';
 
 /**
  * meetings (BAL-418 / ADR-1045 §2 + ADR-1043 §1) — the cross-cutting Meeting primitive.
@@ -114,6 +115,11 @@ export const meetingsRelations = relations(meetings, ({ many }) => ({
   // `with: { guests: true }` hydrates `token_hash` and every guest's `email`. Any read that
   // can reach a route MUST pass an explicit `columns:` projection.
   guests: many(meetingGuests),
+  // BAL-423. ⚠ `reference_drizzle_with_hydration_leaks_secrets`: a bare
+  // `with: { files: true }` hydrates `r2_key`, which is an OBJECT LOCATOR — the exact
+  // string `createPresignedMeetingFileDownload` signs. Any read that can reach a route MUST
+  // pass an explicit `columns:` projection that omits it.
+  files: many(meetingFiles),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

@@ -892,3 +892,21 @@ export const meetingGuestAdmissionEnum = pgEnum('meeting_guest_admission', [
   'admitted',
   'denied',
 ]);
+
+// ── BAL-423 — meeting files (schema/meeting-files.ts) ──────────────────────────────────
+
+/**
+ * BAL-423 (D0) — WHICH IN-CALL ENTRY POINT produced a `meeting_files` row.
+ *   `chat`      — the in-call chat paperclip.
+ *   `files_tab` — the in-call Files tab drop-zone.
+ * ONE store, TWO entry points. Between-call attachments are `conversation_files`, a
+ * different table with a different anchor; BAL-421 merges the two on READ.
+ *
+ * Standalone `CREATE TYPE` in migration 0063, so every label it is BORN with commits
+ * atomically with the type — naming one in a CHECK in that same migration would be safe
+ * (`reference_enum_default_same_tx_migration_hazard` binds only ALTER TYPE … ADD VALUE).
+ * It appears in NO index predicate — the action-items.ts / transcripts.ts house rule.
+ * ⚠ APPEND-ONLY: a label goes at the END, never mid-array — an insert changes ordinals
+ * and makes drizzle recreate the type instead of emitting a plain ALTER TYPE … ADD VALUE.
+ */
+export const meetingFileSourceEnum = pgEnum('meeting_file_source', ['chat', 'files_tab']);

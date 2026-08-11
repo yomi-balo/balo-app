@@ -43,6 +43,21 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   // company authorizes as `client` lens, both rows are INSERTed, and only then is the request
   // rejected on `lens !== 'expert'`.
   'app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download.ts',
+  // ── BAL-423, the meeting-file readers ────────────────────────────────────────────────
+  //
+  // ⚠ THE STANDING BAL-424 OBLIGATION ABOVE DOES NOT BIND THESE TWO, AND THIS NOTE EXISTS SO
+  // THE NEXT READER DOES NOT GO HUNTING FOR A READ-ONLY VARIANT THAT ISN'T THERE. That
+  // obligation is specifically about `resolveConversationAccess` being get-or-CREATE. These
+  // actions resolve MEETING access via `authorizeMeetingFileAccess`, which performs NO WRITES
+  // AT ALL — it never mints a row, so there is no writing/read-only pair to choose between
+  // and no meeting-file equivalent of `readConversationAccess` to reach for. Both actions
+  // therefore fall outside `conversation-access-read-only.test.ts`'s subject set (they never
+  // mention the conversation-access module) while still being enrolled in the gate test.
+  //
+  // Mints a short-lived presigned GET for one meeting file — no mutation.
+  'app/(dashboard)/meetings/[meetingId]/_actions/get-meeting-file-download.ts',
+  // Lists a meeting's live files (both in-call sources) — pure read.
+  'app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files.ts',
 ];
 
 /** The module whose two variants differ by whether they WRITE. */
