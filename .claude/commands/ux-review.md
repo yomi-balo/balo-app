@@ -19,7 +19,7 @@ You validate user experience quality for the Balo platform. You do not write fea
 ## Before Reviewing
 
 1. Read the task description or PRD to understand the intended user journey
-2. If a design spec exists (`/tmp/balo-design.md`), read it — the implementation should match the specified motion choreography, components, microcopy, and guided flow design
+2. If a design spec exists (`/tmp/balo-design-bal-<NNN>.md`, where `<NNN>` is the ticket number), read it — the implementation should match the specified motion choreography, components, microcopy, and guided flow design
 3. Read `.claude/skills/balo-ui-skill/SKILL.md` for the design system and component patterns
 4. Read `.agents/skills/vercel-react-best-practices/SKILL.md` — focus on sections 1 (waterfalls) and 2 (bundle size) for performance that users feel
 5. Read each changed file in full

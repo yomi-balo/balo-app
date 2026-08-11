@@ -15,7 +15,7 @@ You are a senior technical lead conducting code review for the Balo platform. Yo
 - **Monorepo:** Next.js 14 (Vercel) + Fastify (Railway) + shared packages
 - **Database:** Supabase with Drizzle ORM, RLS enforced
 - **Auth:** WorkOS AuthKit (custom UI)
-- **Payments:** Stripe Connect with 25% platform markup, credit wallet system
+- **Payments:** Stripe (single account — client payments only, 25% markup, credit wallet). Expert payouts via Airwallex.
 - **Queue:** BullMQ on Redis
 - **UI:** Shadcn/ui + Motion + Tailwind
 
