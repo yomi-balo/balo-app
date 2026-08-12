@@ -29,6 +29,7 @@ import { formatUtcLongDate, formatUtcLongDateWithWeekday } from '@/lib/format/lo
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, GUEST_SERVER_EVENTS } from '@/lib/analytics/server';
 import { LinkNotActive } from './link-not-active';
+import { JoinControl } from './join-control';
 import { AccessScopeDisclosure } from './_components/access-scope-disclosure';
 
 // `node:crypto` (token hashing) + Drizzle need Node, not Edge.
@@ -270,21 +271,28 @@ interface InvitationViewProps {
   readonly otherGuestNames: readonly string[];
   readonly accessScope: GuestAccessScopeLabel;
   readonly expiresOn: string;
+  /**
+   * BAL-132 — everything {@link JoinControl} needs. ⚠ The raw token is passed through so the
+   * control can POST it to the mint endpoint; it is NEVER rendered as text.
+   */
+  readonly token: string;
+  readonly meetingId: string;
+  readonly scheduledStartIso: string;
+  readonly scheduledEndIso: string;
 }
 
 /**
- * The invitation card.
+ * The invitation card's CONTENT. ⚠ The card itself — and the join phase that can replace it —
+ * belongs to {@link JoinControl}; see the note at this function's `return`.
  *
- * ⚠⚠ **THERE IS NO JOIN BUTTON HERE, AND ITS ABSENCE IS A DECISION.** BAL-129 provisions the
- * Daily room with `privacy: 'private'`, so `meetings.join_url` is NOT a working control for
- * anyone without a meeting token — a raw link would render a dead button, or worse, drop the
- * guest into Daily's own knocking UI outside Balo's admit/deny flow. Minting a token here
- * would ALSO mean minting it for whoever is holding the link, which is precisely the decision
- * the lobby exists to make. **BAL-132 adds the join control TO THIS SAME ROUTE**, together
- * with `@daily-co/daily-js`, the `pending` admission lobby and the host-side admit queue.
- * Until then this is an INVITATION DETAIL surface and its copy promises nothing it cannot do —
- * the closing line states only what is true today: the link keeps working, from more than one
- * device, until it expires.
+ * ⚠⚠ **THE JOIN BUTTON IS `JoinControl`'S, NOT THIS COMPONENT'S, AND THAT SPLIT IS A DECISION.**
+ * BAL-129 provisions the Daily room with `privacy: 'private'`, so `meetings.join_url` is NOT a
+ * working control for anyone without a meeting token — a raw link would render a dead button,
+ * or worse, drop the guest into Daily's own knocking UI outside Balo's admit/deny flow. Minting
+ * a token from an RSC would ALSO mean minting it for whoever is holding the link (including a
+ * link scanner), which is precisely the decision the lobby exists to make. So the mint is a
+ * POST-only, user-initiated Server Action behind a client boundary, and this RSC renders only
+ * what it can prove.
  *
  * ⚠ NO BILLING, RATE OR PRICE LINE ANYWHERE. Guests do not change what anybody pays (billing
  * is per-minute of EXPERT time, never per-seat), and a guest is the last audience that should
@@ -304,6 +312,10 @@ function InvitationView({
   otherGuestNames,
   accessScope,
   expiresOn,
+  token,
+  meetingId,
+  scheduledStartIso,
+  scheduledEndIso,
 }: Readonly<InvitationViewProps>): React.JSX.Element {
   const headline = hasEnded ? 'This call has already taken place' : "You're invited";
   const roleLine = isDelegate
@@ -345,8 +357,25 @@ function InvitationView({
     ? 'Nothing more to do — the recap will appear on this page once it’s ready.'
     : 'Come back to this page when it’s time — you’ll join the video call from here.';
 
+  /*
+    ⚠⚠ BAL-132 — `JoinControl` OWNS THE `<article>` CARD; THIS RSC SUPPLIES ITS CONTENT.
+    The join phase is a CLIENT concern and, once the guest is admitted, the call surface must
+    REPLACE this card rather than render inside it — which is what nesting produced: two `<h1>`s
+    on the page, "You're in" immediately above "Come back to this page when it's time", and a
+    560px column handed to BAL-435 to build a video stage in. Inverting the wrapper costs two
+    props (`nextStepLine`, `expiresOn`) and removes all three.
+  */
   return (
-    <article className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-6 shadow-sm sm:p-8">
+    <JoinControl
+      token={token}
+      meetingId={meetingId}
+      scheduledStartIso={scheduledStartIso}
+      scheduledEndIso={scheduledEndIso}
+      utcWindowLabel={scheduledWindow}
+      hasEnded={hasEnded}
+      nextStepLine={nextStepLine}
+      expiresOn={expiresOn}
+    >
       <span className="border-border bg-muted/40 text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium">
         <Video className="h-3 w-3" aria-hidden="true" />
         {contextLabel}
@@ -383,16 +412,7 @@ function InvitationView({
       </dl>
 
       <AccessScopeDisclosure accessScope={accessScope} />
-
-      <p className="text-foreground mt-6 text-[13px] leading-relaxed">{nextStepLine}</p>
-
-      <p className="text-muted-foreground border-border mt-4 border-t pt-4 text-[12.5px] leading-relaxed">
-        Keep this link — it stays active until {expiresOn}, and it works from more than one device.
-      </p>
-      <p className="text-muted-foreground mt-4 text-[11.5px]">
-        Powered by <span className="text-foreground font-semibold">Balo</span>
-      </p>
-    </article>
+    </JoinControl>
   );
 }
 
@@ -490,7 +510,11 @@ export default async function JoinLandingPage({
   const [parties, roster, inviterNames] = await Promise.all([
     resolveEngagementParties(primary),
     meetingGuestsRepository.listLiveByMeeting(meeting.id),
-    usersRepository.findNamesByIds([guest.invitedById]),
+    // ⚠ `invitedById` IS NULLABLE SINCE MIGRATION 0064 (BAL-132): a self-claimed lobby row
+    // has no inviter. Such a guest never reaches THIS route (they hold a lobby token, not a
+    // `/join/{token}` magic link), but the type is honest and the branch is one line — the
+    // empty batch falls straight through to the `'Someone'` fallback below.
+    usersRepository.findNamesByIds(guest.invitedById === null ? [] : [guest.invitedById]),
   ]);
 
   // Compute first-open BEFORE stamping (`access_count === 0` pre-increment); the emit below
@@ -540,6 +564,12 @@ export default async function JoinLandingPage({
         .map((entry) => entry.name ?? ANONYMOUS_GUEST_LABEL)}
       accessScope={guest.accessScope}
       expiresOn={formatUtcLongDate(guest.expiresAt)}
+      // BAL-132 — threaded to the join control. ⚠ The raw token goes to a POST-only Server
+      // Action and is never rendered as text; see `JoinControl`.
+      token={token}
+      meetingId={meeting.id}
+      scheduledStartIso={meeting.scheduledStart.toISOString()}
+      scheduledEndIso={meeting.scheduledEnd.toISOString()}
     />
   );
 }

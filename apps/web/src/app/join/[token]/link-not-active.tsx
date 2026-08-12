@@ -1,4 +1,5 @@
 import { Link2Off } from 'lucide-react';
+import { JOIN_UNAVAILABLE_BODY, JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
 
 /**
  * The SINGLE generic bail-out for the guest join landing (BAL-408 / ADR-1044).
@@ -29,6 +30,16 @@ import { Link2Off } from 'lucide-react';
  * resolved to; and it must stay identical across outcomes, so it cannot vary by anything
  * at all. It takes NO PROPS for that reason — the type system is the enforcement.
  *
+ * ⚠⚠ THE COPY IS **GENUINELY** SHARED WITH `/join/m/[meetingId]`'s `LobbyUnavailable`, via
+ * `JOIN_UNAVAILABLE_TITLE` / `JOIN_UNAVAILABLE_BODY`. It used to be two sets of hardcoded
+ * literals that the lobby's docblock merely CLAIMED could not drift — and they had already
+ * drifted ("Invitation links…" here versus "Meeting links…" there). Two surfaces enforcing one
+ * indistinguishability property must render one string, or the property is per-surface only.
+ *
+ * ⚠ WHICH IS WHY THE BODY NO LONGER SAYS "invited you": this card renders for an EMAILED guest,
+ * the lobby's renders for someone who was FORWARDED a bare URL by a person nobody recorded.
+ * "Whoever shared this one with you" is true for both.
+ *
  * DRAFT COPY — pending MJ sign-off. Warm, blameless, gender-neutral, and it points at a
  * next step that actually exists.
  */
@@ -38,10 +49,9 @@ export function LinkNotActive(): React.JSX.Element {
       <span className="border-border bg-muted/40 mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border">
         <Link2Off className="text-muted-foreground h-6 w-6" aria-hidden="true" />
       </span>
-      <h1 className="text-foreground mt-4 text-lg font-semibold">This link isn&apos;t active</h1>
+      <h1 className="text-foreground mt-4 text-lg font-semibold">{JOIN_UNAVAILABLE_TITLE}</h1>
       <p className="text-muted-foreground mt-2 text-[13px] leading-relaxed">
-        Invitation links stop working after a while, and they can be replaced at any time. Whoever
-        invited you can send a fresh one.
+        {JOIN_UNAVAILABLE_BODY}
       </p>
       <p className="text-muted-foreground border-border mt-6 border-t pt-4 text-[11.5px]">
         Powered by <span className="text-foreground font-semibold">Balo</span>

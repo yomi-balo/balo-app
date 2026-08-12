@@ -67,6 +67,15 @@ const PINNED_GET_PATH_FILES: readonly string[] = [
   '[token]/error.tsx',
   '[token]/link-not-active.tsx',
   '[token]/_components/access-scope-disclosure.tsx',
+  // BAL-132 — the join control and the anonymous lobby segment. ⚠ These are the files the
+  // invariant's own docblock ANTICIPATED: the lobby is the first thing that legitimately
+  // mutates participation from this route, and it arrives as POST-only Server Actions under
+  // `_actions/` (excluded below) with everything else here staying read-only.
+  '[token]/join-control.tsx',
+  'm/[meetingId]/page.tsx',
+  'm/[meetingId]/lobby-client.tsx',
+  'm/[meetingId]/loading.tsx',
+  'm/[meetingId]/error.tsx',
 ];
 
 /**

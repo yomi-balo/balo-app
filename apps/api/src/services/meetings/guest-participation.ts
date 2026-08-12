@@ -142,8 +142,15 @@ function isUniqueViolation(error: unknown): boolean {
  * STORED BYTES — so a caller that skips this silently permits `Dana@x.com` alongside
  * `dana@x.com` as two live invites to one meeting. Lowercased + trimmed here, once, before
  * the domain read, before the unique index, and before the notification payload.
+ *
+ * ⚠ EXPORTED FOR BAL-132, NOT COPIED. `claimLobbyPlace` writes into the SAME partial unique
+ * index (`meeting_guest_meeting_email_live_idx`), which is the only bound on one visitor
+ * spamming N pending rows into a host's queue — and that index matches the STORED BYTES. A
+ * second definition of "the same address" on the lobby path would let `Dana@x.com` and
+ * `dana@x.com` both insert, turning the queue cap into a formality. One definition, two
+ * writers.
  */
-function canonicalEmail(email: string): string {
+export function canonicalEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
@@ -737,6 +744,32 @@ export async function inviteGuests(input: InviteGuestsInput): Promise<InviteGues
  * forbids and which the in-meeting design prototype does. It is `host_meetings` on the
  * ENGAGEMENT axis, deliberately a different token from the `manage_engagement` this route's
  * gate used: hosting is the live/in-meeting right, inviting is administrative.
+ *
+ * ── ⚠⚠ `participantCount` IS THE **SEAT** COUNT, FROM THE COUNTER THE CAP IS ENFORCED ON ──
+ *
+ * It is `participantCount()` → `countLiveByMeeting`, byte for byte the same call
+ * `inviteGuests` gates on — NOT `rows.length`. That is not a refactor; the two disagreed.
+ *
+ * `listLiveByMeeting` filters `deleted_at` / `revoked_at` only, so it INCLUDES `pending`
+ * knocks and expired handles, neither of which holds a seat. While BAL-408 was the only
+ * writer nothing could produce a `pending` row and the two happened to agree. BAL-132 makes
+ * them diverge in the worst direction: 2 admitted guests + 5 queued knocks reported
+ * `participantCount: 9` of 10 while `inviteGuests` computed 4 and would accept 6 more. The
+ * route's own contract instructs consumers to render "{n} of 10" from these two fields and
+ * never a local count, so BAL-436's composer would have shown a nearly-full meeting and, if
+ * it gated on `count >= cap`, disabled itself — reintroducing the invite lockout the counter
+ * split exists to close, moved from the server to the client.
+ *
+ * ⚠ ONE RULE ANSWERS "HOW FULL IS THIS MEETING", AND IT IS THE ONE THE SERVER REFUSES ON.
+ * Do not re-derive it from `rows` here, even with a matching predicate: two expressions of
+ * one rule is how the rule stops being one.
+ *
+ * ⚠ QUEUE DEPTH IS A DIFFERENT QUESTION AND IS ALREADY ANSWERABLE — count
+ * `guests[].admission === 'pending'`. `projectGuestForViewer` omits FIELDS across the party
+ * boundary, never ROWS, so that count is complete for every viewer. It is deliberately NOT a
+ * second top-level number: seats and queue slots are separate resources
+ * (`MAX_MEETING_PARTICIPANTS` vs `MAX_LOBBY_QUEUE`) and conflating them in one payload is
+ * exactly how they got conflated in the first place.
  */
 export async function listGuests(input: {
   meetingId: string;
@@ -751,13 +784,16 @@ export async function listGuests(input: {
   });
   if (!authorized.ok) return { ok: false, code: authorized.code };
 
-  const [rows, canHost] = await Promise.all([
+  // Three independent reads — one round trip's latency, not three (the async-waterfall rule).
+  const [rows, canHost, seatCount] = await Promise.all([
     meetingGuestsRepository.listLiveByMeeting(input.meetingId),
     hasEngagementCapability(
       { id: input.actorUserId },
       ENGAGEMENT_CAPABILITIES.HOST_MEETINGS,
       authorized.subject
     ),
+    // ⚠ THE SAME FUNCTION `inviteGuests` GATES ON. See the docblock.
+    participantCount(input.meetingId),
   ]);
 
   return {
@@ -778,7 +814,7 @@ export async function listGuests(input: {
       )
     ),
     canHost,
-    participantCount: RESERVED_BASE_PARTICIPANTS + rows.length,
+    participantCount: seatCount,
     participantCap: MAX_MEETING_PARTICIPANTS,
   };
 }
@@ -894,10 +930,24 @@ export async function removeGuest(input: {
  * `engagements.status`, so a `completed` engagement's expert still holds both tokens. The
  * `authorizeMutation` call above additionally requires a LIVE meeting.
  *
- * ⚠⚠ 100% INERT IN THIS PR. Nothing produces an `admission = 'pending'` row: the lobby
- * identity model (anonymous visitor → name capture → bot protection → share-link proof) is
- * BAL-132's design, and inventing it here would be a second competing one. Tested regardless
- * — an authorization path that arrives untested arrives untrustworthy.
+ * ⚠⚠ **LIVE AS OF BAL-132 — THIS IS NO LONGER AN INERT PATH.** It shipped inert only because
+ * nothing could produce an `admission = 'pending'` row; BAL-132 IS that ticket, and
+ * `meetingGuestsRepository.claimLobbyPlace` (the anonymous lobby knock) is that producer. Both
+ * decisions are now genuinely reachable in production, and the `409 guest_not_pending` answer
+ * is now the RACE outcome it was always meant to be rather than the only outcome.
+ *
+ * ⚠⚠ IT RE-CHECKS THE SEAT CAP ON THE **ADMIT** BRANCH ONLY. It is the second ADDITIVE
+ * mutation and, since BAL-132 stopped a `pending` row from consuming a seat, the only one
+ * that could otherwise walk a meeting past `MAX_MEETING_PARTICIPANTS` — 25 queued knocks
+ * against 1 free seat is now an expressible state. A DENY is never refused for capacity: it
+ * is the host's only control for clearing a flooded queue. See the inline block.
+ *
+ * ⚠ WHAT IS STILL MISSING IS THE HOST'S **UI**, NOT THE MECHANISM — BAL-436 owns the
+ * admit/deny panel. Until it ships, the transition is reachable only by calling the route
+ * directly. ⚠⚠ AND BAL-436 CARRIES A SECURITY OBLIGATION THIS LAYER CANNOT DISCHARGE: a
+ * `link`-channel `pending` row's name and email are **SELF-DECLARED BY AN ANONYMOUS
+ * VISITOR** — anyone with the meeting URL can knock as anyone. The panel must present such
+ * entries as UNVERIFIED and must never render the self-declared address as identity.
  */
 export async function decideGuestAdmission(input: {
   meetingId: string;
@@ -937,6 +987,46 @@ export async function decideGuestAdmission(input: {
     return { ok: false, code: 'guest_not_found' };
   }
 
+  // ── ⚠⚠ THE SEAT CAP, RE-CHECKED HERE — THE SECOND ADDITIVE PATH ────────────────────────
+  //
+  // `authorizeMutation`'s docblock names BOTH `inviteGuests` and this function as ADDITIVE
+  // mutations, but only `inviteGuests` used to count. That was safe only while a `pending`
+  // row consumed a seat: the queue could not then grow past the cap, so the cap bounded both
+  // paths through one check. BAL-132's counter split ended that on purpose — `pending` no
+  // longer holds a seat — so `MAX_LOBBY_QUEUE` (25) knocks can now queue against `1` free
+  // seat, and admitting them one by one would have walked a 10-person meeting to 27 without
+  // ever consulting the cap.
+  //
+  // ⚠ ADMIT ONLY. A DENY MUST NEVER BE REFUSED FOR CAPACITY — it is the host's only control
+  // for clearing a flooded queue, and gating it on a full room would jam the one lever that
+  // unjams the meeting. It also frees, rather than consumes, a queue slot.
+  //
+  // ⚠ `>=`, NOT `>`. Admitting takes the count from N to N+1, so N at the cap is already one
+  // too many. The count is UNSYNCHRONISED with the write, exactly as `inviteGuests` documents
+  // — two hosts admitting simultaneously at 9/10 can both pass. Accepted on the same terms:
+  // the cap is a product number, not a safety property, and an advisory lock is not warranted.
+  //
+  // ⚠ SAFE AS A DISTINCT LITERAL. It is reachable strictly AFTER `authorizeMutation` and the
+  // `host_meetings` check, so it confirms nothing to anyone who was not already entitled to
+  // read this roster. Reused rather than newly invented: `participant_cap_reached` already
+  // means exactly this, and a second literal for one fact would make the wire vocabulary
+  // describe our call sites instead of the product.
+  if (input.decision === 'admitted') {
+    const currentCount = await participantCount(input.meetingId);
+    if (currentCount >= MAX_MEETING_PARTICIPANTS) {
+      log.info(
+        {
+          meetingId: input.meetingId,
+          guestId: input.guestId,
+          actorUserId: input.actorUserId,
+          currentCount,
+        },
+        'Guest admission refused — participant cap reached'
+      );
+      return { ok: false, code: 'participant_cap_reached' };
+    }
+  }
+
   // Compare-and-set on `admission = 'pending'` inside the repository, so two racing hosts
   // cannot both record a decision.
   const decided = await meetingGuestsRepository.decideAdmission({
@@ -964,7 +1054,16 @@ export async function decideGuestAdmission(input: {
     input.decision === 'admitted'
       ? GUEST_SERVER_EVENTS.GUEST_ADMITTED
       : GUEST_SERVER_EVENTS.GUEST_DENIED,
-    { party: decided.party as MeetingGuestSide, distinct_id: input.actorUserId }
+    {
+      party: decided.party as MeetingGuestSide,
+      // ⚠ BAL-132 — REQUIRED, and it is what makes `party` READABLE on these two events. A
+      // `link`-channel row's `party` is a PLACEHOLDER (the lobby writer stores `client`
+      // because the column is NOT NULL, not because a side was resolved), so without this
+      // discriminator every admit/deny in PostHog looks like a client-side guest. Taken from
+      // the DECIDED ROW, never from request input.
+      invite_channel: decided.inviteChannel,
+      distinct_id: input.actorUserId,
+    }
   );
 
   return {

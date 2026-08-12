@@ -18,8 +18,16 @@ describe('JoinLandingLoading', () => {
 
     const region = screen.getByRole('status');
     expect(region.tagName).toBe('OUTPUT');
-    expect(region).toHaveAttribute('aria-busy', 'true');
     expect(region).toHaveTextContent('Loading your invitation');
+  });
+
+  it('⚠⚠ aria-busy is on the DECORATIVE skeleton, NEVER on the <output>', () => {
+    // `aria-busy` tells assistive tech to SUPPRESS a live region's announcements — so on the
+    // `<output>` it silenced the very line that element exists to announce.
+    const { container } = render(<JoinLandingLoading />);
+
+    expect(screen.getByRole('status').getAttribute('aria-busy')).toBeNull();
+    expect(container.querySelector('div[aria-busy="true"]')).not.toBeNull();
   });
 
   it('does not hide the announcement behind aria-hidden', () => {

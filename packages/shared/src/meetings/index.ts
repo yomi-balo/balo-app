@@ -47,6 +47,11 @@
 export * from './bookable-contexts';
 export * from './bounds';
 export * from './room-name';
+// BAL-132 — the Daily `user_id` claim's encoding, beside `room-name` and for the SAME
+// reason: this ticket's token minter WRITES it, BAL-131's webhook resolver READS it, and
+// BAL-134's presence writer ROUTES on it (`user_id` vs `meeting_guest_id`). Two apps, three
+// consumers, one definition — a second one is how a diarization mis-attribution ships.
+export * from './participant-identity';
 // BAL-408 — the guest participation model's pure core (the meetingId→context combining
 // rule, THE MONEY RULE, the retrospective read predicate, counterparty concealment).
 export * from './guest-participation';
@@ -56,6 +61,10 @@ export * from './guest-participation';
 // import, and deliberately NO `server-only` (that subpath crash-loops `apps/api`'s tsup
 // bundle — the PR #191 hazard).
 export * from './context-owner';
+// BAL-132 — the join CREDENTIAL's shape, so `apps/api` (which produces it) and `apps/web`
+// (which consumes it and spreads it into `MeetingCallSurface`'s props) cannot drift. It was
+// previously declared twice and linked by a COMMENT; BAL-435 builds against this one.
+export * from './join-grant';
 
 import type { MeetingPresenceParty } from './guest-participation';
 
@@ -65,6 +74,11 @@ export interface PresenceInterval {
    * ⚠ BAL-408: a GUEST's row must derive this through `presencePartyForGuest`, never from
    * the guest's own `party` column — an expert-side guest written as `'expert'` would put a
    * NON-DELIVERING attendee on the billable clock below. See THE MONEY RULE.
+   *
+   * ⚠ BAL-132 WIDENED THAT OBLIGATION, AND THE SIGNATURE NOW ENFORCES IT: the derivation
+   * takes the guest's `invite_channel` TOO, non-optionally, because a `link`-channel row's
+   * `party` is a self-declared PLACEHOLDER rather than a resolved side and maps to
+   * `observer` regardless of what is stored. Passing only the party no longer compiles.
    */
   party: MeetingPresenceParty;
   joinedAt: Date;

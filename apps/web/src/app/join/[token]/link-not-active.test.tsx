@@ -42,7 +42,11 @@ describe('LinkNotActive (join)', () => {
     expect(text).not.toMatch(/sign in/i);
     expect(text).not.toMatch(/sign up/i);
     expect(text).not.toMatch(/log in/i);
-    expect(text).toMatch(/invited you/i);
+    // ⚠ "shared it with you", not "invited you" — BAL-132 made this copy SHARED with the
+    // anonymous lobby's card, whose reader was forwarded a bare URL by a person nobody
+    // recorded. "Invited" would be false for half the readers. It still points at the same
+    // human recovery.
+    expect(text).toMatch(/shared it with you/i);
   });
 
   /**

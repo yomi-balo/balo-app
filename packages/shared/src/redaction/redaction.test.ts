@@ -105,6 +105,54 @@ describe('redactSensitivePath', () => {
   });
 
   /**
+   * ── ⚠⚠ BAL-132 — THE ANONYMOUS LOBBY, AND THE ORDERING BUG IT EXPOSED ────────────────────
+   *
+   * `redactSensitivePath` replaces only THE SINGLE SEGMENT following a prefix and returns on
+   * the FIRST prefix that matches. `/join/` matches `/join/m/{id}`, and the segment after it
+   * is the literal `m` — so with `/join/` alone the output was `/join/[redacted]/{id}` and the
+   * meeting id sailed through to Axiom, Sentry and PostHog's `$current_url`, from an anonymous
+   * browser on a public page. A docblock on the route claimed coverage "verified, not
+   * assumed"; it was neither. `/join/m/` is now registered AHEAD of `/join/`.
+   */
+  describe('BAL-132 — the anonymous lobby meeting id', () => {
+    it('⚠⚠ redacts the MEETING ID, not the literal segment `m`', () => {
+      expect(redactSensitivePath('/join/m/0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d')).toBe(
+        '/join/m/[redacted]'
+      );
+    });
+
+    it('⚠ THE ORDER IS THE FIX — the more specific prefix must win', () => {
+      // A regression here reads as `/join/[redacted]/…`, i.e. the id preserved verbatim. This
+      // asserts the failure SHAPE explicitly so a reordering cannot pass by accident.
+      const redacted = redactSensitivePath('/join/m/0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d');
+      expect(redacted).not.toContain('0f7b1c2d');
+      expect(redacted).not.toBe('/join/[redacted]/0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d');
+    });
+
+    it('redacts inside a full URL (the PostHog $current_url shape) and keeps the query', () => {
+      expect(redactSensitivePath('https://balo.expert/join/m/abc-123?utm=x')).toBe(
+        'https://balo.expert/join/m/[redacted]?utm=x'
+      );
+    });
+
+    it('redacts the percent-encoded form too (the ?from=%2Fjoin%2Fm%2F… trap)', () => {
+      expect(redactSensitivePath('/onboarding?forced=1&from=%2Fjoin%2Fm%2Fabc-123')).toBe(
+        '/onboarding?forced=1&from=%2Fjoin%2Fm%2F[redacted]'
+      );
+    });
+
+    it('⚠ does NOT change how a guest TOKEN is redacted — tokens contain no slash', () => {
+      // `/join/m/` cannot occur inside a base64url token, so the token arm is untouched.
+      expect(redactSensitivePath('/join/mABC123def')).toBe('/join/[redacted]');
+      expect(redactSensitivePath('/join/tok_9f/lobby')).toBe('/join/[redacted]/lobby');
+    });
+
+    it('leaves the bare lobby prefix (no id) untouched', () => {
+      expect(redactSensitivePath('/join/m/')).toBe('/join/m/');
+    });
+  });
+
+  /**
    * ⚠ THE ENCODE-THEN-MISS TRAP. A sensitive path does not only travel as a path: the
    * fail-closed onboarding gate in `apps/web/src/middleware.ts` stashes the origin
    * pathname as a QUERY VALUE, and `URLSearchParams` percent-encodes the slashes. A
@@ -278,9 +326,10 @@ describe('redactSensitivePath', () => {
 });
 
 describe('SENSITIVE_PATH_PREFIXES', () => {
-  it('lists exactly the three token-bearing landings', () => {
+  it('lists exactly the four registered landings', () => {
     expect([...SENSITIVE_PATH_PREFIXES].sort((a, b) => a.localeCompare(b))).toEqual([
       '/join/',
+      '/join/m/',
       '/review/',
       '/shared/proposals/',
     ]);
@@ -291,5 +340,26 @@ describe('SENSITIVE_PATH_PREFIXES', () => {
       expect(prefix.startsWith('/')).toBe(true);
       expect(prefix.endsWith('/')).toBe(true);
     }
+  });
+
+  /**
+   * ⚠⚠ THE DECLARATION ORDER IS PART OF THE CONTRACT, NOT A STYLE CHOICE.
+   * `redactSensitivePath` returns on the first prefix that matches, so a prefix that is a
+   * STRING EXTENSION of another must be declared before it — otherwise the shorter one wins
+   * and redacts the wrong segment. `/join/m/` vs `/join/` is the live instance; this asserts
+   * the RULE, so a future `/review/x/` gets it for free.
+   */
+  it('⚠ any prefix that extends another is declared BEFORE it (first match wins)', () => {
+    SENSITIVE_PATH_PREFIXES.forEach((prefix, index) => {
+      const extended = SENSITIVE_PATH_PREFIXES.filter(
+        (other) => other !== prefix && other.startsWith(prefix)
+      );
+      for (const specific of extended) {
+        expect(
+          SENSITIVE_PATH_PREFIXES.indexOf(specific),
+          `${specific} must be declared before ${prefix}`
+        ).toBeLessThan(index);
+      }
+    });
   });
 });

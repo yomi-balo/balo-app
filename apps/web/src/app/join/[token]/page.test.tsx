@@ -327,17 +327,43 @@ describe('JoinLandingPage', () => {
   });
 
   /**
-   * ⚠⚠ NO JOIN BUTTON. BAL-129 provisions the Daily room `privacy: 'private'`, so a raw
-   * `join_url` link is a dead control. BAL-132 adds the join control to THIS SAME ROUTE.
-   * Until then the page must promise nothing it cannot do.
+   * ⚠⚠ NO DEAD **LINK** — AND THAT HALF OF THE RULE IS PERMANENT, unlike the button half.
+   *
+   * BAL-129 provisions the Daily room `privacy: 'private'`, so a raw `join_url` anchor is a
+   * dead control: the URL admits nobody without a minted token, and following it would drop
+   * the guest into Daily's OWN knocking UI, outside Balo's admit/deny flow entirely. That
+   * must never appear here.
+   *
+   * ⚠ THE "no button" HALF WAS BAL-408's PLACEHOLDER AND BAL-132 HAS NOW LANDED IT — the
+   * original assertion's own comment said so ("BAL-132 adds the join control to THIS SAME
+   * ROUTE"). Loosening it is the correct amendment, not a weakening: it is replaced by a
+   * SPECIFIC assertion about what the control does, which is strictly stronger than a count.
    */
-  it('offers no join control and no dead link', async () => {
+  it('offers no dead link, and exactly ONE join control (a button, never an anchor)', async () => {
     primeHappyPath();
     await renderPage();
 
+    // ⚠ STILL ZERO ANCHORS. A `<a href={joinUrl}>` is the failure this pins.
     expect(screen.queryAllByRole('link')).toHaveLength(0);
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
-    expect(screen.queryByText(/join now/i)).not.toBeInTheDocument();
+
+    // ONE button — the join control, which POSTs to a Server Action. A navigation cannot
+    // reach it, which is what `join-link-never-writes.test.ts` requires of anything that
+    // changes participation from this route.
+    const buttons = screen.queryAllByRole('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveAccessibleName(/join the call/i);
+  });
+
+  /**
+   * ⚠ THE RAW TOKEN REACHES THE JOIN CONTROL AS A PROP BUT MUST NEVER BE RENDERED. It is in
+   * the URL because it has to be; putting it in the body as well invites a screenshot into a
+   * group chat, and the token is deliberately NOT single-use.
+   */
+  it('never renders the raw token as visible text', async () => {
+    primeHappyPath();
+    const container = await renderPage();
+
+    expect(container.textContent ?? '').not.toContain(RAW_TOKEN);
   });
 
   // ── The scheduled window ───────────────────────────────────────────────────

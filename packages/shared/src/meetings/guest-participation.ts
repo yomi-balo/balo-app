@@ -45,6 +45,25 @@ export type MeetingParticipationRoleLabel = 'guest' | 'delegate';
 /** The admit/deny lifecycle. Mirrors `meeting_guest_admission`. */
 export type MeetingGuestAdmissionLabel = 'pre_admitted' | 'pending' | 'admitted' | 'denied';
 
+/**
+ * HOW the guest reached the meeting. Mirrors `meeting_guest_invite_channel`, restated purely
+ * for the same reason every other label list here is — this subpath must never value-import
+ * `@balo/db`.
+ *
+ * ⚠ THE TWO LABELS CARRY A TRUST DECISION, NOT JUST A PROVENANCE FACT (`enums.ts`):
+ *   · `email` — somebody with rights NAMED this address, hence trust-by-default
+ *     (`pre_admitted`) and a RESOLVED `party`.
+ *   · `link`  — the link was forwarded or shared, hence the waiting-to-join queue
+ *     (`pending`) and a `party` that is a PLACEHOLDER. See {@link presencePartyForGuest}.
+ *
+ * ⚠ PINNED AGAINST THE pgEnum, NOT TRUSTED. `apps/api`'s `authorize-meeting-participation.ts`
+ * carries a two-way `AssertNever` (`AssertMeetingGuestInviteChannelsMatch`) against
+ * `@balo/db`'s `MeetingGuestInviteChannel`, so a THIRD label added to the database fails
+ * `pnpm --filter api typecheck` until it is given a meaning here — and, crucially, until
+ * somebody decides which side of the money rule below it falls on.
+ */
+export type MeetingGuestInviteChannelLabel = 'email' | 'link';
+
 // ── Product numbers ───────────────────────────────────────────────────────────────────
 
 /**
@@ -76,6 +95,31 @@ export const MAX_MEETING_PARTICIPANTS = 10;
  * decision rather than an oversight.
  */
 export const RESERVED_BASE_PARTICIPANTS = 2;
+
+/**
+ * BAL-132 — how many ANONYMOUS KNOCKS may sit in one meeting's admit/deny queue at once.
+ *
+ * ⚠⚠ A SEPARATE RESOURCE FROM {@link MAX_MEETING_PARTICIPANTS}, AND THE SEPARATION IS THE
+ * WHOLE POINT. The lobby's first cut counted a `pending` knock against the PARTICIPANT cap,
+ * on the same counter `inviteGuests` uses — so filling the queue from a forwarded URL also
+ * took away the HOST's ability to invite anyone by email, permanently, with no way to clear
+ * it (denying did not help; the denied row kept its seat). Seats in the room and slots in the
+ * panel are now bounded independently:
+ *
+ *   · exceeding THIS refuses further KNOCKS and nothing else — invites are unaffected;
+ *   · exceeding `MAX_MEETING_PARTICIPANTS` refuses further SEATS, which knocks never held.
+ *
+ * ⚠ SELF-CLEARING. A slot is freed by an admit, a DENY, a revoke, or `expires_at` passing —
+ * so a host facing a flood has a working control, rather than a stuck meeting.
+ *
+ * ⚠ HIGHER THAN THE PARTICIPANT CAP ON PURPOSE. A host may legitimately deny several people
+ * (wrong meeting, forwarded to the wrong team) and still admit a full room afterwards, so a
+ * queue bound at 10 would be reachable in normal use.
+ *
+ * ⚠ A PRODUCT NUMBER, NOT A SAFETY PROPERTY — same status as the participant cap, same
+ * unsynchronised-count caveat, and the same natural migration to `platform_config`.
+ */
+export const MAX_LOBBY_QUEUE = 25;
 
 /**
  * How long a guest's join link outlives the meeting it was minted for: 7 days past
@@ -278,14 +322,60 @@ export function selectPrimaryMeetingContext(
  * is really in the room, so the billable intersection should legitimately continue if the
  * booker drops but their colleague stays.
  *
+ * ── THE SECOND ARM: A `link`-CHANNEL GUEST IS **ALWAYS** AN OBSERVER (BAL-132) ───────────
+ *
+ * ⚠⚠ A SELF-CLAIMED LOBBY VISITOR'S `party` IS A PLACEHOLDER, NOT A RESOLVED SIDE, SO IT
+ * MUST NEVER ANCHOR MONEY. `meeting_guests.party` is NOT NULL and CHECK-narrowed to
+ * `client | expert`, and a bare meeting URL carries NO sharer identity — there is no
+ * server-side signal for which side a knock is on. BAL-132's `claimLobbyPlace` therefore
+ * writes `client` because the column demands *a* value, not because anybody resolved one.
+ *
+ * Left unhandled, that placeholder is a REAL over-billing path and not a theoretical one:
+ * `computeMeetingClocks` anchors `billableMs` on the first instant an `expert` row and a
+ * `client` row overlap. An expert-side colleague who was forwarded the link, knocked, and
+ * was admitted would be stored `party='client'` — so on a 60-minute call where the real
+ * client left at minute 10, that person sitting in the room to minute 60 keeps the billable
+ * span open to 60. **The client company is billed for the expert's own colleague's time.**
+ * Mapping the whole `link` channel to `observer` closes it by construction: `observer` is
+ * excluded from BOTH sides of the billable intersection.
+ *
+ * ⚠ THE CHANNEL ARGUMENT IS **NON-OPTIONAL**, AND THAT IS THE ENFORCEMENT — NOT THE
+ * DOCBLOCK. An optional parameter defaulting to the old one-argument behaviour would let
+ * BAL-134's writer call this and receive a silently WRONG answer, which is precisely the
+ * failure this exists to prevent; the whole point of putting the rule in the shared pure
+ * function is that the writer cannot MISS it. An input object rather than a positional pair
+ * so the two same-shaped string arguments can never be transposed at a call site.
+ *
+ * ⚠ AN `email`-CHANNEL ROW IS UNAFFECTED. Its `party` WAS resolved — server-side, from the
+ * inviter's own authorized side (`authorizeMeetingParticipation`) — so the original rule
+ * still governs it exactly as before, including the deliberate `client → client` arm.
+ *
+ * ⚠ THE ORDER OF THE TWO ARMS IS IRRELEVANT TO THE ANSWER AND DELIBERATE FOR READING: both
+ * `link` arms yield `observer`, so `link` + `expert` is `observer` either way. The channel
+ * is tested FIRST because it is the stronger statement — "we never resolved a side at all"
+ * dominates "the side we resolved was the expert's".
+ *
  * ⚠ THE WRITE IS BAL-134'S, AND THIS IS ITS CONTRACT. Every guest presence row must derive
  * `party` through this function — never from the guest row's own `party` column — and must
  * set `meeting_guest_id`, never `user_id`. The same assignment is written on
- * `meeting_presence`'s docblock. Both clock scenarios above are pinned as NUMBERS in
+ * `meeting_presence`'s docblock. All THREE clock scenarios above are pinned as NUMBERS in
  * `index.test.ts` so this paragraph cannot drift from the behaviour.
  */
-export function presencePartyForGuest(guestParty: MeetingGuestSide): MeetingPresenceParty {
-  return guestParty === 'expert' ? 'observer' : guestParty;
+export function presencePartyForGuest(
+  guest: Readonly<{
+    /**
+     * ⚠ AS STORED on `meeting_guests.party` — which, on a `link` row, is a placeholder the
+     * function below deliberately ignores.
+     */
+    party: MeetingGuestSide;
+    /** ⚠ AS STORED on `meeting_guests.invite_channel`. NEVER taken from request input. */
+    inviteChannel: MeetingGuestInviteChannelLabel;
+  }>
+): MeetingPresenceParty {
+  if (guest.inviteChannel === 'link') {
+    return 'observer';
+  }
+  return guest.party === 'expert' ? 'observer' : guest.party;
 }
 
 // ── D6: the recorded grant's read predicate (BAL-388 enforces) ────────────────────────

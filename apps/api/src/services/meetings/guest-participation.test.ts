@@ -68,11 +68,15 @@ vi.mock('@balo/db', () => ({
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
+  // ⚠ A HAND-ROLLED LITERAL, SO IT MUST LIST EVERY KEY THE SOURCE DECLARES. An omitted key
+  // yields `undefined` as the EVENT NAME at runtime with NO type error — the event simply
+  // vanishes from PostHog. `GUEST_JOINED` was added by BAL-132.
   GUEST_SERVER_EVENTS: {
     GUEST_ADMITTED: 'guest_admitted',
     GUEST_DENIED: 'guest_denied',
     GUEST_INVITE_OPENED: 'guest_invite_opened',
     GUEST_INVITED: 'guest_invited',
+    GUEST_JOINED: 'guest_joined',
     GUEST_REMOVED: 'guest_removed',
   },
 }));
@@ -1118,10 +1122,56 @@ describe('listGuests — the PARTY-SCOPED roster', () => {
 
   it('counts the reserved seats into the roster total', async () => {
     mockListLiveByMeeting.mockResolvedValue([CLIENT_ROW, EXPERT_ROW]);
+    mockCountLiveByMeeting.mockResolvedValue(2);
 
     const result = await listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID });
 
     expect(result).toMatchObject({ ok: true, participantCount: 4, participantCap: 10 });
+  });
+
+  /**
+   * ── ⚠⚠ THE ROSTER'S NUMBER AND THE INVITE GATE'S NUMBER ARE THE SAME NUMBER ─────────────
+   *
+   * `participantCount` used to be `RESERVED_BASE_PARTICIPANTS + rows.length`, where `rows`
+   * comes from `listLiveByMeeting` — which filters `deleted_at` / `revoked_at` only and so
+   * counts `pending` knocks and expired handles. `inviteGuests` gates on `countLiveByMeeting`,
+   * which counts SEATS. Nothing produced a `pending` row before BAL-132, so the two happened
+   * to agree; the lobby makes them diverge, and the route tells consumers to render
+   * "{n} of 10" from these fields and never a local count.
+   */
+  it('⚠⚠ reports the SEAT count, NOT the row count — pending knocks are not seats', async () => {
+    // Five queued knocks and no seats taken: the roster has five rows and zero occupants.
+    const knock = { ...CLIENT_ROW, id: 'g-knock', admission: 'pending' };
+    mockListLiveByMeeting.mockResolvedValue([knock, knock, knock, knock, knock]);
+    mockCountLiveByMeeting.mockResolvedValue(0);
+
+    const result = await listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID });
+
+    if (!result.ok) throw new Error('expected ok');
+    // The old expression would have said `7` here — a nearly-full meeting — while
+    // `inviteGuests` computed `2` and accepted eight more.
+    expect(result.participantCount).toBe(2);
+    expect(result.guests).toHaveLength(5);
+    expect(mockCountLiveByMeeting).toHaveBeenCalledWith(MEETING_ID);
+  });
+
+  it('⚠ agrees with `inviteGuests` BY CONSTRUCTION — both read the same counter', async () => {
+    // Not "the two predicates match" — the same function is called on both paths, so they
+    // cannot drift. Seven seats: the invite gate accepts one more guest and no more.
+    mockCountLiveByMeeting.mockResolvedValue(7);
+    mockListLiveByMeeting.mockResolvedValue([CLIENT_ROW]);
+
+    const listed = await listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID });
+    const invited = await inviteGuests(invite([{ email: 'dana@northwind.example' }]));
+
+    if (!listed.ok || !invited.ok) throw new Error('expected both to succeed');
+    expect(listed.participantCount).toBe(9);
+    expect(invited.participantCount).toBe(10);
+
+    const overflow = await inviteGuests(
+      invite([{ email: 'a@northwind.example' }, { email: 'b@northwind.example' }])
+    );
+    expect(overflow).toEqual({ ok: false, code: 'participant_cap_reached' });
   });
 
   it('publishes nothing and tracks nothing — a read has no side effects', async () => {
@@ -1387,6 +1437,8 @@ describe('decideGuestAdmission — TWO gates, in order, both fail-closed', () =>
     mockDecideAdmission.mockResolvedValue({
       id: GUEST_ID,
       party: 'client',
+      // BAL-132: the analytics payload reads this off the DECIDED ROW, never request input.
+      inviteChannel: 'link',
       admissionDecidedAt: DECIDED_AT,
     });
 
@@ -1406,6 +1458,10 @@ describe('decideGuestAdmission — TWO gates, in order, both fail-closed', () =>
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockTrackServer).toHaveBeenCalledWith(event, {
       party: 'client',
+      // ⚠ BAL-132. Without this, `party` is unreadable in PostHog: a `link`-channel row's
+      // `party` is a lobby PLACEHOLDER (`client` because the column is NOT NULL), so every
+      // admit/deny would look client-side. This row is deliberately a `link` one.
+      invite_channel: 'link',
       distinct_id: USER_ID,
     });
   });
@@ -1423,4 +1479,79 @@ describe('decideGuestAdmission — TWO gates, in order, both fail-closed', () =>
       expect(mockHasEngagementCapability).not.toHaveBeenCalled();
     }
   );
+
+  /**
+   * ── ⚠⚠ THE SEAT CAP ON THE **SECOND** ADDITIVE PATH ─────────────────────────────────────
+   *
+   * `inviteGuests` was the only mutation that counted. That was sufficient only while a
+   * `pending` row consumed a seat, because the queue then could not grow past the cap. BAL-132
+   * split the counters on purpose — waiting is not holding — so `MAX_LOBBY_QUEUE` (25) knocks
+   * can queue against one free seat, and admitting them one at a time would have walked a
+   * 10-person meeting to 27 without ever consulting `MAX_MEETING_PARTICIPANTS`.
+   */
+  describe('the participant cap, re-checked on ADMIT only', () => {
+    beforeEach(() => {
+      mockHasEngagementCapability.mockResolvedValue(true);
+      mockFindLiveById.mockResolvedValue(PENDING_GUEST);
+      mockDecideAdmission.mockResolvedValue({
+        id: GUEST_ID,
+        party: 'client',
+        inviteChannel: 'link',
+        admissionDecidedAt: DECIDED_AT,
+      });
+    });
+
+    it('⚠ REFUSES an admit that would exceed the cap, and writes nothing', async () => {
+      // `MAX_MEETING_PARTICIPANTS` is 10 and `RESERVED_BASE_PARTICIPANTS` is 2 — the real
+      // constants, deliberately unmocked — so 8 guest seats is a full room.
+      mockCountLiveByMeeting.mockResolvedValue(8);
+
+      await expect(decide('admitted')).resolves.toEqual({
+        ok: false,
+        code: 'participant_cap_reached',
+      });
+      expect(mockDecideAdmission).not.toHaveBeenCalled();
+      expect(mockTrackServer).not.toHaveBeenCalled();
+    });
+
+    it('admits at ONE BELOW the cap — `>=`, so the last seat is still fillable', async () => {
+      mockCountLiveByMeeting.mockResolvedValue(7);
+
+      await expect(decide('admitted')).resolves.toMatchObject({ ok: true, admission: 'admitted' });
+      expect(mockDecideAdmission).toHaveBeenCalled();
+    });
+
+    it('⚠⚠ NEVER refuses a DENY for capacity — it is the only way to clear a flooded queue', async () => {
+      // Gating deny on a full room would jam the one lever that unjams the meeting, and a deny
+      // frees a queue slot rather than consuming a seat.
+      mockCountLiveByMeeting.mockResolvedValue(50);
+
+      await expect(decide('denied')).resolves.toMatchObject({ ok: true, admission: 'denied' });
+      expect(mockDecideAdmission).toHaveBeenCalledWith({
+        guestId: GUEST_ID,
+        decision: 'denied',
+        deciderUserId: USER_ID,
+      });
+      // ⚠ And the counter is not even consulted on that branch.
+      expect(mockCountLiveByMeeting).not.toHaveBeenCalled();
+    });
+
+    it('⚠ counts only AFTER both gates and the guest lookup — never before authorization', async () => {
+      // A distinct literal is safe here precisely because it is unreachable until the actor has
+      // proven tenancy AND `host_meetings`. If the count ran first it would be an oracle.
+      mockHasEngagementCapability.mockResolvedValue(false);
+      mockCountLiveByMeeting.mockResolvedValue(8);
+
+      await expect(decide('admitted')).resolves.toEqual({ ok: false, code: 'meeting_not_found' });
+      expect(mockCountLiveByMeeting).not.toHaveBeenCalled();
+    });
+
+    it('⚠ an unknown guest id still answers `guest_not_found`, not the cap literal', async () => {
+      mockFindLiveById.mockResolvedValue(undefined);
+      mockCountLiveByMeeting.mockResolvedValue(8);
+
+      await expect(decide('admitted')).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+      expect(mockCountLiveByMeeting).not.toHaveBeenCalled();
+    });
+  });
 });

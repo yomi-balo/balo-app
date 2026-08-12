@@ -117,6 +117,7 @@ import {
 } from '../../services/meetings/provision-meeting.js';
 import { createMeetingBodySchema } from './schema.js';
 import { meetingGuestRoutes } from './guests.js';
+import { meetingJoinRoutes } from './join.js';
 
 const log = createLogger('meetings-route');
 
@@ -391,6 +392,12 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
   // sibling registration rather than a separate plugin so every `/meetings` route shares one
   // prefix and one `requireAuth` idiom.
   await meetingGuestRoutes(fastify);
+
+  // BAL-132 — the join surface (member join / anonymous lobby claim / guest mint-or-poll).
+  // ⚠ A SIBLING REGISTRATION, same reasoning as the guest routes above — one prefix, one
+  // idiom. ⚠ TWO OF ITS THREE ROUTES ARE PUBLIC (no `requireAuth`) and that is deliberate;
+  // see that module's docblock before "fixing" it.
+  await meetingJoinRoutes(fastify);
 
   log.info('Registered meeting routes');
 }

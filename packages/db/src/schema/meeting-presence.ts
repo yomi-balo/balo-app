@@ -108,6 +108,31 @@ import { timestamps, softDelete } from './helpers';
  *      `observer` was declared for exactly this class of attendee. A client-side guest DOES
  *      map to `client`, on purpose: the client party is genuinely represented, so the
  *      billable intersection should continue if the booker drops but their colleague stays.
+ *
+ * ── ⚠⚠ BAL-132 HAND-OFF: A `link`-CHANNEL GUEST'S `party` IS A PLACEHOLDER ──────────────
+ *
+ * BAL-132 shipped the LOBBY: an anonymous visitor at a bare meeting URL self-claims a place
+ * in the admission queue (`meetingGuestsRepository.claimLobbyPlace`), and is the platform's
+ * first producer of `invite_channel = 'link'` and `admission = 'pending'`.
+ *
+ * ⚠ SUCH A ROW'S `party` IS SELF-DECLARED — OR RATHER, NOT DECLARED BY ANYONE AT ALL. An
+ * `email`-channel guest's `party` is SERVER-RESOLVED from the inviter's own authorized side
+ * (`authorizeMeetingParticipation`); a bare meeting URL carries NO sharer identity, so there
+ * is no equivalent signal for a knock. `meeting_guests.party` is NOT NULL and CHECK-narrowed
+ * to `client | expert`, so the lobby writer stores `client` because the COLUMN DEMANDS A
+ * VALUE — not because a side was resolved. **IT MUST NEVER ANCHOR `billableMs`.**
+ *
+ * ⚠⚠ AND THAT OBLIGATION IS NOW MECHANICAL, NOT A REQUEST IN THIS PARAGRAPH. `presencePartyForGuest`
+ * takes the guest's `invite_channel` as a **NON-OPTIONAL** argument and maps EVERY
+ * `link`-channel row to `observer` regardless of the stored `party`. So obligation (2) above
+ * is discharged by construction for lobby guests: derive `party` through that function — which
+ * you must do anyway — and the placeholder can no longer reach a billing clock. A one-argument
+ * call no longer compiles, which is the whole reason the signature was widened in BAL-132's
+ * slice rather than left as prose here for a later reader to miss.
+ *
+ * The number this buys, pinned in `@balo/shared/meetings`'s `index.test.ts`: on a 60-minute
+ * call where the real client leaves at minute 10 and a forwarded-link attendee stays to 60,
+ * `billableMs` is **10 minutes**, not 60.
  */
 export const meetingPresence = pgTable(
   'meeting_presence',

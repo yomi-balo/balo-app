@@ -42,6 +42,31 @@ export const SENSITIVE_PATH_PREFIXES: readonly string[] = [
   // SEGMENT is replaced, so the `?r=3` prefill survives redaction — which is what
   // keeps the emailed-star funnel legible without ever logging the token.
   '/review/',
+  // ⚠⚠ BAL-132 — THE ANONYMOUS LOBBY, `/join/m/{meetingId}`. **IT MUST PRECEDE `/join/`
+  // IN THIS ARRAY** — {@link redactSensitivePath} returns on the FIRST prefix that
+  // matches, and `/join/` matches `/join/m/{id}` too, replacing the literal segment `m`
+  // and producing `/join/[redacted]/{id}` — i.e. the id sails through untouched. That is
+  // exactly what shipped before this entry existed, while a docblock claimed the route
+  // was "REDACTION-COVERED FOR FREE … verified, not assumed". Order is the fix; a test
+  // pins it.
+  //
+  // ⚠ WHAT IS BEING PROTECTED HERE IS **NOT A CREDENTIAL** — and that difference is worth
+  // stating, because it is the only entry in this list that is not one. A meeting id
+  // admits nobody: the Daily room is `privacy: 'private'`, knocking is rate-limited and
+  // queue-capped, and entry needs an explicit host admit. It is listed because the whole
+  // feature is built on treating "a meeting exists at this uuid" as non-disclosable to an
+  // anonymous visitor, and this URL is the one place that fact leaves the perimeter from
+  // an ANONYMOUS BROWSER on a PUBLIC page — into PostHog's `$current_url` / `$pathname`,
+  // i.e. a third-party processor, for a meeting the visitor may merely have guessed.
+  //
+  // ⚠ IT COSTS NOTHING IN DEBUGGABILITY, which is why it is redaction rather than a
+  // docblock correction. `meetingId` is still logged DELIBERATELY as a structured field by
+  // `claim-lobby-place.ts`, `poll-guest-admission.ts` and every `apps/api` join log line —
+  // different sink, different audience, unchanged. Only the URL-shaped copy is redacted.
+  //
+  // ⚠ NO FALSE MATCH ON `/join/{token}`: guest tokens are base64url and contain no `/`, so
+  // the literal eight characters `/join/m/` cannot occur inside one.
+  '/join/m/',
   // BAL-408 / ADR-1044 — the guest join landing, `/join/{token}`. The token is the
   // ONLY credential a guest has for a meeting they were invited to, and it is
   // deliberately NOT single-use (desktop → phone → rejoin after a network drop), so

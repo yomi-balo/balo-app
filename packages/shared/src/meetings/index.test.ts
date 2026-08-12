@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { computeMeetingClocks, type MeetingClocks, type PresenceInterval } from './index';
+import {
+  computeMeetingClocks,
+  presencePartyForGuest,
+  type MeetingClocks,
+  type PresenceInterval,
+} from './index';
 
 const MIN = 60_000;
 const T0 = new Date('2026-08-05T10:00:00.000Z');
@@ -238,6 +243,50 @@ describe('computeMeetingClocks', () => {
 
     expect(clocks.billableMs).toBe(60 * MIN);
     expect(clocks.billableStartedAt).toEqual(at(0));
+  });
+
+  it('DOCBLOCK PIN (BAL-132) — a `link`-channel guest stored `party="client"` contributes ZERO billableMs', () => {
+    // ⚠⚠ THE THIRD PIN, AND THE ONE THAT PROVES A MONEY RULE RATHER THAN AN ARITHMETIC ONE.
+    // A self-claimed lobby visitor's `party` is a PLACEHOLDER: `meeting_guests.party` is NOT
+    // NULL and CHECK-narrowed to two labels, and a bare meeting URL carries no sharer
+    // identity, so `claimLobbyPlace` writes `client` because the column demands a value —
+    // not because anybody resolved a side.
+    //
+    // The scenario is the expensive one: the REAL client leaves at minute 10, and an
+    // expert-side colleague who was forwarded the link sits in the room until minute 60.
+    // Routed through `presencePartyForGuest` WITH the channel, that person is `observer` and
+    // the billable span closes at 10. Had the placeholder `client` been trusted, the span
+    // would run 0 → 60 and the client company would be billed 50 extra minutes for the
+    // expert's own colleague.
+    const lobbyGuestParty = presencePartyForGuest({ party: 'client', inviteChannel: 'link' });
+    expect(lobbyGuestParty).toBe('observer');
+
+    const clocks = computeMeetingClocks(
+      [
+        interval('expert', 0, 60),
+        // The genuine client member, present for the first ten minutes only.
+        interval('client', 0, 10),
+        // The lobby knock, present throughout — and billable for none of it.
+        interval(lobbyGuestParty, 0, 60),
+      ],
+      at(90)
+    );
+
+    expect(clocks.billableMs).toBe(10 * MIN);
+    expect(clocks.billableStartedAt).toEqual(at(0));
+    expect(clocks.expertPresentMs).toBe(60 * MIN);
+  });
+
+  it('BAL-132 CONTROL — the SAME rows with the placeholder trusted would bill 60, not 10', () => {
+    // The counterfactual, executed rather than asserted in prose: this is what the pin above
+    // is worth. If a future edit made `presencePartyForGuest` ignore the invite channel, the
+    // guest's row would come through as `client` and produce exactly this number.
+    const clocks = computeMeetingClocks(
+      [interval('expert', 0, 60), interval('client', 0, 10), interval('client', 0, 60)],
+      at(90)
+    );
+
+    expect(clocks.billableMs).toBe(60 * MIN);
   });
 
   // ── NON-FINITE INPUT (the `toSpans` guard) ───────────────────────────────────────────

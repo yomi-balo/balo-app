@@ -25,6 +25,13 @@
  *   3. `entryPoint` is REQUIRED and is the only field that differs between the three surfaces.
  *   4. THE RAW TOKEN NEVER COMES BACK. UIs do not build join links; the engine emails them.
  *   5. Render "{n} of 10" from `participantCount` / `participantCap`, never a local count.
+ *      ⚠ `participantCount` IS THE **SEAT** COUNT — the reserved pair plus guests who are
+ *      `pre_admitted` or `admitted` and not expired — and it is produced by the very counter
+ *      the server refuses invites on, so the number a UI shows and the number that decides a
+ *      `participant_cap_reached` cannot disagree. It deliberately EXCLUDES waiting knocks:
+ *      queue depth is a different resource with a different cap (`MAX_LOBBY_QUEUE`), and it
+ *      is answered by counting `guests[].admission === 'pending'` — the projection omits
+ *      fields across the party boundary, never rows.
  *   6. BAL-132 gates its admit/deny CONTROLS on `canHost` from the GET response — NOT on
  *      `lens === 'expert'`, which is the comparison ADR-1029 forbids and which the in-meeting
  *      design prototype does ("take the layout; do not take its gate"). Shipping `canHost`
@@ -382,8 +389,15 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
   /**
    * POST /meetings/:meetingId/guests/:guestId/admit  and  …/deny
    *
-   * ⚠ 100% INERT IN THIS PR — nothing produces an `admission = 'pending'` row, so every call
-   * answers `409 guest_not_pending`. BAL-132 owns the lobby that produces one.
+   * ⚠⚠ **LIVE AS OF BAL-132.** These shipped inert because nothing produced an
+   * `admission = 'pending'` row, so every call answered `409 guest_not_pending`. BAL-132 IS
+   * that ticket: the anonymous lobby (`POST /meetings/:meetingId/lobby`) now produces pending
+   * rows, so both routes are genuinely reachable and `409` is now the RACE answer.
+   *
+   * ⚠ ONLY THE HOST'S **UI** IS OUTSTANDING — BAL-436 owns the admit/deny panel, and carries
+   * the obligation this route cannot: a `link`-channel pending row's name and email are
+   * SELF-DECLARED by an anonymous visitor, so the panel must mark them UNVERIFIED and must
+   * never present the address as identity.
    *
    * ⚠ TWO GATES, IN ORDER: tenancy (`authorizeMeetingParticipation`) THEN delivery identity
    * (`hasEngagementCapability(HOST_MEETINGS)`). The second does not subsume the first — see
