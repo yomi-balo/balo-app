@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { READ_ONLY_ALLOWLIST } from './_read-only-actions';
+import { PUBLIC_ACTION_ALLOWLIST, READ_ONLY_ALLOWLIST } from './_read-only-actions';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -72,28 +72,82 @@ const USE_SERVER = /^\s*['"]use server['"]/;
 // the substring "requireUser") and method calls are excluded by the boundary too.
 const BARE_REQUIRE_USER_CALL = /\brequireUser\s*\(/;
 
+/**
+ * BAL-132 — every primitive through which a Server Action can learn WHO IS CALLING.
+ *
+ * ⚠⚠ A MODULE MENTIONING **NONE** OF THESE NEVER LOOKS AT ITS CALLER AT ALL, AND THAT IS THE
+ * CASE THE `bareRequireUser` SCAN CANNOT SEE. That scan asks "does this action use the WEAK
+ * gate?"; a module using NO gate never enters its set, so it passes in silence. BAL-132 shipped
+ * the platform's first two deliberately unauthenticated mutating actions, and nothing would
+ * have stopped a THIRD, accidental one landing beside them.
+ *
+ * ⚠ THE LIST IS WIDER THAN THE THREE GATE HELPERS, AND IT HAS TO BE. A large, entirely
+ * legitimate set of shipped actions authenticates via `getSession()` / `getCurrentUser()`
+ * instead — the whole `lib/auth/actions/*` onboarding family, the credit readers, and others.
+ * Scanning for the gate helpers alone would flag ~15 correctly-authenticated modules, and an
+ * allowlist that large stops being a claim anybody reads. What this set actually asserts is
+ * narrow and checkable: **this module reads its caller's identity SOMEWHERE.** Whether it reads
+ * it through the RIGHT gate is the job of the `bareRequireUser` assertions above; the two
+ * checks are complementary, not redundant.
+ *
+ * ⚠⚠ **`requireOnboardedUser` IS NOT REDUNDANT WITH `requireUser`, AND AN EARLIER VERSION OF
+ * THIS COMMENT CLAIMED IT WAS.** The claim was that "`requireOnboardedUser` and
+ * `requireExpertUser` both contain `requireUser`, so any of them counts". They do not:
+ * `'requireOnboardedUser'.includes('requireUser')` is **false** — the name is
+ * `require` + `Onboarded` + `User`, so the eleven characters `requireUser` never occur
+ * contiguously. Same for `requireExpertUser`.
+ *
+ * This is not a pedantic correction. Acting on that comment and deleting the entry makes
+ * `app/join/_actions/join-as-member.ts` — whose ONLY auth reference is `requireOnboardedUser()`
+ * — register as UNAUTHENTICATED, and the join-surface assertion below fails demanding it be
+ * added to `PUBLIC_ACTION_ALLOWLIST`. Which is to say: the invariant would have been "fixed" by
+ * allowlisting a correctly-gated action as public. The failing test is the only reason that did
+ * not ship, so the entry stays and the false rationale is what goes.
+ *
+ * ⚠ SUBSTRING MATCHING IS STILL THE MECHANISM (`source.includes(helper)`) — it is just not a
+ * shortcut that lets one gate name stand in for another. **Every helper a module might use
+ * must appear here in full.**
+ */
+const AUTH_HELPERS = [
+  'requireUser',
+  'requireOnboardedUser',
+  'withAuth',
+  'getSession',
+  'getCurrentUser',
+] as const;
+
 interface ServerActionScan {
   readonly scanned: string[];
   readonly bareRequireUser: string[];
+  /** `'use server'` modules that reference NO auth helper whatsoever. */
+  readonly unauthenticated: string[];
 }
 
 function scanServerActions(): ServerActionScan {
   const scanned: string[] = [];
   const bareRequireUser: string[] = [];
+  const unauthenticated: string[] = [];
   for (const file of collectSourceFiles(SRC_DIR)) {
     const raw = readFileSync(file, 'utf8');
     if (!USE_SERVER.test(raw)) continue;
     const rel = path.relative(SRC_DIR, file).split(path.sep).join('/');
     scanned.push(rel);
-    if (BARE_REQUIRE_USER_CALL.test(stripComments(raw))) {
+    const source = stripComments(raw);
+    if (BARE_REQUIRE_USER_CALL.test(source)) {
       bareRequireUser.push(rel);
     }
+    // ⚠ COMMENT-STRIPPED, like the scan above — every one of these modules DISCUSSES the gate
+    // at length in its docblock, so an un-stripped search would find all of them and the
+    // invariant would be vacuous in the most misleading possible way.
+    if (!AUTH_HELPERS.some((helper) => source.includes(helper))) {
+      unauthenticated.push(rel);
+    }
   }
-  return { scanned, bareRequireUser };
+  return { scanned, bareRequireUser, unauthenticated };
 }
 
 describe('onboarding mutation gate (BAL-365)', () => {
-  const { scanned, bareRequireUser } = scanServerActions();
+  const { scanned, bareRequireUser, unauthenticated } = scanServerActions();
 
   // Non-vacuity guard: if the walk silently finds nothing, every assertion below
   // passes for the wrong reason. The app has ~96 'use server' modules.
@@ -126,6 +180,97 @@ describe('onboarding mutation gate (BAL-365)', () => {
       stale,
       `These allowlisted files no longer call bare requireUser() (migrated or removed). ` +
         `Prune them from READ_ONLY_ALLOWLIST:\n  ${stale.join('\n  ')}`
+    ).toEqual([]);
+  });
+
+  /**
+   * ── ⚠⚠ BAL-132 — THE OTHER HALF OF THE INVARIANT, SCOPED TO THE JOIN SURFACE ────────────
+   *
+   * Everything above asks "does this action use the WEAK gate?", which makes it **structurally
+   * blind to an action using NO gate**: such a module never enters the `bareRequireUser` set,
+   * so it passes in silence. BAL-132 shipped the platform's first two deliberately
+   * unauthenticated mutating Server Actions, and their docblocks correctly noted they passed
+   * the invariant — but passing it was not evidence of anything, and nothing stopped a THIRD,
+   * accidentally unauthenticated action landing beside them and passing just as quietly.
+   *
+   * ── ⚠ WHY IT IS SCOPED TO `app/join/` RATHER THAN REPO-WIDE, STATED PLAINLY ─────────────
+   *
+   * A repo-wide version is DELIBERATELY DEFERRED, not impossible — and the distinction matters,
+   * because an earlier version of this note said "NOT currently implementable", which is too
+   * strong and would discourage the very work that should happen next. ~35 shipped actions —
+   * the whole `engagements/[id]/_actions/*` and `projects/[requestId]/_actions/*` families —
+   * authenticate through PER-FEATURE WRAPPERS (`engagement-lifecycle-shared`,
+   * `action-item-action-shared`, and friends) that a fixed helper-name list cannot see through,
+   * so a repo-wide scan today would flag all ~35 as unauthenticated. At least two approaches
+   * WOULD work: follow imports one level, or add the wrapper names to `AUTH_HELPERS`.
+   *
+   * ⚠ THE OBJECTION TO A WRAPPER LIST UNDERCUTS ITSELF, SO IT IS NOT THE REASON. `AUTH_HELPERS`
+   * is ALREADY a fixed name list that rots silently; adding wrapper names makes it longer, not
+   * different in kind. The real reason is cost and sequencing: allowlisting 35 files would be a
+   * "justification" nobody reads (the failure mode `_read-only-actions.ts` records from
+   * BAL-424), and the payoff is concentrated where the anonymous arm actually is.
+   *
+   * ⚠ SO THE SCOPE IS THE SURFACE THAT ACTUALLY HAS AN ANONYMOUS ARM. `app/join/` is where the
+   * unauthenticated actions live, where the next one would land, and where the property is
+   * exactly checkable. **The PREREQUISITE for widening is resolving the wrapper indirection
+   * (import-following, or wrapper names in `AUTH_HELPERS`) — deleting the filter and growing
+   * the allowlist to 35 entries is the one move that must not happen.**
+   *
+   * It asserts EXACT SET EQUALITY in both directions, so the anonymous surface can only grow by
+   * a deliberate edit to `PUBLIC_ACTION_ALLOWLIST`, which carries the written justification.
+   */
+  const JOIN_SURFACE = 'app/join/';
+  const joinActions = scanned.filter((f) => f.startsWith(JOIN_SURFACE));
+  const unauthenticatedJoinActions = unauthenticated.filter((f) => f.startsWith(JOIN_SURFACE));
+
+  it('scans the join surface (guards against a vacuous pass)', () => {
+    // `claim-lobby-place`, `poll-guest-admission`, `join-as-member` — at minimum.
+    expect(joinActions.length).toBeGreaterThanOrEqual(3);
+  });
+
+  /**
+   * ⚠⚠ NO ENTRY IN `AUTH_HELPERS` IS COVERED BY ANOTHER — pinned, because a comment claiming
+   * otherwise nearly cost a real gate.
+   *
+   * That comment said `requireOnboardedUser` "contains `requireUser`, so any of them counts",
+   * and two independent reviews repeated it. It is false: the name is `require` + `Onboarded` +
+   * `User`, so the eleven characters `requireUser` never occur contiguously. Deleting the entry
+   * on that reasoning makes `join-as-member.ts` — correctly gated, and gated with nothing else
+   * — look UNAUTHENTICATED, and the natural "fix" is to allowlist it as public.
+   *
+   * This asserts the property the comment got wrong, so the next person to reach for the same
+   * simplification is told by a test rather than by a comment.
+   */
+  it('⚠ every AUTH_HELPERS entry is load-bearing — none is a substring of another', () => {
+    for (const helper of AUTH_HELPERS) {
+      const covered = AUTH_HELPERS.filter((other) => other !== helper && other.includes(helper));
+      expect(covered, `${helper} is a substring of ${covered.join(', ')}`).toEqual([]);
+    }
+    // Non-vacuity, and the specific pair that was wrongly claimed to be redundant.
+    expect('requireOnboardedUser'.includes('requireUser')).toBe(false);
+    expect(AUTH_HELPERS).toContain('requireOnboardedUser');
+  });
+
+  it('⚠ only the ALLOWLISTED join actions are unauthenticated', () => {
+    const unexpected = unauthenticatedJoinActions.filter(
+      (f) => !PUBLIC_ACTION_ALLOWLIST.includes(f)
+    );
+    expect(
+      unexpected,
+      `These 'use server' actions under ${JOIN_SURFACE} reference NO auth or session helper at ` +
+        `all, so they are callable by anyone on the internet. Gate each with ` +
+        `requireOnboardedUser() — or, if it is genuinely meant to be public, add it to ` +
+        `PUBLIC_ACTION_ALLOWLIST naming where the real server-side authorization lives and ` +
+        `what bounds abuse:\n  ${unexpected.join('\n  ')}`
+    ).toEqual([]);
+  });
+
+  it('the public-action allowlist has no stale entries', () => {
+    const stale = PUBLIC_ACTION_ALLOWLIST.filter((f) => !unauthenticated.includes(f));
+    expect(
+      stale,
+      `These allowlisted files are no longer unauthenticated (gated, or removed). Prune them ` +
+        `from PUBLIC_ACTION_ALLOWLIST:\n  ${stale.join('\n  ')}`
     ).toEqual([]);
   });
 });

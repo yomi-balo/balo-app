@@ -10,6 +10,9 @@
     "./server": "./src/server/index.ts",
     "./events": "./src/events/index.ts"
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit --moduleResolution bundler --module esnext"
+  },
   "dependencies": {
     "@balo/shared": "workspace:*",
     "posthog-js": "^1.335.3",

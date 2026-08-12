@@ -1,11 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { describe, it, expect, vi } from 'vitest';
+import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { auditEvents, meetingGuests, meetingPresence, meetings, users } from '../schema';
-import type { NewMeetingGuest } from '../schema';
+import type { MeetingGuest, NewMeetingGuest } from '../schema';
 import { meetingFactory, meetingGuestFactory, userFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { meetingGuestsRepository, type CreateMeetingGuestInput } from './meeting-guests';
+import { auditEventsRepository } from './audit-events';
+import {
+  meetingGuestsRepository,
+  type ClaimLobbyPlaceInput,
+  type CreateMeetingGuestInput,
+} from './meeting-guests';
 
 const DAY_MS = 86_400_000;
 
@@ -54,17 +59,83 @@ function rawGuestRow(
   };
 }
 
-async function invitedAuditRows(guestId: string): Promise<{ actorUserId: string | null }[]> {
+/** A valid anonymous LOBBY KNOCK input (client-side placeholder party). Overrides ride on top. */
+function claimInput(
+  meetingId: string,
+  overrides: Partial<ClaimLobbyPlaceInput> = {}
+): ClaimLobbyPlaceInput {
+  return {
+    meetingId,
+    email: `knock${(hashSeq += 1)}@northwind.test`,
+    name: 'Anonymous Visitor',
+    emailDomain: 'northwind.test',
+    party: 'client',
+    accessScope: 'meeting',
+    tokenHash: tokenHash(),
+    expiresAt: new Date(Date.now() + 7 * DAY_MS),
+    ...overrides,
+  };
+}
+
+/**
+ * The `audit_events` rows one guest holds for one action, oldest first. ONE helper rather
+ * than a per-action copy — a second copy is both a Sonar new-code duplication finding and a
+ * copy that keeps passing after the original's `entity_type` scoping is broken.
+ */
+async function guestAuditRows(
+  guestId: string,
+  action: string
+): Promise<{ actorUserId: string | null; metadata: Record<string, unknown> | null }[]> {
   return db
-    .select({ actorUserId: auditEvents.actorUserId })
+    .select({ actorUserId: auditEvents.actorUserId, metadata: auditEvents.metadata })
     .from(auditEvents)
     .where(
       and(
         eq(auditEvents.entityType, 'meeting_guest'),
         eq(auditEvents.entityId, guestId),
-        eq(auditEvents.action, 'meeting_guest.invited')
+        eq(auditEvents.action, action)
       )
-    );
+    )
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+}
+
+/** Every audit action recorded against one guest, for "wrote NOTHING" assertions. */
+async function guestAuditActions(guestId: string): Promise<string[]> {
+  const rows = await db
+    .select({ action: auditEvents.action })
+    .from(auditEvents)
+    .where(and(eq(auditEvents.entityType, 'meeting_guest'), eq(auditEvents.entityId, guestId)));
+  return rows.map((row) => row.action).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Run `attempt` with `auditEventsRepository.record` forced to reject ONCE, and assert the
+ * call it drives rejects with that error.
+ *
+ * ⚠ THE ONLY WAY TO PROVE THE `db.transaction` IN A WRITE PATH IS REAL. A failing audit sink
+ * is the failure mode that can occur BETWEEN the row write and the history write; without
+ * the transaction the row survives and the history does not, silently and permanently.
+ * Shared by `decideAdmission` and `claimLobbyPlace` — one implementation, so the discipline
+ * cannot rot in one copy (and so Sonar sees no new-code duplication).
+ */
+async function expectAuditFailureRollsBack(attempt: () => Promise<unknown>): Promise<void> {
+  const spy = vi
+    .spyOn(auditEventsRepository, 'record')
+    .mockRejectedValueOnce(new Error('audit sink is down'));
+  try {
+    await expect(attempt()).rejects.toThrow('audit sink is down');
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** The whole stored row, for "byte-identical afterwards" assertions. */
+async function readGuest(guestId: string): Promise<MeetingGuest> {
+  const [row] = await db.select().from(meetingGuests).where(eq(meetingGuests.id, guestId));
+  if (row === undefined) {
+    throw new Error(`expected meeting_guests row ${guestId} to exist`);
+  }
+  return row;
 }
 
 // ── 1. createMany ────────────────────────────────────────────────────────────
@@ -94,7 +165,9 @@ describe('meetingGuestsRepository.createMany', () => {
       expect(row.revokedAt).toBeNull();
       expect(row.deletedAt).toBeNull();
       expect(row.admissionDecidedAt).toBeNull();
-      expect(await invitedAuditRows(row.id)).toEqual([{ actorUserId: inviter.id }]);
+      const audits = await guestAuditRows(row.id, 'meeting_guest.invited');
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.actorUserId).toBe(inviter.id);
     }
   });
 
@@ -480,6 +553,219 @@ describe('meetingGuestsRepository.decideAdmission', () => {
     ).resolves.toBeUndefined();
   });
 
+  /**
+   * ── ⚠⚠ THE DENIAL STAMPS `revoked_at`, AND THIS IS THE TEST THAT MAKES IT LOAD-BEARING ───
+   *
+   * `meeting_guest_meeting_email_live_idx` is partial on `deleted_at IS NULL AND
+   * revoked_at IS NULL` and NOTHING ELSE — no `admission` predicate, no `expires_at`
+   * predicate, and expiry does not vacate a unique index in any case. So before this stamp
+   * existed a denied row held its `(meeting, party, email)` slot FOREVER and the host who
+   * pressed Deny could never afterwards invite that address by email.
+   */
+  it('a DENIAL stamps revoked_at + its attribution — an ADMIT stamps neither', async () => {
+    const host = await userFactory();
+    const denied = await meetingGuestFactory({ values: { admission: 'pending' } });
+    const admitted = await meetingGuestFactory({ values: { admission: 'pending' } });
+
+    const deniedRow = await meetingGuestsRepository.decideAdmission({
+      guestId: denied.guest.id,
+      decision: 'denied',
+      deciderUserId: host.id,
+    });
+    const admittedRow = await meetingGuestsRepository.decideAdmission({
+      guestId: admitted.guest.id,
+      decision: 'admitted',
+      deciderUserId: host.id,
+    });
+
+    expect(deniedRow?.revokedAt).not.toBeNull();
+    expect(deniedRow?.revokedByUserId).toBe(host.id);
+    // ⚠ NOT A SOFT DELETE. `revoke` stamps `deleted_at` too; a denial deliberately does not,
+    // so the two states stay distinguishable on the row itself and the refusal survives as
+    // evidence rather than disappearing.
+    expect(deniedRow?.deletedAt).toBeNull();
+
+    // ⚠⚠ AN ADMIT MUST NOT STAMP IT. Every "live" read is predicated on
+    // `revoked_at IS NULL`, so an admitted guest carrying it would be instantly unable to
+    // resolve their own token — i.e. admitted into a room they cannot enter.
+    expect(admittedRow?.revokedAt).toBeNull();
+    expect(admittedRow?.revokedByUserId).toBeNull();
+    await expect(
+      meetingGuestsRepository.findLiveByTokenHash(admitted.guest.tokenHash)
+    ).resolves.toBeDefined();
+  });
+
+  it('⚠⚠ a DENIAL FREES THE ADDRESS — the host can then invite that person properly', async () => {
+    // THE DEFECT THIS CLOSES, end to end and in the exact order a host performs it: deny the
+    // anonymous knock, then invite the same human by email. That second step used to raise
+    // `23505` → a `409 guest_already_invited` that was FALSE and had no recovery anywhere.
+    const host = await userFactory();
+    const inviter = await userFactory();
+    const { meeting } = await meetingFactory();
+
+    const knock = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'alice@acme.test', party: 'client' })
+    );
+    if (knock === undefined) throw new Error('expected the knock to be inserted');
+
+    await meetingGuestsRepository.decideAdmission({
+      guestId: knock.id,
+      decision: 'denied',
+      deciderUserId: host.id,
+    });
+
+    const invited = await meetingGuestsRepository.createMany({
+      meetingId: meeting.id,
+      invitedById: inviter.id,
+      guests: [inviteInput({ email: 'alice@acme.test', party: 'client' })],
+    });
+
+    expect(invited).toHaveLength(1);
+    expect(invited[0]?.admission).toBe('pre_admitted');
+    expect(invited[0]?.id).not.toBe(knock.id);
+  });
+
+  it('a DENIAL also frees the address for a fresh KNOCK — denial is not an identity ban', async () => {
+    // ⚠ Decision 10, already accepted: a bare link plus a self-declared address cannot support
+    // a durable ban, and the property that matters is untouched — the room is private, so the
+    // re-knock mints NOTHING without a second explicit host admit.
+    const host = await userFactory();
+    const { meeting } = await meetingFactory();
+
+    const first = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'dana@northwind.test' })
+    );
+    if (first === undefined) throw new Error('expected the first knock to be inserted');
+
+    await meetingGuestsRepository.decideAdmission({
+      guestId: first.id,
+      decision: 'denied',
+      deciderUserId: host.id,
+    });
+
+    const second = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'dana@northwind.test' })
+    );
+
+    expect(second).toBeDefined();
+    expect(second?.id).not.toBe(first.id);
+    expect(second?.admission).toBe('pending');
+  });
+
+  it('a DENIED row drops out of listLiveByMeeting — the ACCEPTED cost, pinned deliberately', async () => {
+    // ⚠ NOT AN OVERSIGHT. `revoked_at` is what every "live" read filters on, so stamping it on
+    // a denial necessarily removes the row from the roster projection. BAL-436's panel will
+    // therefore not show denied entries; the durable record is the `meeting_guest.denied`
+    // audit row asserted below, which is where a disputed decision is reconstructed from.
+    const host = await userFactory();
+    const { meeting } = await meetingFactory();
+    const knock = await meetingGuestsRepository.claimLobbyPlace(claimInput(meeting.id));
+    if (knock === undefined) throw new Error('expected the knock to be inserted');
+
+    await expect(meetingGuestsRepository.listLiveByMeeting(meeting.id)).resolves.toHaveLength(1);
+
+    await meetingGuestsRepository.decideAdmission({
+      guestId: knock.id,
+      decision: 'denied',
+      deciderUserId: host.id,
+    });
+
+    await expect(meetingGuestsRepository.listLiveByMeeting(meeting.id)).resolves.toEqual([]);
+    await expect(guestAuditRows(knock.id, 'meeting_guest.denied')).resolves.toHaveLength(1);
+    // …and the row itself is still there, un-deleted, carrying its decision.
+    const after = await readGuest(knock.id);
+    expect(after.admission).toBe('denied');
+    expect(after.deletedAt).toBeNull();
+  });
+
+  /**
+   * ── THE ADR-1030 OBLIGATION BAL-408 DEFERRED AND BAL-132 DISCHARGES ────────────────────
+   * BAL-408 shipped admit/deny with no `audit_events` row, accepted ONLY while nothing could
+   * produce a `pending` guest. `claimLobbyPlace` (below) ends that window, so the write lands
+   * here. The three tests below pin all three halves of the contract: the row EXISTS, it
+   * DISTINGUISHES admit from deny, and a NO-OP writes NOTHING.
+   */
+  it('writes exactly ONE `meeting_guest.admitted` audit row, attributed to the decider', async () => {
+    const host = await userFactory();
+    const seeded = await meetingGuestFactory({ values: { admission: 'pending' } });
+
+    await meetingGuestsRepository.decideAdmission({
+      guestId: seeded.guest.id,
+      decision: 'admitted',
+      deciderUserId: host.id,
+    });
+
+    const audits = await guestAuditRows(seeded.guest.id, 'meeting_guest.admitted');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(host.id);
+    expect(audits[0]?.metadata).toMatchObject({
+      meetingId: seeded.meetingId,
+      party: 'client',
+      decision: 'admitted',
+      inviteChannel: 'email',
+    });
+    // ⚠ NEVER the token hash — an audit row is a durable, widely-readable record and
+    // `token_hash` is the only secret-adjacent value on the guest row.
+    expect(JSON.stringify(audits[0]?.metadata)).not.toContain(seeded.guest.tokenHash);
+    // The two actions are DISTINCT, not one `meeting_guest.decided` with a field.
+    await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual(['meeting_guest.admitted']);
+  });
+
+  it('writes a `meeting_guest.denied` row for the other branch — the two are distinguishable', async () => {
+    const host = await userFactory();
+    const seeded = await meetingGuestFactory({ values: { admission: 'pending' } });
+
+    await meetingGuestsRepository.decideAdmission({
+      guestId: seeded.guest.id,
+      decision: 'denied',
+      deciderUserId: host.id,
+    });
+
+    const denials = await guestAuditRows(seeded.guest.id, 'meeting_guest.denied');
+    expect(denials).toHaveLength(1);
+    expect(denials[0]?.metadata).toMatchObject({ decision: 'denied' });
+    await expect(guestAuditRows(seeded.guest.id, 'meeting_guest.admitted')).resolves.toEqual([]);
+  });
+
+  it('a NO-OP decision writes ZERO audit rows — history must not record what did not happen', async () => {
+    // ⚠ `revoke`'s discipline, applied here: `undefined` is returned BEFORE the audit call.
+    // Without it, the LOSER of a two-host race would be indistinguishable from the winner in
+    // `audit_events` — the exact review a disputed call turns on.
+    const host = await userFactory();
+    const preAdmitted = await meetingGuestFactory(); // default admission, not pending
+
+    await expect(
+      meetingGuestsRepository.decideAdmission({
+        guestId: preAdmitted.guest.id,
+        decision: 'admitted',
+        deciderUserId: host.id,
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(guestAuditActions(preAdmitted.guest.id)).resolves.toEqual([]);
+  });
+
+  it('is ATOMIC — a failing audit write rolls the admission back with it', async () => {
+    // ⚠ THE WHOLE POINT OF THE `db.transaction` BAL-132 ADDS. Before it, the update was a
+    // bare statement, so an audit failure would have left an ADMITTED guest with no history.
+    const host = await userFactory();
+    const seeded = await meetingGuestFactory({ values: { admission: 'pending' } });
+
+    await expectAuditFailureRollsBack(() =>
+      meetingGuestsRepository.decideAdmission({
+        guestId: seeded.guest.id,
+        decision: 'admitted',
+        deciderUserId: host.id,
+      })
+    );
+
+    const after = await readGuest(seeded.guest.id);
+    expect(after.admission).toBe('pending');
+    expect(after.admissionDecidedAt).toBeNull();
+    expect(after.admittedByUserId).toBeNull();
+    await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual([]);
+  });
+
   it('returns `undefined` from ANY non-pending state — no silent transition', async () => {
     const host = await userFactory();
     const preAdmitted = await meetingGuestFactory(); // default admission
@@ -540,6 +826,309 @@ describe('meetingGuestsRepository.decideAdmission', () => {
 
     expect(first?.admittedByUserId).toBe(hostA.id);
     expect(second).toBeUndefined();
+    // ⚠ ASSERTED SEQUENTIALLY, NOT VIA RACING CLIENTS — memory
+    // `reference_db_integration_harness_no_concurrency`: the harness is a `max:1` pool inside
+    // ONE per-test transaction, so genuine concurrency is INEXPRESSIBLE here. Two ordinary
+    // calls prove the same predicate. The audit trail must show exactly ONE decision, and no
+    // trace at all of hostB's denial.
+    await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual(['meeting_guest.admitted']);
+  });
+});
+
+// ── 5b. claimLobbyPlace — the anonymous lobby knock (BAL-132) ────────────────
+
+describe('meetingGuestsRepository.claimLobbyPlace', () => {
+  it('inserts a `pending` / `link` / null-inviter row and audits it with NO actor', async () => {
+    const { meeting } = await meetingFactory();
+
+    const row = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'visitor@northwind.test', name: 'Dana Visitor' })
+    );
+
+    expect(row?.meetingId).toBe(meeting.id);
+    // ⚠ THE WHOLE REASON MIGRATION 0064 EXISTS. A knock has no inviter, and there is no
+    // honest non-null value for one.
+    expect(row?.invitedById).toBeNull();
+    expect(row?.inviteChannel).toBe('link');
+    expect(row?.admission).toBe('pending');
+    expect(row?.participationRole).toBe('guest');
+    // `meeting_guest_admission_terminal_stamped` is a BICONDITIONAL — a non-terminal
+    // admission MUST be unstamped, so an insert that "helpfully" stamped would 23514.
+    expect(row?.admissionDecidedAt).toBeNull();
+    expect(row?.admittedByUserId).toBeNull();
+    expect(row?.revokedAt).toBeNull();
+    expect(row?.deletedAt).toBeNull();
+    expect(row?.accessCount).toBe(0);
+    expect(row?.email).toBe('visitor@northwind.test');
+
+    if (row === undefined) {
+      throw new Error('expected the knock to be inserted');
+    }
+    const audits = await guestAuditRows(row.id, 'meeting_guest.self_claimed');
+    expect(audits).toHaveLength(1);
+    // An anonymous visitor is not an actor; `audit_events.actor_user_id` is nullable for
+    // exactly this case.
+    expect(audits[0]?.actorUserId).toBeNull();
+    expect(audits[0]?.metadata).toMatchObject({
+      meetingId: meeting.id,
+      email: 'visitor@northwind.test',
+      party: 'client',
+      participationRole: 'guest',
+      accessScope: 'meeting',
+      inviteChannel: 'link',
+    });
+    expect(JSON.stringify(audits[0]?.metadata)).not.toContain(row.tokenHash);
+  });
+
+  /**
+   * ⚠⚠ THE `ON CONFLICT` PARTIAL-INDEX ARBITER TEST — the single highest-risk line in this
+   * slice, and the ONLY thing that can prove it.
+   *
+   * `meeting_guest_meeting_email_live_idx` is PARTIAL
+   * (`deleted_at IS NULL AND revoked_at IS NULL`). Postgres will only infer a partial index
+   * for `ON CONFLICT` if the arbiter predicate matches it, and an arbiter carrying a BIND
+   * PARAMETER can never match — the statement fails
+   * `42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification`
+   * (memory `reference_pg_partial_index_arbiter_param_42p10`). No unit test, no typecheck and
+   * no schema snapshot can see that; only a real conflict against a real Postgres can.
+   *
+   * ⚠ THE PIN SURVIVES THE SWITCH TO `DO NOTHING`. Arbiter inference is required for
+   * `ON CONFLICT (cols) WHERE pred DO NOTHING` exactly as it was for `DO UPDATE`, so this still
+   * drives a genuine second knock onto a LIVE incumbent and would still fail 42P10 if the
+   * predicate ever stopped matching the index.
+   */
+  it('a RE-KNOCK from the same address hits the arbiter and is a NO-OP (the 42P10 pin)', async () => {
+    const { meeting } = await meetingFactory();
+    const firstHash = tokenHash();
+    const secondHash = tokenHash();
+    const laterExpiry = new Date(Date.now() + 9 * DAY_MS);
+
+    const first = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, {
+        email: 'visitor@northwind.test',
+        name: 'Dana',
+        tokenHash: firstHash,
+      })
+    );
+    if (first === undefined) {
+      throw new Error('expected the first knock to be inserted');
+    }
+    const before = await readGuest(first.id);
+
+    const second = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, {
+        email: 'visitor@northwind.test',
+        name: 'Dana Visitor',
+        tokenHash: secondHash,
+        expiresAt: laterExpiry,
+      })
+    );
+
+    // ⚠⚠ THE HIJACK FIX. The first cut ROTATED the incumbent's `token_hash`, `name` and
+    // `expires_at` so that a person reloading the lobby would not 409. But a knock carries NO
+    // proof of identity — only a meeting id and a self-declared address — so "the same person
+    // reloading" and "a stranger who guessed a colleague's address" are THE SAME REQUEST, byte
+    // for byte. Rotation therefore let a stranger silently invalidate a live credential and
+    // inherit that queue position under a name and address of their own choosing.
+    expect(second).toBeUndefined();
+
+    // Not merely unreported — the incumbent row is genuinely BYTE-IDENTICAL.
+    await expect(readGuest(first.id)).resolves.toEqual(before);
+
+    // ⚠ THE ORIGINAL TOKEN STILL RESOLVES. That is the property that was broken: the
+    // incumbent's poll keeps working instead of starting to answer "this link isn't active".
+    await expect(meetingGuestsRepository.findLiveByTokenHash(firstHash)).resolves.toMatchObject({
+      guest: { id: first.id },
+    });
+    // …and the impostor's token was never persisted anywhere.
+    await expect(meetingGuestsRepository.findLiveByTokenHash(secondHash)).resolves.toBeUndefined();
+
+    await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(1);
+
+    // ⚠ INSERT-ONLY MEANS EXACTLY ONE AUDIT ROW PER GUEST ROW. A second one on the same
+    // `entity_id` is now a bug rather than the rotation signal it used to be.
+    await expect(guestAuditRows(first.id, 'meeting_guest.self_claimed')).resolves.toHaveLength(1);
+  });
+
+  it('NEVER touches a LIVE row in ANY admission state — `pending` included', async () => {
+    // ⚠⚠ `ON CONFLICT DO NOTHING`. The earlier compare-and-set protected only the ALREADY-DECIDED
+    // states, so it answered a success for a live `pending` incumbent and a refusal for the
+    // rest — the response itself told a caller which one it was, an email-roster oracle sitting
+    // on top of the hijack. Every live state now yields ONE outcome.
+    const host = await userFactory();
+    const inviter = await userFactory();
+
+    const cases: [string, Partial<NewMeetingGuest>][] = [
+      // ⚠ `pending` IS THE ONE THAT WAS EXPLOITABLE — it is first on purpose.
+      ['pending', { admission: 'pending' }],
+      [
+        'admitted',
+        { admission: 'admitted', admissionDecidedAt: new Date(), admittedByUserId: host.id },
+      ],
+      ['pre_admitted', { admission: 'pre_admitted' }],
+      [
+        'denied',
+        { admission: 'denied', admissionDecidedAt: new Date(), admittedByUserId: host.id },
+      ],
+    ];
+
+    for (const [label, values] of cases) {
+      const { meeting } = await meetingFactory();
+      const incumbent = await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { email: 'taken@northwind.test', party: 'client', ...values },
+      });
+      const before = await readGuest(incumbent.guest.id);
+
+      await expect(
+        meetingGuestsRepository.claimLobbyPlace(
+          claimInput(meeting.id, { email: 'taken@northwind.test', name: 'Impostor' })
+        ),
+        label
+      ).resolves.toBeUndefined();
+
+      // Not merely unreported — genuinely untouched.
+      const after = await readGuest(incumbent.guest.id);
+      expect(after, label).toEqual(before);
+      await expect(guestAuditActions(incumbent.guest.id), label).resolves.toEqual([]);
+      // ⚠ AND NO SECOND ROW WAS INSERTED for that address either.
+      await expect(
+        meetingGuestsRepository.listLiveByMeeting(meeting.id),
+        label
+      ).resolves.toHaveLength(1);
+    }
+  });
+
+  it('two DIFFERENT addresses on one meeting both get their own place in the queue', async () => {
+    const { meeting } = await meetingFactory();
+
+    const one = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'dana@northwind.test' })
+    );
+    const two = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'sam@northwind.test' })
+    );
+
+    expect(one?.id).not.toBe(two?.id);
+    await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(2);
+  });
+
+  it('the arbiter is PARTY-SCOPED — the same address may knock on each side independently', async () => {
+    // The conflict target is `(meeting_id, party, email)`, matching the index key. Getting
+    // the column list wrong would silently collapse the two sides into one slot.
+    const { meeting } = await meetingFactory();
+
+    const clientSide = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'dana@northwind.test', party: 'client' })
+    );
+    const expertSide = await meetingGuestsRepository.claimLobbyPlace(
+      claimInput(meeting.id, { email: 'dana@northwind.test', party: 'expert' })
+    );
+
+    expect(clientSide?.id).not.toBe(expertSide?.id);
+    expect(clientSide?.party).toBe('client');
+    expect(expertSide?.party).toBe('expert');
+  });
+
+  it('a REVOKED or SOFT-DELETED knock vacates the slot — a fresh INSERT, not a rotation', async () => {
+    // ⚠ The other half of the partial-index contract, and the
+    // `reference_softdelete_nonpartial_unique_recreate` regression from the knock side: both
+    // halves of the index predicate must vacate, or a denied-and-revoked visitor could never
+    // be let back in even by a host who changed their mind.
+    const inviter = await userFactory();
+
+    for (const [label, values] of [
+      ['revoked', { revokedAt: new Date(), revokedByUserId: inviter.id }],
+      ['soft-deleted', { deletedAt: new Date() }],
+    ] as [string, Partial<NewMeetingGuest>][]) {
+      const { meeting } = await meetingFactory();
+      const dead = await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { email: 'dana@northwind.test', admission: 'pending', ...values },
+      });
+
+      const fresh = await meetingGuestsRepository.claimLobbyPlace(
+        claimInput(meeting.id, { email: 'dana@northwind.test' })
+      );
+
+      expect(fresh?.id, label).not.toBe(dead.guest.id);
+      expect(fresh?.admission, label).toBe('pending');
+      expect(fresh?.invitedById, label).toBeNull();
+    }
+  });
+
+  it('rejects a knock on a meeting that does not exist (23503) — no orphan queue entries', async () => {
+    // ⚠ The repository is called DIRECTLY rather than through `expectConstraintViolation`,
+    // and that is safe for the same reason that helper exists: `claimLobbyPlace` opens its
+    // own `db.transaction`, which under the integration harness is a SAVEPOINT, so the 23503
+    // rolls back to it and the outer per-test transaction survives (`test/setup-integration.ts`).
+    // The service is expected to have resolved the meeting already; this is the backstop.
+    await expect(
+      meetingGuestsRepository.claimLobbyPlace(claimInput('00000000-0000-0000-0000-000000000000'))
+    ).rejects.toMatchObject({ code: '23503' });
+  });
+
+  it('a knock is projected by listLiveByMeeting with a NULL invitedById (the type ripple)', async () => {
+    // ⚠ `MeetingGuestPublic.invitedById` widened to `string | null` in this slice. Every
+    // reader must branch; `apps/web/src/app/join/[token]/page.tsx` is the one that did.
+    const { meeting } = await meetingFactory();
+    const knock = await meetingGuestsRepository.claimLobbyPlace(claimInput(meeting.id));
+
+    const [projected] = await meetingGuestsRepository.listLiveByMeeting(meeting.id);
+    expect(projected?.id).toBe(knock?.id);
+    expect(projected?.invitedById).toBeNull();
+    expect(projected?.admission).toBe('pending');
+    expect(projected?.inviteChannel).toBe('link');
+  });
+
+  it('a knock can then be ADMITTED, and the same row carries both audit rows', async () => {
+    // The end-to-end lifecycle this slice makes reachable for the first time: knock (no
+    // actor) → host decision (attributed). Both live under one `entity_id`.
+    const host = await userFactory();
+    const { meeting } = await meetingFactory();
+    const knock = await meetingGuestsRepository.claimLobbyPlace(claimInput(meeting.id));
+    if (knock === undefined) {
+      throw new Error('expected the knock to be inserted');
+    }
+
+    const decided = await meetingGuestsRepository.decideAdmission({
+      guestId: knock.id,
+      decision: 'admitted',
+      deciderUserId: host.id,
+    });
+
+    expect(decided?.admission).toBe('admitted');
+    expect(decided?.admittedByUserId).toBe(host.id);
+    // ⚠ The admission is attributed even though the ROW has no inviter — `invited_by_id` and
+    // `admitted_by_user_id` are independent attribution columns.
+    expect(decided?.invitedById).toBeNull();
+    await expect(guestAuditActions(knock.id)).resolves.toEqual([
+      'meeting_guest.admitted',
+      'meeting_guest.self_claimed',
+    ]);
+    const admittedAudit = await guestAuditRows(knock.id, 'meeting_guest.admitted');
+    expect(admittedAudit[0]?.metadata).toMatchObject({ inviteChannel: 'link' });
+  });
+
+  it('is ATOMIC — a failing audit write rolls the knock back with it', async () => {
+    const { meeting } = await meetingFactory();
+
+    await expectAuditFailureRollsBack(() =>
+      meetingGuestsRepository.claimLobbyPlace(
+        claimInput(meeting.id, { email: 'visitor@northwind.test' })
+      )
+    );
+
+    // Not merely unaudited — the queue entry itself never existed, so the visitor's retry
+    // takes the INSERT arm cleanly rather than colliding with a half-written row.
+    await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(0);
+    const orphans = await db
+      .select({ id: meetingGuests.id })
+      .from(meetingGuests)
+      .where(eq(meetingGuests.meetingId, meeting.id));
+    expect(orphans).toEqual([]);
   });
 });
 
@@ -570,6 +1159,171 @@ describe('meetingGuestsRepository — the live reads', () => {
   it('countLiveByMeeting is 0 for a meeting with no guests at all', async () => {
     const { meeting } = await meetingFactory();
     await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(0);
+  });
+
+  /**
+   * ── ⚠⚠ BAL-132: SEATS AND QUEUE SLOTS ARE TWO DIFFERENT RESOURCES ──────────────────────
+   *
+   * `countLiveByMeeting` used to filter only `deleted_at` / `revoked_at`, which was correct
+   * while `pre_admitted` was the only admission any writer could produce. The lobby makes
+   * `pending` and `denied` reachable, and under the old predicate BOTH consumed a seat
+   * permanently — `decideAdmission` stamps `admission`, NOT `revoked_at`, so a DENIED row
+   * stayed "live" forever. Expired rows counted too.
+   *
+   * The consequence was NOT confined to the lobby: `inviteGuests` shares this counter, so a
+   * handful of anonymous knocks from ONE address left the HOST unable to invite anybody by
+   * email, with no way to clear it. Denying them did not help.
+   */
+  describe('⚠⚠ countLiveByMeeting counts SEATS, not rows', () => {
+    it('EXCLUDES a `pending` knock — waiting is not holding a seat', async () => {
+      const { meeting } = await meetingFactory();
+
+      await meetingGuestsRepository.claimLobbyPlace(
+        claimInput(meeting.id, { email: 'knocker@northwind.test' })
+      );
+
+      await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(0);
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(1);
+    });
+
+    it('⚠⚠ EXCLUDES a `denied` row — and a DENY therefore FREES the slot it took', async () => {
+      const host = await userFactory();
+      const { meeting } = await meetingFactory();
+
+      const knock = await meetingGuestsRepository.claimLobbyPlace(
+        claimInput(meeting.id, { email: 'knocker@northwind.test' })
+      );
+      if (knock === undefined) throw new Error('expected the knock to be inserted');
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(1);
+
+      await meetingGuestsRepository.decideAdmission({
+        guestId: knock.id,
+        decision: 'denied',
+        deciderUserId: host.id,
+      });
+
+      // ⚠ NO SECOND WRITE AND NO SWEEP — the row simply drops out of both predicates.
+      await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(0);
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(0);
+    });
+
+    it('COUNTS an `admitted` knock — an admit converts a queue slot into a seat', async () => {
+      const host = await userFactory();
+      const { meeting } = await meetingFactory();
+
+      const knock = await meetingGuestsRepository.claimLobbyPlace(
+        claimInput(meeting.id, { email: 'knocker@northwind.test' })
+      );
+      if (knock === undefined) throw new Error('expected the knock to be inserted');
+
+      await meetingGuestsRepository.decideAdmission({
+        guestId: knock.id,
+        decision: 'admitted',
+        deciderUserId: host.id,
+      });
+
+      await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(1);
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(0);
+    });
+
+    it('EXCLUDES an EXPIRED row — an expired handle occupies nothing', async () => {
+      const { meeting } = await meetingFactory();
+      const inviter = await userFactory();
+
+      await meetingGuestFactory({ meetingId: meeting.id, invitedById: inviter.id });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { expiresAt: new Date(Date.now() - DAY_MS) },
+      });
+
+      // ⚠ `findLiveByTokenHash` already refuses to resolve an expired row, so counting it would
+      // reserve a seat nobody can ever occupy.
+      await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(1);
+    });
+
+    it('⚠⚠ A FULL KNOCK QUEUE LEAVES THE PARTICIPANT COUNT AT ZERO (the host can still invite)', async () => {
+      // The defect in one assertion: under the old single counter these knocks filled the
+      // meeting and `inviteGuests` — which shares this exact counter — started refusing every
+      // email invite the host tried to send.
+      const { meeting } = await meetingFactory();
+
+      for (const email of ['a@x.test', 'b@x.test', 'c@x.test', 'd@x.test', 'e@x.test']) {
+        await meetingGuestsRepository.claimLobbyPlace(claimInput(meeting.id, { email }));
+      }
+
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(5);
+      await expect(meetingGuestsRepository.countLiveByMeeting(meeting.id)).resolves.toBe(0);
+    });
+  });
+
+  describe('countPendingLobbyKnocks — the queue counter', () => {
+    it('is 0 for a meeting with no knocks', async () => {
+      const { meeting } = await meetingFactory();
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(0);
+    });
+
+    it('⚠ counts only `link`-channel rows — an emailed invitee is never queue noise', async () => {
+      const { meeting } = await meetingFactory();
+      const inviter = await userFactory();
+
+      // A `pending` EMAIL-channel row cannot be produced by any shipped writer, but the
+      // predicate is scoped to `link` so a future one could not inflate the lobby's bound.
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { inviteChannel: 'email', admission: 'pending' },
+      });
+      await meetingGuestsRepository.claimLobbyPlace(
+        claimInput(meeting.id, { email: 'knocker@northwind.test' })
+      );
+
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(1);
+    });
+
+    it('excludes revoked, soft-deleted and expired knocks', async () => {
+      const { meeting } = await meetingFactory();
+      const inviter = await userFactory();
+
+      const base = {
+        inviteChannel: 'link' as const,
+        admission: 'pending' as const,
+        invitedById: null,
+      };
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { ...base, revokedAt: new Date(), revokedByUserId: inviter.id },
+      });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { ...base, deletedAt: new Date() },
+      });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        invitedById: inviter.id,
+        values: { ...base, expiresAt: new Date(Date.now() - DAY_MS) },
+      });
+
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(meeting.id)).resolves.toBe(0);
+    });
+
+    it('is scoped to ONE meeting', async () => {
+      const one = await meetingFactory();
+      const two = await meetingFactory();
+
+      await meetingGuestsRepository.claimLobbyPlace(
+        claimInput(one.meeting.id, { email: 'knocker@northwind.test' })
+      );
+
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(one.meeting.id)).resolves.toBe(
+        1
+      );
+      await expect(meetingGuestsRepository.countPendingLobbyKnocks(two.meeting.id)).resolves.toBe(
+        0
+      );
+    });
   });
 
   it('listLiveByMeeting NEVER projects token_hash (nor expires_at / access_count)', async () => {
@@ -858,6 +1612,62 @@ describe('meeting_guests — the CHECK backstops', () => {
       .returning();
     expect(decidedActorGone?.admission).toBe('admitted');
     expect(decidedActorGone?.admittedByUserId).toBeNull();
+  });
+
+  it('refuses a NULL inviter on a non-`link` channel (meeting_guest_self_claimed_is_link)', async () => {
+    // ⚠ THE CONSTRAINT THAT GUARDS 0064'S OWN WIDENING. `invited_by_id` became nullable in
+    // this migration, so this is the row shape that only became EXPRESSIBLE here: an
+    // inviter-less guest that claims to have arrived by `email`. Nobody sent that email —
+    // there is no sender — so the row asserts a provenance that cannot exist.
+    const { meeting } = await meetingFactory();
+    await expectConstraintViolation('23514', (tx) =>
+      tx.insert(meetingGuests).values(
+        // `rawGuestRow`'s second arg is the inviter; the override nulls it. Every other
+        // column stays valid, so it is THIS check that fires and not a neighbour.
+        rawGuestRow(meeting.id, '00000000-0000-0000-0000-000000000000', {
+          invitedById: null,
+          inviteChannel: 'email',
+        })
+      )
+    );
+  });
+
+  it('PERMITS a link-channel row that DOES name an inviter — the check is an IMPLICATION, not a biconditional', async () => {
+    // ⚠⚠ THIS TEST IS THE GUARD AGAINST A FUTURE "TIGHTENING". The one-directional check
+    // says only "a null inviter implies a link row". The converse — an attributed link row —
+    // is DELIBERATELY LEGAL, because BAL-436 ships a "Copy join link" control and a follow-up
+    // could legitimately attribute the resulting row to the member who copied the link.
+    // A biconditional would forbid this insert; if someone ever writes one, this test is the
+    // thing that goes red and explains why.
+    const { meeting } = await meetingFactory();
+    const inviter = await userFactory();
+
+    const [row] = await db
+      .insert(meetingGuests)
+      .values(rawGuestRow(meeting.id, inviter.id, { inviteChannel: 'link' }))
+      .returning();
+
+    expect(row?.inviteChannel).toBe('link');
+    expect(row?.invitedById).toBe(inviter.id);
+  });
+
+  it('PERMITS the self-claim shape the check exists to allow (null inviter + link)', async () => {
+    // The other half of "not over-broad": the exact row `claimLobbyPlace` writes must pass.
+    const { meeting } = await meetingFactory();
+
+    const [row] = await db
+      .insert(meetingGuests)
+      .values(
+        rawGuestRow(meeting.id, '00000000-0000-0000-0000-000000000000', {
+          invitedById: null,
+          inviteChannel: 'link',
+          admission: 'pending',
+        })
+      )
+      .returning();
+
+    expect(row?.invitedById).toBeNull();
+    expect(row?.inviteChannel).toBe('link');
   });
 
   it('refuses a negative access_count', async () => {

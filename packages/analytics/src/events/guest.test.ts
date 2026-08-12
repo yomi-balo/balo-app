@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GUEST_SERVER_EVENTS } from './guest';
+import { GUEST_SERVER_EVENTS, type GuestServerEventMap } from './guest';
 
 describe('GUEST_SERVER_EVENTS', () => {
   it('exposes exactly the BAL-408 guest server events', () => {
@@ -16,6 +16,11 @@ describe('GUEST_SERVER_EVENTS', () => {
       'GUEST_DENIED',
       'GUEST_INVITE_OPENED',
       'GUEST_INVITED',
+      // ⚠ BAL-132. `GUEST_JOINED` sorts here under BOTH ICU `localeCompare` and code-unit
+      // order — after `GUEST_INVITED` (`I` < `J`) and before `GUEST_REMOVED` (`J` < `R`) —
+      // so unlike the `GUEST_INVITE_OPENED` / `GUEST_INVITED` pair above, its position is
+      // not collation-sensitive.
+      'GUEST_JOINED',
       'GUEST_REMOVED',
     ]);
   });
@@ -25,6 +30,7 @@ describe('GUEST_SERVER_EVENTS', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_DENIED).toBe('guest_denied');
     expect(GUEST_SERVER_EVENTS.GUEST_INVITE_OPENED).toBe('guest_invite_opened');
     expect(GUEST_SERVER_EVENTS.GUEST_INVITED).toBe('guest_invited');
+    expect(GUEST_SERVER_EVENTS.GUEST_JOINED).toBe('guest_joined');
     expect(GUEST_SERVER_EVENTS.GUEST_REMOVED).toBe('guest_removed');
   });
 
@@ -34,12 +40,75 @@ describe('GUEST_SERVER_EVENTS', () => {
     }
   });
 
-  it('⚠ does NOT declare an event with no producer — `guest_joined` is BAL-132’s and `guest_converted_to_member` is BAL-345’s', () => {
-    // A constant with no emitter reads as a 100% drop-off funnel step in PostHog. Both
-    // shapes are documented in the module docblock so the receiving tickets add them
-    // verbatim; neither may be declared here until it can actually fire.
+  it('⚠ does NOT declare an event with no producer — `guest_converted_to_member` is still BAL-345’s', () => {
+    // A constant with no emitter reads as a 100% drop-off funnel step in PostHog. The shape
+    // is documented in the module docblock so the receiving ticket adds it verbatim; it may
+    // not be declared here until it can actually fire.
+    //
+    // ⚠ `guest_joined` WAS PINNED ABSENT HERE AND HAS NOW LANDED (BAL-132). Removing this
+    // assertion is the CORRECT amendment, not a weakening of the guard: the rule is "no
+    // constant without a producer", and `guest_joined` arrived in the same PR as
+    // `joinMeetingAsGuest`, which emits it on every successful Daily token mint. The
+    // exact-key-set case above is what keeps the set honest now.
     const values: readonly string[] = Object.values(GUEST_SERVER_EVENTS);
-    expect(values).not.toContain('guest_joined');
     expect(values).not.toContain('guest_converted_to_member');
+  });
+
+  it('BAL-345’s shape stays reserved in prose, not in code — the docblock is the hand-off', () => {
+    // Non-vacuity for the assertion above: prove the collection really is the one being
+    // guarded, so a future refactor that empties it cannot make the check pass for free.
+    expect(Object.values(GUEST_SERVER_EVENTS).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * ⚠⚠ BAL-132 — `guest_joined.party` IS **OPTIONAL**, AND THE OMISSION IS THE WHOLE POINT.
+   *
+   * `meeting_guests.party` is NOT NULL and CHECK-narrowed to `client | expert`, so the lobby
+   * writer stores the PLACEHOLDER `client` — not because a side was resolved (a bare meeting
+   * URL carries no sharer identity) but because the column demands something. Emitting that
+   * placeholder makes a dashboard filtered on `party = client` silently include every
+   * link-share joiner: a WRONG answer, not merely a coarse one.
+   *
+   * ⚠ IT WAS `MeetingGuestSide | null` FIRST, and both this test and the source docblock said
+   * the property was "ABSENT rather than wrong". **IT WAS NOT ABSENT.** `trackServer` spreads
+   * the properties object straight into `capture({ properties })`, so the `null` reached
+   * PostHog as a real value: it satisfies `party is set`, it creates a `null` breakdown bucket,
+   * and it appears in the property explorer. Optional-and-omitted is what makes the claim true.
+   *
+   * ⚠ THE COMPILE-TIME HALF IS NOW ACTUALLY COMPILED. `@balo/analytics` had no `scripts` block
+   * at all, so root `pnpm typecheck` never reached this package and Vitest transpiles via
+   * esbuild WITHOUT type checking — a "COMPILE-TIME assertion" that nothing compiled. The
+   * package now has a `typecheck` script, so the `@ts-expect-error` below is genuinely a gate.
+   */
+  it('⚠ `guest_joined.party` is OPTIONAL and OMITTED on link_share — never null', () => {
+    const linkShare: GuestServerEventMap['guest_joined'] = {
+      join_method: 'link_share',
+      admitted: true,
+      distinct_id: 'guest-1',
+    };
+    const resolved: GuestServerEventMap['guest_joined'] = {
+      party: 'expert',
+      join_method: 'magic_link',
+      admitted: false,
+      distinct_id: 'guest-2',
+    };
+
+    // ⚠ KEY ABSENCE, not `=== undefined`: `JSON.stringify` drops an absent key entirely, which
+    // is exactly why PostHog never sees the property. A `party: undefined` would pass an
+    // `=== undefined` check while still being a present key.
+    expect('party' in linkShare).toBe(false);
+    expect(resolved.party).toBe('expert');
+  });
+
+  it('⚠ `guest_joined.party` REJECTS null — the encoding that used to ship', () => {
+    const withNull: GuestServerEventMap['guest_joined'] = {
+      // @ts-expect-error — `null` is a VALUE PostHog would store; the property must be omitted.
+      party: null,
+      join_method: 'link_share',
+      admitted: true,
+      distinct_id: 'guest-3',
+    };
+
+    expect(withNull.join_method).toBe('link_share');
   });
 });

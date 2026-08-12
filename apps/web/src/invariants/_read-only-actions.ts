@@ -60,6 +60,54 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   'app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files.ts',
 ];
 
+/**
+ * BAL-132 — Server Actions that authenticate with **NOTHING AT ALL**, because their caller has
+ * no account by definition.
+ *
+ * ── ⚠⚠ WHY THIS LIST HAD TO EXIST ───────────────────────────────────────────────────────
+ *
+ * `onboarding-mutation-gate.test.ts` scans for modules calling BARE `requireUser(`. That makes
+ * it **structurally blind to a module calling no auth helper at all** — such a module simply
+ * never enters the offending set. So BAL-132's two anonymous lobby actions passed that
+ * invariant, and their docblocks said so accurately ("IT PASSES THAT INVARIANT … VERIFIED") —
+ * but passing it was never EVIDENCE OF SAFETY, and nothing stopped a third, accidentally
+ * unauthenticated mutating action landing under `_actions/` and passing just as quietly.
+ *
+ * This list closes that hole from the other side: the paired assertion proves the set of
+ * `'use server'` modules under `app/join/` that reference NO auth or session primitive at all is
+ * EXACTLY this list. A new one fails CI; deleting one from here without deleting the file fails
+ * CI too.
+ *
+ * ⚠ THE ASSERTION IS SCOPED TO `app/join/`, AND THAT LIMIT IS DELIBERATE AND DOCUMENTED. A
+ * repo-wide version is not implementable as a name scan today: ~35 correctly-authenticated
+ * actions gate through per-feature wrappers a fixed helper-name list cannot see through. See
+ * the test's own docblock for the full reasoning — and do NOT "fix" it by deleting the scope
+ * filter and growing this list.
+ *
+ * ── ⚠ WHAT AN ENTRY HERE IS ASSERTING ───────────────────────────────────────────────────
+ *
+ * NOT "this action needs no authorization" — it is asserting that **the authorization is
+ * SERVER-SIDE AND ELSEWHERE**, and naming where. Both entries below forward to `apps/api`
+ * routes that are public BY DESIGN and that carry the real gate: meeting resolution, liveness,
+ * the participant and queue caps, the token compare, and rate limiting — collapsing every
+ * failure into one non-enumerating literal.
+ *
+ * ⚠ DO NOT ADD AN ENTRY TO MAKE A FAILING BUILD GREEN. The default for a mutating Server Action
+ * is `requireOnboardedUser()`; an anonymous one needs a written reason, its own rate limit, and
+ * a non-enumerating response.
+ */
+export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
+  // An ANONYMOUS visitor forwarded a bare meeting URL knocks to join the admission queue. They
+  // have no account BY DEFINITION — that is the entire premise of a waiting-to-join lobby.
+  // Authorization: `apps/api`'s `claimLobbyPlace` (meeting + liveness + both caps), behind the
+  // lobby route's per-visitor, per-meeting-visitor and per-peer windows.
+  'app/join/_actions/claim-lobby-place.ts',
+  // A token-bearing GUEST asks "have I been let in yet?". The ≥256-bit token IS the credential;
+  // a guest has no WorkOS session to send a Bearer from. Authorization: `apps/api`'s
+  // `joinMeetingAsGuest`, which resolves the token hash and refuses everything else identically.
+  'app/join/_actions/poll-guest-admission.ts',
+];
+
 /** The module whose two variants differ by whether they WRITE. */
 export const CONVERSATION_ACCESS_MODULE = 'project-request/resolve-conversation-access';
 

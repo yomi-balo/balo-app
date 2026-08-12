@@ -6,6 +6,7 @@ import {
   projectGuestForViewer,
   selectPrimaryMeetingContext,
   GUEST_TOKEN_TTL_AFTER_END_MS,
+  MAX_LOBBY_QUEUE,
   MAX_MEETING_PARTICIPANTS,
   MEETING_CONTEXT_PRECEDENCE,
   RESERVED_BASE_PARTICIPANTS,
@@ -150,12 +151,38 @@ describe('selectPrimaryMeetingContext', () => {
 // ── ⚠⚠ THE MONEY RULE ─────────────────────────────────────────────────────────────────
 
 describe('presencePartyForGuest — THE MONEY RULE', () => {
-  it('maps an EXPERT-side guest to `observer`, never `expert`', () => {
-    expect(presencePartyForGuest('expert')).toBe('observer');
+  it('maps an EXPERT-side EMAIL-channel guest to `observer`, never `expert`', () => {
+    expect(presencePartyForGuest({ party: 'expert', inviteChannel: 'email' })).toBe('observer');
   });
 
-  it('maps a CLIENT-side guest to `client` — the client party is genuinely represented', () => {
-    expect(presencePartyForGuest('client')).toBe('client');
+  it('maps a CLIENT-side EMAIL-channel guest to `client` — the client party is genuinely represented', () => {
+    expect(presencePartyForGuest({ party: 'client', inviteChannel: 'email' })).toBe('client');
+  });
+
+  // ── BAL-132: the `link` channel is ALWAYS an observer ──────────────────────────────
+  describe('a `link`-channel guest is an observer REGARDLESS of the stored party', () => {
+    /**
+     * ⚠ THE STORED `party` IS A PLACEHOLDER ON THESE ROWS, NOT A RESOLVED SIDE. A bare
+     * meeting URL carries no sharer identity, so `claimLobbyPlace` writes `client` only
+     * because `meeting_guests.party` is NOT NULL and CHECK-narrowed to two labels. Trusting
+     * it would let an expert-side colleague who was forwarded the link hold the billable
+     * clock open after the real client leaves.
+     */
+    it.each(['client', 'expert'] as const)(
+      'stored party `%s` + channel `link` ⇒ observer',
+      (party) => {
+        expect(presencePartyForGuest({ party, inviteChannel: 'link' })).toBe('observer');
+      }
+    );
+
+    it('DIFFERS from the email channel for the SAME stored party — the channel is load-bearing', () => {
+      // If this ever comes out equal, the channel argument has stopped being read and the
+      // over-billing path is open again. `client` is the only party for which the two
+      // channels disagree, which is exactly why it is the one worth asserting.
+      expect(presencePartyForGuest({ party: 'client', inviteChannel: 'email' })).not.toBe(
+        presencePartyForGuest({ party: 'client', inviteChannel: 'link' })
+      );
+    });
   });
 
   /**
@@ -175,7 +202,7 @@ describe('presencePartyForGuest — THE MONEY RULE', () => {
     ];
 
     it('CORRECT — the expert-side guest as `observer`: expertPresentMs = 10 min, billableMs = 10 min', () => {
-      const guestParty = presencePartyForGuest('expert');
+      const guestParty = presencePartyForGuest({ party: 'expert', inviteChannel: 'email' });
       const clocks = computeMeetingClocks(
         [...BASE_INTERVALS, { party: guestParty, joinedAt: at(0), leftAt: at(60) }],
         at(60)
@@ -209,7 +236,11 @@ describe('presencePartyForGuest — THE MONEY RULE', () => {
         [
           { party: 'expert', joinedAt: at(0), leftAt: at(60) },
           { party: 'client', joinedAt: at(0), leftAt: at(5) },
-          { party: presencePartyForGuest('client'), joinedAt: at(0), leftAt: at(60) },
+          {
+            party: presencePartyForGuest({ party: 'client', inviteChannel: 'email' }),
+            joinedAt: at(0),
+            leftAt: at(60),
+          },
         ],
         at(60)
       );
@@ -411,5 +442,22 @@ describe('participation constants', () => {
   it('gives a guest link 7 days past the meeting end', () => {
     expect(GUEST_TOKEN_TTL_AFTER_END_MS).toBe(7 * 24 * 60 * 60 * 1000);
     expect(GUEST_TOKEN_TTL_AFTER_END_MS).toBe(604_800_000);
+  });
+
+  /**
+   * ⚠⚠ BAL-132 — THE QUEUE IS A SEPARATE RESOURCE FROM THE ROOM, AND THAT IS THE FIX.
+   *
+   * The lobby's first cut counted a `pending` knock against the PARTICIPANT cap, on the same
+   * counter `inviteGuests` uses — so filling the queue from a forwarded URL also took away the
+   * HOST's ability to invite anyone by email, permanently, with no way to clear it (denying did
+   * not help; the denied row kept its seat). Bounding them independently means a knock flood can
+   * exhaust the QUEUE and nothing else.
+   */
+  it('⚠ bounds the anonymous knock queue SEPARATELY from the participant cap', () => {
+    expect(MAX_LOBBY_QUEUE).toBe(25);
+    // ⚠ HIGHER THAN THE ROOM CAP ON PURPOSE: a host may legitimately deny several people
+    // (wrong meeting, forwarded to the wrong team) and still admit a full room afterwards, so a
+    // queue bound at 10 would be reachable in normal use.
+    expect(MAX_LOBBY_QUEUE).toBeGreaterThan(MAX_MEETING_PARTICIPANTS);
   });
 });

@@ -372,13 +372,25 @@
   }
 }
 
+/* ⚠⚠ THIS BLOCK MUST LIST TAILWIND'S OWN ANIMATIONS TOO, NOT ONLY BALO'S CUSTOM KEYFRAMES.
+   `animate-spin` and `animate-pulse` ship with Tailwind and are NOT covered by the
+   `motion-reduce:` variant unless a component remembers to write it — and the join surfaces
+   (every skeleton bar, every submit spinner) are exactly where a reduced-motion user meets
+   them. Listing them here makes the guarantee global instead of per-component.
+
+   ⚠ `animate-spin` gets `animation: none` rather than a slower spin: a spinner frozen mid-turn
+   is a still icon, which is the correct reduced-motion rendering. The accompanying TEXT
+   ("Asking to join…", "Loading…") is what actually communicates progress — which is why every
+   spinner on these surfaces is `aria-hidden` and paired with a label. */
 @media (prefers-reduced-motion: reduce) {
   .animate-shake,
   .animate-fade-in,
   .animate-slide-up,
   .animate-bar-fill,
   .animate-pulse-dot,
-  .animate-float-glow {
+  .animate-float-glow,
+  .animate-spin,
+  .animate-pulse {
     animation: none;
   }
 }

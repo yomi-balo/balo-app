@@ -30,14 +30,16 @@ export type { TranscriptVenue } from '../events/transcript';
 // BAL-390 — SERVER-ONLY by design: `review_*` here always means the STAR RATING, and
 // none of these three may be added to the client `@/lib/analytics` mock export list.
 export { REVIEW_SERVER_EVENTS } from '../events/review';
-// BAL-129 — THE STEP CLAUDE.md's analytics checklist OMITS, and the one whose absence
-// `@balo/analytics`'s own gates cannot see (it has no typecheck and no test script): these
-// are emitted from `apps/api`, which imports from `@balo/analytics/server` ONLY.
+// BAL-129 — THE STEP CLAUDE.md's analytics checklist OMITS: these are emitted from
+// `apps/api`, which imports from `@balo/analytics/server` ONLY, so skipping this line makes
+// them unimportable there. ⚠ THE ABSENCE STILL LANDS IN `apps/api`'s TYPECHECK, NOT THIS
+// PACKAGE'S — the `typecheck` script added in BAL-132 compiles this package's own sources,
+// which cannot notice a re-export that was never written.
 export { MEETING_SERVER_EVENTS } from '../events/meeting';
 export type { MeetingBookingContextType } from '../events/meeting';
 // BAL-408 — THE SAME FOURTH STEP. `apps/api`'s guest routes and the `apps/web` join landing
 // both import from `@balo/analytics/server`; omitting this line makes the constants
-// unimportable and fails `apps/api`'s typecheck, not this package's (it has neither).
+// unimportable and fails `apps/api`'s typecheck, not this package's.
 export { GUEST_SERVER_EVENTS } from '../events/guest';
-export type { GuestInviteEntryPoint } from '../events/guest';
+export type { GuestInviteEntryPoint, GuestJoinMethod } from '../events/guest';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';

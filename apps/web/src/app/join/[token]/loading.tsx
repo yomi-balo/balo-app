@@ -11,12 +11,20 @@
  * polite live region (and NOT `role="status"`, which SonarCloud flags under S6819); the
  * `sr-only` line is what it announces. Same shape as the shipped `/review/[token]` and
  * `(dashboard)/redeem` skeletons.
+ *
+ * ⚠⚠ `aria-busy` SITS ON THE **DECORATIVE WRAPPER**, NEVER ON THE `<output>`. `aria-busy` tells
+ * assistive tech to SUPPRESS a live region's announcements — so on the `<output>` it silenced
+ * the very "Loading your invitation…" line that element exists to announce. On the skeleton it
+ * means what it should: this subtree is being built.
  */
 export default function JoinLandingLoading(): React.JSX.Element {
   return (
-    <output aria-busy="true" className="mx-auto block w-full max-w-md">
+    <output className="mx-auto block w-full max-w-md">
       <span className="sr-only">Loading your invitation…</span>
-      <div className="border-border bg-card w-full rounded-2xl border p-6 shadow-sm sm:p-8">
+      <div
+        aria-busy="true"
+        className="border-border bg-card w-full rounded-2xl border p-6 shadow-sm sm:p-8"
+      >
         <div className="bg-muted h-5 w-28 animate-pulse rounded-full" />
         <div className="bg-muted mt-4 h-6 w-2/3 animate-pulse rounded" />
         <div className="bg-muted mt-2 h-4 w-1/2 animate-pulse rounded" />

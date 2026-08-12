@@ -1,0 +1,52 @@
+-- BAL-132 (Decision 4) — `meeting_guests.invited_by_id` BECOMES NULLABLE, so an anonymous
+-- LOBBY KNOCK can exist, AND the invariant that pairs a null inviter with a link-channel row
+-- is enforced by the DATABASE rather than only by the write path.
+--
+-- HEADER-ONLY HAND EDIT after `drizzle-kit generate`: the two statements below are exactly
+-- what was generated, unreordered and unmodified. (Precedent for an explanatory header on
+-- generated SQL: 0055_bal417_engagement_supertype.sql, 0056_bal418_meetings_primitive.sql,
+-- 0059_bal428_consultation_projection.sql.)
+--
+-- ── WHY THE COLUMN GOES NULLABLE ───────────────────────────────────────────────────────
+-- A self-claimed visitor at a bare meeting URL has NO INVITER, and there is no honest
+-- non-null value for one. Attributing the knock to the delivering expert or to a synthetic
+-- system user would put a lie in the one column whose entire purpose is attribution.
+-- `CreateMeetingGuestsInput.invitedById` stays `string` (required), so the INVITE path
+-- structurally cannot produce a null; `meetingGuestsRepository.claimLobbyPlace` is the only
+-- writer that leaves it NULL, and it pairs the null with `invite_channel = 'link'`.
+--
+-- ── WHY THE CHECK SHIPS WITH IT ────────────────────────────────────────────────────────
+-- `invited_by_id` just became nullable FOR THE FIRST TIME, so this is precisely the moment a
+-- future writer could quietly produce an inviter-less `email`-channel row that means nothing.
+-- This repo enforces its invariants in the database, not only on the write path
+-- (`meeting_guest_admission_terminal_stamped`, `meeting_guest_admission_attributed`,
+-- `meeting_context_admin_no_id`, `project_requests_direct_requires_expert`).
+--
+-- ⚠⚠ THE CHECK IS A ONE-DIRECTIONAL IMPLICATION — "a null inviter IMPLIES a link-channel
+-- row" — AND MUST STAY THAT WAY. DO NOT tighten it into the biconditional
+-- `(invited_by_id IS NULL) = (invite_channel = 'link')`. The biconditional would also forbid
+-- a `link`-channel row that DOES name an inviter, and that state is not nonsensical: BAL-436
+-- ships a "Copy join link" control, and a follow-up could legitimately want the resulting row
+-- attributed to the member who copied the link. The implication states the invariant we
+-- actually have — "there is no such thing as a self-claimed row that is not a link row" —
+-- without foreclosing a decision nobody has made. Full reasoning lives on the constraint in
+-- `packages/db/src/schema/guests.ts`.
+--
+-- ── WHY BOTH ARE SAFE ON A POPULATED TABLE, WHICH CI CANNOT TELL YOU ───────────────────
+-- ⚠ THE INTEGRATION HARNESS MIGRATES AN **EMPTY** CONTAINER (memory
+-- `reference_db_migrations_tested_against_empty_db`), so it proves nothing about migrating
+-- real data: a NOT NULL add, a backfill, or a retro-validating `ADD CONSTRAINT` would all be
+-- green in CI and red on Railway. BOTH statements are safe for reasons INDEPENDENT of that
+-- harness, and each needs its own argument:
+--
+--   1. `DROP NOT NULL` is a pure WIDENING. It relaxes a predicate every existing row already
+--      satisfies, validates nothing, rewrites no heap, and takes only a brief
+--      ACCESS EXCLUSIVE lock to flip `pg_attribute.attnotnull`. No row can be rejected.
+--   2. `ADD CONSTRAINT … CHECK` DOES run a validation scan — but it cannot reject anything
+--      here, because until statement 1 ran `invited_by_id` was NOT NULL, so the LEFT DISJUNCT
+--      (`invited_by_id IS NOT NULL`) is true for EVERY pre-existing row regardless of its
+--      `invite_channel`. This is exactly the property the biconditional would NOT have: it
+--      would reject every existing `email`-channel row on sight. The ordering matters only
+--      for readability — the scan sees the pre-migration data either way.
+ALTER TABLE "meeting_guests" ALTER COLUMN "invited_by_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "meeting_guests" ADD CONSTRAINT "meeting_guest_self_claimed_is_link" CHECK ("meeting_guests"."invited_by_id" IS NOT NULL OR "meeting_guests"."invite_channel" = 'link');

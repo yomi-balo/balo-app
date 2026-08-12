@@ -12,8 +12,14 @@
  * `packages/analytics/src/server/index.ts`, and `apps/api` imports from
  * `@balo/analytics/server` ONLY — so skipping that re-export leaves these constants
  * unimportable from the app that emits most of them, and the failure lands in `apps/api`'s
- * typecheck rather than here (`@balo/analytics` has no typecheck and no test script of its
- * own; its co-located guard tests run via `npx vitest run packages/analytics`).
+ * typecheck rather than here (a check that compiles only this package cannot see a re-export
+ * nobody wrote). Its co-located guard tests run via `npx vitest run packages/analytics`.
+ *
+ * ⚠ THIS PACKAGE **DOES** HAVE A `typecheck` SCRIPT AS OF BAL-132, and that is load-bearing
+ * for the type-level assertions in `guest.test.ts` / `meeting.test.ts`. It previously had NO
+ * `scripts` block at all, so root `pnpm typecheck` (`turbo run typecheck check-types`) never
+ * reached this package and Vitest transpiles via esbuild WITHOUT type checking — meaning two
+ * tests that described themselves as "COMPILE-TIME assertions" were compiled by nothing.
  *
  * ⚠⚠ NO EMAIL ADDRESSES, NO DOMAINS, NO NAMES, NO TOKENS — EVER. The whole feature is about
  * external people, so the temptation is real and the rule is absolute. `same_domain` is the
@@ -25,19 +31,22 @@
  * has none. It is a stable pseudonymous handle that becomes joinable to a real person only
  * if BAL-345's (currently inert) domain auto-join ever writes `converted_to_user_id`.
  *
- * ⚠ TWO EVENTS ARE DELIBERATELY **NOT** DECLARED HERE, because an analytics constant with
- * no producer is a FALSE PostHog signal — a funnel step that can never fire reads as 100%
- * drop-off, and the exact-key-set guard below would pin it forever:
- *   · `guest_joined` `{ party, join_method: 'magic_link' | 'link_share', admitted }`
- *     → **BAL-132**. Nothing can join: `@daily-co/daily-js` is not a dependency of any
- *     package, and no `pending` admission row is ever produced.
+ * ⚠ ONE EVENT IS DELIBERATELY **NOT** DECLARED HERE, because an analytics constant with no
+ * producer is a FALSE PostHog signal — a funnel step that can never fire reads as 100%
+ * drop-off, and the exact-key-set guard in `guest.test.ts` would pin it forever:
  *   · `guest_converted_to_member` `{ days_since_meeting }` → **BAL-345**, whichever ticket
  *     makes domain auto-join live. Nothing writes `converted_to_user_id`.
- * Both shapes are written out above so those tickets add them verbatim.
+ * The shape is written out above so that ticket adds it verbatim.
+ *
+ * ⚠ `guest_joined` WAS ON THAT LIST UNTIL BAL-132 AND HAS NOW LANDED, VERBATIM — the shape
+ * this docblock reserved for it (`{ party, join_method, admitted }`) is exactly the shape
+ * declared below, and it fires from `joinMeetingAsGuest` on every successful Daily token
+ * mint. The discipline held: the constant arrived WITH its producer, in the same PR.
  */
 import type {
   GuestAccessScopeLabel,
   MeetingContextTypeLabel,
+  MeetingGuestInviteChannelLabel,
   MeetingGuestSide,
   MeetingParticipationRoleLabel,
 } from '@balo/shared/meetings';
@@ -51,9 +60,29 @@ export const GUEST_SERVER_EVENTS = {
   GUEST_INVITE_OPENED: 'guest_invite_opened',
   /** One guest row committed. Emitted once PER GUEST, not once per batch. */
   GUEST_INVITED: 'guest_invited',
+  /**
+   * BAL-132 — a guest Daily meeting token was successfully MINTED, i.e. the guest actually
+   * got into the room. ⚠ A MINT EVENT, NOT A UNIQUE-VISITOR ONE — see the map entry.
+   */
+  GUEST_JOINED: 'guest_joined',
   /** A guest's access was revoked. */
   GUEST_REMOVED: 'guest_removed',
 } as const;
+
+/**
+ * HOW the guest got their credential — BAL-132.
+ *
+ * ⚠ DERIVED FROM THE PERSISTED `meeting_guests.invite_channel`, NEVER FROM REQUEST INPUT.
+ * `email` → `magic_link` (an invite, trust-by-default, `pre_admitted`); `link` → `link_share`
+ * (a forwarded link, hence the lobby queue). It is 1:1 with the channel BY CONSTRUCTION, and
+ * that is exactly why `guest_joined` does NOT also carry an `invite_channel` property: two
+ * spellings of one fact on one event is worse than either alone, because they can be filtered
+ * against each other and disagree in a dashboard.
+ *
+ * ⚠ THE OTHER SIDE OF THAT RULING: `guest_admitted` / `guest_denied` DO carry
+ * `invite_channel`, because those two have no other discriminator at all.
+ */
+export type GuestJoinMethod = 'magic_link' | 'link_share';
 
 /**
  * WHERE the invite was composed. ⚠ THE FIELD THIS WHOLE EVENT SET EXISTS TO MEASURE, and
@@ -89,12 +118,74 @@ export interface GuestServerEventMap {
   };
   [GUEST_SERVER_EVENTS.GUEST_ADMITTED]: {
     party: MeetingGuestSide;
+    /**
+     * ⚠ BAL-132 — REQUIRED, AND IT IS WHAT MAKES `party` READABLE ON THIS EVENT. A
+     * `link`-channel row's `party` is a PLACEHOLDER: the lobby writer stores `client`
+     * because the column is NOT NULL, not because a side was resolved. Without this
+     * discriminator every admit/deny in PostHog looks like a client-side guest, and the
+     * placeholder silently pollutes the one dimension the event carries. Segment on it.
+     */
+    invite_channel: MeetingGuestInviteChannelLabel;
     /** The HOST's user id. */
     distinct_id: string;
   };
   [GUEST_SERVER_EVENTS.GUEST_DENIED]: {
     party: MeetingGuestSide;
+    /** ⚠ BAL-132 — REQUIRED, for the reason on `guest_admitted` above. */
+    invite_channel: MeetingGuestInviteChannelLabel;
     /** The HOST's user id. */
+    distinct_id: string;
+  };
+  /**
+   * BAL-132 — one successful guest Daily token mint.
+   *
+   * ⚠⚠ THIS IS A **MINT** EVENT, NOT A UNIQUE-VISITOR EVENT. It fires on EVERY successful
+   * mint, which includes a rejoin after a network drop and a second device. **Count DISTINCT
+   * `distinct_id`, never raw events.** Documented here rather than solved, exactly as
+   * `guest_invite_opened` documents its scanner inflation: inventing a `first_joined_at`
+   * column to make the count exact is not worth a migration for an analytics nicety.
+   *
+   * ⚠ AND IT FIRES ONLY ON A MINT — a `pending` guest polling the lobby emits NOTHING. That
+   * absence is a deliberate property (Decision 2), asserted by a test: waiting is not joining,
+   * and a poll every 5 seconds would otherwise flood the event stream.
+   */
+  [GUEST_SERVER_EVENTS.GUEST_JOINED]: {
+    /**
+     * ⚠⚠ **OPTIONAL — THE KEY IS OMITTED ENTIRELY ON A `link_share` JOIN.** Not `null`.
+     *
+     * `meeting_guests.party` is NOT NULL and CHECK-narrowed to `client | expert`, so the lobby
+     * writer stores the PLACEHOLDER `client`: a bare meeting URL carries no sharer identity,
+     * so there is no side to resolve. Emitting that placeholder would make a dashboard filtered
+     * on `party = client` silently include every link-share joiner — a WRONG answer, not a
+     * coarse one.
+     *
+     * ⚠ IT WAS TYPED `MeetingGuestSide | null` FIRST, AND THE DOCBLOCK CLAIMED THE PROPERTY WAS
+     * "ABSENT RATHER THAN WRONG". **IT WAS NOT ABSENT.** `trackServer` spreads the properties
+     * object verbatim into `client.capture({ properties: rest })`, so an explicit `null`
+     * reached PostHog as `"party": null` — which satisfies a `party is set` filter, produces a
+     * `null` bucket in every breakdown, and shows up as a real value in the property explorer.
+     * The narrow claim F21 actually needed (a `party = client` filter must exclude link-share
+     * joins) held either way; the stated one did not. An OMITTED key is the encoding that makes
+     * the docblock true — `posthog-node` never sees a property that was never set.
+     *
+     * ⚠ SO A `party` ON THIS EVENT IS ALWAYS A RESOLVED SIDE, and `join_method` tells you when
+     * to expect one at all. (The billing side never had this problem: `presencePartyForGuest`
+     * maps the whole `link` channel to `observer` by a NON-OPTIONAL argument.)
+     *
+     * ⚠ WRITE IT WITH A CONDITIONAL SPREAD, NEVER `party: cond ? x : undefined`. This repo does
+     * not enable `exactOptionalPropertyTypes`, so the second form COMPILES and reintroduces the
+     * same defect one layer down — a present key holding `undefined`.
+     */
+    party?: MeetingGuestSide;
+    /** SERVER-DERIVED from `meeting_guests.invite_channel`. See {@link GuestJoinMethod}. */
+    join_method: GuestJoinMethod;
+    /**
+     * `true` when a host EXPLICITLY admitted them through the queue (`admission = 'admitted'`);
+     * `false` for a trust-by-default invitee (`pre_admitted`). Together with `join_method`
+     * this answers the product question: does the trust-by-default split behave as designed?
+     */
+    admitted: boolean;
+    /** ⚠ `meeting_guests.id` — a guest has NO user id. See the module docblock. */
     distinct_id: string;
   };
   [GUEST_SERVER_EVENTS.GUEST_INVITE_OPENED]: {

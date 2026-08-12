@@ -164,4 +164,9 @@ export {
   type MeetingServerEventMap,
   type MeetingBookingContextType,
 } from './meeting';
-export { GUEST_SERVER_EVENTS, type GuestServerEventMap, type GuestInviteEntryPoint } from './guest';
+export {
+  GUEST_SERVER_EVENTS,
+  type GuestServerEventMap,
+  type GuestInviteEntryPoint,
+  type GuestJoinMethod,
+} from './guest';

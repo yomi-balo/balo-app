@@ -162,7 +162,11 @@ export const meetingGuests = pgTable(
     /** How they reached the meeting. Orthogonal to `admission`. */
     inviteChannel: meetingGuestInviteChannelEnum('invite_channel').notNull(),
 
-    /** The admit/deny lifecycle. `pending` has NO producer until BAL-132. */
+    /**
+     * The admit/deny lifecycle. `pending`'s FIRST PRODUCER is BAL-132's
+     * `meetingGuestsRepository.claimLobbyPlace` (a self-claimed lobby knock); the invite
+     * path still only ever writes `pre_admitted`.
+     */
     admission: meetingGuestAdmissionEnum('admission').notNull(),
 
     /**
@@ -174,10 +178,30 @@ export const meetingGuests = pgTable(
      * BEFORE deleting the user, which satisfies `restrict` — but the two NEW attribution
      * FKs below do NOT have that treatment for free, and that file was patched in this same
      * PR to NULL them. See the note on `revoked_by_user_id`.
+     *
+     * ⚠⚠ NULLABLE SINCE MIGRATION 0064 (BAL-132, Decision 4). A SELF-CLAIMED LOBBY ROW HAS
+     * NO INVITER, AND THERE IS NO HONEST NON-NULL VALUE. Attributing a knock to the
+     * delivering expert or to a synthetic system user would put a LIE in the one column
+     * whose entire purpose is attribution — and `CreateMeetingGuestsInput.invitedById` is
+     * still `string` (required), so the INVITE path structurally cannot produce a null.
+     * `meetingGuestsRepository.claimLobbyPlace` is the ONLY writer that leaves it NULL, and
+     * it pairs the null with `invite_channel = 'link'` + `admission = 'pending'`.
+     *
+     * ⚠ THE PAIRING IS ENFORCED BY THE DATABASE, NOT ONLY BY THE WRITE PATH. Migration 0064
+     * relaxes the NOT NULL **and** adds the one-directional CHECK
+     * `meeting_guest_self_claimed_is_link` (`invited_by_id IS NOT NULL OR
+     * invite_channel = 'link'`) — see its docblock in the CHECKs block below, including why
+     * it must NEVER be tightened into a biconditional. Both statements are pure widenings
+     * that admit every pre-existing row, so neither depends on the integration harness for
+     * its safety argument (memory `reference_db_migrations_tested_against_empty_db` — the
+     * harness migrates an EMPTY container, so a retro-validating `ADD CONSTRAINT` that could
+     * actually reject a row would be green in CI and red on Railway; this one cannot).
+     *
+     * ⚠ NO RIPPLE IN `admin-dev/_actions/delete-user.ts`. A self-claimed row names no
+     * inviter, so its `delete(... WHERE invited_by_id = $user)` simply does not match it;
+     * the row's only actor FK is `admitted_by_user_id`, which that file already NULLs.
      */
-    invitedById: uuid('invited_by_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'restrict' }),
+    invitedById: uuid('invited_by_id').references(() => users.id, { onDelete: 'restrict' }),
 
     /**
      * SHA-256 hex (64 chars) of a ≥256-bit random token. The RAW token is NEVER persisted.
@@ -193,7 +217,26 @@ export const meetingGuests = pgTable(
      */
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 
-    /** Set by remove/deny. THIS is what "removing a guest revokes access" means mechanically. */
+    /**
+     * THIS is what "removing a guest revokes access" means mechanically: every live read
+     * (`findLiveByTokenHash`, `listLiveByMeeting`, `findLiveById`, both counts) re-checks
+     * `revoked_at IS NULL`, and `meeting_guest_meeting_email_live_idx` is partial on it.
+     *
+     * ⚠ WRITTEN BY EXACTLY TWO METHODS, AND THEY DIFFER IN ONE COLUMN — which is what keeps
+     * the two states distinguishable on the row itself:
+     *   · `revoke`          → `revoked_at` **AND** `deleted_at`. A host removed this guest.
+     *   · `decideAdmission` → `revoked_at` ONLY, and ONLY on a `denied` decision. A host
+     *     refused this knock. `deleted_at` stays NULL, so the row survives as evidence.
+     * An ADMIT writes neither — an admitted guest holds a seat, and every "live" read depends
+     * on that.
+     *
+     * ⚠⚠ THE DENIAL STAMP IS LOAD-BEARING, NOT BOOKKEEPING. Without it a denied row keeps its
+     * `(meeting, party, email)` slot in the partial unique FOREVER — expiry does not vacate a
+     * unique index, and that index has no `admission` predicate — so the host who just said no
+     * to an address could never afterwards INVITE that address by email (`23505` →
+     * `409 guest_already_invited`). See `decideAdmission`'s docblock for the full three-part
+     * consequence and for why re-knockability after a denial is consistent with Decision 10.
+     */
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
 
     /**
@@ -265,6 +308,17 @@ export const meetingGuests = pgTable(
     // `proposal_share_link_relationship_recipient_live_idx`, including `revoked_at`.
     // A NON-partial unique here would silently make removal permanent.
     //
+    // ⚠⚠ AND A **DENIAL** VACATES IT TOO (BAL-132), because `decideAdmission` stamps
+    // `revoked_at` on the `denied` branch. THE PREDICATE IS THE COMPLETE LIST OF WHAT FREES A
+    // SLOT: `revoked_at` or `deleted_at` becoming non-null, and nothing else. In particular
+    // **`expires_at` PASSING DOES NOT VACATE THIS INDEX** — expiry is not in the predicate and
+    // a unique index does not honour row TTLs. So without the denial stamp, a host who denied
+    // an address could never afterwards invite it (the `23505` maps to
+    // `409 guest_already_invited`, which would be false and unrecoverable), and a stranger
+    // knocking with a guessed address could burn that address's client-side invite slot for
+    // good. Anything that changes what stamps `revoked_at` changes THIS invariant — read
+    // `decideAdmission`'s docblock before touching either.
+    //
     // ⚠⚠ PARTY-SCOPED, AND THE REASON IS CONCEALMENT, NOT MERELY UNIQUENESS. A unique on
     // the bare (meeting, email) pair spans BOTH sides, so its 23505 — which the service
     // maps to a `409 guest_already_invited` — answers a question about the COUNTERPARTY's
@@ -303,11 +357,13 @@ export const meetingGuests = pgTable(
     index('meeting_guest_admitted_by_idx').on(t.admittedByUserId),
 
     // ── CHECKs ───────────────────────────────────────────────────────────────────────
-    // ALL FIVE ARE THREE-VALUED-LOGIC SAFE. Every operand is either a NOT NULL column
-    // compared to a literal (never NULL) or a total `IS NULL` test — so none of them can
-    // "pass by being unknown", the hole `meeting_outcome_requires_ended` calls out.
-    // Naming enum literals here is safe because all four guest enums are standalone
-    // `CREATE TYPE` in this same migration 0061 (no `ALTER TYPE … ADD VALUE` occurs).
+    // ALL SIX ARE THREE-VALUED-LOGIC SAFE. Every operand is either a NOT NULL column
+    // compared to a literal (never NULL) or a total `IS NULL` / `IS NOT NULL` test — so none
+    // of them can "pass by being unknown", the hole `meeting_outcome_requires_ended` calls
+    // out. Naming enum literals here is safe because all four guest enums are standalone
+    // `CREATE TYPE` in this same migration 0061 (no `ALTER TYPE … ADD VALUE` occurs) — and
+    // that holds for `meeting_guest_self_claimed_is_link`'s `'link'` too, added in 0064
+    // against the already-committed `meeting_guest_invite_channel` type.
 
     // Reuse the three-label party enum (see the docblock), constrain to the two sides.
     check('meeting_guest_party_two_sided', sql`${t.party} IN ('client','expert')`),
@@ -358,6 +414,46 @@ export const meetingGuests = pgTable(
       'meeting_guest_revocation_attributed',
       sql`${t.revokedByUserId} IS NULL OR ${t.revokedAt} IS NOT NULL`
     ),
+
+    // ⚠⚠ A NULL INVITER **IMPLIES** A LINK-CHANNEL ROW (BAL-132, Decision 4). Added in
+    // migration 0064 alongside the `DROP NOT NULL` that made a null inviter possible at all.
+    //
+    // THE INVARIANT IN WORDS: "there is no such thing as a self-claimed row that is not a
+    // link row." `invited_by_id` went nullable so an anonymous LOBBY KNOCK can exist, and the
+    // ONLY writer that leaves it NULL — `meetingGuestsRepository.claimLobbyPlace` — hardcodes
+    // `invite_channel = 'link'` (plus `admission = 'pending'`, `participation_role = 'guest'`).
+    // This repo enforces its invariants in the DATABASE, not only on the write path
+    // (`meeting_guest_admission_terminal_stamped`, `meeting_guest_admission_attributed`,
+    // `meeting_context_admin_no_id`, `project_requests_direct_requires_expert`), and a column
+    // that just became nullable FOR THE FIRST TIME is exactly where a future writer could
+    // quietly produce an inviter-less `email`-channel row that means nothing.
+    //
+    // ⚠⚠⚠ ONE-DIRECTIONAL, AND IT MUST STAY THAT WAY. DO NOT "TIGHTEN" THIS INTO THE
+    // BICONDITIONAL `(invited_by_id IS NULL) = (invite_channel = 'link')`. The biconditional
+    // additionally forbids the OTHER direction — a `link`-channel row that DOES name an
+    // inviter — and that state is not nonsensical, it is a PLAUSIBLE NEAR-FUTURE FEATURE:
+    // BAL-436 ships a "Copy join link" control, and a follow-up could legitimately want the
+    // resulting row attributed to the member who copied the link. Forbidding it here would
+    // foreclose that decision from a CHECK constraint, and re-widening a constraint later is
+    // a migration nobody should have to write for a guarantee we never actually needed.
+    // The implication captures the ACTUAL invariant and over-commits to nothing.
+    //
+    // Three-valued-logic safe like the other five: `invite_channel` is NOT NULL and compared
+    // to a literal, and `invited_by_id IS NOT NULL` is a total test — so the disjunction is
+    // never UNKNOWN and cannot "pass by being unknown".
+    //
+    // ⚠ SAFE TO ADD RETROACTIVELY, which is why it could join 0064 rather than waiting: the
+    // implication ADMITS EVERY PRE-EXISTING ROW. Before this migration `invited_by_id` was
+    // NOT NULL, so the left disjunct is true for all of them and `ADD CONSTRAINT`'s validation
+    // scan cannot reject anything. That reasoning is INDEPENDENT of the integration harness,
+    // which migrates an EMPTY container (memory `reference_db_migrations_tested_against_empty_db`)
+    // and therefore proves nothing about production data. A BICONDITIONAL would NOT have this
+    // property — it would reject every existing `email`-channel row on sight.
+    check(
+      'meeting_guest_self_claimed_is_link',
+      sql`${t.invitedById} IS NOT NULL OR ${t.inviteChannel} = 'link'`
+    ),
+
     check('meeting_guest_access_count_nonneg', sql`${t.accessCount} >= 0`),
   ]
 );

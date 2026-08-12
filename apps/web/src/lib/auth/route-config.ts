@@ -42,6 +42,15 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   // (@balo/shared/redaction). A guest token is deliberately NOT single-use, so a
   // single logged copy stays replayable for the whole 7-day window.
   '/join/',
+  // ⚠ BAL-132 — `/join/m/{meetingId}`, the anonymous lobby. **REDUNDANT FOR ROUTING** (the
+  // `/join/` entry above already matches it by `startsWith`) and present anyway, because the
+  // paired-registry invariant below asserts EXACT containment: every entry in
+  // `SENSITIVE_PATH_PREFIXES` must appear here verbatim. `/join/m/` had to be added there —
+  // `redactSensitivePath` returns on its first matching prefix, so `/join/` alone redacts the
+  // literal segment `m` and leaves the meeting id in the URL — and this line is what keeps
+  // the two registries provably paired rather than "covered by a prefix that happens to
+  // overlap". Do not delete it as dead weight; `route-config.test.ts` fails if you do.
+  '/join/m/',
 ];
 
 /** Admin path prefix (requires platformRole admin or super_admin) */

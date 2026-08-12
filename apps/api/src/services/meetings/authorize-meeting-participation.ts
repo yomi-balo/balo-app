@@ -91,6 +91,7 @@ import {
   requestExpertRelationshipsRepository,
   type Meeting,
   type MeetingContextType,
+  type MeetingGuestInviteChannel,
 } from '@balo/db';
 import { CAPABILITIES, ENGAGEMENT_CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
@@ -101,6 +102,7 @@ import {
   type MeetingContextOwnerReads,
   type PrimaryMeetingContext,
   type MeetingContextTypeLabel,
+  type MeetingGuestInviteChannelLabel,
   type MeetingGuestSide,
 } from '@balo/shared/meetings';
 import { hasEngagementCapability } from './authorize-engagement-host.js';
@@ -121,6 +123,27 @@ type AssertNever<T extends never> = T;
 export type AssertMeetingContextLabelsMatch = [
   AssertNever<MissingContextLabel>,
   AssertNever<StrayContextLabel>,
+];
+
+/**
+ * ⚠ THE SAME DRIFT GUARD FOR `meeting_guest_invite_channel` (BAL-132).
+ *
+ * `@balo/shared/meetings` restates that pgEnum's two labels as
+ * `MeetingGuestInviteChannelLabel` for the same reason it restates the context types — the
+ * package cannot import a pgEnum — and `presencePartyForGuest` now BRANCHES ON THAT LABEL to
+ * decide whether a guest reaches the billable clock. A THIRD label added to the database
+ * without a decision here would silently fall into the `email` arm and be treated as a
+ * RESOLVED party, which is the over-billing path the `link` arm exists to close.
+ *
+ * So it fails `pnpm --filter api typecheck` right here until somebody consciously decides
+ * which side of the money rule the new label sits on. Split per direction so neither branch
+ * forms a `never | never` union (S6571), exactly as the pair above.
+ */
+type MissingInviteChannelLabel = Exclude<MeetingGuestInviteChannel, MeetingGuestInviteChannelLabel>;
+type StrayInviteChannelLabel = Exclude<MeetingGuestInviteChannelLabel, MeetingGuestInviteChannel>;
+export type AssertMeetingGuestInviteChannelsMatch = [
+  AssertNever<MissingInviteChannelLabel>,
+  AssertNever<StrayInviteChannelLabel>,
 ];
 
 /** ⚠ ONE FAILURE LITERAL FOR EVERY DENIAL. There is deliberately no `forbidden`. */

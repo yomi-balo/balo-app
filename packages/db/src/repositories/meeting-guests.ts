@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { meetingGuests, meetings } from '../schema';
 import type {
@@ -38,7 +38,10 @@ export interface CreateMeetingGuestInput {
   /** ⚠ COMPUTED BY THE SERVICE at invite time; this is the stored record of the grant. */
   accessScope: GuestAccessScope;
   inviteChannel: MeetingGuestInviteChannel;
-  /** `pre_admitted` for an email invite; `pending` is BAL-132's lobby (no producer yet). */
+  /**
+   * `pre_admitted` for an email invite. `pending` is the lobby queue — whose real producer
+   * is `claimLobbyPlace` (BAL-132), not this batch insert.
+   */
   admission: Extract<MeetingGuestAdmission, 'pre_admitted' | 'pending'>;
   /** SHA-256 hex of the raw token. ⚠ The RAW token is never passed here or persisted. */
   tokenHash: string;
@@ -64,6 +67,53 @@ export interface DecideMeetingGuestAdmissionInput {
   decision: MeetingGuestAdmissionDecision;
   /** ATTRIBUTION — the host who admitted or denied. */
   deciderUserId: string;
+}
+
+/**
+ * One anonymous LOBBY KNOCK (BAL-132, Decisions 3–6 + 10). Every field is decided by the
+ * CALLER — this repository derives nothing from request input.
+ *
+ * ⚠ THERE IS NO `invitedById` HERE, AND THAT ABSENCE IS THE POINT. A self-claimed visitor
+ * has no inviter, so the column is written NULL (migration 0064 relaxed its NOT NULL). The
+ * invite path keeps `CreateMeetingGuestsInput.invitedById: string`, so only this method can
+ * produce a null-inviter row.
+ *
+ * ⚠ `inviteChannel`, `admission` and `participationRole` are ABSENT TOO, on the same
+ * reasoning inverted: they are not caller policy, they are what "self-claim" MEANS. The
+ * method hardcodes `link` / `pending` / `guest`. A caller that could pass `email` or
+ * `pre_admitted` here would be able to mint a trust-by-default participant with no inviter
+ * — i.e. skip the admission queue entirely — which is the single control this whole table
+ * exists to enforce. (A `delegate` is likewise unrepresentable: a delegate attends INSTEAD
+ * of the booker, which is a thing only an inviter can decide.)
+ */
+export interface ClaimLobbyPlaceInput {
+  meetingId: string;
+  /**
+   * ⚠ MUST ALREADY BE LOWERCASED AND TRIMMED — the same contract
+   * `CreateMeetingGuestInput.email` carries, and it is load-bearing HERE in a way it is not
+   * there: `meeting_guest_meeting_email_live_idx` is the ONLY bound on one visitor spamming
+   * N pending rows into a host's queue, and it matches the STORED BYTES. A caller that
+   * skips normalisation turns the queue cap into a formality.
+   */
+  email: string;
+  /** What the host reads in the queue. Self-declared, therefore never trusted for anything else. */
+  name: string | null;
+  /** The domain snapshot. Derived by the caller from `email`. */
+  emailDomain: string | null;
+  /**
+   * ⚠ A PLACEHOLDER, NOT A RESOLVED SIDE (Decision 3 / A1.1). A bare meeting URL carries no
+   * sharer identity, so there is no server-side signal for which side a knock is on; the
+   * service passes `client` because `party` is NOT NULL and CHECK-narrowed to two labels.
+   * **It must never anchor money.** `presencePartyForGuest` (`@balo/shared/meetings`) maps a
+   * `link`-channel guest to presence `observer` regardless of what is stored here.
+   */
+  party: MeetingGuestParty;
+  /** The grant record, computed by the service. `meeting` for a lobby knock. */
+  accessScope: GuestAccessScope;
+  /** SHA-256 hex of the raw token. ⚠ The RAW token is never passed here or persisted. */
+  tokenHash: string;
+  /** `meetings.scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`. There is NO SQL default. */
+  expiresAt: Date;
 }
 
 /** A resolved live token: the guest AND the meeting it lets them into, in one round trip. */
@@ -97,7 +147,11 @@ export interface MeetingGuestPublic {
   inviteChannel: MeetingGuestInviteChannel;
   admission: MeetingGuestAdmission;
   admissionDecidedAt: Date | null;
-  invitedById: string;
+  /**
+   * ⚠ NULL ON A SELF-CLAIMED LOBBY ROW (migration 0064). Every reader must branch — there
+   * is no inviter to name for someone who let themselves into the queue.
+   */
+  invitedById: string | null;
   createdAt: Date;
 }
 
@@ -263,8 +317,40 @@ export const meetingGuestsRepository = {
   },
 
   /**
-   * The participant-cap input (`MAX_MEETING_PARTICIPANTS`). A COUNT, so the cap check never
-   * materialises rows — and index-only on `meeting_guest_meeting_live_idx`.
+   * The participant-cap input (`MAX_MEETING_PARTICIPANTS`): guests who HOLD A SEAT. A COUNT,
+   * so the cap check never materialises rows — and index-only on
+   * `meeting_guest_meeting_live_idx`.
+   *
+   * ── ⚠⚠ WHAT COUNTS AS A SEAT, AND WHY THE PREDICATE IS NARROWER THAN "LIVE" (BAL-132) ───
+   *
+   * An earlier version filtered ONLY `deleted_at` / `revoked_at`, which was correct while
+   * `pre_admitted` was the only admission any writer could produce. BAL-132's lobby makes
+   * `pending` and `denied` reachable, and under the old predicate BOTH consumed capacity
+   * permanently:
+   *
+   *   · a DENIED knock kept its seat forever — at the time, `decideAdmission` stamped
+   *     `admission` and `admission_decided_at` and NOT `revoked_at`, so the row stayed "live"
+   *     for this count. (It stamps `revoked_at` on a denial NOW — see that method — which
+   *     means this exclusion is belt AND braces rather than the only thing holding;
+   *     `admission IN (…)` remains the rule that MEANS it, and `revoked_at IS NULL` alone
+   *     would still count a `pending` row.)
+   *   · a PENDING knock consumed a seat before any host had agreed to give it one;
+   *   · an EXPIRED row kept its seat, because the count ignored `expires_at`.
+   *
+   * The consequence was NOT confined to the lobby: `inviteGuests` shares this counter, so ten
+   * anonymous knocks from one address would have left the HOST unable to invite anyone by
+   * email, with no way to clear it — denying them did not help. Hence the three extra
+   * predicates. **`admission IN ('pre_admitted','admitted')` is the positive form of the
+   * rule**: a seat is held by somebody who is trusted by default or whom a host has said yes
+   * to. Waiting is not holding, and being refused is not holding.
+   *
+   * ⚠ THE ANONYMOUS QUEUE IS BOUNDED SEPARATELY, by {@link countPendingLobbyKnocks}, NOT by
+   * widening this one back out. Two different resources with two different limits: seats in
+   * the room, and slots in the admit/deny panel.
+   *
+   * ⚠ REVOKED/SOFT-DELETED ROWS ARE **ALSO** EXCLUDED (unchanged) — `revoke` stamps both, so
+   * a removed guest frees their seat immediately. A DENIAL stamps `revoked_at` too (but not
+   * `deleted_at`), so it is excluded twice over.
    *
    * ⚠ THE CAP IS A PRODUCT NUMBER, NOT A SAFETY PROPERTY, AND THIS COUNT IS UNSYNCHRONISED
    * WITH THE INSERT — stated plainly because an earlier version of this note claimed the
@@ -288,7 +374,52 @@ export const meetingGuestsRepository = {
         and(
           eq(meetingGuests.meetingId, meetingId),
           isNull(meetingGuests.deletedAt),
-          isNull(meetingGuests.revokedAt)
+          isNull(meetingGuests.revokedAt),
+          // ⚠ A SEAT IS HELD ONLY BY A TRUSTED-BY-DEFAULT INVITEE OR AN ADMITTED GUEST.
+          // `pending` has not been given one yet; `denied` never will be.
+          inArray(meetingGuests.admission, ['pre_admitted', 'admitted']),
+          // ⚠ AND AN EXPIRED HANDLE HOLDS NOTHING. `findLiveByTokenHash` already refuses to
+          // resolve one, so counting it would reserve a seat nobody can occupy.
+          gt(meetingGuests.expiresAt, sql`now()`)
+        )
+      );
+    return row?.count ?? 0;
+  },
+
+  /**
+   * How many ANONYMOUS KNOCKS are queued on this meeting, awaiting an admit/deny (BAL-132).
+   *
+   * ⚠⚠ A SECOND, SEPARATE RESOURCE FROM {@link countLiveByMeeting}, AND THAT SEPARATION IS
+   * THE POINT. Before this existed the knock queue and the participant roster shared one
+   * counter, so filling the queue from a forwarded URL also exhausted the HOST's ability to
+   * invite anybody by email. Seats and queue slots are now bounded independently: a flood of
+   * knocks can make the queue refuse further knocks, and can do nothing else.
+   *
+   * ⚠ SCOPED TO `invite_channel = 'link'`, NOT TO `pending` ALONE. `claimLobbyPlace` is the
+   * only writer that produces a `pending` LINK row, so this counts exactly the anonymous
+   * self-claim queue and cannot be inflated (or starved) by a future email-channel feature
+   * that legitimately wants a pending state of its own.
+   *
+   * ⚠ A DENY FREES A SLOT IMMEDIATELY — `decideAdmission` moves `admission` off `pending` and,
+   * on a denial, stamps `revoked_at` in the SAME statement, so the row drops out of this
+   * predicate twice over, with no second write and no sweep. So does an admit (the guest now
+   * holds a seat instead), a revoke, and the passage of `expires_at`.
+   *
+   * Unsynchronised with the insert for the same reason `countLiveByMeeting` is; the queue
+   * bound is a spam control, not a safety property.
+   */
+  countPendingLobbyKnocks: async (meetingId: string): Promise<number> => {
+    const [row] = await db
+      .select({ count: sql<number>`cast(count(*) as int)` })
+      .from(meetingGuests)
+      .where(
+        and(
+          eq(meetingGuests.meetingId, meetingId),
+          isNull(meetingGuests.deletedAt),
+          isNull(meetingGuests.revokedAt),
+          eq(meetingGuests.admission, 'pending'),
+          eq(meetingGuests.inviteChannel, 'link'),
+          gt(meetingGuests.expiresAt, sql`now()`)
         )
       );
     return row?.count ?? 0;
@@ -368,58 +499,295 @@ export const meetingGuestsRepository = {
   /**
    * `pending` → `admitted` | `denied`, stamping `admission_decided_at` and
    * `admitted_by_user_id` in the SAME statement — which is what
-   * `meeting_guest_admission_decided_pair` and `meeting_guest_admission_terminal_stamped`
+   * `meeting_guest_admission_terminal_stamped` and `meeting_guest_admission_attributed`
    * require, and why the transition cannot be half-written.
+   *
+   * (⚠ An earlier version of this docblock named a CHECK `meeting_guest_admission_decided_pair`.
+   * NO SUCH CONSTRAINT HAS EVER EXISTED — it appeared in prose only, in no migration SQL.
+   * The two named above are the real pair; see `schema/guests.ts`.)
    *
    * Returns `undefined` when the row is not `pending` (already decided, `pre_admitted`,
    * revoked, soft-deleted, or absent) — the caller maps that to `409 guest_not_pending`.
    * The `admission = 'pending'` predicate makes this a compare-and-set, so two racing hosts
-   * cannot both record a decision.
+   * cannot both record a decision. ⚠ THAT PREDICATE MUST STAY INSIDE THE TRANSACTION AND
+   * INSIDE THE `UPDATE`'s OWN `WHERE`: hoisting it into a read-then-write would reintroduce
+   * exactly the double-decision race it exists to close.
    *
-   * NO `audit_events` ROW — accepted ONLY for the inert window below, and NOT a standing
-   * exemption. The decision is durably attributed on the row itself (`admission` +
-   * `admission_decided_at` + `admitted_by_user_id`, held together by the two CHECKs), and the
-   * compare-and-set makes the transition irreversible and once-only, so who/what/when is
-   * already recorded.
+   * ── THE ADR-1030 AUDIT OBLIGATION, DISCHARGED (BAL-132) ────────────────────────────────
+   * BAL-408 shipped this transition with NO `audit_events` row, accepted ONLY for the window
+   * in which nothing could produce a `pending` guest, and the ticket owner RULED on
+   * 2026-08-10 that BAL-132 must close it when it makes admit/deny reachable. It is closed
+   * here: the update and a `meeting_guest.admitted` / `meeting_guest.denied` row now commit
+   * or roll back TOGETHER, matching `revoke`'s shape and distinguishing the two decisions.
+   * ADR-1030 was deliberately NOT amended — the deviation is ended, not blessed.
    *
-   * ⚠⚠ RULED 2026-08-10 (BAL-408 review, by the ticket owner): that is NOT sufficient, and
-   * BAL-132 MUST add the `audit_events` write when it makes admit/deny reachable. Do not read
-   * this docblock as a blessed deviation — ADR-1030 is deliberately NOT being amended. Two
-   * reasons the on-row triple does not close it:
-   *   1. `revoke` (below) and `createMany` (above) — the sibling acts in this same guest
-   *      lifecycle, carrying the same shape of attribution columns — BOTH write
-   *      `audit_events`. Admit/deny being the only silent transition is an inconsistency,
-   *      not a design.
-   *   2. An on-row triple is STATE, not HISTORY. An admin reconstructing a disputed call
-   *      queries `audit_events`; an admission that never appears there is invisible to
-   *      exactly the review that matters most.
-   * Write it inside this transaction, matching `revoke`'s shape, distinguishing `admitted`
-   * from `denied`.
+   * Two things that ruling turned on, restated so nobody "simplifies" them back out:
+   *   1. `createMany` and `revoke` — the sibling acts in this same guest lifecycle — both
+   *      write `audit_events`. Admit/deny being the only silent transition was an
+   *      inconsistency, not a design.
+   *   2. The on-row triple (`admission` + `admission_decided_at` + `admitted_by_user_id`) is
+   *      STATE, not HISTORY. An admin reconstructing a disputed call queries `audit_events`.
    *
-   * ⚠ INERT IN BAL-408: nothing produces an `admission = 'pending'` row. BAL-132 owns the
-   * lobby (anonymous visitor → name capture → bot protection → share-link proof).
+   * ⚠ THE NO-OP WRITES NO AUDIT ROW. `undefined` is returned BEFORE the audit call, exactly
+   * as `revoke` does: a durable record of a transition that did not happen is worse than
+   * none, and it would make the loser of a two-host race indistinguishable from the winner.
+   *
+   * ⚠ The audit metadata NEVER carries `token_hash` — same rule as `createMany`.
+   *
+   * ── ⚠⚠ A DENIAL ALSO STAMPS `revoked_at`, AND THAT IS THE WHOLE POINT OF THIS BLOCK ─────
+   *
+   * An earlier cut stamped ONLY `admission` / `admission_decided_at` / `admitted_by_user_id`,
+   * and the residual it left was documented as "the visitor is locked out until the row is
+   * denied, revoked or expires". **THAT SENTENCE WAS FALSE IN TWO OF ITS THREE CLAUSES.**
+   * `meeting_guest_meeting_email_live_idx` is partial on
+   * `deleted_at IS NULL AND revoked_at IS NULL` and on NOTHING ELSE — it has no `admission`
+   * predicate and no `expires_at` predicate, and **expiry does not vacate a unique index at
+   * all**. So a denied (or still-pending) row held that `(meeting, party, email)` slot
+   * FOREVER, and three things followed, all of them newly reachable because BAL-132 is the
+   * first producer of `pending` / `link` rows:
+   *
+   *   1. A host who denied `alice@acme.com` and then tried to invite Alice PROPERLY got
+   *      `23505` → `409 guest_already_invited` — an answer that was simply untrue, with no
+   *      recovery path anywhere in the product.
+   *   2. `claimLobbyPlace` writes the placeholder `party: 'client'`, so a knock lands in the
+   *      CLIENT-side slot — and `removeGuest`'s same-party rule means an EXPERT-side host
+   *      could not clear it at all. The one person with `host_meetings` was the one person
+   *      who could not undo it.
+   *   3. Anyone holding a meeting uuid could therefore burn any guessed address's client-side
+   *      invite slot permanently. A griefing primitive, not merely an untidy state.
+   *
+   * Stamping `revoked_at` (+ its `revoked_by_user_id` attribution, which
+   * `meeting_guest_revocation_attributed` permits and in fact requires to be paired this way)
+   * drops the row out of that partial index the instant a host says no, so the address is
+   * re-invitable and re-knockable immediately.
+   *
+   * ⚠ NO READ PATH CHANGES SHAPE. `findLiveByTokenHash` already excluded `denied` AND
+   * `revoked_at IS NOT NULL`, and `countLiveByMeeting` already excluded both — so the denied
+   * bearer's own token was already dead and their seat already freed. This adds nothing to
+   * what a denied person can do.
+   *
+   * ⚠⚠ IT DOES CHANGE ONE READ, AND THE CONSEQUENCE IS ACCEPTED RATHER THAN OVERLOOKED: a
+   * denied row now drops out of `listLiveByMeeting`, so **BAL-436's panel will not show
+   * denied entries in the roster**. The durable record is the `meeting_guest.denied`
+   * `audit_events` row written two statements below, which is where a disputed decision is
+   * reconstructed from anyway (see the STATE-not-HISTORY note above). A roster that keeps
+   * refused strangers visible forever is noise; an invite gate that can never be cleared is a
+   * defect. This trades the first for the second deliberately.
+   *
+   * ⚠ AND IT IS **NOT** A SOFT DELETE. `deleted_at` stays NULL, unlike `revoke`, so the two
+   * are still distinguishable on the row itself:
+   *   · REMOVED  → `deleted_at IS NOT NULL AND revoked_at IS NOT NULL`
+   *   · DENIED   → `deleted_at IS NULL     AND revoked_at IS NOT NULL AND admission='denied'`
+   *
+   * ⚠ DENIAL IS STILL NOT A DURABLE IDENTITY BAN (Decision 10, already accepted). A denied
+   * person CAN now re-knock with the same address, exactly as they could always re-knock with
+   * a different one. That is consistent with the shipped design, not a regression from it: a
+   * bare link plus a self-declared address cannot support an identity ban, and the property
+   * that actually matters is untouched — the room is `privacy: 'private'`, so a second knock
+   * still mints nothing without a second explicit host admit.
    */
   decideAdmission: async (
     input: DecideMeetingGuestAdmissionInput
   ): Promise<MeetingGuest | undefined> => {
-    const [row] = await db
-      .update(meetingGuests)
-      .set({
-        admission: input.decision,
-        admissionDecidedAt: sql`now()`,
-        admittedByUserId: input.deciderUserId,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(meetingGuests.id, input.guestId),
-          eq(meetingGuests.admission, 'pending'),
-          isNull(meetingGuests.deletedAt),
-          isNull(meetingGuests.revokedAt)
+    const isDenial = input.decision === 'denied';
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(meetingGuests)
+        .set({
+          admission: input.decision,
+          admissionDecidedAt: sql`now()`,
+          admittedByUserId: input.deciderUserId,
+          // ⚠⚠ ONLY ON A DENIAL, and it is what vacates
+          // `meeting_guest_meeting_email_live_idx` so the address stays invitable. See the
+          // docblock — an admit must NOT stamp this, because an admitted guest holds a seat
+          // and every "live" read is predicated on `revoked_at IS NULL`.
+          ...(isDenial ? { revokedAt: sql`now()`, revokedByUserId: input.deciderUserId } : {}),
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(meetingGuests.id, input.guestId),
+            eq(meetingGuests.admission, 'pending'),
+            isNull(meetingGuests.deletedAt),
+            isNull(meetingGuests.revokedAt)
+          )
         )
-      )
-      .returning();
-    return row;
+        .returning();
+
+      if (row === undefined) {
+        return undefined;
+      }
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.deciderUserId,
+          action: input.decision === 'admitted' ? 'meeting_guest.admitted' : 'meeting_guest.denied',
+          entityType: ENTITY_TYPE,
+          entityId: row.id,
+          metadata: {
+            meetingId: row.meetingId,
+            party: row.party,
+            decision: row.admission,
+            inviteChannel: row.inviteChannel,
+          },
+        },
+        tx
+      );
+
+      return row;
+    });
+  },
+
+  /**
+   * ONE ANONYMOUS LOBBY KNOCK — **INSERT-ONLY** (BAL-132, Decisions 5, 6 and 10). The first
+   * producer of `invite_channel = 'link'` AND of `admission = 'pending'` on the platform.
+   *
+   * Writes a row with a NULL `invited_by_id` (nobody invited them), `invite_channel = 'link'`
+   * (the enum label already means exactly this — "the link was forwarded or shared, hence the
+   * waiting-to-join queue"), `admission = 'pending'`, `participation_role = 'guest'`, and
+   * `admission_decided_at` left NULL — which `meeting_guest_admission_terminal_stamped`
+   * requires for a non-terminal admission, both directions.
+   *
+   * ── THE `ON CONFLICT` ARBITER IS A PARTIAL INDEX, AND THAT IS THE RISKIEST LINE HERE ────
+   * `meeting_guest_meeting_email_live_idx` is PARTIAL
+   * (`deleted_at IS NULL AND revoked_at IS NULL`), so the arbiter predicate must MATCH IT
+   * EXACTLY or Postgres cannot infer the index and raises
+   * `42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification`
+   * (memory `reference_pg_partial_index_arbiter_param_42p10`).
+   *
+   * ⚠ IT IS WRITTEN AS RAW `sql`, NOT AS DRIZZLE `isNull()` CALLS, AND THAT IS DELIBERATE
+   * EVEN THOUGH BOTH WOULD WORK TODAY. `isNull()` emits no bind parameter, so today's
+   * two-clause predicate would happen to infer. The moment anyone adds a LITERAL to that
+   * index predicate, the Drizzle form starts emitting a `$n` — and an arbiter containing a
+   * bind parameter can never match a partial index, so the failure would arrive as a runtime
+   * 42P10 on a path CI reaches only through this one test. Matching `conversations.ts`'s
+   * `ensureForContext` precedent costs nothing and stays correct through that change.
+   *
+   * ── ⚠⚠ IT NEVER TOUCHES AN INCUMBENT ROW. `DO NOTHING`, NOT `DO UPDATE` (BAL-132 fix) ──
+   *
+   * The first cut rotated a live `pending` row's `token_hash`, `name` and `expires_at` so
+   * that the same person reloading the lobby would not 409 or spawn a second queue entry.
+   * **That was a credential-hijack primitive**, and it is removed.
+   *
+   * A knock carries NO proof of identity — only a meeting id, a self-declared name and a
+   * self-declared address. So "the same person reloading" and "a stranger who guessed a
+   * colleague's address" are THE SAME REQUEST, byte for byte, and any rule that serves the
+   * first necessarily serves the second. Rotation therefore let a stranger:
+   *   1. silently INVALIDATE the incumbent's live token (their poll starts answering
+   *      `meeting_not_found`, i.e. "this link isn't active", while they are still queued), and
+   *   2. INHERIT that queue position under a name and address of the stranger's choosing —
+   *      which the host's admit/deny panel would then show as the incumbent.
+   *
+   * `onConflictDoNothing` closes both: the incumbent row is left BYTE-IDENTICAL for every
+   * admission state, this method returns `undefined`, and the service maps that to the same
+   * uniform `meeting_not_found` it answers for a cancelled meeting or a full room.
+   *
+   * ⚠ THE ARBITER IS STILL REQUIRED, AND IS STILL RAW `sql`, for exactly the 42P10 reason
+   * above. `onConflictDoNothing`'s `where` key IS the arbiter predicate (there is no second
+   * `setWhere` to confuse it with, because there is no `SET`).
+   *
+   * ── ⚠ THE TWO RESIDUALS THIS LEAVES, STATED RATHER THAN HIDDEN ─────────────────────────
+   *
+   *   1. **A (meeting, email) EXISTENCE ORACLE REMAINS.** A caller who knows a meeting id
+   *      learns, from success-vs-refusal, whether an address already has a live guest row on
+   *      that meeting. It is strictly NARROWER than before (`pending`, `admitted`,
+   *      `pre_admitted` and `denied` are now ONE outcome rather than two), and it is bounded
+   *      by the route's per-visitor and per-meeting windows — but it is not closed. Closing it
+   *      needs a decoy-token design whose failure surfaces one poll later, which is a worse
+   *      answer for the legitimate visitor and only moves the oracle.
+   *   2. **A VISITOR WHO LOSES THEIR TOKEN CANNOT RE-ENTER THE QUEUE WITH THAT ADDRESS WHILE
+   *      THE ROW REMAINS LIVE.** `sessionStorage` survives a reload, so this needs the TAB to
+   *      be closed. They then see the uniform "this link isn't active" card until something
+   *      VACATES `meeting_guest_meeting_email_live_idx`.
+   *
+   *      ⚠⚠ AND "SOMETHING" IS AN EXACT, SHORT LIST — **`revoked_at` OR `deleted_at` BECOMING
+   *      NON-NULL, AND NOTHING ELSE.** That index is partial on those two columns only. It has
+   *      NO `admission` predicate and NO `expires_at` predicate, so:
+   *        · a host DENY vacates it (that method stamps `revoked_at` — see `decideAdmission`);
+   *        · a host REMOVE vacates it (`revoke` stamps both);
+   *        · **`expires_at` PASSING DOES NOT.** Expiry does not vacate a unique index at all.
+   *          An earlier version of this note listed expiry alongside the other two, which was
+   *          simply wrong and made the residual look bounded when it was not.
+   *      So a row that is neither denied nor removed holds the slot until one of a host's two
+   *      explicit acts, indefinitely. An ADMITTED row holds it for the life of the meeting, by
+   *      design — they are in the room.
+   *
+   *      That is a real product cost, accepted here because the alternative is the hijack
+   *      above; a proper fix (an emailed re-entry link) is its own ticket, its own rate limit
+   *      and its own non-enumerating response.
+   *
+   * ⚠ NEVER SOFT-DELETE-AND-REINSERT to work around either residual. `token_hash` carries a
+   * NON-PARTIAL unique (`meeting_guest_token_hash_idx`), and vacating the live slot to insert
+   * afresh walks straight into `reference_softdelete_nonpartial_unique_recreate` on the OTHER
+   * index. (A genuinely REVOKED or soft-deleted row DOES vacate the partial unique, so it is
+   * re-claimable as a fresh INSERT — that is the intended behaviour, not the hazard.)
+   *
+   * ── DENIAL IS NOT A DURABLE BAN, AND THAT IS ACCEPTED (Decision 10) ────────────────────
+   * A denied person can re-knock under a DIFFERENT email and get a fresh `pending` row. The
+   * property that matters is unaffected: the Daily room is `privacy: 'private'`, so nobody
+   * enters without an explicit host admit producing a token mint. Denial declines THIS
+   * ATTEMPT; a bare link plus a self-declared address cannot support an identity ban. Do not
+   * read this as a hole.
+   *
+   * ── THE AUDIT ROW ──────────────────────────────────────────────────────────────────────
+   * One `meeting_guest.self_claimed` row per successful call, with a NULL `actorUserId` —
+   * the column is nullable and there genuinely is no actor. This keeps the guest lifecycle
+   * fully audited now that `createMany`, `revoke` and `decideAdmission` all are. Insert-only
+   * means it is now exactly ONE audit row per guest row, so a second one on the same
+   * `entity_id` is a bug rather than a signal.
+   */
+  claimLobbyPlace: async (input: ClaimLobbyPlaceInput): Promise<MeetingGuest | undefined> => {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(meetingGuests)
+        .values({
+          meetingId: input.meetingId,
+          // ⚠ NULL BY CONSTRUCTION — a knock has no inviter. See `ClaimLobbyPlaceInput`.
+          invitedById: null,
+          email: input.email,
+          name: input.name,
+          emailDomain: input.emailDomain,
+          party: input.party,
+          participationRole: 'guest',
+          accessScope: input.accessScope,
+          inviteChannel: 'link',
+          admission: 'pending',
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+        })
+        .onConflictDoNothing({
+          target: [meetingGuests.meetingId, meetingGuests.party, meetingGuests.email],
+          // ⚠ THE ARBITER. Must match `meeting_guest_meeting_email_live_idx`'s predicate
+          // EXACTLY, and must stay raw `sql` — see the docblock's 42P10 note.
+          where: sql`${meetingGuests.deletedAt} IS NULL AND ${meetingGuests.revokedAt} IS NULL`,
+        })
+        .returning();
+
+      if (row === undefined) {
+        return undefined;
+      }
+
+      await auditEventsRepository.record(
+        {
+          // ⚠ NULL — an anonymous visitor is not an actor. The column permits it.
+          actorUserId: null,
+          action: 'meeting_guest.self_claimed',
+          entityType: ENTITY_TYPE,
+          entityId: row.id,
+          metadata: {
+            meetingId: row.meetingId,
+            email: row.email,
+            party: row.party,
+            participationRole: row.participationRole,
+            accessScope: row.accessScope,
+            inviteChannel: row.inviteChannel,
+          },
+        },
+        tx
+      );
+
+      return row;
+    });
   },
 
   /**
