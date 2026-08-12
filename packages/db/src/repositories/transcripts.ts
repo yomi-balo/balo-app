@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   transcripts,
@@ -14,6 +14,12 @@ import {
  * fall to their column defaults (`processing` / `true`). `recordingRef` is deferred (no live
  * producer). `captureId` is the stable dedup key (partial-unique + BullMQ jobId basis).
  */
+/**
+ * The PROJECTED transcript reference the BAL-388 recap reads — id + status ONLY, never the
+ * `canonical` jsonb. See {@link transcriptsRepository.findByMeetingId}.
+ */
+export type TranscriptStatusRef = Pick<Transcript, 'id' | 'status'>;
+
 export interface InsertRawTranscriptInput {
   captureId: string;
   engagementId: string;
@@ -80,6 +86,33 @@ export const transcriptsRepository = {
       .select()
       .from(transcripts)
       .where(and(eq(transcripts.captureId, captureId), isNull(transcripts.deletedAt)))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * THE MEETING-SCOPED READ (BAL-388 recap). The live transcript for one meeting, or
+   * `undefined`. Rides the partial index `transcript_meeting_idx` on `(meeting_id)
+   * WHERE deleted_at IS NULL`.
+   *
+   * ⚠ AT MOST ONE ROW IS RETURNED, BUT NOTHING IN THE SCHEMA GUARANTEES UNIQUENESS.
+   * `transcripts.capture_id` is the partial-unique, not `meeting_id`, so two captures of the
+   * same meeting are representable. `.limit(1)` with a deterministic `created_at DESC, id DESC`
+   * order therefore picks the MOST RECENT one rather than an arbitrary one — a recap that
+   * flip-flopped between two summaries on refresh would read as a bug.
+   *
+   * ⚠⚠ PROJECTED TO TWO COLUMNS ON PURPOSE. `transcripts.canonical` holds the WHOLE raw segment
+   * array for the call (and `extracted_action_items` the LLM extraction), so a bare `select()`
+   * pulls a potentially multi-hundred-KB jsonb on EVERY recap render just to read one enum. The
+   * only consumer needs exactly `id` (to find its artefacts) and `status` (to pick the artefact
+   * render). Precedent: `credit-sessions.ts` `findForClientMoneyView`.
+   */
+  async findByMeetingId(meetingId: string): Promise<TranscriptStatusRef | undefined> {
+    const [row] = await db
+      .select({ id: transcripts.id, status: transcripts.status })
+      .from(transcripts)
+      .where(and(eq(transcripts.meetingId, meetingId), isNull(transcripts.deletedAt)))
+      .orderBy(desc(transcripts.createdAt), desc(transcripts.id))
       .limit(1);
     return row;
   },

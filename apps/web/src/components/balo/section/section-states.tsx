@@ -4,11 +4,18 @@ import { AlertTriangle, Info, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 /**
- * Shared presentational primitives for the domain-join admin surfaces (BAL-347):
- * the section shell + the three non-loaded async states (skeleton / empty invitation
- * / error+retry). Semantic tokens + dark mode throughout; no client interactivity of
- * their own (the retry callback is owned by the caller — a route `error.tsx` reset or
- * the agency tab's `router.refresh`).
+ * Shared presentational primitives for section-shaped surfaces: the section shell, a compact
+ * section HEAD, and the three non-loaded async states (skeleton / empty invitation /
+ * error+retry). Semantic tokens + dark mode throughout; no client interactivity of their own
+ * (the retry callback is owned by the caller — a route `error.tsx` reset or a tab's
+ * `router.refresh`).
+ *
+ * ⚠ MOVED HERE FROM `components/balo/domain-join/` BY BAL-388 — MOVED, NOT COPIED. These were
+ * never domain-join-specific; they are the app's section vocabulary, and the recap page is the
+ * second consumer family. Re-spelling four components into a second file is exactly the shape
+ * SonarCloud's >3% new-code duplication gate exists to catch, so the module moved and its six
+ * importers were re-pointed. The colocated `section-states.test.tsx` moved with it, so coverage
+ * follows the moved lines.
  */
 
 interface SectionCardProps {
@@ -38,6 +45,39 @@ export function SectionCard({
       </header>
       {children}
     </section>
+  );
+}
+
+interface SectionHeadProps {
+  icon: LucideIcon;
+  title: string;
+  /** Right-aligned muted meta ("AI-generated", "2/3 done", a file count). */
+  meta?: string;
+}
+
+/**
+ * A compact section head — a 15px muted icon + `text-sm font-semibold` title, with optional
+ * right-aligned muted meta. This is the header a card uses INSIDE its own container, unlike
+ * {@link SectionCard}, which brings its own shell.
+ *
+ * ⚠ BUILT HERE, NOT COPIED FROM THE PROTOTYPE. `.claude/design-references/case-surface.jsx`
+ * draws this shape with inline hex and no tokens; this is the tokenised, dark-mode-safe
+ * version, and it lives beside the other section primitives so a third consumer reuses it
+ * rather than re-spelling it.
+ */
+export function SectionHead({
+  icon: Icon,
+  title,
+  meta,
+}: Readonly<SectionHeadProps>): React.JSX.Element {
+  return (
+    <div className="mb-2.5 flex items-baseline justify-between gap-3">
+      <div className="flex items-center gap-2">
+        <Icon size={15} className="text-muted-foreground" aria-hidden="true" />
+        <h2 className="text-foreground text-sm font-semibold">{title}</h2>
+      </div>
+      {meta && <span className="text-muted-foreground text-xs">{meta}</span>}
+    </div>
   );
 }
 
@@ -92,11 +132,30 @@ export function SectionEmpty({
   );
 }
 
+/**
+ * The default reassurance line under a section error. Named, so the `body` override below is
+ * visibly a REPLACEMENT of a real default rather than an empty string.
+ */
+const DEFAULT_SECTION_ERROR_BODY = 'This is usually temporary. Your settings are safe.';
+
+interface SectionErrorProps {
+  /** Completes "We couldn't load {label}". */
+  label: string;
+  onRetry: () => void;
+  /**
+   * Reassurance line. Defaults to the settings-shaped copy the domain-join surfaces ship
+   * with; the recap overrides it, because nothing on a recap is "your settings". Additive —
+   * every existing call site keeps the original string with no change.
+   */
+  body?: string;
+}
+
 /** Error state with a retry affordance. `label` completes "We couldn't load {label}". */
 export function SectionError({
   label,
   onRetry,
-}: Readonly<{ label: string; onRetry: () => void }>): React.JSX.Element {
+  body = DEFAULT_SECTION_ERROR_BODY,
+}: Readonly<SectionErrorProps>): React.JSX.Element {
   return (
     <div role="alert" className="px-4 pt-6 pb-2 text-center">
       <span
@@ -107,7 +166,7 @@ export function SectionError({
       </span>
       <h3 className="text-foreground text-[15px] font-semibold">{`We couldn't load ${label}`}</h3>
       <p className="text-muted-foreground mx-auto mt-1.5 max-w-sm text-sm leading-relaxed">
-        This is usually temporary. Your settings are safe.
+        {body}
       </p>
       <div className="mt-4 flex justify-center">
         <Button type="button" variant="outline" onClick={onRetry} className="gap-2">

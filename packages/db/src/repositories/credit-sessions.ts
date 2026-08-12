@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import {
   applyBaloFee,
   deriveMinuteRateCents,
@@ -649,6 +649,54 @@ export const creditSessionsRepository = {
     return db.query.creditSessions.findFirst({
       where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
     });
+  },
+
+  /**
+   * THE MEETING-SCOPED READ (BAL-388 recap). The `id` of the live, NON-CANCELLED credit
+   * session for one meeting, or `undefined`. Rides the partial index `credit_sessions_meeting_idx` on
+   * `(meeting_id, ended_at) WHERE meeting_id IS NOT NULL AND deleted_at IS NULL` (a filter on
+   * `status` still costs a heap fetch, so it is NOT a covering read for this query).
+   *
+   * ⚠ `meeting_id` IS NULLABLE, AND ROWS THAT CARRY NULL CAN NEVER MATCH — `eq()` compiles to
+   * `= $1`, which is never true against NULL. That is exactly the wanted behaviour: a session
+   * with no meeting is not this meeting's session.
+   *
+   * ⚠⚠ `cancelled` ROWS ARE EXCLUDED, AND THAT IS A CORRECTNESS CONSTRAINT RATHER THAN
+   * TIDINESS. A cancelled session never bills, so its `billing_finalized_at` stays NULL, and
+   * `deriveState` maps a NULL to `pending` — a meeting whose session was cancelled would render
+   * "Charge pending" FOREVER, which is exactly the unbackable money claim Rule M swears off.
+   * Excluding it here also fixes the ordering: a later cancelled retry must not outrank the
+   * `ended` row that actually billed.
+   *
+   * ⚠ ABSENCE IS LOAD-BEARING ON THE RECAP, NOT AN ERROR. Rule M branch M1 is keyed on the
+   * ABSENCE of a row ("no consultation charge for this one"), so `undefined` must stay a
+   * first-class answer here and must never be coerced into a zero-valued stub. A meeting whose
+   * ONLY session was cancelled therefore falls to M1 — no figure, no claim.
+   *
+   * ⚠⚠ PROJECTED TO `id` ALONE, AND THAT IS THE WHOLE POINT. Its ONE caller is the recap
+   * loader, on a CLIENT-BOUND path: it needs the id (to fetch the fee-concealed, lens-resolved
+   * money block over the api) and the row's mere existence (Rule M branch M1). A bare
+   * `.select()` here would put `baloFeeBps` (the literal Balo margin), `expertRateMinorPerMinute`
+   * (the UN-MARKED-UP expert rate), `expertAccruedMinor` and `stripePaymentIntentId` one
+   * careless spread away from a client payload — the same posture `findDisplayProfileById`
+   * exists to enforce for `expert_profiles.rate_cents`. Concealment is enforced by what the ROW
+   * CAN HOLD, not by remembering to omit things downstream. The other projected money reads are
+   * `findForClientMoneyView` / `findForExpertView`; the full row is `findForAdminView`.
+   */
+  async findIdByMeetingId(meetingId: string): Promise<{ id: string } | undefined> {
+    const [row] = await db
+      .select({ id: creditSessions.id })
+      .from(creditSessions)
+      .where(
+        and(
+          eq(creditSessions.meetingId, meetingId),
+          ne(creditSessions.status, 'cancelled'),
+          isNull(creditSessions.deletedAt)
+        )
+      )
+      .orderBy(desc(creditSessions.createdAt), desc(creditSessions.id))
+      .limit(1);
+    return row;
   },
 
   /**

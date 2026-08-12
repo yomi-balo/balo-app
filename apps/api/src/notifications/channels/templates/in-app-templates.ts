@@ -522,7 +522,10 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // never has to render an ask it cannot satisfy. `closeReason` distinguishes a
   // deliberate resolve from a quiet-case close so the notice never reads as a
   // reprimand. Copy is DRAFT pending MJ sign-off.
-  // ⚠ INERT: no publisher ships (BAL-420 / BAL-421 supply one).
+  // ⚠ DELIBERATELY NOT `engagementNotice`, whose whole job is to build an engagements URL —
+  // that route 404s for a CASE by construction (its loader filters engagement_type = project).
+  // BAL-388's resolve action is this event FIRST publisher, so the deep link is the RECAP.
+  // `?from=notification` keeps `recap_viewed.source` measurable. No `meetingId` ⇒ NO actionUrl.
   'engagement-case-closed-client': (data) => {
     const title = (data.caseTitle as string) ?? 'Your case';
     const closedDate = (data.closedDate as string) ?? 'today';
@@ -530,7 +533,12 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const body = wentQuiet
       ? `'${title}' had been quiet for a while, so we closed it out on ${closedDate} rather than leave it hanging.`
       : `'${title}' is wrapped up as of ${closedDate}. Everything from it stays here whenever you need it.`;
-    return engagementNotice('Case closed', body, data);
+    const meetingId = data.meetingId as string | undefined;
+    return {
+      title: 'Case closed',
+      body,
+      actionUrl: meetingId ? `/meetings/${meetingId}?from=notification` : undefined,
+    };
   },
 
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
@@ -799,7 +807,12 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
 
   // BAL-387 (ADR-1013 + ADR-1043) transcript recap ready — the client owner OR the delivering
   // expert. One template serves both. Carries no money (fee-safe); the headline (when present)
-  // + action-item count read as helpful facts. Deep-links to the delivery workspace.
+  // + action-item count read as helpful facts.
+  //
+  // ⚠ BAL-388 RE-POINTED THE DEEP LINK to the MEETING RECAP `/meetings/{meetingId}` — this
+  // notification IS the recap's primary entry point, and `meetingId` has been REQUIRED on
+  // `RecapReadyPayload` since BAL-418. It deliberately does NOT use `engagementNotice`, whose
+  // whole job is to build an `/engagements/{id}` URL.
   'recap-ready': (data) => {
     const count = numberOrZero(data.actionItemCount);
     const headline = (data.summaryHeadline as string) ?? '';
@@ -809,7 +822,14 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       headline.length > 0
         ? `${headline}${countSuffix}`
         : `Your session summary is ready${countSuffix}.`;
-    return engagementNotice('Session recap ready', body, data);
+    const meetingId = data.meetingId as string | undefined;
+    return {
+      title: 'Session recap ready',
+      body,
+      // `?from=notification` is what makes `recap_viewed.source` readable for the recap's
+      // PRIMARY entry point — the recap page whitelists exactly this value.
+      actionUrl: meetingId ? `/meetings/${meetingId}?from=notification` : undefined,
+    };
   },
 
   /**

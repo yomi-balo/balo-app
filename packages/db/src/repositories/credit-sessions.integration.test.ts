@@ -1322,3 +1322,111 @@ describe('creditSessionsRepository.open — meetingId / engagementId (BAL-418)',
     expect(anchors.get(otherEngagement.id)?.lastCompletedConsultationAt).toBeNull();
   });
 });
+
+/**
+ * BAL-388 — the MEETING-scoped read behind RULE M. The recap keys its money line on the
+ * PRESENCE of a row for this meeting, so ABSENCE is a first-class answer here.
+ */
+describe('creditSessionsRepository.findIdByMeetingId', () => {
+  it('returns the session linked to a meeting', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const sessionId = await openOk(ctx);
+    const meetingId = (await meetingFactory()).meeting.id;
+    await db.update(creditSessions).set({ meetingId }).where(eq(creditSessions.id, sessionId));
+
+    const found = await creditSessionsRepository.findIdByMeetingId(meetingId);
+    expect(found?.id).toBe(sessionId);
+  });
+
+  it('PROJECTS TO `id` ALONE - the margin and the un-marked-up expert rate never load', async () => {
+    // Its one caller is the recap loader, on a CLIENT-BOUND path. A bare `.select()` here would
+    // put `balo_fee_bps` (the literal Balo margin), `expert_rate_minor_per_minute` (the
+    // UN-MARKED-UP expert rate), `expert_accrued_minor` and `stripe_payment_intent_id` one
+    // careless spread away from a client payload. Asserting the KEY SET (not merely the id) is
+    // what makes a widened select fail HERE rather than in production.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const sessionId = await openOk(ctx);
+    const meetingId = (await meetingFactory()).meeting.id;
+    const intentId = 'pi_secret_margin';
+    await db
+      .update(creditSessions)
+      .set({ meetingId, baloFeeBps: 2500, stripePaymentIntentId: intentId })
+      .where(eq(creditSessions.id, sessionId));
+
+    const found = await creditSessionsRepository.findIdByMeetingId(meetingId);
+    expect(found).toEqual({ id: sessionId });
+    expect(Object.keys(found ?? {})).toEqual(['id']);
+  });
+
+  it("NEVER matches a row whose meeting_id is NULL — a session with no meeting is not this meeting's", async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    // The session opened here keeps meeting_id NULL; the meeting below is real and linked to
+    // nothing. `eq()` compiles to `= $1`, which is never true against NULL.
+    await openOk(ctx);
+    const unlinkedMeetingId = (await meetingFactory()).meeting.id;
+
+    await expect(
+      creditSessionsRepository.findIdByMeetingId(unlinkedMeetingId)
+    ).resolves.toBeUndefined();
+  });
+
+  it('EXCLUDES a cancelled session — a cancelled row must never render "Charge pending"', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const sessionId = await openOk(ctx);
+    const meetingId = (await meetingFactory()).meeting.id;
+    await db
+      .update(creditSessions)
+      .set({ meetingId, status: 'cancelled' })
+      .where(eq(creditSessions.id, sessionId));
+
+    await expect(creditSessionsRepository.findIdByMeetingId(meetingId)).resolves.toBeUndefined();
+  });
+
+  it('picks the BILLED row over a LATER cancelled retry on the same meeting', async () => {
+    // Two sessions on ONE meeting: the older one actually billed, the newer was cancelled.
+    // Ordering alone (created_at DESC) would hand back the cancelled retry and the recap would
+    // read "Charge pending" forever — the status filter is what decides this.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = (await meetingFactory()).meeting.id;
+
+    const billedId = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ meetingId, status: 'ended' })
+      .where(eq(creditSessions.id, billedId));
+
+    // Opened SECOND, so `created_at DESC` ranks it first — it must still lose.
+    const cancelledId = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ meetingId, status: 'cancelled' })
+      .where(eq(creditSessions.id, cancelledId));
+
+    const found = await creditSessionsRepository.findIdByMeetingId(meetingId);
+    expect(found?.id).toBe(billedId);
+  });
+
+  it('filters deleted_at IS NULL', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const sessionId = await openOk(ctx);
+    const meetingId = (await meetingFactory()).meeting.id;
+    await db
+      .update(creditSessions)
+      .set({ meetingId, deletedAt: new Date() })
+      .where(eq(creditSessions.id, sessionId));
+
+    await expect(creditSessionsRepository.findIdByMeetingId(meetingId)).resolves.toBeUndefined();
+  });
+
+  it("never returns ANOTHER meeting's session", async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const sessionId = await openOk(ctx);
+    const meetingId = (await meetingFactory()).meeting.id;
+    const otherMeetingId = (await meetingFactory()).meeting.id;
+    await db.update(creditSessions).set({ meetingId }).where(eq(creditSessions.id, sessionId));
+
+    await expect(
+      creditSessionsRepository.findIdByMeetingId(otherMeetingId)
+    ).resolves.toBeUndefined();
+  });
+});

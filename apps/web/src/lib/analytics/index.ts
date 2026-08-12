@@ -28,6 +28,7 @@ export {
   PROMO_EVENTS,
   SESSION_EVENTS,
   CASE_BILLING_EVENTS,
+  RECAP_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
 } from '@balo/analytics/client';

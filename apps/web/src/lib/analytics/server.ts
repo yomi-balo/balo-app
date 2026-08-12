@@ -24,6 +24,18 @@ export {
   // `apps/api`. ⚠ NOT in the client `@/lib/analytics` barrel and NOT in
   // `src/test/setup.ts`'s client `vi.mock` list — that mock is client-only.
   GUEST_SERVER_EVENTS,
+  // BAL-388 — the recap page RSC fires RECAP_VIEWED; its two Server Actions fire
+  // CASE_RESOLVED and CASE_RESOLUTION_REQUEST_DISMISSED. All three are emitted from
+  // apps/web, so this allowlist is required (the client half lives in @/lib/analytics).
+  RECAP_SERVER_EVENTS,
+} from '@balo/analytics/server';
+export type {
+  RecapState,
+  RecapLens,
+  RecapContextType,
+  RecapEntrySource,
+  RecapResolvePromptVariant,
+  RecapCta,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

@@ -224,18 +224,17 @@ export const caseEngagementsRepository = {
    *
    * A Case's terminal state is `completed`, never `cancelled`.
    *
-   * ⚠ BAL-390 CONTRACT — READ THIS BEFORE WIRING THE FIRST CALLER. This repository
+   * ⚠ BAL-390 CONTRACT — READ THIS BEFORE WIRING ANOTHER CALLER. This repository
    * CANNOT publish notification events: `@balo/db` depends only on `@balo/shared`,
    * `drizzle-orm` and `postgres`, so no publisher is reachable from here, and this file
    * deliberately imports nothing from the notifications tree. Closing a case IS the
-   * terminal anchor for the review ask, so THE FIRST CALLER (BAL-420's sweep /
-   * BAL-421's server action) MUST, POST-COMMIT:
+   * terminal anchor for the review ask, so EVERY CALLER MUST, POST-COMMIT:
    *   1. mint a `review_invite_tokens` row for the resolved client-side reviewer, and
    *   2. publish `engagement.case_closed` carrying the RAW `reviewToken`, when that
    *      reviewer has not already rated the delivering expert.
-   * The event, its rule, its email and in-app templates and its Zod publish arm ALL ship
-   * in BAL-390 with NO publisher — the caller adds exactly ONE `publishNotificationEvent`
-   * line.
+   * BAL-388's `resolveCaseAction` (apps/web, the recap's `resolved` close) is the FIRST
+   * caller and does both; copy its post-commit half. BAL-420's `auto_inactive` sweep is
+   * the second, and mints NO token by design.
    *
    * The NUDGE half needs no caller wiring: `listClosedBetween` below starts matching the
    * moment `closed_at` is first stamped. It is NOT close-reason-blind, though — it reads
@@ -330,6 +329,75 @@ export const caseEngagementsRepository = {
       });
 
       return toCaseRow(updatedParent, updatedChild);
+    });
+  },
+
+  /**
+   * CLEAR a pending expert resolution REQUEST, leaving the case OPEN (BAL-388).
+   *
+   * ⚠ BOTH COLUMNS ARE NULLED IN ONE UPDATE, AND THAT IS A CORRECTNESS CONSTRAINT RATHER THAN
+   * TIDINESS. `case_engagement_resolution_request_paired` is
+   * `(resolution_requested_at IS NULL) = (resolution_requested_by_user_id IS NULL)`, so nulling
+   * one column alone is rejected 23514.
+   *
+   * IDEMPOTENT BY CONSTRUCTION: the `WHERE` does NOT require a request to be present, so
+   * dismissing twice is a no-op that still returns the row. A client who double-clicks
+   * "Not yet" sees one outcome.
+   *
+   * REFUSES A CLOSED CASE (`closed_at IS NULL` in the WHERE) — clearing a request on a case
+   * that is already closed would rewrite terminal history for no user-visible gain. A closed
+   * case matches nothing and `undefined` comes back; the caller answers not-found.
+   *
+   * ⚠ NOT AN AUTHORIZATION GATE — the same ruling as {@link close}. No capability is resolved
+   * here and no role is interpreted. `hasCapability(actor, CAPABILITIES.PARTICIPATE,
+   * { companyId })` runs at the CALL SITE (ADR-1029), in BAL-388's dismiss server action.
+   *
+   * ⚠ NO NOTIFICATION, NO DOMAIN EVENT (owner decision D-E). Dismissal clears the request and
+   * leaves the case open, silently. Do not invent an event, payload, template or rule for it.
+   *
+   * ⚠⚠ THE PARENT IS READ **BEFORE** THE UPDATE, AND THE ORDER IS THE POINT. Reading it after
+   * would let the write COMMIT while `undefined` came back — the caller then tells a client
+   * "this case is no longer open" about a request that was in fact cleared. Reading first means
+   * a soft-deleted or non-`case` parent short-circuits with NO write at all, so the returned
+   * value and the persisted state can never disagree.
+   */
+  async clearResolutionRequest(input: {
+    engagementId: string;
+  }): Promise<CaseEngagementRow | undefined> {
+    return db.transaction(async (tx) => {
+      const [parent] = await tx
+        .select()
+        .from(engagements)
+        .where(
+          and(
+            eq(engagements.id, input.engagementId),
+            eq(engagements.engagementType, 'case'),
+            isNull(engagements.deletedAt)
+          )
+        )
+        .limit(1);
+
+      if (parent === undefined) {
+        return undefined;
+      }
+
+      const [updatedChild] = await tx
+        .update(caseEngagements)
+        .set({ resolutionRequestedAt: null, resolutionRequestedByUserId: null })
+        .where(
+          and(
+            eq(caseEngagements.engagementId, input.engagementId),
+            isNull(caseEngagements.closedAt),
+            isNull(caseEngagements.deletedAt)
+          )
+        )
+        .returning();
+
+      if (updatedChild === undefined) {
+        return undefined;
+      }
+
+      return toCaseRow(parent, updatedChild);
     });
   },
 

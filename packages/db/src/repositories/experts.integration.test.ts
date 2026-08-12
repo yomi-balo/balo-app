@@ -1287,3 +1287,34 @@ describe('expertsRepository.findOrCreateDraft (race + degradation paths)', () =>
     ).rejects.toThrow('duplicate key value');
   });
 });
+
+describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card read (BAL-388)', () => {
+  it('returns six display columns and NEVER rateCents / stripeConnectId / cronofyUserId', async () => {
+    const expert = await expertFactory();
+    await db
+      .update(expertProfiles)
+      .set({ rateCents: 25_000, stripeConnectId: 'acct_secret' })
+      .where(eq(expertProfiles.id, expert.id));
+
+    const row = await expertsRepository.findDisplayProfileById(expert.id);
+
+    if (row === undefined) throw new Error('expected a display row');
+    // rateCents is the UN-MARKED-UP consultant rate; the client lens already carries the all-in
+    // charge, so a row holding both would hand the client the Balo margin.
+    expect(Object.keys(row).sort()).toEqual([
+      'agencyId',
+      'headline',
+      'id',
+      'type',
+      'userId',
+      'username',
+    ]);
+    expect(row).not.toHaveProperty('rateCents');
+    expect(row).not.toHaveProperty('stripeConnectId');
+    expect(row).not.toHaveProperty('cronofyUserId');
+  });
+
+  it('returns undefined for an unknown profile id', async () => {
+    await expect(expertsRepository.findDisplayProfileById(randomUUID())).resolves.toBeUndefined();
+  });
+});

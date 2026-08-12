@@ -279,6 +279,43 @@ export const expertsRepository = {
   },
 
   /**
+   * DISPLAY-ONLY hydration of ONE expert profile (BAL-388) — the six columns a party card
+   * needs, and NOTHING else.
+   *
+   * ⚠⚠ THIS EXISTS TO KEEP `rateCents` OFF A CLIENT-BOUND RENDER PATH. `expert_profiles.rate_cents`
+   * is the UN-MARKED-UP consultant rate; the client lens already carries the all-in charge, so a
+   * payload holding both hands the client the Balo margin. `stripeConnectId` and
+   * `cronofyUserId` are vendor identifiers with no display use at all. `findProfileById` returns
+   * every one of them, and TypeScript will NOT catch a spread of the full row (excess-property
+   * checking does not apply to spreads). Concealment is enforced by what the row CAN hold.
+   */
+  async findDisplayProfileById(expertProfileId: string): Promise<
+    | {
+        id: string;
+        userId: string;
+        agencyId: string | null;
+        type: ExpertProfile['type'];
+        headline: string | null;
+        username: string | null;
+      }
+    | undefined
+  > {
+    const [row] = await db
+      .select({
+        id: expertProfiles.id,
+        userId: expertProfiles.userId,
+        agencyId: expertProfiles.agencyId,
+        type: expertProfiles.type,
+        headline: expertProfiles.headline,
+        username: expertProfiles.username,
+      })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, expertProfileId))
+      .limit(1);
+    return row;
+  },
+
+  /**
    * BAL-356: link an expert draft/profile to its payout agency by setting
    * `agency_id`. A single UPDATE — `expert_profiles` has no `deletedAt`, so only a
    * not-found guard applies (no soft-delete predicate). Executor-aware: the three

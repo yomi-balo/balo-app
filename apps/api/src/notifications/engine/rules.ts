@@ -575,10 +575,10 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // no-reviewer close skips rather than dead-lettering. NO admin fan-out — the client
   // is the sole target, exactly like engagement.review_reminder.
   //
-  // ⚠ INERT: this rule ships fully wired with NO PUBLISHER. `close()` has zero
-  // production callers (`resolved` is BAL-421's, `auto_inactive` is BAL-420's) and a
-  // @balo/db repository structurally cannot publish. Each of those tickets adds exactly
-  // one publishNotificationEvent line.
+  // ⚠ LIVE AS OF BAL-388: `resolveCaseAction` (the recap's client-side close) is the FIRST
+  // and today ONLY publisher, so this rule delivers a real email to a real client. The
+  // `auto_inactive` arm is still unpublished — BAL-420's sweep owns it — and it reuses this
+  // same rule and template with a different `closeReason`.
   'engagement.case_closed': emailAndInApp(
     'client',
     'engagement-case-closed-client',

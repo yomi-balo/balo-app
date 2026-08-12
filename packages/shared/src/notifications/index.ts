@@ -711,7 +711,7 @@ export interface PayoutRecordedPayload {
 // fee content); `recordingRef` is NULLABLE/deferred (no live capture producer).
 export interface RecapReadyPayload {
   correlationId: string; // `${transcriptId}:recap_ready` → BullMQ jobId dedup
-  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  engagementId: string; // context for the resolver / rules — NOT the CTA (BAL-388: the CTA is the recap)
   transcriptId: string;
   meetingId: string; // BAL-418: REQUIRED — transcripts.meeting_id is a NOT NULL FK → meetings.id
   recipientId?: string; // client company owner user id → recipient:'client'; absent → client rule skips
@@ -766,13 +766,10 @@ export interface ReviewReminderPayload {
 /**
  * BAL-390 (D4) — a case was closed; the fused close-confirmation + rating email.
  *
- * ⚠ INERT IN THIS PR: registered with a rule, an email template, an in-app template and
- * a Zod publish arm, but with NO PUBLISHER. `caseEngagementsRepository.close()` has zero
- * production callers (`resolved` is BAL-421's, `auto_inactive` is BAL-420's), and a
- * `@balo/db` repository structurally CANNOT publish (it depends only on `@balo/shared`,
- * `drizzle-orm` and `postgres`). Each of BAL-420/421 adds exactly ONE
- * `publishNotificationEvent` call at its own layer. Precedent: `company.provisioned` —
- * a rule-less publish is a correct no-op; this is the inverse.
+ * ⚠ LIVE AS OF BAL-388. The recap's `resolveCaseAction` is the FIRST and (today) only
+ * publisher: a `@balo/db` repository structurally cannot publish, so `close()` gets its
+ * publish line at the caller's layer. The `auto_inactive` arm is still unpublished
+ * (BAL-420's sweep owns it). Do not describe this event as inert.
  *
  * ⚠ THIS EVENT IS **PUBLISHABLE**, NOT SERVER-ONLY. BAL-421's caller is a web Server
  * Action, which publishes over HTTP → `apps/api/src/routes/notifications/schema.ts`.
@@ -780,11 +777,19 @@ export interface ReviewReminderPayload {
  * BAL-421 physically unable to publish it.
  *
  * `reviewToken` ABSENT ⇒ already rated ⇒ the template omits the review block ENTIRELY
- * (not greyed — gone), replaced by one warm line and a "View the case" link.
+ * (not greyed — gone), replaced by one warm line.
  */
 export interface EngagementCaseClosedPayload {
   correlationId: string; // `${engagementId}:case_closed` → BullMQ jobId dedup
-  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  engagementId: string; // context for the resolver / rules — NOT the CTA (see meetingId)
+  /**
+   * ⚠ THE CTA / actionUrl SUBJECT (BAL-388). `/engagements/{id}` 404s BY CONSTRUCTION for a
+   * CASE — `engagements/[id]`'s loader filters `engagement_type = 'project'` — so both the
+   * email button and the in-app deep link point at `/meetings/{meetingId}` instead. OPTIONAL
+   * because a future auto-close sweep may have no anchoring meeting; when it is absent the
+   * templates render NO link at all rather than a dead one.
+   */
+  meetingId?: string;
   recipientId?: string; // client-side reviewer → recipient 'client'; absent ⇒ the rule skips
   expertProfileId: string; // → resolver hydrates data.expert (context; no expert rule today)
   clientCompanyName: string; // {Client} — prospective party

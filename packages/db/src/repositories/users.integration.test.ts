@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { partyDomains, auditEvents } from '../schema';
+import { partyDomains, auditEvents, users } from '../schema';
 import { userFactory, companyFactory, companyMemberFactory } from '../test/factories';
 import { usersRepository } from './users';
 
@@ -580,5 +580,32 @@ describe('users partial unique indexes (BAL-360)', () => {
         lastName: 'Beta',
       })
     ).rejects.toThrow();
+  });
+});
+
+describe('usersRepository.findDisplayById — the PROJECTED counterparty read (BAL-388)', () => {
+  it('returns exactly four display columns and NOT email / workosId / phone', async () => {
+    const user = await userFactory();
+
+    const row = await usersRepository.findDisplayById(user.id);
+
+    if (row === undefined) throw new Error('expected a display row');
+    // The key SET is the invariant, not just the values: a future `select()` regression would
+    // add keys here and fail loudly rather than leaking silently into a client-bound view.
+    expect(Object.keys(row).sort()).toEqual(['avatarUrl', 'firstName', 'id', 'lastName']);
+    expect(row).not.toHaveProperty('email');
+    expect(row).not.toHaveProperty('workosId');
+    expect(row).not.toHaveProperty('phone');
+  });
+
+  it('excludes a soft-deleted user', async () => {
+    const user = await userFactory();
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    await expect(usersRepository.findDisplayById(user.id)).resolves.toBeUndefined();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(usersRepository.findDisplayById(randomUUID())).resolves.toBeUndefined();
   });
 });

@@ -40,6 +40,7 @@ const caseClosedData = (over: Record<string, unknown> = {}): Record<string, unkn
   closeReason: 'resolved',
   reviewToken: TOKEN,
   engagementId: 'eng-1',
+  meetingId: 'mtg-1',
   ...over,
 });
 
@@ -362,14 +363,35 @@ describe('review-nudge — two cadence steps and no third', () => {
   });
 });
 
-describe('engagement-case-closed-client — the fused close email (INERT)', () => {
+describe('engagement-case-closed-client — the fused close email', () => {
   it('a resolved close reads as wrapped up', async () => {
     const out = getEmailTemplate('engagement-case-closed-client', caseClosedData());
     const html = readable(await render(out.component));
     expect(out.subject).toBe('Flow interview stuck on a loop is wrapped up');
     expect(html).toContain('wrapped up');
     expect(html).toContain('we closed the case out on 3 Aug');
-    expect(html).toContain('View the case');
+    expect(html).toContain('View the recap');
+  });
+
+  // BAL-388: this event's FIRST publisher ships in the same PR, so the one navigation the
+  // email carries must resolve. The engagements route 404s for a CASE by construction.
+  it('deep-links the CTA to the MEETING RECAP, never to the engagement', async () => {
+    const out = getEmailTemplate('engagement-case-closed-client', caseClosedData());
+    const html = await render(out.component);
+    expect(html).toContain('/meetings/mtg-1?from=notification');
+    expect(html).not.toContain('/engagements/eng-1');
+  });
+
+  it('renders NO CTA at all when the payload carries no meetingId', async () => {
+    const out = getEmailTemplate(
+      'engagement-case-closed-client',
+      caseClosedData({ meetingId: undefined })
+    );
+    const html = readable(await render(out.component));
+    expect(html).not.toContain('View the recap');
+    expect(html).not.toContain('/engagements/');
+    // The record itself still renders — a missing link is not a missing email.
+    expect(html).toContain('wrapped up');
   });
 
   it('a quiet-case close reads as tidying up, never as a reprimand', async () => {

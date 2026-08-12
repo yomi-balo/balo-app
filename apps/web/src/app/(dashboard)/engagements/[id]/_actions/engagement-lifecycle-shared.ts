@@ -60,27 +60,13 @@ export type GateResult =
  */
 export type ExpertGateStatus = Extract<ProjectDeliveryStatus, 'active' | 'pending_acceptance'>;
 
-// ── Date helpers (deterministic under TZ=UTC) — kept local to the actions, NOT
-//    imported from the view module (the view derives its own display copy) ─────
-
-/** "4 Jul" — day + short month, UTC. */
-export function formatShortUtc(date: Date): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
-    day: 'numeric',
-    month: 'short',
-  }).format(date);
-}
-
-/** "9 Jul 2026" — day + short month + year, UTC. */
-export function formatLongUtc(date: Date): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(date);
-}
+// ── Date helpers (deterministic under TZ=UTC) ─────────────────────────────────
+//
+// ⚠ DECLARED ONCE, IN `@/lib/format/utc-date`, AND RE-EXPORTED HERE so this module's three
+// existing importers are unchanged. BAL-388 needed the same formatter for a notification
+// payload two routes away, and a fourth verbatim spelling of a date formatter that feeds an
+// EMAIL is a drift waiting to happen. Do not re-inline either of these anywhere.
+export { formatShortUtc, formatLongUtc } from '@/lib/format/utc-date';
 
 /** Whole days between `from` and `now` (never negative). */
 export function wholeDaysSince(from: Date, now: Date): number {

@@ -34,10 +34,20 @@ function formatAud(minor: number): string {
   })}`;
 }
 
-/** Lens-derived copy so the render stays branch-free (no nested ternaries). */
+/**
+ * Lens-derived copy so the render stays branch-free (no nested ternaries).
+ *
+ * ⚠⚠ `finalizedLabel` IS WHAT MAKES THE FIGURE MEAN SOMETHING. Suppressing the
+ * receipt/payout ANCHOR (BAL-388, D-C — no `/sessions/:id/receipt` or `/sessions/:id/payout`
+ * route exists) also removed the only TEXT attached to the number: the meta line rendered an
+ * `aria-hidden` icon and a bare `A$150.00`, so a screen reader announced the single most
+ * consequential fact on the recap with no context at all, and a sighted expert had no clue the
+ * figure was earnings. D-C required dropping the LINK, not the MEANING — so the label is now
+ * rendered as muted text beside the amount. The anchor stays suppressed.
+ */
 const LENS_COPY = {
-  client: { Icon: Receipt, pendingLabel: 'Charge pending', linkLabel: 'receipt' },
-  expert: { Icon: ArrowUpRight, pendingLabel: 'Payout pending', linkLabel: 'payout' },
+  client: { Icon: Receipt, pendingLabel: 'Charge pending', finalizedLabel: 'Charged' },
+  expert: { Icon: ArrowUpRight, pendingLabel: 'Payout pending', finalizedLabel: 'Your payout' },
 } as const;
 
 /** The own-side finalized amount for the lens (client all-in vs expert earnings). */
@@ -55,16 +65,21 @@ function MoneyBlockSkeleton() {
   );
 }
 
-/** Muted fallback (error) — never leaks internals. */
+/**
+ * Muted fallback (error) — never leaks internals.
+ *
+ * ⚠ LENS-NEUTRAL COPY, DELIBERATELY. `block` is `null` here so the lens is unknown, and the
+ * BAL-388 recap is the first surface that shows this fragment to an EXPERT, who has no receipt.
+ */
 function MoneyBlockUnavailable() {
   return (
     <span className="text-muted-foreground inline-flex items-center gap-1.5 text-sm">
-      <Receipt size={14} aria-hidden="true" /> Receipt will be ready shortly
+      <Receipt size={14} aria-hidden="true" /> These details will be ready shortly
     </span>
   );
 }
 
-/** Pending affordance — elapsed only + a spinning "Charge/Payout pending" pill. */
+/** Pending affordance — elapsed only + a spinning 'Charge/Payout pending' pill. */
 function MoneyBlockPending({
   block,
   elapsedMinutes,
@@ -95,20 +110,20 @@ function MoneyBlockPending({
   );
 }
 
-/** Finalized — the own-side figure + a receipt/payout link. */
+/**
+ * Finalized — the own-side figure, as PLAIN TEXT.
+ *
+ * ⚠ NO RECEIPT/PAYOUT ANCHOR (BAL-388, D-C). See {@link LENS_COPY}: the `/sessions/:id/receipt`
+ * and `/sessions/:id/payout` routes do not exist, so the anchor was a link to nowhere. The
+ * FIGURE — the thing a client or expert actually came for — is unchanged.
+ */
 function MoneyBlockFinalized({ block }: Readonly<{ block: SessionMoneyBlock }>) {
-  const { Icon, linkLabel } = LENS_COPY[block.lens];
+  const { Icon, finalizedLabel } = LENS_COPY[block.lens];
   return (
     <span className="text-foreground inline-flex items-center gap-1.5 text-sm">
       <Icon size={14} className="text-muted-foreground" aria-hidden="true" />
+      <span className="text-muted-foreground">{finalizedLabel}</span>
       <span className="font-mono tabular-nums">{formatAud(finalizedAmountMinor(block))}</span>
-      <a
-        href={`/sessions/${block.sessionId}/${linkLabel}`}
-        aria-label={`View ${linkLabel}`}
-        className="text-primary focus-visible:ring-ring text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
-      >
-        {linkLabel}
-      </a>
     </span>
   );
 }

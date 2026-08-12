@@ -640,10 +640,15 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // green record block → the star ask when `reviewToken` is present (absent ⇒ the block
   // is gone, replaced by a short thank-you). `closeReason` switches a deliberate resolve
   // from a quiet-case close so the notice never reads as a reprimand.
-  // ⚠ INERT: no publisher ships — BAL-420 / BAL-421 each add one publish line.
+  // ⚠ THE CTA IS THE RECAP, NOT THE ENGAGEMENT (BAL-388). The engagements route 404s for
+  // a CASE by construction (its loader filters engagement_type = project), and BAL-388's
+  // resolve action is this event's FIRST and only publisher — so the one navigation this
+  // email carries has to be live. `?from=notification` is what makes `recap_viewed.source`
+  // readable for the recap's primary entry point. No `meetingId` ⇒ NO button, never a dead one.
   'engagement-case-closed-client': (data) => {
     const caseTitle = (data.caseTitle as string) ?? 'your case';
     const wentQuiet = data.closeReason === 'auto_inactive';
+    const meetingId = data.meetingId as string | undefined;
     return {
       component: React.createElement(CaseClosedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
@@ -654,7 +659,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         closeReason: wentQuiet ? 'auto_inactive' : 'resolved',
         consultationCount: data.consultationCount as number | undefined,
         reviewToken: data.reviewToken as string | undefined,
-        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        recapUrl: meetingId ? `${BASE_URL}/meetings/${meetingId}?from=notification` : undefined,
         baseUrl: BASE_URL,
       }),
       subject: wentQuiet
@@ -1124,13 +1129,13 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // BAL-387 (ADR-1013 + ADR-1043) transcript recap ready — ONE component serves BOTH the client
   // owner and the delivering expert (the greeting differs via the per-recipient `recipientName`).
   // Carries no money (fee-safe); `summaryHeadline` / `actionItemCount` come straight from the
-  // payload. CTA deep-links to the delivery workspace `/engagements/{id}`. Stable subject.
+  // payload. CTA deep-links to the MEETING RECAP `/meetings/{meetingId}` (BAL-388).
   'recap-ready': (data) => ({
     component: React.createElement(RecapReadyEmail, {
       firstName: (data.recipientName as string) ?? 'there',
       summaryHeadline: data.summaryHeadline as string | undefined,
       actionItemCount: numberCount(data.actionItemCount),
-      engagementId: (data.engagementId as string) ?? '',
+      meetingId: (data.meetingId as string) ?? '',
       baseUrl: BASE_URL,
     }),
     subject: 'Your session recap is ready',

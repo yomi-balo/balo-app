@@ -6,7 +6,7 @@ import { reviewColors } from './review-email-shared.js';
  * BAL-390 — the in-email star-rating ask. ONE component, four carriers:
  *   · `engagement-accepted-client`      (client explicitly accepted a project)
  *   · `engagement-auto-accepted-client` (VARIANT 3, the D7 sweep closed it out)
- *   · `engagement-case-closed-client`   (the fused case-close email — INERT today)
+ *   · `engagement-case-closed-client`   (the fused case-close email; LIVE as of BAL-388)
  *   · `review-nudge`                    (the +24h / +7d sweep, both cadence steps)
  *
  * Defining it exactly once is what keeps four consumers under SonarCloud's >3%

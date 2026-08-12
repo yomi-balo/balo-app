@@ -1,4 +1,4 @@
-import { SectionCard, SectionSkeleton } from '@/components/balo/domain-join/section-states';
+import { SectionCard, SectionSkeleton } from '@/components/balo/section/section-states';
 
 /**
  * Three block skeletons that match the loaded join-mode shape (three radio-cards),

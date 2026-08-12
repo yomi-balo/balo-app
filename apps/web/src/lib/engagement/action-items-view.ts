@@ -41,7 +41,11 @@ export interface ActionItemNodeView {
 export interface ActionItemsPanelView {
   engagementId: string;
   items: ActionItemNodeView[];
-  /** Mutations are allowed only on a live, active engagement (matches milestones). */
+  /**
+   * Mutations are allowed only on a live, active engagement (matches milestones). `false` also
+   * decides ABSENCE: a read-only panel with no items renders NOTHING at all (see the panel), so
+   * a caller that WRAPS it must not emit a wrapper for a view that will render nothing.
+   */
   canWrite: boolean;
   /** = `ctx.lens` — drives default self-assign framing + copy. */
   viewerParty: EngagementLens;
@@ -78,6 +82,35 @@ function deriveAssigneeLabel(
 }
 
 /**
+ * ONE action-item row → its serializable node. PURE.
+ *
+ * ⚠ EXPORTED AND SHARED ON PURPOSE (BAL-388). The recap builds a MEETING-scoped panel view
+ * and cannot call `mapActionItemsToView` — that function takes a
+ * `ProjectEngagementWithMilestones` and its own docblock assigns the case mapper elsewhere.
+ * Re-spelling this body in a second mapper is exactly the shape SonarCloud's >3% new-code
+ * duplication gate exists to catch, so the per-item mapping lives here once and both mappers
+ * call it. Behaviour is unchanged from the original inline version.
+ */
+export function mapActionItemNode(
+  item: ActionItem,
+  clientCompanyName: string,
+  expertPartyShort: string,
+  nowMs: number
+): ActionItemNodeView {
+  const dueAt = item.dueAt;
+  return {
+    id: item.id,
+    body: item.body,
+    status: item.status,
+    assigneeParty: item.assigneeParty,
+    assigneeLabel: deriveAssigneeLabel(item.assigneeParty, clientCompanyName, expertPartyShort),
+    dueLabel: dueAt === null ? null : formatDueLabel(dueAt),
+    dueAtValue: dueAt === null ? null : toDateInputValue(dueAt),
+    isOverdue: dueAt !== null && item.status === 'open' && dueAt.getTime() < nowMs,
+  };
+}
+
+/**
  * Map the LIVE action-item rows + resolved viewer context into the single serializable
  * panel view. SERVER-ONLY, PURE (no I/O; `@balo/db` type-only) — the returned object is
  * plain data safe to hand to the client island. `now` is injectable for deterministic
@@ -101,23 +134,9 @@ export function mapActionItemsToView(
   const parties = deriveEngagementParties(engagement);
   const nowMs = now.getTime();
 
-  const items: ActionItemNodeView[] = actionItems.map((item) => {
-    const dueAt = item.dueAt;
-    return {
-      id: item.id,
-      body: item.body,
-      status: item.status,
-      assigneeParty: item.assigneeParty,
-      assigneeLabel: deriveAssigneeLabel(
-        item.assigneeParty,
-        parties.clientCompanyName,
-        parties.expertPartyShort
-      ),
-      dueLabel: dueAt === null ? null : formatDueLabel(dueAt),
-      dueAtValue: dueAt === null ? null : toDateInputValue(dueAt),
-      isOverdue: dueAt !== null && item.status === 'open' && dueAt.getTime() < nowMs,
-    };
-  });
+  const items: ActionItemNodeView[] = actionItems.map((item) =>
+    mapActionItemNode(item, parties.clientCompanyName, parties.expertPartyShort, nowMs)
+  );
 
   return {
     engagementId: engagement.id,
