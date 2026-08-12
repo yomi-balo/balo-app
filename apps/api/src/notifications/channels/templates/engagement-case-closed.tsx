@@ -14,12 +14,10 @@ import { ReviewAskBlock } from './review-ask-block.js';
  * case summary → the star-rating ask, in that order. ONE email, never two — the
  * record is the primary content and the ask is secondary.
  *
- * ⚠ INERT IN THIS PR. `engagement.case_closed` ships with a rule, this template, an
- * in-app template and a Zod publish arm, but with NO PUBLISHER:
- * `caseEngagementsRepository.close()` has zero production callers (`resolved` is
- * BAL-421's, `auto_inactive` is BAL-420's) and a `@balo/db` repository structurally
- * cannot publish. Each of those tickets adds exactly one `publishNotificationEvent`
- * line and this email starts sending with no change here.
+ * ⚠ LIVE AS OF BAL-388. The recap's `resolveCaseAction` is the FIRST and (today) only
+ * publisher of `engagement.case_closed`, so this is a real email that a real client
+ * receives. The `auto_inactive` arm is still unpublished (BAL-420's sweep owns it), which
+ * is why the quiet-close copy stays. Do not describe this template as inert.
  *
  * `reviewToken` ABSENT ⇒ already rated ⇒ the star block is omitted ENTIRELY — not
  * greyed, gone — and replaced by one short thank-you line. That is the BEST outcome:
@@ -44,7 +42,13 @@ export interface CaseClosedEmailProps {
   readonly consultationCount?: number;
   /** RAW review-invite token. ABSENT ⇒ already rated ⇒ no star block at all. */
   readonly reviewToken?: string;
-  readonly engagementUrl: string;
+  /**
+   * ⚠ THE RECAP, NOT THE ENGAGEMENT. `/engagements/[id]` 404s BY CONSTRUCTION for a case — that
+   * route's loader filters `engagement_type = project`, so a case id resolves to `undefined`
+   * and it `notFound()`s. This was the ONLY navigation in the first close email the platform
+   * ever sends. ABSENT ⇒ NO button at all: a missing CTA is honest, a dead one is not.
+   */
+  readonly recapUrl?: string;
   readonly baseUrl: string;
 }
 
@@ -57,7 +61,7 @@ export function CaseClosedEmail({
   closeReason,
   consultationCount,
   reviewToken,
-  engagementUrl,
+  recapUrl,
   baseUrl,
 }: Readonly<CaseClosedEmailProps>) {
   const wentQuiet = closeReason === 'auto_inactive';
@@ -112,11 +116,13 @@ export function CaseClosedEmail({
         />
       )}
 
-      <Section style={reviewStyles.ctaWrapper}>
-        <Button style={reviewStyles.ctaPrimary} href={engagementUrl}>
-          View the case →
-        </Button>
-      </Section>
+      {recapUrl === undefined ? null : (
+        <Section style={reviewStyles.ctaWrapper}>
+          <Button style={reviewStyles.ctaPrimary} href={recapUrl}>
+            View the recap →
+          </Button>
+        </Section>
+      )}
 
       <Hr style={reviewStyles.divider} />
       <Text style={{ ...reviewStyles.bodyText, fontSize: '13px', margin: 0 }}>

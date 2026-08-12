@@ -30,6 +30,7 @@ import type { CreditEventMap, CreditServerEventMap } from './events/credit';
 import type { PromoServerEventMap, PromoEventMap } from './events/promo';
 import type { SessionEventMap, SessionServerEventMap } from './events/session';
 import type { CaseBillingEventMap, CaseBillingServerEventMap } from './events/case-billing';
+import type { RecapEventMap, RecapServerEventMap } from './events/recap';
 import type { ActionItemServerEventMap } from './events/action-item';
 import type { WalletEventMap } from './events/wallet';
 import type { ScheduleEventMap } from './events/schedule';
@@ -63,6 +64,7 @@ export type AllEvents = AuthEventMap &
   PromoEventMap &
   SessionEventMap &
   CaseBillingEventMap &
+  RecapEventMap &
   WalletEventMap &
   ScheduleEventMap;
 
@@ -87,6 +89,7 @@ export type ServerEvents = ExpertServerEventMap &
   PromoServerEventMap &
   SessionServerEventMap &
   CaseBillingServerEventMap &
+  RecapServerEventMap &
   ActionItemServerEventMap &
   TranscriptServerEventMap &
   ReviewServerEventMap &

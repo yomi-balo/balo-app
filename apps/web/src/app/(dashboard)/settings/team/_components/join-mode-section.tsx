@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
-import { SectionCard } from '@/components/balo/domain-join/section-states';
+import { SectionCard } from '@/components/balo/section/section-states';
 import { formatShortDate } from '@/components/balo/domain-join/format';
 import { setCompanyJoinMode } from '../_actions/set-join-mode';
 import { cn } from '@/lib/utils';

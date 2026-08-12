@@ -385,11 +385,13 @@ const engagementAcceptedPayload = z.object({
 // z.uuid so the suffix validates). `recipientId` gates the rule (absent ⇒ skip).
 // `reviewToken` is the RAW ≥256-bit review-invite token and appears ONLY inside the
 // emailed URL — absent ⇒ already rated ⇒ the email omits the review block entirely.
-// ⚠ INERT: this arm exists so BAL-420 / BAL-421 can publish from a web Server Action
-// with one line and no schema work. Mirrors packages/shared/src/notifications/index.ts.
+// `meetingId` is the CTA subject on BOTH channels: the engagements route 404s for a CASE by
+// construction, so the deep link is the recap (BAL-388). OPTIONAL — absent ⇒ no CTA at all.
+// Mirrors packages/shared/src/notifications/index.ts.
 const engagementCaseClosedPayload = z.object({
   correlationId: z.string().min(1).max(120),
   engagementId: z.uuid(),
+  meetingId: z.uuid().optional(),
   recipientId: z.uuid().optional(),
   expertProfileId: z.uuid(),
   clientCompanyName: z.string().min(1).max(200),

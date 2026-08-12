@@ -129,6 +129,23 @@ describe('ActionItemsPanel', () => {
     expect(screen.queryByText('Action items')).not.toBeInTheDocument();
   });
 
+  /**
+   * BAL-388 — the ADD PATH IS GATED ON `canWrite` ALONE, and the invitation copy is reachable
+   * ONLY on that same branch. The read-only, item-less panel above renders NOTHING, so there is
+   * no surface anywhere that can show an "add the first action item" instruction it cannot
+   * honour. This pins both halves together: reverting either one leaves a dead instruction on
+   * a surface with no input, no button and no path.
+   */
+  it('never shows the invitation copy without the add path that honours it', () => {
+    const { rerender } = render(<ActionItemsPanel view={makeView({ items: [] })} />);
+    expect(screen.getByRole('button', { name: /^Add$/ })).toBeInTheDocument();
+    expect(screen.getByText(/Add the first action item/)).toBeInTheDocument();
+
+    rerender(<ActionItemsPanel view={makeView({ canWrite: false, items: [] })} />);
+    expect(screen.queryByRole('button', { name: /^Add$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Add the first action item/)).not.toBeInTheDocument();
+  });
+
   it('adds an action item → calls createActionItemAction and toasts success', async () => {
     const user = userEvent.setup();
     render(<ActionItemsPanel view={makeView({ items: [] })} />);

@@ -91,6 +91,7 @@ vi.mock('@/lib/analytics', async () => {
     PROMO_EVENTS: events.PROMO_EVENTS,
     SESSION_EVENTS: events.SESSION_EVENTS,
     CASE_BILLING_EVENTS: events.CASE_BILLING_EVENTS,
+    RECAP_EVENTS: events.RECAP_EVENTS,
     WALLET_EVENTS: events.WALLET_EVENTS,
     SCHEDULE_EVENTS: events.SCHEDULE_EVENTS,
     initAnalytics: vi.fn(),

@@ -220,10 +220,10 @@ export type NotificationEvent =
   // ABSENT from this web union (they have no `/notifications/publish` route arm).
   | 'engagement.accepted'
   | 'engagement.changes_requested'
-  // BAL-390 (D4) — a case was closed (the fused close + rating email). PUBLISHABLE from
-  // apps/web and INERT: the rule, both templates and the Zod arm all ship, but nothing
-  // publishes it yet. BAL-420 (auto_inactive) and BAL-421 (resolved) each add exactly
-  // one publishNotificationEvent line against this key.
+  // BAL-390 (D4) — a case was closed (the fused close + rating email). PUBLISHED FROM
+  // apps/web as of BAL-388: `resolveCaseAction` on the recap is the platform's first and
+  // today only publisher of this key. BAL-420's auto_inactive sweep adds the second, from
+  // apps/api.
   | 'engagement.case_closed'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'

@@ -13,7 +13,9 @@ import {
  * BAL-387 (ADR-1013 + ADR-1043) — a transcript recap is ready; the client company owner OR the
  * delivering expert is notified. ONE component serves both rules — the greeting differs via the
  * per-recipient `firstName`. Bespoke on `EmailShell` (like `action-item-assigned`, NOT
- * `ProjectStatusEmail`): the CTA deep-links to the delivery workspace `/engagements/{id}`. Copy
+ * `ProjectStatusEmail`): the CTA deep-links to the MEETING RECAP `/meetings/{meetingId}`
+ * (BAL-388 — re-pointed from `/engagements/{id}`, which was the closest thing that existed
+ * before the recap page did; `meetingId` was already REQUIRED on the payload). Copy
  * is gender-neutral and carries NO money (fee-safe by construction). `summaryHeadline`, when
  * present, is a short plain-text one-liner of shared meeting context; `actionItemCount` reads as
  * a helpful fact, never a countdown.
@@ -22,7 +24,7 @@ export interface RecapReadyEmailProps {
   readonly firstName: string;
   readonly summaryHeadline?: string;
   readonly actionItemCount: number;
-  readonly engagementId: string;
+  readonly meetingId: string;
   readonly baseUrl: string;
 }
 
@@ -47,7 +49,7 @@ export function RecapReadyEmail({
   firstName = 'there',
   summaryHeadline,
   actionItemCount,
-  engagementId,
+  meetingId,
   baseUrl,
 }: Readonly<RecapReadyEmailProps>) {
   const itemsLine = actionItemLine(actionItemCount);
@@ -83,7 +85,10 @@ export function RecapReadyEmail({
         ) : null}
 
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
-          <Button style={shared.smallCtaButton} href={`${baseUrl}/engagements/${engagementId}`}>
+          <Button
+            style={shared.smallCtaButton}
+            href={`${baseUrl}/meetings/${meetingId}?from=notification`}
+          >
             View the recap →
           </Button>
         </Section>

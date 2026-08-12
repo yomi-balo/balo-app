@@ -53,6 +53,20 @@ export const companiesRepository = {
     });
   },
 
+  /**
+   * DISPLAY-ONLY hydration of ONE company (BAL-388) — `id` + `name`, and nothing else.
+   * `findById` returns the whole row (billing details, domain, join mode), which has no place
+   * on a counterparty-facing render path. Same posture as `usersRepository.findDisplayById`.
+   */
+  findNameById: async (id: string): Promise<{ id: string; name: string } | undefined> => {
+    const [row] = await db
+      .select({ id: companies.id, name: companies.name })
+      .from(companies)
+      .where(eq(companies.id, id))
+      .limit(1);
+    return row;
+  },
+
   findBySlug: async (slug: string): Promise<Company | undefined> => {
     return db.query.companies.findFirst({
       where: eq(companies.slug, slug),

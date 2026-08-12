@@ -9,7 +9,7 @@ const props = (over: Record<string, unknown> = {}) => ({
   firstName: 'Dana',
   summaryHeadline: 'Agreed to migrate CPQ config before the next sync.',
   actionItemCount: 3,
-  engagementId: 'eng-1',
+  meetingId: 'mtg-1',
   baseUrl: BASE,
   ...over,
 });
@@ -20,11 +20,13 @@ function clean(html: string): string {
 }
 
 describe('RecapReadyEmail (BAL-387)', () => {
-  it('greets by first name and deep-links the CTA to the delivery workspace', async () => {
+  it('greets by first name and deep-links the CTA to the meeting recap', async () => {
     const html = clean(await render(RecapReadyEmail(props())));
     expect(html).toContain('Hi Dana,');
     expect(html).toContain('Your session recap is ready.');
-    expect(html).toContain('/engagements/eng-1');
+    // `?from=notification` is what makes `recap_viewed.source` readable for the recap's PRIMARY
+    // entry point — the recap page whitelists exactly this value (BAL-388).
+    expect(html).toContain('/meetings/mtg-1?from=notification');
   });
 
   it('renders the summary callout when a headline is present', async () => {
@@ -72,19 +74,19 @@ describe('RecapReadyEmail (BAL-387)', () => {
 });
 
 describe('getEmailTemplate — recap-ready factory', () => {
-  it('greets by recipientName, carries a stable subject, and deep-links the engagement', async () => {
+  it('greets by recipientName, carries a stable subject, and deep-links the meeting recap', async () => {
     const out = getEmailTemplate('recap-ready', {
       recipientName: 'Dana',
       summaryHeadline: 'Migration plan agreed.',
       actionItemCount: 2,
-      engagementId: 'eng-9',
+      meetingId: 'mtg-9',
     });
     expect(out.subject).toBe('Your session recap is ready');
     const html = clean(await render(out.component));
     expect(html).toContain('Hi Dana,');
     expect(html).toContain('Migration plan agreed.');
     expect(html).toContain('2 action items are ready to review.');
-    expect(html).toContain('/engagements/eng-9');
+    expect(html).toContain('/meetings/mtg-9?from=notification');
   });
 
   it('degrades gracefully when optional fields are absent', async () => {

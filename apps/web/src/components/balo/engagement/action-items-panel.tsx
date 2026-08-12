@@ -311,6 +311,8 @@ export function ActionItemsPanel({
 
         {optimistic.length === 0 ? (
           <p className="text-muted-foreground mt-4 text-sm leading-relaxed">
+            {/* Only a WRITABLE panel ever reaches this branch — the read-only, item-less case
+                returns null above — so the invitation is never a dead instruction. */}
             Add the first action item so both sides stay aligned on what happens next.
           </p>
         ) : (

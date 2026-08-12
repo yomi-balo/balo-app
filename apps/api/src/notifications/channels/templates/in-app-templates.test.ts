@@ -482,18 +482,30 @@ describe('getInAppTemplate', () => {
   });
 
   describe('engagement-case-closed-client (BAL-390)', () => {
-    it('renders the resolved-close record, deep-linked to the engagement', () => {
+    it('renders the resolved-close record, deep-linked to the MEETING RECAP', () => {
       const result = getInAppTemplate('engagement-case-closed-client', {
         caseTitle: 'Flow interview stuck on a record-triggered loop',
         closedDate: '3 Aug',
         closeReason: 'resolved',
         engagementId: 'eng-1',
+        meetingId: 'mtg-1',
       });
       expect(result).toEqual({
         title: 'Case closed',
         body: "'Flow interview stuck on a record-triggered loop' is wrapped up as of 3 Aug. Everything from it stays here whenever you need it.",
-        actionUrl: '/engagements/eng-1',
+        // NOT `/engagements/eng-1` — that route 404s for a CASE by construction (BAL-388).
+        actionUrl: '/meetings/mtg-1?from=notification',
       });
+    });
+
+    it('renders NO actionUrl when the payload carries no meetingId', () => {
+      const result = getInAppTemplate('engagement-case-closed-client', {
+        caseTitle: 'Apex CPU limit',
+        closedDate: '3 Aug',
+        closeReason: 'resolved',
+        engagementId: 'eng-9',
+      });
+      expect(result.actionUrl).toBeUndefined();
     });
 
     it('softens the copy when the case went quiet rather than being resolved', () => {
@@ -525,6 +537,37 @@ describe('getInAppTemplate', () => {
       expect(result.body).toContain("'Your case'");
       expect(result.body).toContain('today');
       expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  /**
+   * BAL-388 — the recap's PRIMARY in-app entry point. `getInAppTemplate` silently falls back to
+   * a generic notice for an unknown name, so an untested arm degrades to a meaningless
+   * notification with a green CI: these assert the REAL title, body and deep link.
+   */
+  describe('recap-ready (BAL-387 / BAL-388)', () => {
+    it('deep-links the MEETING recap and tags the entry source', () => {
+      const result = getInAppTemplate('recap-ready', {
+        meetingId: 'mtg-1',
+        actionItemCount: 2,
+        summaryHeadline: 'Agreed to migrate CPQ config.',
+      });
+      expect(result).toEqual({
+        title: 'Session recap ready',
+        body: 'Agreed to migrate CPQ config. · 2 action items',
+        actionUrl: '/meetings/mtg-1?from=notification',
+      });
+    });
+
+    it('uses the singular action-item noun for exactly one', () => {
+      const result = getInAppTemplate('recap-ready', { meetingId: 'mtg-2', actionItemCount: 1 });
+      expect(result.body).toBe('Your session summary is ready · 1 action item.');
+    });
+
+    it('renders NO actionUrl when the payload carries no meetingId', () => {
+      const result = getInAppTemplate('recap-ready', { actionItemCount: 0 });
+      expect(result.actionUrl).toBeUndefined();
+      expect(result.title).toBe('Session recap ready');
     });
   });
 

@@ -2,7 +2,7 @@
 
 import { Globe } from 'lucide-react';
 import type { PartyDomainWithCreator } from '@balo/db';
-import { SectionCard, SectionEmpty } from './section-states';
+import { SectionCard, SectionEmpty } from '../section/section-states';
 import { DomainRow } from './domain-row';
 import { AddDomainForm } from './add-domain-form';
 

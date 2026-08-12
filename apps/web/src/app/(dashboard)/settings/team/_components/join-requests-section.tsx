@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { Check } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PendingJoinRequestRow, ResolvedJoinRequestRow } from '@balo/db';
-import { SectionCard, SectionEmpty, InfoNote } from '@/components/balo/domain-join/section-states';
+import { SectionCard, SectionEmpty, InfoNote } from '@/components/balo/section/section-states';
 import { RequestRow } from './request-row';
 import { ResolvedDisclosure } from './resolved-disclosure';
 import { approveJoinRequest } from '../_actions/approve-join-request';

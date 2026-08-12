@@ -1,6 +1,6 @@
 'use client';
 
-import { SectionError } from '@/components/balo/domain-join/section-states';
+import { SectionError } from '@/components/balo/section/section-states';
 
 /**
  * Route error boundary for the company Members & access surface (BAL-347). Renders the

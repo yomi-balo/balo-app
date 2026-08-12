@@ -23,6 +23,18 @@ export { CREDIT_SERVER_EVENTS } from '../events/credit';
 export { PROMO_SERVER_EVENTS } from '../events/promo';
 export { SESSION_SERVER_EVENTS } from '../events/session';
 export { CASE_BILLING_SERVER_EVENTS } from '../events/case-billing';
+// BAL-388 — the recap is a MIXED feature: its client half is exported from '../client'
+// and its server half here. Both allowlists are load-bearing; neither package has a
+// typecheck or test script that would notice a missing line.
+export { RECAP_SERVER_EVENTS } from '../events/recap';
+export type {
+  RecapState,
+  RecapLens,
+  RecapContextType,
+  RecapEntrySource,
+  RecapResolvePromptVariant,
+  RecapCta,
+} from '../events/recap';
 export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
 export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';

@@ -610,3 +610,19 @@ describe('companiesRepository.promoteToOrganization', () => {
     ).resolves.toHaveLength(1);
   });
 });
+
+describe('companiesRepository.findNameById — the PROJECTED display read (BAL-388)', () => {
+  it('returns exactly id + name, and nothing else from the row', async () => {
+    const companyId = await seedCompany();
+
+    const row = await companiesRepository.findNameById(companyId);
+
+    if (row === undefined) throw new Error('expected a display row');
+    expect(Object.keys(row).sort()).toEqual(['id', 'name']);
+    expect(row.name).toBe('Acme Co');
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(companiesRepository.findNameById(randomUUID())).resolves.toBeUndefined();
+  });
+});

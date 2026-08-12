@@ -735,8 +735,8 @@ describe('caseEngagementsRepository.listClosedBetween', () => {
   });
 
   it('excludes an OPEN case (closed_at IS NULL) — the empty-set state BAL-390 actually ships in', async () => {
-    // ⚠ D5: `close()` has no production caller, so in production EVERY case is in this
-    // state and this reader legitimately returns nothing. It self-activates unchanged.
+    // ⚠ D5: the only production caller of `close()` today is BAL-388's `resolveCaseAction`,
+    // so most cases are still in this state and this reader legitimately skips them.
     const open = await caseEngagementFactory();
     const ids = await candidateIds(new Date(0), new Date(Date.now() + 86_400_000));
     expect(ids).not.toContain(open.engagement.id);
@@ -833,5 +833,156 @@ describe('case_engagements — the composite FK cascade', () => {
       .from(caseEngagements)
       .where(eq(caseEngagements.engagementId, engagement.id));
     expect(rows).toHaveLength(0);
+  });
+});
+
+/**
+ * BAL-388 — `clearResolutionRequest`. The dismissal half of §R4: the client says "not yet",
+ * the pending request goes away, and the case STAYS OPEN.
+ */
+describe('caseEngagementsRepository.clearResolutionRequest', () => {
+  it('nulls BOTH paired columns in one UPDATE, without tripping the CHECK', async () => {
+    // ⚠ `case_engagement_resolution_request_paired` is
+    // `(at IS NULL) = (by IS NULL)`, so a one-column update would be rejected 23514. This
+    // test is what proves the repository writes the pair.
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory({
+      caseValues: {
+        resolutionRequestedAt: new Date('2026-08-01T00:00:00.000Z'),
+        resolutionRequestedByUserId: requester.id,
+      },
+    });
+
+    const cleared = await caseEngagementsRepository.clearResolutionRequest({
+      engagementId: engagement.id,
+    });
+
+    expect(cleared).toBeDefined();
+    expect(cleared?.resolutionRequestedAt).toBeNull();
+    expect(cleared?.resolutionRequestedByUserId).toBeNull();
+
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).toBeNull();
+    expect(row?.resolutionRequestedByUserId).toBeNull();
+  });
+
+  it('LEAVES THE CASE OPEN — closed_at, close_reason and the parent status are untouched', async () => {
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory({
+      caseValues: {
+        resolutionRequestedAt: new Date('2026-08-01T00:00:00.000Z'),
+        resolutionRequestedByUserId: requester.id,
+      },
+    });
+
+    await caseEngagementsRepository.clearResolutionRequest({ engagementId: engagement.id });
+
+    const [child] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(child?.closedAt).toBeNull();
+    expect(child?.closeReason).toBeNull();
+    expect(child?.closedByUserId).toBeNull();
+
+    const [parent] = await db.select().from(engagements).where(eq(engagements.id, engagement.id));
+    expect(parent?.status).toBe('active');
+  });
+
+  it('is IDEMPOTENT — a second clear is a no-op that still returns the row', async () => {
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory({
+      caseValues: {
+        resolutionRequestedAt: new Date('2026-08-01T00:00:00.000Z'),
+        resolutionRequestedByUserId: requester.id,
+      },
+    });
+
+    await caseEngagementsRepository.clearResolutionRequest({ engagementId: engagement.id });
+    const second = await caseEngagementsRepository.clearResolutionRequest({
+      engagementId: engagement.id,
+    });
+
+    expect(second).toBeDefined();
+    expect(second?.resolutionRequestedAt).toBeNull();
+  });
+
+  it('is a no-op on a case that never had a request', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const cleared = await caseEngagementsRepository.clearResolutionRequest({
+      engagementId: engagement.id,
+    });
+    expect(cleared?.resolutionRequestedAt).toBeNull();
+  });
+
+  it('REFUSES a CLOSED case — terminal history is not rewritten', async () => {
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory({
+      withClientMember: true,
+      caseValues: {
+        resolutionRequestedAt: new Date('2026-08-01T00:00:00.000Z'),
+        resolutionRequestedByUserId: requester.id,
+      },
+    });
+    await caseEngagementsRepository.close({ engagementId: engagement.id, reason: 'auto_inactive' });
+
+    await expect(
+      caseEngagementsRepository.clearResolutionRequest({ engagementId: engagement.id })
+    ).resolves.toBeUndefined();
+
+    // And the request columns are STILL set — the refusal is a refusal, not a partial write.
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).not.toBeNull();
+  });
+
+  it('refuses a SOFT-DELETED case', async () => {
+    const { engagement } = await caseEngagementFactory();
+    await softDeleteEngagementFixture(engagement.id);
+
+    await expect(
+      caseEngagementsRepository.clearResolutionRequest({ engagementId: engagement.id })
+    ).resolves.toBeUndefined();
+  });
+
+  it('REPORTS FAILURE AND WRITES NOTHING when the PARENT row has drifted', async () => {
+    const requester = await userFactory();
+    const requestedAt = new Date('2026-08-01T00:00:00.000Z');
+    const { engagement } = await caseEngagementFactory({
+      caseValues: { resolutionRequestedAt: requestedAt, resolutionRequestedByUserId: requester.id },
+    });
+
+    // DELIBERATE parent/child drift — the sanctioned fixture stamps BOTH rows, and this test
+    // needs only the PARENT stamped so the child UPDATE would still match. That is the exact
+    // state in which reading the parent AFTER the update commits the clear and then reports
+    // "no longer open" to a client whose request was in fact cleared.
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+
+    await expect(
+      caseEngagementsRepository.clearResolutionRequest({ engagementId: engagement.id })
+    ).resolves.toBeUndefined();
+
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).toEqual(requestedAt);
+    expect(row?.resolutionRequestedByUserId).toBe(requester.id);
+  });
+
+  it('returns undefined for an unknown engagement id', async () => {
+    await expect(
+      caseEngagementsRepository.clearResolutionRequest({
+        engagementId: '00000000-0000-4000-8000-000000000000',
+      })
+    ).resolves.toBeUndefined();
   });
 });

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Lock } from 'lucide-react';
 import type { PartyDomainWithCreator } from '@balo/db';
 import { DomainsSection } from '@/components/balo/domain-join/domains-section';
-import { SectionCard, SectionError, InfoNote } from '@/components/balo/domain-join/section-states';
+import { SectionCard, SectionError, InfoNote } from '@/components/balo/section/section-states';
 
 interface AgencyDomainsTabProps {
   agencyId: string;

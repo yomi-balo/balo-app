@@ -333,6 +333,40 @@ export const usersRepository = {
   },
 
   /**
+   * DISPLAY-ONLY hydration of ONE user (BAL-388) — `id` / `firstName` / `lastName` /
+   * `avatarUrl`, and NOTHING else.
+   *
+   * ⚠⚠ THIS EXISTS SO A CLIENT-BOUND RENDER PATH CANNOT OVER-HYDRATE. `findById` returns the
+   * whole `User`, including `email`, `workosId` and `phone`; a relational hydrate handed to a
+   * counterparty-facing view is the exact shape of memory
+   * `reference_drizzle_with_hydration_leaks_secrets`, and TypeScript will NOT catch it because
+   * excess-property checking does not apply to spreads. Concealment here is enforced by what
+   * the row CAN hold, not by remembering to omit downstream. Same posture as
+   * {@link usersRepository.findNamesByIds}, for the single-row case that also needs an avatar.
+   *
+   * ⚠ `avatarUrl` MAY BE AN R2 KEY rather than a URL (Balo uploads store the key). Every
+   * display site must run it through `getAvatarUrl()`.
+   */
+  findDisplayById: async (
+    id: string
+  ): Promise<
+    | { id: string; firstName: string | null; lastName: string | null; avatarUrl: string | null }
+    | undefined
+  > => {
+    const [row] = await db
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        avatarUrl: users.avatarUrl,
+      })
+      .from(users)
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
+      .limit(1);
+    return row;
+  },
+
+  /**
    * BAL-374 onboarding-reminder sweep: non-deleted users who have NOT completed
    * onboarding and whose `created_at` falls in the HALF-OPEN window `(after, until]`
    * (`created_at > after AND created_at <= until`). Projects `id` + `email` ONLY

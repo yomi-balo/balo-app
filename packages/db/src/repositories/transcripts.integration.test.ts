@@ -182,3 +182,62 @@ describe('transcripts — engagement cascade', () => {
     expect(childRows).toHaveLength(0);
   });
 });
+
+/**
+ * BAL-388 — the MEETING-scoped read the recap page needs. Before this, the only lookups were
+ * by `capture_id` and by `id`, so "the transcript for this meeting" had no repository method
+ * at all.
+ */
+describe('transcriptsRepository.findByMeetingId', () => {
+  it('returns the LIVE transcript for a meeting, PROJECTED to id + status only', async () => {
+    const { transcript, meetingId } = await transcriptFactory();
+
+    const found = await transcriptsRepository.findByMeetingId(meetingId);
+    expect(found?.id).toBe(transcript.id);
+    expect(found?.status).toBe(transcript.status);
+    // ⚠ THE KEY SET IS THE INVARIANT. `transcripts.canonical` holds the whole raw segment
+    // array for the call; a bare `select()` pulled a potentially multi-hundred-KB jsonb on
+    // EVERY recap render just to read one enum. A regression re-adds keys here.
+    expect(Object.keys(found ?? {}).sort()).toEqual(['id', 'status']);
+    expect(found).not.toHaveProperty('canonical');
+    expect(found).not.toHaveProperty('extractedActionItems');
+  });
+
+  it('filters deleted_at IS NULL — a soft-deleted transcript is invisible', async () => {
+    const { transcript, meetingId } = await transcriptFactory();
+    await db
+      .update(transcripts)
+      .set({ deletedAt: new Date() })
+      .where(eq(transcripts.id, transcript.id));
+
+    await expect(transcriptsRepository.findByMeetingId(meetingId)).resolves.toBeUndefined();
+  });
+
+  it('returns undefined for a meeting with no transcript', async () => {
+    const meetingId = (await meetingFactory()).meeting.id;
+    await expect(transcriptsRepository.findByMeetingId(meetingId)).resolves.toBeUndefined();
+  });
+
+  it("never returns ANOTHER meeting's transcript", async () => {
+    await transcriptFactory();
+    const otherMeetingId = (await meetingFactory()).meeting.id;
+    await expect(transcriptsRepository.findByMeetingId(otherMeetingId)).resolves.toBeUndefined();
+  });
+
+  it('picks the MOST RECENT row when a meeting somehow has two captures', async () => {
+    // ⚠ `meeting_id` is NOT the partial-unique — `capture_id` is — so two captures of one
+    // meeting ARE representable. The recap must not flip between two summaries on refresh,
+    // so the order is deterministic rather than arbitrary.
+    const { meetingId, engagementId } = await transcriptFactory({
+      values: { createdAt: new Date('2026-07-01T00:00:00.000Z') },
+    });
+    const second = await transcriptFactory({
+      meetingId,
+      engagementId,
+      values: { createdAt: new Date('2026-07-02T00:00:00.000Z') },
+    });
+
+    const found = await transcriptsRepository.findByMeetingId(meetingId);
+    expect(found?.id).toBe(second.transcript.id);
+  });
+});

@@ -136,6 +136,18 @@ export {
   type CaseBillingFinalizationPath,
 } from './case-billing';
 export {
+  RECAP_EVENTS,
+  type RecapEventMap,
+  RECAP_SERVER_EVENTS,
+  type RecapServerEventMap,
+  type RecapState,
+  type RecapLens,
+  type RecapContextType,
+  type RecapEntrySource,
+  type RecapResolvePromptVariant,
+  type RecapCta,
+} from './recap';
+export {
   ACTION_ITEM_SERVER_EVENTS,
   type ActionItemServerEventMap,
   type ActionItemAssigneeRole,
