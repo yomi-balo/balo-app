@@ -28,6 +28,9 @@ export {
   // CASE_RESOLVED and CASE_RESOLUTION_REQUEST_DISMISSED. All three are emitted from
   // apps/web, so this allowlist is required (the client half lives in @/lib/analytics).
   RECAP_SERVER_EVENTS,
+  // BAL-389 — the end-of-call page RSC fires END_OF_CALL_SERVER_EVENTS.VIEWED. Its client
+  // half (END_OF_CALL_EVENTS) lives in the @/lib/analytics barrel; both are required.
+  END_OF_CALL_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type {
   RecapState,
@@ -38,6 +41,12 @@ export type {
   RecapCta,
   // BAL-421 — the case surface RSC's `case_surface_viewed` payload.
   CaseSurfaceState,
+  CaseResolveSource,
+} from '@balo/analytics/server';
+export type {
+  EndOfCallRecapState,
+  EndOfCallRatingState,
+  EndOfCallAction,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

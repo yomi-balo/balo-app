@@ -58,7 +58,13 @@ import { log } from '@/lib/logging';
 
 const CASE_ACCESS = {
   lens: 'client',
-  meeting: { id: MEETING_ID },
+  meeting: {
+    id: MEETING_ID,
+    // The gate projects these two through for `resolveCaseAction`'s post-call guard. Dismissal
+    // deliberately does NOT consult them — see the assertion at the bottom of this file.
+    scheduledStart: new Date('2026-08-12T09:00:00.000Z'),
+    status: 'scheduled',
+  },
   subject: { contextType: 'case', contextId: ENGAGEMENT_ID },
   companyId: COMPANY_ID,
   expertProfileId: 'd0000000-0000-4000-8000-000000000004',
@@ -197,5 +203,30 @@ describe('dismissResolutionRequestAction', () => {
     const result = await dismissResolutionRequestAction(INPUT);
     expect(result).toEqual({ success: false, error: 'Something went wrong. Please try again.' });
     expect(log.error).toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-389 SECURITY FIX — SCOPE. `resolveCaseAction` now refuses a close when the consultation
+   * has not taken place. That guard is deliberately NOT in the SHARED gate, so dismissal keeps
+   * working on a future or cancelled meeting.
+   *
+   * ⚠ THIS IS A DELIBERATE NON-EXTENSION, NOT AN OVERSIGHT. Dismissal clears two columns and
+   * leaves the case OPEN — its outcome is indistinguishable from doing nothing — so it is not one
+   * of the two CONSEQUENTIAL controls the finding concerns, and tightening a third control would
+   * be scope the ruling did not ask for. If that judgement is ever revisited, this test is the
+   * one to change, and the guard belongs in `authorizeRecapCaseMutation` at that point.
+   */
+  it('is NOT gated by the post-call rule — a future or cancelled meeting still dismisses', async () => {
+    for (const meeting of [
+      { id: MEETING_ID, scheduledStart: new Date('2099-01-01T09:00:00.000Z'), status: 'scheduled' },
+      { id: MEETING_ID, scheduledStart: new Date('2026-08-12T09:00:00.000Z'), status: 'cancelled' },
+    ]) {
+      mockClear.mockClear();
+      mockResolveAccess.mockResolvedValue({ ...CASE_ACCESS, meeting });
+      expect(await dismissResolutionRequestAction(INPUT), meeting.status).toEqual({
+        success: true,
+      });
+      expect(mockClear).toHaveBeenCalledWith({ engagementId: ENGAGEMENT_ID });
+    }
   });
 });

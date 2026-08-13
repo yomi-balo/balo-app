@@ -91,9 +91,19 @@ vi.mock('@/lib/analytics/server', async () => {
 import { resolveCaseAction } from './resolve-case';
 import { log } from '@/lib/logging';
 
+/**
+ * ⚠ THE FIXTURE CARRIES A **PAST** `scheduledStart` AND A LIVE STATUS, because the action now
+ * refuses to close a case from a consultation that has not taken place. `scheduled` (not `ended`)
+ * is the honest default: `meetings.status` has no live transition writer, so that is what 100% of
+ * real rows hold. The date is fixed in the past rather than derived from the wall clock so this
+ * suite means the same thing on every machine and every day.
+ */
+const PAST_START = new Date('2026-08-12T09:00:00.000Z');
+const FUTURE_START = new Date('2099-01-01T09:00:00.000Z');
+
 const CASE_ACCESS = {
   lens: 'client',
-  meeting: { id: MEETING_ID },
+  meeting: { id: MEETING_ID, scheduledStart: PAST_START, status: 'scheduled' },
   subject: { contextType: 'case', contextId: ENGAGEMENT_ID },
   companyId: COMPANY_ID,
   expertProfileId: PROFILE_ID,
@@ -282,6 +292,106 @@ describe('resolveCaseAction — gates', () => {
   });
 });
 
+/**
+ * BAL-389 SECURITY FIX — THE POST-CALL GUARD, SERVER-SIDE. This is the LOAD-BEARING half: the
+ * end-of-call loader also declines to OFFER the close, but a render-only check is bypassable by
+ * invoking this Server Action directly, and what is behind it is IRREVERSIBLE.
+ *
+ * ⚠ EVERY CASE IS RUN ACROSS **BOTH SURFACES**. `source` is an analytics dimension that gates
+ * nothing, so a guard that somehow keyed on it would be a hole; running the table over both
+ * values is what proves the recap and the end-of-call screen inherit ONE rule.
+ */
+describe('resolveCaseAction — the consultation must actually have taken place', () => {
+  const REFUSAL = 'This case can only be resolved from a consultation that has taken place.';
+  /** `undefined` IS the recap surface — that is what its two shipped call sites pass. */
+  const SURFACES = [undefined, 'end_of_call'] as const;
+
+  /**
+   * ⚠ THIS DELIBERATELY TIGHTENS EXISTING RECAP BEHAVIOUR on the second row. `loadRecap` admits
+   * `cancelled`, so closing from a cancelled consultation's recap used to work. A consultation
+   * that never went ahead is not evidence that the client's issue is resolved.
+   */
+  const DENIED = [
+    { why: 'a FUTURE start', meeting: { scheduledStart: FUTURE_START } },
+    { why: 'a CANCELLED status', meeting: { status: 'cancelled' } },
+  ] as const;
+
+  /** Point the gate at a meeting fixture and run the close from one surface. */
+  async function closeFrom(
+    source: (typeof SURFACES)[number],
+    meetingOver: Record<string, unknown> = {}
+  ): Promise<{ success: boolean; error?: string }> {
+    seedResolveCaseMocks({ user: { id: USER_ID, firstName: 'Dana' } });
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      meeting: { ...CASE_ACCESS.meeting, ...meetingOver },
+    });
+    return resolveCaseAction({ meetingId: MEETING_ID, source });
+  }
+
+  beforeEach(() => {
+    seedResolveCaseMocks({ user: { id: USER_ID, firstName: 'Dana' } });
+  });
+
+  it('DENIES both shapes on BOTH surfaces, and nothing downstream runs', async () => {
+    for (const { why, meeting } of DENIED) {
+      for (const source of SURFACES) {
+        const at = why + ' via ' + (source ?? 'recap');
+        expect(await closeFrom(source, meeting), at).toEqual({ success: false, error: REFUSAL });
+        expect(mockClose, at).not.toHaveBeenCalled();
+        expect(mockPublish, at).not.toHaveBeenCalled();
+        expect(mockCreateToken, at).not.toHaveBeenCalled();
+        expect(mockTrack, at).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('ALLOWS a past-start meeting still sitting at `scheduled` — the 100% case today', async () => {
+    // ⚠ THE ASSERTION THAT KEEPS THE FEATURE ALIVE. Nothing writes `started_at` and nothing
+    // transitions `status`, so a guard keyed on either would refuse every real close.
+    for (const source of SURFACES) {
+      expect(await closeFrom(source), source ?? 'recap').toEqual({ success: true });
+      expect(mockClose).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('refuses BEFORE any read or write — not even the case row is fetched', async () => {
+    await closeFrom(undefined, { scheduledStart: FUTURE_START });
+    expect(mockFindCase).not.toHaveBeenCalled();
+    expect(mockRevalidate).not.toHaveBeenCalled();
+  });
+
+  it('logs the refusal with the routing context, and never as a success', async () => {
+    await closeFrom(undefined, { status: 'cancelled' });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Case close refused — the consultation has not taken place',
+      {
+        meetingId: MEETING_ID,
+        engagementId: ENGAGEMENT_ID,
+        userId: USER_ID,
+        meetingStatus: 'cancelled',
+      }
+    );
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it('reads the LIFECYCLE FACTS FROM THE GATE, never from caller input', async () => {
+    // The action's only trusted input is `meetingId`; a caller cannot name a scheduledStart or a
+    // status, so there is nothing to tamper with. Passing a decorated input changes nothing.
+    const tampered = {
+      meetingId: MEETING_ID,
+      scheduledStart: PAST_START,
+      status: 'ended',
+    } as unknown as { meetingId: string };
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      meeting: { ...CASE_ACCESS.meeting, scheduledStart: FUTURE_START },
+    });
+    expect(await resolveCaseAction(tampered)).toEqual({ success: false, error: REFUSAL });
+    expect(mockClose).not.toHaveBeenCalled();
+  });
+});
+
 describe('resolveCaseAction — the two-step close contract', () => {
   beforeEach(() => {
     seedResolveCaseMocks({
@@ -417,9 +527,10 @@ describe('resolveCaseAction — the two-step close contract', () => {
     });
   });
 
-  it('revalidates the recap path', async () => {
+  it('revalidates BOTH meeting surfaces, unconditionally', async () => {
     await resolveCaseAction(INPUT);
     expect(mockRevalidate).toHaveBeenCalledWith('/meetings/' + MEETING_ID);
+    expect(mockRevalidate).toHaveBeenCalledWith('/meetings/' + MEETING_ID + '/end');
   });
 
   it('still succeeds when the sibling read fails — the ordinal is a garnish', async () => {
@@ -463,9 +574,78 @@ describe('resolveCaseAction — exactly once, and idempotent under double-submit
     expect(mockCreateToken).toHaveBeenCalledTimes(1);
   });
 
-  it('still refreshes the page on the idempotent path', async () => {
+  it('still refreshes BOTH surfaces on the idempotent path', async () => {
     mockClose.mockRejectedValue(new CaseAlreadyClosedError('already closed'));
     await resolveCaseAction(INPUT);
     expect(mockRevalidate).toHaveBeenCalledWith('/meetings/' + MEETING_ID);
+    expect(mockRevalidate).toHaveBeenCalledWith('/meetings/' + MEETING_ID + '/end');
+  });
+});
+
+/**
+ * BAL-389 — the `source` seam. It is an ANALYTICS DIMENSION ONLY: it gates nothing, grants
+ * nothing, and must never widen what the caller can name.
+ */
+describe('resolveCaseAction — the multi-surface `source` dimension', () => {
+  beforeEach(() => {
+    seedResolveCaseMocks({ user: { id: USER_ID, firstName: 'Dana' } });
+  });
+
+  it('threads source=end_of_call into BOTH the event and the log line', async () => {
+    expect(await resolveCaseAction({ meetingId: MEETING_ID, source: 'end_of_call' })).toEqual({
+      success: true,
+    });
+    expect(mockTrack).toHaveBeenCalledWith('case_resolved', {
+      source: 'end_of_call',
+      engagement_id: ENGAGEMENT_ID,
+      distinct_id: USER_ID,
+    });
+    expect(log.info).toHaveBeenCalledWith('Case resolved', {
+      engagementId: ENGAGEMENT_ID,
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      source: 'end_of_call',
+    });
+  });
+
+  it('DEFAULTS to recap when the caller omits it — BAL-388 call sites are unchanged', async () => {
+    await resolveCaseAction({ meetingId: MEETING_ID });
+    expect(mockTrack).toHaveBeenCalledWith(
+      'case_resolved',
+      expect.objectContaining({ source: 'recap' })
+    );
+  });
+
+  it('COLLAPSES a source this action does not serve to recap rather than piping it', async () => {
+    // A Server Action argument is attacker-controllable. An unvalidated string here would let
+    // anyone mint arbitrary `case_resolved.source` values and poison the one measurement this
+    // property exists for. It must never fail the close, either — the dimension is a garnish.
+    //
+    // ⚠⚠ `case_surface` IS THE SHARPEST POSSIBLE PROBE, AND DELIBERATELY SO. It is a REAL
+    // member of `CaseResolveSource` (BAL-421) — so this pins that the action's enum is a
+    // deliberate SUBSET of the analytics union, not a stale copy of it. The case surface closes
+    // through its OWN action (`cases/[engagementId]/_actions/resolve-case.ts`), which is the
+    // only thing entitled to claim that source; a recap/end-of-call caller asserting it is
+    // exactly the mislabelling the parse exists to stop.
+    const tampered = { meetingId: MEETING_ID, source: 'case_surface' } as unknown as {
+      meetingId: string;
+      source?: 'recap' | 'end_of_call';
+    };
+    expect(await resolveCaseAction(tampered)).toEqual({ success: true });
+    expect(mockTrack).toHaveBeenCalledWith(
+      'case_resolved',
+      expect.objectContaining({ source: 'recap' })
+    );
+  });
+
+  it('REGRESSION — the widened input still passes the gate STRICT parse', async () => {
+    // ⚠⚠ THE ONE THAT MATTERS. `authorizeRecapCaseMutation`'s schema is `.strict()`, so passing
+    // `input` straight through instead of `{ meetingId: input.meetingId }` would fail the parse
+    // on the extra `source` key and DENY EVERY CLOSE from BOTH surfaces, as a permission error.
+    const result = await resolveCaseAction({ meetingId: MEETING_ID, source: 'end_of_call' });
+    expect(result).toEqual({ success: true });
+    expect(mockClose).toHaveBeenCalledTimes(1);
+    // The gate is handed the NARROWED object — never the caller's own, wider one.
+    expect(mockResolveAccess).toHaveBeenCalledWith(MEETING_ID, USER_ID);
   });
 });
