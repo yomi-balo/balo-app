@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import { caseEngagementsRepository, conversationsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { publishConversationEvent } from '@/lib/realtime/ably-server';
 import { CONVERSATION_EVENT_FILE } from '@/lib/realtime/channels';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
@@ -18,7 +18,7 @@ import {
 } from '@/lib/storage/conversation-file';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 import type { ConversationFileView } from '@/lib/conversations/conversation-view-types';
-import { publishCaseFileShared, resolveCaseNotifyTargets } from '../_lib/case-conversation-notify';
+import { publishCaseFileShared, resolveCaseNotifyContext } from '../_lib/case-conversation-notify';
 import type { ConfirmCaseFileUploadResult } from './_types/case-action-types';
 
 /**
@@ -188,7 +188,7 @@ export async function confirmCaseFileUploadAction(
         engagementId,
         conversationId,
         userId: user.id,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
     }
 
@@ -204,23 +204,26 @@ export async function confirmCaseFileUploadAction(
     //     `companiesRepository.findOwnerUserIdByCompanyId` on the expert lens, which its own
     //     docblock says still THROWS on a transient DB error so a caller can retry — but this
     //     caller must not, and cannot. A missed notification beats a phantom failure.
-    const [caseRow, targets] = await Promise.all([
-      caseEngagementsRepository.findByEngagementId(engagementId).catch(() => undefined),
-      resolveCaseNotifyTargets(access).catch((error: unknown) => {
+    const { title: caseTitle, targets } = await resolveCaseNotifyContext({
+      access,
+      engagementId,
+      conversationId,
+      userId: user.id,
+      findCaseTitle: (id) => caseEngagementsRepository.findByEngagementId(id),
+      onTargetsFailed: (error) => {
         log.warn('Case notify target resolution failed after commit — no fan-out', {
           engagementId,
           conversationId,
           userId: user.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
-        return undefined;
-      }),
-    ]);
+      },
+    });
     if (targets !== undefined) {
       publishCaseFileShared({
         access,
         targets,
-        title: caseRow?.title ?? 'your case',
+        title: caseTitle,
         senderName: uploadedByName,
         correlationId: row.id,
         fileName: row.fileName,
@@ -252,7 +255,7 @@ export async function confirmCaseFileUploadAction(
       userId: user.id,
       key,
       sizeBytes,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Could not share your file. Please try again.' };

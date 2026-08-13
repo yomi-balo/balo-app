@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import type { CaseSurfaceState } from '@/lib/analytics/server';
 import type { CaseHeaderView } from '@/lib/cases/case-view-types';
@@ -86,7 +86,7 @@ export default async function CasePage({
     log.error('Failed to load case surface', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     throw error; // let error.tsx render the boundary

@@ -67,6 +67,41 @@ export async function resolveCaseNotifyTargets(access: CaseAccess): Promise<Case
   };
 }
 
+/**
+ * The POST-COMMIT half of both writers, in ONE place: resolve the case title and the
+ * recipients, with each read individually guarded so neither can fail a write that has
+ * already committed AND already gone out over Ably.
+ *
+ * ⚠⚠ THIS IS THE GUARD, NOT A CONVENIENCE WRAPPER. `resolveCaseNotifyTargets` reaches
+ * `companiesRepository.findOwnerUserIdByCompanyId` on the expert lens, which still REJECTS on
+ * a transient DB error (see its docblock). Called unguarded after the insert, that rejection
+ * surfaces as "could not send" for a message the sender can already SEE in their own thread —
+ * and the retry double-posts, or trips `conversation_file_key_idx` and reports "already
+ * shared". Degrading to NO fan-out is the correct trade: a missed notification beats a
+ * phantom failure. Do not "simplify" either `.catch` away.
+ *
+ * `targets: undefined` means DO NOT PUBLISH. `title` degrades to a neutral label rather than
+ * blocking the notification, because a nameless case still beats silence.
+ */
+export async function resolveCaseNotifyContext(input: {
+  access: CaseAccess;
+  engagementId: string;
+  conversationId: string;
+  userId: string;
+  /** Injected so this module keeps its single `@balo/db` import surface. */
+  findCaseTitle: (engagementId: string) => Promise<{ title: string } | undefined>;
+  onTargetsFailed: (error: unknown) => void;
+}): Promise<{ title: string; targets: CaseNotifyTargets | undefined }> {
+  const [caseRow, targets] = await Promise.all([
+    input.findCaseTitle(input.engagementId).catch(() => undefined),
+    resolveCaseNotifyTargets(input.access).catch((error: unknown) => {
+      input.onTargetsFailed(error);
+      return undefined;
+    }),
+  ]);
+  return { title: caseRow?.title ?? 'your case', targets };
+}
+
 /** The anchor fields both events share, plus the sender and recipient. */
 interface CaseNotifyBase {
   access: CaseAccess;

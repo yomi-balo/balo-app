@@ -6,7 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { caseEngagementsRepository } from '@balo/db';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { hasEngagementCapability } from '@/lib/authz/engagement';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { authorizeCaseMutation } from '../_lib/authorize-case-mutation';
 import type { CaseActionResult } from './_types/case-action-types';
 
@@ -96,7 +96,7 @@ export async function requestResolutionAction(input: {
     log.error('Failed to request case resolution', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Something went wrong. Please try again.' };

@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { conversationsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 import type { MarkCaseThreadReadResult } from './_types/case-action-types';
 
@@ -60,7 +60,7 @@ export async function markCaseThreadReadAction(
     log.error('Failed to mark case conversation thread read', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Could not update the thread. Please try again.' };

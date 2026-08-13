@@ -314,7 +314,7 @@ describe('resolveCaseAction (case surface) — the derived CTA anchor', () => {
   it('CAPS the case title so a long one is not silently dropped by the publish schema', async () => {
     mockFindCase.mockResolvedValue({ engagementId: ENGAGEMENT_ID, title: 'x'.repeat(400) });
     await resolveCaseAction(INPUT);
-    expect((publishedPayload().caseTitle as string).length).toBe(200);
+    expect(publishedPayload().caseTitle as string).toHaveLength(200);
   });
 });
 

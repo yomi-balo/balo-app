@@ -256,7 +256,9 @@ describe('onboarding mutation gate (BAL-365)', () => {
       expect(covered, `${helper} is a substring of ${covered.join(', ')}`).toEqual([]);
     }
     // Non-vacuity, and the specific pair that was wrongly claimed to be redundant.
-    expect('requireOnboardedUser'.includes('requireUser')).toBe(false);
+    // `not.toContain` rather than `.includes(…)).toBe(false)`: on failure the dedicated
+    // matcher reports WHICH string contained WHAT, instead of "expected true to be false".
+    expect('requireOnboardedUser').not.toContain('requireUser');
     expect(AUTH_HELPERS).toContain('requireOnboardedUser');
   });
 

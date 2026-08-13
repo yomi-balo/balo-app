@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { caseEngagementsRepository, type CaseEngagementRow } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 import { requireOnboardedUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 
 /**
@@ -109,7 +109,7 @@ export async function authorizeCaseMutation(input: {
     log.error('Case mutation authorization failed', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { ok: false, error: 'Something went wrong. Please try again.' };

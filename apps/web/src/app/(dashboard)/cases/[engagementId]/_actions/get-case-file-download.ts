@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { conversationsRepository, isTwoSidedParty, meetingFilesRepository } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 import { authorizeMeetingFileAccess } from '@/lib/meetings/authorize-meeting-file-access';
 import { createPresignedMeetingFileDownload } from '@/lib/storage/meeting-file';
@@ -123,7 +123,7 @@ export async function getCaseFileDownloadAction(
       origin: data.origin,
       fileId: data.fileId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Could not download this file. Please try again.' };

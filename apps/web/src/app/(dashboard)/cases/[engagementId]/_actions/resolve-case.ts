@@ -9,7 +9,7 @@ import {
   caseEngagementsRepository,
 } from '@balo/db';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import {
   capCaseTitle,
@@ -147,7 +147,7 @@ export async function resolveCaseAction(input: {
     log.error('Failed to resolve case', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Something went wrong. Please try again.' };

@@ -1,7 +1,6 @@
 import type { SessionMoneyBlock } from '@balo/shared/credit';
 import type {
   RecapContextType,
-  RecapLens,
   RecapResolvePromptVariant,
   RecapState,
 } from '@balo/analytics/events';
@@ -32,7 +31,10 @@ import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
  */
 
 /** Re-exported so a consumer needs ONE import for the whole recap contract. */
-export type { RecapContextType, RecapLens, RecapState, SessionMoneyBlock, MeetingFileView };
+export type { RecapContextType, RecapState, SessionMoneyBlock, MeetingFileView };
+// `RecapLens` is ONLY re-exported (nothing here consumes it), so it goes out via
+// `export ... from` rather than being imported first purely to be re-exported.
+export type { RecapLens } from '@balo/analytics/events';
 
 /**
  * Which shape the resolve prompt takes. `requested` ⇒ R4 banner; `offered` ⇒ R9 rail card.

@@ -124,6 +124,47 @@ export const transcriptsRepository = {
     return row;
   },
 
+  /**
+   * The SAME projection as {@link findByMeetingId}, for MANY meetings in ONE round trip.
+   *
+   * ⚠ EXISTS TO KILL AN N-QUERY FAN-OUT. The case surface renders every consultation on a
+   * case at once, so calling `findByMeetingId` per row means a case with forty held
+   * consultations issues forty queries on every render. Filtering to terminal meetings is
+   * NOT a bound — a long-running case is precisely the one that has many of them.
+   *
+   * ⚠ AT MOST ONE ROW PER MEETING, newest first, mirroring `findByMeetingId`'s `limit(1)`.
+   * A meeting can legitimately hold several transcript rows (a re-capture writes a new one),
+   * so returning them all would leave the caller's per-meeting answer dependent on row
+   * order. `DISTINCT ON` is avoided deliberately: Drizzle does not model it cleanly and the
+   * de-dup below is trivial and explicit.
+   *
+   * An empty `meetingIds` short-circuits — `inArray` with an empty list is an error in some
+   * drivers and a full scan in others, and neither is what a caller with no meetings meant.
+   */
+  async findByMeetingIds(
+    meetingIds: readonly string[]
+  ): Promise<Map<string, TranscriptMeetingStatusRef>> {
+    const byMeetingId = new Map<string, TranscriptMeetingStatusRef>();
+    if (meetingIds.length === 0) return byMeetingId;
+
+    const rows = await db
+      .select({
+        id: transcripts.id,
+        status: transcripts.status,
+        meetingId: transcripts.meetingId,
+      })
+      .from(transcripts)
+      .where(and(inArray(transcripts.meetingId, [...meetingIds]), isNull(transcripts.deletedAt)))
+      .orderBy(desc(transcripts.createdAt), desc(transcripts.id));
+
+    // First row wins: the ORDER BY is newest-first, so this reproduces the single-meeting
+    // reader's `limit(1)` exactly rather than approximating it.
+    for (const row of rows) {
+      if (!byMeetingId.has(row.meetingId)) byMeetingId.set(row.meetingId, row);
+    }
+    return byMeetingId;
+  },
+
   /** ONE live transcript by id. `undefined` when missing or soft-deleted. */
   async findById(id: string): Promise<Transcript | undefined> {
     const [row] = await db

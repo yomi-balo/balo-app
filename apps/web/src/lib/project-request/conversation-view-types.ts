@@ -1,5 +1,5 @@
 import type { RequestExpertRelationship } from '@balo/db';
-import { PREVIEW_MAX_CHARS, previewOfPlainText } from '@balo/shared/notifications';
+import { previewOfPlainText } from '@balo/shared/notifications';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import type {
   ConversationFileView,
@@ -25,7 +25,11 @@ export const MESSAGE_MAX_TEXT = 4000;
  * API's conversation-unread digest rebuilds an identical preview at fire time. Re-exported
  * here so every existing call site is unchanged.
  */
-export { PREVIEW_MAX_CHARS, previewOfPlainText };
+// ⚠ SPLIT DELIBERATELY. `previewOfPlainText` IS used locally (by `previewOfHtml` below), so
+// it must be imported and is re-exported from that binding. `PREVIEW_MAX_CHARS` is not used
+// here at all — it goes out via `export ... from`, so it is not imported just to be re-sent.
+export { previewOfPlainText };
+export { PREVIEW_MAX_CHARS } from '@balo/shared/notifications';
 
 /** Plain-text preview of a sanitised HTML body — null when effectively empty. */
 export function previewOfHtml(bodyHtml: string): string | null {

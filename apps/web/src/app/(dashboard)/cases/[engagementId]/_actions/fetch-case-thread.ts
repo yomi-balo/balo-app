@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { conversationsRepository, usersRepository } from '@balo/db';
 import { personDisplayName } from '@balo/shared/parties';
 import { requireUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 import {
   mapConversationFileRowToView,
@@ -116,7 +116,7 @@ export async function fetchCaseThreadAction(
     log.error('Failed to fetch case conversation thread', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Could not load this conversation. Please try again.' };

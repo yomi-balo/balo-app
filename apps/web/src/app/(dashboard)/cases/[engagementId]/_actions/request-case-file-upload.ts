@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 import {
   CONVERSATION_ALLOWED_CONTENT_TYPES,
@@ -78,7 +78,7 @@ export async function requestCaseFileUploadAction(
       engagementId,
       userId: user.id,
       contentType,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: "File sharing isn't available right now." };

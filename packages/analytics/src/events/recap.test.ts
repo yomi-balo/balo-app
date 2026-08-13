@@ -143,47 +143,46 @@ describe('BAL-388 enum values', () => {
   it('ALIASES the shared context union rather than restating it', () => {
     // The assignment is the assertion: it only compiles while the two types are identical, so
     // a seventh `meeting_context_type` label reaches this event through `tsc`.
+    // ⚠ NO `expect(asRecap).toBe('case')` HERE — it can never fail (the value was just
+    // assigned from a literal), so it reads as coverage while asserting nothing. The
+    // COMPILE-TIME assignment above is the real guard; the runtime assertions below are the
+    // ones that can actually go red.
     const fromShared: MeetingContextTypeWithHolder = 'case';
     const asRecap: RecapContextType = fromShared;
-    expect(asRecap).toBe('case');
+    expect(CONTEXT_TYPES).toHaveProperty(asRecap);
     expect(Object.keys(CONTEXT_TYPES)).toHaveLength(6);
     expect(CONTEXT_TYPES).not.toHaveProperty('admin');
   });
 });
 
 describe('BAL-388 declares no event without a producer', () => {
-  it('does not declare recap_recording_played (D-B — no recording; BAL-126 / BAL-140 own capture)', () => {
-    const all: readonly string[] = [
-      ...Object.values(RECAP_EVENTS),
-      ...Object.values(RECAP_SERVER_EVENTS),
-    ];
-    expect(all).not.toContain('recap_recording_played');
-  });
+  /**
+   * One table, one assertion — these four cases differed only in the string, so four copies
+   * of the same body added no coverage and one more would have been a fifth copy. The `why`
+   * column is the part worth keeping: it records WHY each name must stay undeclared, which is
+   * the thing a future reader is tempted to undo.
+   */
+  const UNDECLARED: readonly { readonly event: string; readonly why: string }[] = [
+    {
+      event: 'recap_recording_played',
+      why: 'D-B — no recording exists anywhere; BAL-126 / BAL-140 own capture',
+    },
+    { event: 'recap_export', why: 'D-B — no export exists' },
+    {
+      event: 'case_resolved_manually',
+      why: 'BAL-421 — it would FORK `case_resolved`. The case surface is a SECOND ENTRY POINT to the same close, distinguished by `case_resolved.source`; a separate event name would split the source distribution across two events at exactly the moment there were finally two sources to compare.',
+    },
+    {
+      event: 'guest_converted_to_member',
+      why: 'D-A — no guest lens; BAL-132 owns the guest arm',
+    },
+  ];
 
-  it('does not declare recap_export (D-B — no export exists)', () => {
+  it.each(UNDECLARED)('does not declare $event ($why)', ({ event }) => {
     const all: readonly string[] = [
       ...Object.values(RECAP_EVENTS),
       ...Object.values(RECAP_SERVER_EVENTS),
     ];
-    expect(all).not.toContain('recap_export');
-  });
-
-  it('does not declare case_resolved_manually (BAL-421 — it would FORK case_resolved)', () => {
-    // The case surface is a SECOND ENTRY POINT to the same close, distinguished by
-    // `case_resolved.source`. A separate event name would split the source distribution
-    // across two events at exactly the moment there were finally two sources to compare.
-    const all: readonly string[] = [
-      ...Object.values(RECAP_EVENTS),
-      ...Object.values(RECAP_SERVER_EVENTS),
-    ];
-    expect(all).not.toContain('case_resolved_manually');
-  });
-
-  it('does not declare guest_converted_to_member (D-A — no guest lens; BAL-132 owns the guest arm)', () => {
-    const all: readonly string[] = [
-      ...Object.values(RECAP_EVENTS),
-      ...Object.values(RECAP_SERVER_EVENTS),
-    ];
-    expect(all).not.toContain('guest_converted_to_member');
+    expect(all).not.toContain(event);
   });
 });

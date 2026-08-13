@@ -25,7 +25,7 @@ import {
   type CaseNudge,
 } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { hasEngagementCapability } from '@/lib/authz/engagement';
@@ -571,31 +571,38 @@ function selectNextScheduled(
 /**
  * Which of this case's consultations have a transcript.
  *
- * ⚠ BOUNDED BY SEMANTICS RATHER THAN BY AN ARBITRARY CAP: only an `ended` meeting can have
- * one, so `scheduled` / `waiting_for_participants` / `in_progress` / `cancelled` rows are not
- * queried at all. `findByMeetingId` projects to `id` + `status` and never touches the
- * `canonical` jsonb.
+ * ⚠⚠ ONE QUERY FOR THE WHOLE CASE, NOT ONE PER CONSULTATION. Restricting to `ended` narrows
+ * the id list but is NOT a bound: a long-running case is exactly the one with many ended
+ * consultations, so a per-meeting read scaled linearly with the page's own content — forty
+ * held consultations meant forty queries on every render. `findByMeetingIds` answers for all
+ * of them in a single round trip, still projected to `id` + `status` so the `canonical` jsonb
+ * (the whole raw segment array) is never pulled.
  *
  * ⚠ NEVER THROWS. A transcript indicator is decoration on a page whose job is to say what
- * happened; a failed read degrades to "no indicator", never to a failed render.
+ * happened; a failed read degrades to "no indicator", never to a failed render. The batched
+ * read makes that degradation all-or-nothing rather than per-row, which is the honest
+ * trade — the indicator is absent, and absence already means "no transcript" here.
  */
 async function readTranscriptMeetingIds(
   meetings: readonly Meeting[]
 ): Promise<ReadonlySet<string>> {
-  const ended = meetings.filter((meeting) => meeting.status === 'ended');
-  const results = await Promise.all(
-    ended.map(async (meeting) => {
-      try {
-        const transcript = await transcriptsRepository.findByMeetingId(meeting.id);
-        return transcript !== undefined && transcript.status === 'ready' ? meeting.id : null;
-      } catch (error) {
-        log.warn('Case surface transcript lookup failed', {
-          meetingId: meeting.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return null;
-      }
-    })
-  );
-  return new Set(results.filter((id): id is string => id !== null));
+  const endedIds = meetings
+    .filter((meeting) => meeting.status === 'ended')
+    .map((meeting) => meeting.id);
+  if (endedIds.length === 0) return new Set();
+
+  try {
+    const byMeetingId = await transcriptsRepository.findByMeetingIds(endedIds);
+    const ready = new Set<string>();
+    for (const [meetingId, transcript] of byMeetingId) {
+      if (transcript.status === 'ready') ready.add(meetingId);
+    }
+    return ready;
+  } catch (error) {
+    log.warn('Case surface transcript lookup failed', {
+      meetingCount: endedIds.length,
+      error: errorMessage(error),
+    });
+    return new Set();
+  }
 }

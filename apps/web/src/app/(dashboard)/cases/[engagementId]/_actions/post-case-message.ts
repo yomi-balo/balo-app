@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { caseEngagementsRepository, conversationsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { publishConversationEvent } from '@/lib/realtime/ably-server';
 import { CONVERSATION_EVENT_MESSAGE } from '@/lib/realtime/channels';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
@@ -19,7 +19,7 @@ import {
 import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
 import {
   publishCaseMessagePosted,
-  resolveCaseNotifyTargets,
+  resolveCaseNotifyContext,
 } from '../_lib/case-conversation-notify';
 import type { PostCaseMessageResult } from './_types/case-action-types';
 
@@ -123,7 +123,7 @@ export async function postCaseMessageAction(
         engagementId,
         conversationId,
         userId: user.id,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
     }
 
@@ -139,23 +139,26 @@ export async function postCaseMessageAction(
     //     docblock says still THROWS on a transient DB error so a caller can retry — but this
     //     caller must not, and cannot. A missed notification is strictly better than a
     //     duplicated message.
-    const [caseRow, targets] = await Promise.all([
-      caseEngagementsRepository.findByEngagementId(engagementId).catch(() => undefined),
-      resolveCaseNotifyTargets(access).catch((error: unknown) => {
+    const { title: caseTitle, targets } = await resolveCaseNotifyContext({
+      access,
+      engagementId,
+      conversationId,
+      userId: user.id,
+      findCaseTitle: (id) => caseEngagementsRepository.findByEngagementId(id),
+      onTargetsFailed: (error) => {
         log.warn('Case notify target resolution failed after commit — no fan-out', {
           engagementId,
           conversationId,
           userId: user.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
-        return undefined;
-      }),
-    ]);
+      },
+    });
     if (targets !== undefined) {
       publishCaseMessagePosted({
         access,
         targets,
-        title: caseRow?.title ?? 'your case',
+        title: caseTitle,
         senderName,
         correlationId: row.id,
         preview: previewOfPlainText(plainText),
@@ -174,7 +177,7 @@ export async function postCaseMessageAction(
     log.error('Failed to post case conversation message', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Could not send your message. Please try again.' };

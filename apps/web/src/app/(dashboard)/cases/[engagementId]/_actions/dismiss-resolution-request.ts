@@ -5,7 +5,7 @@ import 'server-only';
 import { revalidatePath } from 'next/cache';
 import { caseEngagementsRepository } from '@balo/db';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
-import { log } from '@/lib/logging';
+import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import { authorizeCaseMutation } from '../_lib/authorize-case-mutation';
 import type { CaseActionResult } from './_types/case-action-types';
@@ -74,7 +74,7 @@ export async function dismissResolutionRequestAction(input: {
     log.error('Failed to dismiss case resolution request', {
       engagementId,
       userId: user.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { success: false, error: 'Something went wrong. Please try again.' };
