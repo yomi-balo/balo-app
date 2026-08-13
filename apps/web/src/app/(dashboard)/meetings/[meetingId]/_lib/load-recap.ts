@@ -36,8 +36,11 @@ import type {
   RecapStatusView,
   RecapView,
 } from '@/lib/meetings/recap-view-types';
-import { contextIsCase, resolveEyebrow } from './resolve-eyebrow';
-import { deriveConsultationOrdinal, formatOrdinalLine } from './derive-consultation-ordinal';
+import {
+  deriveConsultationOrdinal,
+  formatOrdinalLine,
+} from '@/lib/meetings/derive-consultation-ordinal';
+import { contextIsCase, resolveCaseHref, resolveEyebrow } from './resolve-eyebrow';
 import {
   resolveArtifacts,
   resolveMoneyView,
@@ -519,6 +522,9 @@ export const loadRecap = cache(
 
     const header: RecapHeaderView = {
       eyebrow: resolveEyebrow(contextType),
+      // BAL-421 — the recap's back link to its case. See `resolveCaseHref` for why only a
+      // `case` context yields one, and why it carries no `?from` param.
+      caseHref: resolveCaseHref(isCase, subject.contextId),
       title,
       status: resolveStatus(meeting, caseRow, artifacts.summary.state === 'processing'),
       closedNote: resolveClosedNote(caseRow),

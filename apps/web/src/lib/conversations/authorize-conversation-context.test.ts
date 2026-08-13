@@ -290,8 +290,12 @@ describe('authorizeEngagementConversation', () => {
  * ACT, never the READ; reading a thread is not an act, so gating this module on that axis
  * would be a category error WHEREVER the module lived. It would also deny the wrong people —
  * that holder set excludes agency role `expert`, the colleagues most likely to need a
- * delivery thread. This module must therefore never reach for it, and BAL-424 must not open
- * the `apps/web` engagement-axis seam (CLAUDE.md records that as landing with BAL-410/411).
+ * delivery thread. This module must therefore never reach for it.
+ *
+ * ⚠ THE `apps/web` SEAM IS NOW OPEN — BAL-421 opened it (`lib/authz/engagement.ts`), not
+ * BAL-410/BAL-411 as originally deferred. THAT MAKES THIS GUARD MORE LOAD-BEARING, NOT LESS:
+ * the import is now merely a keystroke away rather than impossible, so the assertion below is
+ * the only thing keeping a READ gate off the ACT axis. Do not relax it.
  */
 describe('axis discipline', () => {
   /**

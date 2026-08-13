@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 // and no second copy to drift) — see `@balo/shared/testing`'s own docblock.
 import { stripComments } from '../testing/strip-comments';
 import {
+  buildHostContextForExpertProfile,
   ENGAGEMENT_CAPABILITIES,
   ENGAGEMENT_ROLE_CAPABILITIES,
   HOST_ROLES,
@@ -15,6 +16,8 @@ import {
   resolveHostRole,
   type EngagementCapability,
   type HostContext,
+  type HostContextReads,
+  type HostExpertProfile,
   type HostRole,
   type RelationshipHostingStatus,
 } from './engagement';
@@ -354,6 +357,120 @@ describe('relationshipDeniesHosting — the SINGLE definition of "declined"', ()
     // definition of "declined" impossible to add without failing a test.
     expect(source).toContain('export function relationshipDeniesHosting');
     expect([...source.matchAll(/'declined'/g)]).toHaveLength(1);
+  });
+});
+
+// ── BAL-421: the ONE host-context assembly, shared by both per-app resolvers ──
+
+describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)', () => {
+  const EXPERT_USER = 'user-expert';
+  const ACTOR = 'user-actor';
+  const AGENCY = 'agency-1';
+
+  /** Records every injected read so the short-circuit is provable by CALL COUNT. */
+  function makeReads(profile: HostExpertProfile | undefined, agencyRole?: string) {
+    const calls = { findExpertProfile: [] as string[], findAgencyRole: [] as string[][] };
+    const reads: HostContextReads = {
+      findExpertProfile: (id) => {
+        calls.findExpertProfile.push(id);
+        return Promise.resolve(profile);
+      },
+      findAgencyRole: (agencyId, actorId) => {
+        calls.findAgencyRole.push([agencyId, actorId]);
+        return Promise.resolve(agencyRole);
+      },
+    };
+    return { reads, calls };
+  }
+
+  it('reports a MISSING profile as its own reason, never as a bare non-holder', async () => {
+    const { reads } = makeReads(undefined);
+    await expect(buildHostContextForExpertProfile('missing', ACTOR, reads)).resolves.toEqual({
+      ok: false,
+      reason: 'expert_profile_missing',
+    });
+  });
+
+  /**
+   * ⚠ ADR-1046 §2. The INDEPENDENT expert has no agency for anyone to be a colleague of, so
+   * NO agency lookup is performed. Asserted by CALL COUNT — that is the only way the
+   * guarantee is observable, and it is why `agency` is `null` rather than `{agencyId: null}`.
+   */
+  it('SHORT-CIRCUITS an independent expert with ZERO agency lookups', async () => {
+    const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: null });
+
+    const resolution = await buildHostContextForExpertProfile('p1', ACTOR, reads);
+
+    expect(resolution).toEqual({
+      ok: true,
+      hostContext: { resolvedForActorId: ACTOR, expertUserId: EXPERT_USER, agency: null },
+    });
+    expect(calls.findAgencyRole).toHaveLength(0);
+  });
+
+  /**
+   * ⚠ AND IT DOES **NOT** SHORT-CIRCUIT FOR THE DELIVERING EXPERT OF AN AGENCY. Doing so
+   * would be cheaper but would return a context that LIES about the world.
+   */
+  it('still resolves the agency when the actor IS the delivering agency expert', async () => {
+    const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, 'expert');
+
+    const resolution = await buildHostContextForExpertProfile('p1', EXPERT_USER, reads);
+
+    expect(resolution).toMatchObject({
+      ok: true,
+      hostContext: { agency: { agencyId: AGENCY, actorRole: 'expert' } },
+    });
+    expect(calls.findAgencyRole).toEqual([[AGENCY, EXPERT_USER]]);
+  });
+
+  it('passes the ACTOR to the lookup per call — never a captured id', async () => {
+    const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, 'owner');
+    await buildHostContextForExpertProfile('p1', ACTOR, reads);
+    expect(calls.findAgencyRole).toEqual([[AGENCY, ACTOR]]);
+  });
+
+  it('maps a non-member (undefined role) to actorRole null', async () => {
+    const { reads } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, undefined);
+    await expect(buildHostContextForExpertProfile('p1', ACTOR, reads)).resolves.toEqual({
+      ok: true,
+      hostContext: {
+        resolvedForActorId: ACTOR,
+        expertUserId: EXPERT_USER,
+        agency: { agencyId: AGENCY, actorRole: null },
+      },
+    });
+  });
+
+  /** End-to-end over the pure core: the holder set, assembled the way both apps assemble it. */
+  describe('composed with hostContextGrants — the holder set', () => {
+    it.each([
+      { name: 'the delivering expert', actorId: EXPERT_USER, role: 'expert', grants: true },
+      { name: 'an agency OWNER', actorId: ACTOR, role: 'owner', grants: true },
+      { name: 'an agency ADMIN', actorId: ACTOR, role: 'admin', grants: true },
+      // ⚠ The colleague holds VISIBILITY (a wider, separate rule) but NOT the act.
+      { name: 'agency role EXPERT (a colleague)', actorId: ACTOR, role: 'expert', grants: false },
+      { name: 'a non-member', actorId: ACTOR, role: undefined, grants: false },
+    ])('$name → grants manage_engagement: $grants', async ({ actorId, role, grants }) => {
+      const { reads } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, role);
+      const resolution = await buildHostContextForExpertProfile('p1', actorId, reads);
+      const hostContext = resolution.ok ? resolution.hostContext : null;
+
+      expect(
+        hostContextGrants(hostContext, { id: actorId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT)
+      ).toBe(grants);
+    });
+  });
+
+  /** A missing profile denies every actor on both tokens — fail closed. */
+  it('denies BOTH tokens when the profile is missing', async () => {
+    const { reads } = makeReads(undefined);
+    const resolution = await buildHostContextForExpertProfile('gone', EXPERT_USER, reads);
+    const hostContext = resolution.ok ? resolution.hostContext : null;
+
+    for (const capability of Object.values(ENGAGEMENT_CAPABILITIES)) {
+      expect(hostContextGrants(hostContext, { id: EXPERT_USER }, capability)).toBe(false);
+    }
   });
 });
 

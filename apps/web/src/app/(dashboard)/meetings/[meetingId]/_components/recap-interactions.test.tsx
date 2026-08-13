@@ -44,7 +44,7 @@ import { ResolvePromptBanner } from './resolve-prompt-banner';
 import { ResolveDismissalProvider, UnlessDismissed } from './resolve-dismissal';
 import { NotHeldPanel } from './not-held-panel';
 import { RecapStatusChip } from './recap-status-chip';
-import { LocalDateTime } from './local-date-time';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 
 const OFFERED: RecapResolveView = {
   engagementId: 'e1',

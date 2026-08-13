@@ -34,6 +34,9 @@ export type {
   RecapEntrySource,
   RecapResolvePromptVariant,
   RecapCta,
+  // BAL-421 — `case_surface_viewed` is a SERVER event, so the case surface's RSC needs this
+  // type to build its payload. `CaseSurfaceAction` is CLIENT-side and lives in '../client'.
+  CaseSurfaceState,
 } from '../events/recap';
 export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';

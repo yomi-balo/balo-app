@@ -214,6 +214,55 @@ export interface EndSessionResult {
   alreadyEnded: boolean;
 }
 
+/**
+ * BAL-421 — the ENGAGEMENT-GRAIN expert-earnings aggregate for ONE case, as a
+ * DISCRIMINATED UNION rather than a flat `{count, count, number}` triple.
+ *
+ * ⚠⚠ THE UNION IS THE POINT: "NO DATA" AND "A$0.00" MUST NOT BE THE SAME VALUE.
+ * Nothing writes `credit_sessions.engagement_id` today (the live `openSession` service
+ * passes neither it nor `meeting_id`; BAL-400 is the ticket that will), so EVERY case that
+ * exists right now aggregates to `not_yet`. If that state carried `earningsAudMinor: 0`,
+ * the case surface would render "A$0.00" — a MONEY CLAIM — for every expert on the
+ * platform, and no amount of downstream care could tell it apart from a genuinely-zero
+ * finalized session. Here the figure is STRUCTURALLY UNREPRESENTABLE until something has
+ * actually finalized: `not_yet` and `pending` cannot HOLD a number, so the surface is
+ * forced to render its designed empty/pending copy instead of a fabricated zero.
+ *
+ * A `finalized` block CAN legitimately be `0` (a finalized session with zero connected
+ * minutes). That is a REAL zero, and it is the reason the three states must stay distinct.
+ *
+ * ⚠ FEE CONCEALMENT (hard invariant, ADR-1040 Decision 4 / BAL-399). This is the
+ * EXPERT-side aggregate and carries own-earnings only. There is deliberately NO key here
+ * for the client rate, the all-in client charge, `baloFeeBps`, the margin, or
+ * `overdraftSettledMinor` — and none is DERIVABLE from what is returned, because the sum
+ * is over `expert_accrued_minor` (the RAW, un-marked-up accrual) with no companion figure
+ * to difference it against. Mirrors `EXPERT_SESSION_MONEY_COLUMNS` /
+ * `buildExpertMoneyBlock`. Do not add a client or admin figure to this shape; the ADMIN
+ * lens is `findForAdminView`, per session, and stays that way.
+ */
+export type CaseExpertEarningsAggregate =
+  | {
+      /** No session on this engagement at all — render the "not yet" copy, NEVER a figure. */
+      readonly state: 'not_yet';
+      readonly finalizedSessionCount: 0;
+      readonly pendingSessionCount: 0;
+      readonly earningsAudMinor: null;
+    }
+  | {
+      /** Sessions exist but none has finalized — "{n} still being finalised", NO figure. */
+      readonly state: 'pending';
+      readonly finalizedSessionCount: 0;
+      readonly pendingSessionCount: number;
+      readonly earningsAudMinor: null;
+    }
+  | {
+      /** At least one finalized session — the ONLY state carrying a figure. AUD minor units. */
+      readonly state: 'finalized';
+      readonly finalizedSessionCount: number;
+      readonly pendingSessionCount: number;
+      readonly earningsAudMinor: number;
+    };
+
 export interface MarkSettlementResultInput {
   sessionId: string;
   status: Extract<CreditSettlementStatus, 'processing' | 'settled' | 'failed' | 'requires_action'>;
@@ -777,6 +826,106 @@ export const creditSessionsRepository = {
     return db.query.creditSessions.findFirst({
       where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
     });
+  },
+
+  /**
+   * BAL-421 — the EXPERT-lens earnings aggregate for one CASE, keyed on the engagement.
+   *
+   * ⚠⚠ READS `engagement_id` **AS GIVEN**. IT MUST NEVER RESOLVE THROUGH
+   * `meeting_id` → `meeting_contexts.context_id` → engagement. This is not a preference:
+   * the two columns' coherence is unenforceable in the database (a CHECK cannot subquery,
+   * and the composite-FK trick has no valid target — see the ruling on
+   * `schema/credit-sessions.ts`), so it is the SINGLE WRITE PATH's obligation, carried by
+   * BAL-400. Money and reporting read `engagement_id` directly; only BAL-425's inactivity
+   * sweep resolves through the seam. Re-deriving here would make a divergent pair
+   * SILENTLY AGREE — it "would hide a divergence rather than catch it" — and the divergence
+   * would then be undiscoverable by any read, because no row anywhere looks wrong. The gap
+   * is pinned by the divergence test in `credit-sessions.integration.test.ts`, and this
+   * method has its own guard test beside it. If you find yourself joining `meeting_contexts`
+   * to make a case's earnings "show up", the bug is in the WRITER, not here.
+   *
+   * `engagement_id` IS NULLABLE and `eq()` compiles to `= $1`, which is never true against
+   * NULL — so a session that carries a meeting but no engagement is invisible here even
+   * when its meeting resolves to this very case. That is the wanted behaviour, and it is
+   * exactly what the divergence guard asserts.
+   *
+   * ⚠ RETURNS `not_yet` FOR EVERY CASE ON `main` TODAY, AND THAT IS CORRECT — the live
+   * `openSession` service passes neither column (BAL-400 will). Do not "fix" the empty
+   * result by widening the read. See {@link CaseExpertEarningsAggregate} for why the empty
+   * state is a distinct value rather than a zero.
+   *
+   * FINALIZED-ONLY SUMMATION, mirroring `buildExpertMoneyBlock` ("pending ⇒ every figure is
+   * 0"): a session whose `billing_finalized_at` is NULL contributes to
+   * `pendingSessionCount` and to NOTHING else. Summing un-finalized accrual would surface a
+   * moving number nobody is owed yet.
+   *
+   * ⚠ EXCLUDES `cancelled` SESSIONS, AND THAT IS A CORRECTNESS CONSTRAINT RATHER THAN
+   * TIDINESS — the same ruling as `findIdByMeetingId`. A cancelled session never bills, so
+   * its `billing_finalized_at` stays NULL FOREVER; counting it would pin the block in
+   * `pending` ("1 consultation still being finalised") for the life of the case, about a
+   * consultation that will never produce a cent. A `pending`/`active` session legitimately
+   * counts as pending: the reaper cancels the stale ones (`findStalePending`), which then
+   * fall out of this read by the same filter.
+   *
+   * FEE-SAFE BY PROJECTION: the SELECT touches `expert_accrued_minor` and
+   * `billing_finalized_at` and NOTHING else — never `clientRateMinorPerMinute`,
+   * `baloFeeBps`, `overdraftSettledMinor` or `stripePaymentIntentId`. Concealment is
+   * enforced by what the ROWS can hold, not by remembering to omit things downstream.
+   *
+   * Rides the partial index `credit_sessions_engagement_idx`
+   * (`(engagement_id) WHERE engagement_id IS NOT NULL AND deleted_at IS NULL`). Folded in
+   * TypeScript rather than aggregated in SQL: the row set is one case's consultations (a
+   * handful, bounded by how many calls two parties hold about one problem), and an explicit
+   * two-column projection is both the fee boundary and the thing a reviewer can check at a
+   * glance — a `FILTER (WHERE …)` aggregate is not expressible in Drizzle's typed builder
+   * and would trade that for raw SQL.
+   */
+  async sumExpertEarningsForEngagement(engagementId: string): Promise<CaseExpertEarningsAggregate> {
+    const rows = await db
+      .select({
+        expertAccruedMinor: creditSessions.expertAccruedMinor,
+        billingFinalizedAt: creditSessions.billingFinalizedAt,
+      })
+      .from(creditSessions)
+      .where(
+        and(
+          // AS GIVEN — never through `meeting_id` → `meeting_contexts`. See the docblock.
+          eq(creditSessions.engagementId, engagementId),
+          ne(creditSessions.status, 'cancelled'),
+          isNull(creditSessions.deletedAt)
+        )
+      );
+
+    let finalizedSessionCount = 0;
+    let pendingSessionCount = 0;
+    let earningsAudMinor = 0;
+    for (const row of rows) {
+      if (row.billingFinalizedAt === null) {
+        pendingSessionCount += 1;
+        continue;
+      }
+      finalizedSessionCount += 1;
+      earningsAudMinor += row.expertAccruedMinor;
+    }
+
+    if (finalizedSessionCount === 0) {
+      // NO FIGURE IN EITHER ARM — the surface renders copy, never `A$0.00`.
+      return pendingSessionCount === 0
+        ? {
+            state: 'not_yet',
+            finalizedSessionCount: 0,
+            pendingSessionCount: 0,
+            earningsAudMinor: null,
+          }
+        : {
+            state: 'pending',
+            finalizedSessionCount: 0,
+            pendingSessionCount,
+            earningsAudMinor: null,
+          };
+    }
+
+    return { state: 'finalized', finalizedSessionCount, pendingSessionCount, earningsAudMinor };
   },
 
   /**

@@ -55,6 +55,21 @@ vi.mock('@/lib/logging', () => ({
     debug: vi.fn(),
   },
   logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), child: vi.fn() },
+  // ⚠ THE REAL IMPLEMENTATION, NOT `vi.fn()`. `errorMessage` is a pure `unknown → string`
+  // helper whose OUTPUT is what production code writes into log payloads, and several suites
+  // assert on that exact payload. A `vi.fn()` returning `undefined` would make those
+  // assertions pass vacuously, or fail for a reason unrelated to the behaviour under test.
+  // Kept in lockstep with `@/lib/logging`'s version, which deliberately avoids `String(obj)`
+  // (that yields the useless '[object Object]').
+  errorMessage: (err: unknown): string => {
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    try {
+      return JSON.stringify(err) ?? 'Unknown error';
+    } catch {
+      return 'Unknown error';
+    }
+  },
   getContext: vi.fn(),
   withContext: vi.fn(),
   requestContext: {},

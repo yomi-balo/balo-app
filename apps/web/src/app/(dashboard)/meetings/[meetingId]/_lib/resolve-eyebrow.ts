@@ -43,3 +43,21 @@ export function resolveEyebrow(contextType: RecapContextType): string {
 export function contextIsCase(contextType: RecapContextType): boolean {
   return contextType === 'case';
 }
+
+/**
+ * BAL-421 — the recap's back link to its case, or `null` when there is nowhere to go.
+ *
+ * ⚠ ONLY THE `case` CONTEXT'S `contextId` IS AN `engagements.id`. Every other context yields
+ * `null` and NO link renders — never a disabled or dead one. Lives here, beside
+ * {@link contextIsCase}, because "what does this context's id actually point at" is exactly
+ * the question this module already answers once for all three surfaces.
+ *
+ * ⚠ NO `?from=recap`, DELIBERATELY. The case→recap direction DOES carry `?from=case_surface`,
+ * because `RecapEntrySource` declares that value and `resolveEntrySource` reads it. Nothing
+ * reads a `from` param on `/cases/{id}`: `case_surface_viewed` carries lens /
+ * consultation_count / case_state and has no `source` dimension. Appending one anyway would
+ * be an unread query string that LOOKS like instrumentation. Add it in the change that reads it.
+ */
+export function resolveCaseHref(isCase: boolean, contextId: string): string | null {
+  return isCase ? '/cases/' + contextId : null;
+}

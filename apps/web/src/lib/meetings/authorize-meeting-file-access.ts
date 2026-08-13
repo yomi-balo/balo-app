@@ -64,10 +64,14 @@ import { log } from '@/lib/logging';
  *     and their agency owners/admins), so it could never be the whole gate for a TWO-SIDED
  *     file surface anyway.
  *
- * ⚠ COROLLARY, STATED SO IT IS NOT UNDONE: THIS MODULE DOES NOT OPEN THE `apps/web`
- * ENGAGEMENT-AXIS SEAM. CLAUDE.md records that seam as landing "with its first consumer
- * (BAL-410/BAL-411)". It still does. `authorize-meeting-file-access.test.ts` asserts that
- * STATICALLY, by reading this file's own source.
+ * ⚠ COROLLARY, STATED SO IT IS NOT UNDONE: THIS MODULE DOES NOT USE THE `apps/web`
+ * ENGAGEMENT-AXIS SEAM. That seam is now OPEN — BAL-421 opened it
+ * (`apps/web/src/lib/authz/engagement.ts`), not BAL-410/BAL-411 as originally deferred
+ * (ADR-1046 amendment 2026-08-12) — so the packaging accident that used to make this
+ * impossible is GONE. The argument above is unaffected, because it never rested on packaging:
+ * downloading is a READ and uploading is on neither token. `authorize-meeting-file-access.test.ts`
+ * asserts the non-import STATICALLY by reading this file's own source, and that assertion is
+ * now load-bearing rather than incidental.
  *
  * ──────────────────────────────────────────────────────────────────────────────
  * ⚠⚠ (b) THE EXPERT ARM CONSUMES THE SHIPPED **VISIBILITY** RULE — IT DOES NOT INVENT ONE,

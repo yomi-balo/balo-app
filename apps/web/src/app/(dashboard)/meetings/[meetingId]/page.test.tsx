@@ -68,6 +68,8 @@ const BASE = {
   state: 'ready' as const,
   header: {
     eyebrow: 'Consultation',
+    // BAL-421 — a `case` recap now links back to its case surface.
+    caseHref: '/cases/' + ENGAGEMENT_ID,
     title: 'Flow interview stuck on a record-triggered loop',
     status: { label: 'Completed', tone: 'success' as const, icon: 'check' as const },
     closedNote: null,

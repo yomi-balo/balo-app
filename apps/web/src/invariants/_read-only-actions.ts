@@ -58,6 +58,24 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   'app/(dashboard)/meetings/[meetingId]/_actions/get-meeting-file-download.ts',
   // Lists a meeting's live files (both in-call sources) — pure read.
   'app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files.ts',
+  // ── BAL-421, the case-surface readers ────────────────────────────────────────────────
+  //
+  // ⚠ THE STANDING BAL-424 OBLIGATION ABOVE BINDS BOTH OF THESE IN SPIRIT, THOUGH NOT BY THE
+  // LETTER OF ITS MODULE NAME. Neither mentions `project-request/resolve-conversation-access`,
+  // so `conversation-access-read-only.test.ts` does not enrol them in its subject set — but
+  // they resolve a conversation all the same, through `@/lib/cases/resolve-case-access`. That
+  // adapter reaches `authorizeEngagementConversation`, whose thread read is
+  // `conversationsRepository.findByContext` — a SELECT. It must NEVER become
+  // `ensureForContext` / `ensureManyForContexts`: minting a conversation row from a READ path
+  // behind a bare `requireUser()` is the exact transitive-write defect BAL-424 closed. A case's
+  // thread is provisioned in the same transaction as the case, so there is nothing to ensure.
+  //
+  // Lists a case conversation's messages/files (keyset pagination) — pure read.
+  'app/(dashboard)/cases/[engagementId]/_actions/fetch-case-thread.ts',
+  // Mints a short-lived presigned GET for one case file, from EITHER side of the D4 merge.
+  // Each origin keeps its own gate (`authorizeMeetingFileAccess` / the case gate + a
+  // conversation-scoped lookup); neither performs a write.
+  'app/(dashboard)/cases/[engagementId]/_actions/get-case-file-download.ts',
 ];
 
 /**

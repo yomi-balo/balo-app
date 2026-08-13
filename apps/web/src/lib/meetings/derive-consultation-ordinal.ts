@@ -3,9 +3,18 @@ import type { MeetingOutcome, MeetingStatus } from '@balo/db';
 /**
  * BAL-388 — the ORDINAL LINE derivation. PURE: no I/O, no `db`, no clock.
  *
- * The recap cannot link back to the case (BAL-421 and `/cases` do not exist), so this line is
- * what answers "which consultation of which case is this". It is also the source
+ * It answers "which consultation of which case is this", and it is the source
  * `engagement.case_closed`'s `consultationCount` has wanted and never had.
+ *
+ * ⚠ MOVED HERE FROM `meetings/[meetingId]/_lib/` BY BAL-421 (pure path move — this file's
+ * test passes unchanged). It now has TWO route consumers, the recap and the case surface, and
+ * a route-private `_lib/` imported from another route is a lie about ownership.
+ * `apps/web/src/lib/meetings/` is already where cross-route meeting helpers live
+ * (`resolve-recap-access.ts`, `recap-view-types.ts`, `meeting-file-view-types.ts`).
+ *
+ * ⚠ IT STAYS IN `apps/web` AND MUST NOT MOVE TO `@balo/shared`: it type-imports
+ * `MeetingStatus` / `MeetingOutcome` from `@balo/db`, and `@balo/shared` importing `@balo/db`
+ * would INVERT the dependency graph (see `packages/shared/src/meetings/context-owner.ts`).
  *
  * ⚠⚠ THE INPUT TYPE IS NARROWED ON PURPOSE — IT IS A PII/SECRET BOUNDARY, NOT TIDINESS.
  * `meetingContextsRepository.listMeetingsForContext` returns FULL `Meeting` rows, including

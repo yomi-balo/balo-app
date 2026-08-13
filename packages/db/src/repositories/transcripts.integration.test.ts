@@ -241,3 +241,73 @@ describe('transcriptsRepository.findByMeetingId', () => {
     expect(found?.id).toBe(second.transcript.id);
   });
 });
+
+describe('transcriptsRepository.findByMeetingIds', () => {
+  it('answers for MANY meetings in one call, keyed by meeting_id', async () => {
+    const a = await transcriptFactory();
+    const b = await transcriptFactory();
+
+    const byMeetingId = await transcriptsRepository.findByMeetingIds([a.meetingId, b.meetingId]);
+    expect(byMeetingId.size).toBe(2);
+    expect(byMeetingId.get(a.meetingId)?.id).toBe(a.transcript.id);
+    expect(byMeetingId.get(b.meetingId)?.id).toBe(b.transcript.id);
+  });
+
+  it('PROJECTS to id + status + meetingId — never the canonical jsonb', async () => {
+    // Same invariant as the single-meeting reader: the batch exists to remove N queries, not
+    // to reintroduce the multi-hundred-KB payload those queries were careful to avoid.
+    const { meetingId } = await transcriptFactory();
+
+    const found = (await transcriptsRepository.findByMeetingIds([meetingId])).get(meetingId);
+    expect(Object.keys(found ?? {}).sort()).toEqual(['id', 'meetingId', 'status']);
+    expect(found).not.toHaveProperty('canonical');
+    expect(found).not.toHaveProperty('extractedActionItems');
+  });
+
+  it('AGREES WITH findByMeetingId when a meeting has two captures — newest wins', async () => {
+    // The de-dup in the batch reader must reproduce the single reader's `limit(1)`, not
+    // approximate it: a case surface and a recap disagreeing about which capture is current
+    // is exactly the drift a batched read tends to introduce.
+    const first = await transcriptFactory({
+      values: { createdAt: new Date('2026-07-01T00:00:00.000Z') },
+    });
+    const second = await transcriptFactory({
+      meetingId: first.meetingId,
+      engagementId: first.engagementId,
+      values: { createdAt: new Date('2026-07-02T00:00:00.000Z') },
+    });
+
+    const batched = (await transcriptsRepository.findByMeetingIds([first.meetingId])).get(
+      first.meetingId
+    );
+    const single = await transcriptsRepository.findByMeetingId(first.meetingId);
+    expect(batched?.id).toBe(second.transcript.id);
+    expect(batched?.id).toBe(single?.id);
+  });
+
+  it('omits meetings with no transcript rather than mapping them to undefined', async () => {
+    const { meetingId } = await transcriptFactory();
+    const emptyMeetingId = (await meetingFactory()).meeting.id;
+
+    const byMeetingId = await transcriptsRepository.findByMeetingIds([meetingId, emptyMeetingId]);
+    expect(byMeetingId.has(meetingId)).toBe(true);
+    expect(byMeetingId.has(emptyMeetingId)).toBe(false);
+  });
+
+  it('filters deleted_at IS NULL — a soft-deleted transcript is invisible', async () => {
+    const { transcript, meetingId } = await transcriptFactory();
+    await db
+      .update(transcripts)
+      .set({ deletedAt: new Date() })
+      .where(eq(transcripts.id, transcript.id));
+
+    const byMeetingId = await transcriptsRepository.findByMeetingIds([meetingId]);
+    expect(byMeetingId.size).toBe(0);
+  });
+
+  it('short-circuits on an EMPTY id list without querying', async () => {
+    // `inArray` with an empty list is a driver error in some stacks and a full scan in others;
+    // neither is what a case with no ended consultations meant to ask for.
+    await expect(transcriptsRepository.findByMeetingIds([])).resolves.toEqual(new Map());
+  });
+});

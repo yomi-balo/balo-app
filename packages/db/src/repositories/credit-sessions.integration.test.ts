@@ -1430,3 +1430,290 @@ describe('creditSessionsRepository.findIdByMeetingId', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+/**
+ * BAL-421 — `sumExpertEarningsForEngagement`: the ENGAGEMENT-GRAIN expert-earnings
+ * aggregate behind the case surface's expert-lens earnings block.
+ *
+ * Three things are load-bearing here, and each has its own test below:
+ *   1. "NO DATA" IS NOT "A$0.00". Nothing writes `engagement_id` on `main` today, so every
+ *      real case aggregates to `not_yet` — a state that CANNOT hold a figure.
+ *   2. `engagement_id` IS READ AS GIVEN. Never through `meeting_id` → `meeting_contexts`.
+ *   3. FEE CONCEALMENT. Expert accrual only — no client rate, charge, fee or margin, and
+ *      none derivable from what comes back.
+ */
+describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', () => {
+  /** Open a session against an engagement, drive it to a FINALIZED end, return the accrual. */
+  async function finalizeSessionOnEngagement(
+    ctx: Awaited<ReturnType<typeof setup>>,
+    engagementId: string,
+    minutes: number
+  ): Promise<{ sessionId: string; expectedAccrualMinor: number }> {
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: minutes + 5,
+      engagementId,
+    });
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(minutes));
+    const ended = await creditSessionsRepository.end(res.session.id, { now: meterAt(minutes) });
+    expect(ended.session.billingFinalizedAt).not.toBeNull();
+    return { sessionId: res.session.id, expectedAccrualMinor: minutes * EXPERT_RATE_PER_MIN };
+  }
+
+  it('THE STATE EVERY CASE IS IN TODAY: no sessions ⇒ `not_yet`, and the figure is NULL, never 0', async () => {
+    // The live `openSession` service passes neither `meeting_id` nor `engagement_id`
+    // (BAL-400 is the ticket that will), so this is not an edge case — it is the whole
+    // platform. If this returned `earningsAudMinor: 0` the case surface would render
+    // "A$0.00" — an unbacked MONEY CLAIM — to every expert on Balo.
+    const { engagement } = await caseEngagementFactory();
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+
+    expect(agg.state).toBe('not_yet');
+    expect(agg.earningsAudMinor).toBeNull();
+    expect(agg.earningsAudMinor).not.toBe(0);
+    expect(agg.finalizedSessionCount).toBe(0);
+    expect(agg.pendingSessionCount).toBe(0);
+  });
+
+  it('an UN-FINALIZED session ⇒ `pending` with a count and STILL no figure', async () => {
+    // Mirrors `buildExpertMoneyBlock` ("pending ⇒ every figure is 0", rendered as no
+    // figure at all): a session that has not finalized is worth counting and not worth
+    // quoting. Its accrual is a moving number nobody is owed yet.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const { engagement } = await caseEngagementFactory();
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      engagementId: engagement.id,
+    });
+    expect(res.ok).toBe(true);
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+
+    expect(agg.state).toBe('pending');
+    expect(agg.earningsAudMinor).toBeNull();
+    expect(agg.pendingSessionCount).toBe(1);
+    expect(agg.finalizedSessionCount).toBe(0);
+  });
+
+  it('sums FINALIZED sessions only — an un-finalized sibling is counted but contributes NOTHING to the total', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const { engagement } = await caseEngagementFactory();
+
+    const first = await finalizeSessionOnEngagement(ctx, engagement.id, 3);
+    // A SECOND consultation on the same case, still in flight (legal: the first is
+    // terminal, so the one-live-session-per-wallet gate lets this one open).
+    const pendingRes = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      engagementId: engagement.id,
+    });
+    expect(pendingRes.ok).toBe(true);
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+
+    expect(agg.state).toBe('finalized');
+    expect(agg.finalizedSessionCount).toBe(1);
+    expect(agg.pendingSessionCount).toBe(1);
+    // EXACTLY the finalized accrual — the in-flight session's running accrual is excluded.
+    expect(agg.earningsAudMinor).toBe(first.expectedAccrualMinor);
+  });
+
+  it('adds up ACROSS finalized sessions on the same case', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const { engagement } = await caseEngagementFactory();
+
+    const a = await finalizeSessionOnEngagement(ctx, engagement.id, 3);
+    const b = await finalizeSessionOnEngagement(ctx, engagement.id, 5);
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+    expect(agg.state).toBe('finalized');
+    expect(agg.finalizedSessionCount).toBe(2);
+    expect(agg.earningsAudMinor).toBe(a.expectedAccrualMinor + b.expectedAccrualMinor);
+  });
+
+  it('IGNORES SOFT-DELETED sessions — deleting the only session returns to `not_yet`, not to a zero', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const { engagement } = await caseEngagementFactory();
+    const { sessionId } = await finalizeSessionOnEngagement(ctx, engagement.id, 4);
+
+    await db
+      .update(creditSessions)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditSessions.id, sessionId));
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+    expect(agg.state).toBe('not_yet');
+    expect(agg.earningsAudMinor).toBeNull();
+    expect(agg.finalizedSessionCount).toBe(0);
+    expect(agg.pendingSessionCount).toBe(0);
+  });
+
+  it('EXCLUDES a CANCELLED session — it must never pin the block in `pending` forever', async () => {
+    // The `findIdByMeetingId` ruling, applied at the engagement grain. A cancelled session
+    // never bills, so `billing_finalized_at` stays NULL for good; counting it as pending
+    // would render "1 consultation still being finalised" for the life of the case, about
+    // a consultation that will never produce a cent.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const { engagement } = await caseEngagementFactory();
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      engagementId: engagement.id,
+    });
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    await creditSessionsRepository.cancel(res.session.id);
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+    expect(agg.state).toBe('not_yet');
+    expect(agg.pendingSessionCount).toBe(0);
+  });
+
+  it("never counts ANOTHER engagement's sessions", async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const mine = await caseEngagementFactory();
+    const theirs = await caseEngagementFactory();
+
+    await finalizeSessionOnEngagement(ctx, mine.engagement.id, 3);
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(theirs.engagement.id);
+    expect(agg.state).toBe('not_yet');
+  });
+
+  // ── THE DIVERGENCE GUARD ────────────────────────────────────────────────────────────
+  //
+  // ⚠⚠ THESE TWO TESTS EXIST TO FAIL if anyone ever "helpfully" rewrites this read to
+  // resolve `meeting_id` → `meeting_contexts.context_id` → engagement. Money and reporting
+  // consume `engagement_id` AS GIVEN (schema/credit-sessions.ts); only BAL-425's sweep goes
+  // through the seam. Re-deriving here would make a divergent pair silently AGREE — hiding
+  // the divergence instead of catching it, with no row anywhere that looks wrong. They are
+  // the engagement-grain companions to the `open()` divergence test above.
+
+  it('DOES NOT reach through the seam: a session with engagement_id NULL is invisible, even when its MEETING resolves to this case', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const { engagement } = await caseEngagementFactory();
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: {
+        status: 'ended',
+        outcome: 'completed',
+        scheduledStart: new Date(BASE.getTime() - 60 * 60_000),
+        scheduledEnd: BASE,
+        endedAt: BASE,
+      },
+    });
+
+    // A REAL, FINALIZED, EARNING session — linked to the meeting, with NO engagement_id.
+    // (`open` accepts either column alone; their nullability is independent.)
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      meetingId: meeting.id,
+    });
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    expect(res.session.engagementId).toBeNull();
+    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(4));
+    const ended = await creditSessionsRepository.end(res.session.id, { now: meterAt(4) });
+    expect(ended.session.expertAccruedMinor).toBe(4 * EXPERT_RATE_PER_MIN);
+
+    // THE ASSERTION IS ONLY MEANINGFUL IF THE SEAM WOULD HAVE FOUND IT — so prove the seam
+    // does resolve this meeting to this engagement first. Without this line the test could
+    // pass for the wrong reason (a mis-seeded context) and the guard would be vacuous.
+    const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
+      [engagement.id],
+      meterAt(60)
+    );
+    expect(anchors.get(engagement.id)?.lastCompletedConsultationAt?.getTime()).toBe(
+      meterAt(4).getTime()
+    );
+
+    // …and the aggregate STILL reports no data, because it reads `engagement_id` as given.
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+    expect(agg.state).toBe('not_yet');
+    expect(agg.earningsAudMinor).toBeNull();
+  });
+
+  it('ATTRIBUTES BY engagement_id ALONE: a divergent session counts under the engagement it NAMES, not the one its meeting resolves to', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meetingSubject = (await caseEngagementFactory()).engagement; // the meeting's real subject
+    const named = (await caseEngagementFactory()).engagement; // what the money row NAMES
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: meetingSubject.id }],
+    });
+
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      meetingId: meeting.id,
+      engagementId: named.id, // DIVERGENT — accepted today; nothing relates the two values.
+    });
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(2));
+    await creditSessionsRepository.end(res.session.id, { now: meterAt(2) });
+
+    const onNamed = await creditSessionsRepository.sumExpertEarningsForEngagement(named.id);
+    expect(onNamed.state).toBe('finalized');
+    expect(onNamed.earningsAudMinor).toBe(2 * EXPERT_RATE_PER_MIN);
+
+    // The meeting's own subject earns NOTHING from this row — the divergence stays VISIBLE
+    // rather than being papered over by a join.
+    const onSubject = await creditSessionsRepository.sumExpertEarningsForEngagement(
+      meetingSubject.id
+    );
+    expect(onSubject.state).toBe('not_yet');
+  });
+
+  // ── FEE CONCEALMENT ─────────────────────────────────────────────────────────────────
+
+  it('FEE-SAFE: the figure is the RAW expert accrual, and no client / fee / margin key exists on the result', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const { engagement } = await caseEngagementFactory();
+    const minutes = 4;
+    await finalizeSessionOnEngagement(ctx, engagement.id, minutes);
+
+    const agg = await creditSessionsRepository.sumExpertEarningsForEngagement(engagement.id);
+
+    // The expert's OWN, UN-MARKED-UP earnings — provably not the all-in client charge.
+    expect(agg.earningsAudMinor).toBe(minutes * EXPERT_RATE_PER_MIN);
+    expect(agg.earningsAudMinor).not.toBe(minutes * CLIENT_RATE_PER_MIN);
+
+    // Nothing on the shape names — or lets a caller derive — the client side or the margin.
+    const keys = Object.keys(agg);
+    for (const banned of [
+      'clientRateMinorPerMinute',
+      'clientChargeAudMinor',
+      'baloFeeBps',
+      'marginAudMinor',
+      'overdraftSettledMinor',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(banned);
+    }
+    expect(keys.sort()).toEqual(
+      ['earningsAudMinor', 'finalizedSessionCount', 'pendingSessionCount', 'state'].sort()
+    );
+  });
+});

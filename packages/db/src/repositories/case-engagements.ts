@@ -100,6 +100,98 @@ export function toCaseRow(parent: Engagement, child: CaseEngagement): CaseEngage
   return { ...parentRest, ...childRest };
 }
 
+/**
+ * Which way the resolution-request pair is being moved. A DISCRIMINATED UNION, not two
+ * nullable columns, so a caller CANNOT express a half-set pair — see
+ * {@link writeResolutionRequestTx}.
+ */
+type ResolutionRequestWrite =
+  | { readonly kind: 'ask'; readonly userId: string }
+  | { readonly kind: 'clear' };
+
+/**
+ * THE ONE STATEMENT THAT EVER WRITES `case_engagements.resolution_requested_*`, shared by
+ * `requestResolution` (BAL-421, the ask) and `clearResolutionRequest` (BAL-388, the
+ * dismissal). Extracted rather than mirrored, for two reasons that both matter:
+ *
+ * 1. ⚠⚠ IT MAKES THE PAIRED CHECK STRUCTURAL. `case_engagement_resolution_request_paired`
+ *    is `(resolution_requested_at IS NULL) = (resolution_requested_by_user_id IS NULL)`, so
+ *    writing one column alone is rejected 23514. With two hand-written UPDATEs, "always
+ *    write both" is a CONVENTION restated in two docblocks that a third writer can miss.
+ *    Here the two columns are computed together from ONE discriminant, so a half-set pair is
+ *    not merely rejected by the database — it is UNREPRESENTABLE in the code that gets there.
+ * 2. The two callers are otherwise line-for-line identical (same parent read, same WHERE,
+ *    same refusals), which is a copy that keeps passing after one side's ordering discipline
+ *    is broken — and a new-code duplication finding besides.
+ *
+ * ⚠⚠ THE PARENT IS READ **BEFORE** THE UPDATE, AND THE ORDER IS THE POINT. Reading it after
+ * would let the write COMMIT while `undefined` came back — the caller then tells a user
+ * "this case is no longer open" about a request that was in fact written. Reading first
+ * means a soft-deleted or non-`case` parent short-circuits with NO write at all, so the
+ * returned value and the persisted state can never disagree.
+ *
+ * REFUSES A CLOSED CASE (`closed_at IS NULL` in the WHERE) in BOTH directions — neither
+ * asking whether a closed case is resolved nor dismissing a request on one is coherent, and
+ * both would rewrite terminal history for no user-visible gain. Returns `undefined`; the
+ * caller answers not-found.
+ *
+ * ⚠ NOT AN AUTHORIZATION GATE, in either direction — the same ruling as {@link close}. No
+ * capability is resolved and no role is interpreted; this file imports NOTHING from
+ * `@balo/shared/authz`, and a reviewer can check the ruling still holds by grepping it.
+ * Capabilities are resolved at the call site (ADR-1029): `PARTICIPATE` on the membership
+ * axis for the client's dismissal, `MANAGE_ENGAGEMENT` on the engagement axis (ADR-1046)
+ * for the expert's ask.
+ *
+ * ⚠ NO AUDIT ROW, NO DOMAIN EVENT, in either direction (owner decision D-E). The two paired
+ * columns ARE the attribution record.
+ */
+async function writeResolutionRequestTx(
+  engagementId: string,
+  write: ResolutionRequestWrite
+): Promise<CaseEngagementRow | undefined> {
+  return db.transaction(async (tx) => {
+    const [parent] = await tx
+      .select()
+      .from(engagements)
+      .where(
+        and(
+          eq(engagements.id, engagementId),
+          eq(engagements.engagementType, 'case'),
+          isNull(engagements.deletedAt)
+        )
+      )
+      .limit(1);
+
+    if (parent === undefined) {
+      return undefined;
+    }
+
+    // BOTH COLUMNS, COMPUTED TOGETHER, IN ONE UPDATE. Never split this into two `set`s.
+    const pair =
+      write.kind === 'ask'
+        ? { resolutionRequestedAt: new Date(), resolutionRequestedByUserId: write.userId }
+        : { resolutionRequestedAt: null, resolutionRequestedByUserId: null };
+
+    const [updatedChild] = await tx
+      .update(caseEngagements)
+      .set(pair)
+      .where(
+        and(
+          eq(caseEngagements.engagementId, engagementId),
+          isNull(caseEngagements.closedAt),
+          isNull(caseEngagements.deletedAt)
+        )
+      )
+      .returning();
+
+    if (updatedChild === undefined) {
+      return undefined;
+    }
+
+    return toCaseRow(parent, updatedChild);
+  });
+}
+
 export const caseEngagementsRepository = {
   /**
    * Create a case: the supertype row (`engagementType: 'case'`) + the child, in ONE
@@ -333,6 +425,67 @@ export const caseEngagementsRepository = {
   },
 
   /**
+   * WRITE a pending expert resolution REQUEST — the expert's "please confirm this is
+   * resolved" ask, and the exact MIRROR of {@link clearResolutionRequest} (BAL-421). The
+   * columns shipped INERT with BAL-417; this is their first and only writer.
+   *
+   * ⚠ BOTH PAIRED COLUMNS IN ONE UPDATE, AND THAT IS A CORRECTNESS CONSTRAINT RATHER THAN
+   * TIDINESS. `case_engagement_resolution_request_paired` is
+   * `(resolution_requested_at IS NULL) = (resolution_requested_by_user_id IS NULL)`, so
+   * setting one alone is rejected 23514.
+   *
+   * ⚠ NOT AN AUTHORIZATION GATE — the same ruling as {@link close} and
+   * {@link clearResolutionRequest}. No capability is resolved here and no role is
+   * interpreted. `hasEngagementCapability(actor, MANAGE_ENGAGEMENT, { contextType: 'case',
+   * contextId })` runs at the CALL SITE (ADR-1029 / ADR-1046), in BAL-421's server action.
+   * This file imports NOTHING from `@balo/shared/authz`; a reviewer can check the ruling
+   * still holds by grepping it.
+   *
+   * ⚠⚠ AND THEREFORE — DELIBERATELY — THERE IS **NO** MEMBERSHIP INVARIANT ON `userId`, WHICH
+   * IS AN ASYMMETRY WITH {@link close}, NOT AN OVERSIGHT. `close` can assert its
+   * data-integrity invariant (`closed_by_user_id` is a LIVE member of
+   * `engagements.company_id`) because the subject is right there on the parent row, and
+   * asserting it interprets no role. The expert-side equivalent — "the requester is the
+   * delivering expert, or an owner/admin of their agency" — is NOT a row-coherence
+   * question: it spans `expert_profiles` → `agencies` → `agency_members` and IS the
+   * ADR-1046 `manage_engagement` holder rule, character for character. Encoding it here
+   * would be a SECOND definition of an authorization rule living in the data layer, which
+   * is precisely what ADR-1029 forbids. So the only guarantee this method makes about
+   * `userId` is the FK: a non-existent user fails 23503. The holder set is the server
+   * action's to enforce, and it is the only place that enforces it.
+   *
+   * ⚠ NO NOTIFICATION, NO DOMAIN EVENT, NO AUDIT ROW. Symmetric with the shipped dismiss
+   * half (owner decision D-E): the ask renders as a banner on the case surface and nowhere
+   * else, and the two paired columns ARE the attribution record — which is why there is no
+   * `recordDeliveryAudit` call here either. Do not invent an event, payload, template or
+   * rule for it.
+   *
+   * LAST-ASK-WINS (owner, 2026-08-12): the `WHERE` does NOT require the columns to be NULL,
+   * so a re-ask OVERWRITES the timestamp and the actor. There is no cooldown column and no
+   * migration for one. This is safe precisely BECAUSE nothing fires: the blast radius of a
+   * re-ask is one banner reappearing, not a second email.
+   *
+   * DOES NOT TOUCH `status`, `closed_at` OR `close_reason` — asking whether a case is
+   * resolved is not closing it. The case stays OPEN and stays a live inactivity-sweep
+   * candidate.
+   *
+   * REFUSES A CLOSED CASE (`closed_at IS NULL` in the WHERE) — asking whether an already
+   * closed case is resolved is incoherent, and would rewrite terminal history for no
+   * user-visible gain. A closed case matches nothing and `undefined` comes back; the caller
+   * answers not-found.
+   *
+   * The statement itself — the parent-read-BEFORE-update ordering, the paired write, the
+   * closed/soft-deleted refusals — is {@link writeResolutionRequestTx}, shared verbatim with
+   * the dismissal half rather than copied.
+   */
+  async requestResolution(input: {
+    engagementId: string;
+    userId: string;
+  }): Promise<CaseEngagementRow | undefined> {
+    return writeResolutionRequestTx(input.engagementId, { kind: 'ask', userId: input.userId });
+  },
+
+  /**
    * CLEAR a pending expert resolution REQUEST, leaving the case OPEN (BAL-388).
    *
    * ⚠ BOTH COLUMNS ARE NULLED IN ONE UPDATE, AND THAT IS A CORRECTNESS CONSTRAINT RATHER THAN
@@ -360,45 +513,15 @@ export const caseEngagementsRepository = {
    * "this case is no longer open" about a request that was in fact cleared. Reading first means
    * a soft-deleted or non-`case` parent short-circuits with NO write at all, so the returned
    * value and the persisted state can never disagree.
+   *
+   * BAL-421: the statement is now {@link writeResolutionRequestTx}, shared with the ask half
+   * (`requestResolution`). BEHAVIOUR IS UNCHANGED — every guarantee above is the extracted
+   * function's, and this method's integration tests pass unmodified. That is the proof.
    */
   async clearResolutionRequest(input: {
     engagementId: string;
   }): Promise<CaseEngagementRow | undefined> {
-    return db.transaction(async (tx) => {
-      const [parent] = await tx
-        .select()
-        .from(engagements)
-        .where(
-          and(
-            eq(engagements.id, input.engagementId),
-            eq(engagements.engagementType, 'case'),
-            isNull(engagements.deletedAt)
-          )
-        )
-        .limit(1);
-
-      if (parent === undefined) {
-        return undefined;
-      }
-
-      const [updatedChild] = await tx
-        .update(caseEngagements)
-        .set({ resolutionRequestedAt: null, resolutionRequestedByUserId: null })
-        .where(
-          and(
-            eq(caseEngagements.engagementId, input.engagementId),
-            isNull(caseEngagements.closedAt),
-            isNull(caseEngagements.deletedAt)
-          )
-        )
-        .returning();
-
-      if (updatedChild === undefined) {
-        return undefined;
-      }
-
-      return toCaseRow(parent, updatedChild);
-    });
+    return writeResolutionRequestTx(input.engagementId, { kind: 'clear' });
   },
 
   /**

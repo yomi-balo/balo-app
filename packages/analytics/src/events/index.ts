@@ -146,6 +146,8 @@ export {
   type RecapEntrySource,
   type RecapResolvePromptVariant,
   type RecapCta,
+  type CaseSurfaceAction,
+  type CaseSurfaceState,
 } from './recap';
 export {
   ACTION_ITEM_SERVER_EVENTS,
