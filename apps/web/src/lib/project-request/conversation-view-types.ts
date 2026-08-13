@@ -1,6 +1,10 @@
 import type { RequestExpertRelationship } from '@balo/db';
 import { PREVIEW_MAX_CHARS, previewOfPlainText } from '@balo/shared/notifications';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+import type {
+  ConversationFileView,
+  ConversationMessageView,
+} from '@/lib/conversations/conversation-view-types';
 import type { ProjectRequestStatus } from './resolve-request-lens';
 
 /**
@@ -123,32 +127,18 @@ export interface ConversationThreadView {
 }
 
 /**
- * ⚠ THIS IS THE ABLY WIRE PAYLOAD. It carries `conversationId`, NOT `relationshipId`
- * (BAL-424) — the channel is keyed on the conversation, and the client hook's structural
- * type guard requires this exact field. The island maps back to a thread via
- * `threads.find((t) => t.conversationId === …)`.
+ * ⚠⚠ RE-EXPORTED, NOT DECLARED HERE (BAL-421). Both shapes are ANCHOR-AGNOSTIC — they key
+ * on `conversationId` alone — and they are the ABLY WIRE PAYLOADS, so there must be exactly
+ * ONE declaration of each on the platform. They now live in
+ * `@/lib/conversations/conversation-view-types`, because a CASE has no project request and
+ * BAL-421's surface must not import its core conversation contract from a `project-request`
+ * path. Re-exporting keeps every existing import in this module's ~20 call sites working
+ * unchanged; do NOT re-declare either shape here.
  */
-export interface ConversationMessageView {
-  id: string;
-  conversationId: string;
-  /** Sanitised at ingest (plain text → escaped HTML → sanitizeProjectHtml). */
-  bodyHtml: string;
-  senderUserId: string;
-  senderName: string;
-  createdAtIso: string;
-}
-
-/** Also an Ably wire payload — see {@link ConversationMessageView}. */
-export interface ConversationFileView {
-  id: string;
-  conversationId: string;
-  fileName: string;
-  contentType: string;
-  sizeBytes: number;
-  uploadedByUserId: string;
-  uploadedByName: string;
-  createdAtIso: string;
-}
+export type {
+  ConversationMessageView,
+  ConversationFileView,
+} from '@/lib/conversations/conversation-view-types';
 
 export interface ConversationView {
   viewerUserId: string;

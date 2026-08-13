@@ -36,6 +36,8 @@ export type {
   RecapEntrySource,
   RecapResolvePromptVariant,
   RecapCta,
+  // BAL-421 — the case surface RSC's `case_surface_viewed` payload.
+  CaseSurfaceState,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
 

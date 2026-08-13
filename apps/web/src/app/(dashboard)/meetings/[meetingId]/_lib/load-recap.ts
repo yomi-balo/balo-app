@@ -36,8 +36,11 @@ import type {
   RecapStatusView,
   RecapView,
 } from '@/lib/meetings/recap-view-types';
+import {
+  deriveConsultationOrdinal,
+  formatOrdinalLine,
+} from '@/lib/meetings/derive-consultation-ordinal';
 import { contextIsCase, resolveEyebrow } from './resolve-eyebrow';
-import { deriveConsultationOrdinal, formatOrdinalLine } from './derive-consultation-ordinal';
 import {
   resolveArtifacts,
   resolveMoneyView,
@@ -519,6 +522,18 @@ export const loadRecap = cache(
 
     const header: RecapHeaderView = {
       eyebrow: resolveEyebrow(contextType),
+      // ⚠ BAL-421 — the recap's back link to its case. Only the `case` context's `contextId`
+      // IS an `engagements.id`, so every other context yields `null` and NO link renders
+      // (never a disabled one).
+      //
+      // ⚠ NO `?from=recap`, DELIBERATELY. The case→recap direction DOES carry
+      // `?from=case_surface`, because `RecapEntrySource` declares that value and
+      // `resolveEntrySource` reads it. Nothing reads a `from` param on `/cases/{id}`:
+      // `case_surface_viewed` carries lens / consultation_count / case_state and has no
+      // `source` dimension. Appending one anyway would be an unread query string that LOOKS
+      // like instrumentation — the same "reads as coverage that does not exist" failure the
+      // no-producer rule forbids for enum values. Add the param in the change that reads it.
+      caseHref: isCase ? '/cases/' + subject.contextId : null,
       title,
       status: resolveStatus(meeting, caseRow, artifacts.summary.state === 'processing'),
       closedNote: resolveClosedNote(caseRow),

@@ -2,7 +2,7 @@
 
 import { cn } from '@/lib/utils';
 import type { ConversationThreadView } from '@/lib/project-request/conversation-view-types';
-import { InitialsAvatar } from './initials-avatar';
+import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
 
 interface ThreadTabsProps {
   threads: ConversationThreadView[];

@@ -594,9 +594,11 @@ describe('authorizeMeetingFileAccess', () => {
  * (1) This gate must never reach for the ENGAGEMENT-CAPABILITY axis. Its two tokens
  *     authorize the ACT, never the READ, and their holder set excludes agency role `expert` —
  *     the colleague on the call holding the file. It also excludes every client-side actor
- *     structurally, so it could never be the whole gate for a two-sided file surface. BAL-423
- *     must NOT open the `apps/web` engagement-axis seam; CLAUDE.md records that as landing
- *     with BAL-410/BAL-411.
+ *     structurally, so it could never be the whole gate for a two-sided file surface.
+ *
+ *     ⚠ THE `apps/web` SEAM IS NOW OPEN — BAL-421 opened it (`lib/authz/engagement.ts`), not
+ *     BAL-410/BAL-411 as originally deferred. THAT MAKES THIS GUARD MORE LOAD-BEARING, NOT
+ *     LESS: the wrong import is now a keystroke away rather than impossible. Do not relax it.
  *
  * (2) The GUEST arm is a named, fail-closed hole (D2). The gate must not call the guest read
  *     predicate speculatively — BAL-408 records the grant, it does not enforce the read, and

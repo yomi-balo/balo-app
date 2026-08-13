@@ -87,7 +87,9 @@ const realtimeCapture: { input: RealtimeInput | null; status: string } = {
   input: null,
   status: 'connected',
 };
-vi.mock('./use-conversation-realtime', () => ({
+// BAL-421 moved the hook to the anchor-agnostic path; the mock must follow the
+// component's import specifier or the real hook runs and the realtime cases hang.
+vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
   useConversationRealtime: (input: RealtimeInput) => {
     realtimeCapture.input = input;
     return { status: realtimeCapture.status };

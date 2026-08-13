@@ -8,14 +8,39 @@ import { formatBytes } from '@/components/balo/document-uploader/upload-file';
 import type {
   ConversationFileView,
   ConversationMessageView,
-  ConversationThreadView,
-} from '@/lib/project-request/conversation-view-types';
+} from '@/lib/conversations/conversation-view-types';
 import { MessageBubbleHtml } from './message-bubble-html';
 
 export type ThreadDataState = 'loading' | 'error' | 'ready';
 
+/**
+ * ⚠ BAL-421 GENERALISED THIS AWAY FROM `thread: ConversationThreadView`, WHICH WAS THE ONLY
+ * RELATIONSHIP-SHAPED THING LEFT IN AN OTHERWISE ANCHOR-AGNOSTIC LEAF. It read exactly three
+ * fields off that view — `relationshipId` (a scroll-reset key), `expertFirstName` (empty-state
+ * copy) and `eoiHtml` (the pinned intro card) — so it now takes those three as SCALARS. A Case
+ * has no relationship and no EOI; it passes its `conversationId` as the key and `null` as the
+ * intro. Keeping the fat prop would have forced the case surface to fabricate a relationship
+ * view, which is how a "shared" component quietly becomes two.
+ */
 interface MessageListProps {
-  thread: ConversationThreadView;
+  /**
+   * Identity of the thread being shown. Used ONLY to reset scroll on a thread switch — any
+   * stable per-thread string works (a relationship id, or a conversation id).
+   */
+  threadKey: string;
+  /** The other party's first name, for the empty-state invitation copy. */
+  counterpartyFirstName: string;
+  /**
+   * Sanitised HTML pinned above the FULLY loaded thread (the project request's EOI pitch).
+   * `null` ⇒ no intro card at all. A Case has none.
+   */
+  introHtml: string | null;
+  /**
+   * The intro card's eyebrow. Defaults to the project-request framing so the shipped surface
+   * is untouched by the generalisation; a future caller with a different intro must say what
+   * its intro IS rather than inheriting someone else's label.
+   */
+  introLabel?: string;
   lens: 'client' | 'expert';
   viewerUserId: string;
   state: ThreadDataState;
@@ -61,7 +86,10 @@ const SCROLL_STICK_THRESHOLD_PX = 96;
  * invitation / the timeline.
  */
 export function MessageList({
-  thread,
+  threadKey,
+  counterpartyFirstName,
+  introHtml,
+  introLabel = 'Expression of interest',
   lens,
   viewerUserId,
   state,
@@ -116,13 +144,13 @@ export function MessageList({
     if (el !== null && stickToBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [thread.relationshipId, itemCount]);
+  }, [threadKey, itemCount]);
   useEffect(() => {
     // A fresh thread always starts pinned to its live edge.
     stickToBottomRef.current = true;
     const el = containerRef.current;
     if (el !== null) el.scrollTop = el.scrollHeight;
-  }, [thread.relationshipId]);
+  }, [threadKey]);
 
   if (state === 'loading') {
     return (
@@ -156,8 +184,8 @@ export function MessageList({
     );
   }
 
-  const showEoiIntro = lens === 'client' && thread.eoiHtml !== null && !hasEarlier;
-  const isEmpty = items.length === 0 && !showEoiIntro;
+  const showIntro = lens === 'client' && introHtml !== null && !hasEarlier;
+  const isEmpty = items.length === 0 && !showIntro;
 
   if (isEmpty) {
     return (
@@ -166,7 +194,7 @@ export function MessageList({
           <MessageSquare className="text-muted-foreground h-5 w-5" aria-hidden="true" />
         </span>
         <p className="text-foreground text-sm font-semibold">
-          Start the conversation with {lens === 'expert' ? 'the client' : thread.expertFirstName}
+          Start the conversation with {lens === 'expert' ? 'the client' : counterpartyFirstName}
         </p>
         <p className="text-muted-foreground mt-1.5 max-w-sm text-sm leading-relaxed">
           Share context, ask a question, or drop a file — they&apos;ll be notified right away.
@@ -181,15 +209,15 @@ export function MessageList({
       onScroll={handleScroll}
       className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-4"
     >
-      {showEoiIntro && thread.eoiHtml !== null && (
+      {showIntro && introHtml !== null && (
         <div className="border-primary/20 bg-primary/5 rounded-xl border p-3.5">
           <div className="mb-1.5 flex items-center gap-1.5">
             <Sparkles className="text-primary h-3.5 w-3.5" aria-hidden="true" />
             <span className="text-primary text-[10.5px] font-bold tracking-wider uppercase">
-              Expression of interest
+              {introLabel}
             </span>
           </div>
-          <RichTextViewer value={thread.eoiHtml} className="text-sm" />
+          <RichTextViewer value={introHtml} className="text-sm" />
         </div>
       )}
 

@@ -52,4 +52,6 @@ export type {
   ProjectsInboxLens,
   ProjectsInboxFilter,
   AdminEngagementsFilter,
+  /** BAL-421 — annotates the case surface's client action handlers. */
+  CaseSurfaceAction,
 } from '@balo/analytics/client';

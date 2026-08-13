@@ -92,8 +92,28 @@ export interface RecapStatusView {
 }
 
 export interface RecapHeaderView {
-  /** §R1 context label — replaces the breadcrumb the case surface would have given us. */
+  /**
+   * §R1 context label. It USED to stand in for a breadcrumb "the case surface would have
+   * given us" — BAL-421 built that surface, so on a `case` recap the eyebrow now sits beside
+   * a real {@link RecapHeaderView.caseHref} back link rather than substituting for one. It is
+   * still the only identification a NON-case context gets.
+   */
   eyebrow: string;
+  /**
+   * `/cases/{engagementId}` on a `case` recap; `null` on every other context.
+   *
+   * ⚠ NO `?from=recap` QUERY PARAM, DELIBERATELY — and the asymmetry with the case→recap
+   * direction (which DOES carry `?from=case_surface`) is intentional, not an oversight. The full
+   * rationale lives at the emitting site in `load-recap.ts`: nothing reads a `from` param on
+   * `/cases/{id}`, so appending one would be an unread query string that LOOKS like
+   * instrumentation. Read that note before adding it.
+   *
+   * ⚠ `null` ⇒ NO LINK RENDERS, never a disabled one. Only the `case` context's `contextId`
+   * IS an `engagements.id` that `/cases/[engagementId]` can resolve; the other three
+   * engagement-grain contexts have no surface at all, and the two request-grain ones are not
+   * engagements. Computed in `load-recap.ts` — this module is PLAIN TYPES ONLY.
+   */
+  caseHref: string | null;
   title: string;
   status: RecapStatusView;
   /** §R1 closed-case note, or `null` while the case is open / on a non-case context. */

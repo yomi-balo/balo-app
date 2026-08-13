@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   transcripts,
@@ -19,6 +19,13 @@ import {
  * `canonical` jsonb. See {@link transcriptsRepository.findByMeetingId}.
  */
 export type TranscriptStatusRef = Pick<Transcript, 'id' | 'status'>;
+
+/**
+ * The same projection as {@link TranscriptStatusRef} plus the `meeting_id` the caller keys on.
+ * Returned by {@link transcriptsRepository.findByMeetingIds}, which answers for MANY meetings in
+ * one round trip and therefore cannot rely on the caller remembering which id it asked about.
+ */
+export type TranscriptMeetingStatusRef = Pick<Transcript, 'id' | 'status' | 'meetingId'>;
 
 export interface InsertRawTranscriptInput {
   captureId: string;

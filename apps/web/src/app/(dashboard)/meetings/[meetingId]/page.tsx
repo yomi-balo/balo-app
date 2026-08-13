@@ -27,14 +27,28 @@ const GENERIC_METADATA: Metadata = {
 /**
  * Whitelist `?from` into the analytics entry union. Anything unrecognised ⇒ `direct`.
  *
- * ⚠ `notification` IS THE ONLY NON-`direct` VALUE, and it is REAL: both recap deep links
- * (`recap-ready` and `engagement.case_closed`, email and in-app) now append
- * `?from=notification`. `end_of_call` / `case_surface` are deliberately NOT accepted here and
- * not declared in `RecapEntrySource` — neither surface exists (BAL-389 / BAL-421), and a
- * whitelist arm nothing can reach reads as a 100%-drop-off funnel dimension.
+ * ⚠ EVERY ACCEPTED VALUE HAS A LIVE PRODUCER, WHICH IS THE WHOLE RULE:
+ *   · `notification` — both recap deep links (`recap-ready` and `engagement.case_closed`,
+ *     email and in-app) append it.
+ *   · `case_surface` — ADDED BY BAL-421, the ticket that emits it. Every consultation row on
+ *     `/cases/{engagementId}` links here as `/meetings/{id}?from=case_surface` (see
+ *     `cases/[engagementId]/_lib/map-case-consultations.ts`). Before that surface existed this
+ *     arm was unreachable and was correctly absent.
+ *
+ * ⚠ `end_of_call` IS STILL NOT ACCEPTED and still not declared in `RecapEntrySource` — BAL-389
+ * does not exist, and a whitelist arm nothing can reach reads as a 100%-drop-off dimension.
+ *
+ * ⚠ THE MAP IS THE WHITELIST. An unknown `?from` falls through to `direct` rather than being
+ * passed along, so a hand-typed or crafted query string can never widen the union at runtime.
  */
+const ENTRY_SOURCE_BY_PARAM: Readonly<Record<string, RecapEntrySource>> = {
+  notification: 'notification',
+  case_surface: 'case_surface',
+};
+
 function resolveEntrySource(from: string | undefined): RecapEntrySource {
-  return from === 'notification' ? 'notification' : 'direct';
+  if (from === undefined) return 'direct';
+  return ENTRY_SOURCE_BY_PARAM[from] ?? 'direct';
 }
 
 export async function generateMetadata({ params }: Readonly<RecapPageProps>): Promise<Metadata> {

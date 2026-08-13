@@ -61,15 +61,22 @@ const { state, MockRealtime } = vi.hoisted(() => {
 
 vi.mock('ably', () => ({ Realtime: MockRealtime }));
 
+/**
+ * ⚠ BAL-421 — the hook no longer IMPORTS a token action; each surface INJECTS one. So this
+ * is a plain spy passed as the `fetchToken` prop rather than a module mock. The assertions
+ * below are unchanged in substance: the hook still calls its fetcher exactly when it should.
+ */
 const mockTokenAction = vi.fn();
-vi.mock(
-  '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token',
-  () => ({
-    createConversationRealtimeTokenAction: (...args: unknown[]) => mockTokenAction(...args),
-  })
-);
 
-import { sanitizeRealtimeBodyHtml, useConversationRealtime } from './use-conversation-realtime';
+import {
+  sanitizeRealtimeBodyHtml,
+  useConversationRealtime,
+  type ConversationRealtimeTokenResult,
+} from './use-conversation-realtime';
+
+/** Stable identity — the hook re-subscribes when `fetchToken` changes, exactly as documented. */
+const fetchToken = (): Promise<ConversationRealtimeTokenResult> =>
+  mockTokenAction({ requestId: REQUEST_ID }) as Promise<ConversationRealtimeTokenResult>;
 
 function emit(channelName: string, event: string, data: unknown): void {
   const channel = state.channels.get(channelName);
@@ -123,7 +130,7 @@ describe('useConversationRealtime', () => {
     const { result } = renderHook(() =>
       useConversationRealtime({
         enabled: false,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
@@ -137,7 +144,7 @@ describe('useConversationRealtime', () => {
     const { result } = renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: [],
         onMessage: vi.fn(),
         onFile: vi.fn(),
@@ -150,7 +157,7 @@ describe('useConversationRealtime', () => {
     renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1', 'conv-2'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
@@ -167,7 +174,7 @@ describe('useConversationRealtime', () => {
     const { result } = renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
@@ -189,7 +196,7 @@ describe('useConversationRealtime', () => {
     renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage,
         onFile,
@@ -241,7 +248,7 @@ describe('useConversationRealtime', () => {
     renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage,
         onFile,
@@ -269,7 +276,7 @@ describe('useConversationRealtime', () => {
     renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage,
         onFile: vi.fn(),
@@ -293,7 +300,7 @@ describe('useConversationRealtime', () => {
     renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),
@@ -345,7 +352,7 @@ describe('useConversationRealtime', () => {
     const { unmount } = renderHook(() =>
       useConversationRealtime({
         enabled: true,
-        requestId: REQUEST_ID,
+        fetchToken,
         conversationIds: ['conv-1'],
         onMessage: vi.fn(),
         onFile: vi.fn(),

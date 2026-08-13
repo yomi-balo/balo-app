@@ -107,6 +107,14 @@ const BARE_REQUIRE_USER_CALL = /\brequireUser\s*\(/;
  * ⚠ SUBSTRING MATCHING IS STILL THE MECHANISM (`source.includes(helper)`) — it is just not a
  * shortcut that lets one gate name stand in for another. **Every helper a module might use
  * must appear here in full.**
+ *
+ * ⚠⚠ `authorizeCaseMutation` IS THE FIRST **PER-FEATURE WRAPPER** ADMITTED TO THIS LIST, AND
+ * THAT IS THE REMEDY THE NOTE BELOW PRESCRIBES BY NAME ("add the wrapper names to
+ * `AUTH_HELPERS`"). BAL-421's three case-surface mutations (`resolve-case.ts`,
+ * `request-resolution.ts`, `dismiss-resolution-request.ts`) authenticate ONLY through it — it
+ * calls `requireOnboardedUser()` as its first statement and re-runs the full tenancy gate — so
+ * without this entry all three registered as UNAUTHENTICATED and passed in silence, and
+ * deleting their gate call would have shipped green.
  */
 const AUTH_HELPERS = [
   'requireUser',
@@ -114,6 +122,7 @@ const AUTH_HELPERS = [
   'withAuth',
   'getSession',
   'getCurrentUser',
+  'authorizeCaseMutation',
 ] as const;
 
 interface ServerActionScan {

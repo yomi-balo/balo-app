@@ -267,3 +267,103 @@ export function hostContextGrants(
   if (hostRole === null) return false;
   return hostRoleHasCapability(hostRole, capability);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE HOST-CONTEXT ASSEMBLY — shared by BOTH per-app resolvers (BAL-421, ADR-1046
+// amendment). Everything above this line is synchronous; everything below needs I/O, so
+// the reads are INJECTED and this module still imports nothing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The two `expert_profiles` columns the holder rule reads. STRUCTURAL — `@balo/db`'s row
+ * satisfies it, and nothing here imports `@balo/db`. Deliberately the SAME shape
+ * `ExpertSideVisibilityProfile` (`./expert-side-visibility`) declares, because both rules
+ * turn on exactly these two facts; they are separate declarations because the two axes
+ * are separate rules that must be free to diverge (ADR-1046 §7).
+ */
+export interface HostExpertProfile {
+  /** `expert_profiles.userId` — the DELIVERING expert. NOT NULL in the database. */
+  readonly userId: string;
+  /** `expert_profiles.agencyId`. `null` ⇒ INDEPENDENT expert — no agency lookup is made. */
+  readonly agencyId: string | null;
+}
+
+/**
+ * The two reads the assembly needs, injected so this module stays dependency-free.
+ *
+ * ⚠ `findAgencyRole` TAKES `actorId` AS A PARAMETER rather than capturing it — the same
+ * confused-deputy defence `AgencyRoleLookup` documents at length in
+ * `./expert-side-visibility`. A one-argument lookup would let one built for a privileged
+ * actor silently answer for another. Do not "simplify" it.
+ */
+export interface HostContextReads {
+  readonly findExpertProfile: (expertProfileId: string) => Promise<HostExpertProfile | undefined>;
+  readonly findAgencyRole: (agencyId: string, actorId: string) => Promise<string | undefined>;
+}
+
+/**
+ * The assembly's outcome. A DISCRIMINATED UNION rather than a bare
+ * `ResolvedHostContext`, so a caller can tell "no such expert profile" (an INTEGRITY
+ * signal each app logs in its own voice, with its own fields) apart from an ordinary
+ * non-holder. Collapsing them into one `null` here would have silently deleted
+ * `apps/api`'s `denyMissingRow(… 'expert_profile' …)` warn, which is exactly the kind of
+ * behaviour change an "obviously safe" extraction is prone to.
+ */
+export type HostContextResolution =
+  | { readonly ok: true; readonly hostContext: HostContext }
+  | { readonly ok: false; readonly reason: 'expert_profile_missing' };
+
+/**
+ * ⚠⚠ THE ONLY PLACE THE HOLDER SET IS ASSEMBLED, ON EITHER APP (BAL-421 / ADR-1046
+ * amendment 2026-08-12). `apps/api`'s `authorize-engagement-host.ts` and `apps/web`'s
+ * `lib/authz/engagement.ts` BOTH delegate here. A second assembly would be a second
+ * definition of an authorization rule — the thing ADR-1029 forbids — and it is precisely
+ * what this extraction exists to prevent as the `apps/web` seam opens.
+ *
+ * Three facts this turns on, carried verbatim from the `apps/api` original:
+ *   · `expert_profiles` has NO `deleted_at`, so there is no soft-delete predicate to add.
+ *   · `expert_profiles.userId` is NOT NULL; `agencyId` is NULLABLE. A null `agencyId` is
+ *     the INDEPENDENT expert, and it SHORT-CIRCUITS: `findAgencyRole` is NEVER CALLED,
+ *     because there is no agency for anyone to be an admin of (ADR-1046 §2). Modelling it
+ *     as `agency: null` is what makes that guarantee observable by call-count in a test.
+ *   · a live-membership read that comes back `undefined` (a removed agency admin) becomes
+ *     `actorRole: null` → denied, with no extra predicate here.
+ *
+ * ⚠ Do NOT also short-circuit the agency lookup when `profile.userId === actorId`. It
+ * would be cheaper, but it would return `agency: null` for an AGENCY-based expert — a
+ * `HostContext` that LIES ABOUT THE WORLD, and a trap for any caller that reads the
+ * context rather than the boolean (BAL-132 does exactly that). The null-`agencyId`
+ * short-circuit is the ADR's, and it is the only one.
+ *
+ * ⚠ `resolvedForActorId` IS STAMPED ON BOTH RETURN PATHS — see `HostContext`'s docblock.
+ * It binds the context to the actor it was resolved for, so a caller cannot resolve once
+ * as a privileged actor and then check many.
+ */
+export async function buildHostContextForExpertProfile(
+  expertProfileId: string,
+  actorId: string,
+  reads: HostContextReads
+): Promise<HostContextResolution> {
+  const profile = await reads.findExpertProfile(expertProfileId);
+  if (profile === undefined) {
+    return { ok: false, reason: 'expert_profile_missing' };
+  }
+
+  const { agencyId } = profile;
+  if (agencyId === null) {
+    return {
+      ok: true,
+      hostContext: { resolvedForActorId: actorId, expertUserId: profile.userId, agency: null },
+    };
+  }
+
+  const actorRole = await reads.findAgencyRole(agencyId, actorId);
+  return {
+    ok: true,
+    hostContext: {
+      resolvedForActorId: actorId,
+      expertUserId: profile.userId,
+      agency: { agencyId, actorRole: actorRole ?? null },
+    },
+  };
+}

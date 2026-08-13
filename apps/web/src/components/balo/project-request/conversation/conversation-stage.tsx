@@ -32,14 +32,17 @@ import {
   requestProposalAction,
   type RequestProposalResult,
 } from '@/app/(dashboard)/projects/[requestId]/_actions/request-proposal';
-import { useConversationRealtime } from './use-conversation-realtime';
+import { createConversationRealtimeTokenAction } from '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token';
+// BAL-421 — the five ANCHOR-AGNOSTIC leaves moved to `components/balo/conversation/`; the
+// case surface is their second consumer. Pure path move, no behaviour change.
+import { useConversationRealtime } from '@/components/balo/conversation/use-conversation-realtime';
+import { MessageList, type ThreadDataState } from '@/components/balo/conversation/message-list';
+import { MessageComposer } from '@/components/balo/conversation/message-composer';
+import { ThreadFilesPanel } from '@/components/balo/conversation/thread-files-panel';
 import { deriveThreadActions } from './thread-actions';
 import { ThreadTabs } from './thread-tabs';
 import { ThreadHeader } from './thread-header';
 import { ThreadNudge } from './thread-nudge';
-import { MessageList, type ThreadDataState } from './message-list';
-import { MessageComposer } from './message-composer';
-import { ThreadFilesPanel } from './thread-files-panel';
 import { MobileActionRail } from './mobile-action-rail';
 import { MobileOverflowSheet, hasOverflowContent } from './mobile-overflow-sheet';
 import { ProposalRequestDialog } from './proposal-request-dialog';
@@ -601,9 +604,15 @@ export function ConversationStage({
   // BAL-424 — channels are keyed on the CONVERSATION, so a Case (which has no relationship)
   // and a thread that carries over at kickoff both keep one stable channel for life.
   const conversationIds = useMemo(() => view.threads.map((t) => t.conversationId), [view.threads]);
+  // ⚠ MEMOIZED DELIBERATELY (BAL-421). `fetchToken` is an effect dependency inside the hook,
+  // so an inline arrow would re-subscribe every channel on every render.
+  const fetchRealtimeToken = useCallback(
+    () => createConversationRealtimeTokenAction({ requestId }),
+    [requestId]
+  );
   const { status: realtimeStatus } = useConversationRealtime({
     enabled: view.realtimeEnabled && conversationIds.length > 0,
-    requestId,
+    fetchToken: fetchRealtimeToken,
     conversationIds,
     onMessage: handleRealtimeMessage,
     onFile: handleRealtimeFile,
@@ -1134,7 +1143,9 @@ export function ConversationStage({
       )}
 
       <MessageList
-        thread={activeThread}
+        threadKey={activeThread.relationshipId}
+        counterpartyFirstName={activeThread.expertFirstName}
+        introHtml={activeThread.eoiHtml}
         lens={lens}
         viewerUserId={viewerUserId}
         state={activeData.state}

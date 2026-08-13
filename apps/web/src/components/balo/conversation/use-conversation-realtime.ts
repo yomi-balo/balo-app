@@ -10,15 +10,34 @@ import {
 import type {
   ConversationFileView,
   ConversationMessageView,
-} from '@/lib/project-request/conversation-view-types';
-import { createConversationRealtimeTokenAction } from '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token';
+} from '@/lib/conversations/conversation-view-types';
 
 export type ConversationRealtimeStatus = 'disabled' | 'connecting' | 'connected' | 'failed';
+
+/**
+ * What a token fetcher must return. Structurally identical to every
+ * `create*RealtimeTokenAction` result on the platform, declared here rather than imported
+ * from one of them so this hook depends on NO route's action module (BAL-421).
+ */
+export type ConversationRealtimeTokenResult =
+  | { success: true; tokenRequest: Ably.TokenRequest }
+  | { success: false; disabled?: true; error?: string };
 
 export interface UseConversationRealtimeInput {
   /** Server said realtime is on AND there are channels to join. */
   enabled: boolean;
-  requestId: string;
+  /**
+   * ⚠ BAL-421 REPLACED A HARD-CODED `requestId` + A HARD IMPORT OF THE PROJECT-REQUEST
+   * TOKEN ACTION. That import was this hook's ONLY coupling to a route — everything else
+   * already keyed on `conversationIds` alone — and a Case has no request id to pass. Each
+   * surface now injects its OWN entitlement-resolving action.
+   *
+   * ⚠⚠ IT MUST BE MEMOIZED WITH `useCallback`. It is an effect dependency, so an unstable
+   * identity tears down and re-subscribes every Ably channel on EVERY RENDER — which looks
+   * like flapping connectivity rather than like a bug, and would be found in production
+   * rather than in review.
+   */
+  fetchToken: () => Promise<ConversationRealtimeTokenResult>;
   /**
    * BAL-424 — CONVERSATION ids, not relationship ids. The channel name, the token's
    * capability list and both wire payloads all key on the conversation.
@@ -99,8 +118,11 @@ function authErrorMessage(error: unknown): string {
  * NODE-CALLBACK contract — an async `authCallback` that returns a promise
  * silently fails (D1), so this stays a `void`-returning function.
  */
-function fetchRealtimeToken(requestId: string, callback: AblyAuthResultCallback): void {
-  createConversationRealtimeTokenAction({ requestId })
+function fetchRealtimeToken(
+  fetchToken: () => Promise<ConversationRealtimeTokenResult>,
+  callback: AblyAuthResultCallback
+): void {
+  fetchToken()
     .then((result) => {
       if (result.success) {
         callback(null, result.tokenRequest);
@@ -149,7 +171,7 @@ export function sanitizeRealtimeBodyHtml(html: string): string {
 export function useConversationRealtime(input: UseConversationRealtimeInput): {
   status: ConversationRealtimeStatus;
 } {
-  const { enabled, requestId, conversationIds, onMessage, onFile } = input;
+  const { enabled, fetchToken, conversationIds, onMessage, onFile } = input;
   const [status, setStatus] = useState<ConversationRealtimeStatus>(
     enabled ? 'connecting' : 'disabled'
   );
@@ -184,7 +206,7 @@ export function useConversationRealtime(input: UseConversationRealtimeInput): {
 
       client = new AblySdk.Realtime({
         // Node-callback style — NOT a promise-returning callback (D1).
-        authCallback: (_tokenParams, callback) => fetchRealtimeToken(requestId, callback),
+        authCallback: (_tokenParams, callback) => fetchRealtimeToken(fetchToken, callback),
       });
 
       client.connection.on('connected', () => {
@@ -235,7 +257,8 @@ export function useConversationRealtime(input: UseConversationRealtimeInput): {
       client?.close();
       client = null;
     };
-  }, [enabled, requestId, channelsKey]);
+    // ⚠ `fetchToken` MUST BE MEMOIZED BY THE CALLER — see the prop's docblock.
+  }, [enabled, fetchToken, channelsKey]);
 
   return { status };
 }

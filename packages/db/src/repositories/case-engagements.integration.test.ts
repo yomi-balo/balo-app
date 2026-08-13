@@ -837,6 +837,245 @@ describe('case_engagements — the composite FK cascade', () => {
 });
 
 /**
+ * BAL-421 — `requestResolution`. The ASK half: the expert says "is this resolved?", the
+ * paired columns are stamped, and the case STAYS OPEN. The exact mirror of
+ * `clearResolutionRequest` below, and the FIRST writer of columns that shipped inert.
+ */
+describe('caseEngagementsRepository.requestResolution', () => {
+  it('writes BOTH paired columns in one UPDATE, without tripping the CHECK', async () => {
+    // ⚠ `case_engagement_resolution_request_paired` is `(at IS NULL) = (by IS NULL)`, so a
+    // one-column update would be rejected 23514. This test is what proves the repository
+    // writes the pair — the same guarantee its dismissal mirror makes for nulling them.
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory();
+
+    const requested = await caseEngagementsRepository.requestResolution({
+      engagementId: engagement.id,
+      userId: requester.id,
+    });
+
+    expect(requested).toBeDefined();
+    expect(requested?.resolutionRequestedAt).toBeInstanceOf(Date);
+    expect(requested?.resolutionRequestedByUserId).toBe(requester.id);
+
+    // PERSISTED, not merely present on the returned object.
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).toBeInstanceOf(Date);
+    expect(row?.resolutionRequestedByUserId).toBe(requester.id);
+  });
+
+  it('LEAVES THE CASE OPEN — closed_at, close_reason and the parent status are untouched', async () => {
+    // Asserting only the two columns that were written would pass even if the ask had
+    // CLOSED the case, so re-read the child's close columns AND the parent's status.
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory();
+
+    await caseEngagementsRepository.requestResolution({
+      engagementId: engagement.id,
+      userId: requester.id,
+    });
+
+    const [child] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(child?.closedAt).toBeNull();
+    expect(child?.closeReason).toBeNull();
+    expect(child?.closedByUserId).toBeNull();
+
+    const [parent] = await db.select().from(engagements).where(eq(engagements.id, engagement.id));
+    expect(parent?.status).toBe('active');
+
+    // …and the case is therefore still a live inactivity-sweep candidate: asking whether a
+    // case is resolved must not take it out of the BAL-420 scan.
+    expect(
+      (await caseEngagementsRepository.listOpenCreatedBefore(new Date(Date.now() + 60_000))).map(
+        (r) => r.id
+      )
+    ).toContain(engagement.id);
+  });
+
+  it('LAST-ASK-WINS — a re-request overwrites both the timestamp and the actor', async () => {
+    // Owner decision (2026-08-12). The WHERE deliberately does NOT require the columns to
+    // be NULL. Seed the FIRST ask far in the past so "the timestamp moved forward" is
+    // decidable without depending on sub-millisecond clock resolution.
+    const firstRequester = await userFactory();
+    const secondRequester = await userFactory();
+    const staleAsk = new Date('2026-08-01T00:00:00.000Z');
+    const { engagement } = await caseEngagementFactory({
+      caseValues: {
+        resolutionRequestedAt: staleAsk,
+        resolutionRequestedByUserId: firstRequester.id,
+      },
+    });
+
+    const reasked = await caseEngagementsRepository.requestResolution({
+      engagementId: engagement.id,
+      userId: secondRequester.id,
+    });
+
+    expect(reasked).toBeDefined();
+    expect(reasked?.resolutionRequestedByUserId).toBe(secondRequester.id);
+    expect(reasked?.resolutionRequestedAt?.getTime()).toBeGreaterThan(staleAsk.getTime());
+
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedByUserId).toBe(secondRequester.id);
+    expect(row?.resolutionRequestedAt?.getTime()).toBeGreaterThan(staleAsk.getTime());
+  });
+
+  it('ROUND-TRIPS with clearResolutionRequest — ask → dismiss → ask again', async () => {
+    // The two halves are mirrors, and the pair must survive a full cycle: nulling both
+    // columns and re-setting both must each satisfy the paired CHECK.
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory();
+
+    await caseEngagementsRepository.requestResolution({
+      engagementId: engagement.id,
+      userId: requester.id,
+    });
+    const cleared = await caseEngagementsRepository.clearResolutionRequest({
+      engagementId: engagement.id,
+    });
+    expect(cleared?.resolutionRequestedAt).toBeNull();
+    expect(cleared?.resolutionRequestedByUserId).toBeNull();
+
+    const reasked = await caseEngagementsRepository.requestResolution({
+      engagementId: engagement.id,
+      userId: requester.id,
+    });
+    expect(reasked?.resolutionRequestedAt).toBeInstanceOf(Date);
+    expect(reasked?.resolutionRequestedByUserId).toBe(requester.id);
+  });
+
+  it('REFUSES a CLOSED case — asking whether a closed case is resolved is incoherent', async () => {
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory({ withClientMember: true });
+    await caseEngagementsRepository.close({ engagementId: engagement.id, reason: 'auto_inactive' });
+
+    await expect(
+      caseEngagementsRepository.requestResolution({
+        engagementId: engagement.id,
+        userId: requester.id,
+      })
+    ).resolves.toBeUndefined();
+
+    // The refusal is a refusal, not a partial write — and terminal history is intact.
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).toBeNull();
+    expect(row?.resolutionRequestedByUserId).toBeNull();
+    expect(row?.closeReason).toBe('auto_inactive');
+    expect(row?.closedAt).not.toBeNull();
+  });
+
+  it('refuses a SOFT-DELETED case, and writes nothing', async () => {
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory();
+    await softDeleteEngagementFixture(engagement.id);
+
+    await expect(
+      caseEngagementsRepository.requestResolution({
+        engagementId: engagement.id,
+        userId: requester.id,
+      })
+    ).resolves.toBeUndefined();
+
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).toBeNull();
+  });
+
+  it('refuses a PROJECT engagement id — the parent read is type-scoped', async () => {
+    const requester = await userFactory();
+    const project = await engagementFactory();
+
+    await expect(
+      caseEngagementsRepository.requestResolution({
+        engagementId: project.engagement.id,
+        userId: requester.id,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('REPORTS FAILURE AND WRITES NOTHING when the PARENT row has drifted', async () => {
+    // The parent-read-BEFORE-update ordering, asserted directly. DELIBERATE parent/child
+    // drift: only the PARENT is stamped, so the child UPDATE would still match. That is the
+    // exact state in which reading the parent AFTER the update would COMMIT the ask and
+    // then report "this case is no longer open" about a request that was in fact written.
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory();
+
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+
+    await expect(
+      caseEngagementsRepository.requestResolution({
+        engagementId: engagement.id,
+        userId: requester.id,
+      })
+    ).resolves.toBeUndefined();
+
+    const [row] = await db
+      .select()
+      .from(caseEngagements)
+      .where(eq(caseEngagements.engagementId, engagement.id));
+    expect(row?.resolutionRequestedAt).toBeNull();
+    expect(row?.resolutionRequestedByUserId).toBeNull();
+  });
+
+  it('returns undefined for an unknown engagement id', async () => {
+    const requester = await userFactory();
+    await expect(
+      caseEngagementsRepository.requestResolution({
+        engagementId: '00000000-0000-4000-8000-000000000000',
+        userId: requester.id,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects an unknown requester with the raw FK violation (23503) — the ONLY guarantee about userId', async () => {
+    // There is deliberately NO membership/holder check here (the asymmetry with `close` is
+    // argued in the method docblock): the ADR-1046 holder rule is the server action's, and
+    // resolving it in `@balo/db` would be a second definition of an authorization rule.
+    const { engagement } = await caseEngagementFactory();
+
+    await expect(
+      caseEngagementsRepository.requestResolution({
+        engagementId: engagement.id,
+        userId: '00000000-0000-4000-8000-000000000000',
+      })
+    ).rejects.toMatchObject({ code: '23503' });
+  });
+
+  it('writes NO audit row — the paired columns ARE the attribution record', async () => {
+    // Symmetric with the dismiss half (owner decision D-E): no notification, no domain
+    // event, no `recordDeliveryAudit`. A future ticket that wants a trail must add one
+    // deliberately, and this assertion is what will make it notice.
+    const requester = await userFactory();
+    const { engagement } = await caseEngagementFactory();
+
+    await caseEngagementsRepository.requestResolution({
+      engagementId: engagement.id,
+      userId: requester.id,
+    });
+
+    expect(await auditEventsForEntity(engagement.id)).toHaveLength(0);
+  });
+});
+
+/**
  * BAL-388 — `clearResolutionRequest`. The dismissal half of §R4: the client says "not yet",
  * the pending request goes away, and the case STAYS OPEN.
  */

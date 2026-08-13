@@ -1,16 +1,28 @@
-import { CalendarDays, CheckCircle2, CircleCheck, ListChecks, Timer } from 'lucide-react';
+import Link from 'next/link';
+import {
+  ArrowLeft,
+  CalendarDays,
+  CheckCircle2,
+  CircleCheck,
+  ListChecks,
+  Timer,
+} from 'lucide-react';
 import { InfoNote } from '@/components/balo/section/section-states';
 import { MoneyBlock } from '@/components/balo/recap/money-block';
 import type { RecapHeaderView, RecapMoneyView } from '@/lib/meetings/recap-view-types';
-import { LocalDateTime } from './local-date-time';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { RecapStatusChip } from './recap-status-chip';
 
 /**
  * BAL-388 §R1–§R3 — eyebrow, title, status chip, meta line and the money line.
  *
- * ⚠ NO BACK LINK. BAL-421's case surface and `/cases` do not exist, and a link to nowhere is
- * worse than none. The EYEBROW plus the party card's ordinal line carry identification
- * instead — that is the whole reason the eyebrow exists.
+ * ⚠ THE BACK LINK EXISTS NOW, AND ONLY ON A `case` RECAP. This docblock previously read "NO
+ * BACK LINK … BAL-421's case surface and `/cases` do not exist, and a link to nowhere is worse
+ * than none" — BAL-421 built that surface, so the condition that justified the absence is
+ * gone. The rule it was an instance of is UNCHANGED and still enforced: `header.caseHref` is
+ * `null` for every NON-`case` context (whose `contextId` is not an `engagements.id`, so
+ * `/cases/[engagementId]` could not resolve it), and a `null` renders NO element — never a
+ * disabled or dead link. The EYEBROW still carries identification on its own for those.
  *
  * ⚠ NO OVERFLOW MENU. Download recording, copy transcript link and export summary are all
  * struck (D-B), and there is no support destination anywhere in `apps/web/src/app`, so every
@@ -22,6 +34,15 @@ export function RecapHeader({
 }: Readonly<{ header: RecapHeaderView; money: RecapMoneyView | null }>): React.JSX.Element {
   return (
     <header className="flex flex-col gap-3">
+      {header.caseHref !== null && (
+        <Link
+          href={header.caseHref}
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -mx-1 inline-flex w-fit items-center gap-1.5 rounded-md px-1 py-0.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <ArrowLeft size={13} aria-hidden="true" />
+          Back to the case
+        </Link>
+      )}
       <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
         {header.eyebrow}
       </p>
