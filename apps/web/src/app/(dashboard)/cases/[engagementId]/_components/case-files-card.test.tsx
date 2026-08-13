@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen } from '@/test/utils';
+import { act, render, screen, waitFor } from '@/test/utils';
+import { toast } from 'sonner';
+import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseFileRowView } from '@/lib/cases/case-view-types';
 
 /**
@@ -160,6 +162,80 @@ describe('CaseFilesCard — the download branches on origin, and never exposes a
   it('says nothing about truncation when the list is complete', () => {
     renderCard({ files: [MEETING_FILE], truncated: false });
     expect(screen.queryByText('Showing the most recent files.')).not.toBeInTheDocument();
+  });
+
+  it('toasts the server refusal verbatim and navigates nowhere', async () => {
+    mockDownload.mockResolvedValue({ success: false, error: 'This file is no longer available.' });
+    renderCard({ files: [MEETING_FILE] });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Download intake-flow.pdf' }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('This file is no longer available.')
+    );
+    // A refused presign is not a download — nothing may be reported to analytics.
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('toasts a generic message when the presign THROWS, and re-enables the row', async () => {
+    mockDownload.mockRejectedValue(new Error('network down'));
+    renderCard({ files: [CONVERSATION_FILE] });
+    const row = screen.getByRole('button', { name: 'Download notes.txt' });
+    await userEvent.setup().click(row);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not download this file. Please try again.')
+    );
+    // ⚠ THE `finally` CLEARS THE BUSY KEY — a thrown presign must not strand the row disabled.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Download notes.txt' })).not.toBeDisabled()
+    );
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('reports a SUCCESSFUL download to analytics with the rendering lens', async () => {
+    renderCard({ files: [MEETING_FILE], lens: 'expert' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Download intake-flow.pdf' }));
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASE_ACTION_CLICKED, {
+        action: 'download_file',
+        lens: 'expert',
+      })
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('disables ONLY the row being fetched while the presign is in flight', async () => {
+    let release: (value: { success: true; url: string }) => void = () => undefined;
+    mockDownload.mockReturnValue(
+      new Promise<{ success: true; url: string }>((resolve) => {
+        release = resolve;
+      })
+    );
+    renderCard({ files: [MEETING_FILE, CONVERSATION_FILE] });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Download intake-flow.pdf' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Download intake-flow.pdf' })).toBeDisabled()
+    );
+    // The sibling row shares no key, so it stays pressable.
+    expect(screen.getByRole('button', { name: 'Download notes.txt' })).not.toBeDisabled();
+
+    await act(async () => {
+      release({ success: true, url: 'https://r2.example/signed' });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Download intake-flow.pdf' })).not.toBeDisabled()
+    );
+  });
+
+  it.each([
+    [400, '400 B'],
+    [12_800, '13 KB'],
+    [1_600_000, '1.5 MB'],
+  ])('formats %i bytes compactly as %s', (sizeBytes, expected) => {
+    renderCard({ files: [{ ...MEETING_FILE, sizeBytes }] });
+    expect(screen.getByText(`Consultation 3 · ${expected} · Amara`)).toBeInTheDocument();
   });
 
   it('keys rows by origin:id so the two tables cannot collide', () => {

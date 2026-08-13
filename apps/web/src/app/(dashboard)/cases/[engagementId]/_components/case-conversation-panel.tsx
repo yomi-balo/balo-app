@@ -161,6 +161,12 @@ export function CaseConversationPanel({
           toast.error(result.error);
           return false;
         }
+        // ⚠ THE COMPOSER IS CONTROLLED, SO CLEARING IS THIS CALLER'S JOB. `MessageComposer`
+        // documents it (`onSend` — "Resolves `true` when sent (the stage clears that thread's
+        // draft)") and on `true` only re-focuses the textarea. Without this the sent text stays
+        // in the box with the send button still enabled, so one more Enter DOUBLE-POSTS it.
+        // `ConversationStage` — the other caller of the same leaf — does the same thing.
+        setDraft('');
         setMessages((current) =>
           current.some((message) => message.id === result.message.id)
             ? current

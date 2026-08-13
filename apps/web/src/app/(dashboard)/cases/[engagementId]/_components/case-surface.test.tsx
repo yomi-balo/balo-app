@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
-import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
+import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
+import type {
+  CaseConsultationRowView,
+  CaseFileRowView,
+  CaseSurfaceView,
+} from '@/lib/cases/case-view-types';
 
 /**
  * BAL-421 — the desktop composition, tested for the ONE thing composition can get wrong: which
@@ -107,7 +112,7 @@ const BASE = {
   ],
 } satisfies Omit<CaseSurfaceView, 'lens' | 'canClose'>;
 
-function clientView(over: Partial<CaseSurfaceView> = {}): CaseSurfaceView {
+function clientView(over: Record<string, unknown> = {}): CaseSurfaceView {
   return { ...BASE, lens: 'client', canClose: true, ...over } as CaseSurfaceView;
 }
 
@@ -123,6 +128,61 @@ function expertView(over: Record<string, unknown> = {}): CaseSurfaceView {
 
 const MARK_RESOLVED = /mark resolved/i;
 const ASK_RESOLVED = /ask if it's resolved/i;
+
+const LENSES = ['client', 'expert'] as const;
+
+/** Both lens arms of the same fixture, so a section-set assertion runs over each. */
+function viewForLens(
+  lens: (typeof LENSES)[number],
+  over: Record<string, unknown> = {}
+): CaseSurfaceView {
+  return lens === 'client' ? clientView(over) : expertView(over);
+}
+
+const HELD_CONSULTATION: CaseConsultationRowView = {
+  meetingId: 'm-1',
+  ordinal: 1,
+  state: 'held',
+  scheduledStartIso: '2026-06-20T10:00:00Z',
+  startedAtIso: '2026-06-20T10:01:00Z',
+  durationMinutes: 42,
+  recapHref: '/meetings/m-1?from=case_surface',
+  actionItemCount: 2,
+  fileCount: 1,
+  hasTranscript: true,
+  hasRecording: false,
+};
+
+const CASE_FILE: CaseFileRowView = {
+  origin: 'meeting',
+  id: 'mf-1',
+  meetingId: 'm-1',
+  fileName: 'intake-flow.pdf',
+  contentType: 'application/pdf',
+  sizeBytes: 12_800,
+  createdAtIso: '2026-07-01T10:00:00Z',
+  uploaderLabel: 'Amara',
+  sourceLabel: 'Consultation 1',
+};
+
+const ACTION_ITEM: ActionItemNodeView = {
+  id: 'ai-1',
+  body: 'Send the sandbox credentials',
+  status: 'open',
+  assigneeParty: null,
+  assigneeLabel: null,
+  dueLabel: null,
+  dueAtValue: null,
+  isOverdue: false,
+};
+
+const CLOSED_HEADER = {
+  ...BASE.header,
+  isOpen: false,
+  closeReason: 'resolved',
+  closedAtIso: '2026-07-10T09:00:00Z',
+  closedNote: 'This case was marked resolved on 10 Jul 2026.',
+} as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -230,5 +290,169 @@ describe('CaseSurface — the lens is a discriminant all the way down', () => {
     render(<CaseSurface view={expertView()} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
     expect(screen.getByText('You')).toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠ THE SECTION SET IS THE SAME ON BOTH ARMS. The mobile follow-up must be PURE COMPOSITION
+ * over this SAME `CaseSurfaceView` (owner decision D1), which is only true while neither arm
+ * gains or loses a region. A lens that quietly dropped the conversation or the files card would
+ * pass every lens-specific test in this file and still break that contract.
+ */
+describe('CaseSurface — every section composes on both lens arms', () => {
+  it.each(LENSES)('renders the whole section set on the %s lens', (lens) => {
+    render(<CaseSurface view={viewForLens(lens)} />);
+    for (const section of ['Conversation', 'Consultations', 'Action items', 'Files', 'People']) {
+      expect(screen.getByRole('heading', { name: section })).toBeInTheDocument();
+    }
+    // The rail's counterparty card, which carries the one forward action.
+    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
+  });
+
+  it.each(LENSES)('passes the counterparty FIRST name down as the shared label, %s', (lens) => {
+    render(
+      <CaseSurface
+        view={viewForLens(lens, {
+          actionItems: { ...BASE.actionItems, yours: [ACTION_ITEM], totalCount: 1 },
+        })}
+      />
+    );
+    // `counterpartyFirstName` reaches the party card's CTA and the action-items heading alike.
+    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
+    expect(screen.getByText('Yours')).toBeInTheDocument();
+  });
+});
+
+describe('CaseSurface — the conditional regions', () => {
+  it('renders NO nudge when the view carries none', () => {
+    render(<CaseSurface view={clientView({ nudge: null })} />);
+    expect(screen.queryByText(/Nothing booked/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Next consultation/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the ONE nudge the view chose, with its client-lens CTA', () => {
+    render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
+    expect(screen.getByText('Nothing booked yet')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
+  });
+
+  it('renders the resolution ask with both of the surface-owned actions wired', () => {
+    render(<CaseSurface view={clientView({ nudge: { kind: 'resolution_ask' } })} />);
+    expect(screen.getByRole('button', { name: 'Yes, mark it resolved' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+  });
+
+  /** ⚠ A CLOSED CASE IS READ-ONLY BUT FULLY READABLE, and every card says so in its own way. */
+  it('turns the whole surface retrospective on a CLOSED case', () => {
+    // ⚠ `writable` is composed AT THE GATE from the engagement status, not re-derived from
+    // `header.isOpen` — a closed case therefore arrives with BOTH set, and the fixture says so.
+    render(
+      <CaseSurface
+        view={clientView({
+          canClose: false,
+          header: CLOSED_HEADER,
+          conversation: { ...BASE.conversation, writable: false },
+        })}
+      />
+    );
+    expect(screen.getByText(CLOSED_HEADER.closedNote)).toBeInTheDocument();
+    expect(
+      screen.getByText('This case is closed, so the conversation is read-only.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('No files were shared on this case.')).toBeInTheDocument();
+    expect(screen.getByText('Starts a new case — this one stays as it is.')).toBeInTheDocument();
+  });
+
+  it('keeps the open case forward-looking instead', () => {
+    render(<CaseSurface view={clientView()} />);
+    expect(screen.queryByText('No files were shared on this case.')).not.toBeInTheDocument();
+    expect(screen.getByText(/Share a file with Amara in the conversation/)).toBeInTheDocument();
+    expect(
+      screen.queryByText('Starts a new case — this one stays as it is.')
+    ).not.toBeInTheDocument();
+  });
+
+  it('counts an EMPTY consultation list without inventing an empty state', () => {
+    render(<CaseSurface view={clientView({ consultations: [] })} />);
+    expect(screen.getByText('0 · newest last')).toBeInTheDocument();
+  });
+
+  it('renders a held consultation with its recap link and duration', () => {
+    render(<CaseSurface view={clientView({ consultations: [HELD_CONSULTATION] })} />);
+    expect(screen.getByText('1 · newest last')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View recap/ })).toHaveAttribute(
+      'href',
+      '/meetings/m-1?from=case_surface'
+    );
+    expect(screen.getByText('42 min')).toBeInTheDocument();
+  });
+
+  it('invites on an EMPTY action-items card and lists items once there are any', () => {
+    const { unmount } = render(<CaseSurface view={clientView()} />);
+    expect(screen.getByText(/Anything you agree to do on a call lands here/)).toBeInTheDocument();
+    unmount();
+
+    render(
+      <CaseSurface
+        view={clientView({
+          actionItems: {
+            ...BASE.actionItems,
+            unassigned: [ACTION_ITEM],
+            doneCount: 0,
+            totalCount: 1,
+          },
+        })}
+      />
+    );
+    expect(screen.getByText('0/1')).toBeInTheDocument();
+    expect(screen.getByText('Unassigned')).toBeInTheDocument();
+  });
+
+  it('lists files and states truncation out loud', () => {
+    render(<CaseSurface view={clientView({ files: [CASE_FILE], filesTruncated: true })} />);
+    expect(screen.getByRole('button', { name: 'Download intake-flow.pdf' })).toBeInTheDocument();
+    expect(screen.getByText('Showing the most recent files.')).toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠⚠ THE SECRET-LEAK BOUNDARY (P3). `listMeetingsForContext` returns FULL `Meeting` rows
+ * including `daily_room_name` and `join_url` — LIVE CALL-JOIN CREDENTIALS — and the projection
+ * that strips them happens SERVER-SIDE. `CaseConsultationRowView` makes both fields
+ * STRUCTURALLY UNREPRESENTABLE, so the only way to construct a row carrying them is the
+ * assertion below; that is deliberate, and it is what makes this a real render-layer witness
+ * rather than a restatement of the type. If any component ever spread a row into the DOM, these
+ * values would appear and this test would fail.
+ */
+describe('CaseSurface — no meeting join secret crosses the projection boundary', () => {
+  const LEAK_URL = 'https://balo.daily.co/leaked-room?t=secret-token';
+  const LEAK_ROOM = 'leaked-room-9f3a';
+
+  function rowWithSecrets(row: CaseConsultationRowView): CaseConsultationRowView {
+    return { ...row, joinUrl: LEAK_URL, dailyRoomName: LEAK_ROOM } as CaseConsultationRowView;
+  }
+
+  it.each(LENSES)('renders neither joinUrl nor dailyRoomName, %s lens', (lens) => {
+    const { container } = render(
+      <CaseSurface
+        view={viewForLens(lens, { consultations: [rowWithSecrets(HELD_CONSULTATION)] })}
+      />
+    );
+    const html = container.innerHTML;
+    expect(html).not.toContain(LEAK_URL);
+    expect(html).not.toContain(LEAK_ROOM);
+    expect(html).not.toContain('daily.co');
+  });
+
+  it('renders the meetingId only inside the recap href, never as a room address', () => {
+    const { container } = render(
+      <CaseSurface view={clientView({ consultations: [rowWithSecrets(HELD_CONSULTATION)] })} />
+    );
+    expect(screen.getByRole('link', { name: /View recap/ })).toHaveAttribute(
+      'href',
+      '/meetings/m-1?from=case_surface'
+    );
+    // No absolute URL of any kind belongs in a consultation row.
+    expect(container.innerHTML).not.toContain('https://');
   });
 });

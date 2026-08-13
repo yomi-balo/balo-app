@@ -135,6 +135,67 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
   });
 });
 
+/**
+ * ⚠⚠ THE COUNTDOWN IS CLIENT-ONLY, AND THAT IS A HYDRATION RULE RATHER THAN A STYLE CHOICE. "in
+ * N minutes" computed during SSR would be stale by the time it painted and would differ between
+ * the server and client renders, so the first paint states the absolute time and the effect
+ * swaps in the relative one. These cases drive the swapped-in half — including the moment the
+ * countdown crosses zero, where "starts in 0 minutes" would read as a broken clock.
+ */
+describe('CaseNudge — a LIVE consultation counts down, and never past zero', () => {
+  /** An ISO stamp `offsetMs` from the real now, so the effect computes a known minute count. */
+  function isoFromNow(offsetMs: number): string {
+    return new Date(Date.now() + offsetMs).toISOString();
+  }
+
+  it('singularises exactly one minute', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ ...UPCOMING, live: true, scheduledStartIso: isoFromNow(60_000) }}
+        lens="client"
+      />
+    );
+    expect(screen.getByText('Your consultation starts in 1 minute')).toBeInTheDocument();
+  });
+
+  it('pluralises more than one minute', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ ...UPCOMING, live: true, scheduledStartIso: isoFromNow(8 * 60_000) }}
+        lens="client"
+      />
+    );
+    expect(screen.getByText('Your consultation starts in 8 minutes')).toBeInTheDocument();
+  });
+
+  it('says it is STARTING NOW once the start time has passed — never a negative count', () => {
+    const { container } = render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ ...UPCOMING, live: true, scheduledStartIso: isoFromNow(-2 * 60_000) }}
+        lens="client"
+      />
+    );
+    expect(screen.getByText('Your consultation is starting now')).toBeInTheDocument();
+    expect(container.textContent ?? '').not.toMatch(/-\d/);
+    expect(container.textContent ?? '').not.toContain('starts in');
+  });
+
+  it('states the absolute time instead when the consultation is NOT live', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ ...UPCOMING, scheduledStartIso: isoFromNow(60_000) }}
+        lens="client"
+      />
+    );
+    expect(screen.queryByText(/starts in/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Next consultation/i)).toBeInTheDocument();
+  });
+});
+
 describe('CaseNudge — the resolution ask is the only interactive nudge', () => {
   it('wires both actions, and disables them while a mutation is in flight', async () => {
     const onMarkResolved = vi.fn();
