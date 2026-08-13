@@ -27,11 +27,28 @@ import userEvent from '@testing-library/user-event';
  */
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+/**
+ * ⚠⚠ THE VENDOR DOUBLE IS NOT OPTIONAL HERE — see the twin note in `join-control.test.tsx`.
+ *
+ * This file asserts the **ADMITTED** transition on BOTH surfaces, and admitted is precisely the
+ * state that hands the grant to `MeetingCallSurface`, which since BAL-435 mounts the frame via
+ * `next/dynamic`. Unmocked, that chunk loads the REAL `@daily-co/daily-js`, which throws
+ * `WebRTC not supported or suppressed` in jsdom — and whether it resolves before the file ends
+ * is a race, so it surfaces only under a saturated worker pool.
+ */
+vi.mock('@daily-co/daily-react', async () => {
+  const { dailyReactModuleMock } = await import('@/test/mocks/daily');
+  return dailyReactModuleMock();
+});
+
 vi.mock('motion/react', async () => {
   const { createMotionStub } = await import('@/test/motion-stub');
   // ⚠⚠ THE WHOLE POINT OF THIS FILE. See the module docblock.
   return createMotionStub({ animatePresenceMode: 'wait' });
 });
+
+// jsdom has no `matchMedia`; the repo's convention is to mock the hook, not stub `matchMedia`.
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 const mockClaim = vi.fn();
 const mockPoll = vi.fn();
@@ -42,6 +59,7 @@ vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
   pollGuestAdmissionAction: (...args: unknown[]) => mockPoll(...args),
 }));
 
+import { installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { LobbyClient } from './m/[meetingId]/lobby-client';
 import { JoinControl } from './[token]/join-control';
 import { JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
@@ -55,7 +73,7 @@ const GRANT = {
   token: 'daily.jwt.value',
   isOwner: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
-  participantId: 'g555555555555455585555555555555555',
+  participantId: 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };
 
 /** The focused element's tag, or the literal `BODY` when focus was dropped. */
@@ -70,6 +88,9 @@ function focusedText(): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ⚠ AFTER `clearAllMocks`, which strips the double's implementations along with everyone else's.
+  installMediaStubs();
+  resetDailyMock();
   globalThis.sessionStorage.clear();
   mockClaim.mockResolvedValue({ success: true, lobbyToken: LOBBY_TOKEN });
   mockPoll.mockResolvedValue({ success: true, state: 'waiting' });
@@ -123,11 +144,17 @@ describe('⚠⚠ the anonymous lobby — focus under AnimatePresence mode="wait"
       await vi.advanceTimersByTimeAsync(6_000);
     });
 
+    // ⚠⚠ THE HEADING IS THE **MOUNTED FRAME'S**, NOT "Connecting…". This used to assert
+    // `/connecting/i`, which is the `dynamic({ ssr: false })` LOADING FALLBACK — so it went green
+    // without the admitted surface ever mounting, measuring the placeholder instead of the card
+    // the guest waited for. With the vendor double in place the chunk resolves to PreJoin, and
+    // the assertion is now strictly stronger: the REAL frame's `<h1>` is what holds focus.
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(focusedText()).toMatch(/connecting/i);
+      expect(focusedTag()).toBe('H1');
+      expect(focusedText()).toMatch(/ready to join/i);
     });
   });
 
@@ -181,12 +208,17 @@ describe('⚠⚠ the invited guest — focus under AnimatePresence mode="wait"',
 
     await user.click(screen.getByRole('button', { name: /join the call/i }));
 
+    // ⚠⚠ See the twin note on the lobby's admitted test: `/connecting/i` matched only the
+    // `next/dynamic` loading fallback, so this passed without the admitted surface mounting. The
+    // mounted frame's `<h1>` is the honest target, and it proves the invitation card is gone.
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(focusedText()).toMatch(/connecting/i);
+      expect(focusedTag()).toBe('H1');
+      expect(focusedText()).toMatch(/ready to join/i);
     });
+    expect(screen.queryByText('Design review with CloudPeak')).not.toBeInTheDocument();
   });
 
   it('⚠ pressing Join does NOT move focus — `joining` renders the same card', async () => {

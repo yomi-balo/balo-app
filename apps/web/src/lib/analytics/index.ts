@@ -31,6 +31,7 @@ export {
   RECAP_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
+  MEETING_CALL_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -52,4 +53,9 @@ export type {
   ProjectsInboxLens,
   ProjectsInboxFilter,
   AdminEngagementsFilter,
+  MeetingCallLayout,
+  MeetingCallLayoutSource,
+  MeetingCallLeaveReason,
+  MeetingCallGrantRejectionReason,
+  MeetingCallDeviceKind,
 } from '@balo/analytics/client';

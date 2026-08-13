@@ -159,3 +159,25 @@ export const JOIN_WAITING_BODY =
 
 export const JOIN_LONG_WAIT_BODY =
   'This is taking a little longer than usual. They may not be at their desk yet — you can keep waiting, or come back to this link later.';
+
+/**
+ * BAL-435 — the MEMBER join action's two distinguishable failures, hoisted so the action and its
+ * caller cannot disagree about which one happened.
+ *
+ * ⚠⚠ THEY ARE HERE, NOT IN `join-as-member.ts`, FOR THE REASON THIS WHOLE MODULE EXISTS: a
+ * `'use server'` file may export ONLY async functions, so `export const MEMBER_JOIN_… = '…'`
+ * there would fail `next build` while `tsc`, eslint and vitest all pass.
+ *
+ * ⚠ THE ACTION'S FAILURE COPY IS OTHERWISE INTENTIONALLY COARSE — the api collapses "no such
+ * meeting", "not your party" and "no capability" into ONE literal, so this layer cannot and must
+ * not try to say more. The only two it distinguishes are facts about the CALLER's own state (a
+ * signed-out session) or a genuine upstream outage.
+ */
+export const MEMBER_JOIN_SIGNED_OUT_ERROR = 'Please sign in and try again.';
+
+/** ⚠ A **503**: the call room did not answer. Retryable — the caller schedules another attempt. */
+export const MEMBER_JOIN_OUTAGE_ERROR =
+  "We couldn't set up your call room just now. Please try again in a moment.";
+
+/** ⚠ THE COLLAPSE. Everything else, byte for byte, so nothing can be inferred from the wording. */
+export const MEMBER_JOIN_UNAVAILABLE_ERROR = "This meeting isn't available to join.";

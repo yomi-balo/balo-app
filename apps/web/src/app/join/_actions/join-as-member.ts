@@ -5,7 +5,12 @@ import 'server-only';
 import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { postMemberJoin, type JoinGrant } from '@/lib/meetings/join-api-client';
+import {
+  MEMBER_JOIN_OUTAGE_ERROR,
+  MEMBER_JOIN_SIGNED_OUT_ERROR,
+  MEMBER_JOIN_UNAVAILABLE_ERROR,
+} from '@/lib/meetings/lobby';
+import { postMemberJoin, type MemberJoinResponse } from '@/lib/meetings/join-api-client';
 
 /**
  * BAL-132 — an AUTHENTICATED Balo member joins a meeting.
@@ -44,8 +49,13 @@ import { postMemberJoin, type JoinGrant } from '@/lib/meetings/join-api-client';
 
 const joinSchema = z.object({ meetingId: z.string().uuid() });
 
+/**
+ * ⚠ BAL-435 (R6): the success arm carries `MemberJoinResponse` — the grant's five fields PLUS the
+ * meeting's CONTEXT on the envelope. `JoinGrant` itself is unchanged, and neither guest action
+ * carries the context: an anonymous caller must not learn what a meeting is attached to.
+ */
 export type JoinAsMemberResult =
-  | { success: true; grant: JoinGrant }
+  | { success: true; grant: MemberJoinResponse }
   | { success: false; error: string };
 
 /**
@@ -71,7 +81,7 @@ export async function joinAsMemberAction(input: {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { success: false, error: 'Please sign in and try again.' };
+    return { success: false, error: MEMBER_JOIN_SIGNED_OUT_ERROR };
   }
 
   const parsed = joinSchema.safeParse(input);
@@ -90,10 +100,9 @@ export async function joinAsMemberAction(input: {
     // A 503 is an outage the caller should retry; everything else is the uniform refusal.
     return {
       success: false,
-      error:
-        result.status === 503
-          ? "We couldn't set up your call room just now. Please try again in a moment."
-          : "This meeting isn't available to join.",
+      // ⚠ THE LITERALS ARE SHARED CONSTANTS so the caller can branch on WHICH failure it was
+      // without string-matching prose that a copy edit would silently break.
+      error: result.status === 503 ? MEMBER_JOIN_OUTAGE_ERROR : MEMBER_JOIN_UNAVAILABLE_ERROR,
     };
   }
 

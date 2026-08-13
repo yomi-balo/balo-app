@@ -31,6 +31,7 @@ export {
   RECAP_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
+  MEETING_CALL_EVENTS,
 } from '../events';
 
 export type {
@@ -80,4 +81,10 @@ export type {
   WalletLens,
   WalletRestingStateName,
   ScheduleEventMap,
+  MeetingCallEventMap,
+  MeetingCallLayout,
+  MeetingCallLayoutSource,
+  MeetingCallLeaveReason,
+  MeetingCallGrantRejectionReason,
+  MeetingCallDeviceKind,
 } from '../events';

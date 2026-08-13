@@ -4,10 +4,30 @@ import userEvent from '@testing-library/user-event';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+/**
+ * ⚠⚠ THE VENDOR DOUBLE IS NOT OPTIONAL HERE, AND ITS ABSENCE WAS A **LOAD-DEPENDENT FLAKE.**
+ *
+ * The admitted state of this control hands the grant to `MeetingCallSurface`, which since BAL-435
+ * actually mounts the frame via `next/dynamic`. Without this mock that dynamic chunk pulls in the
+ * REAL `@daily-co/daily-js`, which throws `WebRTC not supported or suppressed` in jsdom.
+ *
+ * ⚠ WHY IT PASSED IN ISOLATION: whether the chunk resolves before the test ends is a RACE. Run
+ * alone the file finishes first and the rejection is never observed; run under a saturated worker
+ * pool it lands mid-suite and fails a file that looks unrelated. Do not "fix" a recurrence by
+ * skipping the admitted-state assertions — they are the reason this file exists.
+ */
+vi.mock('@daily-co/daily-react', async () => {
+  const { dailyReactModuleMock } = await import('@/test/mocks/daily');
+  return dailyReactModuleMock();
+});
+
 vi.mock('motion/react', async () => {
   const { createMotionStub } = await import('@/test/motion-stub');
   return createMotionStub();
 });
+
+// jsdom has no `matchMedia`; the repo's convention is to mock the hook, not stub `matchMedia`.
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 const mockPoll = vi.fn();
 vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
@@ -15,6 +35,7 @@ vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
 }));
 
 import { toast } from 'sonner';
+import { installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { JoinControl } from './join-control';
 import {
   JOIN_TEMPORARILY_UNAVAILABLE_TITLE,
@@ -37,7 +58,7 @@ const GRANT = {
   token: 'daily.jwt.value',
   isOwner: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
-  participantId: 'g555555555555455585555555555555555',
+  participantId: 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };
 
 /** A TERMINAL refusal — unknown / expired / revoked / DENIED token, or no such meeting. */
@@ -69,6 +90,9 @@ function renderControl(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ⚠ AFTER `clearAllMocks`, which strips the double's implementations along with everyone else's.
+  installMediaStubs();
+  resetDailyMock();
   mockPoll.mockResolvedValue({ success: true, state: 'admitted', grant: GRANT });
 });
 
@@ -106,7 +130,7 @@ describe('JoinControl — the invited guest`s join', () => {
     await user.click(screen.getByRole('button', { name: /join the call/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     expect(mockPoll).toHaveBeenCalledWith({ meetingId: MEETING_ID, guestToken: RAW_TOKEN });
     expect(mockPoll).toHaveBeenCalledTimes(1);
@@ -118,7 +142,7 @@ describe('JoinControl — the invited guest`s join', () => {
 
     await user.click(screen.getByRole('button', { name: /join the call/i }));
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
 
     expect(container.textContent ?? '').not.toContain(RAW_TOKEN);
@@ -183,7 +207,7 @@ describe('JoinControl — the invited guest`s join', () => {
     await user.click(button).catch(() => undefined);
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     expect(mockPoll).toHaveBeenCalledTimes(1);
   });
@@ -245,7 +269,7 @@ describe('⚠⚠ JoinControl — the admitted phase replaces the card', () => {
     await user.click(screen.getByRole('button', { name: /join the call/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     expect(screen.queryByText(INVITATION_HEADLINE)).not.toBeInTheDocument();
     expect(screen.queryByText(NEXT_STEP)).not.toBeInTheDocument();
@@ -257,7 +281,7 @@ describe('⚠⚠ JoinControl — the admitted phase replaces the card', () => {
 
     await user.click(screen.getByRole('button', { name: /join the call/i }));
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
@@ -317,7 +341,7 @@ describe('⚠⚠ JoinControl — a queued invitee gets the waiting treatment AND
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
   });
 

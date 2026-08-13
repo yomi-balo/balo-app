@@ -16,7 +16,7 @@ const GRANT = {
   token: 'daily.jwt.value',
   isOwner: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
-  participantId: 'g555555555555455585555555555555555',
+  participantId: 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };
 
 const VALID = { meetingId: MEETING_ID, guestToken: GUEST_TOKEN };

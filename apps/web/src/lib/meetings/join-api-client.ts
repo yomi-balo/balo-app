@@ -1,7 +1,12 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
-import type { GuestJoinState, JoinGrant, LobbyClaimState } from '@balo/shared/meetings';
+import type {
+  GuestJoinState,
+  JoinGrant,
+  LobbyClaimState,
+  MemberJoinResponse,
+} from '@balo/shared/meetings';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -54,7 +59,7 @@ function getApiUrl(): string {
  * `@balo/db` value can reach a `'use client'` graph through it — but keeping this
  * `export type` makes that structurally impossible rather than merely true today.
  */
-export type { GuestJoinState, JoinGrant, LobbyClaimState };
+export type { GuestJoinState, JoinGrant, LobbyClaimState, MemberJoinResponse };
 
 export type JoinApiResult<T> =
   | { readonly ok: true; readonly data: T }
@@ -291,13 +296,20 @@ async function callJoinApi<T>(
  * api re-verifies the token regardless, so this is a first, cheap gate rather than the
  * boundary.
  */
-export async function postMemberJoin(meetingId: string): Promise<JoinApiResult<JoinGrant>> {
+export async function postMemberJoin(
+  meetingId: string
+): Promise<JoinApiResult<MemberJoinResponse>> {
   const session = await getSession();
   const accessToken = session.accessToken;
   if (session.user?.id === undefined || accessToken === undefined || accessToken.length === 0) {
     return { ok: false, status: 401, code: 'unauthenticated' };
   }
-  return callJoinApi<JoinGrant>(`/meetings/${meetingId}/join`, undefined, {
+  /**
+   * ⚠ `MemberJoinResponse`, NOT `JoinGrant` — BAL-435's ruling R6 put the meeting's CONTEXT on
+   * the RESPONSE ENVELOPE beside the grant's five fields, so `JoinGrant` itself stays frozen and
+   * both guest hops below are untouched.
+   */
+  return callJoinApi<MemberJoinResponse>(`/meetings/${meetingId}/join`, undefined, {
     authorization: `Bearer ${accessToken}`,
   });
 }
