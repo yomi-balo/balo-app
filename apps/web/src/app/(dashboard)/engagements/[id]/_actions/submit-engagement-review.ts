@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { REVIEW_BODY_MAX, RATING_MAX, RATING_MIN, isRating } from '@balo/shared/reviews';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
 import {
   REVIEW_ENGAGEMENT_NOT_FOUND,
   REVIEW_GENERIC_FAILURE,
@@ -36,19 +37,46 @@ import { applyReview } from '@/app/review/_actions/review-write-shared';
  * expert from the engagement itself. A signed-in stranger passing someone else's
  * engagement id is denied there.
  *
- * ⚠ ZERO CALLERS SHIP IN BAL-390. This is a declared seam with a test, not dead code:
- * the ticket ships the primitive (schema + repository + resolver + write path) and
- * BAL-389 mounts the UI on top of it.
+ * ⚠ IT IS MOUNTED. BAL-390 shipped it with zero callers; BAL-389 then mounted it from
+ * the end-of-call rating block (`rating-block.tsx`, which calls it with
+ * `surface: 'end_of_call'`). Anything reasoning about this file as an unreachable seam is
+ * out of date — including, until BAL-422's fix round, the note that used to sit here.
+ *
+ * ⚠ RATE LIMITED, AND NOT ONLY FOR ABUSE-OF-CONTENT REASONS. See {@link SUBMIT_LIMIT}.
  */
 
 // ⚠ THE FAILURE COPY LIVES IN `@/lib/reviews/messages`, NOT HERE — AND MUST NOT MOVE BACK.
 //   A `'use server'` module may only export async functions; a plain `export const` string
 //   here fails `next build` with "Only async functions are allowed to be exported in a
 //   'use server' file". These four strings previously lived in this file and built green
-//   ONLY because this action has no callers yet (see the ZERO CALLERS note above), so it
-//   never entered the client graph to be checked. Its sibling `submit-token-review.ts` —
-//   same violation, but reachable from the landing form — broke CI on PR #191. Moving
-//   these out means BAL-389 does not inherit that break when it mounts the UI.
+//   ONLY because this action had no callers, so it never entered the client graph to be
+//   checked. Its sibling `submit-token-review.ts` — same violation, but reachable from the
+//   landing form — broke CI on PR #191. This file IS in the client graph now (BAL-389
+//   mounted it), so moving the strings out is what keeps it building.
+//
+// ⚠ FOR THE SAME REASON, `SUBMIT_LIMIT` BELOW IS NOT EXPORTED. It is a `const` in a
+//   `'use server'` module; exporting it would fail `next build` — and now that this file
+//   is reachable, it would fail LOUDLY rather than silently.
+
+/**
+ * 10 submits per 10 minutes per (reviewer, engagement) — the same shape and budget as the
+ * magic-link path's token-keyed limiter, so the two review write paths cannot be capped
+ * differently by accident.
+ *
+ * ⚠ WHY AN AUTHENTICATED, IDEMPOTENT-ISH ACTION NEEDS ONE AT ALL. A review is REVISABLE
+ * indefinitely: every repeat call from the same signed-in user on the same engagement is a
+ * LEGITIMATE write, so nothing else in this path caps the rate. Each one takes a row lock
+ * on `expert_profiles` inside the write transaction (see `recomputeRatingAggregate`), which
+ * makes an unbounded revise loop a targeted latency attack on ONE expert's writes rather
+ * than a content-spam problem. That is the reason for the key: it is deliberately NOT
+ * IP-keyed — the actor here is authenticated, and a per-IP bucket would let one user with
+ * several IPs through while penalising an office NAT.
+ *
+ * ⚠ BEST-EFFORT AND PER-INSTANCE, like every other `checkMemoryLimit` caller: a
+ * module-level `Map` is not shared across Vercel lambdas. It blunts a hot loop; it is not
+ * a global guarantee, and the correctness of the aggregate does not depend on it.
+ */
+const SUBMIT_LIMIT = { max: 10, windowMs: 600_000 } as const;
 
 const submitEngagementReviewSchema = z
   .object({
@@ -88,6 +116,17 @@ export async function submitEngagementReviewAction(
   // Narrows the Zod-proven range to the `Rating` literal union WITHOUT an assertion.
   if (!isRating(rating)) {
     return { success: false, error: REVIEW_INVALID_REQUEST };
+  }
+
+  // ⚠ AFTER the parse (so the key is built from validated input) and BEFORE the database is
+  // touched (so a throttled caller costs no query and takes no lock). See {@link SUBMIT_LIMIT}.
+  if (
+    !checkMemoryLimit(`review-submit-engagement:${reviewerUserId}:${engagementId}`, SUBMIT_LIMIT)
+  ) {
+    // Deliberately the GENERIC failure, not a distinct "slow down" — this action is reached
+    // from a signed-in UI where the honest answer to a burst is "that didn't go through",
+    // and a distinguishable rate-limit reply is a signal worth not handing out.
+    return { success: false, error: REVIEW_GENERIC_FAILURE };
   }
 
   const result = await applyReview({

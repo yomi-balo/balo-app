@@ -57,6 +57,15 @@ export interface ReviewFactoryResult {
 /**
  * Seeds one live `reviews` row over a fresh PROJECT engagement.
  *
+ * ⚠⚠ IT DOES **NOT** RECOMPUTE `expert_profiles.rating_average` / `rating_count`
+ * (BAL-422). The direct `db.insert` below bypasses `reviewsRepository.upsert`, which is
+ * the only thing that calls `recomputeRatingAggregate`. That bypass is LOAD-BEARING —
+ * it is how the soft-deleted-review and multi-reviewer fixtures are built at all — but
+ * it is a trap: **any test that asserts on `expert_profiles.rating_*` must either write
+ * through `reviewsRepository.upsert` or call `recomputeRatingAggregate` explicitly after
+ * seeding.** A fixture-seeded review leaves the denormalised columns at 0/NULL, and an
+ * assertion written against them will pass for the wrong reason.
+ *
  * The reviewer is seeded with a LIVE `company_members` row on the engagement's company,
  * because that is the shape the capability gate (`PARTICIPATE`) resolves against at the
  * web layer — a fixture without it would make every downstream authorization test

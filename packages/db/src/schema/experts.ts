@@ -4,6 +4,7 @@ import {
   text,
   boolean,
   integer,
+  numeric,
   timestamp,
   date,
   uniqueIndex,
@@ -93,6 +94,61 @@ export const expertProfiles = pgTable(
     bookingBufferAfterMinutes: integer('booking_buffer_after_minutes').notNull().default(0),
     bookingMinimumNoticeMinutes: integer('booking_minimum_notice_minutes').notNull().default(0),
 
+    // ── Denormalised rating roll-up (BAL-422) ────────────────────────────────
+    /**
+     * The expert's average rating, or NULL.
+     *
+     * ⚠ NULLABLE, AND NULL MEANS "NO REVIEWS" — NEVER 0.0. No surface may render 0.0:
+     * the scale starts at 1, so a zero is not a bad rating, it is a fabricated one.
+     * Every reader null-gates on THIS column (never on `rating_count`).
+     *
+     * STORED rather than derived on read because expert search returns many experts per
+     * page and every row needs a rating — a per-expert aggregate at read time is high
+     * fan-out on the hottest path in the product. It is recomputed FROM SCRATCH (never
+     * incrementally) inside the same transaction as every review write; see
+     * `reviewsRepository.recomputeRatingAggregate`, which is the ONLY writer.
+     *
+     * ⚠ THE AVERAGE IS OF PER-ENGAGEMENT AVERAGES, not of review rows — see
+     * `ratingCount` below for the ruling and why it matters.
+     *
+     * ⚠ numeric(2,1). THE ROUNDING TO ONE DECIMAL HAPPENS EXACTLY ONCE, HERE, ON
+     * ASSIGNMENT. The per-engagement averages feeding it are exact `numeric` (Postgres
+     * `avg()` over `integer` returns `numeric`, not `float8`) and are NEVER rounded
+     * first — round each engagement and the four-row fixture `[5,5,4]` + `[4]` stores
+     * 4.4 instead of the correct 4.3. `reviews.integration.test.ts` pins that exact
+     * discrimination; do not "simplify" it away.
+     *
+     * ⚠ DRIZZLE INFERS `numeric` AS `string`, NOT `number`. Reads arrive as `'4.3'`.
+     * Every projection of this column goes through `parseRatingAverage`
+     * (`@balo/shared/reviews`) — never a per-call-site `Number(...)`, never a `::float8`
+     * cast in the projection.
+     */
+    ratingAverage: numeric('rating_average', { precision: 2, scale: 1 }),
+
+    /**
+     * ENGAGEMENTS REVIEWED — **NOT** `count(*)` over `reviews`.
+     *
+     * ⚠ ONE ENGAGEMENT, ONE VOTE (Yomi, 2026-08-14). The partial unique on `reviews`
+     * permits one live review per (engagement, reviewer, expert), so a 5-member company
+     * can contribute FIVE rows to ONE engagement where a 1-person company contributes
+     * one. This column counts the DISTINCT engagements that carry at least one live
+     * review — in that example, 1, not 5. `rating_average` is the average of
+     * per-engagement averages, weighted to match.
+     *
+     * A rating is a statement by the PARTY, not by each person who happened to be on the
+     * call — the same ruling BAL-390 already made for review BODIES
+     * (`listPublicByExpert` projects `companies.name` and can never project the
+     * reviewer). This makes the NUMBER agree with it.
+     *
+     * ⚠ NEVER derive this from `select count(*) from reviews where expert_profile_id = …`.
+     * That is the flat per-row count this decision REJECTED, and it overstates the
+     * evidence — "(6)" reads as six clients when there were two. Both columns are
+     * recomputed together and only by `reviewsRepository.recomputeRatingAggregate`.
+     *
+     * NOT NULL with a CONSTANT default → PG11+ metadata-only add, no table rewrite.
+     */
+    ratingCount: integer('rating_count').notNull().default(0),
+
     ...timestamps,
     approvedAt: timestamp('approved_at', { withTimezone: true }),
 
@@ -125,6 +181,23 @@ export const expertProfiles = pgTable(
     bookingMinimumNoticeCheck: check(
       'expert_profiles_booking_minimum_notice_check',
       sql`${table.bookingMinimumNoticeMinutes} BETWEEN 0 AND 20160`
+    ),
+    // ── Rating roll-up bounds (BAL-422) ──────────────────────────────────────
+    // The range a two-level average over a 1..5 scale can actually produce. NULL is
+    // legal and is the "no reviews" reading; 0.0 is NOT, which is the point — it is the
+    // one value the recompute must never store and every surface must never render.
+    //
+    // ⚠ WHAT THIS CANNOT CATCH: a regression to the FLAT per-row average still lands in
+    // [1,5] and passes. Only the `4.3 vs 4.4 vs 4.5` fixture in
+    // `reviews.integration.test.ts` catches that. What it DOES catch is a sum/count
+    // transposition or a divide-by-the-wrong-denominator, which escapes the range fast.
+    ratingAverageRangeCheck: check(
+      'expert_profiles_rating_average_range',
+      sql`${table.ratingAverage} IS NULL OR (${table.ratingAverage} >= 1.0 AND ${table.ratingAverage} <= 5.0)`
+    ),
+    ratingCountNonNegativeCheck: check(
+      'expert_profiles_rating_count_non_negative',
+      sql`${table.ratingCount} >= 0`
     ),
   })
 );

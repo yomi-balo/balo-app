@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Video } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
@@ -19,10 +20,12 @@ import { CaseEarningsBlock } from './case-earnings-block';
  * `title`, and not via a gravatar-style hash of one. The avatar is `users.avatar_url` or
  * initials — and NOTHING in `CasePartyView` can carry an address, by construction.
  *
- * ⚠ NO RATING LINE (owner decision D5 / BAL-422). The design reference draws stars, but
- * `expert_profiles` has no `rating_avg` / `rating_count`, `reviewsRepository.aggregateForExpert`
- * has ZERO callers, and the api mapper hardcodes `rating: null`. The recap precedent is to OMIT
- * rather than fake, so BAL-422 adds one line to this same stack with no structural change.
+ * ⚠ THE RATING LINE IS REAL DATA, AND IT IS CLIENT-LENS ONLY (BAL-422). It landed exactly as
+ * the earlier docblock promised — ONE more null-gated line in this same stack, no structural
+ * change, nothing faked. `party.ratingAverage` is `null` for an unrated expert AND on the
+ * expert lens (where the counterparty is the client company), and the line simply does not
+ * render. NEVER coalesce it to `0`: the scale starts at 1, so 0.0 would be a fabricated
+ * rating, and nothing evaluative may appear on the expert lens at all.
  *
  * ⚠ THE EARNINGS BLOCK IS PASSED, NEVER DERIVED. A client-lens `CaseSurfaceView` has no
  * `earnings` field at all, so the caller cannot supply one — the fee-concealment invariant is
@@ -67,6 +70,11 @@ export function CasePartyCard({
           )}
           {party.orgLabel !== null && (
             <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
+          )}
+          {party.ratingAverage !== null && (
+            <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
+              <InlineRating average={party.ratingAverage} count={party.ratingCount} />
+            </p>
           )}
         </div>
       </div>

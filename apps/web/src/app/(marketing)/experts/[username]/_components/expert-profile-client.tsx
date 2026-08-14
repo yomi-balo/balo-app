@@ -177,7 +177,11 @@ export function ExpertProfileClient({
               </section>
             )}
             <section id="section-reviews" data-section="reviews" className="scroll-mt-[72px]">
-              <ReviewsSection firstName={view.firstName} />
+              <ReviewsSection
+                firstName={view.firstName}
+                ratingAverage={view.ratingAverage}
+                ratingCount={view.ratingCount}
+              />
             </section>
           </div>
 

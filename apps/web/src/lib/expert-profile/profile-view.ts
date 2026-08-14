@@ -1,4 +1,5 @@
 import type { PublicExpertProfile } from '@balo/db';
+import { parseRatingAverage } from '@balo/shared/reviews';
 import { deriveInitials } from '@/lib/search/expert-card-mapper';
 import type {
   AgencyView,
@@ -114,6 +115,16 @@ function mapWorkHistory(workHistory: PublicExpertProfile['workHistory']): WorkHi
  * Pure mapper: DB graph → fully serializable view-model. No env access, no
  * Date objects leak across the client boundary, never fabricates rating /
  * reviews / response-time data.
+ *
+ * ⚠ BAL-422 — THE RATING IS NOW REAL, AND STILL NEVER FABRICATED. `ratingAverage` is the
+ * stored aggregate or `null`; `null` means NO REVIEWS and the hero omits the stat entirely
+ * rather than rendering `0.0`. The parse is the point: `expert_profiles.rating_average` is
+ * `numeric(2,1)`, so `findPublicProfileByUsername`'s relational `columns:` allow-list — which
+ * cannot reshape — hands back the STRING `'4.3'`. `parseRatingAverage` (`@balo/shared/reviews`)
+ * is the ONE parse; never `Number()` it inline.
+ *
+ * ⚠ `topRated` STAYS `false`. It is a separate editorial badge with no defined threshold, and
+ * deriving it from `ratingAverage` here would invent a rule nobody decided.
  */
 export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileView {
   const { user } = profile;
@@ -155,8 +166,12 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     certCount: certifications.length,
     availableForWork: profile.availableForWork,
     baloVerified: true,
-    // Deferred: derive from rating once a reviews feature lands.
+    // Still deferred — an editorial badge with no decided threshold. NOT derived from
+    // `ratingAverage`; picking a cutoff here would invent a rule nobody agreed.
     topRated: false,
+    // BAL-422 — `numeric` ⇒ a STRING off the driver, so the one shared parse.
+    ratingAverage: parseRatingAverage(profile.ratingAverage),
+    ratingCount: profile.ratingCount,
     competencies: mapCompetencies(profile.competencies),
     certifications,
     languages,

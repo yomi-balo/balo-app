@@ -106,6 +106,12 @@ function makeRelationship(): Relationship {
     updatedAt: NOW,
     expertProfile: {
       id: 'exp-1',
+      // ⚠ `rating_average` is `numeric(2,1)`, so Drizzle's relational `columns:` hands back
+      // the STRING '4.3'. The fixture mirrors the raw row precisely so the mapper's
+      // `parseRatingAverage` is genuinely exercised rather than bypassed by a pre-parsed
+      // number — that string→number seam is the whole trap this feature had to avoid.
+      ratingAverage: '4.3',
+      ratingCount: 2,
       user: { id: 'user-9', firstName: 'Priya', lastName: 'Sharma' },
     },
     expressionsOfInterest: [],
@@ -118,6 +124,56 @@ const milestones = [makeMilestone()];
 const installments = [makeInstallment()];
 const documents = [makeDocument()];
 const relationship = makeRelationship();
+
+/**
+ * BAL-422 — the expert's rating is now hydrated from the relationship graph rather than
+ * degrading to `null`. The parse is the point: `findByIdWithRelations` uses a relational
+ * `columns:` allow-list, which cannot reshape a `numeric(2,1)` column, so the raw row carries
+ * the STRING `'4.3'` and the mapper must turn it into a number.
+ */
+describe('hydrateReviewDoc — the expert rating aggregate', () => {
+  const hydrate = (rel = relationship) =>
+    hydrateReviewDoc(proposal, milestones, installments, documents, rel, 'client');
+
+  it('parses the numeric rating STRING into a number and carries the count', () => {
+    const doc = hydrate();
+    expect(doc.expert.rating).toBe(4.3);
+    expect(typeof doc.expert.rating).toBe('number');
+    expect(doc.expert.ratingCount).toBe(2);
+  });
+
+  /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
+  it('keeps an unrated expert null, and never fabricates a zero', () => {
+    const unrated = {
+      ...relationship,
+      expertProfile: {
+        ...relationship.expertProfile,
+        ratingAverage: null,
+        ratingCount: 0,
+      },
+    };
+
+    const doc = hydrate(unrated);
+    expect(doc.expert.rating).toBeNull();
+    expect(doc.expert.ratingCount).toBe(0);
+  });
+
+  /**
+   * ⚠ THE RATING IS AUDIENCE-INDEPENDENT. Unlike money, it is not marked up, concealed or
+   * re-keyed per audience — the same aggregate is public on the expert's card.
+   */
+  it('is identical across every audience', () => {
+    const ratings = (['client', 'expert', 'admin'] as const).map(
+      (audience) =>
+        hydrateReviewDoc(proposal, milestones, installments, documents, relationship, audience)
+          .expert
+    );
+    for (const expert of ratings) {
+      expect(expert.rating).toBe(4.3);
+      expect(expert.ratingCount).toBe(2);
+    }
+  });
+});
 
 describe('hydrateReviewDoc — audience boundary (BAL-357)', () => {
   it('expert: raw figures, no adminPricing, no fee rate at any level', () => {

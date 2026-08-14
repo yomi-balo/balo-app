@@ -53,6 +53,7 @@ function baseDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc 
       company: 'Cloudwerx',
       headline: 'CPQ Specialist',
       rating: 4.9,
+      ratingCount: 12,
     },
     ...overrides,
   };
@@ -138,8 +139,54 @@ describe('ProposalDoc — header + revision', () => {
     render(<ProposalDoc doc={baseDoc()} />);
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.getByText(/Cloudwerx/)).toBeInTheDocument();
-    expect(screen.getByText(/4\.9/)).toBeInTheDocument();
+    // ⚠ EXACT, NOT `/4\.9/`. The rating now also carries an `sr-only` sentence containing
+    // the same digits (see `InlineRating`), so a regex matches BOTH nodes and throws
+    // "found multiple elements". The exact string pins the VISUAL node, and the accessible
+    // name has its own assertion below.
+    expect(screen.getByText('4.9')).toBeInTheDocument();
     expect(screen.getByText(/CPQ Specialist/)).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ BAL-422 AC — THE AVERAGE NEVER SHIPS WITHOUT ITS DENOMINATOR. This surface rendered a
+   * bare average with NO count before; "4.9" alone reads as settled evidence when it may rest
+   * on a single engagement.
+   */
+  it('renders the review count alongside the rating', () => {
+    render(<ProposalDoc doc={baseDoc()} />);
+    expect(screen.getByText('(12)')).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ THE DENOMINATOR MUST REACH A SCREEN READER TOO, AND AS "ENGAGEMENTS". The visual row
+   * is three separate nodes — star, `4.9`, `(12)` — which announced as "4.9 12": two orphan
+   * numbers, no scale, no noun. The `sr-only` sentence is the accessible name; the visual
+   * nodes are `aria-hidden` so it is not read twice.
+   */
+  it('gives the rating an accessible name that says engagements', () => {
+    render(<ProposalDoc doc={baseDoc()} />);
+    expect(screen.getByText('Rated 4.9 out of 5 across 12 engagements')).toBeInTheDocument();
+  });
+
+  /** It also used to render a raw `5` where the canonical badge shows `5.0`. */
+  it('formats the rating to one decimal place', () => {
+    const base = baseDoc();
+    render(
+      <ProposalDoc doc={{ ...base, expert: { ...base.expert, rating: 5, ratingCount: 1 } }} />
+    );
+    expect(screen.getByText('5.0')).toBeInTheDocument();
+    // …and the accessible name singularises with it.
+    expect(screen.getByText('Rated 5.0 out of 5 across 1 engagement')).toBeInTheDocument();
+  });
+
+  /** ⚠ NULL ⇒ NOTHING. Never `0.0`, and never a lone "(0)". */
+  it('renders neither the rating nor its count when the expert is unrated', () => {
+    const base = baseDoc();
+    const { container } = render(
+      <ProposalDoc doc={{ ...base, expert: { ...base.expert, rating: null, ratingCount: 0 } }} />
+    );
+    expect(container.textContent ?? '').not.toContain('0.0');
+    expect(screen.queryByText('(0)')).not.toBeInTheDocument();
   });
 });
 

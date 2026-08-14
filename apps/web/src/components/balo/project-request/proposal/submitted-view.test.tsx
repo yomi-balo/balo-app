@@ -26,7 +26,14 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
     milestones: [],
     installments: [],
     attachments: [],
-    expert: { name: 'Priya Sharma', initials: 'PS', company: 'Acme', headline: 'CPQ', rating: 4.9 },
+    expert: {
+      name: 'Priya Sharma',
+      initials: 'PS',
+      company: 'Acme',
+      headline: 'CPQ',
+      rating: 4.9,
+      ratingCount: 12,
+    },
     ...overrides,
   };
 }

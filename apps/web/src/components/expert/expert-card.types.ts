@@ -40,8 +40,8 @@ export interface ExpertCardData {
   languages: ExpertCardLanguage[];
   agency: ExpertCardAgency | null;
   distinctions: ExpertCardDistinctions;
-  rating: number | null; // kept; ALWAYS null in v1 — short-circuits all rating UI
-  reviewCount: number; // kept; gates rating UI
+  rating: number | null; // BAL-422; null ⇒ NO REVIEWS (never 0.0) — RatingBadge renders nothing
+  ratingCount: number; // BAL-422; ENGAGEMENTS reviewed, not rows. Always shown WITH `rating`
   yearsExperience: number | null; // was yearsExp
   consultationCount: number;
   expertise: ExpertiseItem[]; // web-only; NOT in DTO

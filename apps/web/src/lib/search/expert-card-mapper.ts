@@ -4,14 +4,21 @@ import type { ExpertSearchResultDTO } from './search-data';
 /**
  * Maps the API search-result DTO to the `ExpertCardData` the `ExpertCard` reuses.
  *
- * `ExpertCardData` needs three things the DTO shapes differently:
+ * `ExpertCardData` needs two things the DTO shapes differently:
  * - `initials` — derived from `name`.
- * - `reviewCount` — `0` in v1 (rating UI is null-gated and short-circuits).
  * - `expertise` — built from the DTO's flat `competencies` via the shared
  *   `buildExpertise` (groups by product, maps support-type slug → SkillType).
  *   An expert with no competencies yields `[]`, which the card handles cleanly
  *   (ExpertisePills returns null; buildHeadline falls back to `headline`).
- * `rating` passes the DTO's `null` straight through.
+ *
+ * ⚠ BAL-422 — `rating` / `ratingCount` NOW CARRY REAL DATA. They used to be hardcoded
+ * `null` / `0` here, which short-circuited the already-mounted `RatingBadge` for every
+ * expert on the platform. Both are straight pass-throughs of the DTO now; the mapper
+ * invents nothing.
+ *
+ * ⚠ A `null` rating STILL renders nothing — it means NO REVIEWS, not a zero score, and
+ * `RatingBadge` gates on it. Do not coalesce it to `0`: the scale starts at 1, so 0.0 is a
+ * fabricated rating and the one value this feature must never display.
  */
 
 export function deriveInitials(name: string): string {
@@ -36,8 +43,8 @@ export function mapSearchResultToCardData(result: ExpertSearchResultDTO): Expert
     languages: result.languages,
     agency: result.agency,
     distinctions: result.distinctions,
-    rating: null,
-    reviewCount: 0,
+    rating: result.rating,
+    ratingCount: result.ratingCount,
     yearsExperience: result.yearsExperience,
     consultationCount: result.consultationCount,
     expertise: buildExpertise(

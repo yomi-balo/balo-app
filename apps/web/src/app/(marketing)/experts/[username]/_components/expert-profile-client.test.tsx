@@ -53,6 +53,11 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     availableForWork: true,
     baloVerified: true,
     topRated: false,
+    // BAL-422 — the DEFAULT fixture is UNRATED, so every existing assertion in this file
+    // keeps exercising the zero-review path (hero stat omitted, reviews section shows the
+    // invitation empty state). Tests that want the rated path override both explicitly.
+    ratingAverage: null,
+    ratingCount: 0,
     competencies: [
       { id: 's1', name: 'Apex', proficiency: 10, level: 'Expert', tone: 'success', pct: 100 },
       { id: 's2', name: 'Flows', proficiency: 5, level: 'Intermediate', tone: 'warning', pct: 50 },
@@ -215,7 +220,53 @@ describe('ExpertProfileClient — sparse profile', () => {
     expect(
       screen.getByText(/Skills and certifications will appear here once they're added\./i)
     ).toBeInTheDocument();
-    expect(screen.getByText('No reviews yet')).toBeInTheDocument();
+    // ⚠ BAL-422 reframed this heading off the absence-framed "No reviews yet". It must not
+    // simply restate the invitation beneath it either (an earlier fix made it "Be the first
+    // to review", directly above "Be the first to work with …"), so the heading states where
+    // ratings come from and the BODY does the inviting.
+    expect(screen.getByText('Ratings come from completed work')).toBeInTheDocument();
+    expect(screen.queryByText(/no reviews yet/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ BAL-422 — the hero stat and the reviews section read the SAME aggregate, so they
+   * cannot contradict each other. This pins both halves of the zero-review case: the hero
+   * omits the rating stat entirely (never `0.0`) while the section invites a first review.
+   */
+  it('omits the hero rating stat AND invites a first review when unrated', () => {
+    const { container } = render(
+      <ExpertProfileClient
+        view={makeSparseView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
+    expect(container.textContent ?? '').not.toContain('0.0');
+    expect(
+      screen.getByText('Be the first to work with this expert and share how it went.')
+    ).toBeInTheDocument();
+  });
+
+  it('shows the aggregate in BOTH the hero and the reviews section when rated', () => {
+    render(
+      <ExpertProfileClient
+        view={makeView({ ratingAverage: 4.8, ratingCount: 12 })}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+      />
+    );
+    // Hero stat: average + count, never one without the other.
+    expect(screen.getByText('Rating')).toBeInTheDocument();
+    expect(screen.getByText('(12)')).toBeInTheDocument();
+    // ⚠ …AND THE HERO STAT HAS AN ACCESSIBLE NAME. Its visible "Rating" label sits in a
+    // separate <p> with no programmatic tie to the number, so unaided it announced as
+    // "4.8 (12) Rating" — no scale, and no noun on the denominator.
+    expect(screen.getByText('Rated 4.8 out of 5 across 12 engagements')).toBeInTheDocument();
+    // The section beneath agrees rather than contradicting it.
+    expect(screen.getByText('average across 12 engagements')).toBeInTheDocument();
+    expect(screen.queryByText('Ratings come from completed work')).not.toBeInTheDocument();
   });
 
   it('shows "Rate on request" and the unavailable state when rate is null and not available', () => {

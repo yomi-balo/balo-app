@@ -25,7 +25,10 @@ export function mapRowToExpertSearchResult(row: ExpertSearchRow, now: Date): Exp
       isSalesforceCta: row.isSalesforceCta,
       isCertifiedTrainer: row.isCertifiedTrainer,
     },
-    rating: null,
+    // BAL-422 — pass-through of the denormalised aggregate. The repository already parsed
+    // the `numeric` column to a number; `null` stays null and MUST NOT become 0.
+    rating: row.ratingAverage,
+    ratingCount: row.ratingCount,
     yearsExperience: row.yearStartedSalesforce
       ? now.getFullYear() - row.yearStartedSalesforce
       : null,

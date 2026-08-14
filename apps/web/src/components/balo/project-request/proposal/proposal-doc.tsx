@@ -11,10 +11,10 @@ import {
   Lock,
   Paperclip,
   Shield,
-  Star,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { InlineRating } from '@/components/balo/rating-display';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
@@ -102,11 +102,20 @@ export function ProposalDoc({
           </p>
           {(doc.expert.rating !== null || doc.expert.headline !== null) && (
             <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+              {/*
+                ⚠ THE COUNT IS NOT OPTIONAL (BAL-422 AC). An average with no denominator
+                reads as settled evidence when it may rest on a single engagement. The
+                count rides INSIDE this fragment, so the null path and the ' · ' separator
+                below are unchanged.
+
+                ⚠ THE TREATMENT — including the CONTRAST of the count and its accessible
+                name — lives in `InlineRating`, not here. It shipped inline as
+                `text-muted-foreground/60` at ~12px (about 2.4:1 in light mode, under the
+                4.5:1 WCAG AA floor) with the digits exposed bare to a screen reader, which
+                announced "4.8 12". Both are fixed once, in one place.
+              */}
               {doc.expert.rating !== null && (
-                <>
-                  <Star className="text-warning h-3 w-3 fill-current" aria-hidden="true" />
-                  {doc.expert.rating}
-                </>
+                <InlineRating average={doc.expert.rating} count={doc.expert.ratingCount} />
               )}
               {doc.expert.rating !== null && doc.expert.headline !== null && ' · '}
               {doc.expert.headline}

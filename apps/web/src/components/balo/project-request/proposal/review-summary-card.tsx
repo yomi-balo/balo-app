@@ -1,6 +1,7 @@
 'use client';
 
-import { Check, RotateCcw, Star } from 'lucide-react';
+import { Check, RotateCcw } from 'lucide-react';
+import { InlineRating } from '@/components/balo/rating-display';
 import { cn } from '@/lib/utils';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
@@ -75,11 +76,19 @@ export function ReviewSummaryCard({
           </p>
           {(doc.expert.rating !== null || doc.expert.company !== null) && (
             <span className="text-muted-foreground inline-flex items-center gap-1 text-[11.5px]">
+              {/*
+                ⚠ THE COUNT IS NOT OPTIONAL (BAL-422 AC), at THIS card's own scale — hence
+                the `starClassName` override to h-2.5 against `InlineRating`'s h-3 default.
+                Do not normalise the sizing to `proposal-doc`; each card keeps its own
+                rhythm. Everything ELSE about the treatment (the count's contrast, the
+                screen-reader name) is shared and must not be re-specified here.
+              */}
               {doc.expert.rating !== null && (
-                <>
-                  <Star className="text-warning h-2.5 w-2.5 fill-current" aria-hidden="true" />
-                  {doc.expert.rating}
-                </>
+                <InlineRating
+                  average={doc.expert.rating}
+                  count={doc.expert.ratingCount}
+                  starClassName="h-2.5 w-2.5"
+                />
               )}
               {doc.expert.rating !== null && doc.expert.company !== null && ' · '}
               {doc.expert.company}

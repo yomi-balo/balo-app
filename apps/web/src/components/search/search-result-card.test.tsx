@@ -50,7 +50,7 @@ function expert(overrides: Partial<ExpertCardData> = {}): ExpertCardData {
     agency: null,
     distinctions: { isSalesforceMvp: false, isSalesforceCta: false, isCertifiedTrainer: false },
     rating: null,
-    reviewCount: 0,
+    ratingCount: 0,
     yearsExperience: null,
     consultationCount: 0,
     expertise: [],

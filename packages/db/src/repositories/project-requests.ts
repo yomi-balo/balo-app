@@ -216,8 +216,18 @@ export const projectRequestsRepository = {
             updatedAt: true,
           },
           with: {
+            // ⚠ BAL-422 widened this allow-list by exactly TWO DISPLAY columns
+            // (`ratingAverage` / `ratingCount`) so the proposal header and the review
+            // summary card can show the expert's rating. That is consistent with the
+            // defense-in-depth rationale above, not a hole in it: `rateCents` — the
+            // UN-MARKED-UP consultant rate the client must never see — stays structurally
+            // absent, which is the column this allow-list exists to keep out.
+            //
+            // ⚠ `ratingAverage` is `numeric` ⇒ a STRING here. A relational `columns:`
+            // allow-list cannot reshape, so the parse happens at the view boundary
+            // (`hydrateReviewDoc` → `parseRatingAverage`), which is still the ONE parse.
             expertProfile: {
-              columns: { id: true },
+              columns: { id: true, ratingAverage: true, ratingCount: true },
               with: { user: { columns: { id: true, firstName: true, lastName: true } } },
             },
             // Newest live EOI per relationship — its `submittedAt` is one of the

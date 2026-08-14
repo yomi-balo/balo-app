@@ -67,7 +67,7 @@ function makeExpert(overrides: Partial<ExpertCardData> = {}): ExpertCardData {
       isCertifiedTrainer: false,
     },
     rating: null,
-    reviewCount: 0,
+    ratingCount: 0,
     yearsExperience: 8,
     consultationCount: 132,
     expertise: [
@@ -136,22 +136,31 @@ describe('ExpertCard', () => {
   // ── Rating gate (always null in v1) ───────────────────────────
 
   it('renders no rating UI when rating is null', () => {
-    render(<ExpertCard expert={makeExpert({ rating: null, reviewCount: 0 })} />);
+    render(<ExpertCard expert={makeExpert({ rating: null, ratingCount: 0 })} />);
     expect(screen.queryByText('(0)')).not.toBeInTheDocument();
     // No rating value text either.
     expect(screen.queryByText(/^\d\.\d$/)).not.toBeInTheDocument();
   });
 
   it('renders the rating badge with value and review count when rating is set', () => {
-    render(<ExpertCard expert={makeExpert({ rating: 4.8, reviewCount: 27 })} />);
+    render(<ExpertCard expert={makeExpert({ rating: 4.8, ratingCount: 27 })} />);
     expect(screen.getByText('4.8')).toBeInTheDocument();
     expect(screen.getByText('(27)')).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ THE BADGE HAS AN ACCESSIBLE NAME, AND THE COUNT IS "ENGAGEMENTS". The three nodes
+   * announced as "4.8 27" before — two orphan numbers with no scale and no noun.
+   */
+  it('gives the rating badge an accessible name that says engagements', () => {
+    render(<ExpertCard expert={makeExpert({ rating: 4.8, ratingCount: 27 })} />);
+    expect(screen.getByText('Rated 4.8 out of 5 across 27 engagements')).toBeInTheDocument();
   });
 
   // ── Sessions / New ────────────────────────────────────────────
 
   it('shows "New" and no session count when consultationCount is 0 (grid)', () => {
-    render(<ExpertCard expert={makeExpert({ consultationCount: 0 })} />);
+    render(<ExpertCard expert={makeExpert({ consultationCount: 0, rating: null })} />);
     expect(screen.getByText('New')).toBeInTheDocument();
     expect(screen.queryByText(/sessions/)).not.toBeInTheDocument();
   });
@@ -160,6 +169,33 @@ describe('ExpertCard', () => {
     render(<ExpertCard expert={makeExpert({ consultationCount: 132 })} />);
     expect(screen.getByText('132 sessions')).toBeInTheDocument();
     expect(screen.queryByText('New')).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ "PROVEN AND UNPROVEN AT ONCE" — the contradiction BAL-422 made reachable. `New` used
+   * to be the plain `else` of "has sessions", but reviews anchor to ENGAGEMENTS, not
+   * consultations: an expert with reviewed PROJECT work and no confirmed consultations has
+   * `consultationCount === 0` AND a real rating, so the card read "4.8 (12)" and "New" side
+   * by side. Unreachable before this PR only because `RatingBadge` never rendered.
+   */
+  it('does NOT call a rated expert "New", even with zero sessions (grid)', () => {
+    render(
+      <ExpertCard expert={makeExpert({ consultationCount: 0, rating: 4.8, ratingCount: 12 })} />
+    );
+    expect(screen.getByText('4.8')).toBeInTheDocument();
+    expect(screen.queryByText('New')).not.toBeInTheDocument();
+    // …and it does not invent a session count to fill the gap either.
+    expect(screen.queryByText(/sessions/)).not.toBeInTheDocument();
+  });
+
+  it('does NOT call a rated expert "New expert", even with zero sessions (list)', () => {
+    render(
+      <ExpertCard
+        variant="list"
+        expert={makeExpert({ consultationCount: 0, rating: 4.8, ratingCount: 12 })}
+      />
+    );
+    expect(screen.queryByText('New expert')).not.toBeInTheDocument();
   });
 
   // ── Distinctions ──────────────────────────────────────────────
@@ -289,7 +325,9 @@ describe('ExpertCard', () => {
   });
 
   it('uses the "New expert" meta label in the list variant when there are no sessions', () => {
-    render(<ExpertCard expert={makeExpert({ consultationCount: 0 })} variant="list" />);
+    render(
+      <ExpertCard expert={makeExpert({ consultationCount: 0, rating: null })} variant="list" />
+    );
     expect(screen.getByText('New expert')).toBeInTheDocument();
   });
 

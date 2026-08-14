@@ -80,12 +80,28 @@ export function initialsOf(name: string): string {
 /**
  * The §R8 party card, both lenses.
  *
- * CLIENT LENS → the delivering EXPERT: photo, person name, headline, agency.
+ * CLIENT LENS → the delivering EXPERT: photo, person name, headline, agency, rating.
  * EXPERT LENS  → the client PARTY, i.e. the company. CLAUDE.md's attribution rule makes that
  * the right call rather than a shortcut: client-side rights sit on COMPANY membership and
- * survive individual departures, so there is no single client PERSON to name here. Nothing
- * evaluative appears on either side — the expert is not scoring the client, and BAL-422's
- * rating does not exist.
+ * survive individual departures, so there is no single client PERSON to name here.
+ *
+ * ⚠⚠ THE RATING IS CLIENT-LENS ONLY (BAL-422). `expert_profiles.rating_average` /
+ * `rating_count` now exist and `findDisplayProfileById` projects them, so the client lens
+ * carries the delivering expert's real aggregate. THE EXPERT LENS STILL CARRIES NOTHING
+ * EVALUATIVE — it hardcodes `ratingAverage: null` / `ratingCount: 0` below, because the
+ * expert is not scoring the client and a company has no rating aggregate to begin with.
+ *
+ * ⚠ `null` means NO REVIEWS, never 0.0 — `PartyCard` null-gates and renders nothing.
+ *
+ * ⚠⚠ TWO CALLERS, BUT ONLY ONE RENDERS `party`. `load-recap.ts` renders the party card and so
+ * shows the rating. `load-end-of-call.ts` (BAL-389) also calls this — that shared naming is
+ * why the file exists — but it reads ONLY `expertShortName` / `agencyLabel` and NEVER touches
+ * `party` (its own comment at the call site says so). So the rating is computed and discarded
+ * on the end-of-call path: NOTHING new renders there because of BAL-422.
+ *
+ * ⚠ THAT IS LEFT UNGATED ON PURPOSE. No component-level suppression was added, so if the
+ * end-of-call screen ever adopts the party card it inherits the same client-lens rating with
+ * no change here. Do not add a gate, and do not describe end-of-call as already showing it.
  */
 export async function resolveCounterparty(
   lens: RecapLens,
@@ -133,6 +149,9 @@ export async function resolveCounterparty(
         initials: initialsOf(expertPerson),
         ordinalLine,
         bookAgainHref: username === null ? null : '/experts/' + username,
+        // BAL-422 — already parsed to a number by `findDisplayProfileById`.
+        ratingAverage: profile?.ratingAverage ?? null,
+        ratingCount: profile?.ratingCount ?? 0,
       },
     };
   }
@@ -150,6 +169,11 @@ export async function resolveCounterparty(
       // time) has NO live destination today, so the card renders none. It must read complete
       // with one action or with zero — a disabled CTA is worse than an absent one.
       bookAgainHref: null,
+      // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The counterparty here is the
+      // client COMPANY; the expert is not scoring the client, and companies carry no rating
+      // aggregate at all. Hardcoded, not derived — do not "wire" these.
+      ratingAverage: null,
+      ratingCount: 0,
     },
   };
 }

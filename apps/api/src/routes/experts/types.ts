@@ -60,8 +60,25 @@ export interface ExpertSearchResult {
   /** { name, logoUrl } or null */
   agency: ExpertSearchAgency | null;
   distinctions: ExpertSearchDistinctions;
-  /** DEFERRED — ALWAYS null, never fabricated */
-  rating: null;
+  /**
+   * `expert_profiles.rating_average` — the DENORMALISED average of PER-ENGAGEMENT averages
+   * (BAL-422), already parsed to a number by the repository.
+   *
+   * ⚠ `null` MEANS "NO REVIEWS", AND IS NOT 0.0. The scale starts at 1, so a zero would be a
+   * fabricated rating, not a bad one. Every consumer null-gates on THIS field — never on
+   * `ratingCount` — and renders nothing when it is null.
+   *
+   * ⚠ NEVER SHOW THIS WITHOUT `ratingCount`. An average with no denominator reads as
+   * settled evidence when it may rest on a single engagement; the two travel together on
+   * every surface (BAL-422 acceptance criterion).
+   */
+  rating: number | null;
+  /**
+   * `expert_profiles.rating_count` — ENGAGEMENTS REVIEWED, **not** review rows. A 5-member
+   * company reviewing one engagement contributes 1 here, not 5 (one engagement, one vote).
+   * `0` whenever `rating` is null.
+   */
+  ratingCount: number;
   /** now.getFullYear() - year_started_salesforce; null if unset */
   yearsExperience: number | null;
   /** proxy: confirmed, non-deleted consultations; degrades to 0 */

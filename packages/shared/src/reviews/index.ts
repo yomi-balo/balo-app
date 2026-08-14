@@ -239,6 +239,62 @@ export function reviewNudgeBands(now: Date, windowMs = REVIEW_NUDGE_WINDOW_MS): 
   }));
 }
 
+// ── The denormalised aggregate's read boundary (BAL-422) ──────────────────────
+
+/**
+ * `expert_profiles.rating_average` is `numeric(2,1)`, and **Drizzle infers a Postgres
+ * `numeric` column as `string`, not `number`** — the postgres-js driver really does hand
+ * back `'4.3'`. Every read of that column therefore arrives as a string that would
+ * `toFixed` nowhere, compare wrong (`'10' < '4.3'`), and quietly render as `4.3` anyway,
+ * so nothing downstream notices. Same class of trap as the jsonb `$type<{…Date}>()` lie.
+ *
+ * ⚠ THIS IS THE ONE PARSE FUNCTION, AND IT IS THE ONLY ONE. Nothing anywhere calls
+ * `Number()` / `parseFloat` on this column, and no projection casts it in SQL. Do NOT
+ * "fix" it with `::float8` casts instead: several read sites go through Drizzle's
+ * RELATIONAL query builder, which CANNOT cast or reshape, so a cast-in-SQL rule would
+ * immediately need exceptions — and exceptions are how a rule like this drifts into a
+ * per-call-site `Number(...)` sprinkled over four files. The parse is also TYPE-FORCED:
+ * Drizzle types the column `string | null`, so TypeScript rejects any consumer that
+ * forgets it.
+ *
+ * ⚠ BUT THE PARSE DOES NOT ALWAYS HAPPEN IN THE REPOSITORY — and an earlier version of
+ * this docblock claimed it did. The as-built rule is: **every read is parsed exactly once,
+ * either inside the repository or at its single view boundary one layer out.** The split is
+ * not stylistic; it is forced by which Drizzle API the read uses, and the exceptions are
+ * ENUMERABLE. Reads that return `string | null` and are parsed by their view:
+ *
+ *   · `expertsRepository.findPublicProfileByUsername`  → `mapProfileToView`
+ *     (`apps/web/src/lib/expert-profile/profile-view.ts`)
+ *   · `projectRequestsRepository.findByIdWithRelations` → `hydrateReviewDoc`
+ *     (`apps/web/src/lib/project-request/proposal-audience-view.ts`)
+ *   · `expertsRepository.findProfileForSettings`       → the settings self-preview
+ *     (`apps/web/src/app/(dashboard)/expert/settings/_components/profile-tab.tsx`)
+ *
+ * All three use `db.query.…findFirst`, whose `columns:` allow-list (or full-row hydration)
+ * cannot apply a mapper. Everything else — `findDisplayProfileById`, the expert search
+ * projection, and both aggregate paths in `reviewsRepository` — parses in place and hands
+ * back `number | null`. ADDING A FOURTH RAW READ MEANS ADDING IT TO THIS LIST; a raw read
+ * that is not on it is the bug this note exists to make findable.
+ *
+ * It lives in `@balo/shared` rather than `@balo/db` for the reason stated at the top of
+ * this file — a client component must be able to import it without value-importing
+ * `postgres` (`reference_balo_db_client_bundle_footgun`) — and so the duplication gate
+ * sees exactly one definition (`reference_notification_event_dup_shared_home`).
+ *
+ * TOTAL, and it NEVER FABRICATES A ZERO. `null` and any non-finite text yield `null`,
+ * which every surface reads as "no reviews yet" and null-gates. A `0.0` rating is
+ * unrepresentable by the aggregate (the scale starts at 1) and must never be rendered,
+ * so returning `0` on a parse failure would manufacture the one value this feature is
+ * forbidden to show.
+ */
+export function parseRatingAverage(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // ── Client-bound projections ──────────────────────────────────────────────────
 
 /**

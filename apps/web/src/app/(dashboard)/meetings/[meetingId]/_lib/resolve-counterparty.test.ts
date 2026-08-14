@@ -45,8 +45,13 @@ const AGENCY_PROFILE = {
   type: 'agency' as const,
   headline: 'Salesforce CPQ specialist',
   username: 'amara',
+  // BAL-422 — already parsed to a NUMBER by `findDisplayProfileById` (the column is
+  // `numeric`, so the string→number parse happens in the repository, not here).
+  ratingAverage: 4.3,
+  ratingCount: 2,
 };
 
+/** ⚠ The UNRATED expert: `null`, NOT `0` — 0.0 is unrepresentable on a 1..5 scale. */
 const FREELANCE_PROFILE = {
   id: 'p2',
   userId: EXPERT_USER_ID,
@@ -54,6 +59,8 @@ const FREELANCE_PROFILE = {
   type: 'freelancer' as const,
   headline: null,
   username: null,
+  ratingAverage: null,
+  ratingCount: 0,
 };
 
 describe('initialsOf', () => {
@@ -108,6 +115,29 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
     expect(labels.expertPartyShort).toBe('CloudPeak');
   });
 
+  /**
+   * ⚠ BAL-422 — the client lens carries the delivering expert's REAL aggregate. This resolver
+   * also feeds the BAL-389 end-of-call screen, so this assertion covers that surface too.
+   */
+  it('carries the expert rating aggregate on the CLIENT lens', async () => {
+    const labels = await resolveCounterparty('client', AGENCY_PROFILE, 'Northwind', null);
+    expect(labels.party.ratingAverage).toBe(4.3);
+    expect(labels.party.ratingCount).toBe(2);
+  });
+
+  /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
+  it('passes a null rating through as null for an unrated expert', async () => {
+    const labels = await resolveCounterparty('client', FREELANCE_PROFILE, 'Northwind', null);
+    expect(labels.party.ratingAverage).toBeNull();
+    expect(labels.party.ratingCount).toBe(0);
+  });
+
+  it('degrades to no rating when the profile is missing entirely', async () => {
+    const labels = await resolveCounterparty('client', undefined, 'Northwind', null);
+    expect(labels.party.ratingAverage).toBeNull();
+    expect(labels.party.ratingCount).toBe(0);
+  });
+
   it('omits the Book again href entirely when the username is null', async () => {
     // ⚠ NEVER `/experts/null`, and never a disabled CTA.
     const labels = await resolveCounterparty('client', FREELANCE_PROFILE, 'Northwind', null);
@@ -159,6 +189,11 @@ describe('resolveCounterparty — EXPERT lens names the client COMPANY, never a 
     expect(labels.party.avatarUrl).toBeNull();
     expect(labels.party.initials).toBe('NI');
     expect(labels.party.bookAgainHref).toBeNull();
+    // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The expert is not scoring the
+    // client, and the delivering expert's OWN rating must not leak onto this card either —
+    // note AGENCY_PROFILE carries 4.3/2 and neither value survives the expert branch.
+    expect(labels.party.ratingAverage).toBeNull();
+    expect(labels.party.ratingCount).toBe(0);
   });
 
   it('still resolves the expert labels — both lenses share that half', async () => {

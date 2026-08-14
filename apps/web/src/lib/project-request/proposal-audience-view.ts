@@ -28,6 +28,7 @@ import type {
   ProjectRequestWithRelations,
 } from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
+import { parseRatingAverage } from '@balo/shared/reviews';
 import type {
   ProposalReviewDoc,
   AdminProposalPricing,
@@ -89,11 +90,20 @@ function buildAdminPricing(proposal: Proposal): AdminProposalPricing {
 /**
  * Map a persisted proposal (+ its children) into the serialisable, presentation-
  * only {@link ProposalReviewDoc} the read/submitted views render, resolving money
- * for `audience` (see the module doc). Expert identity is derived from the only
- * fields `findByIdWithRelations` hydrates on each relationship:
- * `expertProfile.user.{firstName,lastName}`. `company`, `headline`, and `rating`
- * are NOT on that graph, so they degrade to `null` — the read components hide those
- * rows when null (no invented fields).
+ * for `audience` (see the module doc). Expert identity is derived from the fields
+ * `findByIdWithRelations` hydrates on each relationship:
+ * `expertProfile.user.{firstName,lastName}` plus, since BAL-422,
+ * `expertProfile.{ratingAverage,ratingCount}`. `company` and `headline` are still NOT on
+ * that graph and degrade to `null` — the read components hide those rows when null (no
+ * invented fields).
+ *
+ * ⚠ `ratingAverage` ARRIVES AS A STRING. The relational `columns:` allow-list on
+ * `findByIdWithRelations` cannot reshape a `numeric(2,1)` column, so Drizzle hands back
+ * `'4.3'`. It goes through `parseRatingAverage` (`@balo/shared/reviews`) HERE — the ONE
+ * parse, just called at the view boundary rather than in the repository. Never `Number()`
+ * it inline.
+ *
+ * ⚠ `null` RATING MEANS NO REVIEWS, NEVER 0.0, and the count travels with it everywhere.
  */
 export function hydrateReviewDoc(
   proposal: Proposal,
@@ -143,11 +153,13 @@ export function hydrateReviewDoc(
     expert: {
       name: fullNameOf(expertUser.firstName, expertUser.lastName, 'Your expert'),
       initials: initialsOf(expertUser.firstName, expertUser.lastName),
-      // Not hydrated by `findByIdWithRelations` — degrade gracefully (the read
+      // Still not hydrated by `findByIdWithRelations` — degrade gracefully (the read
       // components omit these rows when null). Do NOT invent fields.
       company: null,
       headline: null,
-      rating: null,
+      // BAL-422 — hydrated now. `numeric` ⇒ string off the driver, so one shared parse.
+      rating: parseRatingAverage(relationship.expertProfile.ratingAverage),
+      ratingCount: relationship.expertProfile.ratingCount,
     },
   };
 

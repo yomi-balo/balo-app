@@ -6,6 +6,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { ChevronDown, ChevronUp, Phone } from 'lucide-react';
 import { toast } from 'sonner';
+// ⚠ `@balo/shared/reviews` is dependency-free and CLIENT-SAFE by construction (no `@balo/db`,
+// so no transitive `postgres` → unresolvable `tls` at `next build`). That is exactly why
+// `parseRatingAverage` lives there rather than beside the repository.
+import { parseRatingAverage } from '@balo/shared/reviews';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
@@ -114,8 +118,14 @@ export function ProfileTab({
         isSalesforceCta: initialProfile.isSalesforceCta,
         isCertifiedTrainer: initialProfile.isCertifiedTrainer,
       },
-      rating: null,
-      reviewCount: 0,
+      // BAL-422 — the preview must show the SAME badge clients see on the live card, so this
+      // reads the real aggregate rather than the old `null` / `0` hardcode: a preview that
+      // silently omitted the expert's rating would misrepresent their live profile.
+      // `findProfileForSettings` hydrates the full `expert_profiles` row, so both columns are
+      // already here. `rating_average` is `numeric` ⇒ a STRING, hence the one shared parse.
+      // `null` still means NO REVIEWS and `RatingBadge` renders nothing — never 0.0.
+      rating: parseRatingAverage(initialProfile.ratingAverage),
+      ratingCount: initialProfile.ratingCount,
       yearsExperience: initialProfile.yearStartedSalesforce
         ? new Date().getFullYear() - initialProfile.yearStartedSalesforce
         : null,

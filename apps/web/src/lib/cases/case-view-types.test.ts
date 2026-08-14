@@ -127,6 +127,8 @@ const BASE = {
     avatarUrl: null,
     initials: 'AO',
     bookAgainHref: null,
+    ratingAverage: null,
+    ratingCount: 0,
   },
   // ⚠ NO `as const` HERE. It would type every array as a `readonly` tuple, which is NOT
   // assignable to the view's mutable `CaseConsultationRowView[]` / `CasePersonView[]`. The

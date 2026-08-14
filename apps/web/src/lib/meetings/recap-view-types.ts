@@ -145,6 +145,27 @@ export interface RecapPartyView {
    * renders no action at all. NEVER a disabled CTA, and never a link to `/experts/null`.
    */
   bookAgainHref: string | null;
+  /**
+   * The delivering expert's average rating (BAL-422), or `null`.
+   *
+   * ⚠⚠ CLIENT LENS ONLY. `resolve-counterparty.ts` populates it on the `client` branch and
+   * hardcodes `null` / `0` on the `expert` branch, whose counterparty is the client COMPANY —
+   * nothing evaluative appears there, because the expert is not scoring the client.
+   *
+   * ⚠ `null` MEANS NO REVIEWS, NEVER 0.0. `PartyCard` gates the line on THIS field.
+   *
+   * ⚠ THE SHARED RESOLVER POPULATES THIS FOR THE END-OF-CALL LOADER TOO, BUT NOTHING RENDERS
+   * IT THERE — AND IT IS DELIBERATELY NOT GATED OFF. `resolve-counterparty.ts` was hoisted out
+   * of `load-recap.ts` (BAL-389) so the recap and the end-of-call screen name the counterparty
+   * identically, so `load-end-of-call.ts` does call it — but it consumes ONLY
+   * `expertShortName` / `agencyLabel` and never reads `party` at all (verified, and stated in
+   * its own comment at the `resolveCounterparty` call). The rating is therefore computed and
+   * discarded on that path today. It is left ungated on purpose: if that screen ever adopts
+   * the party card it should inherit the same client-lens rating with no change here.
+   */
+  ratingAverage: number | null;
+  /** ENGAGEMENTS REVIEWED, not review rows. Rendered WHENEVER `ratingAverage` is. */
+  ratingCount: number;
 }
 
 export interface RecapFileRowView {

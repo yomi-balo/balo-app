@@ -224,11 +224,16 @@ interface CounterpartyLabels {
  * they left. `load-recap.ts`'s `resolveCounterparty` made the identical call for the identical
  * reason; two surfaces disagreeing about who the client IS would be worse than either choice.
  *
- * ⚠ NO RATING FIELD ANYWHERE (owner decision D5 / BAL-422). `expert_profiles` has no
- * `rating_avg` / `rating_count`, `reviewsRepository.aggregateForExpert` has ZERO callers, and
- * `routes/experts/mapper.ts` hardcodes `rating: null`. The design reference draws stars; the
- * recap precedent is to OMIT rather than fake, so BAL-422 slots in as one more line in the
- * same stack with NO structural change.
+ * ⚠⚠ THE RATING IS ON THE CLIENT BRANCH ONLY (BAL-422). `expert_profiles.rating_average` /
+ * `rating_count` now exist and `findDisplayProfileById` projects them, so the client lens
+ * carries the delivering expert's real aggregate — the design reference's stars, backed by
+ * data rather than faked. The EXPERT branch below hardcodes `ratingAverage: null` /
+ * `ratingCount: 0` and MUST KEEP DOING SO: its counterparty is the client COMPANY, and
+ * nothing evaluative belongs there — the expert is not scoring the client. This is enforced
+ * by what each branch populates, and asserted by the lens tests.
+ *
+ * ⚠ `null` means NO REVIEWS, never 0.0 — the card null-gates on `ratingAverage` and renders
+ * nothing rather than a fabricated zero.
  */
 async function resolveCounterparty(
   lens: 'client' | 'expert',
@@ -271,6 +276,9 @@ async function resolveCounterparty(
         avatarUrl: expertUser?.avatarUrl ?? null,
         initials: initialsOf(expertPerson),
         bookAgainHref: username === null ? null : '/experts/' + username,
+        // BAL-422 — already parsed to a number by `findDisplayProfileById`.
+        ratingAverage: profile?.ratingAverage ?? null,
+        ratingCount: profile?.ratingCount ?? 0,
       },
     };
   }
@@ -289,6 +297,11 @@ async function resolveCounterparty(
       // ⚠ NO expert-side CTA. "Book another" is the CLIENT's action (only a client can book),
       // and every other expert-side forward action the design considered has no destination.
       bookAgainHref: null,
+      // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The counterparty here is the
+      // client COMPANY; the expert does not score the client, and companies carry no rating
+      // aggregate in the first place. Hardcoded, not derived — do not "wire" these.
+      ratingAverage: null,
+      ratingCount: 0,
     },
   };
 }
@@ -559,8 +572,10 @@ function selectNextScheduled(
       return state === 'scheduled' || state === 'in_progress';
     })
     .sort((a, b) => {
+      // Lead with the POSITIVE branch (S7735 / unicorn/no-negated-condition). Behaviour is
+      // identical: same start time ⇒ break the tie on id, otherwise order by start time.
       const delta = a.scheduledStart.getTime() - b.scheduledStart.getTime();
-      return delta !== 0 ? delta : a.id.localeCompare(b.id);
+      return delta === 0 ? a.id.localeCompare(b.id) : delta;
     });
 
   const [next] = upcoming;

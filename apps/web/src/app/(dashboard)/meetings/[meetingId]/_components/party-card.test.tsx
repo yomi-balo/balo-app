@@ -19,6 +19,8 @@ const PARTY: RecapPartyView = {
   initials: 'AO',
   ordinalLine: '3rd consultation on this case',
   bookAgainHref: '/experts/amara',
+  ratingAverage: 4.3,
+  ratingCount: 2,
 };
 
 beforeEach(() => {
@@ -67,5 +69,72 @@ describe('PartyCard', () => {
     const { container } = render(<PartyCard party={PARTY} lens="client" />);
     expect(container.innerHTML).not.toContain('mailto:');
     expect(container.innerHTML).not.toContain('@example');
+  });
+});
+
+/**
+ * BAL-422 — the rating landed as ONE more null-gated line in the same stack. The ordinal line
+ * was never a placeholder for it and stays; both render together on the client lens.
+ */
+describe('PartyCard — the rating line', () => {
+  /** ⚠ THE AVERAGE NEVER SHIPS WITHOUT ITS DENOMINATOR (BAL-422 AC). */
+  it('renders the average to one decimal WITH its engagement count', () => {
+    const { container } = render(<PartyCard party={PARTY} lens="client" />);
+    expect(container.textContent ?? '').toContain('4.3');
+    expect(container.textContent ?? '').toContain('(2)');
+  });
+
+  /**
+   * ⚠ …AND THE DENOMINATOR REACHES A SCREEN READER, AS "ENGAGEMENTS". Star, value and count
+   * are three separate nodes that announced as "4.3 2" — two orphan numbers.
+   */
+  it('gives the rating an accessible name that says engagements', () => {
+    render(<PartyCard party={PARTY} lens="client" />);
+    expect(screen.getByText('Rated 4.3 out of 5 across 2 engagements')).toBeInTheDocument();
+  });
+
+  it('keeps the ordinal line alongside it — the rating did not replace it', () => {
+    render(<PartyCard party={PARTY} lens="client" />);
+    expect(screen.getByText('3rd consultation on this case')).toBeInTheDocument();
+  });
+
+  it('always shows one decimal place', () => {
+    const { container } = render(
+      <PartyCard party={{ ...PARTY, ratingAverage: 5, ratingCount: 1 }} lens="client" />
+    );
+    expect(container.textContent ?? '').toContain('5.0');
+  });
+
+  /**
+   * ⚠⚠ NULL MEANS NO REVIEWS AND MUST RENDER NOTHING — NEVER `0.0`. The scale starts at 1, so
+   * a zero would fabricate a bad score for an expert who has simply not been reviewed.
+   */
+  it('renders no rating line at all when ratingAverage is null', () => {
+    const { container } = render(
+      <PartyCard party={{ ...PARTY, ratingAverage: null, ratingCount: 0 }} lens="client" />
+    );
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('0.0');
+    expect(text).not.toContain('(0)');
+  });
+
+  /**
+   * ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS — the expert is not scoring the client. The
+   * SERVER enforces it (`resolve-counterparty.ts` hardcodes null there); this pins the
+   * render-layer consequence.
+   */
+  it('renders no rating on the EXPERT lens, whose counterparty is the client company', () => {
+    const { container } = render(
+      <PartyCard
+        party={{
+          ...PARTY,
+          name: 'Northwind Industrial',
+          ratingAverage: null,
+          ratingCount: 0,
+        }}
+        lens="expert"
+      />
+    );
+    expect(container.textContent ?? '').not.toContain('0.0');
   });
 });

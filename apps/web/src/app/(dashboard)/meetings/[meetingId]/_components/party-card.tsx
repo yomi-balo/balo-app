@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { CalendarDays, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type { RecapLens, RecapPartyView } from '@/lib/meetings/recap-view-types';
@@ -13,10 +14,20 @@ import type { RecapLens, RecapPartyView } from '@/lib/meetings/recap-view-types'
  * BAL-388 §R8 — the OTHER-PARTY card. Renders in EVERY cell of the matrix, including not-held,
  * because it is where the page's forward motion lives.
  *
- * ⚠ THE ORDINAL LINE REPLACES THE DESIGN REFERENCE'S STAR RATING, which does not exist
- * (BAL-422 is Backlog with no columns). It is not a patch over a hole: it is MORE relevant
- * than what it replaces, and it is additive-safe — when BAL-422 lands the rating slots in as
- * one more line in the same stack, with no structural change.
+ * ⚠ THE STAR RATING NOW RENDERS ALONGSIDE THE ORDINAL LINE (BAL-422 landed). The ordinal line
+ * was never a placeholder for it — it is independently relevant and STAYS. The rating slotted
+ * in exactly as this docblock promised: one more null-gated line in the same stack, no
+ * structural change, nothing faked.
+ *
+ * ⚠ THE RATING IS CLIENT-LENS ONLY, and that is enforced by the SERVER, not by a branch here:
+ * `resolve-counterparty.ts` hardcodes `ratingAverage: null` on the expert lens. `null` also
+ * means an unrated expert. Either way the line does not render — and NEVER coalesce to `0`,
+ * because 0.0 is unrepresentable on a 1..5 scale and would be a fabricated rating.
+ *
+ * ⚠ THIS CARD'S RESOLVER IS SHARED WITH THE END-OF-CALL LOADER, but that loader reads only the
+ * counterparty LABELS and never `party`, so this card — and therefore the rating — does NOT
+ * render on the end-of-call screen. No gate was added here on purpose: if that screen ever
+ * adopts this card it inherits the same client-lens rating unchanged.
  *
  * ⚠⚠ NO EMAIL ADDRESS ANYWHERE. Not in the card, not in a `mailto:`, not in a `title`, and not
  * via a gravatar-style hash of one (ADR-1044). The avatar is `users.avatar_url` or initials.
@@ -49,6 +60,11 @@ export function PartyCard({
           )}
           {party.orgLabel !== null && (
             <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
+          )}
+          {party.ratingAverage !== null && (
+            <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
+              <InlineRating average={party.ratingAverage} count={party.ratingCount} />
+            </p>
           )}
         </div>
       </div>

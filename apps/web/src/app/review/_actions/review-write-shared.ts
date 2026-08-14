@@ -102,7 +102,7 @@ export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewR
   }
 
   try {
-    const { created } = await reviewsRepository.upsert({
+    const { created, ratingCount } = await reviewsRepository.upsert({
       engagementId: input.engagementId,
       reviewerUserId: input.reviewerUserId,
       // SERVER-DERIVED, always. Never accepted from the caller, never from a form field.
@@ -122,12 +122,19 @@ export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewR
       distinct_id: input.reviewerUserId,
     });
 
+    // ⚠ `ratingCount` IS DRIFT TELEMETRY (BAL-422), not decoration. It is the value the
+    // in-transaction recompute actually COMMITTED to `expert_profiles.rating_count`, so an
+    // operator can compare the stored aggregate against the review rows from the log alone.
+    // It counts ENGAGEMENTS REVIEWED, never review rows — the same quantity every surface
+    // renders in parentheses. NOT tracked to PostHog: it is an operational number, and the
+    // review analytics events are deliberately keyed on the submission, not on the expert.
     log.info('Review submitted', {
       engagementId: input.engagementId,
       userId: input.reviewerUserId,
       authMethod: input.authMethod,
       surface: input.surface,
       created,
+      ratingCount,
     });
 
     return { ok: true, created };
