@@ -256,6 +256,29 @@ describe('RecapPage — analytics', () => {
       expect.objectContaining({ source: 'notification' })
     );
   });
+
+  it('recognises ?from=end_of_call — the BAL-389 producer, whitelisted in the same ticket', async () => {
+    // ⚠ THIS IS THE HALF THAT IS EASY TO FORGET. `RecapEntrySource` declares `end_of_call`, and
+    // the end-of-call screen's onward CTA emits it; without this arm the value would collapse to
+    // `direct` and the declared dimension would have no producer after all.
+    await RecapPage(props({ searchParams: Promise.resolve({ from: 'end_of_call' }) }));
+    expect(mockTrack).toHaveBeenCalledWith(
+      'recap_viewed',
+      expect.objectContaining({ source: 'end_of_call' })
+    );
+  });
+
+  it('does not resolve an INHERITED key through the whitelist lookup', async () => {
+    // A bare object-literal index would return the `Object` constructor for `?from=constructor`.
+    for (const from of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      mockTrack.mockClear();
+      await RecapPage(props({ searchParams: Promise.resolve({ from }) }));
+      expect(mockTrack).toHaveBeenCalledWith(
+        'recap_viewed',
+        expect.objectContaining({ source: 'direct' })
+      );
+    }
+  });
 });
 
 describe('generateMetadata', () => {

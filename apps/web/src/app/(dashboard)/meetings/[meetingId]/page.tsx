@@ -27,16 +27,19 @@ const GENERIC_METADATA: Metadata = {
 /**
  * Whitelist `?from` into the analytics entry union. Anything unrecognised ⇒ `direct`.
  *
- * ⚠ EVERY ACCEPTED VALUE HAS A LIVE PRODUCER, WHICH IS THE WHOLE RULE:
+ * ⚠ EVERY ACCEPTED VALUE HAS A LIVE PRODUCER, AND THIS WHITELIST IS HALF OF WHAT MAKES THAT
+ * TRUE. Declaring a value in `RecapEntrySource` WITHOUT adding its arm here would silently
+ * collapse it to `direct` and ship a declared-but-never-emitted dimension — precisely what
+ * `packages/analytics/src/events/recap.ts` forbids. The two edits belong to the same ticket,
+ * always:
  *   · `notification` — both recap deep links (`recap-ready` and `engagement.case_closed`,
  *     email and in-app) append it.
  *   · `case_surface` — ADDED BY BAL-421, the ticket that emits it. Every consultation row on
  *     `/cases/{engagementId}` links here as `/meetings/{id}?from=case_surface` (see
  *     `cases/[engagementId]/_lib/map-case-consultations.ts`). Before that surface existed this
  *     arm was unreachable and was correctly absent.
- *
- * ⚠ `end_of_call` IS STILL NOT ACCEPTED and still not declared in `RecapEntrySource` — BAL-389
- * does not exist, and a whitelist arm nothing can reach reads as a 100%-drop-off dimension.
+ *   · `end_of_call` — ADDED BY BAL-389, the ticket that emits it. The end-of-call screen's
+ *     ready-state CTA links here as `/meetings/{id}?from=end_of_call`.
  *
  * ⚠ THE MAP IS THE WHITELIST. An unknown `?from` falls through to `direct` rather than being
  * passed along, so a hand-typed or crafted query string can never widen the union at runtime.
@@ -44,10 +47,15 @@ const GENERIC_METADATA: Metadata = {
 const ENTRY_SOURCE_BY_PARAM: Readonly<Record<string, RecapEntrySource>> = {
   notification: 'notification',
   case_surface: 'case_surface',
+  end_of_call: 'end_of_call',
 };
 
 function resolveEntrySource(from: string | undefined): RecapEntrySource {
   if (from === undefined) return 'direct';
+  // ⚠ `Object.hasOwn`, NOT a bare lookup — an object-literal index resolves INHERITED keys, so
+  // `?from=constructor` would otherwise yield the `Object` constructor typed as an entry source
+  // (the same trap `parsePrefillRating`'s docblock names in `@balo/shared/reviews`).
+  if (!Object.hasOwn(ENTRY_SOURCE_BY_PARAM, from)) return 'direct';
   return ENTRY_SOURCE_BY_PARAM[from] ?? 'direct';
 }
 

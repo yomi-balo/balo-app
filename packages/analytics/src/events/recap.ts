@@ -69,10 +69,13 @@ export type RecapContextType = MeetingContextTypeWithHolder;
  * `apps/web/.../cases/[engagementId]/_lib/map-case-consultations.ts`, whose `recapHref` is
  * `/meetings/{id}?from=case_surface` on every consultation row that has a recap destination.
  *
- * ⚠ `end_of_call` IS STILL NOT DECLARED — that surface (BAL-389) does not exist, so nothing
- * writes it. A value nothing produces reads as a 100%-drop-off funnel dimension.
+ * ⚠ `end_of_call` WAS ADDED BY BAL-389 UNDER THE SAME RULE. The end-of-call screen's ready-state
+ * CTA links to `/meetings/{id}?from=end_of_call`, and `resolveEntrySource` in
+ * `meetings/[meetingId]/page.tsx` was widened in the SAME ticket to recognise it — declaring the
+ * value without widening that whitelist would silently collapse it to `direct` and ship a
+ * declared-but-never-emitted dimension.
  */
-export type RecapEntrySource = 'direct' | 'notification' | 'case_surface';
+export type RecapEntrySource = 'direct' | 'notification' | 'case_surface' | 'end_of_call';
 
 /**
  * Which forward action was clicked ON THE CASE SURFACE (BAL-421).
@@ -116,6 +119,26 @@ export type CaseSurfaceAction =
  * the single most useful thing this dimension can tell anyone.
  */
 export type CaseSurfaceState = 'open' | 'resolved' | 'auto_inactive';
+
+/**
+ * WHERE a case close was initiated — the `case_resolved` dimension, declared ONCE.
+ *
+ * ⚠⚠ ONE BUSINESS FACT, ONE EVENT NAME. A parallel `end_of_call_case_resolved` event would
+ * make `count(case_resolved)` wrong and force every funnel to union two names forever, so each
+ * new closing surface widens THIS union and threads the value instead.
+ *
+ * ⚠ BAL-421's `case_surface` IS THE SECOND ENTRY POINT, NOT A SECOND EVENT, and BAL-389's
+ * `end_of_call` is the third. There is deliberately NO `case_resolved_manually`: minting one
+ * would split the very distribution this property exists to measure across two event names, so
+ * the closes would stop being comparable at exactly the moment there were finally several to
+ * compare. Every entry point calls the SAME `caseEngagementsRepository.close()` and the same
+ * post-commit half (`@/lib/cases/close-case-effects`); only the `source` differs, which is the
+ * point.
+ *
+ * ⚠ `sweep` is still NOT declared — the +30d dormancy sweep closes with `auto_inactive` from
+ * `apps/api` without emitting this event at all. The ticket that emits it declares the value.
+ */
+export type CaseResolveSource = 'recap' | 'end_of_call' | 'case_surface';
 
 /**
  * Which shape the resolve prompt took, when it was shown.
@@ -226,17 +249,11 @@ export interface RecapServerEventMap {
      * across recap / end-of-call / case surface / sweep is the evidence for whether asking
      * at the natural moment works at all, so this stays a required property.
      *
-     * ⚠ BAL-421 ADDED `case_surface` — THE SECOND ENTRY POINT, NOT A SECOND EVENT. There is
-     * deliberately NO `case_resolved_manually`: minting one would split the very distribution
-     * this property exists to measure across two event names, so the two closes would stop
-     * being comparable at exactly the moment there were finally two to compare. Both entry
-     * points call the SAME `caseEngagementsRepository.close()` and the same post-commit half
-     * (`@/lib/cases/close-case-effects`); only the `source` differs, which is the point.
-     *
-     * ⚠ `end_of_call` and `sweep` are still NOT declared — BAL-389 does not exist, and the
-     * +30d dormancy sweep closes with `auto_inactive` from `apps/api` without emitting this.
+     * ⚠ THE UNION IS NAMED, NOT INLINED — see {@link CaseResolveSource}, which is where the
+     * one-business-fact-one-event-name reasoning lives and where each new closing surface
+     * widens the set. Widen it THERE, in the ticket that emits the new value.
      */
-    source: 'recap' | 'case_surface';
+    source: CaseResolveSource;
     engagement_id: string;
     /** = the acting user id. */
     distinct_id: string;

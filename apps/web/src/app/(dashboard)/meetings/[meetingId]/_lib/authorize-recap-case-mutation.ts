@@ -5,6 +5,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
+import type { PostCallMeetingFacts } from '@/lib/meetings/post-call-eligibility';
 import { resolveRecapAccess } from '@/lib/meetings/resolve-recap-access';
 
 /**
@@ -39,6 +40,20 @@ import { resolveRecapAccess } from '@/lib/meetings/resolve-recap-access';
  *
  * ⚠ ONE DENIAL LITERAL. Gate-null, wrong lens, non-case and a nameless expert all return the
  * same copy, so the action is never an existence oracle over `meetings.id`.
+ *
+ * ⚠⚠ THE LIFECYCLE FACTS ARE **EXPOSED HERE, ENFORCED IN `resolveCaseAction`** — AND THAT
+ * ASYMMETRY IS DELIBERATE. This gate is shared with `dismiss-resolution-request.ts`, and the
+ * security finding it answers is scoped to the two CONSEQUENTIAL controls: the rating capture and
+ * the one-way `case_engagements.close()`. Dismissing an expert's resolution request is neither —
+ * it clears two columns, leaves the case OPEN, and its outcome is indistinguishable from doing
+ * nothing — so folding a fifth gate in HERE would tighten a third control nobody asked to
+ * tighten. Instead this gate hands back the two meeting facts the rule needs and the CLOSE
+ * applies `meetingAllowsPostCallActions` to them, so both surfaces that can close (the recap and
+ * the end-of-call screen) inherit ONE predicate and dismissal is untouched.
+ *
+ * ⚠ THE PROJECTION IS EXPLICIT, NOT THE WHOLE `Meeting` ROW. `access.meeting` carries
+ * `dailyRoomName` and `joinUrl`; the two fields the rule reads are copied out by name so a venue
+ * secret cannot ride along into a Server Action's local scope.
  */
 
 const recapMutationSchema = z.object({ meetingId: z.uuid() }).strict();
@@ -53,6 +68,13 @@ export type RecapCaseMutationGate =
       companyId: string;
       /** Never null on a `case` — narrowed here so no caller re-defends it. */
       expertProfileId: string;
+      /**
+       * The two lifecycle facts `meetingAllowsPostCallActions` reads, projected by name.
+       *
+       * ⚠ EXPOSED, NOT ENFORCED — see the module docblock. `resolveCaseAction` applies the rule;
+       * `dismissResolutionRequestAction` deliberately does not.
+       */
+      meeting: PostCallMeetingFacts;
     }
   | { ok: false; error: string };
 
@@ -106,6 +128,10 @@ export async function authorizeRecapCaseMutation(
       engagementId: access.subject.contextId,
       companyId: access.companyId,
       expertProfileId: access.expertProfileId,
+      meeting: {
+        scheduledStart: access.meeting.scheduledStart,
+        status: access.meeting.status,
+      },
     };
   } catch (error) {
     log.error('Recap case mutation authorization failed', {

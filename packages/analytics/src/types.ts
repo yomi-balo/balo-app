@@ -31,6 +31,7 @@ import type { PromoServerEventMap, PromoEventMap } from './events/promo';
 import type { SessionEventMap, SessionServerEventMap } from './events/session';
 import type { CaseBillingEventMap, CaseBillingServerEventMap } from './events/case-billing';
 import type { RecapEventMap, RecapServerEventMap } from './events/recap';
+import type { EndOfCallEventMap, EndOfCallServerEventMap } from './events/end-of-call';
 import type { ActionItemServerEventMap } from './events/action-item';
 import type { WalletEventMap } from './events/wallet';
 import type { ScheduleEventMap } from './events/schedule';
@@ -65,6 +66,7 @@ export type AllEvents = AuthEventMap &
   SessionEventMap &
   CaseBillingEventMap &
   RecapEventMap &
+  EndOfCallEventMap &
   WalletEventMap &
   ScheduleEventMap;
 
@@ -97,6 +99,7 @@ export type ServerEvents = ExpertServerEventMap &
   MeetingServerEventMap &
   // BAL-408 — SERVER-ONLY for the same reason: every producer is an `apps/api` route or the
   // `apps/web` `/join/[token]` RSC. Deliberately absent from `AllEvents`.
-  GuestServerEventMap;
+  GuestServerEventMap &
+  EndOfCallServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;
