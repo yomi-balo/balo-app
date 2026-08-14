@@ -1,6 +1,6 @@
 {
   "note": "Verbatim webhook deliveries. Bodies are raw text, headers unfiltered.",
-  "count": 6,
+  "count": 7,
   "received": [
     {
       "arrivedAt": "2026-08-14T07:35:58.771Z",
@@ -253,6 +253,45 @@
       "bodyParsed": {
         "eventType": "calendar.event.changed",
         "timestamp": "2026-08-14T07:38:20.114Z"
+      },
+      "bodyCarriesIdentity": []
+    },
+    {
+      "arrivedAt": "2026-08-14T08:34:54.135Z",
+      "method": "POST",
+      "path": "/hook/ping/x",
+      "identityFromPath": {
+        "endUserAccountId": "ping",
+        "calendarId": "x"
+      },
+      "headers": {
+        "host": "recall-needs-founder-bat.trycloudflare.com",
+        "user-agent": "curl/8.7.1",
+        "content-length": "25",
+        "accept": "*/*",
+        "accept-encoding": "gzip",
+        "cdn-loop": "cloudflare; loops=1; subreqs=1",
+        "cf-connecting-ip": "2405:6e00:2215:60bb:a047:c11e:6f2d:e8a3",
+        "cf-ew-via": "15",
+        "cf-ipcountry": "AU",
+        "cf-ray": "a2ae9f805d915ab8-MEL",
+        "cf-visitor": "{\"scheme\":\"https\"}",
+        "cf-warp-tag-id": "83ab0e32-27f0-4e31-a4e1-9996fea08be5",
+        "cf-worker": "trycloudflare.com",
+        "connection": "keep-alive",
+        "content-type": "application/json",
+        "x-forwarded-for": "2405:6e00:2215:60bb:a047:c11e:6f2d:e8a3",
+        "x-forwarded-proto": "https"
+      },
+      "svix": {
+        "id": null,
+        "timestamp": null,
+        "signaturePresent": false,
+        "verification": "no-secret-registered"
+      },
+      "bodyRaw": "{\"probe\":\"restart-check\"}",
+      "bodyParsed": {
+        "probe": "restart-check"
       },
       "bodyCarriesIdentity": []
     }

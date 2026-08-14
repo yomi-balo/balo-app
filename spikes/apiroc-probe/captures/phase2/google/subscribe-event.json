@@ -6,22 +6,22 @@
     "authMode": "valid",
     "body": {
       "calendarId": "«email-redacted»",
-      "webhookUrl": "https://paper-vocals-launch-mathematics.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/yomikadri2023%40gmail.com",
+      "webhookUrl": "https://recall-needs-founder-bat.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/yomikadri2023%40gmail.com",
       "subscriptionType": "event"
     }
   },
-  "durationMs": 1477,
+  "durationMs": 1577,
   "response": {
     "status": 200,
     "statusText": "OK",
     "headers": {
       "content-type": "application/json",
-      "x-request-id": "25a3a00a5d0bcd68e6c7cf3c17065559",
-      "date": "Fri, 14 Aug 2026 07:36:31 GMT"
+      "x-request-id": "9939e064d9dc3c9253424427592d85a7",
+      "date": "Fri, 14 Aug 2026 08:35:12 GMT"
     },
-    "bodyRaw": "{\"webhookSubscriptionId\":\"cmssmvjh11q7un52l3p8o78xj\",\"endpointSecret\":\"«string present, 38 chars — REDACTED»\"}",
+    "bodyRaw": "{\"webhookSubscriptionId\":\"cmssoyzws1qs2oi2k08up0zjo\",\"endpointSecret\":\"«string present, 38 chars — REDACTED»\"}",
     "bodyParsed": {
-      "webhookSubscriptionId": "cmssmvjh11q7un52l3p8o78xj",
+      "webhookSubscriptionId": "cmssoyzws1qs2oi2k08up0zjo",
       "endpointSecret": "«string present, 38 chars — REDACTED»"
     }
   }

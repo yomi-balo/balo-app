@@ -4,7 +4,7 @@
 > Four of the six standing hypotheses are **refuted**; one is confirmed. One question is
 > deliberately left open and cannot be closed by this spike: whether Apiroc auto-renews
 > subscriptions before their 7-day expiry (Unknown 3). Proposed follow-up issues are in
-> **[Handoff](#handoff--work-this-spike-creates)** — T1–T13, each scoped to become one
+> **[Handoff](#handoff--work-this-spike-creates)** — T1–T14, each scoped to become one
 > Linear ticket.
 > Rule for this document: an answer is only filled in when evidence backs it. Each row is
 > tagged **[live]** (real API response, saved under `captures/`) or **[static]** (read out
@@ -448,10 +448,41 @@ revocation signal on the wire.
    **still untested**. If it does not fire on revocation, there is no proactive path and an
    expert stays silently broken until someone tries to book them.
 
-|                                                                        | Observed                                                                           |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Does a `enduseraccount.credential.updated` webhook fire on revocation? | ⏳ pending — Phase 2                                                               |
-| Lag between provider-side revoke and status flip                       | **Not time-based — event-based.** Flips on the first failed data call, not a timer |
+|                                                                        | Observed                                                                                    |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Does a `enduseraccount.credential.updated` webhook fire on revocation? | **No — 0 deliveries over 5.5 min, spanning both the revoke and the status flip.** See below |
+| Lag between provider-side revoke and status flip                       | **Not time-based — event-based.** Flips on the first failed data call, not a timer          |
+
+### ⚠️⚠️ There is NO proactive reconnect signal. `credential.updated` never fires.
+
+**[live]** Tested with a **live `event` subscription in place** and the webhook receiver
+running — the earlier revocation happened before any subscription existed, so it could not
+have been observed then.
+
+| Phase                                                      | Duration | Account status      | Deliveries |
+| ---------------------------------------------------------- | -------- | ------------------- | ---------- |
+| A — after revoking at Google, no other action              | 3 min    | `ACTIVE` throughout | **0**      |
+| B — after forcing the flip with a `calendars` call (`401`) | 2.5 min  | `EXPIRED`           | **0**      |
+
+**No `enduseraccount.credential.updated`, no `enduseraccount.updated`, nothing at all** —
+neither on the revocation itself nor on the `ACTIVE → EXPIRED` transition.
+
+Stated honestly: account-level events may only be delivered on a **`calendar`-type**
+subscription, which is the type returning **HTTP 500**. So the capability might exist and be
+merely unreachable. The practical conclusion is unchanged: **today there is no way to
+receive a proactive credential signal.**
+
+**→ Step 4 of the recovery design above is dead.** Detection is _purely_ error-driven.
+Combined with the lazy status flip, the real-world failure is:
+
+> An expert revokes calendar access. Balo keeps showing them as connected, `status` stays
+> `ACTIVE`, no webhook arrives, nothing changes — **until a client tries to book them.** The
+> failure surfaces in front of a paying client.
+
+**This creates new work — see T14.** Balo needs a **periodic health probe**: a cheap
+synthetic **data call** per connection on a schedule. Note this is _not_ the refuted "poll
+`endUserAccounts.get()`" pattern — polling the status is useless precisely because the status
+only moves after a data call has already failed. The probe must issue a real data call.
 
 **Verdict on H5 — ❌ REFUTED.** "Drive reconnect off `credentialStatus`, not off error
 codes" is backwards: the status is stale until an error code has already told you.
@@ -500,6 +531,39 @@ possibilities have very different costs:
 the failure mode is silent and platform-wide, so the asymmetry favours building the job. Ask
 the vendor directly, and add a cheap monitor either way: a daily check for subscriptions
 with `expiration` inside 48h is a few lines and catches the bad case regardless of the answer.
+
+### ⚠️ You cannot delete a subscription once the credential has expired — reconnect must come FIRST
+
+**[live]** Two gotchas, one cosmetic and one that inverts a documented procedure.
+
+**1. `delete` puts the id in the request BODY, not the path.** The SDK issues
+`DELETE /api/v1/calendarSubscriptions/{endUserAccountId}` with `{ data: { subscriptionId } }`.
+A path-style `DELETE /calendarSubscriptions/{acct}/{id}` — the obvious guess, and what this
+spike tried first — returns `404 Not Found` while leaving the record untouched. DELETE-with-a-body
+is unusual and some proxies and HTTP clients drop it silently, so this is worth pinning in the
+adapter and never hand-rolling.
+
+**2. Deleting is blocked on an expired credential.** With the account in `EXPIRED`, deleting
+its subscriptions fails:
+
+```
+delete cmssoyzws… → AuthorizationError 403 "End user account credential expired"
+delete cmssmvjh… → AuthorizationError 403 "End user account credential expired"
+```
+
+The skill's reconnect procedure — _"On reconnect, `calendarSubscriptions.delete` the old ones
+and re-create"_ — **cannot execute in that order**. The credential is expired precisely
+_because_ the user revoked, which is the reason you are reconnecting; so at cleanup time the
+delete is already forbidden.
+
+**→ Correct order is: reconnect first (restoring the credential), then delete the stale
+subscriptions, then re-create.** This works because `endUserAccountId` is stable across a
+revoke/reconnect cycle (I5), so the old subscription records are still addressable afterwards.
+
+⚠️ **Combined with the 7-day expiry and the broken `calendar` type, this is a real accumulation
+risk**: if an expert reconnects and cleanup is skipped or fails, stale subscriptions linger
+until they expire — delivering duplicate webhooks and triggering duplicate delta-read jobs for
+up to a week. Cleanup needs to be explicitly ordered and verified, not best-effort.
 
 ### ⚠️ The `calendar` subscription type is broken — HTTP 500
 
@@ -725,7 +789,12 @@ expired"` both map to one internal `RECONNECT_REQUIRED` condition.
   `calendar_connections.credential_status`.
 - **No distinct UX for `EXPIRED` vs `REVOKED`** — a user-initiated revoke yields `EXPIRED`;
   `REVOKED` appears unreachable on Google. Treat any non-`ACTIVE` as reconnect-required.
-- No scheduled job polls account status as a health check.
+- No scheduled job polls account status as a health check (see T14 — the probe must make a
+  real **data** call).
+- **Reconnect ordering:** reconnect FIRST, then delete stale subscriptions, then re-create.
+  Deleting is forbidden while the credential is `EXPIRED`, so the skill's delete-then-recreate
+  order cannot run. Cleanup must be verified, not best-effort — stale subscriptions deliver
+  duplicate webhooks for up to 7 days.
 
 ---
 
@@ -981,11 +1050,50 @@ That is an unhandled exception (a `Response` built with an invalid status), leak
 internals. Consequence: Balo must create **one `event` subscription per calendar**, so with
 the 7-day expiry that is N subscriptions per expert to create, track and renew.
 
+**T13c — subscription deletion is blocked on an expired credential.** `403 "End user account
+credential expired"`. This makes the documented reconnect cleanup order impossible and risks
+stale subscriptions delivering duplicate webhooks for up to 7 days. Ask whether delete can be
+permitted on a dead credential (it mutates Apiroc's own record, not the provider's calendar).
+
 **T13b — the API's error contract is not a contract.** The `error` field is variously the
 string `"Error"`, the number `404`, `"InvalidRefreshToken"`, `"InternalServerError"`, a
 `ZodError` object, or (on the OAuth callback) `missing_required_permissions`. Ask for a
 stable machine-readable code, and for `requestId` to be included in the 400-shaped envelope
 (it currently appears only in the `x-request-id` header there).
+
+---
+
+### T14 — Periodic calendar-connection health probe (there is no proactive signal)
+
+- **Relation:** amends **BAL-396**; **replaces** the dead step 4 of T2
+- **Priority:** Urgent — this is the difference between finding out ourselves and finding out
+  in front of a paying client
+- **Evidence:** Unknown 2 · 0 deliveries across 5.5 min spanning a revoke and a status flip
+
+**Problem.** Three findings compose into one bad outcome:
+
+1. `credentialStatus` does not flip on revocation — only after a data call has already failed.
+2. `enduseraccount.credential.updated` **never fires** (verified with a live subscription).
+3. Therefore nothing tells Balo an expert's calendar has died.
+
+An expert revokes access; Balo shows them as connected indefinitely; the first thing that
+notices is a **client trying to book them**.
+
+**Scope.** A scheduled job issuing a cheap **data call** per live connection (`calendars.list`
+is the lightest known-good probe), mapping the failure through T2's classifier, and flipping
+`calendar_connections.credential_status` + triggering reconnect notification.
+
+**Acceptance criteria**
+
+- Probes every live connection on a schedule; cadence justified against the per-account rate
+  limits (Google 600/min, Microsoft 1000/min) and expert count.
+- Uses a **data call**, not `endUserAccounts.get()` — polling status cannot work (Unknown 2).
+- On failure: persist the new status and publish the reconnect notification via
+  `notificationEvents.publish()` (never send email directly — CLAUDE.md).
+- A dead credential is detected by the probe, **not** by a booking attempt. Worth an explicit
+  test.
+- Re-check whether `credential.updated` has started working once T13a (the `calendar`
+  subscription 500) is fixed — if it ever fires, this job can be relaxed, not removed.
 
 ---
 
