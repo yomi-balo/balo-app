@@ -29,13 +29,18 @@ describe('LinkNotActive', () => {
   });
 
   /**
-   * ⚠ THE REGRESSION THIS FILE EXISTS FOR. BAL-390 ships the signed-in rating surface as
-   * an UNMOUNTED SEAM (D3): `submitEngagementReviewAction`, `readEngagementReview` and
-   * `RatingInput` have no consumer outside the magic-link landing, so there is no rating
-   * control behind `/login` at all. This card is the terminal state for every expired,
-   * revoked, rate-limited and departed-reviewer arrival — the audience with no other way
-   * in — so promising them a control that does not exist is the one thing it must not do.
-   * Restore the rate-from-here wording when BAL-389 mounts it.
+   * ⚠ THE REGRESSION THIS FILE EXISTS FOR. BAL-390 shipped the signed-in rating surface as
+   * an UNMOUNTED SEAM (D3), and this card's copy was written against that.
+   *
+   * ⚠ THAT PREMISE IS NOW STALE, BUT THE ASSERTION IS NOT — do not "restore" the
+   * rate-from-here wording on the strength of the mounting alone. BAL-389 DID mount
+   * `submitEngagementReviewAction` (from the end-of-call rating block), so a rating control
+   * behind `/login` does exist. This card, however, is the terminal state for every expired,
+   * revoked, rate-limited and DEPARTED-REVIEWER arrival: a departed reviewer fails the
+   * capability gate on every path, and the others have no way to know which case they are
+   * in. Telling THIS audience to sign in and rate still promises something most of them
+   * cannot do. Changing the copy needs a decision about that audience, not just a mounted
+   * action.
    */
   it('does NOT promise a rating control that is not mounted anywhere', () => {
     const { container } = render(<LinkNotActive />);

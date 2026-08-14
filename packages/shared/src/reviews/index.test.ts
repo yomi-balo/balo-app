@@ -10,6 +10,7 @@ import {
   REVIEW_TOKEN_TTL_DAYS,
   isRating,
   parsePrefillRating,
+  parseRatingAverage,
   quantiseNudgeTick,
   resolveEndOfCallReviewState,
   reviewNudgeBands,
@@ -376,5 +377,33 @@ describe('REVIEW_NUDGE_STEPS', () => {
   it('produces one band per declared step', () => {
     const bands: ReviewNudgeBand[] = reviewNudgeBands(NOW);
     expect(bands.map((b) => b.step)).toEqual(REVIEW_NUDGE_STEPS.map((s) => s.step));
+  });
+});
+
+describe('parseRatingAverage (BAL-422 — the numeric-is-a-string boundary)', () => {
+  it('parses what postgres-js actually hands back for a numeric(2,1) column', () => {
+    // NOT the number 4.3 — Drizzle types `numeric` as `string` and the driver obliges.
+    expect(parseRatingAverage('4.3')).toBe(4.3);
+    expect(parseRatingAverage('5.0')).toBe(5);
+    expect(parseRatingAverage('1.0')).toBe(1);
+  });
+
+  it('maps NULL — the "no reviews" reading — to null, NEVER to 0', () => {
+    // ⚠ A fabricated 0.0 is the one value this feature must never produce: the scale
+    // starts at 1, so 0.0 cannot be a real aggregate, and every surface null-gates.
+    expect(parseRatingAverage(null)).toBeNull();
+    expect(parseRatingAverage(null)).not.toBe(0);
+  });
+
+  it('is TOTAL — unparseable text yields null rather than letting NaN reach a render', () => {
+    for (const raw of ['', '   ', 'NaN', 'abc', 'null', 'undefined']) {
+      expect(parseRatingAverage(raw)).toBeNull();
+    }
+  });
+
+  it('keeps FULL precision — it also parses the UN-rounded read aggregate', () => {
+    // `aggregateForExpert` returns the exact two-level average (4.3333…); only the
+    // stored column is rounded, and only once. Truncating here would hide a drift.
+    expect(parseRatingAverage('4.33333333333333333333')).toBeCloseTo(4.3333333333, 9);
   });
 });

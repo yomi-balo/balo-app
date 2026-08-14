@@ -105,6 +105,8 @@ const BASE = {
     avatarUrl: null,
     initials: 'AO',
     bookAgainHref: '/experts/amara-okafor',
+    ratingAverage: 4.3,
+    ratingCount: 2,
   },
   people: [
     { name: 'Dana Reyes', isViewer: true },

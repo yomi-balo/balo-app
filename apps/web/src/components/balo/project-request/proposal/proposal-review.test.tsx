@@ -60,6 +60,7 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
       company: 'Acme',
       headline: 'CPQ',
       rating: 4.9,
+      ratingCount: 12,
     },
     ...overrides,
   };
@@ -71,7 +72,14 @@ function marcus(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
     relationshipId: 'rel-marcus',
     overviewHtml: 'Marcus overview',
     priceCents: 6_200_000,
-    expert: { name: 'Marcus Lee', initials: 'ML', company: 'Globex', headline: 'Dev', rating: 4.7 },
+    expert: {
+      name: 'Marcus Lee',
+      initials: 'ML',
+      company: 'Globex',
+      headline: 'Dev',
+      rating: 4.7,
+      ratingCount: 8,
+    },
     ...overrides,
   });
 }

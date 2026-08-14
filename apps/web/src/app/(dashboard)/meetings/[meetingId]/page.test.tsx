@@ -93,6 +93,8 @@ const BASE = {
     initials: 'AO',
     ordinalLine: '3rd consultation on this case',
     bookAgainHref: '/experts/amara',
+    ratingAverage: 4.3,
+    ratingCount: 2,
   },
   files: [],
   notHeld: null,
@@ -120,6 +122,10 @@ const EXPERT_VIEW: RecapView = {
     headline: null,
     orgLabel: null,
     bookAgainHref: null,
+    // ⚠ EXPERT LENS — the counterparty is the client company, and nothing evaluative
+    // appears there. The server hardcodes these; the fixture mirrors it.
+    ratingAverage: null,
+    ratingCount: 0,
   },
 };
 

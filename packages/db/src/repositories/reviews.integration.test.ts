@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { auditEvents, reviews } from '../schema';
+import { auditEvents, expertProfiles, reviews } from '../schema';
 import type { AuditEvent } from '../schema';
 import {
   caseEngagementFactory,
@@ -56,6 +56,52 @@ async function liveReviewIdsForEngagement(engagementId: string): Promise<string[
     .from(reviews)
     .where(and(eq(reviews.engagementId, engagementId), isNull(reviews.deletedAt)));
   return rows.map((row) => row.id);
+}
+
+/**
+ * The DENORMALISED columns as they are actually STORED — read raw, so `rating_average`
+ * arrives as the `numeric` STRING postgres-js really returns ('4.3', not 4.3).
+ *
+ * ⚠ ASSERTED AS A STRING ON PURPOSE. Comparing against a number here would silently
+ * pass through a `parseRatingAverage` that returned `4.30000000001`, and would hide the
+ * single most important property of this column: the rounding to one decimal happened
+ * ONCE, in Postgres, on assignment. `'4.3'` can only come from `numeric(2,1)`.
+ */
+async function storedAggregate(
+  expertProfileId: string
+): Promise<{ ratingAverage: string | null; ratingCount: number }> {
+  const [row] = await db
+    .select({
+      ratingAverage: expertProfiles.ratingAverage,
+      ratingCount: expertProfiles.ratingCount,
+    })
+    .from(expertProfiles)
+    .where(eq(expertProfiles.id, expertProfileId));
+  if (row === undefined) {
+    throw new Error(`expert profile ${expertProfileId} not found`);
+  }
+  return row;
+}
+
+/**
+ * Seed one engagement for `expertProfileId` and write `ratings` to it, one per reviewer,
+ * THROUGH `reviewsRepository.upsert` — so every write exercises the real recompute hook.
+ *
+ * ⚠ Multiple ratings on ONE engagement is the shape the whole per-engagement decision
+ * turns on: the partial unique permits one live review per PERSON per engagement, so
+ * each rating needs its own company member.
+ */
+async function seedEngagementWithRatings(
+  expertProfileId: string,
+  ratings: number[]
+): Promise<EngagementFactoryResult> {
+  const engagement = await engagementFactory({ expertProfileId });
+  for (const rating of ratings) {
+    const reviewer = await userFactory();
+    await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
+    await reviewsRepository.upsert(upsertInput(engagement, reviewer.id, { rating }));
+  }
+  return engagement;
 }
 
 describe('reviewsRepository.upsert — the targetWhere proof', () => {
@@ -326,14 +372,11 @@ describe('reviewsRepository.aggregateForExpert', () => {
   it('averages and counts the live rows for one expert', async () => {
     const expert = await expertDraftFactory();
     for (const rating of [5, 4, 3]) {
-      const engagement = await engagementFactory({ expertProfileId: expert.id });
-      const reviewer = await userFactory();
-      await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
-      await reviewsRepository.upsert(upsertInput(engagement, reviewer.id, { rating }));
+      await seedEngagementWithRatings(expert.id, [rating]);
     }
 
     const aggregate = await reviewsRepository.aggregateForExpert(expert.id);
-    expect(aggregate.count).toBe(3);
+    expect(aggregate.ratedEngagementCount).toBe(3);
     expect(aggregate.averageRating).toBeCloseTo(4, 5);
   });
 
@@ -349,7 +392,7 @@ describe('reviewsRepository.aggregateForExpert', () => {
     await reviewsRepository.upsert(upsertInput(engagement, reviewer.id, { rating: 5 }));
 
     await expect(reviewsRepository.aggregateForExpert(expert.id)).resolves.toEqual({
-      count: 1,
+      ratedEngagementCount: 1,
       averageRating: 5,
     });
   });
@@ -368,7 +411,7 @@ describe('reviewsRepository.aggregateForExpert', () => {
 
     expect(live.review.rating).toBe(4);
     await expect(reviewsRepository.aggregateForExpert(expert.id)).resolves.toEqual({
-      count: 1,
+      ratedEngagementCount: 1,
       averageRating: 4,
     });
   });
@@ -376,9 +419,324 @@ describe('reviewsRepository.aggregateForExpert', () => {
   it('returns a zero/null aggregate for an expert with no reviews — never throws', async () => {
     const expert = await expertDraftFactory();
     await expect(reviewsRepository.aggregateForExpert(expert.id)).resolves.toEqual({
-      count: 0,
+      ratedEngagementCount: 0,
       averageRating: null,
     });
+  });
+
+  /**
+   * ⚠ THE TEST THAT PROVES PER-ENGAGEMENT WAS ACTUALLY IMPLEMENTED, on the READ side.
+   * Five reviewers on ONE engagement is ONE vote — see the stored-column suite below for
+   * the same fixture asserted against `expert_profiles`.
+   */
+  it('counts FIVE reviewers on ONE engagement as ONE rated engagement, not five', async () => {
+    const expert = await expertDraftFactory();
+    await seedEngagementWithRatings(expert.id, [5, 5, 5, 1, 4]);
+
+    const aggregate = await reviewsRepository.aggregateForExpert(expert.id);
+    expect(aggregate.ratedEngagementCount).toBe(1);
+    expect(aggregate.averageRating).toBeCloseTo(4, 5); // (5+5+5+1+4)/5 — within the one engagement
+  });
+});
+
+describe('reviewsRepository.recomputeRatingAggregate — ONE ENGAGEMENT, ONE VOTE', () => {
+  /**
+   * ⚠⚠ THE FIXTURE THAT DISCRIMINATES THREE WAYS AT ONCE. Do NOT substitute a "simpler"
+   * one: most naive fixtures cannot tell these apart, because symmetric rounding errors
+   * cancel.
+   *
+   *   engagement A: 5, 5, 4  → 14/3 = 4.6666…
+   *   engagement B: 4        → 4.0
+   *
+   *   ROUND ONCE, at the outer AVG (CORRECT):  (4.6666… + 4)/2 = 4.3333… → stored '4.3'
+   *   ROUND EACH ENGAGEMENT FIRST (the bug):   (4.7      + 4)/2 = 4.35   → stored '4.4'
+   *   FLAT AVG OVER ROWS (pre-decision):       avg([5,5,4,4])  = 4.5     → stored '4.5', count 4
+   *
+   * So ONE four-row fixture pins per-engagement WEIGHTING, SINGLE rounding, AND
+   * `rating_count = 2`. All three are asserted below, by value, in one test.
+   */
+  it('stores 4.3 — NOT 4.4 (rounded per engagement) and NOT 4.5 (flat per row)', async () => {
+    const expert = await expertDraftFactory();
+    await seedEngagementWithRatings(expert.id, [5, 5, 4]);
+    await seedEngagementWithRatings(expert.id, [4]);
+
+    const stored = await storedAggregate(expert.id);
+
+    expect(stored.ratingAverage).toBe('4.3');
+    expect(stored.ratingAverage).not.toBe('4.4'); // spelled out: the round-each-first bug
+    expect(stored.ratingAverage).not.toBe('4.5'); // spelled out: the flat per-row regression
+    expect(stored.ratingCount).toBe(2); // ENGAGEMENTS reviewed, not the 4 review rows
+  });
+
+  it('counts FIVE reviewers on ONE engagement as rating_count = 1', async () => {
+    // The single most important behavioural change in BAL-422, and the case a 5-member
+    // company would otherwise use to outvote a 1-person company 5:1 on one piece of work.
+    const expert = await expertDraftFactory();
+    await seedEngagementWithRatings(expert.id, [5, 5, 5, 5, 5]);
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '5.0',
+      ratingCount: 1,
+    });
+  });
+
+  it('counts a CASE and a PROJECT engagement alike — the aggregate never reads engagement_type', async () => {
+    const expert = await expertDraftFactory();
+    await seedEngagementWithRatings(expert.id, [5]);
+
+    const caseSeed = await caseEngagementFactory({ expertProfileId: expert.id });
+    const reviewer = await userFactory();
+    await companyMemberFactory({ companyId: caseSeed.companyId, userId: reviewer.id });
+    await reviewsRepository.upsert({
+      engagementId: caseSeed.engagement.id,
+      reviewerUserId: reviewer.id,
+      expertProfileId: expert.id,
+      rating: 3,
+      body: null,
+      surface: 'end_of_call',
+      authMethod: 'session',
+    });
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '4.0',
+      ratingCount: 2,
+    });
+  });
+
+  it('EXCLUDES soft-deleted rows (the reworded AC — there is no moderation write path yet)', async () => {
+    // ⚠ `reviewFactory` inserts DIRECTLY and does NOT recompute, so the recompute is
+    // driven explicitly here. That is also the whole seam a future moderation ticket
+    // needs: `update … set deletedAt` then `recomputeRatingAggregate(expertProfileId, tx)`.
+    const expert = await expertDraftFactory();
+    const engagement = await seedEngagementWithRatings(expert.id, [5]);
+
+    const other = await userFactory();
+    await companyMemberFactory({ companyId: engagement.companyId, userId: other.id });
+    const moderated = await reviewFactory({
+      engagement,
+      reviewerUserId: other.id,
+      values: { rating: 1, deletedAt: new Date() },
+    });
+    expect(moderated.review.deletedAt).toBeInstanceOf(Date);
+
+    await expect(reviewsRepository.recomputeRatingAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: 5,
+      ratingCount: 1,
+    });
+    // The 1 never reached the stored column: a 5 and a moderated 1 would average 3.0.
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '5.0',
+      ratingCount: 1,
+    });
+  });
+
+  it('drops an engagement out of the count when its ONLY review is soft-deleted', async () => {
+    const expert = await expertDraftFactory();
+    await seedEngagementWithRatings(expert.id, [5]);
+    const doomed = await seedEngagementWithRatings(expert.id, [1]);
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '3.0',
+      ratingCount: 2,
+    });
+
+    await db
+      .update(reviews)
+      .set({ deletedAt: new Date() })
+      .where(eq(reviews.engagementId, doomed.engagement.id));
+    await reviewsRepository.recomputeRatingAggregate(expert.id);
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '5.0',
+      ratingCount: 1,
+    });
+  });
+
+  it('leaves NULL / 0 for an expert with no reviews — never 0.0', async () => {
+    // ⚠ Falls out of aggregate-over-the-empty-set, with NO special case in the code: an
+    // aggregate over zero rows still returns one row, so `avg` is NULL and `count(*)` is 0.
+    const expert = await expertDraftFactory();
+
+    await expect(reviewsRepository.recomputeRatingAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: null,
+      ratingCount: 0,
+    });
+    const stored = await storedAggregate(expert.id);
+    expect(stored.ratingAverage).toBeNull();
+    expect(stored.ratingAverage).not.toBe('0.0');
+    expect(stored.ratingCount).toBe(0);
+  });
+
+  it('is IDEMPOTENT — a second recompute over the same rows stores the same value', async () => {
+    const expert = await expertDraftFactory();
+    await seedEngagementWithRatings(expert.id, [5, 5, 4]);
+    await seedEngagementWithRatings(expert.id, [4]);
+
+    const first = await reviewsRepository.recomputeRatingAggregate(expert.id);
+    const second = await reviewsRepository.recomputeRatingAggregate(expert.id);
+    expect(second).toEqual(first);
+    expect(second.ratingAverage).toBe(4.3);
+  });
+
+  it('THROWS for an unknown expert profile — the locking read found no row', async () => {
+    // An integrity violation (a review naming a non-existent expert), not a normal miss.
+    // `@balo/db` throws; the caller's existing catch logs it.
+    await expect(
+      reviewsRepository.recomputeRatingAggregate('00000000-0000-0000-0000-000000000000')
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('does not let ANOTHER expert’s reviews bleed into this expert’s aggregate', async () => {
+    const mine = await expertDraftFactory();
+    const theirs = await expertDraftFactory();
+    await seedEngagementWithRatings(mine.id, [5]);
+    await seedEngagementWithRatings(theirs.id, [1, 1, 1]);
+
+    await expect(storedAggregate(mine.id)).resolves.toEqual({
+      ratingAverage: '5.0',
+      ratingCount: 1,
+    });
+    await expect(storedAggregate(theirs.id)).resolves.toEqual({
+      ratingAverage: '1.0',
+      ratingCount: 1,
+    });
+  });
+});
+
+describe('reviewsRepository.upsert — the recompute is UNBYPASSABLE', () => {
+  /**
+   * ⚠ THIS TEST PINS THE CALL, and it is the thing that stops the hook drifting out of
+   * the transaction. A BARE `upsert` — no second call, no explicit recompute — must
+   * leave both denormalised columns correct. If a future refactor moves the review write
+   * out of `db.transaction` or makes the recompute conditional, this goes red.
+   */
+  it('writes BOTH columns from a bare upsert, with no second call', async () => {
+    const expert = await expertDraftFactory();
+    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    const reviewer = await userFactory();
+    await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: null,
+      ratingCount: 0,
+    });
+
+    await reviewsRepository.upsert(upsertInput(engagement, reviewer.id, { rating: 4 }));
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '4.0',
+      ratingCount: 1,
+    });
+  });
+
+  /**
+   * ⚠ `upsert` RETURNS THE COMMITTED `ratingCount`, and it must be the STORED value, not a
+   * guess (BAL-422 fix round). `applyReview` logs it as drift telemetry — an operator
+   * comparing the aggregate against the review rows reads THIS number — so a return value
+   * that disagreed with the column would be worse than no telemetry at all. Pinned against
+   * `storedAggregate`, which reads the column back, rather than against a literal.
+   */
+  it('returns the ratingCount it actually committed', async () => {
+    const expert = await expertDraftFactory();
+    const reviewer = await userFactory();
+    const first = await engagementFactory({ expertProfileId: expert.id });
+    await companyMemberFactory({ companyId: first.companyId, userId: reviewer.id });
+
+    const inserted = await reviewsRepository.upsert(upsertInput(first, reviewer.id, { rating: 4 }));
+    expect(inserted.ratingCount).toBe((await storedAggregate(expert.id)).ratingCount);
+    expect(inserted.ratingCount).toBe(1);
+
+    // A SECOND engagement is a second vote…
+    const second = await engagementFactory({ expertProfileId: expert.id });
+    await companyMemberFactory({ companyId: second.companyId, userId: reviewer.id });
+    const added = await reviewsRepository.upsert(upsertInput(second, reviewer.id, { rating: 2 }));
+    expect(added.ratingCount).toBe(2);
+
+    // …but a REVISION of one is not, and the returned count must follow the same rule the
+    // column does rather than incrementing on every write.
+    const revised = await reviewsRepository.upsert(upsertInput(second, reviewer.id, { rating: 5 }));
+    expect(revised.created).toBe(false);
+    expect(revised.ratingCount).toBe(2);
+    expect(revised.ratingCount).toBe((await storedAggregate(expert.id)).ratingCount);
+  });
+
+  it('RECOMPUTES on the UPDATE branch — a revised rating cannot leave the old value behind', async () => {
+    // The case an insert-only or delta hook silently drifts on: the upsert DESTROYS the
+    // previous rating, so anything short of a from-scratch recompute keeps a dead number.
+    const expert = await expertDraftFactory();
+    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    const reviewer = await userFactory();
+    await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
+
+    await reviewsRepository.upsert(upsertInput(engagement, reviewer.id, { rating: 2 }));
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '2.0',
+      ratingCount: 1,
+    });
+
+    const revised = await reviewsRepository.upsert(
+      upsertInput(engagement, reviewer.id, { rating: 5 })
+    );
+    expect(revised.created).toBe(false);
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '5.0',
+      ratingCount: 1, // still ONE engagement — a revision is not a second vote
+    });
+  });
+
+  it('leaves the aggregate UNTOUCHED when the review write is rejected', async () => {
+    // The recompute rides the SAME transaction as the review, so a rejected write (here
+    // the `review_rating_range` CHECK) can never leave a half-applied aggregate behind.
+    // ⚠ Read literally: this proves the FAILING path writes nothing. It does not, and
+    // cannot, prove a recompute that ran and was then rolled back — nothing follows the
+    // recompute inside the transaction, so there is no such ordering to construct.
+    const expert = await expertDraftFactory();
+    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    const reviewer = await userFactory();
+    await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
+    await reviewsRepository.upsert(upsertInput(engagement, reviewer.id, { rating: 3 }));
+
+    const second = await engagementFactory({ expertProfileId: expert.id });
+    const otherReviewer = await userFactory();
+    await companyMemberFactory({ companyId: second.companyId, userId: otherReviewer.id });
+    await expect(
+      reviewsRepository.upsert(upsertInput(second, otherReviewer.id, { rating: 9 }))
+    ).rejects.toMatchObject({ code: '23514' });
+
+    await expect(storedAggregate(expert.id)).resolves.toEqual({
+      ratingAverage: '3.0',
+      ratingCount: 1,
+    });
+  });
+});
+
+describe('the READ and the WRITE cannot drift apart', () => {
+  /**
+   * ⚠ THE STANDING JOB OF `aggregateForExpert`. Both wrap the SAME
+   * `perEngagementAverages` fragment, so this is what catches someone "optimising" one
+   * of them into a different definition of the aggregate. Rounding the read to 1dp must
+   * reproduce the stored column EXACTLY, on every fixture.
+   */
+  it.each<[string, number[][]]>([
+    ['the 4.3 discriminator', [[5, 5, 4], [4]]],
+    ['five reviewers on one engagement', [[5, 5, 5, 1, 4]]],
+    ['a lopsided pair', [[1], [5, 5, 5, 5]]],
+    ['a single review', [[3]]],
+    ['a .x5 tie that rounds AWAY from zero', [[4], [5], [4], [4]]],
+  ])('%s', async (_label, engagementRatings) => {
+    const expert = await expertDraftFactory();
+    for (const ratings of engagementRatings) {
+      await seedEngagementWithRatings(expert.id, ratings);
+    }
+
+    const read = await reviewsRepository.aggregateForExpert(expert.id);
+    const stored = await storedAggregate(expert.id);
+
+    expect(read.ratedEngagementCount).toBe(stored.ratingCount);
+    if (read.averageRating === null) {
+      throw new Error('fixture must produce a rating');
+    }
+    expect(read.averageRating.toFixed(1)).toBe(stored.ratingAverage);
   });
 });
 

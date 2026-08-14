@@ -33,7 +33,14 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
       { id: 'i-2', label: 'On delivery', pct: 60 },
     ],
     attachments: [],
-    expert: { name: 'Priya Sharma', initials: 'PS', company: 'Acme', headline: 'CPQ', rating: 4.9 },
+    expert: {
+      name: 'Priya Sharma',
+      initials: 'PS',
+      company: 'Acme',
+      headline: 'CPQ',
+      rating: 4.9,
+      ratingCount: 12,
+    },
     ...overrides,
   };
 }
@@ -141,7 +148,9 @@ describe('ReviewSummaryCard', () => {
             initials: 'PS',
             company: null,
             headline: 'CPQ',
+            // ⚠ UNRATED: null, and `ratingCount` 0 — the card must render NEITHER, never 0.0.
             rating: null,
+            ratingCount: 0,
           },
         })}
         onAccept={vi.fn()}
@@ -152,5 +161,26 @@ describe('ReviewSummaryCard', () => {
     // Neither the rating value nor the company string renders.
     expect(screen.queryByText('4.9')).not.toBeInTheDocument();
     expect(screen.queryByText('Acme')).not.toBeInTheDocument();
+    // ⚠ AND NO FABRICATED ZERO, AND NO ORPHANED COUNT.
+    expect(screen.queryByText('0.0')).not.toBeInTheDocument();
+    expect(screen.queryByText('(0)')).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ BAL-422 AC — THE AVERAGE NEVER SHIPS WITHOUT ITS DENOMINATOR. This card rendered a bare
+   * average with NO count before.
+   */
+  it('renders the rating to one decimal WITH its review count', () => {
+    render(<ReviewSummaryCard doc={doc()} onAccept={vi.fn()} onRequestChanges={vi.fn()} />);
+    // ⚠ EXACT, NOT `/4\.9/`: the `sr-only` accessible name contains the same digits, so a
+    // regex would match two nodes and throw. Asserted separately, below.
+    expect(screen.getByText('4.9')).toBeInTheDocument();
+    expect(screen.getByText('(12)')).toBeInTheDocument();
+  });
+
+  /** ⚠ …AND THE DENOMINATOR REACHES A SCREEN READER AS "ENGAGEMENTS", not as a bare "12". */
+  it('gives the rating an accessible name that says engagements', () => {
+    render(<ReviewSummaryCard doc={doc()} onAccept={vi.fn()} onRequestChanges={vi.fn()} />);
+    expect(screen.getByText('Rated 4.9 out of 5 across 12 engagements')).toBeInTheDocument();
   });
 });

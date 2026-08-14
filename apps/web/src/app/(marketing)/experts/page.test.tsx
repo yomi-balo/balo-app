@@ -37,6 +37,7 @@ function makeExpert(overrides: Partial<ExpertSearchResultDTO> = {}): ExpertSearc
     agency: null,
     distinctions: { isSalesforceMvp: false, isSalesforceCta: false, isCertifiedTrainer: false },
     rating: null,
+    ratingCount: 0,
     yearsExperience: 9,
     consultationCount: 124,
     competencies: [],

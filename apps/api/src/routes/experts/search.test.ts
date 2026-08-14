@@ -94,6 +94,9 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     agencyName: null,
     agencyLogoUrl: null,
     consultationCount: 0,
+    // BAL-422 — the unrated default. `null` means NO REVIEWS, never 0.0.
+    ratingAverage: null,
+    ratingCount: 0,
     languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
     competencies: [
       {

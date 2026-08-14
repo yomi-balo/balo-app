@@ -102,6 +102,9 @@ function makeRelationship(): Relationship {
     updatedAt: NOW,
     expertProfile: {
       id: 'exp-1',
+      // ⚠ `numeric` ⇒ a STRING off the driver — the fixture mirrors the raw row.
+      ratingAverage: null,
+      ratingCount: 0,
       user: { id: 'user-9', firstName: 'Dana', lastName: 'Okafor' },
     },
     expressionsOfInterest: [],

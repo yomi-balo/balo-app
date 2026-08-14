@@ -12,9 +12,12 @@ import { CasePartyCard } from './case-party-card';
  * NULLABLE, so a null `bookAgainHref` must produce NO button rather than a link to
  * `/experts/null`. That is the branch this file exists to hold.
  *
- * ⚠ NO EMAIL ADDRESS ANYWHERE (ADR-1044) and NO RATING (owner decision D5 / BAL-422) — the
- * recap precedent is to OMIT rather than fake, so both absences are asserted over the whole
- * rendered tree.
+ * ⚠ NO EMAIL ADDRESS ANYWHERE (ADR-1044) — asserted over the whole rendered tree.
+ *
+ * ⚠ BAL-422 LANDED THE RATING LINE, so the old "no rating anywhere" assertion is GONE and is
+ * replaced by the three branches that actually matter: it renders WITH ITS COUNT when the
+ * aggregate exists, it renders NOTHING (never `0.0`) when `ratingAverage` is null, and the
+ * EXPERT lens never carries one — the expert does not score the client.
  */
 
 const PARTY: CasePartyView = {
@@ -24,6 +27,8 @@ const PARTY: CasePartyView = {
   avatarUrl: null,
   initials: 'AO',
   bookAgainHref: '/experts/amara-okafor',
+  ratingAverage: 4.3,
+  ratingCount: 2,
 };
 
 const NOT_YET: CaseEarningsView = {
@@ -68,12 +73,60 @@ describe('CasePartyCard — the identity block', () => {
     expect(container.textContent ?? '').not.toContain('@');
   });
 
-  it('renders no rating — no stars, no score, no review count (D5 / BAL-422)', () => {
+  /**
+   * ⚠ THE AVERAGE NEVER SHIPS WITHOUT ITS DENOMINATOR (BAL-422 AC). "4.3" alone reads as
+   * settled evidence when it rests on two engagements; "4.3 (2)" does not.
+   */
+  it('renders the rating to one decimal WITH its engagement count', () => {
     const { container } = renderCard();
-    const text = (container.textContent ?? '').toLowerCase();
-    for (const word of ['rating', 'review', '★']) {
-      expect(text).not.toContain(word);
-    }
+    expect(container.textContent ?? '').toContain('4.3');
+    expect(container.textContent ?? '').toContain('(2)');
+  });
+
+  /**
+   * ⚠ …AND THE DENOMINATOR REACHES A SCREEN READER, AS "ENGAGEMENTS". Star, value and count
+   * are three separate nodes that announced as "4.3 2" — two orphan numbers.
+   */
+  it('gives the rating an accessible name that says engagements', () => {
+    renderCard();
+    expect(screen.getByText('Rated 4.3 out of 5 across 2 engagements')).toBeInTheDocument();
+  });
+
+  /** A whole number must still read as "5.0", matching the shipped RatingBadge treatment. */
+  it('always shows one decimal place', () => {
+    const { container } = renderCard({ party: { ...PARTY, ratingAverage: 5, ratingCount: 1 } });
+    expect(container.textContent ?? '').toContain('5.0');
+    expect(container.textContent ?? '').toContain('(1)');
+  });
+
+  /**
+   * ⚠⚠ NULL MEANS NO REVIEWS AND MUST RENDER NOTHING — NEVER `0.0`. The scale starts at 1, so
+   * a zero would be a fabricated bad score for an expert who simply has not been reviewed.
+   */
+  it('renders NO rating line at all when ratingAverage is null', () => {
+    const { container } = renderCard({
+      party: { ...PARTY, ratingAverage: null, ratingCount: 0 },
+    });
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('0.0');
+    expect(text).not.toContain('(0)');
+  });
+
+  /**
+   * ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS. The server enforces this by hardcoding
+   * `ratingAverage: null` on that branch (`load-case.ts`); this pins the render consequence.
+   */
+  it('renders no rating on the EXPERT lens, whose counterparty is the client company', () => {
+    const { container } = renderCard({
+      lens: 'expert',
+      party: {
+        ...PARTY,
+        name: 'Northwind Industrial',
+        ratingAverage: null,
+        ratingCount: 0,
+      },
+    });
+    expect(container.textContent ?? '').not.toContain('0.0');
   });
 });
 

@@ -60,8 +60,16 @@ export interface ExpertSearchResultDTO {
   languages: ExpertSearchLanguageDTO[];
   agency: ExpertSearchAgencyDTO | null;
   distinctions: ExpertSearchDistinctionsDTO;
-  /** DEFERRED — ALWAYS null. */
-  rating: null;
+  /**
+   * The expert's average rating (BAL-422), or `null` for NO REVIEWS.
+   *
+   * ⚠ `null` IS NOT 0.0 — the scale starts at 1, so a zero would be fabricated. `RatingBadge`
+   * null-gates on this field and renders nothing when it is null. Never show it without
+   * `ratingCount`.
+   */
+  rating: number | null;
+  /** ENGAGEMENTS REVIEWED, not review rows (one engagement, one vote). `0` when unrated. */
+  ratingCount: number;
   yearsExperience: number | null;
   consultationCount: number;
   /** expert_competency, proficiency-desc; powers the "Top expert in" pills. */

@@ -147,14 +147,25 @@ export interface CasePartyView {
   /**
    * `/experts/{username}` — the ONE forward action with a live destination, and only when
    * `expert_profiles.username` is non-null (the column is NULLABLE). `null` ⇒ no CTA at all.
-   *
-   * ⚠ NO RATING FIELD (owner decision D5 / BAL-422). `expert_profiles` has NO `rating_avg` /
-   * `rating_count`, `reviewsRepository.aggregateForExpert` has ZERO callers, and
-   * `routes/experts/mapper.ts` hardcodes `rating: null`. The recap precedent is to OMIT it
-   * entirely so BAL-422 slots in as one more line in the same stack with NO structural
-   * change — never to fake a number.
    */
   bookAgainHref: string | null;
+  /**
+   * The counterparty expert's average rating (BAL-422), or `null`.
+   *
+   * ⚠⚠ CLIENT LENS ONLY, AND THAT IS AN INVARIANT, NOT A DEFAULT. On the expert lens the
+   * counterparty is the client COMPANY, and nothing evaluative may appear there — the expert
+   * is not scoring the client. `load-case.ts` populates these two fields on the `client`
+   * branch and hardcodes `null` / `0` on the `expert` branch; a lens test asserts it.
+   *
+   * ⚠ `null` MEANS NO REVIEWS, NEVER 0.0. The card gates the whole rating line on THIS field
+   * (never on `ratingCount`), because 0.0 is unrepresentable on a 1..5 scale.
+   *
+   * As the earlier docblock here promised, this landed as ONE MORE LINE in the same
+   * avatar → name → headline → org stack, with no structural change and no faked number.
+   */
+  ratingAverage: number | null;
+  /** ENGAGEMENTS REVIEWED, not review rows. Rendered WHENEVER `ratingAverage` is. */
+  ratingCount: number;
 }
 
 export interface CasePersonView {

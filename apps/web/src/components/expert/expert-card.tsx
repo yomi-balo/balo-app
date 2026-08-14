@@ -4,7 +4,6 @@ import { useState, useMemo } from 'react';
 import Image from 'next/image';
 import { motion } from 'motion/react';
 import {
-  Star,
   Heart,
   MapPin,
   Award,
@@ -22,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { InlineRating } from '@/components/balo/rating-display';
 import { cn } from '@/lib/utils';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type {
@@ -188,14 +188,23 @@ function AgencyBadge({
   );
 }
 
-// ── Rating badge (bottom-left) — null-gated, never renders in v1 ──
+// ── Rating badge (bottom-left) — null-gated ──────────────────────
 
+/**
+ * ⚠ IT RENDERS NOW. This shipped null-gated and unreachable ("never renders in v1", when
+ * the DTO hardcoded `rating: null`); BAL-422 wired the real aggregate through, so this
+ * badge is live on every rated expert's card. Reason about it as production UI.
+ *
+ * The star / number / count and the screen-reader name come from `InlineRating` — the ONE
+ * definition, shared with the profile hero, both party cards and both proposal surfaces.
+ * Only the float-chip wrapper and this card's weights are local.
+ */
 function RatingBadge({
   rating,
-  reviewCount,
+  ratingCount,
 }: Readonly<{
   rating: number | null;
-  reviewCount: number;
+  ratingCount: number;
 }>): React.JSX.Element | null {
   if (rating == null) return null;
 
@@ -206,9 +215,12 @@ function RatingBadge({
         FLOAT_CHIP
       )}
     >
-      <Star className="fill-warning text-warning h-3 w-3" />
-      <span className="text-foreground text-xs font-bold">{rating.toFixed(1)}</span>
-      <span className="text-muted-foreground text-[11px]">({reviewCount})</span>
+      <InlineRating
+        average={rating}
+        count={ratingCount}
+        valueClassName="text-foreground text-xs font-bold"
+        countClassName="text-[11px]"
+      />
     </div>
   );
 }
@@ -393,6 +405,26 @@ interface StatItemData {
   icon: LucideIcon;
 }
 
+/**
+ * ⚠⚠ "NEW" IS NOT THE COMPLEMENT OF "HAS SESSIONS" (BAL-422). The two labels answer
+ * different questions and they used to be forced into one branch:
+ *
+ *   · `{n} sessions` is a fact about CONSULTATIONS.
+ *   · `New` is a claim about the expert having NO TRACK RECORD AT ALL.
+ *
+ * Reviews anchor to ENGAGEMENTS, not consultations, so an expert with reviewed PROJECT work
+ * and no confirmed consultations has `consultationCount === 0` and a real rating. Under the
+ * old `else` the card rendered "4.8 (12)" and "New" side by side — proven and unproven at
+ * once. That was unreachable before this PR only because `RatingBadge` never rendered.
+ *
+ * So `New` now requires BOTH silences. An expert with a rating and no sessions simply drops
+ * the third stat (the strip is already variable-width — `buildStats` on the profile hero
+ * omits unbacked stats the same way), and the rating badge carries the signal instead.
+ */
+function hasNoTrackRecord(expert: ExpertCardData): boolean {
+  return expert.consultationCount === 0 && expert.rating === null;
+}
+
 function buildGridStats(expert: ExpertCardData): StatItemData[] {
   const country = getCountryDisplay(expert.countryCode);
   const stats: StatItemData[] = [
@@ -405,7 +437,7 @@ function buildGridStats(expert: ExpertCardData): StatItemData[] {
 
   if (expert.consultationCount > 0) {
     stats.push({ key: 'sessions', label: `${expert.consultationCount} sessions`, icon: Video });
-  } else {
+  } else if (hasNoTrackRecord(expert)) {
     stats.push({ key: 'new', label: 'New', icon: Phone });
   }
 
@@ -445,7 +477,13 @@ function buildListMeta(expert: ExpertCardData): string[] {
     meta.push(`${expert.yearsExperience}y exp`);
   }
 
-  meta.push(expert.consultationCount > 0 ? `${expert.consultationCount} sessions` : 'New expert');
+  // ⚠ SAME RULE AS THE GRID — see {@link hasNoTrackRecord}. "New expert" next to a real
+  // rating is a self-contradiction, so a rated expert with no sessions gets neither entry.
+  if (expert.consultationCount > 0) {
+    meta.push(`${expert.consultationCount} sessions`);
+  } else if (hasNoTrackRecord(expert)) {
+    meta.push('New expert');
+  }
 
   return meta;
 }
@@ -537,7 +575,7 @@ function GridCard({
           <AvailabilityPill nextAvailableAt={expert.nextAvailableAt} />
           <HeartButton />
           <AgencyBadge agency={expert.agency} />
-          <RatingBadge rating={expert.rating} reviewCount={expert.reviewCount} />
+          <RatingBadge rating={expert.rating} ratingCount={expert.ratingCount} />
         </div>
 
         {/* Name + rate strip */}
@@ -618,7 +656,7 @@ function ListRow({
         <AvailabilityPill nextAvailableAt={expert.nextAvailableAt} />
         <HeartButton />
         <AgencyBadge agency={expert.agency} />
-        <RatingBadge rating={expert.rating} reviewCount={expert.reviewCount} />
+        <RatingBadge rating={expert.rating} ratingCount={expert.ratingCount} />
       </div>
 
       {/* Content column */}

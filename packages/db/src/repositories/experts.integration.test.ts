@@ -32,6 +32,7 @@ import {
 } from '../test/helpers/consultation-count-matrix';
 import { expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
+import { reviewsRepository } from './reviews';
 import { usersRepository } from './users';
 
 // Unique-suffix helper so inline taxonomy rows never collide across tests
@@ -184,6 +185,45 @@ describe('expertsRepository.updateProfile', () => {
     expect(fresh?.bookingBufferBeforeMinutes).toBe(0);
     expect(fresh?.bookingBufferAfterMinutes).toBe(0);
     expect(fresh?.bookingMinimumNoticeMinutes).toBe(0);
+  });
+
+  /**
+   * ⚠⚠ THE RATING COLUMNS HAVE EXACTLY ONE WRITER, AND THIS PROVES IT STRUCTURALLY.
+   * `updateProfile` used to `.set({ ...data, updatedAt })`, which made the
+   * `UpdateProfileInput` TYPE the only thing keeping `rating_average` / `rating_count` out
+   * of this generic writer — and a type cannot do that job: TypeScript's excess-property
+   * check fires on object LITERALS only, so a caller passing a VARIABLE carrying extra keys
+   * wrote them straight through. The `SET` is now an explicit allow-list.
+   *
+   * The cast is the POINT of the test, not a workaround: it reproduces exactly what a
+   * widened caller looks like at runtime, which is the only shape that can express this bug.
+   * The rating columns must be untouched, and the legitimate field must still land.
+   */
+  it('IGNORES rating columns smuggled past the type — they keep one writer', async () => {
+    const draft = await expertDraftFactory();
+    await reviewsRepository.recomputeRatingAggregate(draft.id);
+
+    const smuggled = {
+      headline: 'Salesforce Architect',
+      ratingAverage: '5.0',
+      ratingCount: 99,
+    } as unknown as Parameters<typeof expertsRepository.updateProfile>[1];
+    await expertsRepository.updateProfile(draft.id, smuggled);
+
+    const [row] = await db
+      .select({
+        headline: expertProfiles.headline,
+        ratingAverage: expertProfiles.ratingAverage,
+        ratingCount: expertProfiles.ratingCount,
+      })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, draft.id));
+
+    // The legitimate field still writes — this is an allow-list, not a freeze.
+    expect(row?.headline).toBe('Salesforce Architect');
+    // …and the two rating columns are exactly what the recompute left.
+    expect(row?.ratingAverage).toBeNull();
+    expect(row?.ratingCount).toBe(0);
   });
 
   it('rejects a booking buffer beyond the CHECK bound (0..120)', async () => {
@@ -1289,7 +1329,15 @@ describe('expertsRepository.findOrCreateDraft (race + degradation paths)', () =>
 });
 
 describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card read (BAL-388)', () => {
-  it('returns six display columns and NEVER rateCents / stripeConnectId / cronofyUserId', async () => {
+  /**
+   * ⚠ BAL-422 WIDENED THIS FROM SIX COLUMNS TO EIGHT (`ratingAverage` + `ratingCount`), and the
+   * EXHAUSTIVE key-set is the point — it is what makes the widening a deliberate, reviewed act
+   * rather than something a careless `select` could smuggle in. The concealment rationale is
+   * untouched: the two additions are display aggregates a client already sees on the expert's
+   * public card, while `rateCents` (the UN-MARKED-UP consultant rate) and the vendor ids stay
+   * structurally absent.
+   */
+  it('returns eight display columns and NEVER rateCents / stripeConnectId / cronofyUserId', async () => {
     const expert = await expertFactory();
     await db
       .update(expertProfiles)
@@ -1305,6 +1353,8 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
       'agencyId',
       'headline',
       'id',
+      'ratingAverage',
+      'ratingCount',
       'type',
       'userId',
       'username',
@@ -1312,6 +1362,37 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
     expect(row).not.toHaveProperty('rateCents');
     expect(row).not.toHaveProperty('stripeConnectId');
     expect(row).not.toHaveProperty('cronofyUserId');
+  });
+
+  /**
+   * ⚠ THE `numeric` → `number` PARSE HAPPENS IN THE REPOSITORY, and this is the only test that
+   * can prove it against a REAL Postgres. Drizzle types `rating_average` as `string` and the
+   * driver really does hand back `'4.3'`; a pass-through would put a string into a
+   * `number | null` field and every `.toFixed(1)` downstream would throw at runtime while
+   * typechecking clean.
+   */
+  it('parses rating_average from the numeric STRING into a number', async () => {
+    const expert = await expertFactory();
+    await db
+      .update(expertProfiles)
+      .set({ ratingAverage: '4.3', ratingCount: 2 })
+      .where(eq(expertProfiles.id, expert.id));
+
+    const row = await expertsRepository.findDisplayProfileById(expert.id);
+
+    expect(row?.ratingAverage).toBe(4.3);
+    expect(typeof row?.ratingAverage).toBe('number');
+    expect(row?.ratingCount).toBe(2);
+  });
+
+  /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
+  it('returns a null rating as null, never as 0, for an unrated expert', async () => {
+    const expert = await expertFactory();
+
+    const row = await expertsRepository.findDisplayProfileById(expert.id);
+
+    expect(row?.ratingAverage).toBeNull();
+    expect(row?.ratingCount).toBe(0);
   });
 
   it('returns undefined for an unknown profile id', async () => {

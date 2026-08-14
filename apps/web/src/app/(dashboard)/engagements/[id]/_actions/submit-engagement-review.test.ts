@@ -16,6 +16,20 @@ vi.mock('@/lib/authz', () => ({
   CAPABILITIES: { PARTICIPATE: 'participate' },
 }));
 
+/**
+ * ⚠ MOCKED, NOT LEFT REAL — AND THAT IS ABOUT DETERMINISM, NOT CONVENIENCE.
+ * `checkMemoryLimit` keeps its buckets in a MODULE-LEVEL `Map`, so a real one would be
+ * shared by every case in this file: the cases below submit the same
+ * (reviewer, engagement) pair well over ten times, and somewhere past the tenth the
+ * limiter would start denying and the failures would land on whichever case happened to
+ * run eleventh. Mocking makes the limit an explicit input, so the two cases that care
+ * assert it and the rest are unaffected by their own position in the file.
+ */
+const mockCheckLimit = vi.fn();
+vi.mock('@/lib/rate-limit/memory-window', () => ({
+  checkMemoryLimit: (...a: unknown[]) => mockCheckLimit(...a),
+}));
+
 const { mockFindEngagement, mockUpsert } = vi.hoisted(() => ({
   mockFindEngagement: vi.fn(),
   mockUpsert: vi.fn(),
@@ -35,6 +49,7 @@ vi.mock('@/lib/analytics/server', async () => {
   };
 });
 
+import { log } from '@/lib/logging';
 import {
   REVIEW_ENGAGEMENT_NOT_FOUND,
   REVIEW_GENERIC_FAILURE,
@@ -52,11 +67,17 @@ function primeHappyPath(): void {
     expertProfileId: EXPERT_PROFILE_ID,
   });
   mockHasCapability.mockResolvedValue(true);
-  mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: true });
+  mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: true, ratingCount: 3 });
+  mockCheckLimit.mockReturnValue(true);
 }
 
 describe('submitEngagementReviewAction', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Allowed unless a case says otherwise — `clearAllMocks` resets the return value to
+    // `undefined`, which is falsy and would silently throttle every case.
+    mockCheckLimit.mockReturnValue(true);
+  });
 
   it('writes with authMethod=session and the caller-chosen surface', async () => {
     primeHappyPath();
@@ -105,6 +126,73 @@ describe('submitEngagementReviewAction', () => {
     } as unknown as { engagementId: string; rating: number; surface: 'recap' });
 
     expect(result).toEqual({ success: false, error: REVIEW_INVALID_REQUEST });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ DRIFT TELEMETRY (BAL-422). The "Review submitted" line carries the `rating_count` the
+   * in-transaction recompute actually COMMITTED, so an operator can compare the stored
+   * aggregate against the review rows from the log alone. It comes back OUT of the write —
+   * not from a re-read a layer out — so the logged number cannot disagree with the row.
+   *
+   * ⚠ NEITHER THE BODY NOR THE RATING IS LOGGED, and this pins that too.
+   */
+  it('logs the committed ratingCount, and never the review body', async () => {
+    primeHappyPath();
+    mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: true, ratingCount: 7 });
+
+    await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      body: 'Unblocked us in one call',
+      surface: 'end_of_call',
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      'Review submitted',
+      expect.objectContaining({ ratingCount: 7, created: true })
+    );
+    const payload = vi.mocked(log.info).mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(payload)).not.toContain('Unblocked us in one call');
+  });
+
+  /**
+   * ⚠⚠ THE MOUNTED, AUTHENTICATED PATH IS RATE LIMITED (BAL-422 fix round). It shipped with
+   * NONE while the magic-link sibling had two, and "authenticated" is not a defence here: a
+   * review is REVISABLE INDEFINITELY, so every repeat call from the same user on the same
+   * engagement is a LEGITIMATE write that nothing else caps. Each one takes a row lock on
+   * `expert_profiles` inside the write transaction, which turns an unbounded revise loop
+   * into a targeted latency attack on ONE expert's writes.
+   */
+  it('rate limits per (reviewer, engagement), not per IP', async () => {
+    primeHappyPath();
+    await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'end_of_call',
+    });
+
+    expect(mockCheckLimit).toHaveBeenCalledWith(
+      `review-submit-engagement:${VIEWER_ID}:${ENGAGEMENT_ID}`,
+      { max: 10, windowMs: 600_000 }
+    );
+  });
+
+  /** ⚠ AND IT DENIES BEFORE THE DATABASE IS TOUCHED — no query, and no lock taken. */
+  it('refuses a throttled submit without reaching the repository, with the generic copy', async () => {
+    primeHappyPath();
+    mockCheckLimit.mockReturnValue(false);
+
+    const result = await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'end_of_call',
+    });
+
+    // Generic, NOT a distinguishable "slow down" — a rate-limit reply is a signal worth
+    // not handing out, and the same copy already covers a genuine write fault.
+    expect(result).toEqual({ success: false, error: REVIEW_GENERIC_FAILURE });
+    expect(mockFindEngagement).not.toHaveBeenCalled();
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 

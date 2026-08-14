@@ -92,8 +92,35 @@ export interface ExpertProfileView {
   availableForWork: boolean;
   /** Derived from the visibility gate (approved + searchable) — always true here. */
   baloVerified: boolean;
-  /** Reviews are deferred — always false in v1. */
+  /**
+   * ALWAYS `false` — and after BAL-422 that is no longer because reviews are deferred.
+   * Reviews exist and `ratingAverage` below is real data; `topRated` is a SEPARATE
+   * EDITORIAL badge with no defined threshold, so `mapProfileToView` hardcodes `false`
+   * rather than inventing a cutoff nobody decided. Same rationale as the one stated at
+   * `mapProfileToView`; if the two ever disagree, that one is the authority.
+   */
   topRated: boolean;
+  /**
+   * The expert's average rating (BAL-422), 1..5, or `null` for NO REVIEWS.
+   *
+   * ⚠ `null` IS NOT 0.0 and MUST NEVER RENDER AS ONE — the scale starts at 1, so a zero is a
+   * fabricated rating, not a bad one. The hero stats strip OMITS the rating stat entirely
+   * when this is null (matching `buildStats`' existing omit-don't-fabricate rule for
+   * consultations / experience / certs), and the reviews section falls back to its
+   * invitation empty state.
+   *
+   * ⚠ ALWAYS RENDERED WITH `ratingCount`. An average with no denominator overstates the
+   * evidence — that pairing is a BAL-422 acceptance criterion, not a style preference.
+   */
+  ratingAverage: number | null;
+  /**
+   * ENGAGEMENTS REVIEWED — **not** review rows. A 5-person company reviewing one engagement
+   * contributes 1, not 5 (one engagement, one vote). `0` whenever `ratingAverage` is null.
+   *
+   * ⚠ THIS IS WHY THE PUBLIC COPY SAYS "ENGAGEMENTS", NOT "REVIEWS". Saying "12 reviews"
+   * when the number counts engagements would misstate the evidence in the other direction.
+   */
+  ratingCount: number;
   competencies: CompetencyView[];
   certifications: CertView[];
   languages: LanguageView[];

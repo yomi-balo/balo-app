@@ -160,6 +160,9 @@ const FAT_PROFILE = {
   headline: 'Salesforce CPQ specialist',
   username: 'amara',
   rateCents: 33_700,
+  // BAL-422 — already a NUMBER here: `findDisplayProfileById` parses the `numeric` column.
+  ratingAverage: 4.3,
+  ratingCount: 2,
 };
 
 const OPEN_CASE = {
@@ -521,7 +524,20 @@ describe('loadCase — the counterparty, per lens', () => {
       avatarUrl: null,
       initials: 'AO',
       bookAgainHref: '/experts/amara',
+      // ⚠ BAL-422 — the client lens carries the delivering expert's REAL aggregate. Note
+      // this is a `toEqual`, so it ALSO pins that `rateCents` (on FAT_PROFILE) never
+      // reaches the party view: the exhaustive shape is the concealment assertion.
+      ratingAverage: 4.3,
+      ratingCount: 2,
     });
+  });
+
+  /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
+  it('passes a null rating through as null for an unrated expert', async () => {
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, ratingAverage: null, ratingCount: 0 });
+    const view = await loadOrThrow();
+    expect(view.party.ratingAverage).toBeNull();
+    expect(view.party.ratingCount).toBe(0);
   });
 
   /** ⚠ `expert_profiles.username` IS NULLABLE — a null username means NO CTA, never
@@ -555,6 +571,11 @@ describe('loadCase — the counterparty, per lens', () => {
       avatarUrl: null,
       initials: 'NI',
       bookAgainHref: null,
+      // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). FAT_PROFILE carries 4.3/2 and
+      // NEITHER value survives this branch — the expert is not scoring the client, and the
+      // delivering expert's own rating must not ride along onto the company card either.
+      ratingAverage: null,
+      ratingCount: 0,
     });
   });
 

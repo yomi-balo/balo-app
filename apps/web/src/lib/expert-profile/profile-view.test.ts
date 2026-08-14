@@ -13,6 +13,12 @@ function makeProfile(overrides: Partial<PublicExpertProfile> = {}): PublicExpert
     bio: 'A bio.',
     availableForWork: true,
     consultationCount: 0,
+    // ⚠ `rating_average` is `numeric(2,1)`, so Drizzle's relational `columns:` allow-list
+    // hands back a STRING. The fixture mirrors the raw row so the mapper's
+    // `parseRatingAverage` is genuinely exercised rather than bypassed by a pre-parsed
+    // number — that string→number seam is the trap this feature had to avoid.
+    ratingAverage: null,
+    ratingCount: 0,
     user: {
       id: 'user-1',
       firstName: 'Priya',
@@ -60,6 +66,38 @@ describe('mapProfileToView — names & basics', () => {
 
   it('passes through the avatar key (mapper stays pure — no URL resolution)', () => {
     expect(mapProfileToView(makeProfile()).avatarKey).toBe('avatar-key');
+  });
+
+  /**
+   * BAL-422 — the mapper's job at this seam is the `numeric`-string → number parse. Drizzle
+   * types `rating_average` as `string`, so a mapper that passed it through would put `'4.3'`
+   * into a `number | null` field and every `.toFixed(1)` downstream would throw at runtime
+   * while typechecking clean.
+   */
+  it('parses the numeric rating_average STRING into a number', () => {
+    // ⚠ NO CAST. `PublicExpertProfile['ratingAverage']` really is `string | null` (Drizzle
+    // infers `numeric` as `string`), so the fixture typechecks as-is — and that is the
+    // point: this assignment IS the compile-time proof that the repository hands back a
+    // string. An `as unknown as` here, which is how this shipped, would suppress exactly
+    // the check the design leans on, and would keep passing the day someone "fixed" the
+    // column's inferred type to `number`.
+    const view = mapProfileToView(makeProfile({ ratingAverage: '4.3', ratingCount: 12 }));
+    expect(view.ratingAverage).toBe(4.3);
+    expect(typeof view.ratingAverage).toBe('number');
+    expect(view.ratingCount).toBe(12);
+  });
+
+  /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
+  it('keeps a null rating null, and never fabricates a zero', () => {
+    const view = mapProfileToView(makeProfile());
+    expect(view.ratingAverage).toBeNull();
+    expect(view.ratingCount).toBe(0);
+  });
+
+  /** ⚠ `topRated` is a separate editorial badge — NOT derived from the rating. */
+  it('leaves topRated false even for a highly rated expert', () => {
+    const view = mapProfileToView(makeProfile({ ratingAverage: '5.0', ratingCount: 30 }));
+    expect(view.topRated).toBe(false);
   });
 
   it('hard-codes baloVerified true and topRated false', () => {

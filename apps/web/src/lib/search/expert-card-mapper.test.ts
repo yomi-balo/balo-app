@@ -43,7 +43,8 @@ const baseDto: ExpertSearchResultDTO = {
   languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
   agency: { name: 'MIDCAI', logoUrl: null },
   distinctions: { isSalesforceMvp: true, isSalesforceCta: false, isCertifiedTrainer: false },
-  rating: null,
+  rating: 4.3,
+  ratingCount: 2,
   yearsExperience: 9,
   consultationCount: 124,
   competencies: [
@@ -69,10 +70,18 @@ const baseDto: ExpertSearchResultDTO = {
 };
 
 describe('mapSearchResultToCardData', () => {
-  it('sets v1 defaults reviewCount:0 and rating:null', () => {
+  // BAL-422 — this used to pin the v1 hardcode (`ratingCount: 0`, `rating: null`), which
+  // dead-ended the already-mounted RatingBadge. It now pins PASS-THROUGH in both directions.
+  it('passes the rating aggregate through from the DTO', () => {
     const card = mapSearchResultToCardData(baseDto);
-    expect(card.reviewCount).toBe(0);
+    expect(card.rating).toBe(4.3);
+    expect(card.ratingCount).toBe(2);
+  });
+
+  it('keeps rating null (never 0) for an expert with no reviews', () => {
+    const card = mapSearchResultToCardData({ ...baseDto, rating: null, ratingCount: 0 });
     expect(card.rating).toBeNull();
+    expect(card.ratingCount).toBe(0);
   });
 
   it('builds expertise from the DTO competencies (product grouping + slug → SkillType)', () => {

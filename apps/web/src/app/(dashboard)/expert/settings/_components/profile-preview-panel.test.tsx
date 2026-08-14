@@ -47,7 +47,7 @@ function makeExpert(overrides: Partial<ExpertCardData> = {}): ExpertCardData {
       isCertifiedTrainer: false,
     },
     rating: null,
-    reviewCount: 0,
+    ratingCount: 0,
     yearsExperience: null,
     consultationCount: 0,
     expertise: [],

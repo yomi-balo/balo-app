@@ -159,8 +159,16 @@ describe('invariant: BAL-390 repositories never notify (D4 / §8.7.4)', () => {
     const violations: string[] = [];
     for (const scanned of SCANNED) {
       for (const module of scanned.modules) {
+        // ⚠ `drizzle-orm` AND ITS SUBPATHS (BAL-422). `reviews.ts` imports `QueryBuilder`
+        // from `drizzle-orm/pg-core` to compose the rating aggregate's shared subquery
+        // fragment. Widening to the subpaths does NOT weaken this invariant: the whole
+        // package is the ORM, it carries no publisher, queue or email client, and the two
+        // assertions above still scan the source for notification markers under any alias.
+        // Matching the prefix with the `/` boundary keeps a hypothetical
+        // `drizzle-orm-notifier` package out.
         const permitted =
           module === 'drizzle-orm' ||
+          module.startsWith('drizzle-orm/') ||
           module.startsWith('@balo/shared') ||
           module.startsWith('../') ||
           module.startsWith('./');
@@ -169,8 +177,8 @@ describe('invariant: BAL-390 repositories never notify (D4 / §8.7.4)', () => {
     }
     expect(
       violations,
-      `A BAL-390 repository imports outside the permitted set (drizzle-orm, @balo/shared, ` +
-        `relative modules within @balo/db):\n  ${violations.join('\n  ')}`
+      `A BAL-390 repository imports outside the permitted set (drizzle-orm and its ` +
+        `subpaths, @balo/shared, relative modules within @balo/db):\n  ${violations.join('\n  ')}`
     ).toEqual([]);
   });
 });

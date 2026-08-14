@@ -122,11 +122,23 @@ export const reviews = pgTable(
       .on(t.engagementId, t.reviewerUserId, t.expertProfileId)
       .where(sql`${t.deletedAt} IS NULL`),
 
-    // The aggregate read: AVG(rating), COUNT(*) GROUP BY expert_profile_id over LIVE
-    // rows. `rating` is in the index so the aggregate is index-only. NO status filter,
-    // NO terminal-state gate, NO frozen window — a review counts immediately.
+    // THE RECOMPUTE READ (BAL-422): AVG over PER-ENGAGEMENT AVGs, and a COUNT of
+    // ENGAGEMENTS — not of rows — over LIVE rows for one expert. All three columns the
+    // aggregate touches are in the index, so it is index-only.
+    //
+    // ⚠ COLUMN ORDER IS LOAD-BEARING, NOT ALPHABETICAL:
+    //   expert_profile_id — the equality predicate, so it must lead;
+    //   engagement_id     — the GROUP BY key, so the scan arrives PRE-SORTED and the
+    //                       planner takes a GroupAggregate with NO sort node;
+    //   rating            — the aggregated payload, carried only to stay index-only.
+    // Dropping `engagement_id` (the shape before BAL-422) forces a sort or a HashAggregate
+    // on every recompute, and every review write runs one.
+    //
+    // NO status filter, NO terminal-state gate, NO frozen window — a review counts
+    // immediately. `deleted_at IS NULL` is the ONLY filter, and it is the partial
+    // predicate rather than a column so a moderated row leaves the index entirely.
     index('review_expert_live_idx')
-      .on(t.expertProfileId, t.rating)
+      .on(t.expertProfileId, t.engagementId, t.rating)
       .where(sql`${t.deletedAt} IS NULL`),
 
     // NON-PARTIAL and deliberately so: it must serve the composite FK's delete-time scan

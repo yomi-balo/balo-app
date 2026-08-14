@@ -601,6 +601,9 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
             status: 'proposal_submitted',
             expertProfile: {
               id: 'expert-2',
+              // ⚠ `numeric` ⇒ a STRING off the driver — the fixture mirrors the raw row.
+              ratingAverage: null,
+              ratingCount: 0,
               user: { id: 'user-expert-2', firstName: 'Sam', lastName: 'Lee' },
             },
           }),

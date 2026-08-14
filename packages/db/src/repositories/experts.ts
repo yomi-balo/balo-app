@@ -1,5 +1,6 @@
 import { eq, and, not, inArray, or, like, isNotNull, sql } from 'drizzle-orm';
 import { createLogger } from '@balo/shared/logging';
+import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
 import { consultationCountExpression } from './_shared/consultation-count';
 import {
@@ -279,7 +280,7 @@ export const expertsRepository = {
   },
 
   /**
-   * DISPLAY-ONLY hydration of ONE expert profile (BAL-388) — the six columns a party card
+   * DISPLAY-ONLY hydration of ONE expert profile (BAL-388) — the EIGHT columns a party card
    * needs, and NOTHING else.
    *
    * ⚠⚠ THIS EXISTS TO KEEP `rateCents` OFF A CLIENT-BOUND RENDER PATH. `expert_profiles.rate_cents`
@@ -288,6 +289,23 @@ export const expertsRepository = {
    * `cronofyUserId` are vendor identifiers with no display use at all. `findProfileById` returns
    * every one of them, and TypeScript will NOT catch a spread of the full row (excess-property
    * checking does not apply to spreads). Concealment is enforced by what the row CAN hold.
+   *
+   * ⚠ BAL-422 WIDENED SIX COLUMNS TO EIGHT — `ratingAverage` + `ratingCount` — AND THAT LIGHTS
+   * UP THREE SURFACES AT ONCE, because they all reach the expert through this ONE method:
+   * the BAL-421 case party card, the BAL-388 recap party card, and (through the shared
+   * `resolve-counterparty.ts` that BAL-389 hoisted) the end-of-call screen. All three are
+   * ACCEPTED and INTENDED; none is a leak. The two new columns are display aggregates a
+   * client already sees on the expert's public card, so adding them does not weaken the
+   * concealment rationale above — `rateCents` / `stripeConnectId` / `cronofyUserId` remain
+   * structurally absent, which is still the whole reason this method exists.
+   *
+   * ⚠ `ratingAverage` IS PARSED HERE, NOT PASSED THROUGH. The column is `numeric(2,1)` and
+   * Drizzle infers that as `string` (`'4.3'`, not `4.3`), so this returns `number | null` via
+   * `parseRatingAverage` — the ONE parse (`@balo/shared/reviews`). Callers get a number they
+   * can `.toFixed(1)`; nobody downstream re-parses or `Number()`s it.
+   *
+   * ⚠ NULL MEANS NO REVIEWS, NEVER 0.0. Every consumer null-gates on `ratingAverage` (never on
+   * `ratingCount`), because 0.0 is unrepresentable on a 1..5 scale and must never render.
    */
   async findDisplayProfileById(expertProfileId: string): Promise<
     | {
@@ -297,6 +315,8 @@ export const expertsRepository = {
         type: ExpertProfile['type'];
         headline: string | null;
         username: string | null;
+        ratingAverage: number | null;
+        ratingCount: number;
       }
     | undefined
   > {
@@ -308,11 +328,16 @@ export const expertsRepository = {
         type: expertProfiles.type,
         headline: expertProfiles.headline,
         username: expertProfiles.username,
+        ratingAverage: expertProfiles.ratingAverage,
+        ratingCount: expertProfiles.ratingCount,
       })
       .from(expertProfiles)
       .where(eq(expertProfiles.id, expertProfileId))
       .limit(1);
-    return row;
+    if (row === undefined) {
+      return undefined;
+    }
+    return { ...row, ratingAverage: parseRatingAverage(row.ratingAverage) };
   },
 
   /**
@@ -457,6 +482,11 @@ export const expertsRepository = {
       // of the RSC by construction — not just by mapper discipline. If the
       // mapper/page later needs another column, the type narrows and typecheck
       // fails until it's added here (the safety mechanism working).
+      // ⚠ BAL-422 added `ratingAverage` / `ratingCount` for the hero rating stat and the
+      // aggregate-aware reviews section. `ratingAverage` is `numeric` ⇒ Drizzle hands back a
+      // STRING here: a relational `columns:` allow-list cannot reshape or cast, so the parse
+      // happens at the view boundary (`mapProfileToView` → `parseRatingAverage`), which is
+      // still the ONE parse function — just called one layer out.
       columns: {
         id: true,
         username: true,
@@ -466,6 +496,8 @@ export const expertsRepository = {
         rateCents: true,
         yearStartedSalesforce: true,
         availableForWork: true,
+        ratingAverage: true,
+        ratingCount: true,
       },
       // Real confirmed-consultation count for the hero "consultations" stat —
       // shared scalar subquery so the public read and search list never diverge.
@@ -780,6 +812,28 @@ export const expertsRepository = {
    * transaction when one is supplied (e.g. `saveProfileStep`), else uses the base
    * client. A single UPDATE is atomic on its own, so no standalone wrapping is
    * needed.
+   *
+   * ⚠⚠ THE `SET` IS AN EXPLICIT ALLOW-LIST, NOT `{ ...data }`, AND THAT IS A SECURITY
+   * PROPERTY (BAL-422). It used to spread the argument, which meant {@link
+   * UpdateProfileInput} was the ONLY thing keeping `rating_average` / `rating_count` out of
+   * this generic writer — and a type cannot do that job: TypeScript's excess-property check
+   * fires on OBJECT LITERALS ONLY, so any caller passing a VARIABLE that happens to carry
+   * extra keys writes them straight through. Listing the columns means the two rating
+   * columns keep EXACTLY ONE writer (`reviewsRepository.recomputeRatingAggregate`, under a
+   * row lock) by construction rather than by discipline.
+   *
+   * The same holds for every other column not listed here — `agency_id`, `approved_at`,
+   * `type`, `user_id` — each of which has its own dedicated writer for the same reason.
+   *
+   * ⚠ PARTIAL-UPDATE SEMANTICS ARE UNCHANGED. Drizzle's `mapUpdateSet` drops `undefined`
+   * values before building the statement, so an absent field is still not written, while an
+   * explicit `null` still clears a nullable column. `updatedAt` is always present, so the
+   * SET can never be empty (which Drizzle would reject).
+   *
+   * ⚠ ADDING A FIELD TO {@link UpdateProfileInput} MEANS ADDING A LINE HERE. A field in the
+   * interface but not in this list is silently ignored at runtime — the one failure mode
+   * this shape introduces, and the reason the interface sits directly above with the same
+   * ordering.
    */
   async updateProfile(
     expertProfileId: string,
@@ -789,7 +843,27 @@ export const expertsRepository = {
     const exec = executor ?? db;
     await exec
       .update(expertProfiles)
-      .set({ ...data, updatedAt: new Date() })
+      .set({
+        headline: data.headline,
+        bio: data.bio,
+        username: data.username,
+        websiteUrl: data.websiteUrl,
+        yearStartedSalesforce: data.yearStartedSalesforce,
+        projectCountMin: data.projectCountMin,
+        projectLeadCountMin: data.projectLeadCountMin,
+        linkedinUrl: data.linkedinUrl,
+        trailheadUrl: data.trailheadUrl,
+        isSalesforceMvp: data.isSalesforceMvp,
+        isSalesforceCta: data.isSalesforceCta,
+        isCertifiedTrainer: data.isCertifiedTrainer,
+        searchable: data.searchable,
+        rateCents: data.rateCents,
+        timezone: data.timezone,
+        bookingBufferBeforeMinutes: data.bookingBufferBeforeMinutes,
+        bookingBufferAfterMinutes: data.bookingBufferAfterMinutes,
+        bookingMinimumNoticeMinutes: data.bookingMinimumNoticeMinutes,
+        updatedAt: new Date(),
+      })
       .where(eq(expertProfiles.id, expertProfileId));
   },
 

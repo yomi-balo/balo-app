@@ -1,4 +1,5 @@
 import { and, desc, eq, gte, lte, isNotNull, inArray, exists, sql, type SQL } from 'drizzle-orm';
+import { parseRatingAverage } from '@balo/shared/reviews';
 import { db } from '../client';
 import {
   expertProfiles,
@@ -57,6 +58,18 @@ export interface ExpertSearchRow {
   agencyName: string | null;
   agencyLogoUrl: string | null;
   consultationCount: number;
+  /**
+   * BAL-422 — the DENORMALISED aggregate, already PARSED to a number (the column is
+   * `numeric(2,1)`, which Drizzle infers as `string`). `null` means NO REVIEWS, never 0.0 —
+   * the card's `RatingBadge` null-gates on this and renders nothing.
+   *
+   * ⚠ THIS IS WHY THE COLUMNS ARE DENORMALISED AT ALL. Search returns a page of experts and
+   * every row needs a rating; a per-expert aggregate here would be high fan-out on the
+   * hottest path in the product. Do NOT "improve" this into a join on `reviews`.
+   */
+  ratingAverage: number | null;
+  /** ENGAGEMENTS REVIEWED, not review rows — see the column docblock on `expert_profiles`. */
+  ratingCount: number;
   languages: { name: string; flagEmoji: string | null }[];
   competencies: ExpertSearchCompetencyRow[];
 }
@@ -407,6 +420,9 @@ interface SearchSelectRow {
   agencyName: string | null;
   agencyLogoUrl: string | null;
   consultationCount: number;
+  /** ⚠ RAW `numeric` ⇒ a STRING off the driver. Parsed into `ExpertSearchRow` below. */
+  ratingAverage: string | null;
+  ratingCount: number;
   languages: { name: string; flagEmoji: string | null }[];
   rank: number;
   totalCount: number;
@@ -500,6 +516,10 @@ export const expertSearchRepository = {
         consultationCount: sql<number>`${consultationCountExpression}::int`.as(
           'consultation_count'
         ),
+        // BAL-422 — DENORMALISED, so this is two plain column reads on a row we already have,
+        // not a per-expert aggregate on the hot path. That is the entire reason they exist.
+        ratingAverage: expertProfiles.ratingAverage,
+        ratingCount: expertProfiles.ratingCount,
         languages: languagesJsonExpression,
         rank: relevanceExpression(q).as('rank'),
         totalCount: sql<number>`count(*) OVER ()`.as('total_count'),
@@ -551,6 +571,10 @@ export const expertSearchRepository = {
       agencyName: r.agencyName,
       agencyLogoUrl: r.agencyLogoUrl,
       consultationCount: Number(r.consultationCount),
+      // ⚠ `numeric` ⇒ a STRING off the driver ('4.3'). ONE parse, the shared one — never
+      // `Number(...)` inline, and never a `::float8` cast in the projection.
+      ratingAverage: parseRatingAverage(r.ratingAverage),
+      ratingCount: r.ratingCount,
       languages: (r.languages ?? []).map((l: { name: string; flagEmoji: string | null }) => ({
         name: l.name,
         flagEmoji: l.flagEmoji,

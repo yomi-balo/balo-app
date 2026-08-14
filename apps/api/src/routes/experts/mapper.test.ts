@@ -23,6 +23,8 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     agencyName: 'Acme Consulting',
     agencyLogoUrl: 'https://cdn.example.com/logo.png',
     consultationCount: 7,
+    ratingAverage: 4.3,
+    ratingCount: 2,
     languages: [
       { name: 'English', flagEmoji: '🇬🇧' },
       { name: 'French', flagEmoji: null },
@@ -119,8 +121,21 @@ describe('mapRowToExpertSearchResult', () => {
     });
   });
 
-  it('always sets rating to null', () => {
-    expect(mapRowToExpertSearchResult(buildRow(), NOW).rating).toBeNull();
+  // BAL-422 — this used to pin `rating` as ALWAYS null (the aggregate did not exist). It now
+  // pins PASS-THROUGH of the denormalised columns in both directions.
+  it('passes the rating aggregate through unchanged', () => {
+    const result = mapRowToExpertSearchResult(buildRow(), NOW);
+    expect(result.rating).toBe(4.3);
+    expect(result.ratingCount).toBe(2);
+  });
+
+  it('keeps rating null (never 0) for an expert with no reviews', () => {
+    const result = mapRowToExpertSearchResult(
+      buildRow({ ratingAverage: null, ratingCount: 0 }),
+      NOW
+    );
+    expect(result.rating).toBeNull();
+    expect(result.ratingCount).toBe(0);
   });
 
   it('passes through countryCode', () => {

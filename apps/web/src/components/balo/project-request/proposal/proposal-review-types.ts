@@ -12,7 +12,22 @@ export interface ProposalExpertIdentity {
   initials: string; // 1-2 char avatar fallback
   company: string | null;
   headline: string | null; // e.g. 'CPQ Specialist'
-  rating: number | null; // 0..5 or null
+  /**
+   * The expert's average rating (BAL-422), 1..5, or `null` for NO REVIEWS.
+   *
+   * ⚠ `null` IS NOT 0.0 and is NOT "unrated but zero-scored" — the scale starts at 1. Both
+   * read components gate the whole rating fragment on `rating !== null`.
+   */
+  rating: number | null;
+  /**
+   * ENGAGEMENTS REVIEWED — not review rows (one engagement, one vote). `0` when `rating` is
+   * null.
+   *
+   * ⚠ NON-NULLABLE ON PURPOSE, mirroring `ExpertCardData`. `rating` is the gate; a second
+   * nullable field would invite a second, divergent gate. It is rendered WHENEVER `rating`
+   * is — an average without its denominator is the thing BAL-422's AC forbids.
+   */
+  ratingCount: number;
 }
 
 /** One milestone / deliverable row. `valueCents` is only shown for Fixed pricing. */
