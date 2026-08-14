@@ -59,12 +59,15 @@ export interface MockDevice {
 
 export type MockDeviceState = 'idle' | 'pending' | 'granted' | 'blocked' | 'not-found';
 
+/** The three track kinds Daily exposes per participant. Named so `tracks` can be read at a glance. */
+export type MockTrackKind = 'video' | 'audio' | 'screenVideo';
+
 export interface DailyMockState {
   localSessionId: string;
   /** ⚠ Already `joined_at`-sorted, exactly as Daily returns it with `{ sort: 'joined_at' }`. */
   participantIds: string[];
   participants: Record<string, MockParticipant>;
-  tracks: Record<string, Partial<Record<'video' | 'audio' | 'screenVideo', MockTrackState>>>;
+  tracks: Record<string, Partial<Record<MockTrackKind, MockTrackState>>>;
   meetingState: string;
   networkState: string;
   activeSpeakerId: string | null;

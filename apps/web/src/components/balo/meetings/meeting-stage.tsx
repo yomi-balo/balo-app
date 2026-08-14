@@ -67,8 +67,7 @@ export function SpotlightLayout({
 }: Readonly<
   StageTilesProps & { selfIsPrimary?: boolean; onSwapSelf?: () => void }
 >): React.JSX.Element {
-  const remotes = tiles.visible.filter((tile) => !tile.isLocal);
-  const [remote] = remotes;
+  const remote = tiles.visible.find((tile) => !tile.isLocal);
   const self = tiles.visible.find((tile) => tile.isLocal);
 
   if (remote === undefined) {

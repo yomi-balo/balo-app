@@ -14,7 +14,7 @@
 function hueFor(name: string): number {
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) {
-    hash = (hash * 31 + name.charCodeAt(i)) % 360;
+    hash = (hash * 31 + (name.codePointAt(i) ?? 0)) % 360;
   }
   return hash;
 }

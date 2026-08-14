@@ -221,7 +221,9 @@ export function PreJoin({
             onChange={handleSkipChange}
             className="accent-primary h-4 w-4"
           />
-          Skip this next time
+          {/* ⚠ An expression, not bare text: the label is `flex gap-2`, so a literal space would
+              stack ON TOP of the gap and shift the copy off the checkbox. */}
+          {'Skip this next time'}
         </label>
       </div>
     </div>

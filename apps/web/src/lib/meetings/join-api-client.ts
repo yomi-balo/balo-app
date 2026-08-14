@@ -1,12 +1,7 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
-import type {
-  GuestJoinState,
-  JoinGrant,
-  LobbyClaimState,
-  MemberJoinResponse,
-} from '@balo/shared/meetings';
+import type { GuestJoinState, LobbyClaimState, MemberJoinResponse } from '@balo/shared/meetings';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -59,7 +54,15 @@ function getApiUrl(): string {
  * `@balo/db` value can reach a `'use client'` graph through it — but keeping this
  * `export type` makes that structurally impossible rather than merely true today.
  */
-export type { GuestJoinState, JoinGrant, LobbyClaimState, MemberJoinResponse };
+export type { GuestJoinState, LobbyClaimState, MemberJoinResponse };
+
+/**
+ * ⚠ `export type … from`, NOT an import-then-re-export. The other three names above are USED in
+ * this file, so they must be imported; `JoinGrant` is not — it is only passed through for
+ * callers. Importing a symbol solely to re-export it reads as a local dependency that does not
+ * exist, and is the one form the direct re-export replaces cleanly.
+ */
+export type { JoinGrant } from '@balo/shared/meetings';
 
 export type JoinApiResult<T> =
   | { readonly ok: true; readonly data: T }

@@ -99,7 +99,9 @@ export function MeetingClockSlot({
     return (
       <span aria-live="off" aria-label="Live" className={cn(CHIP_BASE, 'text-success bg-white/6')}>
         <span className="bg-success h-1.5 w-1.5 rounded-full" aria-hidden="true" />
-        Live
+        {/* ⚠ An expression, not bare text: the chip is `flex gap-1.5`, so a literal space would
+            stack ON TOP of the gap. This also matches the `{elapsed}` arms below. */}
+        {'Live'}
       </span>
     );
   }

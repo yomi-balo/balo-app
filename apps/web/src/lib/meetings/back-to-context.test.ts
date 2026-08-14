@@ -3,32 +3,41 @@ import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
 import { DASHBOARD_BACK_TO, resolveBackTo, resolveContextNoun } from './back-to-context';
 
 /**
- * ⚠ DRIVEN FROM A LOCAL EXHAUSTIVE LIST that `tsc` proves complete: the `satisfies` below fails
- * to compile if a seventh holder-bearing label is added and not listed, so a new context type
- * fails HERE as well as at the lookup table.
+ * ⚠ TOTAL BY CONSTRUCTION, NOT BY A SEPARATE ASSERTION. `satisfies Record<…, true>` requires a
+ * key for EVERY holder-bearing label, so adding a seventh and forgetting it here fails to
+ * compile — and the guard is the object's own type, so there is nothing to keep in sync and
+ * nothing to re-assert at runtime.
+ *
+ * ⚠ THIS REPLACED AN `expect(_assertTotal).toBe(true)` THAT COULD ONLY EVER PASS: `_assertTotal`
+ * was a `const` whose declared type WAS `true`. The compile-time check was real; its runtime
+ * echo asserted nothing while making the test look guarded.
  */
-const ALL_WITH_HOLDER = [
-  'case',
-  'project_discovery',
-  'project_kickoff',
-  'package_session',
-  'retainer_checkin',
-  'request_interaction',
-] as const satisfies readonly MeetingContextTypeWithHolder[];
-
-type Listed = (typeof ALL_WITH_HOLDER)[number];
-/** ⚠ Fails to compile if a label exists that the list above forgot. */
-type AssertTotal = MeetingContextTypeWithHolder extends Listed ? true : never;
-const _assertTotal: AssertTotal = true;
+const ALL_WITH_HOLDER = Object.keys({
+  case: true,
+  project_discovery: true,
+  project_kickoff: true,
+  package_session: true,
+  retainer_checkin: true,
+  request_interaction: true,
+} satisfies Record<MeetingContextTypeWithHolder, true>) as MeetingContextTypeWithHolder[];
 
 describe('resolveBackTo', () => {
   it('answers for every holder-bearing context type, with a non-empty label and href', () => {
+    /**
+     * ⚠ THE LOOP IS GUARDED BY A COUNT, NOT BY A TAUTOLOGY. This previously closed with
+     * `expect(_assertTotal).toBe(true)`, which can only ever pass: `_assertTotal` is a `const`
+     * whose declared type IS `true`. The real totality check is the compile-time annotation on
+     * that const — a runtime echo of it asserted nothing, while making the test LOOK guarded.
+     * What actually needed guarding is the loop: over an empty list every assertion below is
+     * skipped and the test still passes green.
+     */
+    expect(ALL_WITH_HOLDER).toHaveLength(6);
+
     for (const contextType of ALL_WITH_HOLDER) {
       const backTo = resolveBackTo({ contextType, contextId: 'ctx-1' });
       expect(backTo.label.length).toBeGreaterThan(0);
       expect(backTo.href.startsWith('/')).toBe(true);
     }
-    expect(_assertTotal).toBe(true);
   });
 
   it('⚠ points `case` at /consultations — /cases/[caseId] is BAL-421 and does not exist yet', () => {

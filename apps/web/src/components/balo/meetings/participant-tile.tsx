@@ -138,7 +138,18 @@ export function ParticipantTile({
             // ⚠ SELF-VIEW IS MIRRORED; REMOTE TILES NEVER ARE.
             isLocal ? 'scale-x-[-1]' : ''
           )}
-        />
+        >
+          {/*
+            ⚠ AN EMPTY CAPTIONS TRACK, PRESENT ONLY TO STATE THAT THERE IS NOTHING TO CAPTION.
+            This element carries a LIVE WebRTC MediaStream attached imperatively via `videoRef` —
+            there is no `src`, no file, and no timed-text resource that could exist for it. Live
+            captioning would be a transcription feature (BAL-387's territory), not a `<track>`.
+            The tag is here because the a11y rule cannot distinguish live media from recorded, and
+            an explicit empty track is the honest answer: no captions are available for this
+            stream, rather than captions that were forgotten.
+          */}
+          <track kind="captions" />
+        </video>
       ) : (
         <span className="absolute inset-0 flex items-center justify-center">
           <MeetingAvatar name={displayName} size={big ? 84 : 46} />
