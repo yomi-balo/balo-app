@@ -72,6 +72,21 @@ const grantSchema = z.object({
   isOwner: z.boolean(),
   expiresAt: z.string().refine((value) => Number.isFinite(Date.parse(value))),
   participantId: z.string().refine(isParticipantId),
+  /**
+   * BAL-134 / ADR-1049 (D3) — ⚠⚠ **A SIXTH FIELD, NEVER A WIDENING OF `isOwner`.**
+   *
+   * `isOwner` is the only input to the Daily `is_owner` token property, so widening it to
+   * client principals would mint VENDOR-LEVEL owner tokens (eject, recording control) for the
+   * paying side. The two booleans diverge the moment the viewer is a client principal, which
+   * is the ordinary case on every client-booked consultation.
+   *
+   * ⚠⚠ **REQUIRED, NOT OPTIONAL, AND THAT IS THE WHOLE POINT OF THE SEPARATE FIELD.** An
+   * optional field would let a guest arm silently omit it and default to "absent" at every
+   * consumer — which is precisely the failure mode this design exists to prevent. Both guest
+   * arms send an explicit `false`, hard-coded server-side exactly as `isOwner` is, so the
+   * absence of the field is a BUG and this schema is where it is caught.
+   */
+  canEndMeeting: z.boolean(),
 });
 
 /**

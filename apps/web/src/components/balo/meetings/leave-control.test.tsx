@@ -5,11 +5,19 @@ import { axe } from 'jest-axe';
 import { LeaveControl, type LeaveControlProps } from './leave-control';
 
 /**
- * BAL-435 — ⚠⚠ **THE PINNED FINDING.**
+ * BAL-435 — ⚠⚠ **THE PINNED FINDING.** BAL-134 / ADR-1049 changed the gate's SUBJECT, not its
+ * shape: every assertion below now resolves on `canEndMeeting`.
  *
  * The prototype gated end-for-everyone on `lens === 'expert'`. Two defects: a LENS is never an
  * authorization input (ADR-1029), and leaving was conflated with ending, so a host stepping out
  * to take a phone call would have hung up on their client.
+ *
+ * ⚠⚠ **AND THE GATE IS NOT `isOwner` EITHER.** That boolean is
+ * `hasEngagementCapability(HOST_MEETINGS)` and is the ONE input to the Daily `is_owner` token
+ * property. ADR-1049 gives end authority to the client principal too — the party whose
+ * per-minute spend is running — so `canEndMeeting` is `isOwner || clientPrincipal`, composed
+ * server-side, and it reaches a Daily token nowhere. `isOwner` does not appear in this file, and
+ * `meeting-call-no-lens-gate.test.ts` asserts it does not appear in `leave-control.tsx` either.
  *
  * ⚠ THE HEADLINE ASSERTION IS AN **ABSENCE**, AND IT IS DELIBERATELY MADE TWICE — once through
  * the accessible tree (`queryByRole`) and once as a raw text sweep. A control that is merely
@@ -18,11 +26,11 @@ import { LeaveControl, type LeaveControlProps } from './leave-control';
  * variants that don't check `disabled`, which is why "not disabled, ABSENT" is the wording of the
  * rule.
  *
- * ⚠ THE VENDOR CALL ITSELF (`updateParticipants({'*':{eject:true}})` then `leave()`) IS ASSERTED
- * IN `meeting-call-surface.test.tsx`, NOT HERE, AND THAT IS ON PURPOSE. `LeaveControl` imports
- * nothing from `@daily-co` — it raises `onEndForEveryone` and the frame performs the eject. A
- * test that asserted a Daily call at this level could only do it by mocking the callback into
- * something that isn't the production path, which would prove nothing.
+ * ⚠ THE ACT ITSELF (`POST /meetings/:meetingId/end`, then the local teardown) IS ASSERTED IN
+ * `meeting-call-surface.test.tsx`, NOT HERE, AND THAT IS ON PURPOSE. `LeaveControl` imports
+ * nothing from `@daily-co` and knows nothing about the server — it raises `onEndForEveryone` and
+ * the frame performs the end. A test that asserted the server call at this level could only do
+ * it by mocking the callback into something that isn't the production path.
  */
 
 // ⚠ jsdom has no `matchMedia` and `setup.ts` stubs none, so the hook is mocked directly — the
@@ -32,7 +40,7 @@ vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 function propsFor(overrides: Partial<LeaveControlProps> = {}): LeaveControlProps {
   return {
-    isOwner: false,
+    canEndMeeting: false,
     contextNoun: 'case',
     isCase: true,
     onLeave: vi.fn(),
@@ -49,8 +57,8 @@ function accessibleNamesIn(container: HTMLElement): string[] {
   );
 }
 
-describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () => {
-  describe('isOwner === false — the non-host call', () => {
+describe('LeaveControl — the :169 fix, gated on canEndMeeting and nothing else', () => {
+  describe('canEndMeeting === false — no end authority', () => {
     it('renders exactly one control, and it says Leave', () => {
       render(<LeaveControl {...propsFor()} />);
 
@@ -95,9 +103,9 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
     });
   });
 
-  describe('isOwner === true — the host call', () => {
+  describe('canEndMeeting === true — the end-authority holder', () => {
     it('renders the split control: Leave, plus a chevron that opens the options', () => {
-      render(<LeaveControl {...propsFor({ isOwner: true })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true })} />);
 
       expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Leaving options' })).toBeInTheDocument();
@@ -107,7 +115,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
       const user = userEvent.setup();
       const onLeave = vi.fn();
       const onEndForEveryone = vi.fn();
-      render(<LeaveControl {...propsFor({ isOwner: true, onLeave, onEndForEveryone })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true, onLeave, onEndForEveryone })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leave' }));
 
@@ -117,7 +125,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
 
     it('the menu offers both choices, and they are different acts', async () => {
       const user = userEvent.setup();
-      render(<LeaveControl {...propsFor({ isOwner: true })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
 
@@ -128,7 +136,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
     it('choosing "Leave the call" from the menu leaves without confirming', async () => {
       const user = userEvent.setup();
       const onLeave = vi.fn();
-      render(<LeaveControl {...propsFor({ isOwner: true, onLeave })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true, onLeave })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
       await user.click(await screen.findByRole('button', { name: 'Leave the call' }));
@@ -140,7 +148,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
     it('⚠ choosing "End the call for everyone" ALWAYS confirms first', async () => {
       const user = userEvent.setup();
       const onEndForEveryone = vi.fn();
-      render(<LeaveControl {...propsFor({ isOwner: true, onEndForEveryone })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true, onEndForEveryone })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
       await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
@@ -153,7 +161,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
 
     it('⚠⚠ focus lands on CANCEL, not on the destructive confirm', async () => {
       const user = userEvent.setup();
-      render(<LeaveControl {...propsFor({ isOwner: true })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
       await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
@@ -167,7 +175,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
       const user = userEvent.setup();
       const onEndForEveryone = vi.fn();
       const onLeave = vi.fn();
-      render(<LeaveControl {...propsFor({ isOwner: true, onEndForEveryone, onLeave })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true, onEndForEveryone, onLeave })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
       await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
@@ -181,7 +189,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
     it('Confirm raises onEndForEveryone exactly once', async () => {
       const user = userEvent.setup();
       const onEndForEveryone = vi.fn();
-      render(<LeaveControl {...propsFor({ isOwner: true, onEndForEveryone })} />);
+      render(<LeaveControl {...propsFor({ canEndMeeting: true, onEndForEveryone })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
       await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
@@ -190,14 +198,14 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
       expect(onEndForEveryone).toHaveBeenCalledTimes(1);
     });
 
-    it('shows the pending label while the eject runs, and both controls are disabled', async () => {
+    it('shows the pending label while the end runs, and both controls are disabled', async () => {
       const user = userEvent.setup();
-      const { rerender } = render(<LeaveControl {...propsFor({ isOwner: true })} />);
+      const { rerender } = render(<LeaveControl {...propsFor({ canEndMeeting: true })} />);
 
       await user.click(screen.getByRole('button', { name: 'Leaving options' }));
       await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
       await screen.findByRole('alertdialog');
-      rerender(<LeaveControl {...propsFor({ isOwner: true, isEnding: true })} />);
+      rerender(<LeaveControl {...propsFor({ canEndMeeting: true, isEnding: true })} />);
 
       // ⚠ The dialog stays OPEN while the action runs, so the pending label is visible at all.
       expect(await screen.findByRole('button', { name: 'Ending…' })).toBeDisabled();
@@ -207,13 +215,13 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
     describe('the confirm copy (ruling R7)', () => {
       async function openConfirm(overrides: Partial<LeaveControlProps>): Promise<HTMLElement> {
         const user = userEvent.setup();
-        render(<LeaveControl {...propsFor({ isOwner: true, ...overrides })} />);
+        render(<LeaveControl {...propsFor({ canEndMeeting: true, ...overrides })} />);
         await user.click(screen.getByRole('button', { name: 'Leaving options' }));
         await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
         return screen.findByRole('alertdialog');
       }
 
-      it('⚠⚠ does NOT claim the end cannot be undone — a client-side eject revokes no token', async () => {
+      it('⚠⚠ does NOT claim the end cannot be undone, and does not mention rejoining', async () => {
         const dialog = await openConfirm({});
 
         expect(dialog.textContent ?? '').not.toMatch(/can'?t be undone/i);
@@ -245,7 +253,7 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
 
     it('has no accessibility violations, closed or open', async () => {
       const user = userEvent.setup();
-      const { container } = render(<LeaveControl {...propsFor({ isOwner: true })} />);
+      const { container } = render(<LeaveControl {...propsFor({ canEndMeeting: true })} />);
 
       expect(await axe(container)).toHaveNoViolations();
 
@@ -257,12 +265,14 @@ describe('LeaveControl — the :169 fix, gated on isOwner and nothing else', () 
     });
   });
 
-  it('⚠ never reads a lens, an activeMode or a role — isOwner is the whole gate', () => {
+  it('⚠ never reads a lens, an activeMode or a role — canEndMeeting is the whole gate', () => {
     // Behavioural restatement of the invariant: the ONLY difference between the two renders is
     // the boolean. `meeting-call-no-lens-gate.test.ts` holds the structural half.
-    const guest = render(<LeaveControl {...propsFor({ isOwner: false })} />).container.innerHTML;
-    const host = render(<LeaveControl {...propsFor({ isOwner: true })} />).container.innerHTML;
+    const withoutAuthority = render(<LeaveControl {...propsFor({ canEndMeeting: false })} />)
+      .container.innerHTML;
+    const withAuthority = render(<LeaveControl {...propsFor({ canEndMeeting: true })} />).container
+      .innerHTML;
 
-    expect(host).not.toBe(guest);
+    expect(withAuthority).not.toBe(withoutAuthority);
   });
 });

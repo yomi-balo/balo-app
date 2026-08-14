@@ -8,13 +8,22 @@ import type { DbExecutor } from './db-executor';
  * compile time WITHOUT the generic repo needing to know it. Mirrors
  * `_shared/schedule-audit.ts`.
  *
- * ⚠ ONLY `meeting.booked` HAS A WRITER TODAY. The other two are RESERVED — declared here so
- * their eventual writers inherit THIS vocabulary rather than minting a near-miss spelling
+ * ⚠ TWO OF THE FOUR HAVE WRITERS: `meeting.booked` (BAL-129, on `create`) and `meeting.ended`
+ * (BAL-134, on `endMeeting`). The other two are RESERVED — declared here so their eventual
+ * writers inherit THIS vocabulary rather than minting a near-miss spelling
  * (`meeting.reschedule`, `meeting.canceled`) that no "history of one meeting" read would ever
  * find. `audit_events.action` is open TEXT, so a reserved label costs no migration and no enum
  * value:
  *   · `meeting.rescheduled` — owner BAL-409/BAL-411, on `meetingsRepository.updateSchedule`.
  *   · `meeting.cancelled`   — owner BAL-410, on `meetingsRepository.cancel`.
+ *
+ * ⚠ `meeting.ended` IS WRITTEN WITH A NULL ACTOR ON FOUR OF THE FIVE TERMINAL PATHS, and that
+ * is the ADR-1030 system-actor exemption, not a miss: idle end, no-show, missed call and
+ * abandoned wait are all decided by the lifecycle sweep, where there genuinely is no human to
+ * name. Its `metadata.endedBy` carries WHICH kind of ender it was in every case, so a null
+ * `actor_user_id` beside `endedBy: 'system_idle'` is a complete record, while a null beside
+ * `'client_principal'` or `'expert_host'` would be a bug — the human paths always pass the
+ * acting user.
  *
  * ⚠ A RESERVED ACTION IS NOT THE SAME LIE AS AN UNWRITTEN COLUMN, and the distinction is worth
  * stating because `schema/meeting-presence.ts` rules the other way for columns: "an attribution
@@ -29,7 +38,11 @@ import type { DbExecutor } from './db-executor';
  * unattributed, party-visible state change. Wiring a caller without also wiring its audit row
  * re-opens exactly the ADR-1044 §5 gap BAL-129 closes here.
  */
-export type MeetingAuditAction = 'meeting.booked' | 'meeting.rescheduled' | 'meeting.cancelled';
+export type MeetingAuditAction =
+  | 'meeting.booked'
+  | 'meeting.rescheduled'
+  | 'meeting.cancelled'
+  | 'meeting.ended';
 
 /** Subject of a meeting audit row is always the meeting (entity_id = `meetings.id`). */
 export type MeetingAuditEntityType = 'meeting';

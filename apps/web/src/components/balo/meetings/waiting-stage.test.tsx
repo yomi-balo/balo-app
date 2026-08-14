@@ -5,8 +5,10 @@ import { axe } from 'jest-axe';
 import {
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
+  UNKNOWN_WAITING_FACTS,
   waitingCopyFor,
   type WaitingAbsentParty,
+  type WaitingFacts,
   type WaitingPhase,
 } from '@/lib/meetings/waiting-copy';
 import { WaitingStage } from './waiting-stage';
@@ -29,9 +31,25 @@ vi.mock('motion/react', async () => {
   return createMotionStub();
 });
 
+/**
+ * BAL-134 — the server-mirror facts. ⚠ THE `settled` ARM BRANCHES ON `outcome`, so the table
+ * below drives each party with the outcome ITS settled sentence is written for; the other arms
+ * are covered by equality in `waiting-copy.test.ts`.
+ */
+const FACTS: WaitingFacts = {
+  noShowFloorMinutes: 15,
+  outcome: null,
+  expertPresenceObserved: true,
+};
+
+function factsFor(absentParty: WaitingAbsentParty): WaitingFacts {
+  return { ...FACTS, outcome: absentParty === 'client' ? 'no_show_client' : 'missed_call' };
+}
+
 const INPUT = {
   counterpartyFirstName: 'Dana',
   scheduledStartLabel: '10:00 am',
+  ...FACTS,
 } as const;
 
 const PHASES: readonly WaitingPhase[] = ['pre-start', 'running', 'near', 'settled'];
@@ -40,11 +58,13 @@ const PARTIES: readonly WaitingAbsentParty[] = ['expert', 'client'];
 function renderWaiting(
   absentParty: WaitingAbsentParty,
   phase: WaitingPhase,
-  headingRef?: React.Ref<HTMLHeadingElement>
+  headingRef?: React.Ref<HTMLHeadingElement>,
+  facts: WaitingFacts = FACTS
 ): HTMLElement {
   return render(
     <WaitingStage
       phase={phase}
+      facts={facts}
       // ⚠⚠ RULING R10 — ONE NULLABLE SUBJECT, NOT THREE OPTIONAL PROPS. Three separate props are
       // how `"your expert"` and `"the scheduled time"` shipped as placeholder literals beside a
       // hard-coded `absentParty="expert"`.
@@ -56,8 +76,14 @@ function renderWaiting(
 
 /** The GUEST mounts, structurally: no route provider ⇒ no subject ⇒ no party's clock named. */
 function renderNeutral(headingRef?: React.Ref<HTMLHeadingElement>): HTMLElement {
-  return render(<WaitingStage phase="pre-start" subject={null} headingRef={headingRef} />)
-    .container;
+  return render(
+    <WaitingStage
+      phase="pre-start"
+      subject={null}
+      facts={UNKNOWN_WAITING_FACTS}
+      headingRef={headingRef}
+    />
+  ).container;
 }
 
 /** The glyph that sits in the avatar badge — compared by its own markup, not by a class name. */
@@ -71,8 +97,8 @@ describe('WaitingStage — the 4 × 2 copy table, rendered', () => {
   for (const absentParty of PARTIES) {
     for (const phase of PHASES) {
       it(`renders the ${absentParty}-absent / ${phase} copy from the shared module`, () => {
-        const expected = waitingCopyFor(absentParty, phase, INPUT);
-        renderWaiting(absentParty, phase);
+        const expected = waitingCopyFor(absentParty, phase, { ...INPUT, ...factsFor(absentParty) });
+        renderWaiting(absentParty, phase, undefined, factsFor(absentParty));
 
         expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(expected.title);
         expect(screen.getByText(expected.body)).toBeInTheDocument();
@@ -225,5 +251,106 @@ describe('WaitingStage — ⚠⚠ the viewer decides WHOSE clock is named (R10)'
     const container = renderNeutral();
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+/**
+ * BAL-134 — ⚠⚠ **THE PROGRESSION HAD NO ANNOUNCEMENT.**
+ *
+ * The body paragraph is the sole carrier of the wait's progression and it was a plain `<p>`, so a
+ * screen-reader expert waiting on a late client was never told that the wait had settled and that
+ * they were free to leave — the single most consequential sentence on the surface.
+ * `MeetingClockSlot` is correctly `aria-live="off"` (a per-second duration must not be announced),
+ * so the announcement has nowhere else to go.
+ */
+describe('WaitingStage — ⚠⚠ the body is a live region (BAL-134)', () => {
+  it('renders the body inside an <output>, not a bare <p>', () => {
+    const container = renderWaiting('client', 'running');
+
+    const live = container.querySelector('output');
+    expect(live).not.toBeNull();
+    expect(live?.textContent).toBe(waitingCopyFor('client', 'running', INPUT).body);
+  });
+
+  it('⚠⚠ it is <output>, NOT role="status" — SonarCloud S6819', () => {
+    const container = renderWaiting('client', 'running');
+
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.querySelector('output')).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('⚠ the announcement is the BODY, and the heading stays out of it', () => {
+    renderWaiting('client', 'settled', undefined, factsFor('client'));
+
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading.tagName).toBe('H1');
+    expect(heading.closest('output')).toBeNull();
+  });
+
+  it('⚠⚠ the text CHANGES across the progression, which is what makes it announce', () => {
+    // A live region announces on content change. The bodies must therefore genuinely differ per
+    // phase, or the region would be silent exactly when it matters.
+    const seen = new Set<string>();
+    for (const phase of PHASES) {
+      const container = renderWaiting('client', phase, undefined, factsFor('client'));
+      seen.add(container.querySelector('output')?.textContent ?? '');
+    }
+    expect(seen.size).toBe(PHASES.length);
+  });
+
+  it('⚠ a re-render with the SAME phase produces the same text (no spurious announcement)', () => {
+    const first = renderWaiting('client', 'running');
+    const second = renderWaiting('client', 'running');
+
+    expect(first.querySelector('output')?.textContent).toBe(
+      second.querySelector('output')?.textContent
+    );
+  });
+
+  it('the neutral (guest) mount carries the live region too', () => {
+    const container = renderNeutral();
+    expect(container.querySelector('output')?.textContent).toBe(NEUTRAL_WAITING_COPY.body);
+  });
+
+  it('has no accessibility violations with the live region present', async () => {
+    expect(
+      await axe(renderWaiting('client', 'settled', undefined, factsFor('client')))
+    ).toHaveNoViolations();
+  });
+});
+
+/**
+ * BAL-134 — the component forwards the server facts, so the stage cannot render a sentence the
+ * facts do not support. The exhaustive fact→string table lives in `waiting-copy.test.ts`; these
+ * assert the WIRING.
+ */
+describe('WaitingStage — ⚠ the facts reach the copy (BAL-134)', () => {
+  it('interpolates the SERVER-supplied no-show floor rather than a bundled literal', () => {
+    const container = renderWaiting('client', 'near', undefined, {
+      ...FACTS,
+      noShowFloorMinutes: 20,
+    });
+
+    expect(container.textContent ?? '').toContain('20-minute mark');
+    expect(container.textContent ?? '').not.toContain('15-minute');
+  });
+
+  it('⚠⚠ never claims a no-show settlement when the outcome does not say so', () => {
+    const container = renderWaiting('client', 'settled', undefined, {
+      ...FACTS,
+      outcome: null,
+    });
+
+    expect(container.textContent ?? '').not.toContain('no-show');
+    expect(container.textContent ?? '').not.toContain('payout');
+  });
+
+  it('⚠⚠ never claims counted time before the expert has been OBSERVED', () => {
+    const container = renderWaiting('client', 'running', undefined, {
+      ...FACTS,
+      expertPresenceObserved: false,
+    });
+
+    expect(container.textContent ?? '').not.toContain('is counted');
   });
 });

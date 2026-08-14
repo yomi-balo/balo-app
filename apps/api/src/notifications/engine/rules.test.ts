@@ -917,14 +917,55 @@ describe('notificationRules', () => {
       }
     });
 
-    it('⚠ `meeting_party_participants` is used by the guest FYI and by nothing else yet', () => {
-      // A new fan-out KIND is a dispatcher branch; pinning its only consumer means a future
-      // reuse has to come past this test and state itself.
+    it('⚠ `meeting_party_participants` is used by the guest FYI and the BAL-134 client nudge', () => {
+      // A new fan-out KIND is a dispatcher branch; pinning its consumers means a future reuse
+      // has to come past this test and state itself. BAL-134 is the SECOND consumer, and it
+      // states itself here: the client-absent nudge fans out to the booking company's members,
+      // resolved by the PUBLISHER into `payload.recipientUserIds` — which is what keeps a
+      // membership read out of `engine/resolver.ts`, exactly as the guest FYI does.
       const users = Object.entries(notificationRules)
         .filter(([, rules]) => rules.some((r) => r.recipient === 'meeting_party_participants'))
         .map(([event]) => event);
 
-      expect(users).toEqual(['meeting.guest_added']);
+      expect(users).toEqual(['meeting.guest_added', 'meeting.client_absent']);
+    });
+
+    /**
+     * ⚠⚠ BAL-134 — THE CLIENT NUDGE HAS **NO SMS ARM**, AND ITS ABSENCE IS ASSERTED (D13). The
+     * AC says "SMS + in-app"; two INDEPENDENT structural blocks in the shipped code make it
+     * unbuildable: `processSmsJob` resolves the number from
+     * `usersRepository.findById(payload.recipientId).phone` (a guest or delegate with no user
+     * row is unreachable BY CONSTRUCTION), and the `recipientPhoneVerified` gate reads
+     * `ctx.data.user`, which the resolver hydrates only on the SINGLE-RECIPIENT path — never on
+     * a fan-out, which is what this nudge is. Adding an SMS arm before those are fixed would
+     * queue jobs that can never resolve a number, so this test is the guard rather than a note.
+     */
+    it('⚠ `meeting.client_absent` ships in-app + email and NO sms (D13 — deferred, not dropped)', () => {
+      const rules = notificationRules['meeting.client_absent'] ?? [];
+
+      expect(rules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      expect(rules.some((r) => r.channel === 'sms')).toBe(false);
+      expect(rules.every((r) => r.template === 'meeting-client-absent')).toBe(true);
+    });
+
+    /**
+     * ⚠ THE BALO-STAFF PATH IS THE SHIPPED `recipient: 'admin'` ONE — the ticket's "this may
+     * need a separate path rather than a new template" is wrong. `dispatcher.ts` resolves it to
+     * the literal `OPS_NOTIFICATION_EMAIL`; the precedent is `project.match_requested`.
+     */
+    it('⚠ `meeting.expert_absent` is a CRITICAL admin email — the shipped ops path, not a new one', () => {
+      expect(notificationRules['meeting.expert_absent']).toEqual([
+        {
+          channel: 'email',
+          recipient: 'admin',
+          template: 'meeting-expert-absent-admin',
+          timing: 'immediate',
+          priority: 'critical',
+        },
+      ]);
     });
   });
 

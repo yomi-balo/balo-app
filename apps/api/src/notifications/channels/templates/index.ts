@@ -59,6 +59,10 @@ import {
   MeetingGuestLinkResentEmail,
   MeetingGuestRemovedEmail,
 } from './meeting-guest-emails.js';
+import {
+  MeetingClientAbsentEmail,
+  MeetingExpertAbsentAdminEmail,
+} from './meeting-absence-emails.js';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 import { ActionItemAssignedEmail } from './action-item-assigned.js';
 import { RecapReadyEmail } from './recap-ready.js';
@@ -124,6 +128,31 @@ function closeReasonOf(value: unknown): 'resolved' | 'auto_inactive' | undefined
     return value;
   }
   return undefined;
+}
+
+/**
+ * BAL-134 — a `meeting_context_type` label as a human noun for the OPS alert's triage line.
+ *
+ * ⚠ A LOOKUP, NOT A `replace(/_/g, ' ')`. The labels are a closed set and ops reads them at a
+ * glance; a mechanical de-underscoring would render `project_discovery` as "project discovery",
+ * which is not what the product calls it. An UNKNOWN label degrades to the neutral
+ * "consultation" rather than leaking a raw enum string into an email.
+ */
+const CONTEXT_TYPE_LABELS: Readonly<Record<string, string>> = {
+  case: 'Case consultation',
+  project_kickoff: 'Project kickoff',
+  project_discovery: 'Project discovery call',
+  package_session: 'Package session',
+  retainer_checkin: 'Retainer check-in',
+  request_interaction: 'Request conversation',
+  admin: 'Balo admin call',
+};
+
+function humaniseContextType(value: unknown): string {
+  if (typeof value !== 'string') {
+    return 'Consultation';
+  }
+  return CONTEXT_TYPE_LABELS[value] ?? 'Consultation';
 }
 
 /**
@@ -1296,6 +1325,40 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       baseUrl: BASE_URL,
     }),
     subject: 'Your call invitation has been withdrawn',
+  }),
+
+  // BAL-134 — the Balo-ops salvage alert. `recipient: 'admin'` resolves to the literal
+  // `OPS_NOTIFICATION_EMAIL` in the dispatcher (the `project-match-requested` precedent).
+  // ⚠ THE SUBJECT NAMES NO PERSON — ops triages by meeting, and a name frozen at schedule time
+  // would be stale by fire time and is PII parked in a table for nothing.
+  'meeting-expert-absent-admin': (data) => ({
+    component: React.createElement(MeetingExpertAbsentAdminEmail, {
+      meetingId: (data.meetingId as string) ?? '',
+      minutesPastStart: numberCount(data.minutesPastStart),
+      contextLabel: humaniseContextType(data.contextType),
+      scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+      baseUrl: BASE_URL,
+    }),
+    subject: 'Expert has not joined a consultation',
+  }),
+
+  // BAL-134 — the client nudge. ⚠ NO BILLING LINE ANYWHERE: nothing is charged until both
+  // sides are present, so a charge claim would be false, and a "you will be charged" line would
+  // be a threat aimed at somebody a few minutes late.
+  'meeting-client-absent': (data) => ({
+    component: React.createElement(MeetingClientAbsentEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      // ⚠ EXPLICITLY `undefined` RATHER THAN A PLACEHOLDER — the component renders
+      // party-neutral copy for it, and inventing a name on a live delivery surface is worse
+      // than saying "your expert".
+      waitingPartyName:
+        typeof data.waitingPartyName === 'string' && data.waitingPartyName.length > 0
+          ? data.waitingPartyName
+          : undefined,
+      meetingId: (data.meetingId as string) ?? '',
+      baseUrl: BASE_URL,
+    }),
+    subject: 'Your consultation has started',
   }),
 };
 

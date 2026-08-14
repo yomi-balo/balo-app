@@ -5,6 +5,7 @@ import { useReducedMotion } from 'motion/react';
 import {
   resolveWaitingCopy,
   waitingIconKindFor,
+  type WaitingFacts,
   type WaitingPhase,
   type WaitingSubject,
 } from '@/lib/meetings/waiting-copy';
@@ -43,16 +44,25 @@ export interface WaitingStageProps {
   readonly phase: WaitingPhase;
   /** ⚠ `null` ⇒ PARTY-NEUTRAL COPY. See the module docblock — this is a live path, not a guard. */
   readonly subject: WaitingSubject | null;
+  /**
+   * BAL-134 — the server-mirror facts the copy may not assert without: the no-show floor in
+   * minutes, the settled outcome, and whether an expert has actually been observed in the room.
+   *
+   * ⚠ `UNKNOWN_WAITING_FACTS` BEFORE THE FIRST POLL AND ON BOTH GUEST MOUNTS. Every string is
+   * written so the unknown answer claims LESS, never more.
+   */
+  readonly facts: WaitingFacts;
   readonly headingRef?: React.Ref<HTMLHeadingElement>;
 }
 
 export function WaitingStage({
   phase,
   subject,
+  facts,
   headingRef,
 }: Readonly<WaitingStageProps>): React.JSX.Element {
   const reduceMotion = useReducedMotion();
-  const { title, body } = resolveWaitingCopy(phase, subject);
+  const { title, body } = resolveWaitingCopy(phase, subject, facts);
   const iconKind = waitingIconKindFor(subject?.absentParty ?? null, phase);
 
   return (
@@ -72,9 +82,30 @@ export function WaitingStage({
         >
           {title}
         </h1>
-        <p className="text-muted-foreground mx-auto mt-1 max-w-[360px] text-sm leading-relaxed">
+        {/*
+          BAL-134 — ⚠⚠ **THE PROGRESSION'S ONLY ANNOUNCEMENT LIVES HERE.**
+
+          This paragraph is the sole carrier of the wait's progression, and it had no live region:
+          a screen-reader expert waiting on a late client was never told that the wait had settled
+          and that they were free to leave — the single most consequential sentence on the surface.
+          `MeetingClockSlot` is correctly `aria-live="off"` (a duration announced every second is a
+          denial of service), so the announcement has nowhere else to go.
+
+          ⚠ `<output>`, NOT `role="status"` — SonarCloud S6819, and `<output>` carries the same
+          implicit live-region semantics natively.
+
+          ⚠ IT ANNOUNCES ON CONTENT CHANGE, WHICH IS EXACTLY PHASE CHANGE: this element renders no
+          clock and no duration, so its text is a pure function of the phase, the subject and the
+          server facts. A re-render that changes none of them changes no text, and a live region
+          with unchanged text says nothing. The element is present at mount, so its initial copy is
+          read as ordinary page content rather than announced as an update.
+        */}
+        <output
+          aria-live="polite"
+          className="text-muted-foreground mx-auto mt-1 block max-w-[360px] text-sm leading-relaxed"
+        >
           {body}
-        </p>
+        </output>
       </div>
     </div>
   );

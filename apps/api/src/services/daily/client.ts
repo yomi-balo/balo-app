@@ -60,11 +60,27 @@ export function getDailyApiKey(): string {
 }
 
 /**
+ * Every HTTP method this seam issues.
+ *
+ * ⚠ BAL-134 WIDENED THIS FROM `'GET' | 'POST'`, AND THAT WAS A **CLIENT** CHANGE RATHER THAN A
+ * CALL-SITE ADDITION — the union was the thing stopping `DELETE /rooms/:name` from being
+ * written at all. Deleting the room is what makes "a settled meeting cannot be rejoined" true
+ * on the VENDOR side: a Daily token survives an eject (`eject_at_token_exp` is false and `exp`
+ * is `scheduled_end + 24h`), so the client-side `updateParticipants({'*': {eject: true}})`
+ * revokes nothing. Balo-side refusal (`MEETING_CLOSED_TO_JOIN`) was already there; this closes
+ * the other half.
+ *
+ * ⚠ NOT WIDENED TO `PATCH` / `PUT` SPECULATIVELY. Per-participant `ban: true` and the roster
+ * remove-from-call path are BAL-444's; this ticket adds `DELETE` and nothing else.
+ */
+export type DailyRequestMethod = 'GET' | 'POST' | 'DELETE';
+
+/**
  * One request to the Daily REST API. Throws `DailyConfigError` when the key is missing and
  * `DailyApiError` (carrying the status and the raw body, for the SERVER log) on any non-2xx.
  */
 export async function dailyRequest<T>(
-  method: 'GET' | 'POST',
+  method: DailyRequestMethod,
   path: string,
   body?: unknown
 ): Promise<T> {

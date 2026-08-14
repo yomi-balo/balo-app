@@ -13,6 +13,7 @@ const {
   mockExpertFindDisplayProfileById,
   mockAuthorizeMeetingParticipation,
   mockHasEngagementCapability,
+  mockGetMemberRole,
   mockTrackServer,
   mockPublish,
 } = vi.hoisted(() => ({
@@ -28,6 +29,7 @@ const {
   mockExpertFindDisplayProfileById: vi.fn(),
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
+  mockGetMemberRole: vi.fn(),
   mockTrackServer: vi.fn(),
   mockPublish: vi.fn(),
 }));
@@ -69,7 +71,7 @@ vi.mock('@balo/db', () => ({
     findDisplayProfileById: mockExpertFindDisplayProfileById,
   },
   partyDomainsRepository: { listByParty: vi.fn() },
-  partyMembershipsRepository: { getMemberRole: vi.fn(), listAdminUserIds: vi.fn() },
+  partyMembershipsRepository: { getMemberRole: mockGetMemberRole, listAdminUserIds: vi.fn() },
   projectRequestsRepository: { findById: vi.fn() },
   requestExpertRelationshipsRepository: { findById: vi.fn() },
 }));
@@ -185,6 +187,9 @@ beforeEach(() => {
   mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk());
   mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
   mockHasEngagementCapability.mockResolvedValue(false);
+  // BAL-134 — no company membership by default, so `canEndMeeting`'s client arm is false unless
+  // a test says otherwise. `undefined` is what `getMemberRole` really answers for a non-member.
+  mockGetMemberRole.mockResolvedValue(undefined);
   mockFindNamesByIds.mockResolvedValue([{ firstName: 'Dana', lastName: 'Okoro' }]);
   // ⚠ BAL-435 (R10) — the waiting-stage counterparty reads.
   mockExpertFindDisplayProfileById.mockResolvedValue({ id: EXPERT_PROFILE_ID, userId: USER_ID });
@@ -222,6 +227,82 @@ describe('joinMeetingAsMember — the happy paths', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.grant.isOwner).toBe(true);
+  });
+});
+
+/**
+ * ⚠⚠⚠ BAL-134 / ADR-1049 (D3) — THE SHARPEST TRAP IN THE FEATURE, PINNED.
+ *
+ * `isOwner` is the ONLY input to the Daily meeting token's `is_owner` property, and Daily
+ * `is_owner` confers VENDOR-LEVEL ROOM POWERS (eject, recording control). `canEndMeeting` is a
+ * SEPARATE, SIXTH grant field that is true for CLIENT PRINCIPALS too. **Merging them, or
+ * "simplifying" the mint to read `canEndMeeting`, would mint Daily owner tokens for the PAYING
+ * SIDE.** ADR-1049's "this is what BAL-435's bare `isOwner` prop becomes" is unsafe as written
+ * and is deliberately not implemented as a rename.
+ *
+ * The decisive row is the third one: a client principal gets `canEndMeeting: true` and
+ * `isOwner: false`, AND THE MINTED TOKEN CARRIES `is_owner: false`. That is the assertion that
+ * fails the moment anybody unifies the two booleans.
+ */
+describe('⚠⚠ joinMeetingAsMember — `canEndMeeting` vs `isOwner` (BAL-134 D3)', () => {
+  it('neither — a member with no capability and no company role', async () => {
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.grant.isOwner).toBe(false);
+    expect(result.grant.canEndMeeting).toBe(false);
+  });
+
+  it('the EXPERT HOST holds both — the engagement axis satisfies each independently', async () => {
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.grant.isOwner).toBe(true);
+    expect(result.grant.canEndMeeting).toBe(true);
+  });
+
+  it('⚠⚠ a CLIENT PRINCIPAL may END but is NEVER a Daily owner — the token proves it', async () => {
+    mockHasEngagementCapability.mockResolvedValue(false);
+    // A live company member. `CONSUME_CREDITS` sits in the base member bundle (D6).
+    mockGetMemberRole.mockResolvedValue('member');
+    const minter = createJwtMinter();
+
+    const result = await joinMeetingAsMember({ meetingId: MEETING_ID, userId: USER_ID, minter });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.grant.canEndMeeting).toBe(true);
+    expect(result.grant.isOwner).toBe(false);
+    // ⚠ THE LINE THAT MATTERS: what actually reached the mint.
+    expect(minter.requests[0]?.isOwner).toBe(false);
+  });
+
+  it('the `is_owner` ANALYTICS property stays on `isOwner`, not on `canEndMeeting`', async () => {
+    mockHasEngagementCapability.mockResolvedValue(false);
+    mockGetMemberRole.mockResolvedValue('owner');
+
+    await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_join_granted',
+      expect.objectContaining({ is_owner: false })
+    );
   });
 
   it('⚠ goes through `authorizeMeetingParticipation` — the TENANCY gate, not `resolveHostContext`', async () => {
@@ -664,6 +745,37 @@ describe('joinMeetingAsGuest — a guest is NEVER a host', () => {
       expect(readMeetingTokenClaims(result.grant.token).is_owner).toBe(false);
       // ⚠ The capability seam is not even consulted for a guest.
       expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+    }
+  );
+
+  /**
+   * ⚠⚠ BAL-134 — A GUEST MAY NEVER END A MEETING (edge case 24). Hard-coded `false` on this
+   * arm exactly as `isOwner` is, and NOT because a token check said so: a guest holds no
+   * `company_members` row, so every membership token fails closed, and they are not on the
+   * engagement axis at all. The ADR's intent, delivered structurally. The assertion that the
+   * membership seam is never even READ is the half that would survive somebody "helpfully"
+   * resolving end authority for guests.
+   */
+  it.each(['client', 'expert'] as const)(
+    '⚠⚠ canEndMeeting is false for a guest whose stored party is `%s` — Leave only',
+    async (party) => {
+      mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ party }));
+      mockHasEngagementCapability.mockResolvedValue(true);
+      mockGetMemberRole.mockResolvedValue('owner');
+
+      const result = await joinMeetingAsGuest({
+        meetingId: MEETING_ID,
+        rawGuestToken: RAW_TOKEN,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok && result.state === 'admitted').toBe(true);
+      if (!result.ok || result.state !== 'admitted') return;
+
+      expect(result.grant.canEndMeeting).toBe(false);
+      // ⚠ NEITHER AXIS IS CONSULTED — the answer is structural, not computed.
+      expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
     }
   );
 });

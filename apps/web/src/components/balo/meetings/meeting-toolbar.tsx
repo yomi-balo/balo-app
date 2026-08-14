@@ -59,8 +59,12 @@ export interface MeetingToolbarProps {
   /** Focused when a panel closes, so focus returns to the control that opened it. */
   readonly peopleButtonRef?: React.Ref<HTMLButtonElement>;
   readonly filesButtonRef?: React.Ref<HTMLButtonElement>;
-  /** ⚠⚠ THE SERVER'S `host_meetings` VERDICT — the only input to the end-for-everyone branch. */
-  readonly isOwner: boolean;
+  /**
+   * BAL-134 / ADR-1049 — ⚠⚠ THE SERVER'S END-AUTHORITY VERDICT (`isOwner || clientPrincipal`)
+   * — the only input to the end-for-everyone branch. **NOT `isOwner`**, which mints the Daily
+   * owner token and would deny the paying client the ability to stop their own spend.
+   */
+  readonly canEndMeeting: boolean;
   readonly contextNoun: string;
   readonly isCase: boolean;
   readonly onLeave: () => void;
@@ -86,7 +90,7 @@ export function MeetingToolbar({
   onTogglePanel,
   peopleButtonRef,
   filesButtonRef,
-  isOwner,
+  canEndMeeting,
   contextNoun,
   isCase,
   onLeave,
@@ -173,7 +177,7 @@ export function MeetingToolbar({
       </div>
 
       <LeaveControl
-        isOwner={isOwner}
+        canEndMeeting={canEndMeeting}
         contextNoun={contextNoun}
         isCase={isCase}
         onLeave={onLeave}

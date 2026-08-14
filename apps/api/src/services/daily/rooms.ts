@@ -42,6 +42,7 @@
  * `enable_knocking: false`, and that is exactly the kind of silent commitment ADR-1044 had
  * to walk back. `rooms.test.ts` deep-equals the body for that reason.
  */
+import { z } from 'zod';
 import { dailyRequest } from './client.js';
 import { DailyApiError } from './errors.js';
 
@@ -217,3 +218,145 @@ function requireField(
 
 /** The live implementation of the port. Tests substitute their own object literal. */
 export const dailyRoomProvisioner: RoomProvisioner = { createRoom };
+
+// ── BAL-134 — TEARDOWN AND RECONCILIATION ─────────────────────────────────────────────────
+
+/** What {@link deleteRoom} answers. Both values are SUCCESS; neither is an error. */
+export type RoomTeardownOutcome = 'deleted' | 'already_gone';
+
+/**
+ * DELETE the meeting's Daily room, making a settled meeting genuinely unrejoinable.
+ *
+ * ⚠⚠ WHY THIS IS IN BAL-134 AT ALL, given the ticket is about timing. A Daily meeting token
+ * SURVIVES AN EJECT — `eject_at_token_exp` is false and `exp` is `scheduled_end + 24h` — so
+ * the shipped client-side `updateParticipants({'*': {eject: true}})` revokes nothing, and a
+ * participant who kept their token could walk straight back into a settled room. Balo-side
+ * rejoin refusal already exists (`MEETING_CLOSED_TO_JOIN` contains `ended`); deleting the room
+ * is what closes the VENDOR side. Per-participant `ban: true` and the roster remove-from-call
+ * path stay with BAL-444 — this adds `DELETE /rooms/:name` and nothing else.
+ *
+ * ⚠ A `404` IS `'already_gone'`, NOT AN ERROR. Daily auto-deletes an expiring room once the
+ * last participant leaves, so racing that is the NORMAL outcome, not a failure — and the
+ * caller's goal ("the room is not there any more") is satisfied either way. Treating it as an
+ * error would make the end route log an error on its most common successful path.
+ *
+ * ⚠ EVERY OTHER NON-2xx THROWS, INCLUDING `429` — and there is deliberately NO RETRY LOOP
+ * inside `dailyRequest` (`client.ts` rules that out explicitly). The end route logs and returns
+ * `200` regardless (the meeting is already terminal in Postgres); the sweep's per-row try/catch
+ * simply picks it up on the next tick. Room delete sits in the skill's 20/s tier, so a rate
+ * limit here means something else is wrong.
+ */
+export async function deleteRoom(name: string): Promise<RoomTeardownOutcome> {
+  try {
+    await dailyRequest<unknown>('DELETE', `/rooms/${encodeURIComponent(name)}`);
+    return 'deleted';
+  } catch (error) {
+    if (error instanceof DailyApiError && error.status === 404) {
+      return 'already_gone';
+    }
+    throw error;
+  }
+}
+
+/**
+ * One participant as Daily's presence endpoint describes them.
+ *
+ * ⚠ EVERY FIELD IS OPTIONAL FOR THE SAME REASON `DailyRoomResponse`'s are: `dailyRequest` ends
+ * in a bare `as T`, so this is an ASSERTION about a vendor payload rather than a guarantee
+ * derived from one. The reconciler narrows `userId` before using it and treats an absent one as
+ * "a participant we cannot map", which is the same fail-closed answer the presence writer gives
+ * an unparseable participant id.
+ */
+export interface DailyPresenceParticipant {
+  /** The `user_id` CLAIM we minted — `u`/`g` + 32 hex. ⚠ Never a bare uuid. */
+  userId?: string;
+  /** Daily's own session id for this participant. Correlation only; never an identity. */
+  id?: string;
+  joinTime?: string;
+}
+
+/**
+ * Daily's `GET /presence` body: active participants grouped by room name.
+ *
+ * ⚠⚠ PARSED, NOT CAST — the ONE place in this file a vendor body is validated, and it is here
+ * because this payload drives a DESTRUCTIVE decision. `dailyRequest` ends in a bare `as T`, so
+ * a body of an unexpected SHAPE would type-check as an empty map and reach the sweep as
+ * "confirmed: nobody is in any room", which closes every open interval on the platform and, ~5
+ * minutes later, deletes live Daily rooms. A `safeParse` failure THROWS instead, so an
+ * unrecognised body takes the same outage path as an unreachable vendor: reconciliation is
+ * skipped, the terminal rules still run, and nothing is truncated.
+ *
+ * ⚠ THE SHAPE IS THE VERIFIED ONE AND MUST NOT BE "FIXED". The GLOBAL `GET /presence` really
+ * is a MAP KEYED BY ROOM NAME (not the per-room endpoint's `{ total_count, data }` envelope),
+ * and the participant field really is camelCase `userId` (not `user_id`). Both were checked
+ * against Daily's live reference. Unknown keys are stripped by Zod's default, which is right:
+ * nothing downstream may read a field this schema has not named.
+ */
+const dailyPresenceResponseSchema = z.record(
+  z.string(),
+  z.array(
+    z.object({
+      userId: z.string().optional(),
+      id: z.string().optional(),
+      joinTime: z.string().optional(),
+    })
+  )
+);
+
+/**
+ * ACTIVE PARTICIPANTS ACROSS EVERY ROOM, in ONE call — leg 2 of D1's presence model, and the
+ * reason the dropped-`participant.left` over-bill is bounded by one sweep tick rather than
+ * being unbounded.
+ *
+ * ⚠ PLATFORM-WIDE, NOT PER-ROOM, AND THAT IS DELIBERATE. The skill names `GET /presence` as
+ * Daily's recommended "current state" endpoint, and a per-room call per candidate meeting would
+ * multiply a 20/s rate-limit tier by the size of the sweep batch. The sweep filters the answer
+ * down to the rooms it is reconciling.
+ *
+ * ⚠ NEVER TRUSTED AS AN IDENTITY ORACLE. What comes back is a vendor's claim about who is in a
+ * room; the reconciler uses it ONLY to decide whether an interval Balo already opened should be
+ * CLOSED, and to open one for a participant whose `joined` webhook was dropped — and in the
+ * latter case the `party` is still derived server-side from Balo's own tables, never from
+ * anything in this payload.
+ */
+export async function getAllPresence(): Promise<Record<string, DailyPresenceParticipant[]>> {
+  const body = await dailyRequest<unknown>('GET', '/presence');
+  const parsed = dailyPresenceResponseSchema.safeParse(body ?? {});
+  if (!parsed.success) {
+    // ⚠ THROW, DO NOT DEGRADE. The caller's outage path treats a rejection as UNKNOWN; an
+    // empty-looking return would be treated as CONFIRMED EMPTY. See the schema's docblock.
+    throw new DailyApiError(
+      'GET',
+      '/presence',
+      RESPONSE_CONTRACT_VIOLATION_STATUS,
+      'Daily GET /presence returned a body this platform cannot interpret; refusing to read it as an empty platform'
+    );
+  }
+
+  const rooms: Record<string, DailyPresenceParticipant[]> = {};
+  for (const [roomName, participants] of Object.entries(parsed.data)) {
+    if (participants !== undefined) {
+      rooms[roomName] = participants;
+    }
+  }
+  return rooms;
+}
+
+/**
+ * The teardown seam, mirroring {@link RoomProvisioner}.
+ *
+ * ⚠ THE PORT EXISTS SO THE END SERVICE'S TESTS RUN WITH NO NETWORK AND NO DAILY ACCOUNT — the
+ * same reason `RoomProvisioner` exists. Do not remove it as "indirection".
+ */
+export interface RoomTeardown {
+  deleteRoom(name: string): Promise<RoomTeardownOutcome>;
+}
+
+/** The reconciliation seam, for the same reason. */
+export interface PresenceReader {
+  getAllPresence(): Promise<Record<string, DailyPresenceParticipant[]>>;
+}
+
+/** The live implementations. Tests substitute their own object literals. */
+export const dailyRoomTeardown: RoomTeardown = { deleteRoom };
+export const dailyPresenceReader: PresenceReader = { getAllPresence };

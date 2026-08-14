@@ -27,6 +27,8 @@ const mockStartScheduledNotificationDispatch = vi.fn();
 const mockRegisterScheduledNotificationDispatchCron = vi.fn().mockResolvedValue(undefined);
 const mockStartReviewNudgeSweep = vi.fn();
 const mockRegisterReviewNudgeSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartMeetingLifecycleSweep = vi.fn();
+const mockRegisterMeetingLifecycleSweepCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -84,6 +86,15 @@ vi.mock('./scheduled-notification-dispatch.js', () => ({
 vi.mock('./review-nudge-sweep.js', () => ({
   startReviewNudgeSweepWorker: () => mockStartReviewNudgeSweep(),
   registerReviewNudgeSweepCron: () => mockRegisterReviewNudgeSweepCron(),
+}));
+// BAL-134: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in BAL-378, BAL-380, BAL-387, BAL-420 and BAL-390 — five tickets in a row. It must
+// land in the SAME COMMIT as the `worker.ts` registration.
+vi.mock('./meeting-lifecycle-sweep.js', () => ({
+  startMeetingLifecycleSweepWorker: () => mockStartMeetingLifecycleSweep(),
+  registerMeetingLifecycleSweepCron: () => mockRegisterMeetingLifecycleSweepCron(),
 }));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
@@ -152,6 +163,8 @@ describe('startWorkers', () => {
     expect(mockRegisterScheduledNotificationDispatchCron).toHaveBeenCalled();
     expect(mockStartReviewNudgeSweep).toHaveBeenCalled();
     expect(mockRegisterReviewNudgeSweepCron).toHaveBeenCalled();
+    expect(mockStartMeetingLifecycleSweep).toHaveBeenCalled();
+    expect(mockRegisterMeetingLifecycleSweepCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

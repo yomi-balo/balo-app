@@ -597,8 +597,25 @@ export const transcriptArtifactKindEnum = pgEnum('transcript_artifact_kind', [
  *   · `repositories/_shared/consultation-count.ts` — the PUBLIC "sessions" stat, gated on
  *     `ended` + `outcome='completed'`.
  *
- * BAL-134 owns the transition map and will need `cancelled` as a terminal state when it
- * lands.
+ * ── BAL-134 HAS LANDED: THE WRITERS THIS LIST MUST NOW ALSO SWEEP ─────────────────────
+ *
+ * BAL-134 owns the transition map, and `cancelled` is a terminal state to it. The four new
+ * `meetingsRepository` methods each gate on an EXPLICIT status set, so a future label must
+ * be checked against every one of them — none of them defaults a label into a bucket:
+ *
+ *   · `listLifecycleCandidates` — the sweep's candidate scan takes its `statuses` from the
+ *     CALLER (`apps/api`'s lifecycle sweep passes the three non-terminal labels). A new
+ *     PRE-TERMINAL label is therefore invisible to the sweep — and so unterminable — until
+ *     that caller names it. Nothing here fails; the meeting simply never gets evaluated.
+ *   · `markWaitingForParticipants` — CAS from `scheduled` only.
+ *   · `markInProgress` — CAS from (`scheduled`, `waiting_for_participants`).
+ *   · `endMeeting` — CAS from "NOT IN (`ended`, `cancelled`)", i.e. the ONE method written
+ *     as an EXCLUSION rather than an inclusion. A new TERMINAL label must be added to that
+ *     exclusion or `endMeeting` will happily re-end a meeting already in it.
+ *
+ * And the reader `resolveClockCeiling` (above) now genuinely reaches its `ended` + `ended_at`
+ * branch for the first time, because `endMeeting` stamps `ended_at` in the SAME statement
+ * that sets `status='ended'` — the residual that reader's docblock assigned to BAL-134.
  */
 export const meetingStatusEnum = pgEnum('meeting_status', [
   'scheduled',
@@ -617,6 +634,53 @@ export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
   'completed',
   'no_show_client',
   'missed_call',
+]);
+
+/**
+ * BAL-134 / ADR-1049 — WHO ended the meeting. NULL unless `status = 'ended'` (CHECK
+ * `meeting_ended_by_requires_ended`). ORTHOGONAL to `meeting_outcome`, which says WHY:
+ * ADR-1049's four-path taxonomy (plus the fifth, "abandoned wait") crosses the two axes,
+ * and neither derives from the other.
+ *
+ *   `client_principal` — a client-side holder pressed End (D6: the membership arm of
+ *                        `canEndMeeting`, resolved through `CONSUME_CREDITS` on the booking
+ *                        company — the party whose money is being spent may stop the spend).
+ *   `expert_host`      — the delivering expert (or their agency owner/admin) pressed End
+ *                        (D7: `hasEngagementCapability(HOST_MEETINGS)`, ADR-1046).
+ *   `system_idle`      — NOBODY pressed anything. The lifecycle sweep terminated the meeting
+ *                        under one of the four SYSTEM rules (idle end, no-show, missed call,
+ *                        abandoned wait). ⚠ ONE LABEL FOR ALL FOUR, deliberately: which
+ *                        system rule fired is carried by `outcome` (`completed` /
+ *                        `no_show_client` / `missed_call` / NULL for an abandoned wait) and
+ *                        by the analytics event, so splitting this axis would encode the
+ *                        same fact twice and let the two disagree.
+ *
+ * ⚠ WHY THE HUMAN PATHS CARRY NO `outcome` (D5). ADR-1049: "the ender never sets the
+ * outcome" — BAL-412 resolves it from `meeting_presence`. `meeting_outcome_requires_ended`
+ * is ONE-DIRECTIONAL (`outcome ⇒ ended`), so `ended` + `outcome IS NULL` is legal and is
+ * exactly what a human end writes. The three system-terminated paths ARE DEFINED BY their
+ * outcome in ADR-1049's own table, so the sweep writes it.
+ *
+ * ⚠ NULLABLE, AND THAT IS NOT A GAP. Every meeting that has NOT ended has no ender, and a
+ * meeting that ends is stamped in the SAME statement that sets `status='ended'`
+ * (`meetingsRepository.endMeeting`) — so `ended` with a NULL `ended_by` is unreachable
+ * through the write path, while remaining representable for the rows migration 0066 found
+ * already `ended`. Making the column NOT NULL would have required inventing an ender for
+ * those rows, which is the "attribution column with no writer is a worse lie than its
+ * absence" failure in reverse: a FABRICATED actor is worse still.
+ *
+ * STANDALONE `CREATE TYPE` in migration 0066 (never `ALTER TYPE … ADD VALUE`), so every
+ * label commits atomically with the type and naming one in a DEFAULT or a CHECK in that same
+ * migration would be safe (memory `reference_enum_default_same_tx_migration_hazard` binds
+ * ADD-VALUE only). 0066 needs neither: the column takes NO DEFAULT (it is meaningless before
+ * an end) and `meeting_ended_by_requires_ended` names no `meeting_ended_by` label — it
+ * references `status = 'ended'`, a `meeting_status` label created back in 0056. It appears
+ * in NO index predicate (the house rule at `action-items.ts` / `transcripts.ts`).
+ */
+export const meetingEndedByEnum = pgEnum('meeting_ended_by', [
+  'client_principal',
+  'expert_host',
+  'system_idle',
 ]);
 
 /**

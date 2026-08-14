@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   computeMeetingClocks,
   type MeetingClocks,
@@ -12,24 +12,199 @@ import {
   type MeetingParticipantParty,
   type MeetingPresence,
 } from '../schema';
+import type { DbExecutor } from './_shared/db-executor';
 
-export interface OpenPresenceInput {
-  meetingId: string;
-  /** `null` for a guest (`meeting_guests` carries no user until conversion). */
+/**
+ * WHO an interval belongs to. The two columns are MUTUALLY EXCLUSIVE (the DB CHECK
+ * `meeting_presence_identity_not_both`), and BOTH may be null — that third arm is a real,
+ * intended state, not a defect: BAL-134's webhook writer may legitimately observe a Daily
+ * participant it cannot map to either table, and `meeting_presence` was designed to permit a
+ * NULL identity beside a KNOWN `party` rather than force the writer to guess. A guess would
+ * anchor a billing clock on the wrong person.
+ *
+ * ⚠ A CALLER MUST SET AT MOST ONE. `open()` rejects both-set in-process
+ * (`InvalidPresenceIdentityError`) rather than letting the CHECK raise a bare `23514`.
+ */
+export interface PresenceIdentity {
+  /** The Balo user, for an authenticated participant. NULL for a guest or an unmapped one. */
   userId: string | null;
+  /**
+   * BAL-408 — the `meeting_guests` row, for a token-authenticated guest. NULL for an
+   * authenticated participant or an unmapped one.
+   *
+   * ⚠ NEVER SET BOTH THIS AND `userId` FOR THE SAME GUEST. `schema/meeting-presence.ts`'s
+   * hand-off spells out why: writing `user_id` for a guest would violate the identity CHECK
+   * (if both were set) or silently re-open the duplicate-interval gap (if only `user_id`
+   * were), because the guest-keyed unique index would then not cover the row.
+   */
+  meetingGuestId: string | null;
+}
+
+/**
+ * BAL-134 (R10) — the MEETING WINDOW a presence instant is clamped into on the WRITE side.
+ *
+ * ⚠⚠ WHY THE CLAMP IS HERE AND NOT IN `computeMeetingClocks`. That pure function anchors
+ * `expertPresentMs` at the first expert join UN-CLAMPED, and its numbers are pinned by
+ * executed tests — so clamping there would change shipped, asserted arithmetic. The presence
+ * schema docblock assigns the window bound to the WRITE side by name ("nothing rejects… a
+ * `leftAt` a day after `scheduled_end`… Clamping presence to the meeting window is
+ * **BAL-134's**"), and this is that seam.
+ *
+ * ⚠ IT IS OPT-IN, AND THAT IS DELIBERATE. The repository does NOT read the meeting row to
+ * derive the window itself, for the same reason `meetingsRepository.cancel()` does not read
+ * the wall clock: the upper bound is a POLICY value (`scheduled_end + MEETING_TOKEN_TTL_
+ * AFTER_END_MS`, an `apps/api` constant), and a repository that resolved policy would make
+ * every fixture and every backfill subject to a number that can change. The caller — which
+ * already holds the meeting row — supplies both halves together so it cannot pass one and
+ * forget the other.
+ */
+export interface PresenceWindow {
+  /**
+   * `joined_at` is RAISED to this. In production it is `meetings.scheduled_start`, and the
+   * rule it encodes is the ticket's verbatim: **an expert arriving at 09:55 for a 10:00 call
+   * is not credited for arriving early.**
+   */
+  notBefore: Date;
+  /**
+   * `left_at` is LOWERED to this. In production it is `scheduled_end` plus the token TTL —
+   * GENEROUS ON PURPOSE, because a legitimately over-running call must not be truncated into
+   * an under-bill. This bound exists to stop a nonsense timestamp (a `left_at` a day late),
+   * NOT to cap a long call; the settlement-side policy cap remains BAL-412's
+   * `effectiveCeilingMinor`.
+   */
+  notAfter: Date;
+}
+
+export interface OpenPresenceInput extends PresenceIdentity {
+  meetingId: string;
   /**
    * ⚠ MUST BE SERVER-DERIVED. See the "party is a billing input" warning on
    * `meetingPresenceRepository` — this argument decides whether an attendee makes the
    * meeting billable, so it may never come from vendor metadata or client input.
    */
   party: MeetingParticipantParty;
-  /** Defaults to now. */
+  /** Defaults to now. Rejected when non-finite (see `InvalidPresenceTimestampError`). */
   joinedAt?: Date;
+  /** BAL-134's R10 clamp. Omit to store the instant exactly as given. */
+  window?: PresenceWindow;
 }
 
-/** `user_id` is NULLABLE, and `= NULL` is never TRUE — every read must branch to `IS NULL`. */
-function userIdMatches(userId: string | null): SQL | undefined {
-  return userId === null ? isNull(meetingPresence.userId) : eq(meetingPresence.userId, userId);
+export interface ClosePresenceInput extends PresenceIdentity {
+  meetingId: string;
+  /** Defaults to now. Rejected when non-finite (see `InvalidPresenceTimestampError`). */
+  leftAt?: Date;
+  /** BAL-134's R10 clamp. Omit to store the instant exactly as given. */
+  window?: PresenceWindow;
+}
+
+/**
+ * Thrown when a presence instant is not a finite time.
+ *
+ * ⚠ THIS OBLIGATION IS ASSIGNED TO BAL-134 BY NAME. `computeMeetingClocks`'s docblock says
+ * the write seam "must reject a non-finite timestamp", and this is that seam. `new Date(x)`
+ * on a malformed vendor field yields an Invalid Date, whose `getTime()` is `NaN`; every
+ * comparison against it is FALSE, so it would not be caught by the `left_at >= joined_at`
+ * CHECK either — it would persist as a NULL-ish timestamp and poison every clock read of that
+ * meeting forever. Loud and early, at the one door it can enter through.
+ *
+ * The webhook route logs this at `error` and still answers `200`: Daily must not retry a body
+ * that will never be writable (edge case 22).
+ */
+export class InvalidPresenceTimestampError extends Error {
+  constructor(
+    public readonly field: string,
+    public readonly value: Date
+  ) {
+    super(`meeting_presence.${field} must be a finite timestamp (received ${String(value)})`);
+    this.name = 'InvalidPresenceTimestampError';
+  }
+}
+
+/**
+ * Thrown when a caller supplies BOTH identity columns — the in-process mirror of the DB CHECK
+ * `meeting_presence_identity_not_both`. A named error rather than a raw `23514` because the
+ * webhook writer branches on identity kind and a both-set call is a WRITER bug, not a data
+ * condition; it should read as one at the point it happens.
+ */
+export class InvalidPresenceIdentityError extends Error {
+  constructor(public readonly meetingId: string) {
+    super(
+      `A presence interval carries AT MOST ONE identity — user_id and meeting_guest_id were both set (meeting ${meetingId})`
+    );
+    this.name = 'InvalidPresenceIdentityError';
+  }
+}
+
+/** Guard every instant that reaches a `timestamptz` on this money path. */
+function assertFiniteInstant(field: string, value: Date): void {
+  if (!Number.isFinite(value.getTime())) {
+    throw new InvalidPresenceTimestampError(field, value);
+  }
+}
+
+/** Guard a supplied window's own two instants — a NaN bound would clamp to nonsense. */
+function assertFiniteWindow(window: PresenceWindow | undefined): void {
+  if (window === undefined) {
+    return;
+  }
+  assertFiniteInstant('window.notBefore', window.notBefore);
+  assertFiniteInstant('window.notAfter', window.notAfter);
+}
+
+/**
+ * The LOWER half of the R10 clamp. Early arrival earns nothing.
+ *
+ * ⚠ NO UPPER CLAMP ON A JOIN, on purpose. A join AFTER `notAfter` is a real event (someone
+ * wandered into a room long after the window) and rewriting it downwards would fabricate
+ * attendance that did not happen. It self-corrects instead: the matching close is clamped
+ * DOWN to `notAfter`, lands below this `joined_at`, and `clampLeftAt` degrades the pair to a
+ * zero-length interval — which bills nothing and is legal (`meeting_presence_left_after_joined`
+ * is `>=`).
+ */
+function clampJoinedAt(instant: Date, window: PresenceWindow | undefined): Date {
+  if (window === undefined) {
+    return instant;
+  }
+  return instant.getTime() < window.notBefore.getTime() ? window.notBefore : instant;
+}
+
+/**
+ * The UPPER half of the R10 clamp, then the zero-length degradation.
+ *
+ * ⚠ THE `joinedAt` RAISE APPLIES ONLY UNDER A WINDOW, and only because the clamp itself can
+ * produce the inversion (a call ended before a `joined_at` that was clamped UP to
+ * `scheduled_start` — the expert who joined at 09:55 and left at 09:58 on a 10:00 call). It is
+ * NOT a general "fix the caller's timestamp" rule: without a `window`, an explicit `leftAt`
+ * before `joined_at` still reaches `meeting_presence_left_after_joined` and raises `23514`,
+ * loudly, exactly as it does today. A repository that silently rewrote every caller's instant
+ * would hide writer bugs on a money path.
+ */
+function clampLeftAt(instant: Date, joinedAt: Date, window: PresenceWindow | undefined): Date {
+  if (window === undefined) {
+    return instant;
+  }
+  const lowered = instant.getTime() > window.notAfter.getTime() ? window.notAfter : instant;
+  return lowered.getTime() < joinedAt.getTime() ? joinedAt : lowered;
+}
+
+/**
+ * Match the ONE interval belonging to this identity.
+ *
+ * ⚠ THE THIRD ARM IS THE LOAD-BEARING ONE, AND IT IS A FIX. Before guest identity existed,
+ * a null `userId` matched on `user_id IS NULL` alone — which, now that guest rows exist,
+ * would ALSO match every guest's interval. Closing "the unmapped participant" would then close
+ * an arbitrary GUEST's interval instead, truncating a real attendee's billable span. Both
+ * columns are therefore constrained on that arm. The other two arms need no such widening:
+ * `user_id = $1` cannot match a guest row (guests carry a NULL `user_id`) and vice versa.
+ */
+function identityMatches(identity: PresenceIdentity): SQL {
+  if (identity.meetingGuestId !== null) {
+    return eq(meetingPresence.meetingGuestId, identity.meetingGuestId);
+  }
+  if (identity.userId !== null) {
+    return eq(meetingPresence.userId, identity.userId);
+  }
+  return sql`${meetingPresence.userId} IS NULL AND ${meetingPresence.meetingGuestId} IS NULL`;
 }
 
 /**
@@ -48,12 +223,20 @@ function userIdMatches(userId: string | null): SQL | undefined {
  * `meetings.ended_at` is. Falling back to the wall clock is correct ONLY while the meeting
  * is still running, where "to now" is exactly what an in-session panel (BAL-403) wants.
  *
- * ⚠ RESIDUAL, ASSIGNED IN WRITING: a meeting that is `ended` with a NULL `ended_at` still
- * measures to the wall clock, because this ticket owns no transition logic and will not
- * invent a ceiling out of `scheduled_end`. **BAL-134 must stamp `ended_at` in the SAME
- * statement that sets `status='ended'`** — that is what closes this last gap. BAL-412
- * additionally holds the settlement-side policy cap (it already carries
- * `effectiveCeilingMinor`).
+ * ⚠ THE RESIDUAL THIS DOCBLOCK ASSIGNED TO BAL-134 IS NOW DISCHARGED — AND THE FALLBACK STAYS
+ * ANYWAY. The ask was: "**BAL-134 must stamp `ended_at` in the SAME statement that sets
+ * `status='ended'`**". `meetingsRepository.endMeeting` does exactly that — ONE `UPDATE` setting
+ * `status`, `ended_at`, `ended_by` and `outcome` together, so the two can never be observed
+ * out of step and this function's `ended` + `ended_at` branch is now genuinely reachable for
+ * the first time. That is also why `endMeeting` closes every open interval on the SAME
+ * transaction: a terminal meeting with an open interval is the state this ceiling exists to
+ * survive, and after `endMeeting` it does not occur.
+ *
+ * The wall-clock fallback below is NOT dead code and must not be deleted. It still covers
+ * (a) rows that were `ended` before migration 0066, (b) any meeting force-ended by a manual
+ * `UPDATE` or a fixture that bypasses `endMeeting`, and (c) every NON-terminal meeting, where
+ * "to now" is the wanted answer. BAL-412 additionally holds the settlement-side policy cap (it
+ * already carries `effectiveCeilingMinor`).
  *
  * ⚠ `'cancelled'` (added to `meeting_status` by BAL-428) IS ALSO TERMINAL, AND IS NOT
  * HANDLED HERE — deliberately, and only because of a guard in another file. `cancel()` is
@@ -100,12 +283,23 @@ async function resolveClockCeiling(meetingId: string): Promise<Date> {
  * from anything the joining browser can influence. This repository cannot enforce that
  * (authorization is the service layer's, per ADR-1029/ADR-1046); it states the obligation.
  *
- * ⚠ PRESENCE INTERVALS ARE UNBOUNDED RELATIVE TO THE MEETING WINDOW. The only DB CHECK is
- * `left_at >= joined_at` (`meeting_presence_left_after_joined`) — nothing rejects a
- * `joinedAt` six hours before `scheduled_start`, or a `leftAt` a day after `scheduled_end`.
- * Clamping presence to the meeting window is **BAL-134's** (it owns the webhook writes) with
- * **BAL-412** holding the settlement-side cap. Assigned here in writing so it is not
- * rediscovered as a billing incident.
+ * ⚠ PRESENCE INTERVALS ARE UNBOUNDED RELATIVE TO THE MEETING WINDOW **AT THE DB LEVEL**. The
+ * only DB CHECK is `left_at >= joined_at` (`meeting_presence_left_after_joined`) — nothing
+ * rejects a `joinedAt` six hours before `scheduled_start`, or a `leftAt` a day after
+ * `scheduled_end`. Clamping presence to the meeting window was assigned to **BAL-134** (it
+ * owns the webhook writes) with **BAL-412** holding the settlement-side cap.
+ *
+ * **BAL-134 HAS DISCHARGED ITS HALF, AS AN OPT-IN `PresenceWindow` ON `open`/`close` — READ
+ * THAT TYPE'S DOCBLOCK BEFORE ASSUMING A CLAMP HAPPENED.** The bound is NOT enforced by this
+ * table and NOT enforced by default: a caller that omits `window` stores the instant exactly
+ * as given, which is what every fixture and backfill wants. Production's webhook writer
+ * supplies it from the meeting row on every call. So "presence is clamped" is true of the
+ * PRODUCTION PATH, not of the storage — do not read a row back and infer it was bounded.
+ *
+ * ⚠ AND THE CLOCKS STILL RUN TO `now` FOR AN OPEN INTERVAL regardless of any clamp — the
+ * clamp bounds the two ENDPOINTS a webhook writes, never the measurement of an interval that
+ * was never closed. That hazard is closed from the other end, by `closeAllOpen` +
+ * `meetings.ended_at` (see `resolveClockCeiling`).
  *
  * ⚠ ADR-1030 RESIDUAL, ASSIGNED IN WRITING. The system-actor attribution exemption stated on
  * the `meeting_presence` schema docblock covers the MACHINE path ONLY — `open`/`close` are
@@ -122,36 +316,83 @@ export const meetingPresenceRepository = {
   /**
    * BAL-134 WRITE SEAM — open a presence interval.
    *
-   * IDEMPOTENT on `meeting_presence_one_open_per_user_idx`: a duplicate join webhook for
-   * an AUTHENTICATED participant returns the EXISTING open interval instead of opening a
-   * second one that would double-count the clocks.
+   * IDEMPOTENT ON BOTH IDENTITY KINDS (the gap BAL-418 documented here is now CLOSED). The
+   * arbiter is chosen by which identity column is set:
    *
-   * ⚠ GUEST GAP (documented on the index too): `user_id` is NULL for a guest and NULLs are
-   * DISTINCT in a unique index, so a guest join is NOT deduplicated — each call opens a
-   * new interval. Accepted here (guests carry no presence identity until BAL-408);
-   * BAL-134/BAL-408 must add the guest-keyed equivalent when guest identity lands.
+   *   · authenticated → `meeting_presence_one_open_per_user_idx` on `(meeting_id, user_id)`;
+   *   · guest (BAL-408) → `meeting_presence_one_open_per_guest_idx` on
+   *     `(meeting_id, meeting_guest_id)`, whose predicate additionally names
+   *     `meeting_guest_id IS NOT NULL`.
+   *
+   * Either way a duplicate join webhook returns the EXISTING open interval instead of opening
+   * a second one that would double-count the clocks.
+   *
+   * ⚠ THE GUEST ARBITER PREDICATE IS RAW `sql` AND MUST STAY THAT WAY, restated byte-for-byte
+   * against the index. Postgres infers the target index by proving the supplied predicate
+   * implies the index's, and its prover works on `Const` nodes: a drizzle `eq()` emits a BIND
+   * PARAMETER, which it cannot match, and the upsert fails `42P10` at runtime with every local
+   * gate green (memory `reference_pg_partial_index_arbiter_param_42p10`). This particular
+   * predicate happens to contain only `IS [NOT] NULL` tests and so binds nothing — but it is
+   * written raw anyway, beside a comment saying why, because the failure mode is invisible
+   * until an integration test hits a real Postgres. The user arm is left exactly as BAL-418
+   * shipped it (also parameter-free) rather than churned for cosmetic symmetry.
+   *
+   * ⚠ THE ONE CLASS THAT STILL IS NOT DEDUPLICATED: an interval with NO identity at all
+   * (both columns NULL — the unmappable Daily participant of §5.3). NULLs are distinct in a
+   * unique index, so each such call opens a fresh interval. That is IRREDUCIBLE rather than
+   * an oversight: there is no key to deduplicate on. It is also the SAFE side of the trade —
+   * such a participant is written `party='observer'`, which `computeMeetingClocks` excludes
+   * from BOTH sides of the billable intersection, so a duplicated one bills nothing.
+   *
+   * Takes an executor so the webhook's marker insert, this effect and the `processed_at`
+   * stamp commit or roll back TOGETHER (§5.1) — a marker committed without its effect would
+   * suppress the very retry that would have applied it.
    */
-  async open(input: OpenPresenceInput): Promise<MeetingPresence> {
-    const [inserted] = await db
-      .insert(meetingPresence)
-      .values({
-        meetingId: input.meetingId,
-        userId: input.userId,
-        party: input.party,
-        joinedAt: input.joinedAt ?? new Date(),
-      })
-      .onConflictDoNothing({
-        target: [meetingPresence.meetingId, meetingPresence.userId],
-        // predicate MUST match `meeting_presence_one_open_per_user_idx` exactly
-        where: and(isNull(meetingPresence.leftAt), isNull(meetingPresence.deletedAt)),
-      })
-      .returning();
+  async open(input: OpenPresenceInput, exec: DbExecutor = db): Promise<MeetingPresence> {
+    if (input.userId !== null && input.meetingGuestId !== null) {
+      throw new InvalidPresenceIdentityError(input.meetingId);
+    }
+    const requestedJoinedAt = input.joinedAt ?? new Date();
+    assertFiniteInstant('joined_at', requestedJoinedAt);
+    assertFiniteWindow(input.window);
+    const joinedAt = clampJoinedAt(requestedJoinedAt, input.window);
 
-    if (inserted !== undefined) {
-      return inserted;
+    const values = {
+      meetingId: input.meetingId,
+      userId: input.userId,
+      meetingGuestId: input.meetingGuestId,
+      party: input.party,
+      joinedAt,
+    };
+
+    const inserted =
+      input.meetingGuestId === null
+        ? await exec
+            .insert(meetingPresence)
+            .values(values)
+            .onConflictDoNothing({
+              target: [meetingPresence.meetingId, meetingPresence.userId],
+              // predicate MUST match `meeting_presence_one_open_per_user_idx` exactly
+              where: and(isNull(meetingPresence.leftAt), isNull(meetingPresence.deletedAt)),
+            })
+            .returning()
+        : await exec
+            .insert(meetingPresence)
+            .values(values)
+            .onConflictDoNothing({
+              target: [meetingPresence.meetingId, meetingPresence.meetingGuestId],
+              // ⚠ RAW `sql`, restating `meeting_presence_one_open_per_guest_idx`'s predicate
+              // byte-for-byte — see the 42P10 note in this method's docblock.
+              where: sql`${meetingPresence.meetingGuestId} IS NOT NULL AND ${meetingPresence.leftAt} IS NULL AND ${meetingPresence.deletedAt} IS NULL`,
+            })
+            .returning();
+
+    const [row] = inserted;
+    if (row !== undefined) {
+      return row;
     }
 
-    const existing = await this.findOpen(input.meetingId, input.userId);
+    const existing = await this.findOpen(input.meetingId, input, exec);
     if (existing === undefined) {
       throw new Error(
         `meetingPresence.open conflicted but no open interval was found for meeting ${input.meetingId}`
@@ -160,15 +401,25 @@ export const meetingPresenceRepository = {
     return existing;
   },
 
-  /** The participant's OPEN interval, if any. Rides `meeting_presence_open_idx`. */
-  async findOpen(meetingId: string, userId: string | null): Promise<MeetingPresence | undefined> {
-    const [row] = await db
+  /**
+   * The participant's OPEN interval, if any. Rides `meeting_presence_open_idx`.
+   *
+   * Takes the whole `PresenceIdentity` rather than a bare `userId` (changed by BAL-134): a
+   * positional user id cannot express a guest, and the null case had to stop meaning "any row
+   * with no user", which now includes every guest. See `identityMatches`.
+   */
+  async findOpen(
+    meetingId: string,
+    identity: PresenceIdentity,
+    exec: DbExecutor = db
+  ): Promise<MeetingPresence | undefined> {
+    const [row] = await exec
       .select()
       .from(meetingPresence)
       .where(
         and(
           eq(meetingPresence.meetingId, meetingId),
-          userIdMatches(userId),
+          identityMatches(identity),
           isNull(meetingPresence.leftAt),
           isNull(meetingPresence.deletedAt)
         )
@@ -193,24 +444,103 @@ export const meetingPresenceRepository = {
    * writer matches zero rows and returns `undefined`, which is exactly the "duplicate leave
    * webhook is a no-op" contract this docblock already promises. FIRST CLOSE WINS.
    */
-  async close(input: {
-    meetingId: string;
-    userId: string | null;
-    leftAt?: Date;
-  }): Promise<MeetingPresence | undefined> {
-    const open = await this.findOpen(input.meetingId, input.userId);
+  async close(
+    input: ClosePresenceInput,
+    exec: DbExecutor = db
+  ): Promise<MeetingPresence | undefined> {
+    const requestedLeftAt = input.leftAt ?? new Date();
+    assertFiniteInstant('left_at', requestedLeftAt);
+    assertFiniteWindow(input.window);
+
+    const open = await this.findOpen(input.meetingId, input, exec);
     if (open === undefined) {
       return undefined;
     }
 
-    const now = new Date();
-    const [updated] = await db
+    const leftAt = clampLeftAt(requestedLeftAt, open.joinedAt, input.window);
+    const [updated] = await exec
       .update(meetingPresence)
-      .set({ leftAt: input.leftAt ?? now, updatedAt: now })
+      .set({ leftAt, updatedAt: new Date() })
       // CAS: re-assert the interval is STILL open at write time (see the warning above).
       .where(and(eq(meetingPresence.id, open.id), isNull(meetingPresence.leftAt)))
       .returning();
     return updated;
+  },
+
+  /**
+   * BAL-134 — close EVERY open interval on a meeting in ONE statement, returning how many
+   * were closed. The bulk sibling of `close()`, and the reason it exists is timing, not
+   * convenience:
+   *
+   *   · `meetingsRepository.endMeeting` calls it on ITS transaction, so a meeting can never
+   *     be `ended` while an interval is still open — which is what makes
+   *     `resolveClockCeiling`'s `ended_at` ceiling actually bite;
+   *   · the Daily `meeting.ended` webhook calls it when the last participant leaves, which
+   *     repairs the DROPPED-`participant.left` case in under a second instead of waiting for
+   *     the reconciliation tick.
+   *
+   * ⚠ `left_at = GREATEST(joined_at, $leftAt)`, NOT a bare `$leftAt`, AND THIS IS NOT
+   * DEFENSIVE PADDING — without it `endMeeting` can fail outright on a real sequence. An
+   * expert joins at 09:55 for a 10:00 call, so the R10 clamp stores `joined_at = 10:00`; they
+   * then end the call at 09:58. A bare assignment writes `left_at < joined_at`, trips
+   * `meeting_presence_left_after_joined` with `23514`, and — because this runs inside
+   * `endMeeting`'s transaction — ROLLS BACK THE WHOLE TERMINATION, leaving the meeting
+   * un-endable by that path forever. `GREATEST` degrades the pair to a zero-length interval
+   * instead, which bills nothing and is explicitly legal (the CHECK is `>=`, "a zero-length
+   * join blip is a real event, not a data error").
+   *
+   * ⚠ NO UPPER CLAMP HERE, deliberately, unlike `close()`'s optional window. The instant
+   * passed by `endMeeting` IS the authoritative end of the meeting, and a call that legitimately
+   * over-ran its scheduled window must not be truncated into an under-bill (edge case 20:
+   * nothing terminates on `scheduled_end`).
+   */
+  async closeAllOpen(meetingId: string, leftAt: Date, exec: DbExecutor = db): Promise<number> {
+    assertFiniteInstant('left_at', leftAt);
+
+    const closed = await exec
+      .update(meetingPresence)
+      .set({
+        leftAt: sql`greatest(${meetingPresence.joinedAt}, ${leftAt.toISOString()}::timestamptz)`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(meetingPresence.meetingId, meetingId),
+          isNull(meetingPresence.leftAt),
+          isNull(meetingPresence.deletedAt)
+        )
+      )
+      .returning({ id: meetingPresence.id });
+
+    return closed.length;
+  },
+
+  /**
+   * Every OPEN live interval for a meeting, in join order — the lifecycle sweep's
+   * RECONCILIATION read (D1 leg 2): whatever this returns that Daily's roster does not
+   * confirm is a DROPPED `participant.left`, and gets closed at the sweep's `now`.
+   *
+   * Rides `meeting_presence_open_idx`, whose predicate is exactly this filter.
+   *
+   * ⚠ RETURNS FULL ROWS, INCLUDING THE IDENTITY COLUMNS — which is the point (the reconciler
+   * must compare them against the vendor roster), but it means this read must NOT be handed
+   * to a route unprojected. It carries no secret of its own (`meeting_presence` stores none),
+   * but `meeting_guest_id` is a join key to a table that holds `token_hash` and `email`; a
+   * caller that hydrates the `guest` relation off the back of it without an explicit
+   * `columns:` projection leaks both (memory `reference_drizzle_with_hydration_leaks_secrets`).
+   */
+  async listOpen(meetingId: string, exec: DbExecutor = db): Promise<MeetingPresence[]> {
+    return exec
+      .select()
+      .from(meetingPresence)
+      .where(
+        and(
+          eq(meetingPresence.meetingId, meetingId),
+          isNull(meetingPresence.leftAt),
+          isNull(meetingPresence.deletedAt)
+        )
+      )
+      .orderBy(asc(meetingPresence.joinedAt), asc(meetingPresence.id));
   },
 
   /**

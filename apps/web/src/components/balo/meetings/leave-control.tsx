@@ -22,17 +22,26 @@ import { MeetingConfirmDialog, MeetingMenu, MeetingMenuItem } from './meeting-ov
  *      end everyone's call — a one-tap, irreversible, other-people-affecting act with no
  *      confirmation. A host stepping out to take a phone call would hang up on their client.
  *
- * ── ⚠⚠ THE GATE ─────────────────────────────────────────────────────────────────────────────
+ * ── ⚠⚠ THE GATE — **BAL-134 / ADR-1049 CHANGED ITS SUBJECT, NOT ITS SHAPE** ──────────────────
  *
- * **EVERYTHING BELOW RESOLVES ON THE `isOwner` BOOLEAN FROM THE VALIDATED GRANT.** No lens, no
- * `activeMode`, no role string, no `platformRole`, no re-derivation anywhere.
- * `meeting-call-no-lens-gate.test.ts` greps this subtree for those tokens, and
+ * **EVERYTHING BELOW RESOLVES ON THE `canEndMeeting` BOOLEAN FROM THE VALIDATED GRANT.** No
+ * lens, no `activeMode`, no role string, no `platformRole`, no re-derivation anywhere — and, as
+ * of BAL-134, **not on `isOwner` either**. `meeting-call-no-lens-gate.test.ts` greps this
+ * subtree for the view-shaped tokens AND asserts this file no longer mentions `isOwner`, and
  * `leave-control.test.tsx` asserts "End" is ABSENT FROM THE DOM — not disabled, not hidden —
- * for a non-owner. A disabled control tells somebody that a power exists and is being withheld;
- * an absent one is simply not part of their call.
+ * for a viewer without the verdict. A disabled control tells somebody that a power exists and
+ * is being withheld; an absent one is simply not part of their call.
  *
- * ⚠ `isOwner` CAN BE TRUE FOR AN AGENCY `owner`/`admin` WHO IS NOT THE DELIVERING EXPERT — so no
- * copy here may say "your call" or "your client".
+ * ⚠⚠ **WHY NOT `isOwner`.** That boolean is `hasEngagementCapability(HOST_MEETINGS)` and it is
+ * the ONE input to the Daily `is_owner` token property. ADR-1049 gives end authority to the
+ * client principal too — the party whose per-minute spend is running — and the only safe way to
+ * say that is a SECOND field: widening `isOwner` would mint vendor-level Daily owner tokens for
+ * the paying side. `canEndMeeting` is `isOwner || clientPrincipal`, composed server-side in
+ * `authorize-end-meeting.ts`, and it reaches a Daily token nowhere.
+ *
+ * ⚠ `canEndMeeting` CAN BE TRUE FOR AN AGENCY `owner`/`admin` WHO IS NOT THE DELIVERING EXPERT,
+ * AND FOR A CLIENT-COMPANY MEMBER WHO IS NOT THE BOOKER — so no copy here may say "your call",
+ * "your client" or "your expert".
  *
  * ── ⚠⚠ THE HOST CONTROL HAS TWO SHAPES, AND THE MOBILE ONE IS A TARGET-SIZE RULE ────────────
  *
@@ -45,21 +54,29 @@ import { MeetingConfirmDialog, MeetingMenu, MeetingMenuItem } from './meeting-ov
  * chooses does not render until someone taps, well after the effect has run, so the SSR-safe
  * `false` first render is never seen.
  *
- * ── ⚠ THE HONEST LIMIT OF "END FOR EVERYONE", AND WHY THE COPY DOES NOT OVER-PROMISE ────────
+ * ── ⚠ WHAT "END FOR EVERYONE" NOW DOES, AND WHY THE COPY STILL DOES NOT OVER-PROMISE ────────
  *
- * The client-side host action is `updateParticipants({ '*': { eject: true } })`. Per the
- * `daily-co` skill's own trap list, **eject alone does not revoke a token** — a disconnected
- * participant holding a live token can rejoin. `ban: true` / `DELETE /rooms/:name` is a REST
- * call and belongs to **BAL-444** (BAL-436 DECLINED it: server-side vendor work in `apps/api`
- * governed by the `daily-co` skill, not UI). So ruling **R7** drops the
- * "and it can't be undone" clause: it would be false as built. Do not restore it, and do not
- * replace it with "anyone with the link can rejoin" — that advertises the gap and reads as a
- * half-working destructive control.
+ * BAL-435 shipped this as `updateParticipants({ '*': { eject: true } })` alone — and per the
+ * `daily-co` skill's own trap list, **eject alone does not revoke a token**, so a disconnected
+ * participant holding a live one could rejoin. **BAL-134 fixed that at the root:** the act is
+ * now `POST /meetings/:meetingId/end`, which closes the presence intervals, writes
+ * `status='ended'` + `ended_at` + `ended_by` in one transaction, and DELETES the Daily room.
+ * The client-side eject stays, purely so the other participants' screens change immediately
+ * rather than a round trip later.
+ *
+ * ⚠ RULING **R7** STILL STANDS: no "and it can't be undone" clause. The reason has changed —
+ * the act genuinely is terminal now — but the clause reads as a warning about the PRODUCT
+ * rather than a fact about the call, and the confirm already says everyone will be
+ * disconnected. Do not restore it, and do not replace it with "anyone with the link can
+ * rejoin", which is no longer even true.
  */
 
 export interface LeaveControlProps {
-  /** ⚠⚠ THE SERVER'S `host_meetings` VERDICT. The ONLY input to the host branch. */
-  readonly isOwner: boolean;
+  /**
+   * ⚠⚠ THE SERVER'S END-AUTHORITY VERDICT (`isOwner || clientPrincipal`). The ONLY input to
+   * the host branch. **NOT `isOwner`** — see the module docblock.
+   */
+  readonly canEndMeeting: boolean;
   /** "case" / "project" / … — from `back-to-context.ts`'s single table. */
   readonly contextNoun: string;
   /** ⚠ The case-only reassurance line: a case is a money surface. */
@@ -73,7 +90,7 @@ const LEAVE_BUTTON_CLASSES =
   'bg-destructive text-destructive-foreground focus-visible:ring-ring inline-flex h-12 shrink-0 items-center gap-2 rounded-2xl px-[18px] text-sm font-medium transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none';
 
 export function LeaveControl({
-  isOwner,
+  canEndMeeting,
   contextNoun,
   isCase,
   onLeave,
@@ -94,7 +111,7 @@ export function LeaveControl({
     setConfirmOpen(true);
   }, []);
 
-  if (!isOwner) {
+  if (!canEndMeeting) {
     /*
       ⚠⚠ ONE PLAIN BUTTON, AND "End" APPEARS **NOWHERE IN THIS BRANCH'S DOM**. Not as a disabled
       item, not as `hidden` markup, not as an `aria-label`. Leaving is reversible — BAL-389

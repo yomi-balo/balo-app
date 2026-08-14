@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { jsonResponse, useDailyApiKey } from '../../test/mocks/daily.js';
 import { DAILY_API_BASE } from './client.js';
 import { DailyApiError } from './errors.js';
-import { createRoom, dailyRoomProvisioner } from './rooms.js';
+import {
+  createRoom,
+  dailyPresenceReader,
+  dailyRoomProvisioner,
+  dailyRoomTeardown,
+  deleteRoom,
+  getAllPresence,
+} from './rooms.js';
 
 const ROOM = 'balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
 
@@ -245,5 +252,149 @@ describe('createRoom — the response must actually CARRY a venue (no half-stamp
 describe('dailyRoomProvisioner', () => {
   it('satisfies the RoomProvisioner port with the live createRoom', () => {
     expect(dailyRoomProvisioner.createRoom).toBe(createRoom);
+  });
+});
+
+// ── BAL-134 — TEARDOWN AND RECONCILIATION ─────────────────────────────────────────────────
+
+describe('deleteRoom (BAL-134)', () => {
+  it('issues DELETE /rooms/:name and reports `deleted`', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { deleted: true, name: ROOM }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteRoom(ROOM)).resolves.toBe('deleted');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/${ROOM}`);
+    expect(init.method).toBe('DELETE');
+    // ⚠ NO BODY. A DELETE carrying a JSON body would also set Content-Type — exactly the kind
+    // of silent request-shape change `createRoom`'s deep-equal pin exists to prevent.
+    expect(init.body).toBeUndefined();
+  });
+
+  /**
+   * ⚠ A 404 IS SUCCESS. Daily auto-deletes an expiring room once the last participant leaves,
+   * so racing that is the NORMAL path — and the caller's goal ("the room is gone") is met.
+   */
+  it('⚠ maps 404 to `already_gone` rather than throwing — the room being gone IS the goal', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(404, { error: 'not-found' })));
+
+    await expect(deleteRoom(ROOM)).resolves.toBe('already_gone');
+  });
+
+  it('⚠ rethrows a 429 — there is deliberately NO retry loop; the sweep retries next tick', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(429, { error: 'rate-limited' })));
+
+    const error = await deleteRoom(ROOM).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DailyApiError);
+    expect(error).toMatchObject({ status: 429, method: 'DELETE' });
+  });
+
+  it('rethrows any other non-2xx', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(500, { error: 'boom' })));
+
+    await expect(deleteRoom(ROOM)).rejects.toBeInstanceOf(DailyApiError);
+  });
+
+  it('percent-encodes the room name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deleteRoom('balo room/1');
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/balo%20room%2F1`);
+  });
+});
+
+describe('getAllPresence (BAL-134)', () => {
+  it('GETs /presence ONCE for the whole platform and returns rooms → participants', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        [ROOM]: [{ userId: 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d', id: 'sess-1' }],
+        'balo-other': [],
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getAllPresence()).resolves.toEqual({
+      [ROOM]: [{ userId: 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d', id: 'sess-1' }],
+      'balo-other': [],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${DAILY_API_BASE}/presence`);
+    expect(init.method).toBe('GET');
+  });
+
+  /**
+   * ⚠⚠ RE-DECIDED (S1). This used to assert that an unparseable room value was silently DROPPED
+   * and the rest returned. That is the most dangerous possible answer here, because "fewer rooms
+   * than reality" is indistinguishable downstream from "those rooms are empty": the sweep closes
+   * every open interval it believes the vendor did not confirm, `idleEndApplies` ends every
+   * `in_progress` meeting ~5 minutes later, and `tearDownRoom` deletes Daily rooms out from
+   * under people who are still talking.
+   *
+   * A body this platform cannot interpret is now an ERROR, so the sweep's existing outage path
+   * treats the whole tick as UNKNOWN and reconciles nothing. Skipping a repair is recoverable;
+   * a confident wrong answer on a destructive path is not.
+   */
+  it('⚠⚠ THROWS on a body it cannot interpret — never a partial, confident-looking answer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(200, { [ROOM]: 'nonsense', 'balo-ok': [] }))
+    );
+
+    await expect(getAllPresence()).rejects.toMatchObject({
+      name: 'DailyApiError',
+      path: '/presence',
+      body: expect.stringContaining('cannot interpret'),
+    });
+  });
+
+  it('⚠ THROWS rather than answering `{}` when the body is not an object at all', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, ['not', 'a', 'map'])));
+
+    await expect(getAllPresence()).rejects.toMatchObject({
+      name: 'DailyApiError',
+      body: expect.stringContaining('cannot interpret'),
+    });
+  });
+
+  /**
+   * ⚠ AN EMPTY MAP IS A LEGITIMATE, WELL-FORMED ANSWER — nobody is on any call. It is returned
+   * faithfully; deciding whether to ACT on it is the sweep's sanity gate, not this function's.
+   */
+  it('answers an empty map for an empty body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {})));
+
+    await expect(getAllPresence()).resolves.toEqual({});
+  });
+
+  it('strips vendor keys this platform has not named', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(200, {
+          [ROOM]: [{ userId: 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d', unexpected: 'field' }],
+        })
+      )
+    );
+
+    await expect(getAllPresence()).resolves.toEqual({
+      [ROOM]: [{ userId: 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d' }],
+    });
+  });
+});
+
+describe('the BAL-134 ports', () => {
+  it('dailyRoomTeardown satisfies RoomTeardown with the live deleteRoom', () => {
+    expect(dailyRoomTeardown.deleteRoom).toBe(deleteRoom);
+  });
+
+  it('dailyPresenceReader satisfies PresenceReader with the live getAllPresence', () => {
+    expect(dailyPresenceReader.getAllPresence).toBe(getAllPresence);
   });
 });

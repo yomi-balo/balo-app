@@ -857,6 +857,33 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       body: `${guest} was added to ${title}.`,
     };
   },
+
+  /**
+   * BAL-134 — the expert is in the room and nobody from the client side has arrived.
+   *
+   * ⚠ THIS ENTRY IS LOAD-BEARING IN A WAY A MISSING EMAIL TEMPLATE IS NOT. `getInAppTemplate`
+   * does NOT throw on an unknown name — it silently returns the generic "You have a new
+   * notification". An absent entry therefore degrades to a MEANINGLESS in-app nudge with a
+   * green CI, which is why `in-app-templates.test.ts` asserts the real title and body.
+   *
+   * ⚠ NO BILLING LINE AND NO COUNTDOWN. Nothing is charged until both sides are present, so a
+   * charge claim would be false; a "you will be charged" line would be a threat aimed at
+   * somebody a few minutes late. A quiet fact, and a way in.
+   *
+   * ⚠ PROSPECTIVE COPY NAMES THE **PARTY** (the expert's agency, or an independent expert's own
+   * name), never an invented individual and never a pronoun. Absent ⇒ "Your expert".
+   */
+  'meeting-client-absent': (data) => {
+    const waiting = data.waitingPartyName;
+    const who = typeof waiting === 'string' && waiting.length > 0 ? waiting : 'Your expert';
+    const meetingId = data.meetingId as string | undefined;
+    return {
+      title: 'Your consultation has started',
+      body: `${who} is in the room and ready when you are.`,
+      // ⚠ STRAIGHT INTO THE CALL — the whole point of the nudge is one tap to the room.
+      ...(meetingId === undefined ? {} : { actionUrl: `/meetings/${meetingId}/call` }),
+    };
+  },
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

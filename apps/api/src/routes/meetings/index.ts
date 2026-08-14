@@ -118,6 +118,8 @@ import {
 import { createMeetingBodySchema } from './schema.js';
 import { meetingGuestRoutes } from './guests.js';
 import { meetingJoinRoutes } from './join.js';
+import { meetingEndRoutes } from './end.js';
+import { meetingStateRoutes } from './state.js';
 
 const log = createLogger('meetings-route');
 
@@ -398,6 +400,14 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
   // idiom. ⚠ TWO OF ITS THREE ROUTES ARE PUBLIC (no `requireAuth`) and that is deliberate;
   // see that module's docblock before "fixing" it.
   await meetingJoinRoutes(fastify);
+
+  // BAL-134 — the server END endpoint and the polled STATE read. Sibling registrations, same
+  // reasoning as the two above: one prefix, one `requireAuth` idiom.
+  // ⚠ BOTH ARE AUTHENTICATED, unlike two of the three join routes. Ending a meeting is a
+  // mutation over a money-bearing record; the state read is member-only because the two guest
+  // surfaces mount no route context and already render neutral copy.
+  await meetingEndRoutes(fastify);
+  await meetingStateRoutes(fastify);
 
   log.info('Registered meeting routes');
 }

@@ -7,9 +7,18 @@ import {
   meetings,
   type MeetingParticipantParty,
 } from '../schema';
-import { engagementFactory, meetingFactory, userFactory } from '../test/factories';
+import {
+  engagementFactory,
+  meetingFactory,
+  meetingGuestFactory,
+  userFactory,
+} from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { meetingPresenceRepository } from './meeting-presence';
+import {
+  InvalidPresenceIdentityError,
+  InvalidPresenceTimestampError,
+  meetingPresenceRepository,
+} from './meeting-presence';
 
 const MIN = 60_000;
 /**
@@ -24,14 +33,20 @@ function at(minutes: number): Date {
   return new Date(T0.getTime() + minutes * MIN);
 }
 
-/** `open` at `T0 + minutes`. A one-liner so the presence TIMELINE stays readable. */
+/** `open` at `T0 + minutes` for an AUTHENTICATED (or unmapped, `userId: null`) participant. */
 async function join(
   meetingId: string,
   userId: string | null,
   party: MeetingParticipantParty,
   minutes: number
 ): Promise<Awaited<ReturnType<typeof meetingPresenceRepository.open>>> {
-  return meetingPresenceRepository.open({ meetingId, userId, party, joinedAt: at(minutes) });
+  return meetingPresenceRepository.open({
+    meetingId,
+    userId,
+    meetingGuestId: null,
+    party,
+    joinedAt: at(minutes),
+  });
 }
 
 /** `close` at `T0 + minutes` (omit `minutes` to exercise the wall-clock default). */
@@ -43,6 +58,37 @@ async function leave(
   return meetingPresenceRepository.close({
     meetingId,
     userId,
+    meetingGuestId: null,
+    ...(minutes === undefined ? {} : { leftAt: at(minutes) }),
+  });
+}
+
+/** BAL-408/BAL-134 — `open` at `T0 + minutes` for a token-authenticated GUEST. */
+async function guestJoin(
+  meetingId: string,
+  meetingGuestId: string,
+  party: MeetingParticipantParty,
+  minutes: number
+): Promise<Awaited<ReturnType<typeof meetingPresenceRepository.open>>> {
+  return meetingPresenceRepository.open({
+    meetingId,
+    userId: null,
+    meetingGuestId,
+    party,
+    joinedAt: at(minutes),
+  });
+}
+
+/** BAL-408/BAL-134 — `close` at `T0 + minutes` for a token-authenticated GUEST. */
+async function guestLeave(
+  meetingId: string,
+  meetingGuestId: string,
+  minutes?: number
+): Promise<Awaited<ReturnType<typeof meetingPresenceRepository.close>>> {
+  return meetingPresenceRepository.close({
+    meetingId,
+    userId: null,
+    meetingGuestId,
     ...(minutes === undefined ? {} : { leftAt: at(minutes) }),
   });
 }
@@ -104,8 +150,9 @@ describe('meetingPresenceRepository.open / close', () => {
 
     // Both retried `participant-left` webhooks read the SAME open interval BEFORE either
     // writes — the interleaving the compare-and-set exists to survive.
-    const firstView = await meetingPresenceRepository.findOpen(meeting.id, user.id);
-    const secondView = await meetingPresenceRepository.findOpen(meeting.id, user.id);
+    const identity = { userId: user.id, meetingGuestId: null };
+    const firstView = await meetingPresenceRepository.findOpen(meeting.id, identity);
+    const secondView = await meetingPresenceRepository.findOpen(meeting.id, identity);
     expect(firstView?.id).toBe(opened.id);
     expect(secondView?.id).toBe(opened.id);
 
@@ -125,18 +172,29 @@ describe('meetingPresenceRepository.open / close', () => {
     expect(persisted?.leftAt?.getTime()).toBe(at(10).getTime());
   });
 
-  it('a GUEST (user_id NULL) opens and closes — documented gap: NOT deduplicated', async () => {
+  it('an UNMAPPED participant (BOTH identity columns NULL) is still NOT deduplicated — the irreducible residue', async () => {
     const { meeting } = await meetingFactory();
 
-    await join(meeting.id, null, 'client', 0);
-    await join(meeting.id, null, 'client', 1);
+    await join(meeting.id, null, 'observer', 0);
+    await join(meeting.id, null, 'observer', 1);
 
-    // NULLs are DISTINCT in `meeting_presence_one_open_per_user_idx`, so a guest is not
-    // covered. Asserted so the gap is visible, not accidental — BAL-408/BAL-134 close it.
+    // ⚠ THIS TEST USED TO BE ABOUT GUESTS. BAL-408 + BAL-134 CLOSED THAT GAP (see the
+    // guest-identity describe block below); what remains is the ONE class that cannot be
+    // deduplicated at all — a Daily participant the writer could map to neither a user nor a
+    // `meeting_guests` row. NULLs are distinct in a unique index and there is no other key to
+    // arbitrate on, so each observation opens a fresh interval. Irreducible, not an oversight.
+    //
+    // And it is the SAFE side of the trade: such a participant is written `party='observer'`,
+    // which `computeMeetingClocks` excludes from BOTH sides of the billable intersection — so
+    // a duplicated one bills nothing (asserted below, not merely asserted in prose).
     expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(2);
 
     const closed = await leave(meeting.id, null, 5);
     expect(closed?.joinedAt.getTime()).toBe(at(0).getTime()); // the EARLIEST open interval
+
+    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    expect(clocks.billableMs).toBe(0);
+    expect(clocks.expertPresentMs).toBe(0);
   });
 
   it('left_at BEFORE joined_at is rejected (23514); an equal pair is legal (zero-length blip)', async () => {
@@ -164,6 +222,496 @@ describe('meetingPresenceRepository.open / close', () => {
       })
       .returning();
     expect(blip?.leftAt?.getTime()).toBe(at(10).getTime());
+  });
+});
+
+// ── BAL-408 / BAL-134: GUEST IDENTITY — the gap BAL-418 documented and assigned here ───────
+
+describe('meetingPresenceRepository — guest identity', () => {
+  it('THE CLOSED GAP: a DUPLICATE guest join returns the EXISTING interval, not a second one', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    const first = await guestJoin(meeting.id, guest.id, 'client', 0);
+    const second = await guestJoin(meeting.id, guest.id, 'client', 1);
+
+    // ⚠ THE 42P10 CANARY. This upsert's arbiter must restate
+    // `meeting_presence_one_open_per_guest_idx`'s predicate byte-for-byte, with no bind
+    // parameters, or Postgres cannot prove implication and the INSERT fails
+    // `42P10 there is no unique or exclusion constraint matching the ON CONFLICT
+    // specification`. A wrong arbiter fails LOUDLY here and NOWHERE ELSE — no typecheck, no
+    // unit test and no lint rule can see it.
+    expect(second.id).toBe(first.id);
+    expect(second.joinedAt.getTime()).toBe(at(0).getTime());
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(1);
+  });
+
+  it('writes meeting_guest_id and leaves user_id NULL (the identity CHECK’s guest shape)', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    const opened = await guestJoin(meeting.id, guest.id, 'client', 0);
+
+    expect(opened.meetingGuestId).toBe(guest.id);
+    expect(opened.userId).toBeNull();
+  });
+
+  it('TWO DIFFERENT guests on one meeting are NOT collapsed into one interval', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest: first } = await meetingGuestFactory({ meetingId: meeting.id });
+    const { guest: second } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    // The unique is on the PAIR `(meeting_id, meeting_guest_id)`. An arbiter keyed on
+    // `meeting_id` alone would silently drop the second attendee's whole presence record.
+    await guestJoin(meeting.id, first.id, 'client', 0);
+    await guestJoin(meeting.id, second.id, 'client', 1);
+
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(2);
+  });
+
+  it('a guest REJOIN after a close opens a genuine second interval', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    const first = await guestJoin(meeting.id, guest.id, 'client', 0);
+    await guestLeave(meeting.id, guest.id, 10);
+    const second = await guestJoin(meeting.id, guest.id, 'client', 20);
+
+    // The partial unique constrains OPEN intervals only, so a rejoin is legal — and the
+    // clocks stay SPANS, so the gap sits inside the billable window rather than restarting it.
+    expect(second.id).not.toBe(first.id);
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(2);
+  });
+
+  it('close routes on the GUEST key — a guest and a user on one meeting never close each other', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+    const expert = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await guestJoin(meeting.id, guest.id, 'client', 0);
+
+    const closedGuest = await guestLeave(meeting.id, guest.id, 10);
+    expect(closedGuest?.meetingGuestId).toBe(guest.id);
+
+    // The expert's interval must be untouched — closing the wrong side's interval would
+    // truncate the billable span against the wrong party.
+    const stillOpen = await meetingPresenceRepository.findOpen(meeting.id, {
+      userId: expert.id,
+      meetingGuestId: null,
+    });
+    expect(stillOpen?.leftAt).toBeNull();
+  });
+
+  it('⚠ AN UNMAPPED close must NOT reach a GUEST’s interval (the `user_id IS NULL` trap)', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    const guestInterval = await guestJoin(meeting.id, guest.id, 'client', 0);
+
+    // Before guest identity existed, a null `userId` matched on `user_id IS NULL` ALONE — which
+    // now matches every guest row too. Closing "the unmapped participant" would then truncate an
+    // arbitrary REAL attendee's billable span. `identityMatches` constrains BOTH columns on this
+    // arm, so the close finds nothing.
+    expect(await leave(meeting.id, null, 5)).toBeUndefined();
+
+    const [persisted] = await db
+      .select()
+      .from(meetingPresence)
+      .where(eq(meetingPresence.id, guestInterval.id));
+    expect(persisted?.leftAt).toBeNull();
+  });
+
+  it('a client-side guest DOES anchor the billable clock; an expert-side one must be written observer', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const { guest: clientGuest } = await meetingGuestFactory({ meetingId: meeting.id });
+    const { guest: agencyColleague } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    // `presencePartyForGuest` (the caller's obligation, `@balo/shared/meetings`) maps
+    // `client → client` and `expert → observer`. Written here as the two values that function
+    // produces, so the BILLING consequence of the mapping is pinned at the storage layer too.
+    await guestJoin(meeting.id, clientGuest.id, 'client', 10);
+    await guestJoin(meeting.id, agencyColleague.id, 'observer', 0);
+    await leave(meeting.id, expert.id, 40);
+
+    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(40));
+
+    // The billable span anchors on the CLIENT-side guest at minute 10, NOT on the expert-side
+    // one at minute 0 — an agency colleague must never put a non-delivering attendee on the
+    // billable clock ("per-minute of expert time, never per-seat").
+    expect(clocks.billableStartedAt?.getTime()).toBe(at(10).getTime());
+    expect(clocks.billableMs).toBe(30 * MIN);
+  });
+
+  it('rejects BOTH identity columns being set, in-process, before the CHECK sees it', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+    const user = await userFactory();
+
+    await expect(
+      meetingPresenceRepository.open({
+        meetingId: meeting.id,
+        userId: user.id,
+        meetingGuestId: guest.id,
+        party: 'client',
+        joinedAt: at(0),
+      })
+    ).rejects.toThrow(InvalidPresenceIdentityError);
+
+    // Nothing was written — the guard runs before the insert, so `meeting_presence_identity_
+    // not_both` never has to fire.
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(0);
+  });
+});
+
+// ── BAL-134 (R10): the WRITE-SIDE window clamp ─────────────────────────────────────────────
+
+describe('meetingPresenceRepository — the R10 write-side clamp', () => {
+  /** A meeting window of `T0 → T0 + 60`, plus the generous 24h post-end tolerance. */
+  const WINDOW = { notBefore: at(0), notAfter: at(60 + 24 * 60) };
+
+  it('THE TICKET RULE: an expert arriving at 09:55 for a 10:00 call is not credited for arriving early', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    const opened = await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(-5), // 09:55 for a 10:00 call
+      window: WINDOW,
+    });
+
+    expect(opened.joinedAt.getTime()).toBe(at(0).getTime());
+  });
+
+  it('leaves a join INSIDE the window exactly as given', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    const opened = await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(7),
+      window: WINDOW,
+    });
+
+    expect(opened.joinedAt.getTime()).toBe(at(7).getTime());
+  });
+
+  it('lowers a nonsense far-future leave to the window ceiling', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(0),
+      window: WINDOW,
+    });
+
+    const closed = await meetingPresenceRepository.close({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      leftAt: at(10 * 24 * 60), // ten days later — a dropped-then-resurrected webhook
+      window: WINDOW,
+    });
+
+    expect(closed?.leftAt?.getTime()).toBe(WINDOW.notAfter.getTime());
+  });
+
+  it('does NOT truncate a legitimately OVER-RUNNING call (the ceiling is generous on purpose)', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+    await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(0),
+      window: WINDOW,
+    });
+    await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: client.id,
+      meetingGuestId: null,
+      party: 'client',
+      joinedAt: at(0),
+      window: WINDOW,
+    });
+
+    // 75 minutes on a 60-minute booking. Nothing terminates on `scheduled_end` (edge case 20),
+    // and truncating here would be a silent UNDER-bill; the settlement-side policy cap is
+    // BAL-412's `effectiveCeilingMinor`, not this clamp's job.
+    await meetingPresenceRepository.close({
+      meetingId: meeting.id,
+      userId: client.id,
+      meetingGuestId: null,
+      leftAt: at(75),
+      window: WINDOW,
+    });
+    await meetingPresenceRepository.close({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      leftAt: at(75),
+      window: WINDOW,
+    });
+
+    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(120));
+    expect(clocks.billableMs).toBe(75 * MIN);
+  });
+
+  it('DEGRADES TO A ZERO-LENGTH INTERVAL when the clamped leave lands below its own join', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    // Joined 09:55 → clamped UP to 10:00. Left 09:58 → below its own stored `joined_at`.
+    // A bare write would trip `meeting_presence_left_after_joined` with 23514; the clamp
+    // raises it to `joined_at` instead, which is legal (the CHECK is `>=`) and bills nothing.
+    await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(-5),
+      window: WINDOW,
+    });
+
+    const closed = await meetingPresenceRepository.close({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      leftAt: at(-2),
+      window: WINDOW,
+    });
+
+    expect(closed?.joinedAt.getTime()).toBe(at(0).getTime());
+    expect(closed?.leftAt?.getTime()).toBe(at(0).getTime());
+    expect(await meetingPresenceRepository.clocks(meeting.id, at(60))).toMatchObject({
+      expertPresentMs: 0,
+      billableMs: 0,
+    });
+  });
+
+  it('WITHOUT a window nothing is clamped, and an inverted pair still raises 23514 loudly', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    // The clamp is OPT-IN. Fixtures and backfills must be able to store an instant exactly as
+    // given — and a caller bug on the un-clamped path must stay loud rather than being
+    // silently rewritten by the repository.
+    const opened = await join(meeting.id, expert.id, 'expert', -5);
+    expect(opened.joinedAt.getTime()).toBe(at(-5).getTime());
+
+    await expectConstraintViolation('23514', (tx) =>
+      tx
+        .update(meetingPresence)
+        .set({ leftAt: at(-10) })
+        .where(eq(meetingPresence.id, opened.id))
+    );
+  });
+
+  it('rejects a NON-FINITE joinedAt / leftAt at the write seam (the obligation named on computeMeetingClocks)', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    // An Invalid Date's getTime() is NaN, every comparison against it is FALSE, and it would
+    // therefore slip past `left_at >= joined_at` too — poisoning every clock read of this
+    // meeting forever. Loud and early, at the one door it can enter through.
+    await expect(
+      meetingPresenceRepository.open({
+        meetingId: meeting.id,
+        userId: expert.id,
+        meetingGuestId: null,
+        party: 'expert',
+        joinedAt: new Date('not-a-date'),
+      })
+    ).rejects.toThrow(InvalidPresenceTimestampError);
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await expect(
+      meetingPresenceRepository.close({
+        meetingId: meeting.id,
+        userId: expert.id,
+        meetingGuestId: null,
+        leftAt: new Date(Number.NaN),
+      })
+    ).rejects.toThrow(InvalidPresenceTimestampError);
+
+    // Nothing was written by the rejected open, and the rejected close left the interval open.
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.leftAt).toBeNull();
+  });
+
+  it('rejects a NON-FINITE window bound rather than clamping to nonsense', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    await expect(
+      meetingPresenceRepository.open({
+        meetingId: meeting.id,
+        userId: expert.id,
+        meetingGuestId: null,
+        party: 'expert',
+        joinedAt: at(0),
+        window: { notBefore: new Date(Number.NaN), notAfter: at(60) },
+      })
+    ).rejects.toThrow(InvalidPresenceTimestampError);
+  });
+});
+
+// ── BAL-134: closeAllOpen + listOpen ───────────────────────────────────────────────────────
+
+describe('meetingPresenceRepository.closeAllOpen / listOpen', () => {
+  it('closes EVERY open interval in one statement and reports how many', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, client.id, 'client', 5);
+    await guestJoin(meeting.id, guest.id, 'client', 6);
+
+    // Both identity kinds are closed by the SAME statement — it keys on the meeting, not on
+    // any identity, which is what makes it a complete "the room is empty now" sweep.
+    const closed = await meetingPresenceRepository.closeAllOpen(meeting.id, at(30));
+    expect(closed).toBe(3);
+    expect(await meetingPresenceRepository.listOpen(meeting.id)).toHaveLength(0);
+
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(rows.map((row) => row.leftAt?.getTime())).toEqual([
+      at(30).getTime(),
+      at(30).getTime(),
+      at(30).getTime(),
+    ]);
+  });
+
+  it('is IDEMPOTENT: a second call closes nothing and never extends an existing left_at', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    await join(meeting.id, expert.id, 'expert', 0);
+
+    expect(await meetingPresenceRepository.closeAllOpen(meeting.id, at(30))).toBe(1);
+    // The `left_at IS NULL` filter IS the compare-and-set. Without it, a second terminal
+    // transition (or a `meeting.ended` webhook arriving after one) would push `left_at`
+    // forward and extend a SPAN-based billable clock.
+    expect(await meetingPresenceRepository.closeAllOpen(meeting.id, at(90))).toBe(0);
+
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(rows[0]?.leftAt?.getTime()).toBe(at(30).getTime());
+  });
+
+  it('⚠ GREATEST(joined_at, leftAt): an end BEFORE a clamped join degrades, it does not 23514', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    // The real sequence: the expert joined at 09:55, the R10 clamp stored `joined_at = 10:00`,
+    // and then somebody ended the call at 09:58. A bare `SET left_at = $endedAt` writes
+    // `left_at < joined_at`, trips the CHECK, and — inside `endMeeting`'s transaction — rolls
+    // back the WHOLE termination, leaving the meeting un-endable by that path forever.
+    const opened = await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(-5),
+      window: { notBefore: at(0), notAfter: at(60) },
+    });
+    expect(opened.joinedAt.getTime()).toBe(at(0).getTime());
+
+    const closed = await meetingPresenceRepository.closeAllOpen(meeting.id, at(-2));
+    expect(closed).toBe(1);
+
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(rows[0]?.leftAt?.getTime()).toBe(at(0).getTime()); // raised to its own joined_at
+  });
+
+  it('touches neither ALREADY-CLOSED nor SOFT-DELETED nor OTHER meetings’ intervals', async () => {
+    const { meeting } = await meetingFactory();
+    const other = await meetingFactory();
+    const closedUser = await userFactory();
+    const deletedUser = await userFactory();
+    const openUser = await userFactory();
+    const otherUser = await userFactory();
+
+    await join(meeting.id, closedUser.id, 'client', 0);
+    await leave(meeting.id, closedUser.id, 10);
+    const softDeleted = await join(meeting.id, deletedUser.id, 'client', 0);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, softDeleted.id));
+    await join(meeting.id, openUser.id, 'expert', 0);
+    await join(other.meeting.id, otherUser.id, 'expert', 0);
+
+    // Exactly ONE: the live open interval. Not the already-closed one (its `left_at` must not
+    // be pushed forward), not the soft-deleted one, and not the other meeting's.
+    expect(await meetingPresenceRepository.closeAllOpen(meeting.id, at(30))).toBe(1);
+
+    const [softDeletedRow] = await db
+      .select()
+      .from(meetingPresence)
+      .where(eq(meetingPresence.id, softDeleted.id));
+    expect(softDeletedRow?.leftAt).toBeNull(); // soft-deleted rows are invisible to the sweep
+
+    const live = await meetingPresenceRepository.listByMeeting(meeting.id);
+    const closedEarly = live.find((row) => row.userId === closedUser.id);
+    expect(closedEarly?.leftAt?.getTime()).toBe(at(10).getTime());
+
+    expect(await meetingPresenceRepository.listOpen(other.meeting.id)).toHaveLength(1);
+  });
+
+  it('returns 0 for a meeting with no open intervals at all', async () => {
+    const { meeting } = await meetingFactory();
+    expect(await meetingPresenceRepository.closeAllOpen(meeting.id, at(30))).toBe(0);
+  });
+
+  it('COMPOSES ON A CALLER’S TRANSACTION, and rolls back with it', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    await join(meeting.id, expert.id, 'expert', 0);
+
+    // This is the property `endMeeting` depends on: presence closure and the status flip are
+    // ONE atomic unit, so a terminal meeting can never be observed with an open interval.
+    // Nested `db.transaction` inside the harness produces a SAVEPOINT, so the throw rolls back
+    // just this block and the per-test transaction survives.
+    await expect(
+      db.transaction(async (tx) => {
+        const closed = await meetingPresenceRepository.closeAllOpen(meeting.id, at(30), tx);
+        expect(closed).toBe(1);
+        throw new Error('force rollback');
+      })
+    ).rejects.toThrow('force rollback');
+
+    expect(await meetingPresenceRepository.listOpen(meeting.id)).toHaveLength(1);
+  });
+
+  it('listOpen returns only OPEN live intervals, in join order', async () => {
+    const { meeting } = await meetingFactory();
+    const early = await userFactory();
+    const late = await userFactory();
+    const gone = await userFactory();
+
+    await join(meeting.id, late.id, 'client', 20);
+    await join(meeting.id, early.id, 'expert', 0);
+    await join(meeting.id, gone.id, 'observer', 5);
+    await leave(meeting.id, gone.id, 10);
+
+    // The reconciler's read (D1 leg 2): whatever this returns that Daily's roster does not
+    // confirm is a DROPPED `participant.left`.
+    const open = await meetingPresenceRepository.listOpen(meeting.id);
+    expect(open.map((row) => row.userId)).toEqual([early.id, late.id]);
   });
 });
 
@@ -364,12 +912,14 @@ describe('meetingPresenceRepository.clocks', () => {
     await meetingPresenceRepository.open({
       meetingId: meeting.id,
       userId: expert.id,
+      meetingGuestId: null,
       party: 'expert',
       joinedAt: tenMinutesAgo,
     });
     await meetingPresenceRepository.open({
       meetingId: meeting.id,
       userId: client.id,
+      meetingGuestId: null,
       party: 'client',
       joinedAt: tenMinutesAgo,
     });
@@ -393,12 +943,14 @@ describe('meetingPresenceRepository.clocks', () => {
     await meetingPresenceRepository.open({
       meetingId: meeting.id,
       userId: expert.id,
+      meetingGuestId: null,
       party: 'expert',
       joinedAt: fiveMinutesAgo,
     });
     await meetingPresenceRepository.open({
       meetingId: meeting.id,
       userId: client.id,
+      meetingGuestId: null,
       party: 'client',
       joinedAt: fiveMinutesAgo,
     });

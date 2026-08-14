@@ -1,4 +1,5 @@
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, notInArray } from 'drizzle-orm';
+import { assertMeetingTransition, type MeetingLifecycleStatus } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   meetings,
@@ -6,6 +7,9 @@ import {
   type Meeting,
   type MeetingContext,
   type MeetingContextType,
+  type MeetingEndedBy,
+  type MeetingOutcome,
+  type MeetingStatus,
   type NewMeeting,
 } from '../schema';
 import {
@@ -15,7 +19,39 @@ import {
   syncProjectionScheduleTx,
 } from './_shared/consultation-projection';
 import type { DbExecutor } from './_shared/db-executor';
-import { recordMeetingBooked } from './_shared/meeting-audit';
+import { recordMeetingAudit, recordMeetingBooked } from './_shared/meeting-audit';
+import { meetingPresenceRepository } from './meeting-presence';
+
+/**
+ * ⚠⚠ THE THREE STATUS MUTATORS' COMPARE-AND-SET **FROM** SETS, DECLARED ONCE AND CHECKED
+ * AGAINST `MEETING_TRANSITIONS` ON EVERY CALL.
+ *
+ * `@balo/shared/meetings`'s `assertMeetingTransition` shipped with NO production caller while
+ * its docblock claimed it was "consulted by EVERY writer" and that the map and the CAS were
+ * "two independent guards". That was one guard and a false comment. These arrays make it true:
+ * each is BOTH the `inArray` predicate the CAS uses AND the list asserted against the map, so
+ * the two cannot drift — widening a CAS to an edge the map does not declare now THROWS on the
+ * next call instead of silently writing an illegal transition.
+ *
+ * ⚠ IT IS AN ASSERTION ABOUT THE WRITER'S DECLARED EDGES, NOT ABOUT ONE ROW. A CAS writer never
+ * reads the row before it writes, so its `from` is a SET, not an observed value — checking the
+ * set is the strongest statement available here, and the CAS itself still catches the race.
+ * Pure and allocation-free, so it costs nothing to run on every call.
+ */
+export const WAITING_FOR_PARTICIPANTS_FROM = ['scheduled'] as const;
+export const IN_PROGRESS_FROM = ['scheduled', 'waiting_for_participants'] as const;
+/** The complement of `endMeeting`'s exclusion CAS (`NOT IN ('ended','cancelled')`). */
+export const END_MEETING_FROM = ['scheduled', 'waiting_for_participants', 'in_progress'] as const;
+
+/** Throw unless EVERY declared `from` may legally reach `to`. See the block above. */
+function assertEveryEdgeLegal(
+  from: readonly MeetingLifecycleStatus[],
+  to: MeetingLifecycleStatus
+): void {
+  for (const status of from) {
+    assertMeetingTransition(status, to);
+  }
+}
 
 /**
  * Thrown by `create` when the `contexts` array is empty.
@@ -57,6 +93,76 @@ export class MeetingNotReschedulableError extends Error {
       `Meeting ${meetingId} is not reschedulable (must be live and status='scheduled' or 'waiting_for_participants')`
     );
     this.name = 'MeetingNotReschedulableError';
+  }
+}
+
+/**
+ * BAL-134 — the lifecycle sweep's candidate scan (§4.3).
+ *
+ * `statuses` is the CALLER'S, not a hard-coded set: the sweep passes the three non-terminal
+ * labels, and a test may pass one. See `meetingStatusEnum`'s reader-sweep list for what a new
+ * label owes this method.
+ */
+export interface ListLifecycleCandidatesInput {
+  statuses: readonly MeetingStatus[];
+  /**
+   * A LOOKBACK FLOOR — never scan all history. Production passes `now − 24h`; anything older
+   * is a data-repair problem, not a live meeting.
+   */
+  scheduledStartAfter: Date;
+  /** Hard batch bound. ⚠ The CALLER must `log.warn` when the batch FILLS (no silent caps). */
+  limit: number;
+}
+
+/** BAL-134 — the terminal transition's input (§4.3). */
+export interface EndMeetingInput {
+  id: string;
+  /**
+   * WHY it ended, or NULL. ⚠ NULL IS A REAL, CORRECT VALUE, NOT "unknown" (D5): the two HUMAN
+   * paths and the abandoned-wait path deliberately leave it unset — "the ender never sets the
+   * outcome" (ADR-1049); BAL-412 resolves it from `meeting_presence`. Only the three system
+   * paths that are DEFINED by their outcome (`completed` / `no_show_client` / `missed_call`)
+   * pass one.
+   */
+  outcome: MeetingOutcome | null;
+  /** WHO ended it. Required on EVERY path — unlike `outcome`, this is never unknown. */
+  endedBy: MeetingEndedBy;
+  /** The authoritative end instant. Becomes `meetings.ended_at` AND the presence ceiling. */
+  endedAt: Date;
+  /**
+   * The acting human, or NULL for the four system paths (the ADR-1030 system-actor
+   * exemption — an unattributed row, never a fabricated actor).
+   */
+  actorUserId: string | null;
+}
+
+/** BAL-134 — what `endMeeting` returns when it actually terminated the meeting. */
+export interface EndMeetingResult {
+  meeting: Meeting;
+  /**
+   * How many open presence intervals this termination closed. Surfaced (not swallowed)
+   * because it is the caller's analytics input and its own health signal: a large count means
+   * a lot of `participant.left` webhooks were dropped.
+   */
+  closedIntervals: number;
+}
+
+/**
+ * Internal control signal — the meeting was ALREADY terminal, so `endMeeting`'s transaction
+ * must roll back and the method must answer `undefined`. Never escapes the repository.
+ *
+ * ⚠ WHY A THROW RATHER THAN AN EARLY RETURN. The presence close runs BEFORE the status
+ * compare-and-set (the R5 ordering, preserved), so by the time the CAS reports "already
+ * terminal" this transaction may already have closed intervals. Returning at that point would
+ * COMMIT those closures on a call that is meant to be a pure no-op (D10: the losing ender gets
+ * an idempotent `200` with no second effect, no second audit row, no second teardown).
+ * Throwing rolls the whole thing back, so "returned undefined" and "changed nothing" become
+ * the same statement — which is the only contract a caller can safely retry against.
+ */
+class MeetingAlreadyTerminalSignal extends Error {
+  constructor() {
+    super('meeting already terminal');
+    this.name = 'MeetingAlreadyTerminalSignal';
   }
 }
 
@@ -349,8 +455,16 @@ export const meetingsRepository = {
    * AND `waiting_for_participants`. So once the Daily room opens, a meeting can be MOVED but
    * not CANCELLED. Two consequences a route author will meet before anyone else does:
    *   · rescheduling a `waiting_for_participants` meeting into next week leaves it AT
-   *     `waiting_for_participants` with a future window — nothing transitions it back to
-   *     `scheduled`, because BAL-134 owns transitions and has not landed;
+   *     `waiting_for_participants` with a future window. ⚠ BAL-134 HAS NOW LANDED AND STILL
+   *     DOES NOT CLOSE THIS (D12): the `waiting_for_participants → scheduled` back-edge is
+   *     DECLARED LEGAL in its transition map but deliberately NOT implemented, because
+   *     deciding what happens to the presence rows from the pre-reschedule attempt is a
+   *     BILLING question (BAL-412's) on a route BAL-409/BAL-411 own. What BAL-134 did do is
+   *     make the stale status INERT: every one of its five terminal rules carries an explicit
+   *     wall-clock precondition anchored on `scheduled_start`, so a meeting rescheduled into
+   *     the future matches NO rule. Without that guard an expert with an open interval across
+   *     the move would have `expertPresentMs` grow to `now` and trip the no-show rule on a
+   *     call that has not happened yet;
    *   · if a participant had already joined, that meeting carries an open presence interval
    *     across the move (`meeting-presence.ts`'s `resolveClockCeiling` residual).
    * Each guard was written for its own reason — `cancel` narrow because cancelling is what
@@ -504,5 +618,231 @@ export const meetingsRepository = {
       const expertProfileId = await softDeleteProjectionTx(tx, id, now);
       return { meeting, expertProfileId };
     });
+  },
+
+  // ── BAL-134 / ADR-1049 — THE LIFECYCLE TRANSITIONS ────────────────────────────────────
+  //
+  // The "DELIBERATELY NO STATUS MUTATOR" note at the top of this repository named BAL-134 as
+  // the owner of `start()` / `end()` / the transition map. This is that block, and it holds
+  // the ONLY status mutators besides `cancel()`.
+  //
+  // ⚠⚠ EVERY ONE OF THEM IS A COMPARE-AND-SET, AND NONE OF THEM THROWS ON A LOST RACE. The
+  // writers are a per-minute sweep, a Daily webhook and a user-pressed button, all of which
+  // can fire at the same instant on the same meeting. `undefined` means "somebody else got
+  // there first, and the meeting is not in the state you assumed" — a NORMAL outcome that the
+  // caller maps to a no-op, never an error. Throwing would turn a routine race into a
+  // user-facing failure on the one control that must always work.
+  //
+  // ⚠ AND NONE OF THEM WRITES THE `consultations` PROJECTION OR REBUILDS AVAILABILITY, unlike
+  // `create`/`updateSchedule`/`cancel`/`softDelete` above. That is CORRECT and deliberate,
+  // not an omission: `consultationStatusForMeeting` maps every non-`cancelled` label to
+  // `confirmed`, so an `ended` meeting KEEPS occupying the expert's calendar slot — the booked
+  // window was consumed, and re-advertising it as free would be the bug. A reviewer will
+  // otherwise read the absence as a miss.
+
+  /**
+   * BAL-134 — the lifecycle sweep's candidate scan (§4.3). Live, non-terminal meetings whose
+   * scheduled start is recent enough to still be actionable, OLDEST FIRST.
+   *
+   * Rides `meeting_status_scheduled_start_idx` — the index whose own docblock says "BAL-134's
+   * starting-soon scans" — because the predicate leads with `status` and then ranges on
+   * `scheduled_start`, in that column order, under the index's `deleted_at IS NULL` predicate.
+   *
+   * ⚠ THE FLOOR AND THE LIMIT ARE BOTH REQUIRED, AND NEITHER HAS A DEFAULT. A sweep that runs
+   * every minute forever would otherwise scan an ever-growing tail of meetings nothing will
+   * ever terminate, and one bad row would grow the batch without bound. Requiring both makes
+   * the bound a decision the caller states out loud.
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the no-silent-caps
+   * rule. A full batch means meetings were DROPPED from this tick, and the sweep is the only
+   * layer that can say so (`@balo/db` has no business logging a business event). Ordering is
+   * ascending so that warning can name the oldest `scheduled_start` it did reach.
+   *
+   * An empty `statuses` array returns `[]` without a query — drizzle would render `inArray(x,
+   * [])` as a false predicate anyway, but an explicit short-circuit says so rather than
+   * relying on that.
+   */
+  async listLifecycleCandidates(input: ListLifecycleCandidatesInput): Promise<Meeting[]> {
+    if (input.statuses.length === 0 || input.limit <= 0) {
+      return [];
+    }
+
+    return db
+      .select()
+      .from(meetings)
+      .where(
+        and(
+          // Enum literals at QUERY time are always safe — the house restriction is on index
+          // predicates and CHECKs.
+          inArray(meetings.status, [...input.statuses]),
+          gte(meetings.scheduledStart, input.scheduledStartAfter),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
+  },
+
+  /**
+   * BAL-134 — `scheduled → waiting_for_participants`, on the FIRST presence interval opening
+   * for a meeting (any party). Compare-and-set from `scheduled`.
+   *
+   * Returns `undefined` when the meeting is not `scheduled` — which is the COMMON case, not an
+   * error: the second, third and fourth participants to join all reach this method with the
+   * meeting already moved, and two Daily webhooks racing on the first join both call it. Both
+   * read as "no transition needed".
+   *
+   * Stamps NOTHING but `status`. `started_at` belongs to `in_progress` (it means "the
+   * consultation began", not "somebody opened the door"), and `ended_at` to the terminal
+   * transition.
+   */
+  async markWaitingForParticipants(id: string): Promise<Meeting | undefined> {
+    assertEveryEdgeLegal(WAITING_FOR_PARTICIPANTS_FROM, 'waiting_for_participants');
+    const [meeting] = await db
+      .update(meetings)
+      .set({ status: 'waiting_for_participants', updatedAt: new Date() })
+      .where(
+        and(
+          eq(meetings.id, id),
+          inArray(meetings.status, [...WAITING_FOR_PARTICIPANTS_FROM]),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .returning();
+    return meeting;
+  },
+
+  /**
+   * BAL-134 — `(scheduled | waiting_for_participants) → in_progress`, stamping `started_at`,
+   * when the expert AND at least one client-side participant are both present.
+   *
+   * `scheduled` is in the CAS set on purpose: a same-instant double-join can take a meeting
+   * from `scheduled` straight to `in_progress` without ever being observed as
+   * `waiting_for_participants` (§4.1 declares that edge). Requiring the intermediate state
+   * would leave such a meeting stuck at `scheduled` — and therefore matched by the MISSED-CALL
+   * rule, which would end a call that is actually running.
+   *
+   * ⚠ `started_at` CANNOT BE OVERWRITTEN BY A LATER CALL, and the CAS is what guarantees it:
+   * `in_progress` is not in the FROM set, so the second caller matches zero rows. Every clock
+   * anchored on `started_at` is therefore stable across a rejoin — the same "spans, not sums"
+   * property `meeting_presence` is built on.
+   */
+  async markInProgress(id: string, startedAt: Date): Promise<Meeting | undefined> {
+    assertEveryEdgeLegal(IN_PROGRESS_FROM, 'in_progress');
+    const [meeting] = await db
+      .update(meetings)
+      .set({ status: 'in_progress', startedAt, updatedAt: new Date() })
+      .where(
+        and(
+          eq(meetings.id, id),
+          inArray(meetings.status, [...IN_PROGRESS_FROM]),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .returning();
+    return meeting;
+  },
+
+  /**
+   * BAL-134 / ADR-1049 — THE TERMINAL TRANSITION. All five paths (human end, idle end,
+   * no-show, missed call, abandoned wait) land here; they differ only in `outcome`, `endedBy`
+   * and `actorUserId`.
+   *
+   * ONE `db.transaction`, in this order (§4.3):
+   *
+   *   1. `meetingPresenceRepository.closeAllOpen(id, endedAt, tx)` — presence closed FIRST,
+   *      clamped to `endedAt`;
+   *   2. the compare-and-set on `meetings`;
+   *   3. the `meeting.ended` audit row, on the same `tx` (ADR-1030's ceiling — `action` and
+   *      `entity_type` are open TEXT, so this costs no migration).
+   *
+   * ⚠⚠ STEP 2 IS **ONE** `UPDATE`, AND THAT IS THE WHOLE POINT OF THIS METHOD.
+   * `status='ended'`, `ended_at`, `ended_by` and `outcome` are set TOGETHER, in a single
+   * statement. `meetingPresenceRepository.resolveClockCeiling` prefers `meetings.ended_at`
+   * over the wall clock for a terminal meeting, and its docblock states the requirement
+   * verbatim: **"BAL-134 must stamp `ended_at` in the SAME statement that sets
+   * `status='ended'`"**. Split into two statements, a reader landing between them sees an
+   * `ended` meeting with a NULL `ended_at`, falls back to the wall clock, and measures every
+   * still-open interval to *now* — the 16-hour over-bill that repository pins as a test.
+   * Combined with step 1 there is no such interval left anyway; the two guards are
+   * independent on purpose.
+   *
+   * ⚠ THE CAS IS AN **EXCLUSION** (`status NOT IN ('ended','cancelled')`), NOT AN INCLUSION —
+   * the one method in this file written that way. Every non-terminal state is endable,
+   * including `scheduled` (that is the missed-call path: nobody ever joined). A new terminal
+   * `meeting_status` label MUST be added to this exclusion or `endMeeting` will happily re-end
+   * a meeting already in it; `meetingStatusEnum`'s reader-sweep list says so too.
+   *
+   * Returns `undefined` when the CAS matches nothing — already `ended`, already `cancelled`,
+   * soft-deleted, or gone — **having changed nothing at all** (the transaction rolls back; see
+   * `MeetingAlreadyTerminalSignal`). That is D10: two `canEndMeeting` holders can press End
+   * simultaneously, and the loser gets an idempotent success rather than a `409` surfaced as an
+   * error on the one control that must always work.
+   *
+   * ⚠ NO DAILY TEARDOWN AND NO ANALYTICS HERE. Deleting the room is a VENDOR call and belongs
+   * to the service layer (`@balo/db` reaches no network, exactly as `repositories-never-notify`
+   * pins for the queue). This method makes the meeting terminal in Postgres; the caller makes
+   * the room unreachable at Daily and emits `meeting_ended`.
+   */
+  async endMeeting(input: EndMeetingInput): Promise<EndMeetingResult | undefined> {
+    // ⚠ OUTSIDE THE TRANSACTION — pure, and a writer-bug throw must not open one.
+    assertEveryEdgeLegal(END_MEETING_FROM, 'ended');
+    try {
+      return await db.transaction(async (tx) => {
+        const closedIntervals = await meetingPresenceRepository.closeAllOpen(
+          input.id,
+          input.endedAt,
+          tx
+        );
+
+        const [meeting] = await tx
+          .update(meetings)
+          .set({
+            status: 'ended',
+            endedAt: input.endedAt,
+            endedBy: input.endedBy,
+            outcome: input.outcome,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(meetings.id, input.id),
+              // Enum literals at QUERY time are always safe — the house restriction is on
+              // index predicates and CHECKs.
+              notInArray(meetings.status, ['ended', 'cancelled']),
+              isNull(meetings.deletedAt)
+            )
+          )
+          .returning();
+
+        if (meeting === undefined) {
+          throw new MeetingAlreadyTerminalSignal();
+        }
+
+        // LAST, and on `tx` — an audit row left behind by a rolled-back termination would
+        // attest to an end that never happened.
+        await recordMeetingAudit(tx, {
+          actorUserId: input.actorUserId,
+          action: 'meeting.ended',
+          meetingId: meeting.id,
+          metadata: {
+            endedBy: input.endedBy,
+            outcome: input.outcome,
+            closedIntervals,
+            // ⚠ ISO STRING, NOT `Date` — `metadata` is `jsonb`, so a `Date` round-trips as a
+            // string and typing it otherwise would be a lie on the way back out (memory
+            // `reference_jsonb_date_type_lie`). The same conversion `recordMeetingBooked` does.
+            endedAt: input.endedAt.toISOString(),
+          },
+        });
+
+        return { meeting, closedIntervals };
+      });
+    } catch (error) {
+      if (error instanceof MeetingAlreadyTerminalSignal) {
+        return undefined;
+      }
+      throw error;
+    }
   },
 };

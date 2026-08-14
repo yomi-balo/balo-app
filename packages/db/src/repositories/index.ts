@@ -425,6 +425,12 @@ export {
 // ── Stripe provider (BAL-382) ─────────────────────────────────────────────
 export { stripeWebhookEventsRepository } from './stripe-webhook-events';
 export type { StripeWebhookEvent, NewStripeWebhookEvent } from '../schema';
+// ── Daily webhook idempotency (BAL-134, D2) — the SECOND webhook marker log ─
+export {
+  dailyWebhookEventsRepository,
+  type InsertReceivedDailyEventInput,
+} from './daily-webhook-events';
+export type { DailyWebhookEvent, NewDailyWebhookEvent } from '../schema';
 // ── Case consultation billing / expert payout obligation (BAL-399) ──────────
 export {
   expertPayoutRecordsRepository,
@@ -447,6 +453,10 @@ export {
   type MeetingContextInput,
   type MeetingMutationResult,
   type MeetingWithContexts,
+  // BAL-134 / ADR-1049 — the lifecycle transitions (§4.3).
+  type ListLifecycleCandidatesInput,
+  type EndMeetingInput,
+  type EndMeetingResult,
 } from './meetings';
 // ── Consultation projection (BAL-428) — `consultations` as a read model of `meetings` ──
 // The WRITERS are deliberately NOT exported: they are transaction-scoped internals of
@@ -472,7 +482,15 @@ export {
   MeetingAdminContextExistsError,
   type ConsultationTimestamps,
 } from './meeting-contexts';
-export { meetingPresenceRepository, type OpenPresenceInput } from './meeting-presence';
+export {
+  meetingPresenceRepository,
+  InvalidPresenceIdentityError,
+  InvalidPresenceTimestampError,
+  type OpenPresenceInput,
+  type ClosePresenceInput,
+  type PresenceIdentity,
+  type PresenceWindow,
+} from './meeting-presence';
 // ── Meeting files (BAL-423) — the FOURTH file scope, anchored on `meetings.id` ──────────
 export {
   meetingFilesRepository,
@@ -497,6 +515,7 @@ export type {
   NewMeeting,
   MeetingStatus,
   MeetingOutcome,
+  MeetingEndedBy,
   MeetingContext,
   NewMeetingContext,
   MeetingContextType,

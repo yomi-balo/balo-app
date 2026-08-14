@@ -42,7 +42,7 @@ function renderToolbar(overrides: Partial<MeetingToolbarProps> = {}): HTMLElemen
     onOpenSettings: vi.fn(),
     moreOpen: false,
     onMoreOpenChange: vi.fn(),
-    isOwner: false,
+    canEndMeeting: false,
     contextNoun: 'case',
     isCase: true,
     onLeave: vi.fn(),
@@ -179,16 +179,16 @@ describe('MeetingToolbar — the day-one control set', () => {
     expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
   });
 
-  describe('⚠⚠ the host branch resolves on isOwner and nothing else', () => {
-    it('gives a non-owner no leaving menu', () => {
-      const container = renderToolbar({ isOwner: false });
+  describe('⚠⚠ the end branch resolves on canEndMeeting and nothing else (BAL-134)', () => {
+    it('gives a viewer without end authority no leaving menu', () => {
+      const container = renderToolbar({ canEndMeeting: false });
 
       expect(screen.queryByRole('button', { name: 'Leaving options' })).toBeNull();
       expect(container.textContent ?? '').not.toMatch(/end/i);
     });
 
-    it('gives an owner the split control', () => {
-      renderToolbar({ isOwner: true });
+    it('gives an end-authority holder the split control', () => {
+      renderToolbar({ canEndMeeting: true });
 
       expect(screen.getByRole('button', { name: 'Leaving options' })).toBeInTheDocument();
     });
@@ -282,7 +282,7 @@ describe('MeetingToolbar — the day-one control set', () => {
             onOpenSettings={vi.fn()}
             moreOpen
             onMoreOpenChange={vi.fn()}
-            isOwner={false}
+            canEndMeeting={false}
             contextNoun="case"
             isCase
             onLeave={vi.fn()}
@@ -313,7 +313,7 @@ describe('MeetingToolbar — the day-one control set', () => {
             onMoreOpenChange={vi.fn()}
             openPanel={null}
             onTogglePanel={onTogglePanel}
-            isOwner={false}
+            canEndMeeting={false}
             contextNoun="case"
             isCase
             onLeave={vi.fn()}

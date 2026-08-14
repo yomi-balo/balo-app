@@ -116,3 +116,52 @@ describe('MeetingClockSlot — assistive tech', () => {
     });
   }
 });
+
+/**
+ * BAL-134 — ⚠⚠ **THE AMBER CHIP MUST EXIST ON A PHONE.**
+ *
+ * `CHIP_BASE` carried `hidden … sm:flex` for all four arms, so below 640px the "counted" chip did
+ * not render at all: an expert on a 375px screen saw NO clock — the entire visible artifact of
+ * this ticket's TopBar fix, absent on exactly the device an expert waiting on a late client is
+ * most likely to be holding.
+ *
+ * ⚠ THE ASSERTION IS ON THE CLASS, not on a rendered width, because `hidden`/`sm:flex` is a
+ * media-query decision Tailwind makes in CSS that JSDOM does not evaluate. The class list IS the
+ * behaviour here.
+ */
+describe('MeetingClockSlot — ⚠⚠ responsive visibility (BAL-134)', () => {
+  function classesOf(state: MeetingClockState): string {
+    const { container } = render(<MeetingClockSlot state={state} />);
+    return container.firstElementChild?.className ?? '';
+  }
+
+  it('⚠⚠ the COUNTED chip renders at every width — it is the money-adjacent one', () => {
+    const classes = classesOf({ kind: 'counted', clocks: CLOCKS, asOf: AS_OF });
+
+    expect(classes).not.toContain('hidden');
+    expect(classes.split(/\s+/)).toContain('flex');
+  });
+
+  it('the BILLABLE chip renders at every width too — same class of claim', () => {
+    const classes = classesOf({ kind: 'billable', clocks: CLOCKS, asOf: AS_OF });
+
+    expect(classes).not.toContain('hidden');
+    expect(classes.split(/\s+/)).toContain('flex');
+  });
+
+  it('⚠ the two CHROME-only arms may still yield space on a phone', () => {
+    // `Not started` and `● Live` restate what the stage below already shows; on a 375px bar the
+    // meeting title is worth more. This is deliberate, so it is pinned rather than left to drift.
+    for (const state of [{ kind: 'not_started' }, { kind: 'live' }] as const) {
+      const classes = classesOf(state);
+      expect(classes.split(/\s+/)).toContain('hidden');
+      expect(classes).toContain('sm:flex');
+    }
+  });
+
+  it('⚠ every arm keeps `shrink-0`, so the title truncates rather than the chip overflowing', () => {
+    for (const { state } of ALL_STATES) {
+      expect(classesOf(state).split(/\s+/)).toContain('shrink-0');
+    }
+  });
+});

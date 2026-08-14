@@ -70,6 +70,21 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   // ⚠ IT IS THE ONLY POLLED ACTION ON THE ALLOWLIST — the panel re-reads it every ~10s while
   // it is open — which is a second, independent reason it must never gain a write.
   'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-guests.ts',
+  // ── BAL-134, the in-call state mirror's polled read ───────────────────────────────────
+  //
+  // ⚠ THE SAME REASONING AS THE ENTRY ABOVE, AND THE SAME TWO PROPERTIES. It resolves NOTHING
+  // locally: it forwards a `GET /meetings/:id/state` to `apps/api` over the WorkOS-Bearer hop
+  // and maps a status to a `retryable` boolean. There is no repository call, no access
+  // resolver and no get-or-create pair anywhere in its import graph, so the standing BAL-424
+  // obligation does not bind it. `authorizeMeetingParticipation` (the real gate) runs in the
+  // other app, on the other side of HTTP, and collapses every denial to `404`.
+  //
+  // ⚠ IT IS THE **SECOND** POLLED ACTION ON THIS LIST — every ~10s while a call is live, on
+  // every participant's tab — which is an independent reason it must never gain a write.
+  //
+  // ⚠⚠ ITS SIBLING `end-meeting.ts` IS A MUTATION AND IS DELIBERATELY **NOT** HERE. It uses
+  // `requireOnboardedUser()`. Do not "tidy" the pair onto one gate.
+  'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-state.ts',
   // ── BAL-421, the case-surface readers ────────────────────────────────────────────────
   //
   // ⚠ THE STANDING BAL-424 OBLIGATION ABOVE BINDS BOTH OF THESE IN SPIRIT, THOUGH NOT BY THE

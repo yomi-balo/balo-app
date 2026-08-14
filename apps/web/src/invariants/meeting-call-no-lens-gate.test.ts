@@ -14,15 +14,38 @@ import {
  * ── ⚠⚠ WHY THIS IS A PINNED TEST AND NOT A CODE COMMENT ─────────────────────────────────────
  *
  * The design prototype this feature is built from gates end-for-everyone on
- * `lens === 'expert'` (`balo-in-meeting-ui.jsx:169`). Ending a call for everyone is a
- * `host_meetings` act (ADR-1046 §2 names "end call" explicitly), so it resolves on the SERVER's
- * per-actor verdict — which arrives here as the single `isOwner` boolean on the validated grant.
+ * `lens === 'expert'` (`balo-in-meeting-ui.jsx:169`). Ending a call for everyone resolves on the
+ * SERVER's per-actor verdict — which arrives here as a boolean on the validated grant.
  * `activeMode` is a view toggle and is NEVER an authorization input (ADR-1029).
  *
  * The prototype is the source of truth for the LAYOUT of this surface, so anyone implementing the
  * next slice of it (BAL-436's People panel, BAL-437's chat) reads that file and finds the wrong
  * gate written down in it. A comment saying "don't do that" sits in a file they may never open.
  * This test fails their build.
+ *
+ * ── ⚠⚠ BAL-134 / ADR-1049 (D3/D4) CHANGED THIS INVARIANT'S **SUBJECT**, NOT ITS INTENT ───────
+ *
+ * The verdict the End control reads is now `canEndMeeting`, and **`isOwner` is FORBIDDEN from
+ * gating it** — a second forbidden token beside the view-shaped ones, for a different reason.
+ *
+ * `isOwner` is `hasEngagementCapability(HOST_MEETINGS)` and it is the ONE input to the Daily
+ * `is_owner` meeting-token property (`join-meeting.ts` → `meeting-tokens.ts`). ADR-1049 gives end
+ * authority to the CLIENT PRINCIPAL as well — the party whose per-minute spend is running — and
+ * the only safe way to say that is a SECOND grant field. Widening `isOwner` to cover the paying
+ * side would mint vendor-level Daily owner tokens (eject, recording control) for clients, which
+ * no ADR authorizes. So `canEndMeeting = isOwner || clientPrincipal`, composed server-side in
+ * `authorize-end-meeting.ts`, and it reaches a Daily token nowhere.
+ *
+ * ⚠ THE FAILURE MODE THIS PINS IS A **PLAUSIBLE REFACTOR**, not a typo. Over today's shipped role
+ * map the two booleans agree in most fixtures, so "they're always the same — merge them" reads as
+ * tidying. It is a privilege escalation in one direction and a lockout in the other. The rule is
+ * therefore structural: the two End-control files below may not mention `isOwner` AT ALL.
+ *
+ * ⚠ AND IT IS SCOPED TO THOSE TWO FILES ON PURPOSE. `isOwner` is entirely legitimate elsewhere in
+ * this subtree — `meeting-call-surface.tsx` and `validate-grant.ts` carry it as a grant field,
+ * `meeting-frame-impl.tsx` hands it to the analytics `is_owner` property and `participant-tile`
+ * reads Daily's own per-participant `owner` flag. A subtree-wide ban would assert a rule nobody
+ * agreed to and would be deleted rather than obeyed.
  *
  * ⚠ SCOPED TO THIS SUBTREE ONLY. The repo-wide version of this rule is **BAL-438**; pinning it
  * here first is deliberate, because this is the surface where the wrong gate is already written
@@ -102,6 +125,16 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   'join-link.ts',
   'meeting-panels.ts',
   'present-guest-ids.ts',
+  // ── BAL-134, the meeting-lifecycle mirror ───────────────────────────────────────────
+  //
+  // ⚠ `meeting-lifecycle-client.ts` IS DELIBERATELY ABSENT, on exactly the grounds
+  // `guests-api-client.ts` and `join-api-client.ts` already are: it carries `import
+  // 'server-only'` and therefore legitimately imports `@/lib/logging` (and resolves the viewer's
+  // Bearer from the iron-session, which is why it must never reach the browser at all). Every
+  // OTHER module this ticket adds to `lib/meetings` is here.
+  'meeting-state.ts',
+  'top-bar-clock.ts',
+  'use-meeting-state-poll.ts',
 ]);
 
 /**
@@ -210,11 +243,20 @@ const PINNED_FILES: readonly string[] = [
   'app/(call)/meetings/[meetingId]/call/_actions/invite-meeting-guests.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/decide-guest-admission.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/resend-guest-link.ts',
+  // ── BAL-134 — the mirror and the end act. ⚠ BOTH LISTS, ALWAYS: the allow-list assertion
+  // above fails loudly on a name that does not resolve, but a name left OFF fails nothing, so an
+  // unpinned module would simply drop out of every scan below. BAL-436 set this precedent with
+  // its four `_actions/*.ts`; these are the two BAL-134 adds.
+  'lib/meetings/meeting-state.ts',
+  'lib/meetings/top-bar-clock.ts',
+  'lib/meetings/use-meeting-state-poll.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-state.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/end-meeting.ts',
 ];
 
 /**
- * ⚠⚠ THE VIEW-SHAPED TOKENS. A control on this surface may resolve on the grant's `isOwner` and
- * on nothing else.
+ * ⚠⚠ THE VIEW-SHAPED TOKENS. A control on this surface may resolve on the server's verdict as it
+ * arrives on the validated grant, and on nothing else.
  *
  * `role ===` rather than bare `role`: `role` is a legitimate ARIA attribute and a legitimate
  * Daily participant field, so the deny-list names the COMPARISON — which is the shape an
@@ -226,6 +268,16 @@ const VIEW_GATE_TOKENS: readonly string[] = [
   'platformRole',
   'role ===',
   "role === '",
+];
+
+/**
+ * BAL-134 / ADR-1049 (D4) — ⚠⚠ **THE FILES THAT RENDER THE END CONTROL.** These may name
+ * `canEndMeeting` and may NOT name `isOwner`, in code, anywhere. See the module docblock for why
+ * merging the two booleans is a real defect rather than a tidy-up.
+ */
+const END_CONTROL_FILES: readonly string[] = [
+  'components/leave-control.tsx',
+  'components/meeting-toolbar.tsx',
 ];
 
 describe('invariant: the call surface never gates on a lens (BAL-435)', () => {
@@ -256,16 +308,21 @@ describe('invariant: the call surface never gates on a lens (BAL-435)', () => {
     expect(impl).toBeDefined();
     expect(leave).toBeDefined();
     expect(impl?.jsx ?? '').toContain("from '@daily-co/daily-react'");
-    expect(leave?.jsx ?? '').toContain('isOwner');
+    // ⚠ BAL-134 RETARGETED THIS PROBE from `isOwner` to `canEndMeeting`. It has to name a token
+    // the file GENUINELY contains, and `leave-control.tsx` no longer mentions `isOwner` in code —
+    // which is now asserted below, so the old probe would have been a permanent false alarm.
+    expect(leave?.jsx ?? '').toContain('canEndMeeting');
     expect(leave?.raw ?? '').toContain("'use client'");
   });
 
   it('⚠ guards the guard: the JSX-comment filter removes ONLY comments', () => {
     // The filter must not be so eager that it eats the code the assertions read. `leave-control`
-    // carries both a JSX comment quoting the rule and the real `isOwner` branch.
-    const stripped = stripJsxComments(codeLinesOf('{/* lens === "expert" */}\nconst a = isOwner;'));
+    // carries both a JSX comment quoting the rule and the real `canEndMeeting` branch.
+    const stripped = stripJsxComments(
+      codeLinesOf('{/* lens === "expert" */}\nconst a = canEndMeeting;')
+    );
     expect(stripped).not.toContain('lens');
-    expect(stripped).toContain('isOwner');
+    expect(stripped).toContain('canEndMeeting');
   });
 
   it('⚠⚠ guards the guard: CODE AFTER A CLOSING */ ON THE SAME LINE IS STILL SCANNED', () => {
@@ -293,10 +350,52 @@ describe('invariant: the call surface never gates on a lens (BAL-435)', () => {
     expect(
       offenders,
       `These call-surface files reference a VIEW-shaped authorization token. Ending a call for ` +
-        `everyone is a \`host_meetings\` act (ADR-1046 §2), so it resolves on the SERVER's ` +
-        `per-actor verdict — which arrives as the \`isOwner\` boolean on the validated grant. ` +
-        `\`activeMode\` is a view toggle and is NEVER an authorization input (ADR-1029). The ` +
-        `design prototype gets this wrong at balo-in-meeting-ui.jsx:169; do not copy it:\n  ` +
+        `everyone resolves on the SERVER's per-actor verdict — which arrives as the ` +
+        `\`canEndMeeting\` boolean on the validated grant. \`activeMode\` is a view toggle and ` +
+        `is NEVER an authorization input (ADR-1029). The design prototype gets this wrong at ` +
+        `balo-in-meeting-ui.jsx:169; do not copy it:\n  ` +
+        offenders.join('\n  ')
+    ).toEqual([]);
+  });
+
+  /**
+   * BAL-134 / ADR-1049 (D3/D4) — ⚠⚠ **THE END CONTROL GATES ON `canEndMeeting`, AND `isOwner` IS
+   * FORBIDDEN FROM GATING IT.** The full reasoning is in the module docblock; the short version
+   * is that `isOwner` mints the Daily owner token and `canEndMeeting` does not, so merging them
+   * either hands clients vendor-level room powers or locks the paying side out of stopping its
+   * own meter.
+   *
+   * ⚠ TWO HALVES, AND BOTH ARE LOAD-BEARING. The positive half is the non-vacuity guard: a file
+   * that gated on NEITHER token would satisfy a bare absence check while rendering an ungated
+   * End control.
+   */
+  it('⚠⚠ the End control resolves on canEndMeeting — and NEVER on isOwner', () => {
+    const endControlSources = END_CONTROL_FILES.map((rel) => ({
+      rel,
+      file: scanned.find((candidate) => candidate.rel === rel),
+    }));
+
+    for (const { rel, file } of endControlSources) {
+      expect(file, `${rel} is not in the scan — the invariant would pass vacuously`).toBeDefined();
+      expect(
+        file?.jsx ?? '',
+        `${rel} must resolve the End control on the grant's \`canEndMeeting\` verdict.`
+      ).toContain('canEndMeeting');
+    }
+
+    const offenders = endControlSources
+      .filter(({ file }) => (file?.jsx ?? '').includes('isOwner'))
+      .map(({ rel }) => rel);
+    expect(
+      offenders,
+      `These End-control files name \`isOwner\`. It is \`hasEngagementCapability(HOST_MEETINGS)\` ` +
+        `and the ONE input to the Daily \`is_owner\` token property; \`canEndMeeting\` is ` +
+        `\`isOwner || clientPrincipal\`, composed server-side in \`authorize-end-meeting.ts\`, ` +
+        `and reaches a Daily token nowhere. Merging them INTO \`isOwner\` mints vendor-level ` +
+        `owner tokens (eject, recording control) for the paying side; merging them INTO ` +
+        `\`canEndMeeting\` denies the client principal the ability to stop their own per-minute ` +
+        `spend. ADR-1049 gives end authority to BOTH parties — that is why there are two ` +
+        `booleans, and why neither may stand in for the other:\n  ` +
         offenders.join('\n  ')
     ).toEqual([]);
   });

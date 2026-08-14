@@ -148,6 +148,50 @@ Verified against Daily's REST error model and rate-limit tiers:
 - **Idempotent provisioning** (deterministic room name): `GET /rooms/:name` → on **404**, `POST /rooms`; if it already exists, treat as provisioned (optionally `POST /rooms/:name` to reconcile config). Don't assume a create succeeds blindly, and don't error the BullMQ job on a name that's already there.
 - **`4xx` other than 429** (400 bad body / 401 bad key) → a config or payload bug, not retryable — fail the job loudly.
 
+## Webhooks
+
+Verified against `docs.daily.co/reference/rest-api/webhooks` (fetched **2026-08-15**). Balo's
+whole scheme lives in one module — `apps/api/src/services/daily/webhook-signature.ts` — so a
+vendor correction costs one file plus its test.
+
+**Registration is a one-off per-environment OPS step, not application code.** `POST /v1/webhooks`
+with the delivery URL; the response's **`hmac` field is the signing secret** and is what goes into
+`DAILY_WEBHOOK_SECRET`. Nothing at runtime creates or rotates a webhook.
+
+**Verification:**
+
+- Headers are `X-Webhook-Signature` and `X-Webhook-Timestamp` — read them **lower-cased**
+  (`x-webhook-signature` / `x-webhook-timestamp`); Fastify normalises header names.
+  `X-Webhook-Timestamp` is unix **seconds**.
+- Signing string is `X-Webhook-Timestamp + '.' + <raw body bytes>`. **Raw bytes, never a
+  re-serialized body** — `JSON.parse` + `JSON.stringify` reorders keys and normalises whitespace,
+  so a round-tripped body verifies against nothing. Register `fastify-raw-body` **scoped**
+  (`global: false`, `encoding: false`, `runFirst: true`), never globally.
+- HMAC-SHA256. **The secret is base64 — decode it to raw bytes before keying.** Keying on the
+  base64 _text_ matches nothing.
+- ⚠⚠ **THE RESULTING DIGEST IS BASE64, NOT HEX.** A hex digest fails **every genuine delivery**
+  with a perfectly healthy-looking `400`: nothing errors, nothing pages, presence is simply never
+  written and both clocks sit at zero. ⚠ A sign-then-verify round-trip test passes under _either_
+  encoding, so pin the digest against a **fixed vector** — a round-trip alone ships the bug.
+- `crypto.timingSafeEqual`, never `===`; it throws on unequal lengths, so length-check first. A
+  **duplicated** header (an array) is a refusal, not a "take the first".
+- Enforce a **freshness window** (Balo: ±5 min, symmetric) on the timestamp, so a captured
+  delivery cannot be replayed forever. The timestamp being _inside_ the signed string is what
+  binds it to the body.
+- The failure reason is a **`log.warn` field**; the wire gets `400` and nothing else. A missing
+  secret is a **`503`** (an outage), never a `400` — a `400` tells Daily to stop retrying.
+
+**Events Balo consumes:** `participant.joined` and `participant.left` (the presence writer), plus
+`meeting.ended`, which closes every open interval for the room when the last participant leaves.
+Any other type is acknowledged `200` and recorded, never processed.
+
+**Idempotency:** the event's **`id` attribute is the key**, persisted in `daily_webhook_events`
+(append-only, unique on `event_id`, mirroring `stripe_webhook_events`). `processed_at` is stamped
+**inside** the effect transaction, so a persisted marker always implies a committed effect. This
+is not optional bookkeeping: a replayed `participant.joined` after its interval legitimately
+closed would open a second interval anchored in the past that nothing closes — a silent unbounded
+over-bill on a money path.
+
 ## Not this skill
 
 - **`enable_knocking`** — Balo's admission gate is token issuance (BAL-132); native knocking contradicts it. If a ticket reaches for it, escalate rather than wire it.
@@ -177,6 +221,7 @@ time rather than hand-copying tables here.
 | Self-signing tokens                      | docs.daily.co/reference/rest-api/meeting-tokens/self-signing-tokens            |
 | Validate token                           | docs.daily.co/reference/rest-api/meeting-tokens/validate-meeting-token         |
 | Eject                                    | docs.daily.co/reference/rest-api/rooms/eject                                   |
+| Webhooks: create, signature, event list  | docs.daily.co/reference/rest-api/webhooks                                      |
 | Presence (per-room)                      | docs.daily.co/reference/rest-api/rooms/get-room-presence                       |
 | Presence (all rooms)                     | docs.daily.co/reference/rest-api/presence                                      |
 | Stop recording                           | docs.daily.co/reference/rest-api/rooms/recordings/stop                         |

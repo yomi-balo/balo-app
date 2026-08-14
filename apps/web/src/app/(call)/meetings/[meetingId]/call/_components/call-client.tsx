@@ -25,9 +25,19 @@ import { parseMemberJoinEnvelope } from '@/lib/meetings/member-join-envelope';
 import { formatScheduledStartLabel } from '@/lib/meetings/format-scheduled-start';
 import { resolveWaitingSubject } from '@/lib/meetings/waiting-subject';
 import { MEMBER_JOIN_OUTAGE_ERROR } from '@/lib/meetings/lobby';
+import { useMeetingStatePoll } from '@/lib/meetings/use-meeting-state-poll';
+import { resolveTopBarClock } from '@/lib/meetings/top-bar-clock';
 import { joinAsMemberAction } from '@/app/join/_actions/join-as-member';
+import { UNKNOWN_WAITING_FACTS, type WaitingFacts } from '@/lib/meetings/waiting-copy';
+import {
+  MEETING_STATE_RETRY_LABEL,
+  MEETING_STATE_STALLED_COPY,
+  type EndMeetingResult,
+} from '@/lib/meetings/meeting-state';
 import type { MemberJoinResponse } from '@/lib/meetings/join-api-client';
 import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import { getMeetingStateAction } from '../_actions/get-meeting-state';
+import { endMeetingAction } from '../_actions/end-meeting';
 import { getMeetingGuestsAction } from '../_actions/get-meeting-guests';
 import { inviteMeetingGuestsAction } from '../_actions/invite-meeting-guests';
 import { decideGuestAdmissionAction } from '../_actions/decide-guest-admission';
@@ -280,6 +290,80 @@ export function CallClient({
     [meetingId, joinLinkUrl]
   );
 
+  /**
+   * BAL-134 (§7.2) — ⚠⚠ **THE ONE POLLED READ, AND THE ONLY PRODUCER OF THE SERVER MIRROR.**
+   *
+   * ⚠ IT WRITES NOTHING. Daily's `participant-joined` / `participant-left` events stay UI-only
+   * inside the frame; presence is observed server-to-server (D1), because a browser-reported
+   * join is a money input supplied by a party to the transaction. This hook creating no
+   * client→server presence path is what preserves `join-link-never-writes.test.ts`'s posture.
+   *
+   * ⚠ `enabled` WAITS FOR THE GRANT. Before the member join resolves there is nothing to mirror
+   * and the read would 404 on a meeting the viewer has not been admitted to.
+   */
+  const loadState = useCallback(() => getMeetingStateAction({ meetingId }), [meetingId]);
+  const { snapshot, stopReason, retry } = useMeetingStatePoll({
+    load: loadState,
+    enabled: response !== null,
+  });
+
+  /**
+   * ⚠ `'pre-start'` UNTIL THE FIRST POLL LANDS — exactly what BAL-435 hard-coded, so the window
+   * before the mirror arrives is the shipped behaviour rather than a flash of a later phase.
+   */
+  const waitingPhase = snapshot?.phase ?? 'pre-start';
+  /** ⚠ MEMOISED: `resolveTopBarClock` returns a fresh object, and this joins the provider's memo. */
+  const clock = useMemo(() => resolveTopBarClock({ snapshot }), [snapshot]);
+
+  /**
+   * BAL-134 — ⚠⚠ **THE FACTS THE WAITING COPY MAY NOT ASSERT WITHOUT**, lifted off the mirror.
+   *
+   * Each one exists because a sentence was found claiming something the browser could not know:
+   * the no-show floor (a hard-coded "15-minute" literal that drifts from an overridden server),
+   * the settled outcome (a terminal status is NOT evidence of a no-show settlement), and whether
+   * an expert has actually been OBSERVED present (the copy claimed counted time inside the
+   * webhook-observation window, where the server measures zero).
+   *
+   * ⚠ ALL THREE DEGRADE TO "UNKNOWN" WITH NO MIRROR, and every string is written so that the
+   * unknown answer claims LESS. ⚠ `expertPresenceOpen === null` — an api that has not yet
+   * deployed the field — keeps the shipped behaviour by falling back to "ever joined".
+   */
+  const waitingFacts = useMemo<WaitingFacts>(() => {
+    if (snapshot === null) return UNKNOWN_WAITING_FACTS;
+    return {
+      noShowFloorMinutes: snapshot.noShowFloorMinutes,
+      outcome: snapshot.outcome,
+      expertPresenceObserved:
+        snapshot.expertPresenceOpen ?? snapshot.clocks.expertFirstJoinedAt !== null,
+    };
+  }, [snapshot]);
+
+  /**
+   * BAL-134 — ⚠⚠ **THE ERROR STATE OF THE FOUR, AND THE ONE THAT WAS MISSING.**
+   *
+   * `isStopped` was computed by the hook and DISCARDED here, so after eight failures or a
+   * refusal the poll stopped permanently and nothing told anybody: the phase froze mid-wait and
+   * an expert would never reach *"you're free to leave"*. This is the quiet degradation notice —
+   * same posture as the `JoinRetryNotice` above, and deliberately NOT a toast, because the
+   * condition persists and a toast does not.
+   *
+   * ⚠ `'terminal'` IS EXCLUDED. A poll that stopped because the meeting ENDED has nothing to
+   * reconnect to; the mirror is complete and the route is already navigating away.
+   */
+  const hasStalled = stopReason === 'unreachable';
+
+  /**
+   * BAL-134 / ADR-1049 — ⚠⚠ **THE END ACTION, WIRED ONLY ON THE MEMBER ROUTE.**
+   *
+   * Both guest surfaces mount no provider, so they read `null` structurally — the second,
+   * independent half of the `canEndMeeting` gate. ⚠ The UI gate is not the gate: `apps/api`
+   * re-resolves both authority axes behind the tenancy gate on every call and collapses every
+   * denial to `404`.
+   */
+  const endMeeting = useCallback((): Promise<EndMeetingResult> => {
+    return endMeetingAction({ meetingId });
+  }, [meetingId]);
+
   if (phase === 'unavailable') {
     return (
       <CallShell>
@@ -321,18 +405,65 @@ export function CallClient({
       waiting={waiting}
       onExit={handleExit}
       panels={panels}
+      waitingPhase={waitingPhase}
+      waitingFacts={waitingFacts}
+      clock={clock}
+      endMeeting={endMeeting}
     >
-      <div className="h-full w-full">
+      <div className="relative h-full w-full">
+        {hasStalled ? <MeetingStateStalledNotice onRetry={retry} /> : null}
         <MeetingCallSurface
           roomUrl={response.roomUrl}
           token={response.token}
           isOwner={response.isOwner}
+          /*
+            ⚠⚠ THE SERVER'S END-AUTHORITY VERDICT, PASSED THROUGH — NEVER RE-DERIVED, AND NEVER
+            `isOwner`. `isOwner` is `hasEngagementCapability(HOST_MEETINGS)` and is the only
+            input to the Daily owner token; `canEndMeeting` is that OR the client principal's
+            `CONSUME_CREDITS` membership, composed in `apps/api`'s `authorize-end-meeting.ts`.
+          */
+          canEndMeeting={response.canEndMeeting}
           expiresAt={response.expiresAt}
           participantId={response.participantId}
           headingRef={headingRef}
         />
       </div>
     </MeetingRouteContextProvider>
+  );
+}
+
+/**
+ * BAL-134 — ⚠⚠ **THE POLL GAVE UP. SAY SO, QUIETLY, AND KEEP THE AFFORDANCE LIVE.**
+ *
+ * ⚠ IT DOES NOT CLAIM THE CALL IS OVER, AND THAT DISTINCTION IS THE WHOLE POINT: the Daily
+ * connection is untouched — audio, video and the room are fine — and only the *status* line has
+ * stopped advancing. "Disconnected" would be false and alarming mid-call.
+ *
+ * ⚠ AN `<output>`, NOT `role="status"` — SonarCloud S6819. It carries the same implicit live
+ * region, so the degradation is announced once, when it happens.
+ *
+ * ⚠ `pointer-events-none` ON THE WRAPPER, RE-ENABLED ON THE CARD: it floats over a live video
+ * stage and must not swallow a click aimed at a tile, but its own button has to remain pressable.
+ */
+function MeetingStateStalledNotice({
+  onRetry,
+}: Readonly<{ onRetry: () => void }>): React.JSX.Element {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-4">
+      <output
+        aria-live="polite"
+        className="bg-card/95 border-border text-muted-foreground pointer-events-auto flex items-center gap-3 rounded-lg border px-3 py-2 text-[12.5px] shadow-lg backdrop-blur"
+      >
+        {MEETING_STATE_STALLED_COPY}
+        <button
+          type="button"
+          onClick={onRetry}
+          className="text-foreground hover:bg-muted focus-visible:ring-ring min-h-9 rounded-md px-2 font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        >
+          {MEETING_STATE_RETRY_LABEL}
+        </button>
+      </output>
+    </div>
   );
 }
 
