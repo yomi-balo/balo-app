@@ -69,6 +69,8 @@ export type {
   MeetingPanelOutcome,
   MeetingPanelFileOutcome,
   MeetingPanelSizeBucket,
+  MeetingPanelMessageOutcome,
+  MeetingPanelReactionEmoji,
   /** BAL-421 — annotates the case surface's client action handlers. */
   CaseSurfaceAction,
 } from '@balo/analytics/client';

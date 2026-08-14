@@ -9,6 +9,8 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { authorizeMeetingFileAccess } from '@/lib/meetings/authorize-meeting-file-access';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
+import { publishMeetingEvent } from '@/lib/realtime/ably-server';
+import { MEETING_EVENT_FILE } from '@/lib/realtime/channels';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
 import {
   MEETING_ALLOWED_CONTENT_TYPES,
@@ -146,13 +148,14 @@ async function verifyUploadedObject(key: string): Promise<UploadedObjectCheck> {
  *
  * ⚠ NO `revalidatePath` — BAL-132 owns island state and realtime freshness.
  *
- * ⚠ NO ABLY PUBLISH, AS A DECISION RATHER THAN AN OMISSION.
- * `confirm-conversation-file-upload.ts` publishes a realtime file event because a
- * BETWEEN-call file must reach an ABSENT counterparty. An IN-call file reaches people who are
- * already in the call, and the in-call channel vocabulary is BAL-132's to define. Publishing
- * a guessed event name now would have to be renamed later.
+ * ⚠⚠ BAL-437 FILLED THE DEFERRED ABLY FAN-OUT, AND IT IS **THE ONLY ONE**. Both in-call entry
+ * points reach THIS action — the Files drop as `source: 'files_tab'`, the chat paperclip as
+ * `source: 'chat'` — so the single `publishMeetingEvent` below is what makes "the chat
+ * paperclip and the Files drop publish through one shared fan-out" STRUCTURAL rather than a
+ * convention two callers agree to honour. Do not add a second publish for chat: the chat
+ * timeline's inline row consumes this very event.
  *
- * ⚠ NO NOTIFICATION EVENT, SAME REASONING. `conversation.file_shared` exists for the absent
+ * ⚠ NO NOTIFICATION EVENT, UNCHANGED. `conversation.file_shared` exists for the absent
  * counterparty; there is none here. If BAL-132 finds a real absent-recipient case (a file
  * added after the call ends, to a party who has left), the correct move is
  * `notificationEvents.publish()` from THIS action — never a direct Brevo call — with the
@@ -253,6 +256,15 @@ export async function confirmMeetingFileUploadAction(
       sizeBytes: verified.sizeBytes,
       contentType: verified.contentType,
     });
+
+    /**
+     * ⚠⚠ **THE ONE FAN-OUT.** Both in-call surfaces consume this single event: the Files panel
+     * bumps its revision and reloads; the chat timeline prepends an inline row for
+     * `source: 'chat'` only. ⚠ IT NEVER THROWS AND IT IS DEFERRED — a publish failure is a
+     * `log.error`, and the row is already persisted and already returned below, so the sharer
+     * is never told a shared file failed.
+     */
+    void publishMeetingEvent(meetingId, MEETING_EVENT_FILE, file);
 
     return { success: true, file };
   } catch (error) {

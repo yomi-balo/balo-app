@@ -15,6 +15,7 @@ import {
   useParticipantIds,
   useScreenShare,
 } from '@daily-co/daily-react';
+import { toast } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MEETING_CALL_EVENTS, MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import { orderTiles, type TileCandidate } from '@/lib/meetings/order-tiles';
@@ -39,10 +40,15 @@ import { MeetingToolbar } from './meeting-toolbar';
 import { MeetingTopBar, type MeetingRoster } from './meeting-top-bar';
 import { PeoplePanel } from './people-panel';
 import { FilesPanel } from './files-panel';
+import { ChatPanel } from './chat-panel';
+import { ReactionPicker } from './reaction-picker';
+import { ReactionFloaters } from './reaction-floaters';
+import { useMeetingCallRealtime, type MeetingCallRealtime } from './use-meeting-realtime';
 import { PreJoin, readSkipPrejoin } from './prejoin';
 import { StageContent } from './meeting-stage';
 import { ViewControls } from './view-controls';
 import { WaitingStage } from './waiting-stage';
+import type { MeetingReactionEmoji } from '@/lib/meetings/meeting-reactions';
 
 /**
  * BAL-435 — ⚠⚠ **THE DYNAMIC-IMPORT BOUNDARY. EVERY `@daily-co` IMPORT IN THE APP IS AT OR BELOW
@@ -484,6 +490,13 @@ interface PanelSlotsInput {
   readonly togglePanel: (id: MeetingPanelId) => void;
   readonly peopleButtonRef: React.RefObject<HTMLButtonElement | null>;
   readonly filesButtonRef: React.RefObject<HTMLButtonElement | null>;
+  readonly chatButtonRef: React.RefObject<HTMLButtonElement | null>;
+  /** BAL-437 — set while a message arrived with the Chat panel closed. */
+  readonly unreadChat: boolean;
+  /** BAL-437 — the desktop picker, or `null` when realtime is unconfigured. */
+  readonly reactionControl: React.ReactNode | null;
+  /** BAL-437 — opens the picker from the MoreSheet's mobile row. `null` ⇒ no row. */
+  readonly onOpenReactions: (() => void) | null;
 }
 
 interface PanelSlots {
@@ -495,6 +508,11 @@ interface PanelSlots {
     onTogglePanel?: (id: MeetingPanelId) => void;
     peopleButtonRef?: React.RefObject<HTMLButtonElement | null>;
     filesButtonRef?: React.RefObject<HTMLButtonElement | null>;
+    chatButtonRef?: React.RefObject<HTMLButtonElement | null>;
+    hasChat?: boolean;
+    unreadChat?: boolean;
+    reactionControl?: React.ReactNode;
+    onOpenReactions?: () => void;
   };
   /** ⚠ THE SEAT CHIP. `null` ⇒ the whole chip is absent — an unavailable count is not a count. */
   readonly roster: MeetingRoster | null;
@@ -521,6 +539,10 @@ function resolvePanelSlots({
   togglePanel,
   peopleButtonRef,
   filesButtonRef,
+  chatButtonRef,
+  unreadChat,
+  reactionControl,
+  onOpenReactions,
 }: Readonly<PanelSlotsInput>): PanelSlots {
   if (panels === null) {
     return { openPeopleSlot: {}, toolbarPanelSlot: {}, roster: null };
@@ -532,8 +554,113 @@ function resolvePanelSlots({
       onTogglePanel: togglePanel,
       peopleButtonRef,
       filesButtonRef,
+      chatButtonRef,
+      // ⚠ BAL-437 — THREE INDEPENDENT REGISTRATIONS, NOT ONE. `panels !== null` gets you
+      // People and Files; `panels.chat !== null` gets you Chat; `panels.realtime !== null`
+      // gets you Reactions. A call can legitimately have the first without either of the
+      // others — an `admin` meeting has no conversation anchor, and a dev box has no
+      // `ABLY_API_KEY`. Collapsing them would ship a control that could only ever fail.
+      hasChat: panels.chat !== null,
+      unreadChat,
+      ...(reactionControl === null ? {} : { reactionControl }),
+      ...(onOpenReactions === null ? {} : { onOpenReactions }),
     },
     roster: seats,
+  };
+}
+
+/**
+ * BAL-437 — ⚠⚠ **THE ONE ABLY CLIENT FOR THE WHOLE CALL, PLUS THE REACTIONS SLOT.**
+ *
+ * Mounted at frame level rather than in the Chat panel because reactions float over the STAGE
+ * while the panel is closed, the Files panel needs the same connection, and inbound chat must
+ * be buffered while the panel is unmounted. `panels?.realtime ?? null` ⇒ no key configured ⇒
+ * terminal `'disabled'`: no client, no retry loop, and NO Reactions control.
+ *
+ * ⚠ A HOOK RATHER THAN INLINE STATE, ONLY TO SHED COGNITIVE COMPLEXITY — inline,
+ * `MeetingFrameInner`'s own body scored 29 against SonarCloud's allowed 15. The repo's
+ * precedent is to EXTRACT, never to disable the rule (`useMeetingPanel` was split out for
+ * exactly this).
+ *
+ * ⚠ A TERMINAL FRAME CLOSES THE PICKER, for the same reason it closes the panel: a call that
+ * has ended must not keep a live control on screen. The floaters need no unwinding — each is
+ * on its own 2.2s timer.
+ */
+function useCallRealtimeSlot(input: {
+  readonly panels: MeetingPanelRegistration | null;
+  readonly panel: MeetingPanelId | null;
+  readonly isTerminal: boolean;
+  readonly meetingProps: Readonly<{ meeting_id?: string }>;
+  /** §16's ONE polite live region, so a failed reaction is HEARD as well as seen. */
+  readonly announce: (message: string) => void;
+  /**
+   * BAL-437 — the More trigger, focused when the picker closes ON MOBILE.
+   *
+   * ⚠⚠ BELOW 768px THE PICKER'S OWN TRIGGER IS `display: none` (`hidden md:flex`) AND THE MENU
+   * IS A RADIX **DIALOG**, so Radix's default focus restore targets a hidden node and focus
+   * falls to `<body>` — a keyboard or screen-reader user is dumped out of the toolbar mid-call.
+   * The mobile opener is the More button, so that is where focus must go back to.
+   */
+  readonly moreButtonRef: React.RefObject<HTMLButtonElement | null>;
+}): {
+  readonly realtime: MeetingCallRealtime;
+  /** ⚠ `null` ⇒ NO REACTIONS CONTROL AT ALL. Absent, never disabled. */
+  readonly reactionControl: React.ReactNode | null;
+  readonly onOpenReactions: (() => void) | null;
+} {
+  const { panels, panel, isTerminal, meetingProps, announce, moreButtonRef } = input;
+  const [reactionsOpen, setReactionsOpen] = useState(false);
+
+  const onReactionSent = useCallback(
+    (emoji: MeetingReactionEmoji, outcome: 'ok' | 'failed'): void => {
+      // ⚠ THE GLYPH AND AN OUTCOME. Never a sender, never the nonce.
+      track(MEETING_PANEL_EVENTS.REACTION_SENT, { ...meetingProps, emoji, outcome });
+    },
+    [meetingProps]
+  );
+
+  /**
+   * ⚠⚠ A **USER-FACING** REPORT, WHICH `onReactionSent` IS NOT. That one feeds PostHog. This one
+   * exists because the optimistic float has already risen by the time a send fails, so silence
+   * means the sender believes the room saw it. Toast AND the §16 region, one sentence in both —
+   * the same pairing every panel's `report` uses.
+   */
+  const onReactionError = useCallback(
+    (message: string): void => {
+      toast.error(message);
+      announce(message);
+    },
+    [announce]
+  );
+
+  const realtime = useMeetingCallRealtime({
+    registration: panels?.realtime ?? null,
+    isChatOpen: panel === 'chat',
+    onReactionSent,
+    onReactionError,
+  });
+
+  useEffect(() => {
+    if (isTerminal) setReactionsOpen(false);
+  }, [isTerminal]);
+
+  const openReactions = useCallback((): void => setReactionsOpen(true), []);
+
+  // ⚠ EVERY HOOK ABOVE RUNS UNCONDITIONALLY; only the RETURN branches.
+  if (panels?.realtime == null) {
+    return { realtime, reactionControl: null, onOpenReactions: null };
+  }
+  return {
+    realtime,
+    reactionControl: (
+      <ReactionPicker
+        open={reactionsOpen}
+        onOpenChange={setReactionsOpen}
+        onSelect={realtime.sendReaction}
+        mobileOpenerRef={moreButtonRef}
+      />
+    ),
+    onOpenReactions: openReactions,
   };
 }
 
@@ -914,9 +1041,26 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
    * overflow tile and no panel. Not disabled — ABSENT.
    */
   const panels = route.panels;
-  const { panel, togglePanel, closePanel, peopleButtonRef, filesButtonRef } = useMeetingPanel({
-    isRegistered: panels !== null,
+  const { panel, togglePanel, closePanel, peopleButtonRef, filesButtonRef, chatButtonRef } =
+    useMeetingPanel({
+      isRegistered: panels !== null,
+      isTerminal: exitReason !== null || isFatal,
+    });
+
+  /**
+   * BAL-437 — ⚠ THE **MORE** TRIGGER, HELD HERE BECAUSE TWO SIBLINGS NEED IT: `MeetingToolbar`
+   * renders it (through `MoreSheet`) and `ReactionPicker` focuses it when the mobile picker
+   * closes. The frame is their nearest common ancestor. See `useCallRealtimeSlot`'s prop doc.
+   */
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const { realtime, reactionControl, onOpenReactions } = useCallRealtimeSlot({
+    panels,
+    panel,
     isTerminal: exitReason !== null || isFatal,
+    meetingProps,
+    announce,
+    moreButtonRef,
   });
 
   const { openPeopleSlot, toolbarPanelSlot, roster } = resolvePanelSlots({
@@ -926,6 +1070,10 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     togglePanel,
     peopleButtonRef,
     filesButtonRef,
+    chatButtonRef,
+    unreadChat: realtime.unreadChat,
+    reactionControl,
+    onOpenReactions,
   });
 
   return (
@@ -1040,12 +1188,25 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
                 }}
               />
               {showChrome ? (
-                <ViewControls
-                  frameElement={frameElement}
-                  showLayoutToggle={isVideoLayout(kind)}
-                  isGallery={kind === 'gallery'}
-                  onToggleLayout={toggleLayout}
-                />
+                <>
+                  <ViewControls
+                    frameElement={frameElement}
+                    showLayoutToggle={isVideoLayout(kind)}
+                    isGallery={kind === 'gallery'}
+                    onToggleLayout={toggleLayout}
+                  />
+                  {/*
+                    ⚠ BAL-437 — `pointer-events-none` + `aria-hidden`, both load-bearing. See
+                    `reaction-floaters.tsx`: without the first, this layer eats every click on
+                    the video for the 2.2s a reaction is in flight.
+
+                    ⚠ IT SHARES `showChrome`'s BRANCH RATHER THAN ADDING ITS OWN — reactions
+                    belong over the LIVE stage, never over PreJoin, the fatal card or the
+                    terminal notice, which is exactly what `showChrome` already means. Folding
+                    it in also keeps this component under SonarCloud's complexity ceiling.
+                  */}
+                  <ReactionFloaters floaters={realtime.floaters} />
+                </>
               ) : null}
               {isReconnecting ? (
                 <ReconnectingOverlay isLongWait={isLongReconnect} onLeave={() => exit('self')} />
@@ -1078,9 +1239,11 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               panels={panels}
               panel={panel}
               onClose={closePanel}
+              onOpenFiles={() => togglePanel('files')}
               onSeatsChange={onSeatsChange}
               meetingProps={meetingProps}
               onAnnounce={announce}
+              realtime={realtime}
             />
           </AnimatePresence>
         </div>
@@ -1101,6 +1264,7 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               isGallery={kind === 'gallery'}
               onToggleLayout={toggleLayout}
               onOpenSettings={() => setSettingsOpen(true)}
+              moreButtonRef={moreButtonRef}
               moreOpen={moreOpen}
               onMoreOpenChange={setMoreOpen}
               // ⚠ BOTH ABSENT WHEN THE SLOT IS UNREGISTERED — the toolbar renders no People or
@@ -1272,15 +1436,40 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
   readonly closePanel: () => void;
   readonly peopleButtonRef: React.RefObject<HTMLButtonElement | null>;
   readonly filesButtonRef: React.RefObject<HTMLButtonElement | null>;
+  readonly chatButtonRef: React.RefObject<HTMLButtonElement | null>;
 } {
   const [panel, setPanel] = useState<MeetingPanelId | null>(null);
   const peopleButtonRef = useRef<HTMLButtonElement | null>(null);
   const filesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const chatButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const focusOpener = useCallback((id: MeetingPanelId): void => {
-    const button = id === 'people' ? peopleButtonRef.current : filesButtonRef.current;
-    button?.focus();
-  }, []);
+  /**
+   * ⚠ A LOOKUP OBJECT, NOT A NESTED TERNARY (SonarCloud). Three slots is where a chained `?:`
+   * stops being readable, and a fourth would make the choice for us anyway.
+   *
+   * ⚠⚠ IT CLOSES OVER THE THREE REFS DIRECTLY — **NO `useRef` MIRROR, NO RENDER-PHASE WRITE.**
+   * An earlier version rebuilt this object every render and assigned it into a second ref during
+   * the render phase, to keep `focusOpener` stable. That was unnecessary and unsafe at once: the
+   * three refs are already stable for the component's whole lifetime (`useRef` returns the same
+   * object forever), so closing over them keeps `focusOpener` stable with an EMPTY dependency
+   * list and nothing is written during render. React may render without committing (Strict
+   * Mode, a discarded concurrent render), which is precisely why a ref write belongs in an
+   * effect or nowhere. Here it is nowhere.
+   */
+  const focusOpener = useCallback(
+    (id: MeetingPanelId): void => {
+      const openers: Record<MeetingPanelId, React.RefObject<HTMLButtonElement | null>> = {
+        people: peopleButtonRef,
+        files: filesButtonRef,
+        chat: chatButtonRef,
+      };
+      openers[id].current?.focus();
+      // ⚠ THE THREE REF OBJECTS ARE THE ONLY DEPENDENCIES, AND THEY NEVER CHANGE IDENTITY — a
+      // `useRef` result is the same object for the component's whole lifetime. So this callback is
+      // stable in practice while still being honestly exhaustive.
+    },
+    [peopleButtonRef, filesButtonRef, chatButtonRef]
+  );
 
   const togglePanel = useCallback(
     (id: MeetingPanelId): void => {
@@ -1316,6 +1505,7 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
     closePanel,
     peopleButtonRef,
     filesButtonRef,
+    chatButtonRef,
   };
 }
 
@@ -1328,14 +1518,18 @@ function FramePanel({
   panels,
   panel,
   onClose,
+  onOpenFiles,
   onSeatsChange,
   meetingProps,
   onAnnounce,
+  realtime,
 }: Readonly<{
   /** ⚠ `null` ⇒ UNREGISTERED. Both GUEST mounts, structurally. Renders nothing. */
   panels: MeetingPanelRegistration | null;
   panel: MeetingPanelId | null;
   onClose: () => void;
+  /** BAL-437 — the chat timeline's "View in Files" swaps the single slot. */
+  onOpenFiles: () => void;
   onSeatsChange: (seats: MeetingRoster) => void;
   meetingProps: Readonly<{ meeting_id?: string }>;
   /**
@@ -1344,6 +1538,8 @@ function FramePanel({
    * second `aria-live` node of its own — two regions on one surface race.
    */
   onAnnounce: (message: string) => void;
+  /** BAL-437 — the frame's one Ably client's state, threaded into both realtime-aware panels. */
+  realtime: MeetingCallRealtime;
 }>): React.JSX.Element | null {
   if (panels === null) return null;
   if (panel === 'people') {
@@ -1362,6 +1558,26 @@ function FramePanel({
       <FilesPanel
         panels={panels}
         onClose={onClose}
+        meetingProps={meetingProps}
+        onAnnounce={onAnnounce}
+        // ⚠ BAL-437 — THE REAL INVALIDATION. Replaced BAL-436's `window.focus` listener.
+        fileRevision={realtime.fileRevision}
+      />
+    );
+  }
+  // ⚠ `panels.chat === null` ⇒ NO CHAT AT ALL. The toolbar renders no button either, so this
+  // branch is unreachable through the UI — it is still written, because a slot rule enforced
+  // in only one of two places is a slot rule that will be broken in the other.
+  if (panel === 'chat' && panels.chat !== null) {
+    return (
+      <ChatPanel
+        chat={panels.chat}
+        files={panels.files}
+        onClose={onClose}
+        onOpenFiles={onOpenFiles}
+        realtimeStatus={realtime.status}
+        chatFeed={realtime.chatFeed}
+        fileFeed={realtime.fileFeed}
         meetingProps={meetingProps}
         onAnnounce={onAnnounce}
       />

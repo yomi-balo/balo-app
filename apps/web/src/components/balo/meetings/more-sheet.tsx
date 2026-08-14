@@ -1,6 +1,14 @@
 'use client';
 
-import { LayoutGrid, MonitorUp, MoreHorizontal, Paperclip, Settings, Users } from 'lucide-react';
+import {
+  LayoutGrid,
+  MonitorUp,
+  MoreHorizontal,
+  Paperclip,
+  Settings,
+  Smile,
+  Users,
+} from 'lucide-react';
 import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
 import type { MeetingPanelId } from '@/lib/meetings/meeting-panels';
 import { BackToContextLink } from './back-to-context-link';
@@ -10,14 +18,25 @@ import { MeetingToolbarButton } from './meeting-toolbar-button';
 /**
  * BAL-435 — the toolbar's overflow.
  *
- * ⚠⚠ **RAISE HAND IS CUT WHOLE TO BAL-437 (ruling R5).** Not as a local visual, not disabled,
- * not present here, not in the icon imports. A gesture that reaches nobody is a broken
- * affordance dressed as a working one; BAL-437's Ably channel is what makes it real.
+ * ⚠⚠ **RAISE HAND IS CUT WHOLE — NOW TO BAL-460 (ruling R5).** Not as a local visual, not
+ * disabled, not present here, not in the icon imports. A gesture that reaches nobody is a
+ * broken affordance dressed as a working one.
+ *
+ * ⚠⚠ **IT WAS RE-POINTED FROM BAL-437 BECAUSE THE OLD SENTENCE WAS FALSE.** This line used to
+ * read *"BAL-437's Ably channel is what makes it real"*. BAL-437 shipped that channel and
+ * DISPROVED the claim: it is a fire-and-forget publish seam with NO history replay and NO
+ * presence, and a raised hand is not a broadcast. A REACTION fires, floats for 2.2s and is
+ * gone; a HAND goes up and STAYS up — it must be visible to somebody who joins AFTER it was
+ * raised, must appear in the People panel and on the stage tile, and needs a host "lower hand"
+ * act. That is per-connection STATE, which means either Ably Presence — whose `enter` requires
+ * the `presence` capability on the CLIENT token, reversing BAL-437's binding subscribe-only
+ * invariant (`ably-server.ts`) — or a durable per-meeting hand store plus late-joiner
+ * hydration plus an act gate. Both are a design surface, not a checkbox. **BAL-460 owns it.**
  *
  * ⚠ THE SLOT RULE: Chat, Files, People and Reactions are REGISTERED SLOTS owned by BAL-436 /
- * BAL-437, and an unregistered slot renders **NOTHING** — never a disabled row. So today the
- * desktop menu holds Settings (plus the back link), and the mobile menu additionally holds the
- * items the narrow ladder pushed out of the bar.
+ * BAL-437, and an unregistered slot renders **NOTHING** — never a disabled row. So the desktop
+ * menu holds Settings (plus the back link), and the mobile menu additionally holds the items
+ * the narrow ladder pushed out of the bar.
  *
  * ⚠ THE ITEMS THAT DIFFER BY BREAKPOINT ARE SWITCHED IN **CSS**, not in JS: their bar twins
  * carry `hidden md:inline-flex` and these carry `md:hidden`, so nothing flashes on first paint.
@@ -55,6 +74,18 @@ export interface MoreSheetProps {
    * registration). Never a disabled row.
    */
   readonly onTogglePanel?: (id: MeetingPanelId) => void;
+  /**
+   * BAL-437 — ⚠ SUPPLIED ONLY WHEN REALTIME IS CONFIGURED. `undefined` ⇒ NO Reactions row: a
+   * reaction with no transport reaches nobody, and the slot rule forbids the disabled version.
+   */
+  readonly onOpenReactions?: () => void;
+  /**
+   * BAL-437 — ⚠ THE **More** TRIGGER'S NODE, handed up so a sibling overlay can return focus to
+   * it. `ReactionPicker` is the one caller: below 768px ITS trigger is `display: none`, so Radix
+   * cannot restore focus there and this button — the control the person actually pressed to
+   * reach the picker — is the correct destination. ⚠ NOTHING HERE READS IT.
+   */
+  readonly triggerRef?: React.Ref<HTMLButtonElement>;
 }
 
 export function MoreSheet({
@@ -68,6 +99,8 @@ export function MoreSheet({
   onToggleScreenShare,
   onOpenSettings,
   onTogglePanel,
+  onOpenReactions,
+  triggerRef,
 }: Readonly<MoreSheetProps>): React.JSX.Element {
   // ⚠ THE SAME STRUCTURAL SIGNAL THE LINK ITSELF USES: no route context ⇒ an anonymous guest,
   // who has no Balo destination. Read here too so the DIVIDER does not render around nothing.
@@ -85,6 +118,7 @@ export function MoreSheet({
       label="More options"
       trigger={
         <MeetingToolbarButton
+          ref={triggerRef}
           icon={MoreHorizontal}
           label="More"
           // ⚠ ONE CONTROL, TWO SIZES, SWITCHED IN CSS — rendering it twice would double the tab
@@ -148,6 +182,34 @@ export function MoreSheet({
             label="Files"
             onSelect={close(() => onTogglePanel('files'))}
           />
+        </div>
+      )}
+
+      {/*
+        ⚠⚠ BAL-437 — **THERE IS DELIBERATELY NO `Chat` ROW HERE, AND THAT IS A CONSIDERED
+        DEVIATION FROM THE PLAN, NOT AN OMISSION.** Chat's bar twin is the mobile ladder's
+        RESERVED SLOT 3 (`meeting-toolbar.tsx`), and unlike People / Files / Share screen that
+        button carries NO breakpoint class at all — it is visible from 320px up. A row here
+        would therefore be a SECOND live control for the same slot at every width, which
+        doubles the tab order and doubles what a screen-reader user hears — the exact rule this
+        file's own `size="mobile"` comment states for the More trigger. The People/Files rows
+        above exist precisely because their bar twins ARE hidden below `lg`; Chat's is not.
+
+        ⚠ AND THERE IS NO `hasChat` PROP EITHER. An earlier draft threaded one "for a future
+        row"; it was dead weight this component never read, and a prop that gates nothing is a
+        claim about behaviour that does not exist. Whoever adds a Chat row here must first
+        decide what its bar twin does — which is the decision the prop was pretending to
+        preserve. `meeting-toolbar.tsx` owns `hasChat` because it owns the control.
+      */}
+
+      {/*
+        ⚠ BAL-437 — REACTIONS, `md:hidden`, mirroring Share screen exactly: its bar twin is
+        `hidden md:inline-flex`, so this pair agrees with itself at every width. Absent
+        entirely when realtime is unconfigured — a reaction with no transport reaches nobody.
+      */}
+      {onOpenReactions === undefined ? null : (
+        <div className="md:hidden">
+          <MeetingMenuItem icon={Smile} label="React" onSelect={close(onOpenReactions)} />
         </div>
       )}
 

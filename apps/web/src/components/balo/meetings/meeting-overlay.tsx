@@ -54,6 +54,20 @@ export interface MeetingMenuProps {
   /** ⚠ Required: an accessible name for the panel itself, not just for its trigger. */
   readonly label: string;
   readonly children: React.ReactNode;
+  /**
+   * BAL-437 — Radix's "where does focus go when this closes?" hook, forwarded to BOTH shapes.
+   *
+   * ⚠⚠ IT EXISTS FOR THE CASE WHERE THE **TRIGGER IS NOT FOCUSABLE**. Radix's default is to
+   * restore focus to the trigger, which is right for every caller whose trigger is on screen —
+   * and wrong for `ReactionPicker`, whose trigger is `hidden md:flex` in exactly the band where
+   * this component becomes a Dialog. Restoring focus to a `display: none` node drops it to
+   * `<body>`, i.e. a keyboard user tabbing from the top of the page on a live call.
+   *
+   * ⚠ A CALLER THAT PASSES THIS **MUST** `preventDefault()` AND FOCUS SOMETHING ITSELF — the
+   * event is the only chance to place focus, and swallowing it without a target is worse than
+   * the default it replaced.
+   */
+  readonly onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -68,6 +82,7 @@ export function MeetingMenu({
   trigger,
   label,
   children,
+  onCloseAutoFocus,
 }: Readonly<MeetingMenuProps>): React.JSX.Element {
   const container = useMeetingFrameElement();
   const isMobile = useIsMobile(MEETING_TOOLBAR_MOBILE_MAX_PX);
@@ -80,6 +95,7 @@ export function MeetingMenu({
           <Dialog.Overlay className={SCRIM_CLASSES} />
           <Dialog.Content
             aria-label={label}
+            onCloseAutoFocus={onCloseAutoFocus}
             className={cn(
               PANEL_CLASSES,
               PANEL_ENTER_SHEET,
@@ -103,6 +119,7 @@ export function MeetingMenu({
       <Popover.Portal container={container}>
         <Popover.Content
           aria-label={label}
+          onCloseAutoFocus={onCloseAutoFocus}
           side="top"
           align="end"
           sideOffset={12}

@@ -69,6 +69,11 @@ export * from './join-grant';
 // PUBLIC lobby route runs it at the knock (before the row is written) and `apps/web`'s
 // concealment sweeps import the same scan, so a weakening cannot pass one and fail the other.
 export * from './self-declared-name';
+// BAL-437 — the six-emoji in-call reaction vocabulary. ⚠ HERE RATHER THAN IN `apps/web`
+// because `@balo/analytics` needs the SAME union for its `reaction_sent` property and cannot
+// import `apps/web`; it used to hand-restate the six glyphs, which is two definitions of one
+// closed set. See `reactions.ts` for the full argument.
+export * from './reactions';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

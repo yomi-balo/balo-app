@@ -11,16 +11,40 @@ import { render, screen } from '@testing-library/react';
  *      EXIST IN NEXT 16 — so a drifted member was silently sent to `/dashboard` instead of into
  *      the paid call they were entering. A layout cannot see a child segment's params; the page
  *      can, so the gate lives here.
- *   2. **THE PAGE READS NO MEETING DATA.** Authorization is `apps/api`'s
- *      `authorizeMeetingParticipation`, reached through `joinAsMemberAction`. A read here would
- *      be a second, weaker opinion about who may join.
+ *   2. **THE PAGE MAKES NO AUTHORIZATION DECISION ABOUT JOINING.** Who may join is
+ *      `apps/api`'s `authorizeMeetingParticipation`, reached through `joinAsMemberAction`. A
+ *      read here would be a second, weaker opinion about that question.
+ *
+ * ⚠⚠ BAL-437 CHANGED (2) IN ONE SPECIFIC WAY, AND IT IS A DECISION RATHER THAN DRIFT. The page
+ * now resolves **the CHAT SLOT** server-side (`resolveMeetingChatAccess`) so the Chat control is
+ * absent-or-present from FIRST PAINT rather than after a client round trip — BAL-435's slot rule
+ * ("an unregistered slot renders NOTHING, never a disabled control") is only expressible if the
+ * answer is known before paint, and a button that appears then vanishes is worse than one that
+ * was never there. That resolution decides a PANEL, never the join, and it can never fail the
+ * page: a throw degrades to `hasChat: false` and logs the reason.
  */
 
-const { mockCheckSessionDrift, mockGetCurrentUser, mockRedirect, mockLogWarn } = vi.hoisted(() => ({
+const {
+  mockCheckSessionDrift,
+  mockGetCurrentUser,
+  mockRedirect,
+  mockLogWarn,
+  mockResolveChatAccess,
+  mockIsRealtimeConfigured,
+  dbSpies,
+} = vi.hoisted(() => ({
   mockCheckSessionDrift: vi.fn(),
   mockGetCurrentUser: vi.fn(),
   mockRedirect: vi.fn(),
   mockLogWarn: vi.fn(),
+  mockResolveChatAccess: vi.fn(),
+  mockIsRealtimeConfigured: vi.fn(),
+  /**
+   * ⚠ A TRIPWIRE, NOT A DEPENDENCY. The page must reach no repository DIRECTLY — the chat
+   * anchor's own reads happen behind `resolveMeetingChatAccess`, which is mocked, and are
+   * covered by `meeting-chat-anchor.test.ts`.
+   */
+  dbSpies: { meetingFindById: vi.fn(), listByMeeting: vi.fn() },
 }));
 
 vi.mock('next/navigation', () => ({
@@ -32,22 +56,39 @@ vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/logging', () => ({
   log: { warn: mockLogWarn, error: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
+vi.mock('@/lib/meetings/meeting-chat-anchor', () => ({
+  resolveMeetingChatAccess: mockResolveChatAccess,
+}));
+vi.mock('@/lib/realtime/ably-server', () => ({
+  isRealtimeConfigured: mockIsRealtimeConfigured,
+}));
 
-/**
- * ⚠ THE `@balo/db` MOCK IS A TRIPWIRE, NOT A DEPENDENCY. Every member below must stay uncalled.
- */
-const dbSpies = { meetingFindById: vi.fn(), listByMeeting: vi.fn() };
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: dbSpies.meetingFindById },
   meetingContextsRepository: { listByMeeting: dbSpies.listByMeeting },
 }));
 
 vi.mock('./_components/call-client', () => ({
-  CallClient: ({ meetingId, viewerName }: { meetingId: string; viewerName: string | null }) => (
+  CallClient: ({
+    meetingId,
+    viewerName,
+    hasChat,
+    isRealtimeEnabled,
+    chatChannelName,
+  }: {
+    meetingId: string;
+    viewerName: string | null;
+    hasChat: boolean;
+    isRealtimeEnabled: boolean;
+    chatChannelName: string | null;
+  }) => (
     <div
       data-testid="call-client"
       data-meeting-id={meetingId}
       data-viewer-name={viewerName ?? ''}
+      data-has-chat={String(hasChat)}
+      data-realtime={String(isRealtimeEnabled)}
+      data-chat-channel={chatChannelName ?? ''}
     />
   ),
 }));
@@ -55,6 +96,8 @@ vi.mock('./_components/call-client', () => ({
 import MeetingCallPage, { metadata } from './page';
 
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
+const USER_ID = '11111111-2222-4333-8444-555555555555';
+const CONVERSATION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 /** ⚠ `params` is a PROMISE in Next 16 — the page must await it. */
 async function renderPage(): Promise<HTMLElement> {
@@ -65,7 +108,14 @@ async function renderPage(): Promise<HTMLElement> {
 beforeEach(() => {
   vi.clearAllMocks();
   mockCheckSessionDrift.mockResolvedValue({ action: 'none' });
-  mockGetCurrentUser.mockResolvedValue({ firstName: 'Dana', lastName: 'Okoro' });
+  mockGetCurrentUser.mockResolvedValue({ id: USER_ID, firstName: 'Dana', lastName: 'Okoro' });
+  mockResolveChatAccess.mockResolvedValue({
+    ok: true,
+    side: 'client',
+    meetingId: MEETING_ID,
+    anchor: { conversationId: CONVERSATION_ID, subject: {}, writable: true },
+  });
+  mockIsRealtimeConfigured.mockReturnValue(true);
 });
 
 describe('MeetingCallPage — route configuration', () => {
@@ -141,8 +191,8 @@ describe('MeetingCallPage — the viewer name', () => {
   });
 });
 
-describe('MeetingCallPage — ⚠⚠ it reads NO meeting data', () => {
-  it('touches no repository at all', async () => {
+describe('MeetingCallPage — ⚠⚠ it decides no JOIN question', () => {
+  it('touches no repository DIRECTLY — the join verdict is `apps/api`’s', async () => {
     await renderPage();
 
     expect(dbSpies.meetingFindById).not.toHaveBeenCalled();
@@ -155,6 +205,92 @@ describe('MeetingCallPage — ⚠⚠ it reads NO meeting data', () => {
     expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
       'data-meeting-id',
       MEETING_ID
+    );
+  });
+});
+
+describe('MeetingCallPage — BAL-437, ⚠⚠ the CHAT SLOT is resolved server-side', () => {
+  it('registers chat and hands down the CONVERSATION channel when an anchor resolves', async () => {
+    const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
+
+    expect(mockResolveChatAccess).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+    expect(client).toHaveAttribute('data-has-chat', 'true');
+    expect(client).toHaveAttribute('data-chat-channel', `conversation:${CONVERSATION_ID}`);
+  });
+
+  it('⚠⚠ NO ANCHOR ⇒ the slot is ABSENT — `hasChat` false and NO channel', async () => {
+    // The four shapes that answer this — `project_discovery`, `admin`, ambiguous, and an
+    // unprovisioned thread — are indistinguishable here on purpose.
+    mockResolveChatAccess.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      meetingId: MEETING_ID,
+      anchor: null,
+    });
+
+    const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
+
+    expect(client).toHaveAttribute('data-has-chat', 'false');
+    expect(client).toHaveAttribute('data-chat-channel', '');
+  });
+
+  it('⚠ a DENIED gate is the same absence — never an error page', async () => {
+    mockResolveChatAccess.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
+
+    const container = await renderPage();
+
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-chat',
+      'false'
+    );
+  });
+
+  it('⚠⚠ a THROWN gate degrades to no-chat, LOGS the reason, and still renders the call', async () => {
+    mockResolveChatAccess.mockRejectedValue(new Error('db unavailable'));
+
+    const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
+
+    expect(client).toBeInTheDocument();
+    expect(client).toHaveAttribute('data-has-chat', 'false');
+    expect(mockLogWarn).toHaveBeenCalledTimes(1);
+    const [, fields] = mockLogWarn.mock.calls[0] ?? [];
+    expect(fields).toMatchObject({ meetingId: MEETING_ID });
+  });
+
+  it('⚠ NO SESSION ⇒ no gate call at all, and no chat', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
+
+    const container = await renderPage();
+
+    expect(mockResolveChatAccess).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-chat',
+      'false'
+    );
+  });
+});
+
+describe('MeetingCallPage — BAL-437, the realtime flag', () => {
+  it('⚠⚠ the CLIENT LEARNS ONLY A BOOLEAN — `ABLY_API_KEY` never leaves the server', async () => {
+    const container = await renderPage();
+
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-realtime',
+      'true'
+    );
+  });
+
+  it('⚠ unconfigured ⇒ false, which makes the Reactions control ABSENT downstream', async () => {
+    mockIsRealtimeConfigured.mockReturnValue(false);
+
+    const container = await renderPage();
+
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-realtime',
+      'false'
     );
   });
 });

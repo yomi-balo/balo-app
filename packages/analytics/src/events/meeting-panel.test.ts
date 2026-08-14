@@ -11,6 +11,8 @@ describe('MEETING_PANEL_EVENTS (client)', () => {
       'LINK_RESENT',
       'FILE_SHARED',
       'FILE_DOWNLOADED',
+      'MESSAGE_SENT',
+      'REACTION_SENT',
     ]);
   });
 
@@ -22,6 +24,8 @@ describe('MEETING_PANEL_EVENTS (client)', () => {
     expect(MEETING_PANEL_EVENTS.LINK_RESENT).toBe('meeting_panel_link_resent');
     expect(MEETING_PANEL_EVENTS.FILE_SHARED).toBe('meeting_panel_file_shared');
     expect(MEETING_PANEL_EVENTS.FILE_DOWNLOADED).toBe('meeting_panel_file_downloaded');
+    expect(MEETING_PANEL_EVENTS.MESSAGE_SENT).toBe('meeting_panel_message_sent');
+    expect(MEETING_PANEL_EVENTS.REACTION_SENT).toBe('meeting_panel_reaction_sent');
   });
 
   it('values follow the snake_case naming convention', () => {

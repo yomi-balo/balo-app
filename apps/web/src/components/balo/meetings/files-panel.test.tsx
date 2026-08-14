@@ -119,7 +119,7 @@ function fakes(options: { files?: MeetingFileView[]; failList?: boolean } = {}):
 /** ⚠ The frame's ONE §16 live region, as a spy. Reassigned per render. */
 let onAnnounce = vi.fn();
 
-function renderPanel(fake: FilesFakes): HTMLElement {
+function renderPanel(fake: FilesFakes, revision = 0): HTMLElement {
   onAnnounce = vi.fn();
   return render(
     <FilesPanel
@@ -127,6 +127,7 @@ function renderPanel(fake: FilesFakes): HTMLElement {
       onClose={vi.fn()}
       meetingProps={MEETING_PROPS}
       onAnnounce={onAnnounce}
+      fileRevision={revision}
     />
   ).container;
 }
@@ -307,6 +308,7 @@ describe('FilesPanel — upload', () => {
         onClose={vi.fn()}
         meetingProps={MEETING_PROPS}
         onAnnounce={vi.fn()}
+        fileRevision={0}
       />
     );
     await screen.findByRole('button', { name: /share a file with the call/i });
@@ -513,6 +515,71 @@ describe('FilesPanel — the truncation note', () => {
 
     await screen.findByText('current-cpq-rules.pdf');
     expect(screen.queryByText(/most recent files/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * BAL-437 — ⚠⚠ **THE REAL INVALIDATION REPLACED BAL-436's `window.focus` STOPGAP.**
+ *
+ * That listener was named an "Ably substitute" in its own docblock and promised deletion the
+ * day the channel landed. It is gone: a `focus` event must now do NOTHING, and a `fileRevision`
+ * bump must reload exactly once. Both halves are asserted, because deleting the listener
+ * without wiring the replacement would leave the panel strictly staler than before.
+ */
+describe('FilesPanel — BAL-437, live file invalidation', () => {
+  it('⚠⚠ a `fileRevision` bump triggers EXACTLY ONE reload', async () => {
+    const fake = fakes();
+    const view = render(
+      <FilesPanel
+        panels={fake.panels}
+        onClose={vi.fn()}
+        meetingProps={MEETING_PROPS}
+        onAnnounce={vi.fn()}
+        fileRevision={0}
+      />
+    );
+    await waitFor(() => expect(fake.list).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <FilesPanel
+        panels={fake.panels}
+        onClose={vi.fn()}
+        meetingProps={MEETING_PROPS}
+        onAnnounce={vi.fn()}
+        fileRevision={1}
+      />
+    );
+
+    await waitFor(() => expect(fake.list).toHaveBeenCalledTimes(2));
+    // ⚠ AND NOT A THIRD — one event, one reload.
+    expect(fake.list).toHaveBeenCalledTimes(2);
+  });
+
+  it('⚠ an UNCHANGED revision does not re-read on a re-render', async () => {
+    const fake = fakes();
+    const props = {
+      panels: fake.panels,
+      onClose: vi.fn(),
+      meetingProps: MEETING_PROPS,
+      onAnnounce: vi.fn(),
+      fileRevision: 3,
+    };
+    const view = render(<FilesPanel {...props} />);
+    await waitFor(() => expect(fake.list).toHaveBeenCalledTimes(1));
+
+    view.rerender(<FilesPanel {...props} />);
+
+    expect(fake.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠⚠ the `window.focus` LISTENER IS GONE — a focus event reloads NOTHING', async () => {
+    const fake = fakes();
+    renderPanel(fake);
+    await waitFor(() => expect(fake.list).toHaveBeenCalledTimes(1));
+
+    globalThis.dispatchEvent(new Event('focus'));
+
+    expect(fake.list).toHaveBeenCalledTimes(1);
   });
 });
 
