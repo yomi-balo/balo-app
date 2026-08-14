@@ -1,0 +1,24 @@
+{
+  "probe": "events-sync",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/events/cmssf6bhg1pnwoi2k3ovlula8/«email-redacted»?syncToken=CM_q36XMn5YDEM_q36XMn5YDGAUghdnxyAMohdnxyAM%3D",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 552,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "8017390d30ff430482640665cce11afc",
+      "date": "Fri, 14 Aug 2026 07:28:37 GMT"
+    },
+    "bodyRaw": "{\"data\":[],\"nextSyncToken\":\"CM_q36XMn5YDEM_q36XMn5YDGAUghdnxyAMohdnxyAM=\"}",
+    "bodyParsed": {
+      "data": [],
+      "nextSyncToken": "CM_q36XMn5YDEM_q36XMn5YDGAUghdnxyAMohdnxyAM="
+    }
+  }
+}

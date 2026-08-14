@@ -1,0 +1,23 @@
+{
+  "probe": "events-page-1",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/events/cmssgqb791pukoi2kuqn2trt0/AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 479,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "145aa158c721145129d714d5ca1a7249",
+      "date": "Fri, 14 Aug 2026 07:28:42 GMT"
+    },
+    "bodyRaw": "{\"data\":[]}",
+    "bodyParsed": {
+      "data": []
+    }
+  }
+}
