@@ -1,0 +1,28 @@
+{
+  "probe": "subscribe-calendar",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/calendarSubscriptions/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": {
+      "webhookUrl": "https://paper-vocals-launch-mathematics.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/all-calendars",
+      "subscriptionType": "calendar"
+    }
+  },
+  "durationMs": 1501,
+  "response": {
+    "status": 500,
+    "statusText": "Internal Server Error",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "0f68403b6b1f46c91bae84ff324f4a85",
+      "date": "Fri, 14 Aug 2026 07:36:33 GMT"
+    },
+    "bodyRaw": "{\"error\":\"InternalServerError\",\"message\":\"init[\\\"status\\\"] must be in the range of 200 to 599, inclusive.\",\"requestId\":\"0f68403b6b1f46c91bae84ff324f4a85\"}",
+    "bodyParsed": {
+      "error": "InternalServerError",
+      "message": "init[\"status\"] must be in the range of 200 to 599, inclusive.",
+      "requestId": "0f68403b6b1f46c91bae84ff324f4a85"
+    }
+  }
+}

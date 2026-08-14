@@ -1,9 +1,10 @@
 # BAL-393 — Apiroc (OneCal) runtime behaviour: findings
 
-> **Status: Phases 0 and 1 complete (both providers). Unknowns 1 and 2 answered; 3 and 4
-> open — they need Phase 2 and an HTTPS webhook receiver.**
-> Three of the six standing hypotheses are **refuted**. Proposed follow-up issues are in
-> **[Handoff](#handoff--work-this-spike-creates)** — T1–T11, each scoped to become one
+> **Status: Phases 0, 1 and 2 complete. All four unknowns answered.**
+> Four of the six standing hypotheses are **refuted**; one is confirmed. One question is
+> deliberately left open and cannot be closed by this spike: whether Apiroc auto-renews
+> subscriptions before their 7-day expiry (Unknown 3). Proposed follow-up issues are in
+> **[Handoff](#handoff--work-this-spike-creates)** — T1–T13, each scoped to become one
 > Linear ticket.
 > Rule for this document: an answer is only filled in when evidence backs it. Each row is
 > tagged **[live]** (real API response, saved under `captures/`) or **[static]** (read out
@@ -49,16 +50,18 @@ refutation means the skill gets corrected (BAL-395).
 
 | #   | Skill claim                                                                                               | Where                     | Verdict                                                                                                                    |
 | --- | --------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| H1  | Subscriptions **don't expire**; OneCal auto-renews the provider channels, so **no renewal job is needed** | Constraint 2              | ⚠️ **doubtful** — `CalendarSubscription.expiration` exists in the v2 types **[static]**. Needs Unknown 3.                  |
-| H2  | Webhook body is a thin `{ eventType, timestamp }` carrying **no account/calendar identity**               | Webhooks §, Constraint 2  | ⏳ pending — Unknown 4                                                                                                     |
+| H1  | Subscriptions **don't expire**; OneCal auto-renews the provider channels, so **no renewal job is needed** | Constraint 2              | ❌ **REFUTED** — hard **7-day** expiry, hidden from the create response. Auto-renew unconfirmed. See Unknown 3.            |
+| H2  | Webhook body is a thin `{ eventType, timestamp }` carrying **no account/calendar identity**               | Webhooks §, Constraint 2  | ✅ **CONFIRMED [live]** — exactly that, no identity fields. URL-encoded identity is required. See Unknown 4.               |
 | H3  | The string `code` is **opaque and unenumerated** — use for telemetry, never control flow                  | Error Handling §          | ❌ **REFUTED** — enumerable, hardcoded, and `undefined` on `APIRequestError`. See Unknown 1.                               |
 | H4  | `ValidationError` is exported but **never thrown**                                                        | Error Handling §          | ✅ **confirmed [live + static]** — server-side 400s arrive as `APIRequestError`                                            |
 | H5  | Reconnect must be driven off `credentialStatus`, **not** off error codes                                  | Delta 2, Error Handling § | ❌ **REFUTED** — status stays `ACTIVE` after revocation and only flips once a data call has already failed. See Unknown 2. |
 | H6  | Sandbox rate limit is **20 req/s** per API key, with `Retry-After` on 429                                 | Error Handling §          | ◐ `Retry-After` is read into `RateLimitError.retryAfter` **[static]**; live magnitude pending                              |
 
-⚠️ **H1 is the expensive one.** If subscriptions _do_ expire and renewal is caller-managed,
-the backend ticket (BAL-396) needs a scheduled renewal job that is currently unplanned, and
-silent expiry would degrade availability freshness with no error surfaced anywhere.
+⚠️ **H1 landed badly.** Subscriptions carry a hard **7-day** expiry, and the create response
+reports `expiration: null` — only `calendarSubscriptions.list` reveals it. Whether Apiroc
+auto-renews before then is **still unconfirmed** and cannot be settled without watching a
+subscription for 7 days. If renewal is caller-managed, BAL-396 needs a scheduled job that is
+currently unplanned, and every expert's sync dies silently a week after connecting.
 
 ---
 
@@ -460,15 +463,65 @@ codes" is backwards: the status is stale until an error code has already told yo
 **Question:** the `expiration` value/duration, and whether renewal is caller-managed or
 automatic — i.e. **do we need a renewal job?**
 
-|                                                                   | Observed    |
-| ----------------------------------------------------------------- | ----------- |
-| `expiration` returned on create (value + implied duration)        | _(pending)_ |
-| Renewal caller-managed or automatic?                              | _(pending)_ |
-| Does `calendarSubscriptions.list` show expiry drift over time?    | _(pending)_ |
-| Behaviour of an `event` subscription vs a `calendar` subscription | _(pending)_ |
-| Fields returned: `webhookSubscriptionId`, `endpointSecret`, …     | _(pending)_ |
+### ⚠️⚠️ Answer: subscriptions DO expire — 7 days — and the create response hides it. H1 refuted.
 
-**Verdict on H1:** _(pending)_ — **→ decides whether BAL-396 needs a renewal job.**
+**[live]** `captures/phase2/google/subscribe-*.json`, `subscriptions-list.json`.
+
+|                                                                      | Observed                                                             |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Create response fields                                               | **only** `{ webhookSubscriptionId, endpointSecret }`                 |
+| `expiration` **on the create response**                              | **`null`** ← the trap                                                |
+| `expiration` **in the stored record** (`calendarSubscriptions.list`) | **`2026-08-21T07:36:30.000Z`**                                       |
+| Created at                                                           | `2026-08-14T07:36:31.574Z`                                           |
+| **Implied TTL**                                                      | **exactly 7 days**                                                   |
+| Provider channel identifiers                                         | `subscriptionId` (uuid) + `resourceId` — Google `watch` channel refs |
+| `endpointSecret`                                                     | present, 38 chars                                                    |
+
+**The trap:** `CreateCalendarSubscriptionResponse` carries no `expiration` field at all, so a
+caller reading only the create response sees `null` and concludes subscriptions never
+expire — which is very likely how the skill's claim originated. The expiry is **only**
+visible via `calendarSubscriptions.list`. 7 days matches Google's maximum `watch` channel
+TTL, so Apiroc is passing the provider's channel expiry straight through.
+
+**Verdict on H1 — ❌ REFUTED as written.** "Subscriptions don't expire" is false: they carry
+a hard 7-day expiry.
+
+⚠️ **What is still genuinely unresolved is whether Apiroc auto-renews before that expiry.**
+This spike cannot settle it — it would require watching a subscription for 7 days. The two
+possibilities have very different costs:
+
+- **Apiroc auto-renews** → no renewal job; the skill's _conclusion_ was right for the wrong
+  reason, and `expiration` is just a passthrough detail.
+- **Renewal is caller-managed** → **BAL-396 needs a scheduled renewal job that is currently
+  unplanned**, and every expert's calendar sync silently dies 7 days after connection with
+  no error raised anywhere. Availability would quietly go stale platform-wide.
+
+**Recommendation:** treat renewal as caller-managed until the vendor confirms otherwise —
+the failure mode is silent and platform-wide, so the asymmetry favours building the job. Ask
+the vendor directly, and add a cheap monitor either way: a daily check for subscriptions
+with `expiration` inside 48h is a few lines and catches the bad case regardless of the answer.
+
+### ⚠️ The `calendar` subscription type is broken — HTTP 500
+
+`subscriptionType: 'calendar'` (the "all calendars, no `calendarId`" variant) fails:
+
+```json
+{
+  "error": "InternalServerError",
+  "message": "init[\"status\"] must be in the range of 200 to 599, inclusive.",
+  "requestId": "0f68403b6b1f46c91bae84ff324f4a85"
+}
+```
+
+That is an unhandled exception inside Apiroc (a `Response` constructed with an invalid
+status), not a validation error — the message is leaked internals. **Only `event`
+subscriptions work**, so Balo must subscribe **per calendar** and there is no
+all-calendars option. Combined with the 7-day expiry, that is N subscriptions per expert to
+create, track, and possibly renew.
+
+This is also a **sixth** distinct `error` value: `"InternalServerError"`.
+
+→ Report to the vendor. Until fixed, per-calendar `event` subscriptions are the only path.
 
 ---
 
@@ -478,17 +531,52 @@ automatic — i.e. **do we need a renewal job?**
 what forces encoding `endUserAccountId`/`calendarId` into the per-subscription
 `webhookUrl`), and whether one ping can batch multiple changes.
 
-```
-(verbatim body — pending)
+### ✅ Answer: H2 CONFIRMED. The payload is thin and anonymous — identity must come from the URL.
+
+**[live]** 5 real deliveries captured verbatim in
+`captures/phase2/webhooks/received.json`, received over a cloudflared tunnel.
+
+**The complete body. This is all of it:**
+
+```json
+{ "eventType": "calendar.event.changed", "timestamp": "2026-08-14T07:37:20.129Z" }
 ```
 
-|                                                                    | Observed    |
-| ------------------------------------------------------------------ | ----------- |
-| Headers received (`svix-id` / `svix-timestamp` / `svix-signature`) | _(pending)_ |
-| Does the body carry account/calendar identity?                     | _(pending)_ |
-| Do rapid successive changes coalesce into one ping?                | _(pending)_ |
-| Signature verifies with `svix` + `endpointSecret`?                 | _(pending)_ |
-| Event types actually observed                                      | _(pending)_ |
+|                                                    | Observed                                                                                                               |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Headers received                                   | `svix-id`, `svix-timestamp`, `svix-signature` all present                                                              |
+| Does the body carry account/calendar identity?     | **No — zero identity fields.** Programmatic scan for any key matching `account\|calendar\|resource\|id$` returned `[]` |
+| Signature verifies with `svix` + `endpointSecret`? | **VALID** on every delivery, via `new Webhook(endpointSecret).verify(rawBody, headers)`                                |
+| Do rapid successive changes coalesce?              | **Yes — see below**                                                                                                    |
+| Event types observed                               | `calendar.event.changed` only                                                                                          |
+
+**→ Encoding `endUserAccountId`/`calendarId` in the per-subscription `webhookUrl` is
+REQUIRED, not a stylistic choice.** The receiver ran at
+`/hook/:endUserAccountId/:calendarId` and the path was the _only_ way to know which expert
+the ping belonged to. The skill's architecture is correct here.
+
+### Coalescing is real — one ping ≠ one change
+
+Eight calendar changes produced **five** deliveries:
+
+| Changes made      | Deliveries |
+| ----------------- | ---------- |
+| 1 isolated create | 1          |
+| 3 rapid creates   | **2**      |
+| 4 rapid deletes   | **2**      |
+
+Deliveries landed roughly one per ~10s window, so Apiroc/Google batches within that window.
+
+**Consequences for BAL-396:**
+
+- Never infer _what_ changed from a ping — it carries no event id. The `syncToken` delta
+  read is mandatory (and on Microsoft, where there is no sync token, a full window re-read —
+  see T3).
+- The delta-read job must be **debounced and deduped per calendar**. Firing one job per
+  webhook wastes work, and firing one job per _change_ is impossible anyway.
+- Dedupe on `svix-id` as the skill says — every delivery had a distinct one
+  (`msg_3Htgz…`, `msg_3Hth1…`, …), so it is a usable idempotency key.
+- Ack fast: the receiver returned `200` immediately and Svix never retried.
 
 **Verdict on H2:** _(pending)_ — if identity **is** present, the `webhookUrl`-encoding
 workaround in the skill's architecture sketch is unnecessary complexity.
@@ -839,23 +927,87 @@ artefact for anyone writing calendar code.
 
 ---
 
-### T11 — Finish the spike: Phase 2 (webhooks + subscription lifecycle)
+### T12 — Subscriptions expire in 7 days: build the renewal job (or prove it's unnecessary)
 
-- **Relation:** **BAL-393** remainder — **blocks T3 and the renewal-job decision in BAL-396**
-- **Priority:** High
-- **Evidence:** Unknowns 3 and 4 are still fully open
+- **Relation:** amends **BAL-396**
+- **Priority:** Urgent — silent, platform-wide failure mode
+- **Evidence:** Unknown 3 · `captures/phase2/google/subscriptions-list.json`
 
-Needs an HTTPS receiver (cloudflared or Railway); `webhookUrl` must be HTTPS. Outstanding:
+**Problem.** A subscription's stored record carries `expiration` exactly **7 days** after
+creation. The **create response does not include the field at all**, so a caller reading only
+that response sees nothing and concludes subscriptions are permanent — almost certainly how
+the skill's "they don't expire" claim arose. Whether Apiroc auto-renews before expiry is
+**unconfirmed** and cannot be settled without a 7-day observation.
 
-- **H1 — do subscriptions expire?** The skill says no renewal job is needed, but
-  `CalendarSubscription.expiration` exists in the v2 types. **If they do expire and renewal
-  is caller-managed, BAL-396 needs a scheduled renewal job that is currently unplanned**,
-  and silent expiry would rot availability with no error surfaced.
-- **H2 — verbatim webhook payload + Svix headers**; whether identity is absent (which is what
-  forces encoding `endUserAccountId`/`calendarId` into the per-subscription `webhookUrl`),
-  and whether rapid changes coalesce.
-- **Does `enduseraccount.credential.updated` fire on revocation?** This is the **only**
-  possible proactive reconnect signal (T2). If it doesn't fire, there is no proactive path
-  and an expert stays silently broken until someone tries to book them.
-- Signature verification with `svix` + `endpointSecret`.
-- Also still unrun: the sandbox rate-limit probe (`pnpm phase0:rate-limit`).
+If renewal is caller-managed and we don't build it, every expert's calendar sync stops a week
+after they connect, with **no error surfaced anywhere** — availability silently goes stale
+platform-wide.
+
+**Scope**
+
+1. Ask the vendor directly whether provider channels are auto-renewed.
+2. Build the renewal sweep unless the answer is a clear yes — the asymmetry favours building
+   it (cheap job vs silent platform-wide degradation).
+3. **Regardless of the answer**, add a monitor: a daily check for subscriptions whose
+   `expiration` falls inside 48h, alerting if any are found. It's a few lines and it catches
+   the bad case either way.
+
+**Acceptance criteria**
+
+- `calendar_connections` (or a subscriptions table) persists `expiration`; it is read from
+  `calendarSubscriptions.list`, **never** from the create response.
+- Monitor in place and alerting.
+- Vendor's answer recorded on the ticket.
+
+---
+
+### T13 — Report two vendor bugs to Apiroc
+
+- **Relation:** **new** — vendor liaison, not code
+- **Priority:** Medium (but T13a blocks a design option in T12)
+- **Evidence:** Unknown 3, Unknown 1
+
+**T13a — `subscriptionType: 'calendar'` returns HTTP 500.** The all-calendars subscription
+variant is unusable:
+
+```json
+{
+  "error": "InternalServerError",
+  "message": "init[\"status\"] must be in the range of 200 to 599, inclusive."
+}
+```
+
+That is an unhandled exception (a `Response` built with an invalid status), leaking
+internals. Consequence: Balo must create **one `event` subscription per calendar**, so with
+the 7-day expiry that is N subscriptions per expert to create, track and renew.
+
+**T13b — the API's error contract is not a contract.** The `error` field is variously the
+string `"Error"`, the number `404`, `"InvalidRefreshToken"`, `"InternalServerError"`, a
+`ZodError` object, or (on the OAuth callback) `missing_required_permissions`. Ask for a
+stable machine-readable code, and for `requestId` to be included in the 400-shaped envelope
+(it currently appears only in the `x-request-id` header there).
+
+---
+
+### T11 — Remaining spike leftovers (small)
+
+- **Relation:** **BAL-393** remainder
+- **Priority:** Medium — all four unknowns are answered; these are gap-fills
+- **Evidence:** see each item
+
+Phases 0–2 are complete. Three measurable things were **not** run, each cheap:
+
+1. **Does `enduseraccount.credential.updated` fire on revocation?** — **the one that
+   matters.** It is the only possible _proactive_ reconnect signal (T2); without it an
+   expert stays silently broken until someone tries to book them. Costs one more
+   revoke/reconnect cycle on the throwaway account **with a live subscription in place**
+   (the earlier revocation happened before any subscription existed, so it could not have
+   been observed). Harness is ready: `src/webhook-receiver.mjs` + `src/subscribe.mjs`.
+2. **Sandbox rate limit** — `pnpm phase0:rate-limit`. Confirms H6's 20 req/s and whether
+   `Retry-After` is actually emitted. ~2 minutes; burns sandbox quota.
+3. **Do subscriptions survive a reconnect?** The account id is stable across
+   revoke/reconnect (I5), but the skill says to delete and re-create subscriptions on
+   reconnect. Untested, and it interacts with T12's renewal design.
+
+Not resolvable by any spike: **whether Apiroc auto-renews before the 7-day expiry** — that
+needs either a 7-day observation or a vendor answer. Tracked in T12/T13.

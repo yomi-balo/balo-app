@@ -1,0 +1,28 @@
+{
+  "probe": "subscribe-event",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/calendarSubscriptions/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": {
+      "calendarId": "«email-redacted»",
+      "webhookUrl": "https://paper-vocals-launch-mathematics.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/yomikadri2023%40gmail.com",
+      "subscriptionType": "event"
+    }
+  },
+  "durationMs": 1477,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "25a3a00a5d0bcd68e6c7cf3c17065559",
+      "date": "Fri, 14 Aug 2026 07:36:31 GMT"
+    },
+    "bodyRaw": "{\"webhookSubscriptionId\":\"cmssmvjh11q7un52l3p8o78xj\",\"endpointSecret\":\"«string present, 38 chars — REDACTED»\"}",
+    "bodyParsed": {
+      "webhookSubscriptionId": "cmssmvjh11q7un52l3p8o78xj",
+      "endpointSecret": "«string present, 38 chars — REDACTED»"
+    }
+  }
+}

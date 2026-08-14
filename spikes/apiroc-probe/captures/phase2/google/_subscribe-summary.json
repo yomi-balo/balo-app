@@ -1,0 +1,23 @@
+{
+  "provider": "google",
+  "calendarId": "«email-redacted»",
+  "eventSubscription": {
+    "webhookSubscriptionId": "cmssmvjh11q7un52l3p8o78xj",
+    "endpointSecret": "«string present, 10 chars — REDACTED»"
+  },
+  "calendarSubscription": null,
+  "stored": [
+    {
+      "id": "cmssmvjh11q7un52l3p8o78xj",
+      "provider": "GOOGLE",
+      "url": "https://paper-vocals-launch-mathematics.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/yomikadri2023%40gmail.com",
+      "expiration": "2026-08-21T07:36:30.000Z",
+      "subscriptionId": "683adaa1-9e52-4809-afdc-f3dad9a9b625",
+      "resourceId": "5EQ4IJ7ysJwnY5WnOFhVBThVsdk",
+      "calendarId": "«email-redacted»",
+      "endUserAccountId": "cmssf6bhg1pnwoi2k3ovlula8",
+      "createdAt": "2026-08-14T07:36:31.574Z",
+      "updatedAt": "2026-08-14T07:36:31.574Z"
+    }
+  ]
+}
