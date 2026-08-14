@@ -146,7 +146,19 @@ export {
   type RecapEntrySource,
   type RecapResolvePromptVariant,
   type RecapCta,
+  type CaseSurfaceAction,
+  type CaseSurfaceState,
+  type CaseResolveSource,
 } from './recap';
+export {
+  END_OF_CALL_EVENTS,
+  type EndOfCallEventMap,
+  END_OF_CALL_SERVER_EVENTS,
+  type EndOfCallServerEventMap,
+  type EndOfCallRecapState,
+  type EndOfCallRatingState,
+  type EndOfCallAction,
+} from './end-of-call';
 export {
   ACTION_ITEM_SERVER_EVENTS,
   type ActionItemServerEventMap,

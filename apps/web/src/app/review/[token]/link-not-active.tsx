@@ -15,13 +15,20 @@ import { Link2Off } from 'lucide-react';
  * and non-enumerating response. The recovery offered instead is signing in.
  *
  * ⚠⚠ THE CTA PROMISES ONLY WHAT EXISTS TODAY: it opens the engagement, it does NOT say
- * you can rate from there. BAL-390 ships the signed-in rating surface as an UNMOUNTED
- * SEAM (D3) — `submitEngagementReviewAction` / `readEngagementReview` / `RatingInput`
- * have no consumer outside this magic-link landing — so there is no rating control
- * anywhere behind `/login`. This page is the terminal state for every expired, revoked
- * and departed-reviewer arrival, i.e. exactly the audience with no other route in;
- * sending them after a control that is not there is the one thing it must not do.
- * **When BAL-389 mounts the end-of-call control, restore the rate-from-here wording.**
+ * you can rate from there. This page is the terminal state for every expired, revoked and
+ * departed-reviewer arrival, i.e. exactly the audience with no other route in; sending
+ * them after a control that is not there is the one thing it must not do.
+ *
+ * **BAL-389 HAS NOW MOUNTED `RatingInput`, AND THE WORDING STILL MUST NOT CHANGE.** That
+ * ticket mounts the capture on `/meetings/{meetingId}/end` — BEHIND AN INERT ENTRY POINT.
+ * No code path navigates there: the in-call leave handler that would send a participant to
+ * it is BAL-435, and no Daily SDK ships in `apps/web` today. `/engagements/[id]` — the one
+ * route this CTA can realistically lead a signed-in reviewer to — still carries no rating
+ * control at all. So "sign in and rate from there" would remain FALSE for every reader of
+ * this card, which is the only test that matters here.
+ * **Restore the rate-from-here wording when BAL-435 lands the leave handler that makes
+ * `/meetings/{meetingId}/end` reachable** — and only if the route the CTA actually points
+ * at can, by then, be reached with the control on it.
  *
  * ⚠ AND IT NAMES NO ENGAGEMENT KIND. `listClosedBetween` returns `[]` until BAL-420/421
  * give `close()` a caller (D4/D5), so EVERY live review link in production today is a

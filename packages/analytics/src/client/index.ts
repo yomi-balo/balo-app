@@ -29,6 +29,7 @@ export {
   SESSION_EVENTS,
   CASE_BILLING_EVENTS,
   RECAP_EVENTS,
+  END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
   MEETING_CALL_EVENTS,
@@ -87,4 +88,10 @@ export type {
   MeetingCallLeaveReason,
   MeetingCallGrantRejectionReason,
   MeetingCallDeviceKind,
+  // BAL-421 — the case surface's client islands annotate their action props with this.
+  // ⚠ THE FIRST `Recap*`-FAMILY TYPE IN THIS LIST: `RECAP_EVENTS` was already exported as a
+  // VALUE above, but no recap TYPE was, so a client component could not name one. Neither
+  // this package nor `apps/web`'s barrel has a check that would have flagged the omission —
+  // it surfaces only as an unresolved import in whichever app tries to use it.
+  CaseSurfaceAction,
 } from '../events';

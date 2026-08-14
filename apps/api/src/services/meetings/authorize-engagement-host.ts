@@ -15,15 +15,23 @@
  * pins it by asserting both tokens produce identical repository call sequences.
  *
  * Structure mirrors `services/credit-session/authorize-session-*.ts` (service-local
- * async guard) — deliberately, per the ticket's scope fence. The `apps/web` seam is
- * DEFERRED to its first consumer (BAL-410 / BAL-411); because every non-I/O decision
- * lives in `@balo/shared/authz`'s pure core, that seam will be a thin fetch-and-call
- * wrapper rather than a re-derivation of the holder rule.
+ * async guard) — deliberately, per the ticket's scope fence.
  *
- * ⚠ THIS SHIPS INERT. There is no production caller yet: BAL-132 mints the Daily owner
- * token, BAL-421 renders the case surface. Unit-tested regardless — the SonarCloud
- * new-code coverage gate applies to changed lines, and an authorization predicate that
- * arrives untested arrives untrustworthy.
+ * ⚠ THE `apps/web` SEAM IS NOW OPEN, AND ITS FIRST CONSUMER IS **BAL-421**, NOT
+ * BAL-410 / BAL-411 (ADR-1046 amendment 2026-08-12). BAL-413 recorded the deferral in
+ * good faith, but ADR-1046 lists "request case resolution" by NAME as a
+ * `manage_engagement` act, and that act is the case surface's expert-side affordance —
+ * so the seam had to land with the case surface. It lives at
+ * `apps/web/src/lib/authz/engagement.ts` and is NARROWED to engagement-grain subjects
+ * only. Because every non-I/O decision lives in `@balo/shared/authz`'s pure core AND the
+ * host-context ASSEMBLY now lives there too (`buildHostContextForExpertProfile`, extracted
+ * by BAL-421), that seam is a thin fetch-and-call wrapper rather than a re-derivation of
+ * the holder rule — which is the whole reason it could land safely.
+ *
+ * ⚠ THIS FILE STILL SHIPS INERT ON THE `apps/api` SIDE. BAL-132 mints the Daily owner
+ * token and has not wired it yet. Unit-tested regardless — the SonarCloud new-code
+ * coverage gate applies to changed lines, and an authorization predicate that arrives
+ * untested arrives untrustworthy.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ⚠ NOTHING IN THIS FILE AUTHORIZES THE READ.
@@ -82,6 +90,7 @@ import {
   type MeetingContextType,
 } from '@balo/db';
 import {
+  buildHostContextForExpertProfile,
   hostContextGrants,
   relationshipDeniesHosting,
   type EngagementCapability,
@@ -174,48 +183,42 @@ function denyMissingRow(
 }
 
 /**
- * Expert profile → host context. The ONLY place the holder set is assembled, and the
- * tail of all six expert-bearing arms. Both tokens funnel through here.
+ * Expert profile → host context. The tail of all six expert-bearing arms; both tokens
+ * funnel through here.
  *
- * Three facts this turns on:
- *   · `expert_profiles` has NO `deleted_at`, so there is no soft-delete predicate to add
- *     — `findProfileById`'s lack of one is correct, not an oversight.
- *   · `expert_profiles.userId` is NOT NULL; `agencyId` is NULLABLE. The null `agencyId`
- *     is the independent expert, and it SHORT-CIRCUITS: no `getMemberRole` call is made,
- *     because there is no agency for anyone to be an admin of (ADR-1046 §2).
- *   · `getMemberRole` already filters `deletedAt IS NULL`, so a removed agency admin
- *     resolves to `undefined` → `actorRole: null` → denied, with no extra predicate here.
+ * ⚠⚠ BAL-421 MOVED THE ASSEMBLY ITSELF INTO `@balo/shared/authz`
+ * (`buildHostContextForExpertProfile`), AND THIS FUNCTION IS NOW ONLY THE `apps/api`
+ * WIRING: the two repository reads, and the integrity `warn` for a missing profile. The
+ * move was forced by the `apps/web` seam opening (BAL-421's expert resolution request):
+ * two apps needing the holder rule means it must have ONE definition, or ADR-1029's "a
+ * role is interpreted in exactly one place" quietly becomes two. Read that function's
+ * docblock for the three facts the assembly turns on — the independent-expert
+ * short-circuit, the absent `deleted_at`, and the removed-admin path.
  *
- * ⚠ Do NOT also short-circuit the agency lookup when `profile.userId === actorId`. It
- * would be cheaper, but it would return `agency: null` for an AGENCY-based expert — a
- * `HostContext` that lies about the world, and a trap for the first caller that reads the
- * context rather than the boolean. The null-`agencyId` short-circuit is the ADR's, and it
- * is the only one.
+ * ⚠ BEHAVIOUR IS UNCHANGED, AND THAT IS THE PROOF RATHER THAN A HOPE. The same two
+ * repository functions are called, in the same order, with the same arguments, and the
+ * same `denyMissingRow` fires on the same branch — so
+ * `authorize-engagement-host.test.ts`, which pins IDENTICAL repository call sequences for
+ * both tokens and asserts the independent-expert path makes ZERO agency lookups, passes
+ * UNMODIFIED.
  */
 async function hostContextForExpertProfile(
   expertProfileId: string,
   actorId: string,
   subject: EngagementHostSubject
 ): Promise<ResolvedHostContext> {
-  const profile = await expertsRepository.findProfileById(expertProfileId);
-  if (profile === undefined) {
+  const resolution = await buildHostContextForExpertProfile(expertProfileId, actorId, {
+    findExpertProfile: (id) => expertsRepository.findProfileById(id),
+    // ⚠ `actor` is the callback's PARAMETER, never a captured `actorId` — the
+    // confused-deputy defence documented on `HostContextReads`. Do not collapse it.
+    findAgencyRole: (agencyId, actor) =>
+      partyMembershipsRepository.getMemberRole('agency', agencyId, actor),
+  });
+
+  if (!resolution.ok) {
     return denyMissingRow(subject, actorId, 'expert_profile', expertProfileId);
   }
-
-  const { agencyId } = profile;
-  if (agencyId === null) {
-    // `resolvedForActorId` is stamped on BOTH return paths — see `HostContext`'s docblock.
-    // It binds this context to the actor it was resolved for, so a caller cannot resolve
-    // once as a privileged actor and then check many.
-    return { resolvedForActorId: actorId, expertUserId: profile.userId, agency: null };
-  }
-
-  const actorRole = await partyMembershipsRepository.getMemberRole('agency', agencyId, actorId);
-  return {
-    resolvedForActorId: actorId,
-    expertUserId: profile.userId,
-    agency: { agencyId, actorRole: actorRole ?? null },
-  };
+  return resolution.hostContext;
 }
 
 /**

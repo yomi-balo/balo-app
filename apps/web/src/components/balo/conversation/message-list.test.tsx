@@ -7,11 +7,10 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
 }));
 
 import { MessageList } from './message-list';
-import { thread } from '@/test/fixtures/conversation';
 import type {
   ConversationFileView,
   ConversationMessageView,
-} from '@/lib/project-request/conversation-view-types';
+} from '@/lib/conversations/conversation-view-types';
 
 const VIEWER_ID = 'user-viewer';
 
@@ -49,7 +48,9 @@ function renderList(overrides: Partial<React.ComponentProps<typeof MessageList>>
   const onFileClick = vi.fn();
   render(
     <MessageList
-      thread={thread()}
+      threadKey="rel-1"
+      counterpartyFirstName="Priya"
+      introHtml={null}
       lens="client"
       viewerUserId={VIEWER_ID}
       state="ready"
@@ -126,7 +127,7 @@ describe('MessageList — timeline', () => {
 
   it('pins the EOI intro card (client lens, fully loaded) above the timeline', () => {
     renderList({
-      thread: thread({ eoiHtml: '<p>The pitch</p>' }),
+      introHtml: '<p>The pitch</p>',
       messages: [msg('m-1', '2026-06-09T10:00:00.000Z')],
     });
     expect(screen.getByText('Expression of interest')).toBeInTheDocument();
@@ -135,7 +136,7 @@ describe('MessageList — timeline', () => {
 
   it('hides the EOI intro card while earlier pages remain', () => {
     renderList({
-      thread: thread({ eoiHtml: '<p>The pitch</p>' }),
+      introHtml: '<p>The pitch</p>',
       messages: [msg('m-1', '2026-06-09T10:00:00.000Z')],
       hasEarlier: true,
     });
@@ -153,7 +154,9 @@ describe('MessageList — "Load earlier" scroll anchoring', () => {
     overrides: Partial<React.ComponentProps<typeof MessageList>> = {}
   ): React.ComponentProps<typeof MessageList> {
     return {
-      thread: thread(),
+      threadKey: 'rel-1',
+      counterpartyFirstName: 'Priya',
+      introHtml: null,
       lens: 'client',
       viewerUserId: VIEWER_ID,
       state: 'ready',

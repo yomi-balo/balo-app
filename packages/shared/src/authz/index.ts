@@ -120,6 +120,10 @@ export {
   resolveHostRole,
   hostContextGrants,
   relationshipDeniesHosting,
+  // BAL-421 — the ONE host-context assembly, shared by BOTH per-app async resolvers. The
+  // `apps/web` seam opening (the case surface's expert resolution request) is what made a
+  // single definition mandatory rather than merely tidy.
+  buildHostContextForExpertProfile,
 } from './engagement';
 export type {
   EngagementCapability,
@@ -127,6 +131,9 @@ export type {
   HostContext,
   ResolvedHostContext,
   RelationshipHostingStatus,
+  HostExpertProfile,
+  HostContextReads,
+  HostContextResolution,
 } from './engagement';
 
 // The expert-side VISIBILITY rule (BAL-419 / ADR-1046 §7) — the counterpart to `./engagement`'s

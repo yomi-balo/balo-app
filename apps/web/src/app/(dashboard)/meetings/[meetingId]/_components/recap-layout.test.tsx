@@ -72,6 +72,7 @@ const VIEW: RecapView = {
   state: 'ready',
   header: {
     eyebrow: 'Consultation',
+    caseHref: null,
     title: 'Flow interview stuck on a loop',
     status: { label: 'Completed', tone: 'success', icon: 'check' },
     closedNote: null,

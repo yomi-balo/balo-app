@@ -29,6 +29,7 @@ export {
   SESSION_EVENTS,
   CASE_BILLING_EVENTS,
   RECAP_EVENTS,
+  END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
   MEETING_CALL_EVENTS,
@@ -58,4 +59,6 @@ export type {
   MeetingCallLeaveReason,
   MeetingCallGrantRejectionReason,
   MeetingCallDeviceKind,
+  /** BAL-421 — annotates the case surface's client action handlers. */
+  CaseSurfaceAction,
 } from '@balo/analytics/client';

@@ -39,6 +39,13 @@
  * diverge on two clocks.
  */
 
+/**
+ * BAL-421 — the CASE SURFACE's pure core (nudge selection + consultation state), re-exported
+ * so `@balo/shared/engagements` stays ONE subpath. No `package.json` change: the subpath
+ * already points at this file. Same barrel posture as `../meetings/index.ts`.
+ */
+export * from './case-surface';
+
 /** The default inactivity window, in days. */
 export const CASE_INACTIVITY_DAYS = 30;
 

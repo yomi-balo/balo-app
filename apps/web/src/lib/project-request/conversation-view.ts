@@ -6,10 +6,10 @@ import {
   expertsRepository,
   type ConversationContextRef,
   type ConversationFile,
-  type ConversationMessage,
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
+import { mapMessageRowToView } from '@/lib/conversations/conversation-view';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { log } from '@/lib/logging';
 import type { RequestViewerContext } from './resolve-request-lens';
@@ -60,19 +60,17 @@ function initialsOf(
   return initials.length > 0 ? initials : 'EX';
 }
 
-/** Repo message row (joined with sender names) → serialisable view. */
-export function mapMessageRowToView(
-  row: ConversationMessage & { senderFirstName: string | null; senderLastName: string | null }
-): ConversationMessageView {
-  return {
-    id: row.id,
-    conversationId: row.conversationId,
-    bodyHtml: row.body,
-    senderUserId: row.senderUserId,
-    senderName: fullName(row.senderFirstName, row.senderLastName, 'Participant'),
-    createdAtIso: row.createdAt.toISOString(),
-  };
-}
+/**
+ * ⚠ MOVED TO `@/lib/conversations/conversation-view` BY BAL-421 — MOVED, NOT COPIED, and
+ * RE-EXPORTED here so every existing import of this path keeps working unchanged.
+ *
+ * It keys on the joined row alone and mentions no request and no relationship, so it was the
+ * one mapper in this module a CASE could reuse verbatim — and a case has neither a project
+ * request nor a relationship, so importing it from a `project-request` path would have been a
+ * lie about ownership. `participantNames` and `mapFileRowToView` below are genuinely
+ * request-shaped and DID NOT move.
+ */
+export { mapMessageRowToView };
 
 /** The two participants' display names — used to attribute file uploads. */
 export interface ConversationParticipantNames {

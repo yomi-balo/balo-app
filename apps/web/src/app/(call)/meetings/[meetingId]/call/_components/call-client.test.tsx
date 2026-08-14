@@ -26,12 +26,21 @@ import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
  *      frame showed the delivering EXPERT the CLIENT's billing promise.
  */
 
-const { mockJoinAsMemberAction, mockPush } = vi.hoisted(() => ({
+const { mockJoinAsMemberAction, mockPush, mockReplace } = vi.hoisted(() => ({
   mockJoinAsMemberAction: vi.fn(),
   mockPush: vi.fn(),
+  mockReplace: vi.fn(),
 }));
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
+/**
+ * ⚠ BOTH `push` AND `replace` ARE MOCKED even though the component only calls `replace`. Keeping
+ * `push` lets the exit tests assert it was NOT used — a silent regression from `replace` back to
+ * `push` would otherwise pass, and it is the difference between Back landing on the end-of-call
+ * screen and Back landing in a dead call frame.
+ */
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+}));
 vi.mock('@/app/join/_actions/join-as-member', () => ({
   joinAsMemberAction: mockJoinAsMemberAction,
 }));
@@ -339,26 +348,30 @@ describe('CallClient — ⚠⚠ ruling R10, the waiting subject', () => {
 });
 
 describe('CallClient — ⚠ where a member goes when the call ends', () => {
-  it('routes to the BAL-388 recap, with the reason BAL-389 will render', async () => {
+  /**
+   * ⚠ BAL-389's `end/page.tsx` names this handler as its ONLY producer and forbids every other
+   * entry point, so these two tests are what hold that boundary from this side. They assert
+   * `replace` rather than `push` on purpose: Back must not return to a dead call frame.
+   */
+  it('routes a host-ended call to BAL-389, replacing the dead frame in history', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderClient();
 
     await surface();
     await user.click(screen.getByRole('button', { name: 'fake host ended' }));
 
-    await waitFor(() =>
-      expect(mockPush).toHaveBeenCalledWith(`/meetings/${MEETING_ID}?ended=host`)
-    );
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith(`/meetings/${MEETING_ID}/end`));
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it('leaves without the query param when the person left of their own accord', async () => {
+  it('routes to the SAME place when the person left of their own accord', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderClient();
 
     await surface();
     await user.click(screen.getByRole('button', { name: 'fake leave' }));
 
-    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meetings/${MEETING_ID}`));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith(`/meetings/${MEETING_ID}/end`));
   });
 });
 

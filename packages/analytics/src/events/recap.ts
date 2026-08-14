@@ -62,12 +62,83 @@ export type RecapContextType = MeetingContextTypeWithHolder;
  * ⚠ ONLY VALUES WITH A LIVE PRODUCER ARE DECLARED — the same no-producer rule {@link RecapCta}
  * applies to CTA values. `notification` is real: BOTH re-pointed recap deep links (the
  * `recap-ready` email and its in-app twin, and the `engagement.case_closed` pair) append
- * `?from=notification`. `end_of_call` and `case_surface` are NOT declared: nothing writes
- * `?from=` on a `/meetings/{id}` URL from either surface, because neither surface exists yet
- * (BAL-389 / BAL-421). Add each value in the ticket that emits it — a value nothing produces
- * reads as a 100%-drop-off funnel dimension.
+ * `?from=notification`.
+ *
+ * ⚠ `case_surface` WAS ADDED BY BAL-421, WHICH IS THE TICKET THAT EMITS IT — exactly as the
+ * rule prescribes ("add each value in the ticket that emits it"). Its producer is
+ * `apps/web/.../cases/[engagementId]/_lib/map-case-consultations.ts`, whose `recapHref` is
+ * `/meetings/{id}?from=case_surface` on every consultation row that has a recap destination.
+ *
+ * ⚠ `end_of_call` WAS ADDED BY BAL-389 UNDER THE SAME RULE. The end-of-call screen's ready-state
+ * CTA links to `/meetings/{id}?from=end_of_call`, and `resolveEntrySource` in
+ * `meetings/[meetingId]/page.tsx` was widened in the SAME ticket to recognise it — declaring the
+ * value without widening that whitelist would silently collapse it to `direct` and ship a
+ * declared-but-never-emitted dimension.
  */
-export type RecapEntrySource = 'direct' | 'notification';
+export type RecapEntrySource = 'direct' | 'notification' | 'case_surface' | 'end_of_call';
+
+/**
+ * Which forward action was clicked ON THE CASE SURFACE (BAL-421).
+ *
+ * ⚠ SEPARATE FROM {@link RecapCta}, DELIBERATELY. The two surfaces offer genuinely different
+ * actions, and one union spanning both would let a recap-only value be reported from the case
+ * surface (and vice versa) with nothing to catch it.
+ *
+ * ⚠ NO `slot_quick_pick`, AND THAT IS THE NO-PRODUCER RULE BINDING AGAIN. The design
+ * reference draws a next-available-slot strip, but owner decision D5 struck it: there is NO
+ * slot-listing endpoint anywhere on the platform, so the case surface renders a plain
+ * "Book another consultation" affordance (`book_another`) and nothing can emit a quick pick.
+ * BAL-400 declares that value when it builds the thing that produces it.
+ *
+ * ⚠⚠ NO `invite` EITHER, AND THIS ONE IS WORTH READING TWICE BECAUSE THE DESIGN REFERENCE
+ * DRAWS THE BUTTON. BAL-421 does NOT ship the "Invite a colleague" affordance, for two
+ * independent reasons: (1) `apps/web` has NO seam that creates a guest invite — it only has
+ * the `/join/[token]` LANDING that consumes one, so there is nothing to call; and (2) guest
+ * scoping is INERT on `main` — `resolveGuestConversationScope` has zero production callers and
+ * `/join/[token]` resolves an identity CLAIM with no guest read session behind it. Shipping a
+ * button whose copy promises "anyone invited sees this whole case" while the grant grants
+ * nothing readable would be a lie about what the invite does, which is the same reasoning that
+ * forbids anchoring an invite to a past meeting. The ticket that builds the invite declares
+ * this value.
+ */
+export type CaseSurfaceAction =
+  | 'book_another'
+  | 'mark_resolved'
+  | 'request_resolution'
+  | 'dismiss_resolution_request'
+  | 'view_recap'
+  | 'download_file';
+
+/**
+ * Which lifecycle state the case surface rendered in.
+ *
+ * Mirrors `case_engagements.closed_at` + `close_reason`: an OPEN case, one a client marked
+ * `resolved`, or one the +30d sweep closed as `auto_inactive`. The two closed reasons stay
+ * DISTINCT because the surface renders visibly different copy for them, and collapsing them
+ * would hide whether cases are being resolved deliberately or merely going quiet — which is
+ * the single most useful thing this dimension can tell anyone.
+ */
+export type CaseSurfaceState = 'open' | 'resolved' | 'auto_inactive';
+
+/**
+ * WHERE a case close was initiated — the `case_resolved` dimension, declared ONCE.
+ *
+ * ⚠⚠ ONE BUSINESS FACT, ONE EVENT NAME. A parallel `end_of_call_case_resolved` event would
+ * make `count(case_resolved)` wrong and force every funnel to union two names forever, so each
+ * new closing surface widens THIS union and threads the value instead.
+ *
+ * ⚠ BAL-421's `case_surface` IS THE SECOND ENTRY POINT, NOT A SECOND EVENT, and BAL-389's
+ * `end_of_call` is the third. There is deliberately NO `case_resolved_manually`: minting one
+ * would split the very distribution this property exists to measure across two event names, so
+ * the closes would stop being comparable at exactly the moment there were finally several to
+ * compare. Every entry point calls the SAME `caseEngagementsRepository.close()` and the same
+ * post-commit half (`@/lib/cases/close-case-effects`); only the `source` differs, which is the
+ * point.
+ *
+ * ⚠ `sweep` is still NOT declared — the +30d dormancy sweep closes with `auto_inactive` from
+ * `apps/api` without emitting this event at all. The ticket that emits it declares the value.
+ */
+export type CaseResolveSource = 'recap' | 'end_of_call' | 'case_surface';
 
 /**
  * Which shape the resolve prompt took, when it was shown.
@@ -101,6 +172,20 @@ export const RECAP_EVENTS = {
   FILE_DOWNLOADED: 'recap_file_downloaded',
   /** A forward action on the recap was clicked. */
   CTA_CLICKED: 'recap_cta_clicked',
+  /**
+   * BAL-421 — a forward action on the CASE SURFACE was clicked.
+   *
+   * ⚠ IT LIVES IN `RECAP_EVENTS` RATHER THAN A NEW `CASE_SURFACE_EVENTS` OBJECT, AND THAT IS A
+   * REGISTRATION DECISION, NOT LAZINESS. This file already owns the case RESOLUTION lifecycle
+   * (`case_resolved`, `case_resolution_request_dismissed`), so the surface's actions belong
+   * beside them. It is also six fewer allowlist edits: `RECAP_EVENTS` is ALREADY re-exported
+   * through `events/index.ts`, `types.ts`'s `AllEvents`, the package client barrel, the
+   * `apps/web` client barrel AND `apps/web/src/test/setup.ts`'s `vi.mock` list — none of which
+   * has a typecheck that would notice an omission (memory
+   * `reference_analytics_registration_is_five_files`). Adding a KEY to an existing constant
+   * needs no allowlist change at all.
+   */
+  CASE_ACTION_CLICKED: 'case_action_clicked',
 } as const;
 
 export interface RecapEventMap {
@@ -115,6 +200,10 @@ export interface RecapEventMap {
     cta: RecapCta;
     lens: RecapLens;
   };
+  [RECAP_EVENTS.CASE_ACTION_CLICKED]: {
+    action: CaseSurfaceAction;
+    lens: RecapLens;
+  };
 }
 
 // ── Server (`trackServer`, from `apps/web`) ───────────────────────────────
@@ -125,11 +214,31 @@ export const RECAP_SERVER_EVENTS = {
   CASE_RESOLVED: 'case_resolved',
   /** The recap page rendered for an authorised viewer. */
   RECAP_VIEWED: 'recap_viewed',
+  /**
+   * BAL-421 — the CASE SURFACE rendered for an authorised viewer.
+   *
+   * ⚠ A SERVER EVENT, NOT A CLIENT ONE, and the precedent is exact: `RECAP_VIEWED` and
+   * `engagement_workspace_viewed` are both page-views of an AUTHORIZED RSC and both fire
+   * server-side. A client event would fire before authorization is observable (so a denied
+   * viewer could still register a view), and would need three extra allowlist entries.
+   */
+  CASE_SURFACE_VIEWED: 'case_surface_viewed',
 } as const;
 
 export interface RecapServerEventMap {
   [RECAP_SERVER_EVENTS.CASE_RESOLUTION_REQUEST_DISMISSED]: {
-    meeting_id: string;
+    /**
+     * ⚠ OPTIONAL AS OF BAL-421, AND THE ABSENCE IS MEANINGFUL RATHER THAN MISSING DATA.
+     * The recap always has a meeting in scope and keeps sending it, so shipped behaviour and
+     * its test are untouched. The CASE SURFACE has NO meeting in scope — the client dismisses
+     * the banner from `/cases/{engagementId}` — and there is nothing honest to put here.
+     *
+     * ⚠ NEVER FABRICATE ONE, and never send "the most recent meeting" to keep the field
+     * populated: that would attribute a dismissal to a consultation that had nothing to do
+     * with it, which is worse for analysis than a null. `engagement_id` is always present and
+     * is the field that actually identifies the case.
+     */
+    meeting_id?: string;
     engagement_id: string;
     /** = the acting user id. */
     distinct_id: string;
@@ -139,8 +248,12 @@ export interface RecapServerEventMap {
      * WHERE the close was initiated. The ticket is explicit that the source distribution
      * across recap / end-of-call / case surface / sweep is the evidence for whether asking
      * at the natural moment works at all, so this stays a required property.
+     *
+     * ⚠ THE UNION IS NAMED, NOT INLINED — see {@link CaseResolveSource}, which is where the
+     * one-business-fact-one-event-name reasoning lives and where each new closing surface
+     * widens the set. Widen it THERE, in the ticket that emits the new value.
      */
-    source: 'recap';
+    source: CaseResolveSource;
     engagement_id: string;
     /** = the acting user id. */
     distinct_id: string;
@@ -152,6 +265,15 @@ export interface RecapServerEventMap {
     source: RecapEntrySource;
     resolve_prompt_shown: boolean;
     resolve_prompt_variant: RecapResolvePromptVariant;
+    /** = the viewing user id. */
+    distinct_id: string;
+  };
+  [RECAP_SERVER_EVENTS.CASE_SURFACE_VIEWED]: {
+    /** The viewer's resolved SIDE. Never `activeMode`, never a role. */
+    lens: RecapLens;
+    /** EVERY consultation on the case, cancelled and no-show ones included. */
+    consultation_count: number;
+    case_state: CaseSurfaceState;
     /** = the viewing user id. */
     distinct_id: string;
   };

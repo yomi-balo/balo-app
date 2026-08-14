@@ -4,7 +4,7 @@ import { Calendar, Clock, FileText, Loader2, Paperclip } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationThreadView } from '@/lib/project-request/conversation-view-types';
 import type { ThreadActions } from './thread-actions';
-import { InitialsAvatar } from './initials-avatar';
+import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
 
 interface ThreadHeaderProps {
   thread: ConversationThreadView;

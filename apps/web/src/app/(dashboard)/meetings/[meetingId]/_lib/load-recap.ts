@@ -3,7 +3,6 @@ import 'server-only';
 import { cache } from 'react';
 import {
   actionItemsRepository,
-  agenciesRepository,
   caseEngagementsRepository,
   companiesRepository,
   creditSessionsRepository,
@@ -15,29 +14,31 @@ import {
   reviewsRepository,
   transcriptArtifactsRepository,
   transcriptsRepository,
-  usersRepository,
   type CaseEngagementRow,
   type Meeting,
 } from '@balo/db';
-import {
-  expertPartyDisplayName,
-  personDisplayName,
-  personWithOrgLabel,
-} from '@balo/shared/parties';
 import type { RecapContextType } from '@balo/analytics/events';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { log } from '@/lib/logging';
 import { fetchSessionMoneyBlock } from '@/lib/api/session-money-block';
+import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
 import { resolveRecapAccess, type RecapAccess } from '@/lib/meetings/resolve-recap-access';
 import type {
   RecapHeaderView,
-  RecapPartyView,
   RecapResolveView,
   RecapStatusView,
   RecapView,
 } from '@/lib/meetings/recap-view-types';
-import { contextIsCase, resolveEyebrow } from './resolve-eyebrow';
-import { deriveConsultationOrdinal, formatOrdinalLine } from './derive-consultation-ordinal';
+import {
+  deriveConsultationOrdinal,
+  formatOrdinalLine,
+} from '@/lib/meetings/derive-consultation-ordinal';
+import {
+  resolveCounterparty,
+  resolveRequesterLabel,
+  type CounterpartyLabels,
+} from './resolve-counterparty';
+import { contextIsCase, resolveCaseHref, resolveEyebrow } from './resolve-eyebrow';
 import {
   resolveArtifacts,
   resolveMoneyView,
@@ -62,16 +63,13 @@ import { mapRecapFiles } from './map-recap-files';
  * ⚠ EVERY READ GOES THROUGH A REPOSITORY. No raw query lives here.
  *
  * ⚠⚠ EVERY COUNTERPARTY READ IS COLUMN-PROJECTED AT THE REPOSITORY, NOT NARROWED HERE.
- * `usersRepository.findDisplayById` (id/first/last/avatar), `expertsRepository
- * .findDisplayProfileById` (six display columns) and `companiesRepository.findNameById`
- * (id/name) exist precisely so this loader CANNOT hold `users.email`, `users.workosId` or
- * `expert_profiles.rate_cents` in the first place. That last one matters most: `rate_cents` is
- * the UN-MARKED-UP consultant rate, and the client lens already carries the all-in charge, so
- * a payload holding both would hand the client the Balo margin. A bare relational hydrate plus
- * a field-by-field projection downstream would LOOK identical and be one careless spread away
- * from leaking, because TypeScript excess-property checking does NOT apply to spreads (memory
- * `reference_drizzle_with_hydration_leaks_secrets`). Uploader names come from
- * `findNamesByIds`, the same posture. THE MONEY ROW IS THE SAME RULE:
+ * `companiesRepository.findNameById` (id/name) and `expertsRepository.findDisplayProfileById`
+ * (six display columns) exist precisely so this loader CANNOT hold `users.email`,
+ * `users.workosId` or `expert_profiles.rate_cents` in the first place. THE COUNTERPARTY HALF
+ * OF THAT RULE — and the reasoning behind it — NOW LIVES IN `./resolve-counterparty.ts`, which
+ * BAL-389 hoisted out of this file so the end-of-call screen shares one definition rather than
+ * re-deriving the same four reads. Read that module's docblock before touching either surface.
+ * Uploader names come from `findNamesByIds`, the same posture. THE MONEY ROW IS THE SAME RULE:
  * `creditSessionsRepository.findIdByMeetingId` projects to `id` alone, so `balo_fee_bps` (the
  * literal margin), `expert_rate_minor_per_minute`, `expert_accrued_minor` and
  * `stripe_payment_intent_id` are structurally absent here — the figures the client is allowed
@@ -109,25 +107,6 @@ const FALLBACK_TITLE: Record<RecapContextType, string> = {
   retainer_checkin: 'Retainer check-in',
   request_interaction: 'Intro call',
 };
-
-/** Whole minutes between the two stamps; `null` when either is missing (never a bare zero). */
-function durationMinutesOf(meeting: Meeting): number | null {
-  const { startedAt, endedAt } = meeting;
-  if (startedAt === null || endedAt === null) return null;
-  return Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 60_000));
-}
-
-/** Up to two initials for the avatar fallback. NEVER derived from an email address. */
-function initialsOf(name: string): string {
-  const parts = name
-    .trim()
-    .split(/\s+/)
-    .filter((part) => part.length > 0);
-  const [first, second] = parts;
-  if (first === undefined) return '?';
-  const tail = second === undefined ? '' : second.charAt(0);
-  return (first.charAt(0) + tail).toUpperCase();
-}
 
 /**
  * §R1 status chip. ⚠ CASE STATE WINS OVER MEETING STATE — a resolved case's recap should read
@@ -197,104 +176,6 @@ async function resolveTitle(
 }
 
 /**
- * The PROJECTED expert-profile row this loader is allowed to hold — six display columns, and
- * structurally NOT `rateCents` / `stripeConnectId` / `cronofyUserId`. Derived from the
- * repository so the two cannot drift.
- */
-type RecapExpertProfile = NonNullable<
-  Awaited<ReturnType<typeof expertsRepository.findDisplayProfileById>>
->;
-
-interface CounterpartyLabels {
-  party: RecapPartyView;
-  /** Retrospective — person @ agency on first mention. Used by R11 and the R4 banner. */
-  expertPersonLabel: string;
-  /** Prospective — the expert PARTY short label, for action-item assignee chips. */
-  expertPartyShort: string;
-  /** The bare person/party name the resolve dialog copy uses. */
-  expertShortName: string;
-  /** The delivering expert's agency name, or `null` for an independent expert. */
-  agencyLabel: string | null;
-}
-
-/**
- * The §R8 party card, both lenses.
- *
- * CLIENT LENS → the delivering EXPERT: photo, person name, headline, agency.
- * EXPERT LENS  → the client PARTY, i.e. the company. CLAUDE.md's attribution rule makes that
- * the right call rather than a shortcut: client-side rights sit on COMPANY membership and
- * survive individual departures, so there is no single client PERSON to name here. Nothing
- * evaluative appears on either side — the expert is not scoring the client, and BAL-422's
- * rating does not exist.
- */
-async function resolveCounterparty(
-  lens: RecapView['lens'],
-  profile: RecapExpertProfile | undefined,
-  clientCompanyName: string,
-  ordinalLine: string | null
-): Promise<CounterpartyLabels> {
-  const [expertUser, agency] = await Promise.all([
-    profile === undefined
-      ? Promise.resolve(undefined)
-      : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
-      ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
-  ]);
-  const agencyLabel = agency?.name ?? null;
-  const firstName = expertUser?.firstName ?? null;
-  const lastName = expertUser?.lastName ?? null;
-
-  const expertPerson = personDisplayName(firstName, lastName, 'An expert');
-  const expertPartyShort = expertPartyDisplayName({
-    type: profile?.type ?? 'freelancer',
-    agencyName: agencyLabel,
-    firstName,
-    lastName,
-  });
-  const shared = {
-    expertPersonLabel: personWithOrgLabel(expertPerson, agencyLabel),
-    expertPartyShort,
-    expertShortName: personDisplayName(firstName, null, expertPartyShort),
-    agencyLabel,
-  };
-
-  if (lens === 'client') {
-    // ⚠ `expert_profiles.username` IS NULLABLE. A null username means NO CTA at all — never a
-    // disabled button, and never an href pointing at `/experts/null`.
-    const username = profile?.username ?? null;
-    return {
-      ...shared,
-      party: {
-        name: expertPerson,
-        headline: profile?.headline ?? null,
-        orgLabel: agencyLabel,
-        avatarUrl: expertUser?.avatarUrl ?? null,
-        initials: initialsOf(expertPerson),
-        ordinalLine,
-        bookAgainHref: username === null ? null : '/experts/' + username,
-      },
-    };
-  }
-
-  return {
-    ...shared,
-    party: {
-      name: clientCompanyName,
-      headline: null,
-      orgLabel: null,
-      avatarUrl: null,
-      initials: initialsOf(clientCompanyName),
-      ordinalLine,
-      // ⚠ EVERY expert-side CTA the design listed (send proposal, private note, offer a new
-      // time) has NO live destination today, so the card renders none. It must read complete
-      // with one action or with zero — a disabled CTA is worse than an absent one.
-      bookAgainHref: null,
-    },
-  };
-}
-
-/**
  * §R4 / §R9 — which shape the resolve prompt takes, who asked, and (once the case is closed)
  * the IN-PLACE success state. CLIENT LENS ONLY.
  *
@@ -340,16 +221,14 @@ async function resolveResolveView(
     // exactly one place: the banner when the expert asked, the quieter rail card otherwise.
     return { ...base, variant: 'offered', requesterLabel: null };
   }
-  const [requester] = await usersRepository.findNamesByIds([requestedBy]);
-  const requesterName = personDisplayName(
-    requester?.firstName ?? null,
-    requester?.lastName ?? null,
-    labels.expertShortName
-  );
   return {
     ...base,
     variant: 'requested',
-    requesterLabel: personWithOrgLabel(requesterName, labels.agencyLabel),
+    requesterLabel: await resolveRequesterLabel(
+      requestedBy,
+      labels.agencyLabel,
+      labels.expertShortName
+    ),
   };
 }
 
@@ -519,6 +398,9 @@ export const loadRecap = cache(
 
     const header: RecapHeaderView = {
       eyebrow: resolveEyebrow(contextType),
+      // BAL-421 — the recap's back link to its case. See `resolveCaseHref` for why only a
+      // `case` context yields one, and why it carries no `?from` param.
+      caseHref: resolveCaseHref(isCase, subject.contextId),
       title,
       status: resolveStatus(meeting, caseRow, artifacts.summary.state === 'processing'),
       closedNote: resolveClosedNote(caseRow),

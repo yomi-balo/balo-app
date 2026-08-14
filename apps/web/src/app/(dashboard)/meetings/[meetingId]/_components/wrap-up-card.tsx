@@ -81,6 +81,7 @@ export function WrapUpCard({
         meetingId={meetingId}
         expertShortName={resolve.expertShortName}
         reviewWillBeAsked={resolve.reviewWillBeAsked}
+        source="recap"
         open={dialogOpen}
         onOpenChange={setDialogOpen}
       />

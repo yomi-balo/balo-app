@@ -54,10 +54,14 @@ import { log } from '@/lib/logging';
  * lived, and it would ALSO deny the wrong people: that holder set excludes agency role
  * `expert`, who are precisely the colleagues most likely to need to read a delivery thread.
  *
- * ⚠ COROLLARY, STATED SO IT IS NOT UNDONE: THIS MODULE DOES NOT OPEN THE `apps/web`
- * ENGAGEMENT-AXIS SEAM. CLAUDE.md records that seam as landing "with its first consumer
- * (BAL-410/BAL-411)". It still does. Nothing here imports `hasEngagementCapability`, and
- * `authorize-conversation-context.test.ts` asserts that statically.
+ * ⚠ COROLLARY, STATED SO IT IS NOT UNDONE: THIS MODULE DOES NOT OPEN — AND DOES NOT USE —
+ * THE `apps/web` ENGAGEMENT-AXIS SEAM. That seam is now OPEN (`apps/web/src/lib/authz/
+ * engagement.ts`, opened by BAL-421, whose expert-side "request case resolution" is a
+ * `manage_engagement` act), so the packaging accident that used to make this impossible is
+ * GONE — and the argument above is unaffected, because it never rested on packaging. Reading
+ * a thread is still not an act. Nothing here imports `hasEngagementCapability`, and
+ * `authorize-conversation-context.test.ts` asserts that statically; that assertion is now
+ * load-bearing rather than incidental, and MUST NOT be relaxed.
  *
  * ──────────────────────────────────────────────────────────────────────────────
  * ⚠⚠ (b) THE EXPERT ARM CONSUMES THE SHIPPED **VISIBILITY** RULE — IT DOES NOT INVENT ONE.

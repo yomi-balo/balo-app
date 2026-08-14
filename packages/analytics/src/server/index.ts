@@ -34,7 +34,20 @@ export type {
   RecapEntrySource,
   RecapResolvePromptVariant,
   RecapCta,
+  // BAL-421 — `case_surface_viewed` is a SERVER event, so the case surface's RSC needs this
+  // type to build its payload. `CaseSurfaceAction` is CLIENT-side and lives in '../client'.
+  CaseSurfaceState,
+  CaseResolveSource,
 } from '../events/recap';
+// BAL-389 — the end-of-call screen is MIXED the same way the recap is: `END_OF_CALL_EVENTS`
+// is exported from '../client' and the server half here. Neither allowlist is optional, and
+// neither this package's typecheck nor its tests would notice a missing line.
+export { END_OF_CALL_SERVER_EVENTS } from '../events/end-of-call';
+export type {
+  EndOfCallRecapState,
+  EndOfCallRatingState,
+  EndOfCallAction,
+} from '../events/end-of-call';
 export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
 export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';

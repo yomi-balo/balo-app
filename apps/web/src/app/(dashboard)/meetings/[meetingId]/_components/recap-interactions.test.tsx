@@ -44,7 +44,7 @@ import { ResolvePromptBanner } from './resolve-prompt-banner';
 import { ResolveDismissalProvider, UnlessDismissed } from './resolve-dismissal';
 import { NotHeldPanel } from './not-held-panel';
 import { RecapStatusChip } from './recap-status-chip';
-import { LocalDateTime } from './local-date-time';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 
 const OFFERED: RecapResolveView = {
   engagementId: 'e1',
@@ -313,7 +313,13 @@ describe('WrapUpCard + ResolveDialog', () => {
 
     expect(screen.getByRole('heading', { name: /Mark this case resolved/ })).toBeInTheDocument();
     expect(screen.getByText(/closes the case for both of you/)).toBeInTheDocument();
-    expect(screen.getByText(/cannot be reopened/)).toBeInTheDocument();
+    // ⚠ BAL-389 REFRAMED THIS FACT, IT DID NOT DROP IT. "It cannot be reopened." states the
+    // irreversibility as a penalty on what is meant to be a completion; the prototype's own
+    // wording states the identical fact while answering what the client is actually asking —
+    // "do I lose anything?". The dialog is SHARED, so the recap improves with the end screen.
+    expect(
+      screen.getByText(/Everything stays available, and booking again starts a new one\./)
+    ).toBeInTheDocument();
     expect(screen.getByText(/start a new case with Amara/)).toBeInTheDocument();
     expect(screen.getByText(/completely optional/)).toBeInTheDocument();
   });
@@ -367,6 +373,23 @@ describe('WrapUpCard + ResolveDialog', () => {
     await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
   });
 
+  it('closes with source=recap, so the shipped CTA funnel is unchanged by BAL-389', async () => {
+    // ⚠ THE RECAP KEEPS BOTH SIGNALS. `recap_cta_clicked` measures THIS surface's forward
+    // actions and stays recap-only; `case_resolved{source}` is the surface-agnostic business
+    // fact. The end-of-call screen passes `source="end_of_call"` and fires NO
+    // `recap_cta_clicked` — asserting the recap half here is what stops a refactor that
+    // "simplifies" the conditional from silently corrupting this funnel.
+    mockResolveCase.mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    render(<WrapUpCard meetingId={MEETING_ID} resolve={OFFERED} />);
+    await user.click(screen.getByRole('button', { name: /Mark resolved/ }));
+    await user.click(screen.getByRole('button', { name: /Yes, mark it resolved/ }));
+
+    await waitFor(() =>
+      expect(mockResolveCase).toHaveBeenCalledWith({ meetingId: MEETING_ID, source: 'recap' })
+    );
+  });
+
   it('toasts the returned copy verbatim on a refused resolve', async () => {
     mockResolveCase.mockResolvedValue({ success: false, error: 'This case is already resolved.' });
     const user = userEvent.setup();
@@ -378,11 +401,14 @@ describe('WrapUpCard + ResolveDialog', () => {
     );
   });
 
-  it('closes the dialog on Not yet, without mutating anything', async () => {
+  it('closes the dialog on Go back, without mutating anything', async () => {
+    // ⚠ RENAMED BY BAL-389. The end-of-call surface answers "Is this issue resolved?" with a
+    // "Not yet", and this dialog opens one tap later — two different meanings for one label in
+    // one flow. This button only cancels a confirmation, so it is named like a cancel.
     const user = userEvent.setup();
     render(<WrapUpCard meetingId={MEETING_ID} resolve={OFFERED} />);
     await user.click(screen.getByRole('button', { name: /Mark resolved/ }));
-    await user.click(screen.getByRole('button', { name: /Not yet/ }));
+    await user.click(screen.getByRole('button', { name: /Go back/ }));
     await waitFor(() =>
       expect(
         screen.queryByRole('heading', { name: /Mark this case resolved/ })

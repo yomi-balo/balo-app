@@ -40,9 +40,18 @@ import type { hasCapability } from '@/lib/authz';
  * If step 3 passes, this gate is dead. The captured failing output for this PR is in
  * `.proof-bal-413.md`.
  *
- * ⚠ SCOPE. This is a type assertion, NOT the deferred `apps/web` engagement resolver seam
- * (`apps/web/src/lib/authz/engagement.ts`), which BAL-410 / BAL-411 own and which this PR
- * deliberately does not build. Nothing here creates a seam those tickets could collide with.
+ * ⚠ SCOPE. This is a type assertion about `hasCapability` — the MEMBERSHIP seam — and it is
+ * NOT the `apps/web` engagement resolver seam (`apps/web/src/lib/authz/engagement.ts`). That
+ * resolver was originally deferred to BAL-410 / BAL-411, but it LANDED WITH BAL-421 (ADR-1046
+ * amendment 2026-08-12), whose expert-side "request case resolution" ADR-1046 lists by name as
+ * a `manage_engagement` act.
+ *
+ * ⚠⚠ THE SEAM LANDING DOES NOT WEAKEN THIS INVARIANT — IT IS EXACTLY WHY IT NOW MATTERS MORE.
+ * The two seams are DIFFERENT FUNCTIONS and must stay so: `hasCapability` (membership,
+ * company/agency-scoped) must keep REFUSING every engagement token, and `hasEngagementCapability`
+ * (delivery identity, engagement-scoped) is where those tokens live. Merging them — or widening
+ * `hasCapability`'s parameter to accept one — would collapse two holder sets with deliberately
+ * different widths into one. Do not "simplify" them together.
  */
 
 /** Compiles only while `T` is exactly `never`. */

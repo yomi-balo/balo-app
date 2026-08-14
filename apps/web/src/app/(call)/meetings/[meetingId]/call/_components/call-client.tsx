@@ -11,10 +11,7 @@ import {
 } from '@/components/balo/meetings/join-notice-card';
 import { MeetingConnectingCard } from '@/components/balo/meetings/meeting-connecting-card';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
-import {
-  MeetingRouteContextProvider,
-  type MeetingExitReason,
-} from '@/lib/meetings/meeting-route-context';
+import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
 import {
   DASHBOARD_BACK_TO,
   resolveBackTo,
@@ -196,18 +193,29 @@ export function CallClient({
   );
 
   /**
-   * ⚠ WHERE A MEMBER GOES WHEN THE CALL ENDS: the BAL-388 recap at `/meetings/{id}` — the natural
-   * parent inside one URL family, and a route that EXISTS today. `?ended=host` is the reason
-   * BAL-389 will render; the recap ignores an unknown query param, so this is safe now and
-   * correct later.
+   * ⚠ WHERE A MEMBER GOES WHEN THE CALL ENDS: BAL-389's end-of-call screen at
+   * `/meetings/{id}/end`, which landed in `02cd447` while this branch was open. That ticket's
+   * `page.tsx` names THIS handler as its only producer — *"BAL-435 owns the in-meeting route and
+   * the Leave handler, and supplies the producer with a one-line
+   * `router.replace('/meetings/{id}/end')`"* — and forbids any other entry point.
+   *
+   * ⚠ `replace`, NOT `push`. The call is over and the room is gone; leaving it in history means
+   * Back returns a person to a dead frame that can only re-render its failure state.
+   *
+   * ⚠ NO QUERY PARAM, AND THE `reason` IS DELIBERATELY NOT FORWARDED. The end-of-call page
+   * declares no `searchParams` prop and states it "reads no query string", so `?ended=host`
+   * would be a value nothing consumes — it resolves what to say from server state instead.
+   *
+   * ⚠ HENCE THE HANDLER TAKES NO PARAMETER AT ALL. Every exit lands on the same URL, so naming
+   * a `reason` it does not read would be a claim this function does not keep. It still satisfies
+   * the `(reason: MeetingExitReason) => void` prop — a function may ignore trailing arguments —
+   * and the reason is not lost: the frame records it on the leave analytics event before calling
+   * this. If the end-of-call screen ever needs to distinguish an ejection from a walk-out, that
+   * is a server-state question there, not a query param here.
    */
-  const handleExit = useCallback(
-    (reason: MeetingExitReason): void => {
-      const query = reason === 'host_ended' ? '?ended=host' : '';
-      router.push(`/meetings/${meetingId}${query}`);
-    },
-    [meetingId, router]
-  );
+  const handleExit = useCallback((): void => {
+    router.replace(`/meetings/${meetingId}/end`);
+  }, [meetingId, router]);
 
   if (phase === 'unavailable') {
     return (
