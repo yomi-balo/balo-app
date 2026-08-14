@@ -6,10 +6,26 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+/**
+ * ⚠⚠ THE VENDOR DOUBLE IS NOT OPTIONAL HERE — see the twin note in `join-control.test.tsx`.
+ *
+ * This lobby's `admitted` state is TERMINAL and hands the grant to `MeetingCallSurface`, which
+ * since BAL-435 mounts the frame via `next/dynamic`. Unmocked, that chunk loads the REAL
+ * `@daily-co/daily-js` and throws `WebRTC not supported or suppressed` in jsdom — but only when
+ * the chunk resolves before the file ends, which under a saturated worker pool is a coin flip.
+ */
+vi.mock('@daily-co/daily-react', async () => {
+  const { dailyReactModuleMock } = await import('@/test/mocks/daily');
+  return dailyReactModuleMock();
+});
+
 vi.mock('motion/react', async () => {
   const { createMotionStub } = await import('@/test/motion-stub');
   return createMotionStub();
 });
+
+// jsdom has no `matchMedia`; the repo's convention is to mock the hook, not stub `matchMedia`.
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 const mockClaim = vi.fn();
 const mockPoll = vi.fn();
@@ -21,6 +37,7 @@ vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
 }));
 
 import { toast } from 'sonner';
+import { installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { LobbyClient } from './lobby-client';
 import {
   JOIN_TEMPORARILY_UNAVAILABLE_TITLE,
@@ -39,7 +56,7 @@ const GRANT = {
   token: 'daily.jwt.value',
   isOwner: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
-  participantId: 'g555555555555455585555555555555555',
+  participantId: 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };
 
 /** A retryable poll failure (the transport case). */
@@ -88,6 +105,9 @@ function seedWaiting(startedAt = Date.now()): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ⚠ AFTER `clearAllMocks`, which strips the double's implementations along with everyone else's.
+  installMediaStubs();
+  resetDailyMock();
   globalThis.sessionStorage.clear();
   mockClaim.mockResolvedValue({ success: true, lobbyToken: LOBBY_TOKEN });
   mockPoll.mockResolvedValue({ success: true, state: 'waiting' });
@@ -341,7 +361,7 @@ describe('LobbyClient — polling', () => {
     await advance(5_000);
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
   });
 
@@ -367,7 +387,7 @@ describe('LobbyClient — polling', () => {
     await advance(5_000);
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     expect(container.textContent ?? '').not.toContain(GRANT.token);
     expect(container.textContent ?? '').not.toContain(LOBBY_TOKEN);
@@ -410,7 +430,7 @@ describe('⚠⚠ LobbyClient — a transient poll failure KEEPS POLLING', () => 
     await advance(15_000);
 
     await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
   });
 

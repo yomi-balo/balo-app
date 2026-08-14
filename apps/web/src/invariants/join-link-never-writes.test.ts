@@ -214,6 +214,25 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
    * rather than merely uninteresting: it is the destination, and BAL-132 will add relative
    * navigation inside it.
    */
+  /**
+   * ⚠⚠ A MODULE SPECIFIER IS NOT A URL, AND CONFLATING THEM WOULD MAKE THIS INVARIANT
+   * UNSATISFIABLE.
+   *
+   * BAL-435 mounts `joinAsMemberAction` from the authenticated call route:
+   * `import { joinAsMemberAction } from '@/app/join/_actions/join-as-member'`. That string
+   * contains `/join/` and is the FIRST legitimate one in the app router — but it is a build-time
+   * import of a POST-only Server Action, not an href. Next prefetches nothing from it, no token
+   * appears in it, and no navigation can reach it.
+   *
+   * ⚠ THE EXCLUSION IS THE `@/app/join/` ALIAS PREFIX AND NOTHING WIDER. A real `<Link>` is
+   * written `href="/join/…"`, which does NOT begin with the alias — so every shape this
+   * invariant exists to catch still fails it. Narrowing further (say, to whole import lines)
+   * would let `href={\`/join/${token}\`}` hide on a line that also imports something.
+   */
+  function withoutActionImports(code: string): string {
+    return code.split('@/app/join/').join('@/app/<server-action>/');
+  }
+
   describe('no <Link> anywhere in the app router points at /join/…', () => {
     const appScanned = scanRouteSources(APP_DIR, '', ['join']);
 
@@ -228,9 +247,18 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
       expect(appScanned.filter((file) => file.rel.startsWith('join/'))).toEqual([]);
     });
 
+    it('⚠ guards the guard: the Server-Action exclusion still catches a real href', () => {
+      // If `withoutActionImports` were too broad, every assertion below would pass vacuously.
+      expect(
+        withoutActionImports("import { a } from '@/app/join/_actions/join-as-member';")
+      ).not.toContain('/join/');
+      expect(withoutActionImports('<Link href="/join/m/abc">')).toContain('/join/');
+      expect(withoutActionImports('href={`/join/${token}`}')).toContain('/join/');
+    });
+
     it('finds no /join/ URL outside the route', () => {
       const offenders = appScanned
-        .filter((file) => file.code.includes('/join/'))
+        .filter((file) => withoutActionImports(file.code).includes('/join/'))
         .map((file) => file.rel);
       expect(
         offenders,

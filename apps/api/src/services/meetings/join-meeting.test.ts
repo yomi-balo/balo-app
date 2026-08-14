@@ -9,6 +9,8 @@ const {
   mockGuestCountPendingLobbyKnocks,
   mockGuestClaimLobbyPlace,
   mockFindNamesByIds,
+  mockCompanyFindNameById,
+  mockExpertFindDisplayProfileById,
   mockAuthorizeMeetingParticipation,
   mockHasEngagementCapability,
   mockTrackServer,
@@ -22,6 +24,8 @@ const {
   mockGuestCountPendingLobbyKnocks: vi.fn(),
   mockGuestClaimLobbyPlace: vi.fn(),
   mockFindNamesByIds: vi.fn(),
+  mockCompanyFindNameById: vi.fn(),
+  mockExpertFindDisplayProfileById: vi.fn(),
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
   mockTrackServer: vi.fn(),
@@ -52,9 +56,18 @@ vi.mock('@balo/db', () => ({
   },
   usersRepository: { findNamesByIds: mockFindNamesByIds, findById: vi.fn() },
   agenciesRepository: { getSummaryById: vi.fn() },
-  caseEngagementsRepository: { findById: vi.fn() },
-  companiesRepository: { findById: vi.fn() },
-  expertsRepository: { findProfileById: vi.fn() },
+  // ⚠ `findByEngagementId` is BAL-435's context-label read, reached through
+  // `resolveMeetingContextLabel` on the member arm. A vitest factory mock throws on any export
+  // the import graph touches but the factory omits.
+  caseEngagementsRepository: { findById: vi.fn(), findByEngagementId: vi.fn() },
+  // ⚠ BAL-435 (R10): `findNameById` / `findDisplayProfileById` are the waiting-stage
+  // counterparty reads, reached through `resolveWaitingCounterparty` on the member arm. A vitest
+  // factory mock throws on any export the import graph touches but the factory omits.
+  companiesRepository: { findById: vi.fn(), findNameById: mockCompanyFindNameById },
+  expertsRepository: {
+    findProfileById: vi.fn(),
+    findDisplayProfileById: mockExpertFindDisplayProfileById,
+  },
   partyDomainsRepository: { listByParty: vi.fn() },
   partyMembershipsRepository: { getMemberRole: vi.fn(), listAdminUserIds: vi.fn() },
   projectRequestsRepository: { findById: vi.fn() },
@@ -173,6 +186,9 @@ beforeEach(() => {
   mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
   mockHasEngagementCapability.mockResolvedValue(false);
   mockFindNamesByIds.mockResolvedValue([{ firstName: 'Dana', lastName: 'Okoro' }]);
+  // ⚠ BAL-435 (R10) — the waiting-stage counterparty reads.
+  mockExpertFindDisplayProfileById.mockResolvedValue({ id: EXPERT_PROFILE_ID, userId: USER_ID });
+  mockCompanyFindNameById.mockResolvedValue({ id: COMPANY_ID, name: 'Northwind Industrial' });
   mockListByMeeting.mockResolvedValue([{ contextType: 'case', contextId: ENGAGEMENT_ID }]);
   mockMeetingFindById.mockResolvedValue(meetingRow());
   mockGuestCountLiveByMeeting.mockResolvedValue(0);
@@ -266,6 +282,112 @@ describe('joinMeetingAsMember — the happy paths', () => {
       is_owner: true,
       distinct_id: USER_ID,
     });
+  });
+});
+
+/**
+ * BAL-435 ruling R10 — the waiting stage's inputs.
+ *
+ * ⚠⚠ WHY THIS IS A MONEY-SURFACE TEST, NOT A COSMETIC ONE. With no `viewerRole` the web frame
+ * hard-coded `absentParty="expert"` for every viewer, so the DELIVERING EXPERT read the CLIENT's
+ * "You won't be charged for waiting" — which is meaningless to the person being paid, and is the
+ * exact misreading BAL-134 says makes an expert leave at minute eight and forfeit a settlement
+ * they had already earned.
+ */
+describe('joinMeetingAsMember — ⚠⚠ R10: who is missing, and from when', () => {
+  it('passes the GATE resolved side through as `viewerRole` — never a lens', async () => {
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // `authorizeMeetingParticipation` resolved `side: 'client'` in `gateOk()`.
+    expect(result.viewerRole).toBe('client');
+    expect(result.scheduledStart).toBe(SCHEDULED_START.toISOString());
+  });
+
+  it('a CLIENT viewer is waiting for the delivering EXPERT, by first name', async () => {
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(mockExpertFindDisplayProfileById).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+    expect(result.counterpartyFirstName).toBe('Dana');
+    // ⚠ The client side names no individual, so its company is never read on this arm.
+    expect(mockCompanyFindNameById).not.toHaveBeenCalled();
+  });
+
+  it('an EXPERT viewer is waiting for the CLIENT COMPANY — a party, never an invented person', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.viewerRole).toBe('expert');
+    expect(result.counterpartyFirstName).toBe('Northwind Industrial');
+    expect(mockCompanyFindNameById).toHaveBeenCalledWith(COMPANY_ID);
+  });
+
+  it('⚠ a match-routed discovery names NO expert, and that is null rather than a guess', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({
+        subject: { contextType: 'project_discovery', contextId: ENGAGEMENT_ID },
+        expertProfileId: null,
+      })
+    );
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.counterpartyFirstName).toBeNull();
+    expect(mockExpertFindDisplayProfileById).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ a repository failure degrades to null and NEVER fails the join', async () => {
+    mockExpertFindDisplayProfileById.mockRejectedValue(new Error('db down'));
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    // A name is decoration on a surface whose job is to connect a call.
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.counterpartyFirstName).toBeNull();
+    expect(result.grant.token.length).toBeGreaterThan(0);
+  });
+
+  it('⚠ an empty or whitespace name is null, not an empty name in the copy', async () => {
+    mockFindNamesByIds.mockResolvedValue([{ firstName: '   ', lastName: 'Okoro' }]);
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.counterpartyFirstName).toBeNull();
   });
 });
 

@@ -350,7 +350,17 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
       sendJoinError(reply, result.code, { route: 'join', meetingId: params.meetingId, userId });
       return;
     }
-    reply.code(200).send(result.grant);
+    // ⚠ BAL-435 (R6 / R10): the grant's five fields stay at the TOP LEVEL, byte for byte, and
+    // the meeting's context — plus the waiting stage's inputs — ride ALONGSIDE them. `JoinGrant`
+    // itself is unchanged, so an older client that knows nothing about these is unaffected, and
+    // the two PUBLIC guest arms below deliberately carry none of them.
+    reply.code(200).send({
+      ...result.grant,
+      context: result.context,
+      viewerRole: result.viewerRole,
+      counterpartyFirstName: result.counterpartyFirstName,
+      scheduledStart: result.scheduledStart,
+    });
   });
 
   /**

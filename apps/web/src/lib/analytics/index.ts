@@ -32,6 +32,7 @@ export {
   END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
+  MEETING_CALL_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -53,6 +54,11 @@ export type {
   ProjectsInboxLens,
   ProjectsInboxFilter,
   AdminEngagementsFilter,
+  MeetingCallLayout,
+  MeetingCallLayoutSource,
+  MeetingCallLeaveReason,
+  MeetingCallGrantRejectionReason,
+  MeetingCallDeviceKind,
   /** BAL-421 — annotates the case surface's client action handlers. */
   CaseSurfaceAction,
 } from '@balo/analytics/client';

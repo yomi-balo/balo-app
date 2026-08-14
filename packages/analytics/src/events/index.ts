@@ -172,6 +172,17 @@ export {
   type WalletRestingStateName,
 } from './wallet';
 export { SCHEDULE_EVENTS, type ScheduleEventMap } from './schedule';
+// BAL-435 — the in-call surface's CLIENT family. ⚠ Deliberately separate from `./meeting`,
+// which is SERVER-ONLY and must stay out of `AllEvents`.
+export {
+  MEETING_CALL_EVENTS,
+  type MeetingCallEventMap,
+  type MeetingCallLayout,
+  type MeetingCallLayoutSource,
+  type MeetingCallLeaveReason,
+  type MeetingCallGrantRejectionReason,
+  type MeetingCallDeviceKind,
+} from './meeting-call';
 export {
   TRANSCRIPT_SERVER_EVENTS,
   type TranscriptServerEventMap,

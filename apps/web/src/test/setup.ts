@@ -113,6 +113,7 @@ vi.mock('@/lib/analytics', async () => {
     END_OF_CALL_EVENTS: events.END_OF_CALL_EVENTS,
     WALLET_EVENTS: events.WALLET_EVENTS,
     SCHEDULE_EVENTS: events.SCHEDULE_EVENTS,
+    MEETING_CALL_EVENTS: events.MEETING_CALL_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

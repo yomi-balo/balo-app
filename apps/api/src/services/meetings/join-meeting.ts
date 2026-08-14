@@ -74,7 +74,9 @@ import {
   dailyRoomNameForMeeting,
   selectPrimaryMeetingContext,
   type JoinGrant,
+  type MemberJoinContext,
   type MeetingGuestSide,
+  type MeetingViewerRole,
 } from '@balo/shared/meetings';
 import { personDisplayName } from '@balo/shared/parties';
 import { dailyMeetingTokenMinter, type MeetingTokenMinter } from '../daily/meeting-tokens.js';
@@ -88,6 +90,8 @@ import { hasEngagementCapability } from './authorize-engagement-host.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { assertMeetingJoinable } from './meeting-liveness.js';
 import { canonicalEmail } from './guest-participation.js';
+import { resolveMeetingContextLabel } from './resolve-meeting-context-label.js';
+import { resolveWaitingCounterparty } from './resolve-waiting-counterparty.js';
 
 const log = createLogger('join-meeting');
 
@@ -109,7 +113,38 @@ export type JoinErrorCode =
  * nothing else.) **BAL-435 imports it from `@balo/shared/meetings`.**
  */
 export type JoinMeetingResult =
-  | { readonly ok: true; readonly grant: JoinGrant }
+  | {
+      readonly ok: true;
+      readonly grant: JoinGrant;
+      /**
+       * BAL-435 (R6) — the meeting's context, for the in-call chrome's heading and its
+       * "Back to {context}" link.
+       *
+       * ⚠⚠ IT RIDES ON THIS RESULT AND ON THE RESPONSE **ENVELOPE**, NEVER ON `JoinGrant`.
+       * Widening the grant would change `MeetingCallSurface`'s frozen five-prop contract and
+       * both guest call sites; the envelope reaches only the member arm, which is the only
+       * caller that has a dashboard to go back to.
+       *
+       * ⚠ MEMBER ARM ONLY. The guest and lobby arms deliberately do not carry it — Decision 9's
+       * no-oracle rule governs those callers.
+       */
+      readonly context: MemberJoinContext;
+      /**
+       * BAL-435 (R10) — WHO IS MISSING, and when the meeting was due to start.
+       *
+       * ⚠⚠ `viewerRole` IS THE GATE'S OWN `side`, PASSED THROUGH. It exists because the in-call
+       * waiting stage had no honest input and therefore hard-coded "expert" for every viewer —
+       * showing the DELIVERING EXPERT the CLIENT's billing promise on a money surface.
+       *
+       * ⚠ MEMBER ARM ONLY, like `context`, and for the same reason: the guest and lobby arms are
+       * anonymous or token-bearing, and Decision 9's no-oracle rule governs them.
+       */
+      readonly viewerRole: MeetingViewerRole;
+      /** ⚠ `null` ⇒ the web layer renders party-NEUTRAL copy. Never a guess. */
+      readonly counterpartyFirstName: string | null;
+      /** ISO 8601. ⚠ Formatted in the VIEWER's timezone by the browser, never here. */
+      readonly scheduledStart: string;
+    }
   | { readonly ok: false; readonly code: JoinErrorCode };
 
 export type GuestJoinResult =
@@ -278,7 +313,10 @@ export async function joinMeetingAsMember(
   if (!authorized.ok) {
     return { ok: false, code: 'meeting_not_found' };
   }
-  const { meeting, subject } = authorized;
+  // ⚠ `side`, `companyId` and `expertProfileId` come from the GATE — they are what it already
+  // resolved from the meeting's own primary context, so BAL-435's waiting-stage data costs no
+  // second tenancy decision and no re-read of the context row.
+  const { meeting, subject, side, companyId, expertProfileId } = authorized;
 
   // 2. LIVENESS — meeting state + engagement lifecycle + the token window. Safe as a
   //    DISTINCT literal only because step 1 already proved this actor belongs here.
@@ -318,14 +356,22 @@ export async function joinMeetingAsMember(
   );
 
   const participantId = dailyParticipantIdFor('user', userId);
-  const minted = await mint(minter, {
-    meetingId,
-    roomName: venue.roomName,
-    userName,
-    participantId,
-    isOwner,
-    expiresAtUnix: liveness.expiresAtUnix,
-  });
+  // ⚠ THE LABEL AND COUNTERPARTY LOOKUPS RUN ALONGSIDE THE MINT, NOT AFTER IT. They are
+  // independent, and the AC is join-to-talking under three seconds — a serial read here would be
+  // a pure waterfall.
+  // ⚠ NEITHER EVER THROWS (see their own modules), so `Promise.all` cannot reject on them.
+  const [minted, context, counterpartyFirstName] = await Promise.all([
+    mint(minter, {
+      meetingId,
+      roomName: venue.roomName,
+      userName,
+      participantId,
+      isOwner,
+      expiresAtUnix: liveness.expiresAtUnix,
+    }),
+    resolveMeetingContextLabel(subject),
+    resolveWaitingCounterparty({ viewerRole: side, companyId, expertProfileId }),
+  ]);
   if (!minted.ok) {
     return { ok: false, code: 'meeting_token_unavailable' };
   }
@@ -347,6 +393,13 @@ export async function joinMeetingAsMember(
       expiresAt: liveness.expiresAt.toISOString(),
       participantId,
     },
+    context,
+    // ⚠ R10 — the waiting stage's only honest inputs. `viewerRole` is the GATE's verdict, never
+    // a lens; `scheduledStart` is an instant, formatted in the viewer's own timezone by the
+    // browser.
+    viewerRole: side,
+    counterpartyFirstName,
+    scheduledStart: meeting.scheduledStart.toISOString(),
   };
 }
 

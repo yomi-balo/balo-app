@@ -32,6 +32,7 @@ export {
   END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
+  MEETING_CALL_EVENTS,
 } from '../events';
 
 export type {
@@ -81,6 +82,12 @@ export type {
   WalletLens,
   WalletRestingStateName,
   ScheduleEventMap,
+  MeetingCallEventMap,
+  MeetingCallLayout,
+  MeetingCallLayoutSource,
+  MeetingCallLeaveReason,
+  MeetingCallGrantRejectionReason,
+  MeetingCallDeviceKind,
   // BAL-421 — the case surface's client islands annotate their action props with this.
   // ⚠ THE FIRST `Recap*`-FAMILY TYPE IN THIS LIST: `RECAP_EVENTS` was already exported as a
   // VALUE above, but no recap TYPE was, so a client component could not name one. Neither

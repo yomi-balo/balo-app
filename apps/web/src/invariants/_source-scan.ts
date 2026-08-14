@@ -25,26 +25,59 @@ import path from 'node:path';
  */
 
 /**
- * Drop whole comment lines. Line-oriented, so there is no regex anywhere and no
- * character-level state machine to get wrong.
+ * Drop comment lines. Line-oriented, so there is no regex anywhere and no character-level state
+ * machine to get wrong.
  *
  * Comments MUST NOT count: a page docblock that NAMES a forbidden call while explaining that
  * it is never made must not trip the invariant it documents. A TRAILING `// …` after real code
  * is deliberately KEPT — the failure mode is then a false ALARM (someone writes a forbidden
  * name in an end-of-line comment and the test complains), never a false pass, which is the
  * correct direction for a security invariant to be wrong in.
+ *
+ * ⚠⚠ **THE CLOSING LINE'S REMAINDER IS KEPT, AND THAT CLOSED A FALSE-PASS HOLE.** This used to
+ * `continue` on any line that OPENED or CLOSED a block comment, dropping the whole line —
+ * including real code after the CLOSE DELIMITER. So a line that closed a block comment and then
+ * carried on with `if (role === 'admin') …` was invisible to every invariant built on this
+ * helper, which is precisely the direction a security scan must never be wrong in. The tail
+ * after the FIRST close delimiter is now kept.
+ *
+ * ⚠ A LINE IS ONLY TREATED AS OPENING A COMMENT WHEN IT **STARTS** WITH `/*` (after trimming),
+ * deliberately: a string literal containing `/*` mid-line would otherwise blank out the rest of
+ * the file — a far bigger false pass than the one being fixed.
  */
+/**
+ * Keep whatever follows a block-comment close on the same line.
+ *
+ * ⚠ THE TAIL AFTER THE CLOSE IS REAL CODE. Keeping a trailing comment fragment with it is a
+ * false ALARM at worst; dropping it was a false PASS — the hole the docblock above describes.
+ *
+ * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY (SonarCloud caps `codeLinesOf` at 15; the two
+ * inlined copies of this put it at 19). The behaviour is byte-for-byte what both branches did.
+ */
+export function pushRemainderAfterClose(kept: string[], line: string, close: number): void {
+  const remainder = line.slice(close + 2);
+  if (remainder.trim().length > 0) kept.push(remainder);
+}
+
 export function codeLinesOf(source: string): string {
   const kept: string[] = [];
   let inBlock = false;
   for (const raw of source.split('\n')) {
     const line = raw.trim();
     if (inBlock) {
-      inBlock = !line.includes('*/');
+      const close = line.indexOf('*/');
+      if (close === -1) continue;
+      inBlock = false;
+      pushRemainderAfterClose(kept, line, close);
       continue;
     }
     if (line.startsWith('/*')) {
-      inBlock = !line.includes('*/');
+      const close = line.indexOf('*/', 2);
+      if (close === -1) {
+        inBlock = true;
+        continue;
+      }
+      pushRemainderAfterClose(kept, line, close);
       continue;
     }
     if (line.startsWith('//') || line.startsWith('*')) continue;
