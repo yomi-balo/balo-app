@@ -456,12 +456,13 @@ describe('authorizeMeetingFileAccess', () => {
      * session on `main` and `guestMayReadMeeting` has zero production callers, so a guest
      * reaches no arm at all — the fail-closed direction.
      *
-     * ⚠ THIS TEST IS SUPPOSED TO GO **RED** WHEN BAL-132 FILLS THE GUEST ARM. That is the
+     * ⚠ THIS TEST IS SUPPOSED TO GO **RED** WHEN **BAL-445** FILLS THE GUEST ARM (the
+     * assignment moved off BAL-132, which shipped without filling it). That is the
      * point: the moment a guest becomes a distinguishable actor, the reason stops being
      * `cross_tenant` and this fails, forcing the guest branch and its own label to be written
      * consciously rather than discovered in production. The AC "Guest access respects
      * BAL-408's access_scope" is NOT met by this PR; it is restated as a contract
-     * BAL-132 / BAL-388 satisfy.
+     * BAL-445 / BAL-388 satisfy.
      */
     it('denies a guest AS A STRANGER — `cross_tenant`, with no guest-specific branch', async () => {
       mockGetMemberRole.mockResolvedValue(undefined);

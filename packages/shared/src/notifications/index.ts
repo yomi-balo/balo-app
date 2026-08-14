@@ -903,6 +903,41 @@ export interface MeetingGuestRemovedPayload {
   scheduledStartIso: string;
 }
 
+/**
+ * BAL-436 — a host re-sent the join link to an ADMITTED guest who never arrived. Email to
+ * THAT PERSON ONLY, and it carries a freshly ROTATED credential.
+ *
+ * ⚠⚠ NO `inviterName` / `inviterOrgLabel` / `accessScope`, UNLIKE THE INVITE. This row was
+ * created by the RECIPIENT themselves (a `link` knock), so there is no inviter to attribute
+ * — naming the host who admitted them would be inventing an inviter relationship that does
+ * not exist. And `accessScope` on a `link` row is `meeting` by construction, chosen by
+ * nobody, so a disclosure paragraph about it would be describing a grant no one negotiated.
+ *
+ * ⚠ NO BILLING LINE, EVER — the same absolute rule as {@link MeetingGuestInvitedPayload}.
+ * The reader is an outsider who is not the payer.
+ */
+export interface MeetingGuestLinkResentPayload {
+  /**
+   * ⚠⚠ **NOT `meeting_guests.id`** — READ THIS BEFORE "HARMONISING" IT WITH
+   * {@link MeetingGuestInvitedPayload}. That payload's `correlationId` IS the row id and is
+   * used as a BullMQ jobId dedup key ("exactly-once per guest"). A RE-SEND happens on the
+   * SAME row, so reusing the row id would collide with the original invite's job and be
+   * SILENTLY SWALLOWED — producing exactly the failure that docblock warns about, a guest
+   * holding a dead link with a re-send affordance that appears to work and sends nothing.
+   *
+   * It is the first 16 hex characters of the NEWLY MINTED token's SHA-256 hash: unique per
+   * rotation, deterministic for a retry of the same rotation, and never the raw token.
+   */
+  correlationId: string;
+  recipientEmail: string; // that person, and only that person
+  joinToken: string; // RAW — the freshly rotated credential. ⚠ Never logged, never persisted.
+  guestName?: string; // absent ⇒ the template greets generically, never with the local part
+  meetingTitle: string;
+  scheduledStartIso: string;
+  scheduledEndIso: string;
+  expiresOn: string; // pre-formatted UTC date — helpful-fact framing, never a countdown
+}
+
 // ── BAL-424 conversation events ────────────────────────────────────────────────────────
 //
 // ⚠ DECLARED ONCE, HERE. `apps/api/src/notifications/events.ts` and

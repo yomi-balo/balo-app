@@ -208,14 +208,23 @@ function OverflowAvatar({ sessionId }: Readonly<{ sessionId: string }>): React.J
  * it is never passed to Daily — so this UI cannot refuse a join, and dropping somebody's audio
  * because the grid ran out of cells is never acceptable.
  *
- * ⚠ NON-INTERACTIVE, WITH NO HOVER AFFORDANCE, UNTIL BAL-436 REGISTERS THE PEOPLE SLOT.
+ * ⚠⚠ BAL-436 REGISTERED THE PEOPLE SLOT, so `onOpenPeople` makes this a REAL button with a
+ * hover affordance and an accessible name. **WITHOUT IT THE TILE IS EXACTLY AS SHIPPED** — a
+ * plain `<div>`, non-interactive, no hover, no name. The slot rule is "absent or real": a
+ * hover affordance on something that does nothing is worse than a static cell, because it
+ * promises a list the person cannot reach.
  */
 export function OverflowTile({
   sessionIds,
   hiddenCount,
-}: Readonly<{ sessionIds: readonly string[]; hiddenCount: number }>): React.JSX.Element {
-  return (
-    <div className="bg-muted/60 border-border flex h-full min-h-0 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed">
+  onOpenPeople,
+}: Readonly<{
+  sessionIds: readonly string[];
+  hiddenCount: number;
+  onOpenPeople?: () => void;
+}>): React.JSX.Element {
+  const body = (
+    <>
       <span className="flex -space-x-2">
         {/* ⚠ KEYED BY SESSION ID, never by array index (SonarCloud S6479). */}
         {sessionIds.slice(0, 3).map((sessionId) => (
@@ -223,6 +232,29 @@ export function OverflowTile({
         ))}
       </span>
       <span className="text-muted-foreground text-xs font-medium">+{hiddenCount} more</span>
-    </div>
+    </>
+  );
+
+  const shape =
+    'bg-muted/60 border-border flex h-full min-h-0 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed';
+
+  if (onOpenPeople === undefined) {
+    return <div className={shape}>{body}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onOpenPeople}
+      // ⚠ THE COUNT IS IN THE NAME. "Show everyone, button" beside a cell reading "+4 more"
+      // leaves a screen-reader user without the number a sighted user just read.
+      aria-label={`Show everyone — ${hiddenCount} more in the call`}
+      className={cn(
+        shape,
+        'hover:bg-muted focus-visible:ring-ring transition-colors focus-visible:ring-2 focus-visible:outline-none'
+      )}
+    >
+      {body}
+    </button>
   );
 }

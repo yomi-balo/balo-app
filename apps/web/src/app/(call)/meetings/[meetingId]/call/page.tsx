@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { log } from '@/lib/logging';
+import { meetingJoinLinkUrl } from '@/lib/meetings/join-link';
 import { CallClient } from './_components/call-client';
 
 /**
@@ -77,5 +78,13 @@ export default async function MeetingCallPage({
     });
   }
 
-  return <CallClient meetingId={meetingId} viewerName={viewerName} />;
+  return (
+    <CallClient
+      meetingId={meetingId}
+      viewerName={viewerName}
+      // ⚠⚠ BUILT SERVER-SIDE, TOKENLESS. See `meetingJoinLinkUrl` — including why the builder
+      // lives in `lib/meetings/` rather than in this file.
+      joinLinkUrl={meetingJoinLinkUrl(meetingId)}
+    />
+  );
 }

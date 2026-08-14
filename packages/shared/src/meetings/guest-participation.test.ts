@@ -336,6 +336,8 @@ describe('projectGuestForViewer — names cross the party boundary, addresses NE
     participationRole: 'guest',
     accessScope: 'engagement',
     admission: 'pre_admitted',
+    inviteChannel: 'email',
+    admissionDecidedAt: null,
   };
 
   const EXPERT_GUEST: GuestForProjection = {
@@ -347,6 +349,8 @@ describe('projectGuestForViewer — names cross the party boundary, addresses NE
     participationRole: 'guest',
     accessScope: 'meeting',
     admission: 'pre_admitted',
+    inviteChannel: 'email',
+    admissionDecidedAt: null,
   };
 
   it('SAME party — the viewer sees the address, the domain and the scope', () => {
@@ -361,6 +365,7 @@ describe('projectGuestForViewer — names cross the party boundary, addresses NE
       participationRole: 'guest',
       admission: 'pre_admitted',
       accessScope: 'engagement',
+      inviteChannel: 'email',
     });
   });
 
@@ -376,6 +381,9 @@ describe('projectGuestForViewer — names cross the party boundary, addresses NE
       'admission',
       'displayName',
       'id',
+      // BAL-436 — PROVENANCE, present for every viewer. It is a fact about how the row was
+      // created, never a fact about the address.
+      'inviteChannel',
       'name',
       'participationRole',
       'party',
@@ -384,7 +392,12 @@ describe('projectGuestForViewer — names cross the party boundary, addresses NE
 
   it('cross-party serialisation carries no address-shaped key at all', () => {
     const serialised = JSON.stringify(projectGuestForViewer(CLIENT_GUEST, 'expert'));
-    expect(serialised).not.toContain('email');
+    // ⚠ THE **KEY** FORM (`"email":`), NOT THE BARE WORD. BAL-436 added `inviteChannel`,
+    // whose VALUE is the literal `"email"` on this row — a bare `not.toContain('email')`
+    // would now fail on a field that carries no address at all. The `:` is what makes this
+    // assert "there is no email PROPERTY", which is the thing the projection rule forbids.
+    expect(serialised).not.toContain('"email":');
+    expect(serialised).not.toContain('"emailDomain":');
     expect(serialised).not.toContain('northwind.example');
     expect(serialised).toContain('Sam Rivera');
   });
@@ -426,6 +439,110 @@ describe('projectGuestForViewer — names cross the party boundary, addresses NE
     const projected = projectGuestForViewer(delegate, 'expert');
     expect(projected.participationRole).toBe('delegate');
     expect('email' in projected).toBe(false);
+  });
+
+  it('carries `inviteChannel` on EVERY projection, both directions', () => {
+    expect(projectGuestForViewer(CLIENT_GUEST, 'client').inviteChannel).toBe('email');
+    expect(projectGuestForViewer(CLIENT_GUEST, 'expert').inviteChannel).toBe('email');
+  });
+
+  it('omits `admissionDecidedAt` — not null — when the column is null', () => {
+    expect('admissionDecidedAt' in projectGuestForViewer(CLIENT_GUEST, 'client')).toBe(false);
+    expect('admissionDecidedAt' in projectGuestForViewer(CLIENT_GUEST, 'expert')).toBe(false);
+  });
+
+  it('serialises `admissionDecidedAt` as an ISO instant when the column is set', () => {
+    const decided: GuestForProjection = {
+      ...CLIENT_GUEST,
+      admission: 'admitted',
+      admissionDecidedAt: new Date('2026-09-01T10:05:00.000Z'),
+    };
+    expect(projectGuestForViewer(decided, 'client').admissionDecidedAt).toBe(
+      '2026-09-01T10:05:00.000Z'
+    );
+  });
+});
+
+/**
+ * BAL-436 — ⚠⚠ THE `link` CHANNEL SHORT-CIRCUITS THE PARTY RULE.
+ *
+ * `claimLobbyPlace` writes the NOT-NULL PLACEHOLDER `party = 'client'`, so before this arm a
+ * client-side host saw a stranger's SELF-DECLARED ADDRESS rendered as their `displayName`,
+ * while an expert-side host of the same meeting saw `'Guest'`. Two hosts, one stranger, two
+ * identities — and the client-side one was an attacker-chosen string presented as a name.
+ */
+describe('projectGuestForViewer — the `link` channel has an EMPTY entitled set', () => {
+  const KNOCKER: GuestForProjection = {
+    id: 'guest-3',
+    email: 'stranger@somewhere.example',
+    emailDomain: 'somewhere.example',
+    name: 'Taylor Wu',
+    // ⚠ THE PLACEHOLDER. `claimLobbyPlace` writes this because the column is NOT NULL, not
+    // because a side was resolved.
+    party: 'client',
+    participationRole: 'guest',
+    accessScope: 'meeting',
+    admission: 'pending',
+    inviteChannel: 'link',
+    admissionDecidedAt: null,
+  };
+
+  it.each([
+    ['client', 'client' as const],
+    ['expert', 'expert' as const],
+  ])(
+    '⚠ a %s-side viewer gets NO email, NO domain and NO accessScope — asserted as key ABSENCE',
+    (_label, viewerParty) => {
+      const projected = projectGuestForViewer(KNOCKER, viewerParty);
+      expect('email' in projected).toBe(false);
+      expect('emailDomain' in projected).toBe(false);
+      expect('accessScope' in projected).toBe(false);
+    }
+  );
+
+  it('⚠⚠ BOTH hosts of one meeting see the IDENTICAL projection for one stranger', () => {
+    expect(projectGuestForViewer(KNOCKER, 'client')).toEqual(
+      projectGuestForViewer(KNOCKER, 'expert')
+    );
+  });
+
+  it('⚠⚠ `displayName` NEVER falls back to the self-declared address', () => {
+    const nameless: GuestForProjection = { ...KNOCKER, name: null };
+    for (const viewerParty of ['client', 'expert'] as const) {
+      const projected = projectGuestForViewer(nameless, viewerParty);
+      expect(projected.displayName).toBe('Guest');
+      expect(projected.displayName).not.toContain('@');
+      expect(projected.displayName).not.toContain('stranger');
+    }
+  });
+
+  it('the self-declared NAME still crosses — it is what the host decides on', () => {
+    expect(projectGuestForViewer(KNOCKER, 'expert').displayName).toBe('Taylor Wu');
+    expect(projectGuestForViewer(KNOCKER, 'expert').name).toBe('Taylor Wu');
+  });
+
+  it('the serialised payload contains no address substring at all, for either viewer', () => {
+    for (const viewerParty of ['client', 'expert'] as const) {
+      const serialised = JSON.stringify(projectGuestForViewer(KNOCKER, viewerParty));
+      expect(serialised).not.toContain('stranger@somewhere.example');
+      expect(serialised).not.toContain('somewhere.example');
+    }
+  });
+
+  it('marks the row as `link` so a consumer can badge it UNVERIFIED without deriving it', () => {
+    expect(projectGuestForViewer(KNOCKER, 'client').inviteChannel).toBe('link');
+  });
+
+  it('⚠ an ADMITTED link row still has the empty entitled set — admitting is not verifying', () => {
+    const admitted: GuestForProjection = {
+      ...KNOCKER,
+      admission: 'admitted',
+      admissionDecidedAt: new Date('2026-09-01T10:05:00.000Z'),
+    };
+    const projected = projectGuestForViewer(admitted, 'client');
+    expect('email' in projected).toBe(false);
+    expect(projected.inviteChannel).toBe('link');
+    expect(projected.admissionDecidedAt).toBe('2026-09-01T10:05:00.000Z');
   });
 });
 

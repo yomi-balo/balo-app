@@ -1,0 +1,530 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { Paperclip, Plus } from 'lucide-react';
+import { MEETING_PANEL_EVENTS, track, type MeetingPanelSizeBucket } from '@/lib/analytics';
+import { formatBytes, putWithProgress } from '@/components/balo/document-uploader/upload-file';
+import {
+  MEETING_ALLOWED_CONTENT_TYPES,
+  MEETING_FILE_ACCEPT,
+  MAX_MEETING_FILE_BYTES,
+} from '@/lib/storage/meeting-file-constraints';
+import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
+import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import { cn } from '@/lib/utils';
+import { MeetingSidePanel } from './meeting-side-panel';
+import { FilesPanelRow } from './files-panel-row';
+import { PanelErrorCard, PanelSkeletonRows } from './panel-states';
+import { useDailyIdentities } from './use-daily-identities';
+
+/**
+ * BAL-436 — the Files panel: a drop zone plus every file on this meeting, from BOTH in-call
+ * sources, with download.
+ *
+ * ── ⚠⚠ ONE UNIFIED LIST. NO `source` FILTER, NO SOURCE GROUPING ─────────────────────────
+ *
+ * That is BAL-423's D0 acceptance criterion, satisfied at the data layer:
+ * `listMeetingFilesAction` returns `chat` and `files_tab` rows unfiltered and this panel adds
+ * nothing. A paperclip glyph on a chat-originated row is the only distinction, and only
+ * because it aids scanning.
+ *
+ * ── ⚠ FRESHNESS: WHAT THIS TICKET DOES AND DELIBERATELY DOES NOT DO ─────────────────────
+ *
+ *   · **No `revalidatePath`.** This is a client island holding its own list; revalidating
+ *     would invalidate the dashboard recap route from inside a call — a different page nobody
+ *     is looking at. Instead `confirmUpload` RETURNS the created row and this panel prepends
+ *     it, which is the freshness the AC actually asks for.
+ *   · **No Ably publish — BAL-437 owns the in-call channel vocabulary.** Publishing a guessed
+ *     event name now would have to be renamed. ⚠⚠ **STATED LIMITATION:** a file another
+ *     participant shares while this panel is open does NOT appear until the panel is re-opened
+ *     or the window regains focus. Both are wired below. **HAND-OFF TO BAL-437:** when the
+ *     in-call channel lands, push an invalidation and delete the focus listener.
+ *   · **No notification event.** `conversation.file_shared` exists for an ABSENT counterparty;
+ *     an in-call file reaches people who are already in the call.
+ *
+ * ⚠ CLIENT-SIDE VALIDATION BEFORE THE PRESIGN. The server re-checks type and size from the R2
+ * object itself and is the source of truth — but a 10 MB round trip to be told no is a bad
+ * experience mid-call.
+ */
+
+/**
+ * ⚠⚠ NOT IMPORTED FROM `@balo/db`, DELIBERATELY, EVEN THOUGH `MEETING_FILE_LIST_LIMIT` LIVES
+ * THERE. A `'use client'` module that VALUE-imports `@balo/db` pulls `postgres` into the
+ * browser graph and breaks `next build` with "can't resolve 'tls'" — a failure NO local
+ * typecheck, lint or vitest run catches (memory `reference_balo_db_client_bundle_footgun`).
+ * Restating one number is the cheap side of that trade; the server-side `log.warn` in
+ * `list-meeting-files.ts` is the authoritative signal either way.
+ */
+const MEETING_FILE_LIST_CAP = 200;
+
+/**
+ * Start a download WITHOUT navigating the tab.
+ *
+ * ── ⚠⚠ THIS IS A DELIBERATE DEVIATION FROM THE TECHNICAL PLAN (L830-831), WHICH PRESCRIBED
+ *      `window.location.assign(url)`. THE PLAN WAS WRONG. ────────────────────────────────
+ *
+ * `location.assign` navigates the CURRENT document. That is survivable only if the response
+ * is guaranteed to carry `Content-Disposition: attachment`, and it is not: the presign is
+ * 300s, so an expired or revoked URL answers with R2's **XML error body**, and any 403 / 404
+ * / bucket-policy answer does the same. The browser renders that XML in the tab — which
+ * unmounts the Daily call object and **ends the call for this participant**, mid-meeting,
+ * because they clicked a file. There is no undo and no "back" that rejoins.
+ *
+ * A programmatic `<a download>` click cannot navigate the document. In the happy path the
+ * browser downloads; in the failure path the browser also treats the answer as a download
+ * (or does nothing at all), and either way the call survives. The `download` attribute is a
+ * same-origin hint only and is ignored cross-origin, but its presence is not what makes this
+ * safe — **not being a navigation is.**
+ *
+ * ⚠ `rel="noopener"` because the anchor is never appended to a document the user can see, and
+ * a hostile `Content-Disposition` answer must not get an `opener` handle to the call tab.
+ * ⚠ THE NODE IS APPENDED AND REMOVED SYNCHRONOUSLY: Firefox ignores `.click()` on an anchor
+ * that is not in the document.
+ */
+function startDownload(url: string): void {
+  const anchor = globalThis.document.createElement('a');
+  anchor.href = url;
+  // ⚠ EMPTY STRING = "use the server's filename". Passing our own would let a file name from
+  // the payload become a local path fragment.
+  anchor.download = '';
+  anchor.rel = 'noopener';
+  anchor.target = '_blank';
+  globalThis.document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+/** The size bands PostHog gets. ⚠ A BUCKET, never a byte count, and never the file name. */
+function sizeBucketFor(sizeBytes: number): MeetingPanelSizeBucket {
+  if (sizeBytes < 100 * 1024) return 'under_100kb';
+  if (sizeBytes < 1024 * 1024) return 'under_1mb';
+  if (sizeBytes < 5 * 1024 * 1024) return 'under_5mb';
+  return 'over_5mb';
+}
+
+/**
+ * Client-side pre-validation.
+ *
+ * ⚠ TWO DIFFERENT MESSAGES FOR TWO DIFFERENT REMEDIES — "pick another file" and "pick a
+ * smaller file" are not the same instruction, and the server's own copy makes the same split.
+ */
+function rejectionFor(file: File): string | null {
+  if (!MEETING_ALLOWED_CONTENT_TYPES.has(file.type)) {
+    return `${file.name} isn't a supported type.`;
+  }
+  if (file.size > MAX_MEETING_FILE_BYTES) {
+    return `${file.name} is ${formatBytes(file.size)} — files must be ${formatBytes(MAX_MEETING_FILE_BYTES)} or smaller.`;
+  }
+  if (file.size === 0) {
+    return `${file.name} appears to be empty.`;
+  }
+  return null;
+}
+
+export interface FilesPanelProps {
+  readonly panels: MeetingPanelRegistration;
+  readonly onClose: () => void;
+  /**
+   * ⚠⚠ THE **EXACT SHAPE**, NEVER `Record<string, string>`. A `Record` index signature defeats
+   * excess-property checking at every `{ ...meetingProps, … }` spread below — which is exactly
+   * where the analytics event map's PII guard is supposed to bite. A file NAME added to this
+   * object would otherwise compile straight into a PostHog payload.
+   */
+  readonly meetingProps: Readonly<{ meeting_id?: string }>;
+  /**
+   * ⚠⚠ §16'S **ONE** POLITE LIVE REGION, OWNED BY THE FRAME. Upload and download outcomes are
+   * announced through this — Sonner is a VISUAL affordance and was the only feedback these
+   * mutations produced, so a screen-reader user shared a file and heard nothing at all.
+   */
+  readonly onAnnounce: (message: string) => void;
+}
+
+export function FilesPanel({
+  panels,
+  onClose,
+  meetingProps,
+  onAnnounce,
+}: Readonly<FilesPanelProps>): React.JSX.Element {
+  const { identities, probes } = useDailyIdentities();
+  const [files, setFiles] = useState<MeetingFileView[] | null>(null);
+  const [hasFailed, setHasFailed] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [downloadingIds, setDownloadingIds] = useState<ReadonlySet<string>>(new Set());
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const isMountedRef = useRef(true);
+
+  const load = useCallback(async (): Promise<void> => {
+    const result = await panels.files.list();
+    if (!isMountedRef.current) return;
+    if (result.success) {
+      setFiles(result.files);
+      setHasFailed(false);
+      return;
+    }
+    setHasFailed(true);
+  }, [panels]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    void load();
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [load]);
+
+  /**
+   * ⚠ THE ABLY SUBSTITUTE, AND IT IS NAMED AS ONE. Until BAL-437's channel exists, a file
+   * another participant shared appears the next time this window is looked at. Cheap, honest,
+   * and deleted the day the real invalidation lands.
+   */
+  useEffect(() => {
+    const onFocus = (): void => {
+      void load();
+    };
+    globalThis.addEventListener('focus', onFocus);
+    return () => globalThis.removeEventListener('focus', onFocus);
+  }, [load]);
+
+  useSwallowStrayFileDrops();
+
+  /** ⚠ Toast **and** the frame's one §16 live region, in one call. Same sentence in both. */
+  const report = useCallback(
+    (kind: 'success' | 'info' | 'error', message: string): void => {
+      toast[kind](message);
+      onAnnounce(message);
+    },
+    [onAnnounce]
+  );
+
+  const upload = useUploadHandler({ panels, meetingProps, setFiles, setIsUploading, report });
+
+  const onPick = useCallback(
+    (picked: FileList | null): void => {
+      const [file] = Array.from(picked ?? []);
+      if (file === undefined) return;
+      void upload(file);
+    },
+    [upload]
+  );
+
+  const onDownload = useCallback(
+    (fileId: string): void => {
+      setDownloadingIds((current) => new Set(current).add(fileId));
+      panels.files
+        .download(fileId)
+        .then((result) => {
+          track(MEETING_PANEL_EVENTS.FILE_DOWNLOADED, {
+            ...meetingProps,
+            outcome: result.success ? 'ok' : 'failed',
+          });
+          if (!result.success) {
+            report('error', result.error);
+            return;
+          }
+          // ⚠ A PRESIGNED GET, live for 300s. `r2Key` never crosses to the browser — the
+          // action resolves it server-side.
+          startDownload(result.url);
+        })
+        .finally(() => {
+          setDownloadingIds((current) => {
+            const next = new Set(current);
+            next.delete(fileId);
+            return next;
+          });
+        });
+    },
+    [panels, meetingProps, report]
+  );
+
+  const uploaderLabelFor = useCallback(
+    (file: MeetingFileView): string => resolveUploaderLabel(file, identities),
+    [identities]
+  );
+
+  const isLoading = files === null && !hasFailed;
+
+  return (
+    <MeetingSidePanel
+      title="Files"
+      count={files?.length}
+      onClose={onClose}
+      footer={
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          disabled={isUploading}
+          className="bg-primary text-primary-foreground focus-visible:ring-ring flex min-h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-70"
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          {isUploading ? 'Sharing…' : 'Share a file'}
+        </button>
+      }
+    >
+      {probes}
+      <div className="p-3">
+        {/* ⚠ THE DROP ZONE STAYS LIVE IN EVERY STATE — loading, error and empty. A failed list
+            read must not remove the ability to share something. */}
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setIsDragging(false);
+            onPick(event.dataTransfer.files);
+          }}
+          className={cn(
+            'border-border text-muted-foreground hover:border-primary/60 focus-visible:ring-ring mb-3 flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed py-6 transition-colors focus-visible:ring-2 focus-visible:outline-none',
+            isDragging ? 'border-primary bg-primary/5' : ''
+          )}
+        >
+          <Paperclip className="h-[18px] w-[18px]" aria-hidden="true" />
+          <span className="text-sm">Share a file with the call</span>
+          <span className="text-muted-foreground/80 text-xs">
+            Anything you drop here stays with this consultation.
+          </span>
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept={MEETING_FILE_ACCEPT}
+          className="sr-only"
+          aria-label="Choose a file to share with the call"
+          onChange={(event) => {
+            onPick(event.target.files);
+            // Allow the same file to be picked twice in a row.
+            event.target.value = '';
+          }}
+        />
+
+        {isLoading ? <PanelSkeletonRows /> : null}
+
+        {hasFailed ? (
+          <PanelErrorCard
+            title="We couldn't load the files"
+            body="The call itself is fine, and you can still share something — the drop zone above works."
+            onRetry={() => {
+              void load();
+            }}
+          />
+        ) : null}
+
+        {files !== null && files.length === 0 ? (
+          /* ⚠⚠ AN INVITATION, NEVER "No files yet". The person CAN act from here, so the empty
+             state leads with the action (CLAUDE.md's empty-state rule). */
+          <p className="text-muted-foreground px-2 py-4 text-center text-sm leading-relaxed">
+            Drop in anything you want to talk through — a screenshot, a spec, a spreadsheet.
+            It&apos;ll be here after the call too.
+          </p>
+        ) : null}
+
+        {files !== null && files.length > 0 ? (
+          <ul className="list-none">
+            {files.map((file) => (
+              <FilesPanelRow
+                key={file.id}
+                file={file}
+                uploaderLabel={uploaderLabelFor(file)}
+                onDownload={onDownload}
+                isDownloading={downloadingIds.has(file.id)}
+              />
+            ))}
+          </ul>
+        ) : null}
+
+        {/* ⚠ NO SILENT CAPS. The server logs the truncation; the reader deserves to know too. */}
+        {files !== null && files.length >= MEETING_FILE_LIST_CAP ? (
+          <p className="text-muted-foreground px-2 pt-2 text-xs">
+            Showing the {MEETING_FILE_LIST_CAP} most recent files.
+          </p>
+        ) : null}
+      </div>
+    </MeetingSidePanel>
+  );
+}
+
+/**
+ * Swallow every file drop that lands anywhere OTHER than the drop zone, for as long as this
+ * panel is mounted.
+ *
+ * ── ⚠⚠ WITHOUT THIS, A NEAR-MISS DROP ENDS THE CALL ─────────────────────────────────────
+ *
+ * The drop zone's own `onDragOver` / `onDrop` handlers `preventDefault`, but they only fire
+ * for the dashed box itself. A file released 20px outside it hits the WINDOW's default
+ * handler, and the browser's default for a dropped file is **navigate to it** — the tab
+ * becomes a PDF viewer, the Daily call object unmounts, and the person is out of a live
+ * meeting because they missed a target by a few pixels. Drag-and-drop is precisely the
+ * interaction where a near miss is the common case.
+ *
+ * ⚠ BOTH EVENTS ARE REQUIRED. Cancelling only `drop` does nothing: the drop event is not
+ * even delivered unless `dragover` has already been cancelled to signal "this is a valid drop
+ * target". This is the one place where preventing one event without the other is a silent
+ * no-op rather than a partial fix.
+ *
+ * ⚠ SCOPED TO THE PANEL'S LIFETIME, not the frame's. Suppressing browser drag-and-drop
+ * globally for the whole app would be this component legislating for pages it does not own;
+ * both listeners are removed on unmount.
+ *
+ * ⚠ IT SWALLOWS RATHER THAN UPLOADS. A drop outside the zone is an unaimed gesture, and
+ * silently uploading a file somebody did not mean to share into a live consultation is a
+ * worse failure than nothing happening. The zone stays the only way in.
+ */
+function useSwallowStrayFileDrops(): void {
+  useEffect(() => {
+    const swallow = (event: DragEvent): void => {
+      event.preventDefault();
+    };
+    globalThis.addEventListener('dragover', swallow);
+    globalThis.addEventListener('drop', swallow);
+    return () => {
+      globalThis.removeEventListener('dragover', swallow);
+      globalThis.removeEventListener('drop', swallow);
+    };
+  }, []);
+}
+
+/**
+ * The three-step upload, extracted.
+ *
+ * ⚠ EXTRACTED SO `FilesPanel`'s OWN BODY STAYS UNDER SonarCloud's COGNITIVE-COMPLEXITY LIMIT
+ * of 15 — the repo's precedent is to extract, never to disable the rule.
+ *
+ * ⚠ IT REUSES THE SHIPPED `putWithProgress` RATHER THAN A SECOND XHR. One definition of "PUT a
+ * file to a presigned URL"; a second would drift on error handling first.
+ */
+function useUploadHandler({
+  panels,
+  meetingProps,
+  setFiles,
+  setIsUploading,
+  report,
+}: {
+  panels: MeetingPanelRegistration;
+  meetingProps: Readonly<{ meeting_id?: string }>;
+  setFiles: React.Dispatch<React.SetStateAction<MeetingFileView[] | null>>;
+  setIsUploading: React.Dispatch<React.SetStateAction<boolean>>;
+  report: (kind: 'success' | 'info' | 'error', message: string) => void;
+}): (file: File) => Promise<void> {
+  return useCallback(
+    async (file: File): Promise<void> => {
+      const size_bucket = sizeBucketFor(file.size);
+
+      const rejection = rejectionFor(file);
+      if (rejection !== null) {
+        track(MEETING_PANEL_EVENTS.FILE_SHARED, {
+          ...meetingProps,
+          outcome: 'rejected',
+          size_bucket,
+        });
+        report('error', rejection);
+        return;
+      }
+
+      setIsUploading(true);
+      try {
+        const presigned = await panels.files.requestUpload({
+          contentType: file.type,
+          fileName: file.name,
+          sizeBytes: file.size,
+        });
+        if (!presigned.success) {
+          track(MEETING_PANEL_EVENTS.FILE_SHARED, {
+            ...meetingProps,
+            outcome: 'rejected',
+            size_bucket,
+          });
+          report('error', presigned.error);
+          return;
+        }
+
+        await putWithProgress({
+          url: presigned.presignedUrl,
+          file,
+          // Progress is not surfaced on this surface: the 10 MB cap is pinned to a 60s presign
+          // TTL, so an in-call share is short by construction and a bar would flash.
+          onProgress: () => {},
+        });
+
+        const confirmed = await panels.files.confirmUpload({
+          key: presigned.key,
+          fileName: file.name,
+          sizeBytes: file.size,
+        });
+        if (!confirmed.success) {
+          // ⚠ A DUPLICATE CONFIRM (double-click) IS EXPECTED, NOT AN ERROR — the server maps
+          // the unique violation to friendly copy, and the row it collides with is already in
+          // the list.
+          const isDuplicate = confirmed.error === 'This file was already shared.';
+          track(MEETING_PANEL_EVENTS.FILE_SHARED, {
+            ...meetingProps,
+            outcome: isDuplicate ? 'duplicate' : 'failed',
+            size_bucket,
+          });
+          report(isDuplicate ? 'info' : 'error', confirmed.error);
+          return;
+        }
+
+        // ⚠ PREPEND THE RETURNED ROW — this is the "freshness" the deferred `revalidatePath`
+        // was actually about, and it needs no route invalidation from inside a live call.
+        setFiles((current) => [confirmed.file, ...(current ?? [])]);
+        track(MEETING_PANEL_EVENTS.FILE_SHARED, { ...meetingProps, outcome: 'ok', size_bucket });
+        report('success', `${file.name} is shared with the call.`);
+      } catch {
+        // ⚠ NO `log.error` — `@/lib/logging` is bare pino + AsyncLocalStorage and is NOT
+        // client-safe; the invariant fails the build. The failure is observed by the event
+        // below, whose `outcome` names WHICH step failed and never the file.
+        track(MEETING_PANEL_EVENTS.FILE_SHARED, {
+          ...meetingProps,
+          outcome: 'failed',
+          size_bucket,
+        });
+        report('error', "We couldn't share that file. Please try again.");
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [panels, meetingProps, setFiles, setIsUploading, report]
+  );
+}
+
+/**
+ * Who shared it.
+ *
+ * ⚠⚠ A NAME OR THE NEUTRAL FALLBACK — **NEVER AN EMAIL ADDRESS AND NEVER A UUID.** The payload
+ * carries `uploadedByUserId` only, so the label resolves from the LIVE Daily roster (the
+ * server-minted `user_name` claim of a participant whose decoded `user_id` matches) and falls
+ * back to "A participant" when that person is not in the room right now. The id itself is
+ * never rendered.
+ */
+function resolveUploaderLabel(
+  file: MeetingFileView,
+  identities: readonly { userId: string | null; userName: string | null }[]
+): string {
+  const match = identities.find(
+    (identity) =>
+      identity.userId !== null && identity.userId.slice(1) === denormalise(file.uploadedByUserId)
+  );
+  const name = match?.userName;
+  if (name === null || name === undefined || name.length === 0) return 'A participant';
+  // First name only — the shipped `FilesCard` rule.
+  const [first] = name.trim().split(/\s+/);
+  return first === undefined || first.length === 0 ? 'A participant' : first;
+}
+
+/**
+ * `users.id` → the hex run a Decision-1 `user_id` claim carries.
+ *
+ * ⚠ HYPHENS STRIPPED AND LOWERCASED, matching `dailyParticipantIdFor` exactly. Comparing the
+ * two forms directly would never match, and a mismatch here degrades silently to "A
+ * participant" rather than to a wrong name — which is the safe direction, but is also why the
+ * transform is written out rather than assumed.
+ */
+function denormalise(userId: string): string {
+  return userId.replaceAll('-', '').toLowerCase();
+}

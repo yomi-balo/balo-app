@@ -194,6 +194,144 @@ describe('MeetingToolbar — the day-one control set', () => {
     });
   });
 
+  /**
+   * BAL-436 — ⚠⚠ THE SIDE-PANEL SLOT. Registered means REAL; unregistered means ABSENT. There
+   * is no third state, and in particular there is no disabled one.
+   */
+  describe('the People and Files slot (BAL-436)', () => {
+    it('⚠ renders NEITHER control when the slot is unregistered', () => {
+      const container = renderToolbar();
+
+      expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Files' })).toBeNull();
+      expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
+    });
+
+    it('renders both when it is registered', () => {
+      renderToolbar({ openPanel: null, onTogglePanel: vi.fn() });
+
+      expect(screen.getByRole('button', { name: 'People' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+    });
+
+    /**
+     * ⚠⚠ THE BREAKPOINT IS `lg`, AND THREE READERS HAVE TO AGREE ON IT.
+     *
+     * The panel overlays below `lg` (`meeting-side-panel.tsx`). While these buttons were
+     * `hidden md:flex` and the MoreSheet rows were `md:hidden`, the 768–1023px band showed the
+     * DESKTOP buttons, hid the sheet rows, and opened a full-width overlay — the one width
+     * where every reader disagreed. Asserting the class is blunt, and blunt is the point: a
+     * CSS-only split cannot be observed any other way in jsdom.
+     */
+    it.each(['People', 'Files'])(
+      '⚠⚠ hides the desktop %s button below `lg`, matching the panel and the sheet',
+      (label) => {
+        renderToolbar({ openPanel: null, onTogglePanel: vi.fn() });
+
+        const button = screen.getByRole('button', { name: label });
+        // ⚠ TOKEN-WISE, not a substring of the whole attribute: `cn` is tailwind-merge, which
+        // reorders and drops conflicting classes (the base `flex` loses to `hidden`).
+        expect([...button.classList]).toContain('hidden');
+        expect([...button.classList]).toContain('lg:flex');
+        expect([...button.classList]).not.toContain('md:flex');
+      }
+    );
+
+    it('⚠ THE NAME STAYS STABLE while `aria-pressed` carries the state', () => {
+      // A name that changed beside a flipping `aria-pressed` announces "Hide people, pressed",
+      // which parses as the opposite of the truth.
+      renderToolbar({ openPanel: 'people', onTogglePanel: vi.fn() });
+
+      const people = screen.getByRole('button', { name: 'People' });
+      expect(people).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: 'Files' })).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      );
+    });
+
+    it.each([
+      ['People', 'people'],
+      ['Files', 'files'],
+    ])('asks the frame to toggle %s', async (label, id) => {
+      const user = userEvent.setup();
+      const onTogglePanel = vi.fn();
+      renderToolbar({ openPanel: null, onTogglePanel });
+
+      await user.click(screen.getByRole('button', { name: label }));
+
+      expect(onTogglePanel).toHaveBeenCalledWith(id);
+    });
+
+    it('⚠ the MoreSheet rows appear only when the slot is registered', async () => {
+      const user = userEvent.setup();
+      const onTogglePanel = vi.fn();
+      const { rerender } = render(
+        <TooltipProvider>
+          <MeetingToolbar
+            micOn
+            cameraOn
+            onToggleMic={vi.fn()}
+            onToggleCamera={vi.fn()}
+            isSharingScreen={false}
+            canShareScreen
+            onToggleScreenShare={vi.fn()}
+            showLayoutToggle
+            isGallery={false}
+            onToggleLayout={vi.fn()}
+            onOpenSettings={vi.fn()}
+            moreOpen
+            onMoreOpenChange={vi.fn()}
+            isOwner={false}
+            contextNoun="case"
+            isCase
+            onLeave={vi.fn()}
+            onEndForEveryone={vi.fn()}
+            isEnding={false}
+          />
+        </TooltipProvider>
+      );
+
+      // Unregistered: the overflow holds no People or Files row.
+      expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+
+      rerender(
+        <TooltipProvider>
+          <MeetingToolbar
+            micOn
+            cameraOn
+            onToggleMic={vi.fn()}
+            onToggleCamera={vi.fn()}
+            isSharingScreen={false}
+            canShareScreen
+            onToggleScreenShare={vi.fn()}
+            showLayoutToggle
+            isGallery={false}
+            onToggleLayout={vi.fn()}
+            onOpenSettings={vi.fn()}
+            moreOpen
+            onMoreOpenChange={vi.fn()}
+            openPanel={null}
+            onTogglePanel={onTogglePanel}
+            isOwner={false}
+            contextNoun="case"
+            isCase
+            onLeave={vi.fn()}
+            onEndForEveryone={vi.fn()}
+            isEnding={false}
+          />
+        </TooltipProvider>
+      );
+
+      // Registered: the bar twin plus the overflow row. Both name the same slot, and the split
+      // is CSS — so in jsdom both are in the DOM.
+      const peopleControls = screen.getAllByRole('button', { name: 'People' });
+      expect(peopleControls.length).toBeGreaterThan(1);
+      await user.click(peopleControls[peopleControls.length - 1] as HTMLElement);
+      expect(onTogglePanel).toHaveBeenCalledWith('people');
+    });
+  });
+
   it('has no accessibility violations', async () => {
     const container = renderToolbar();
 

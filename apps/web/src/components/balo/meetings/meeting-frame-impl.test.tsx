@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MEETING_CALL_EVENTS, track } from '@/lib/analytics';
 import { validateGrant, type ValidatedGrant } from '@/lib/meetings/validate-grant';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
+import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 import {
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
@@ -64,8 +65,36 @@ function grantFor(isOwner: boolean): ValidatedGrant {
   return result.grant;
 }
 
+/**
+ * BAL-436 — a panel registration whose actions resolve immediately with an empty roster.
+ *
+ * ⚠ THE PANELS THEMSELVES ARE TESTED IN THEIR OWN FILES. What this file holds is the FRAME's
+ * half: registered means openable, the toggle closes, focus returns, and a terminal frame
+ * closes the panel.
+ */
+function panelsFake(): MeetingPanelRegistration {
+  return {
+    joinLinkUrl: 'https://balo.test/join/m/0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d',
+    loadGuests: vi.fn().mockResolvedValue({
+      success: true,
+      data: { guests: [], canHost: false, participantCount: 2, participantCap: 10 },
+    }),
+    inviteGuests: vi.fn(),
+    decideAdmission: vi.fn(),
+    resendLink: vi.fn(),
+    files: {
+      list: vi.fn().mockResolvedValue({ success: true, files: [] }),
+      requestUpload: vi.fn(),
+      confirmUpload: vi.fn(),
+      download: vi.fn(),
+    },
+  } as unknown as MeetingPanelRegistration;
+}
+
 interface RouteOptions {
   readonly onExit?: (reason: string) => void;
+  /** ⚠ ABSENT ⇒ THE SLOT IS UNREGISTERED, which is what both guest mounts read. */
+  readonly panels?: MeetingPanelRegistration;
   readonly waiting?: {
     absentParty: 'expert' | 'client';
     counterpartyFirstName: string;
@@ -84,6 +113,7 @@ function renderMember(options: RouteOptions = {}, isOwner = false): HTMLElement 
       contextNoun="case"
       waiting={options.waiting ?? null}
       onExit={options.onExit}
+      panels={options.panels ?? null}
     >
       <MeetingFrame grant={grantFor(isOwner)} />
     </MeetingRouteContextProvider>
@@ -312,5 +342,150 @@ describe('MeetingFrame — the host end, and its pending state', () => {
 
     expect(await screen.findByRole('heading', { name: CALL_ENDED_TITLE })).toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+/**
+ * BAL-436 — ⚠⚠ THE SIDE-PANEL SLOT, AT THE FRAME.
+ *
+ * `panels === null` means NO toolbar buttons, NO More-sheet rows, NO seat chip, NO interactive
+ * overflow tile and NO panel. Not disabled — ABSENT. Both GUEST mounts read `null`
+ * STRUCTURALLY, because neither mounts the route context at all.
+ */
+describe('MeetingFrame — the side panel (BAL-436)', () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+  });
+
+  it('⚠⚠ THE GUEST MOUNT HAS NO SLOT AT ALL — structurally, with no check anywhere', async () => {
+    renderGuest();
+    await join();
+
+    expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Files' })).toBeNull();
+    expect(screen.queryByTestId('meeting-roster')).toBeNull();
+    expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
+  });
+
+  it('⚠ a MEMBER mount with NO registration is equally absent — the default is fail-closed', async () => {
+    renderMember();
+    await join();
+
+    expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+    expect(screen.queryByTestId('meeting-roster')).toBeNull();
+  });
+
+  it('opens the People panel from the toolbar', async () => {
+    const user = userEvent.setup();
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    await user.click(screen.getByRole('button', { name: 'People' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'People' })).toBeInTheDocument();
+  });
+
+  it('⚠⚠ RE-CLICKING THE OPEN BUTTON CLOSES IT, and focus returns to that button', async () => {
+    const user = userEvent.setup();
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    const peopleButton = screen.getByRole('button', { name: 'People' });
+    await user.click(peopleButton);
+    await screen.findByRole('heading', { level: 2, name: 'People' });
+
+    await user.click(peopleButton);
+
+    expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
+    expect(peopleButton).toHaveFocus();
+  });
+
+  it('⚠ CLICKING THE OTHER BUTTON SWITCHES — one slot, no tab strip', async () => {
+    const user = userEvent.setup();
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    await user.click(screen.getByRole('button', { name: 'People' }));
+    await screen.findByRole('heading', { level: 2, name: 'People' });
+    await user.click(screen.getByRole('button', { name: 'Files' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Files' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 2, name: 'People' })).toBeNull();
+  });
+
+  it('closes from the panel`s own X, returning focus to the opener', async () => {
+    const user = userEvent.setup();
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    const peopleButton = screen.getByRole('button', { name: 'People' });
+    await user.click(peopleButton);
+    await user.click(await screen.findByRole('button', { name: 'Close people' }));
+
+    expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
+    expect(peopleButton).toHaveFocus();
+  });
+
+  /**
+   * ⚠⚠ THE CHIP MUST NOT WAIT FOR THE PANEL — DISCOVERY WAS CIRCULAR.
+   *
+   * While `PeoplePanel` was the seat count's only writer, the chip did not exist until People
+   * had been opened once. The chip is ALSO the affordance for opening People, so the one
+   * control that reveals the roster was hidden until the roster had been reached another way.
+   * One read on `hasJoined` breaks the loop; it is a ONE-SHOT, never a poll.
+   */
+  it('⚠⚠ THE SEAT CHIP APPEARS ON JOIN — before People has ever been opened', async () => {
+    const panels = panelsFake();
+    renderMember({ panels });
+    await join();
+
+    expect(await screen.findByTestId('meeting-roster')).toHaveTextContent('2 of 10');
+    // ⚠ EXACTLY ONE READ. A permanently-polling top bar would defeat the panel's own
+    // "closed ⇒ paused" cadence bound.
+    expect(vi.mocked(panels.loadGuests)).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ THE SEAT CHIP SURVIVES THE PANEL CLOSING', async () => {
+    const user = userEvent.setup();
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    const peopleButton = screen.getByRole('button', { name: 'People' });
+    await user.click(peopleButton);
+    expect(await screen.findByTestId('meeting-roster')).toHaveTextContent('2 of 10');
+
+    await user.click(peopleButton);
+    expect(screen.getByTestId('meeting-roster')).toHaveTextContent('2 of 10');
+  });
+
+  it('⚠ NO CHIP WHEN THE SLOT IS UNREGISTERED — both GUEST mounts, structurally', async () => {
+    // ⚠ `panels` OMITTED ⇒ the context reads `null`, which is what both guest mounts get.
+    renderMember();
+    await join();
+
+    expect(screen.queryByTestId('meeting-roster')).toBeNull();
+  });
+
+  it('⚠⚠ A TERMINAL FRAME CLOSES THE PANEL — no live roster on a call that has ended', async () => {
+    const user = userEvent.setup();
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    await user.click(screen.getByRole('button', { name: 'People' }));
+    await screen.findByRole('heading', { level: 2, name: 'People' });
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    expect(await screen.findByRole('heading', { name: CALL_ENDED_TITLE })).toBeInTheDocument();
+    expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
   });
 });

@@ -36,6 +36,7 @@ import type { ActionItemServerEventMap } from './events/action-item';
 import type { WalletEventMap } from './events/wallet';
 import type { ScheduleEventMap } from './events/schedule';
 import type { MeetingCallEventMap } from './events/meeting-call';
+import type { MeetingPanelEventMap } from './events/meeting-panel';
 import type { TranscriptServerEventMap } from './events/transcript';
 import type { ReviewServerEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
@@ -71,7 +72,9 @@ export type AllEvents = AuthEventMap &
   WalletEventMap &
   ScheduleEventMap &
   // BAL-435 — the in-call surface. ⚠ CLIENT family; `MeetingServerEventMap` stays server-only.
-  MeetingCallEventMap;
+  MeetingCallEventMap &
+  // BAL-436 — the in-call side panel. ⚠ CLIENT family; `GuestServerEventMap` stays server-only.
+  MeetingPanelEventMap;
 
 export type EventName = keyof AllEvents;
 

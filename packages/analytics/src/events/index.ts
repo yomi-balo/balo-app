@@ -183,6 +183,19 @@ export {
   type MeetingCallGrantRejectionReason,
   type MeetingCallDeviceKind,
 } from './meeting-call';
+// BAL-436 — the in-call SIDE PANEL's CLIENT family (People and Files). ⚠ Deliberately
+// separate from `./guest`, which is SERVER-ONLY and must stay out of `AllEvents`.
+export {
+  MEETING_PANEL_EVENTS,
+  type MeetingPanelEventMap,
+  type MeetingPanelId,
+  type MeetingPanelAdmissionDecision,
+  type MeetingPanelDecisionOutcome,
+  type MeetingPanelInviteOutcome,
+  type MeetingPanelOutcome,
+  type MeetingPanelFileOutcome,
+  type MeetingPanelSizeBucket,
+} from './meeting-panel';
 export {
   TRANSCRIPT_SERVER_EVENTS,
   type TranscriptServerEventMap,

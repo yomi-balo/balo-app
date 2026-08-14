@@ -45,6 +45,15 @@ export interface MeetingTopBarProps {
   readonly network: MeetingNetworkQuality;
   /** ⚠ `null` ⇒ THE BADGE RENDERS NOTHING. An unavailable count is not a count — never a zero. */
   readonly roster: MeetingRoster | null;
+  /**
+   * BAL-436 — supplied ONLY when the People slot is registered.
+   *
+   * ⚠ ITS PRESENCE IS WHAT PROMOTES THE CHIP FROM A `<span>` TO A `<button>`. An unregistered
+   * slot renders a plain, non-interactive chip rather than a disabled control — the slot rule.
+   * On both GUEST mounts `roster` is `null` anyway, so the whole chip is absent there,
+   * structurally.
+   */
+  readonly onOpenPeople?: () => void;
 }
 
 const TITLE_CLASSES = 'text-foreground truncate text-sm font-semibold outline-none';
@@ -55,6 +64,7 @@ export function MeetingTopBar({
   clock,
   network,
   roster,
+  onOpenPeople,
 }: Readonly<MeetingTopBarProps>): React.JSX.Element {
   const { title } = useMeetingRoute();
   const label = title ?? 'In the call';
@@ -93,39 +103,75 @@ export function MeetingTopBar({
         </span>
 
         {/*
-          ⚠⚠ A NON-INTERACTIVE `<span>`, NOT A BUTTON, AND THAT IS THE SLOT RULE. The People panel
-          is BAL-436's; an unregistered slot renders NOTHING interactive rather than a disabled
-          control that says "this exists and is being withheld from you".
+          ⚠⚠ WITH NO COUNT THE WHOLE CHIP IS **ABSENT**, not a lone glyph, and that is unchanged
+          by BAL-436. §7.5's "the badge renders nothing" was written about a TRANSIENT fetch
+          failure beside a live button; a permanent, numberless `Users` icon is a decoration that
+          reads as a control that broke. An unavailable count is not a count.
 
-          ⚠⚠ AND WITH NO COUNT THE WHOLE CHIP IS **ABSENT**, not a lone glyph. §7.5's "the badge
-          renders nothing" was written about a TRANSIENT fetch failure beside a live button; the
-          seat count is BAL-436's and is `null` on every render today, so what shipped was a
-          permanent, numberless, unclickable `Users` icon — a decoration that reads as a control
-          that broke. An unavailable count is not a count, and an unregistered slot is not a chip.
+          ⚠⚠ BAL-436 REGISTERED THE PEOPLE SLOT, so when `onOpenPeople` is supplied the chip is a
+          REAL `<button>` that toggles the panel. Without it — an unregistered slot — it stays a
+          plain `<span>`: the slot rule is "absent or real", never a disabled control saying
+          "this exists and is being withheld from you".
+
+          ⚠⚠ THE `sr-only` STRING STAYS ON BOTH ARMS. `aria-label` becomes legal on the button
+          form, but swapping would be a needless regression risk and the sr-only string is just
+          as correct there — the sibling network chip states the same pattern. On the SPAN form
+          `aria-label` would be PROHIBITED outright (axe `aria-prohibited-attr`, a generic
+          element with no role), which is why it was never used here.
         */}
-        {roster === null ? null : (
-          <span
-            data-testid="meeting-roster"
-            className="text-muted-foreground flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs"
-          >
-            <Users className="h-[18px] w-[18px]" aria-hidden="true" />
-            <span className="tabular-nums" aria-hidden="true">
-              {roster.participantCount} of {roster.participantCap}
-            </span>
-            {/*
-              ⚠⚠ AN `sr-only` STRING, **NOT** AN `aria-label` ON THE `<span>`. `aria-label` on a
-              generic element with no role is PROHIBITED (axe `aria-prohibited-attr`) and is
-              simply IGNORED by assistive tech — so the accessible name this bar is supposed to
-              expose was reaching nobody. The sibling network chip above already states the
-              pattern. When BAL-436 makes this a real `<button>`, `aria-label` becomes legal
-              again — but the sr-only string is just as correct there.
-            */}
-            <span className="sr-only">
-              {`People — ${roster.participantCount} of ${roster.participantCap} seats`}
-            </span>
-          </span>
-        )}
+        {roster === null ? null : <RosterChip roster={roster} onOpenPeople={onOpenPeople} />}
       </div>
     </header>
+  );
+}
+
+const CHIP_CLASSES = 'text-muted-foreground flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs';
+
+/**
+ * The seat chip — a `<button>` when the People slot is registered, a `<span>` when it is not.
+ *
+ * ⚠ EXTRACTED so the two arms share one body and one accessible name. Two inline copies would
+ * be the shape a copy edit drifts through.
+ */
+function RosterChip({
+  roster,
+  onOpenPeople,
+}: Readonly<{ roster: MeetingRoster; onOpenPeople?: () => void }>): React.JSX.Element {
+  const body = (
+    <>
+      <Users className="h-[18px] w-[18px]" aria-hidden="true" />
+      <span className="tabular-nums" aria-hidden="true">
+        {roster.participantCount} of {roster.participantCap}
+      </span>
+      <span className="sr-only">
+        {`People — ${roster.participantCount} of ${roster.participantCap} seats`}
+      </span>
+    </>
+  );
+
+  if (onOpenPeople === undefined) {
+    return (
+      <span data-testid="meeting-roster" className={CHIP_CLASSES}>
+        {body}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-testid="meeting-roster"
+      onClick={onOpenPeople}
+      className={cn(
+        CHIP_CLASSES,
+        // ⚠⚠ 44px, NOT 36px. Every other control on this surface is `min-h-11` / `h-11`, and
+        // this one is a real toggle on a live call — reached mid-conversation, often one-handed
+        // on a phone. `min-h-9` made the ONE control that opens People the smallest target in
+        // the frame. The visual chip stays compact; the hit area does not.
+        'hover:text-foreground hover:bg-muted/60 focus-visible:ring-ring min-h-11 transition-colors focus-visible:ring-2 focus-visible:outline-none'
+      )}
+    >
+      {body}
+    </button>
   );
 }

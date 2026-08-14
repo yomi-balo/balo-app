@@ -1499,6 +1499,184 @@ describe('meetingGuestsRepository.extendExpiryForMeeting (the BAL-409/410/411 ha
   });
 });
 
+describe('meetingGuestsRepository.rotateToken (BAL-436 — the re-send)', () => {
+  /**
+   * The ONE shape this method may ever rotate: a LIVE, `link`-channel, ADMITTED row.
+   *
+   * ⚠ `admissionDecidedAt` IS NOT DECORATION — `meeting_guest_admission_terminal_stamped`
+   * makes it an IFF with a terminal `admission`, so an `admitted` row without it will not
+   * insert at all.
+   */
+  async function resendableGuest(
+    values: Partial<NewMeetingGuest> = {}
+  ): ReturnType<typeof meetingGuestFactory> {
+    return meetingGuestFactory({
+      values: {
+        inviteChannel: 'link',
+        admission: 'admitted',
+        admissionDecidedAt: new Date(),
+        ...values,
+      },
+    });
+  }
+
+  async function linkResentAuditCount(guestId: string): Promise<number> {
+    const audits = await db
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(
+        and(eq(auditEvents.entityId, guestId), eq(auditEvents.action, 'meeting_guest.link_resent'))
+      );
+    return audits.length;
+  }
+
+  it('⚠⚠ replaces the hash, refreshes the expiry, and KILLS the previous credential', async () => {
+    const host = await userFactory();
+    const seeded = await resendableGuest({ expiresAt: new Date(Date.now() + DAY_MS) });
+    const oldHash = seeded.guest.tokenHash;
+    const newHash = tokenHash();
+    const newExpiry = new Date(Date.now() + 30 * DAY_MS);
+
+    const rotated = await meetingGuestsRepository.rotateToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: newHash,
+      expiresAt: newExpiry,
+      rotatedByUserId: host.id,
+    });
+
+    expect(rotated?.tokenHash).toBe(newHash);
+    expect(rotated?.expiresAt.getTime()).toBe(newExpiry.getTime());
+
+    // ⚠ THE WHOLE SECURITY PROPERTY: the OLD hash no longer resolves, so the link the guest
+    // may still be holding is dead. Two live credentials on one row would be a second hijack
+    // surface opened by the act of rescuing somebody.
+    await expect(meetingGuestsRepository.findLiveByTokenHash(oldHash)).resolves.toBeUndefined();
+    const resolved = await meetingGuestsRepository.findLiveByTokenHash(newHash);
+    expect(resolved?.guest.id).toBe(seeded.guest.id);
+  });
+
+  it('appends ONE attributed `meeting_guest.link_resent` audit row, carrying no token hash', async () => {
+    const host = await userFactory();
+    const seeded = await resendableGuest();
+
+    await meetingGuestsRepository.rotateToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      rotatedByUserId: host.id,
+    });
+
+    const audits = await db
+      .select({ actorUserId: auditEvents.actorUserId, metadata: auditEvents.metadata })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityId, seeded.guest.id),
+          eq(auditEvents.action, 'meeting_guest.link_resent')
+        )
+      );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(host.id);
+    expect(JSON.stringify(audits[0]?.metadata)).not.toContain('tokenHash');
+  });
+
+  it('⚠ REFUSES a revoked row — a rotation must never undo a deliberate revocation', async () => {
+    const host = await userFactory();
+    const seeded = await resendableGuest();
+    await meetingGuestsRepository.revoke({
+      guestId: seeded.guest.id,
+      revokedByUserId: host.id,
+    });
+
+    await expect(
+      meetingGuestsRepository.rotateToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        rotatedByUserId: host.id,
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(linkResentAuditCount(seeded.guest.id)).resolves.toBe(0);
+  });
+
+  /**
+   * ⚠⚠ **THE `WHERE` CLAUSE IS THE BOUNDARY — THERE IS NO RLS BEHIND IT.** Each case below
+   * calls the method with a shape the SERVICE would have refused first, precisely to prove the
+   * refusal does not depend on the service. BAL-442's guest self-service arm inherits this
+   * primitive, and a caller that skips the pre-read still cannot widen it.
+   */
+  it('⚠⚠ REFUSES A CROSS-MEETING ROTATE — the tenancy scope is IN the statement', async () => {
+    const host = await userFactory();
+    const seeded = await resendableGuest();
+    const { meeting: otherMeeting } = await meetingFactory();
+    const oldHash = seeded.guest.tokenHash;
+
+    await expect(
+      meetingGuestsRepository.rotateToken({
+        // The attacker holds a valid guest uuid but names a meeting they DO have rights on.
+        meetingId: otherMeeting.id,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        rotatedByUserId: host.id,
+      })
+    ).resolves.toBeUndefined();
+
+    // ⚠ AND THE ROW IS UNTOUCHED — the original credential still resolves.
+    const resolved = await meetingGuestsRepository.findLiveByTokenHash(oldHash);
+    expect(resolved?.guest.id).toBe(seeded.guest.id);
+    await expect(linkResentAuditCount(seeded.guest.id)).resolves.toBe(0);
+  });
+
+  it('⚠ REFUSES an `email`-channel row — that path has its own attributed re-invite', async () => {
+    const host = await userFactory();
+    const seeded = await meetingGuestFactory({
+      values: { inviteChannel: 'email', admission: 'admitted', admissionDecidedAt: new Date() },
+    });
+
+    await expect(
+      meetingGuestsRepository.rotateToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        rotatedByUserId: host.id,
+      })
+    ).resolves.toBeUndefined();
+    await expect(linkResentAuditCount(seeded.guest.id)).resolves.toBe(0);
+  });
+
+  it.each(['pending' as const, 'denied' as const])(
+    '⚠ REFUSES a `%s` row — a re-send must never precede an admit',
+    async (admission) => {
+      const host = await userFactory();
+      const seeded = await meetingGuestFactory({
+        values: {
+          inviteChannel: 'link',
+          admission,
+          // The CHECK is an IFF: `pending` must have NO stamp, `denied` must have one.
+          admissionDecidedAt: admission === 'denied' ? new Date() : null,
+        },
+      });
+
+      await expect(
+        meetingGuestsRepository.rotateToken({
+          meetingId: seeded.meetingId,
+          guestId: seeded.guest.id,
+          tokenHash: tokenHash(),
+          expiresAt: new Date(Date.now() + 7 * DAY_MS),
+          rotatedByUserId: host.id,
+        })
+      ).resolves.toBeUndefined();
+      await expect(linkResentAuditCount(seeded.guest.id)).resolves.toBe(0);
+    }
+  );
+});
+
 // ── 7. EVERY CHECK REJECTS ITS VIOLATION ─────────────────────────────────────
 
 describe('meeting_guests — the CHECK backstops', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   DailyProvider,
   useActiveSpeakerId,
@@ -16,10 +16,11 @@ import {
   useScreenShare,
 } from '@daily-co/daily-react';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { MEETING_CALL_EVENTS, track } from '@/lib/analytics';
+import { MEETING_CALL_EVENTS, MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import { orderTiles, type TileCandidate } from '@/lib/meetings/order-tiles';
 import { isVideoLayout, resolveStageKind, type LayoutOverride } from '@/lib/meetings/resolve-stage';
 import { useMeetingRoute, type MeetingExitReason } from '@/lib/meetings/meeting-route-context';
+import type { MeetingPanelId, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 import type { WaitingSubject } from '@/lib/meetings/waiting-copy';
 import type { MeetingFrameProps } from './meeting-frame-types';
 import { JoinRetryNotice } from './join-notice-card';
@@ -35,7 +36,9 @@ import {
   ReconnectingOverlay,
 } from './meeting-notices';
 import { MeetingToolbar } from './meeting-toolbar';
-import { MeetingTopBar } from './meeting-top-bar';
+import { MeetingTopBar, type MeetingRoster } from './meeting-top-bar';
+import { PeoplePanel } from './people-panel';
+import { FilesPanel } from './files-panel';
 import { PreJoin, readSkipPrejoin } from './prejoin';
 import { StageContent } from './meeting-stage';
 import { ViewControls } from './view-controls';
@@ -75,7 +78,7 @@ import { WaitingStage } from './waiting-stage';
  * now" button wired to `join()` with the SAME still-valid token; and because `hasJoined` is a
  * dependency of the skip-prejoin effect, anyone carrying the "Skip this next time" preference was
  * silently rejoined **within one render tick, with no interaction**, camera and microphone on.
- * That undid "End for everyone" (a client-side eject revokes no token — `ban:true` is BAL-436's)
+ * That undid "End for everyone" (a client-side eject revokes no token — `ban:true` is BAL-444's)
  * while the host had already navigated away. `didAutoJoinRef` makes the skip a ONE-SHOT for the
  * life of the frame, which is the second, independent half of the same fix.
  */
@@ -88,8 +91,13 @@ import { WaitingStage } from './waiting-stage';
  *
  * ⚠ GENUINELY FROZEN, not merely called frozen: it is spread into every event payload, and a
  * mutation would silently attach a property to every event on the surface.
+ *
+ * ⚠⚠ TYPED AS THE **EXACT SHAPE**, NEVER `Record<string, string>`. A `Record` index signature
+ * defeats excess-property checking at every spread site, so the analytics event maps' PII
+ * guard — the whole reason those maps enumerate their keys — stops applying the moment this
+ * object is spread into a payload. A guest name or an address added here would then compile.
  */
-const NO_MEETING_PROPS: Readonly<Record<string, string>> = Object.freeze({});
+const NO_MEETING_PROPS: Readonly<{ meeting_id?: string }> = Object.freeze({});
 
 /** How long the "joined with your usual devices" pill stays up when PreJoin was skipped. */
 const SKIP_NOTICE_MS = 4_000;
@@ -207,7 +215,7 @@ function useWakeLock(active: boolean): void {
  * did it rather than the person. A pill, not a toast and not a modal: a degraded call is still a
  * call.
  */
-function useDeviceBlockedNotice(meetingProps: Readonly<Record<string, string>>): string | null {
+function useDeviceBlockedNotice(meetingProps: Readonly<{ meeting_id?: string }>): string | null {
   const { camState, micState } = useDevices();
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -269,13 +277,32 @@ function useReconnectState(): { isReconnecting: boolean; isLongReconnect: boolea
  *
  * ⚠ ONE STRING AT A TIME, and the clock is excluded on purpose — a duration announced every
  * second is a screen-reader denial of service (§10.5).
+ *
+ * ── ⚠⚠ BAL-436 — THE SIDE PANEL ANNOUNCES **THROUGH THIS HOOK**, NOT THROUGH A SECOND REGION ─
+ *
+ * The plan BANNED `aria-busy` on the panel because it suppresses "the live-region
+ * announcement" — and then never specified a live region, leaving every panel component citing
+ * one that did not exist. The only named vehicle was Sonner, which is a visual toast and was
+ * additionally unreachable while the panel claimed `aria-modal` (that claim is now gone; see
+ * `meeting-side-panel.tsx`).
+ *
+ * ⚠ THE FIX IS TO **EXTEND** THIS ONE, NOT TO ADD A SECOND. §16 says "the ONE polite live
+ * region", and two `aria-live` regions on one surface race: a screen reader queues both and
+ * the person hears the older message after the newer one. `announce` is therefore returned as
+ * a plain setter and handed down to the panel, so admit/deny/invite/upload outcomes and a new
+ * arrival in the queue all land in the SAME `<output>` the call itself uses.
+ *
+ * ⚠ THE PANEL'S MESSAGES COMPETE WITH THE CALL'S, AND THE CALL WINS BY RECENCY ONLY — there is
+ * no priority queue, deliberately. A panel outcome is user-initiated and instant; a reconnect
+ * is not. Interleaving them by "most recent wins" is what a person actually needs, and a
+ * priority scheme would be one more thing to get wrong on a live call.
  */
 function useCallAnnouncement(input: {
   readonly hasJoined: boolean;
   readonly isReconnecting: boolean;
   readonly remoteCount: number;
   readonly micOn: boolean;
-}): string {
+}): { readonly message: string; readonly announce: (message: string) => void } {
   const { hasJoined, isReconnecting, remoteCount, micOn } = input;
   const [message, setMessage] = useState('');
   const previousRemotes = useRef(remoteCount);
@@ -307,7 +334,67 @@ function useCallAnnouncement(input: {
     setMessage(micOn ? ANNOUNCE_UNMUTED : ANNOUNCE_MUTED);
   }, [micOn]);
 
-  return message;
+  /**
+   * ⚠ RE-ANNOUNCE THE SAME SENTENCE. Two identical admits in a row must both be heard, and a
+   * live region only fires on a CHANGE — so an unchanged string is silence. The zero-width
+   * space alternates the text node's content without altering how it is read aloud, which is
+   * the standard answer and is cheaper than a keyed remount of the region.
+   */
+  const announce = useCallback((next: string): void => {
+    // ⚠ WRITTEN AS AN ESCAPE, NEVER AS THE LITERAL CHARACTER — an invisible code point pasted
+    // into source is unreviewable and the next reader deletes it as a typo.
+    setMessage((current) => (current === next ? `${next}\u200B` : next));
+  }, []);
+
+  return { message, announce };
+}
+
+/**
+ * BAL-436 — ⚠⚠ **ONE** SEAT READ, ON JOIN. Not a poll.
+ *
+ * ── WHY IT EXISTS AT ALL ────────────────────────────────────────────────────────────────
+ *
+ * `PeoplePanel` was the seat count's only writer, so the top-bar chip did not render until the
+ * People panel had been opened once — and the chip is itself the affordance for opening People.
+ * Discovery was therefore circular: the control that reveals the roster was hidden until you had
+ * already reached the roster some other way (the More sheet, or a toolbar button that only
+ * exists at `lg`). One read on join breaks the loop, and the chip then survives the panel
+ * closing because the state lives in the frame.
+ *
+ * ── ⚠ WHY IT IS NOT A POLL, AND MUST NOT BECOME ONE ─────────────────────────────────────
+ *
+ * Seats change on invite / admit / revoke — all of which happen INSIDE the panel, which
+ * refetches after every mutation and hands the result back through the same setter. A
+ * permanently-polling top bar would defeat the panel's own "closed ⇒ paused" rule, which is the
+ * whole cadence bound (Ruling E). This runs exactly once per frame.
+ *
+ * ⚠ A FAILURE IS SILENT. The chip is `null` until a count exists, which renders NOTHING — an
+ * unavailable count is not a count, and there is no error state to show for a decoration on a
+ * live call. `getMeetingGuestsAction` already logs the refusal server-side at `warn`.
+ *
+ * ⚠ UNREGISTERED ⇒ NO READ AT ALL. `panels === null` on both GUEST mounts, structurally, and
+ * neither could satisfy `requireUser()` anyway.
+ */
+function useSeatCountOnJoin(input: {
+  readonly panels: MeetingPanelRegistration | null;
+  readonly hasJoined: boolean;
+  readonly onSeats: (seats: MeetingRoster) => void;
+}): void {
+  const { panels, hasJoined, onSeats } = input;
+  /** ⚠ A ONE-SHOT LATCH, so a re-render or a reconnect cannot re-fire the read. */
+  const hasReadRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasJoined || panels === null || hasReadRef.current) return;
+    hasReadRef.current = true;
+    void panels.loadGuests().then((result) => {
+      if (!result.success) return;
+      onSeats({
+        participantCount: result.data.participantCount,
+        participantCap: result.data.participantCap,
+      });
+    });
+  }, [hasJoined, panels, onSeats]);
 }
 
 /**
@@ -390,6 +477,66 @@ function resolveFrameChrome({
   return { isFatal, showChrome, topBarHeadingRef };
 }
 
+interface PanelSlotsInput {
+  readonly panels: MeetingPanelRegistration | null;
+  readonly panel: MeetingPanelId | null;
+  readonly seats: MeetingRoster | null;
+  readonly togglePanel: (id: MeetingPanelId) => void;
+  readonly peopleButtonRef: React.RefObject<HTMLButtonElement | null>;
+  readonly filesButtonRef: React.RefObject<HTMLButtonElement | null>;
+}
+
+interface PanelSlots {
+  /** Spread onto the top bar and onto `StageContent`. Empty ⇒ neither becomes interactive. */
+  readonly openPeopleSlot: { onOpenPeople?: () => void };
+  /** Spread onto the toolbar. Empty ⇒ no People/Files buttons and no MoreSheet rows. */
+  readonly toolbarPanelSlot: {
+    openPanel?: MeetingPanelId | null;
+    onTogglePanel?: (id: MeetingPanelId) => void;
+    peopleButtonRef?: React.RefObject<HTMLButtonElement | null>;
+    filesButtonRef?: React.RefObject<HTMLButtonElement | null>;
+  };
+  /** ⚠ THE SEAT CHIP. `null` ⇒ the whole chip is absent — an unavailable count is not a count. */
+  readonly roster: MeetingRoster | null;
+}
+
+/**
+ * BAL-436 — ⚠⚠ **"REGISTERED OR ABSENT", RESOLVED ONCE.**
+ *
+ * Four surfaces ask the same question (the top bar's chip, the stage's overflow tile, the
+ * toolbar's two buttons, the MoreSheet's two rows), and asking it four times inline meant four
+ * conditional spreads sitting inside JSX ternaries — which SonarCloud reads as NESTED
+ * conditionals (S3358) and which pushed the component body to 27 against the allowed 15.
+ *
+ * ⚠ A PURE MODULE HELPER RATHER THAN INLINE `const`s, exactly as `resolveFrameChrome` is, and
+ * for exactly the same reason. The logic is unchanged.
+ *
+ * ⚠ THERE IS NO LENS, ROLE OR MODE ANYWHERE IN HERE. The only input is whether the route
+ * mounted a registration, which both GUEST mounts structurally do not.
+ */
+function resolvePanelSlots({
+  panels,
+  panel,
+  seats,
+  togglePanel,
+  peopleButtonRef,
+  filesButtonRef,
+}: Readonly<PanelSlotsInput>): PanelSlots {
+  if (panels === null) {
+    return { openPeopleSlot: {}, toolbarPanelSlot: {}, roster: null };
+  }
+  return {
+    openPeopleSlot: { onOpenPeople: () => togglePanel('people') },
+    toolbarPanelSlot: {
+      openPanel: panel,
+      onTogglePanel: togglePanel,
+      peopleButtonRef,
+      filesButtonRef,
+    },
+    roster: seats,
+  };
+}
+
 function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): React.JSX.Element {
   const daily = useDaily();
   const route = useMeetingRoute();
@@ -416,6 +563,18 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   const [exitReason, setExitReason] = useState<MeetingExitReason | null>(null);
   const [override, setOverride] = useState<LayoutOverride>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  /**
+   * The SEAT counts for the top-bar chip, hoisted out of the panel so the chip SURVIVES the
+   * panel closing. ⚠ THE SERVER'S counter, never a local tile count — the two differ.
+   *
+   * ⚠⚠ **SEEDED ONCE ON `hasJoined`, NOT ONLY BY THE PANEL.** While the panel was its only
+   * writer the chip did not exist until People had been opened — and the chip is ALSO the
+   * affordance for opening People, so discovery was circular: the one control that reveals the
+   * roster was hidden until you had already found the roster another way. One read on join
+   * breaks the loop. See `useSeatCountOnJoin`; it does NOT poll (that is the panel's job, and
+   * only while the panel is open).
+   */
+  const [seats, setSeats] = useState<MeetingRoster | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
   const [selfIsPrimary, setSelfIsPrimary] = useState(false);
@@ -436,11 +595,10 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
    * a bogus breakdown bucket; a `null` reaches PostHog as a real value that does. Same reasoning
    * as `guest_joined`'s conditionally-spread `party`.
    */
-  const meetingProps = useMemo((): Readonly<Record<string, string>> => {
+  const meetingProps = useMemo((): Readonly<{ meeting_id?: string }> => {
     const id = route.meetingId;
     // ⚠ THE SHARED FROZEN EMPTY OBJECT, not a fresh `{}` — an inline literal would give the memo
-    // a new identity on every recompute AND infer a `{ meeting_id?: undefined }` union that
-    // `exactOptionalPropertyTypes` rejects against the index signature.
+    // a new identity on every recompute.
     if (id === null) return NO_MEETING_PROPS;
     return { meeting_id: id };
   }, [route.meetingId]);
@@ -562,8 +720,10 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     });
     // ⚠ THE OWNER TOKEN IS WHAT MAKES THIS LEGAL AT DAILY'S END. ⚠ Eject alone does NOT revoke a
     // token — a disconnected participant holding a live one can rejoin. `ban:true` /
-    // `DELETE /rooms/:name` is a REST call and belongs to BAL-436, which is exactly why the
-    // confirm copy does not claim this cannot be undone (ruling R7).
+    // `DELETE /rooms/:name` is a REST call and belongs to **BAL-444** (BAL-436 DECLINED it: it
+    // is server-side vendor work in `apps/api` governed by the `daily-co` skill, not UI, and
+    // nothing is broken by deferring it). That is exactly why the confirm copy does not claim
+    // this cannot be undone (ruling R7).
     // ⚠ `updateParticipants` IS SYNCHRONOUS in daily-js (it returns the call object, not a
     // promise) — do not `await` it or chain a `.catch`, both of which would be type errors.
     daily.updateParticipants({ '*': { eject: true } });
@@ -686,7 +846,12 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   }, []);
 
   useWakeLock(hasJoined);
-  const announcement = useCallAnnouncement({ hasJoined, isReconnecting, remoteCount, micOn });
+  const { message: announcement, announce } = useCallAnnouncement({
+    hasJoined,
+    isReconnecting,
+    remoteCount,
+    micOn,
+  });
 
   const joinedTrackedRef = useRef(false);
   useEffect(() => {
@@ -708,6 +873,29 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     });
   }, [hasJoined, grant.isOwner, kind, meetingProps, participantIds.length]);
 
+  /**
+   * BAL-436 — ⚠⚠ **IDENTITY-STABLE SEAT UPDATES.** The poll hands us a FRESH OBJECT LITERAL on
+   * every tick, so a bare `setSeats` re-rendered `MeetingFrameInner` — and therefore the WHOLE
+   * in-call subtree, video stage included — every 10 seconds for the life of an open panel,
+   * with identical numbers. `Object.is` can never save a caller who allocates.
+   *
+   * ⚠ THE COMPARISON LIVES **HERE**, IN THE SETTER, NOT IN THE POLL. The poll cannot know
+   * whether its consumer cares about identity, and a comparator passed down would be one more
+   * thing to forget at a second call site. Returning `prev` from the updater is React's own
+   * bail-out, so an unchanged tick costs one function call and no render.
+   */
+  const onSeatsChange = useCallback((next: MeetingRoster): void => {
+    setSeats((current) =>
+      current !== null &&
+      current.participantCount === next.participantCount &&
+      current.participantCap === next.participantCap
+        ? current
+        : next
+    );
+  }, []);
+
+  useSeatCountOnJoin({ panels: route.panels, hasJoined, onSeats: onSeatsChange });
+
   const { isFatal, showChrome, topBarHeadingRef } = resolveFrameChrome({
     hasFailed,
     meetingState,
@@ -719,6 +907,26 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   // back link cannot disagree. `'call'` on both guest mounts, structurally.
   const contextNoun = route.contextNoun;
   const presenter = screens.at(0);
+
+  /**
+   * BAL-436 — ⚠⚠ **REGISTERED MEANS OPENABLE.** `panels === null` (both GUEST mounts,
+   * structurally) means no toolbar buttons, no More-sheet rows, no seat chip, no interactive
+   * overflow tile and no panel. Not disabled — ABSENT.
+   */
+  const panels = route.panels;
+  const { panel, togglePanel, closePanel, peopleButtonRef, filesButtonRef } = useMeetingPanel({
+    isRegistered: panels !== null,
+    isTerminal: exitReason !== null || isFatal,
+  });
+
+  const { openPeopleSlot, toolbarPanelSlot, roster } = resolvePanelSlots({
+    panels,
+    panel,
+    seats,
+    togglePanel,
+    peopleButtonRef,
+    filesButtonRef,
+  });
 
   return (
     <MeetingFrameElementProvider element={frameElement}>
@@ -732,7 +940,14 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
         // §13.1 step 1 — the frame fades in. Every other step delays off this one.
         {...entrance(reduceMotion, {}, 0)}
       >
-        {/* ⚠⚠ §16 — THE ONE POLITE LIVE REGION. Never wrapped in anything `aria-busy`. */}
+        {/*
+          ⚠⚠ §16 — THE ONE POLITE LIVE REGION. Never wrapped in anything `aria-busy`.
+
+          ⚠⚠ BAL-436 — THE SIDE PANEL ANNOUNCES **THROUGH THIS ONE**, via `announce` on the
+          registration below. There is deliberately NO second `aria-live` region in the panel:
+          two regions on one surface race, and a screen reader queues both so the person hears
+          the older sentence after the newer one.
+        */}
         <MeetingAnnouncer message={announcement} />
 
         {showChrome ? (
@@ -747,10 +962,14 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               // client-side interval timer anywhere in this ticket.
               clock={hasJoined ? { kind: 'live' } : { kind: 'not_started' }}
               network={networkState === 'bad' || networkState === 'warning' ? 'unstable' : 'strong'}
-              // ⚠ SEAT COUNT, NOT TILE COUNT — and the guests endpoint that produces it belongs to
-              // BAL-436's People panel. Until then the whole chip is ABSENT: a lone `Users` glyph
-              // with no number and nothing to click reads as a control that broke.
-              roster={null}
+              // ⚠⚠ SEAT COUNT, NOT TILE COUNT. It comes from the guests GET — the very counter
+              // the server refuses invites on — and it is `null` until the People panel has been
+              // opened once, at which point the chip appears and then SURVIVES the panel closing.
+              // An unavailable count is not a count: the whole chip stays absent rather than
+              // rendering a lone numberless glyph.
+              roster={roster}
+              // ⚠ ITS PRESENCE PROMOTES THE CHIP TO A REAL BUTTON. Absent when unregistered.
+              {...openPeopleSlot}
             />
           </motion.div>
         ) : null}
@@ -786,7 +1005,7 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
           </div>
         )}
 
-        <div className="flex min-h-0 flex-1">
+        <div className="relative flex min-h-0 flex-1">
           <motion.div
             className="min-w-0 flex-1 p-3"
             {...entrance(reduceMotion, { scale: 0.98 }, 0.1)}
@@ -808,6 +1027,9 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
                 cameraOn={cameraOn}
                 selfIsPrimary={selfIsPrimary}
                 onSwapSelf={swapSelf}
+                // ⚠ BAL-436 — threaded to `OverflowTile`. Absent ⇒ the tile stays exactly as
+                // it shipped: non-interactive, no hover affordance, no accessible name.
+                {...openPeopleSlot}
                 onToggleMic={toggleMic}
                 onToggleCamera={toggleCamera}
                 onOpenSettings={() => setSettingsOpen(true)}
@@ -830,6 +1052,37 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               ) : null}
             </div>
           </motion.div>
+
+          {/*
+            ⚠⚠ BAL-436 — THE PANEL IS A **SIBLING OF THE STAGE INSIDE THIS FLEX ROW**, not an
+            overlay on top of it. At `lg` and above it takes 360px beside the video; below `lg`
+            its own classes make it a full-height overlay (`absolute inset-0`) — ⚠ OF THIS ROW
+            ONLY, which is why the row is `relative`. `MeetingToolbar` renders OUTSIDE and BELOW
+            this row, so Mic / Camera / More / Leave stay visible and reachable underneath the
+            panel on a phone. That is exactly why the panel is NOT a modal and carries no focus
+            trap (`meeting-side-panel.tsx` has the full argument). The split is CSS, so nothing
+            flashes on first paint.
+
+            ⚠ RENDERED ONLY WHEN THE SLOT IS REGISTERED **AND** OPEN. `panels === null` on both
+            GUEST mounts, structurally — no lens check, no role check, nowhere.
+          */}
+          {/*
+            ⚠ `AnimatePresence` SO CLOSING IS NOT A HARD CUT. The panel animates IN and, without
+            this, vanished in one frame — which on a 360px sidebar reads as a glitch rather than
+            as a dismissal. ⚠ NO `mode="wait"`: switching People→Files must cross-fade in place,
+            and `wait` would blank the column for the length of the exit.
+          */}
+          <AnimatePresence initial={false}>
+            <FramePanel
+              key={panel ?? 'closed'}
+              panels={panels}
+              panel={panel}
+              onClose={closePanel}
+              onSeatsChange={onSeatsChange}
+              meetingProps={meetingProps}
+              onAnnounce={announce}
+            />
+          </AnimatePresence>
         </div>
 
         {isSharingScreen ? <PresentingBar onStop={toggleScreenShare} /> : null}
@@ -850,6 +1103,9 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               onOpenSettings={() => setSettingsOpen(true)}
               moreOpen={moreOpen}
               onMoreOpenChange={setMoreOpen}
+              // ⚠ BOTH ABSENT WHEN THE SLOT IS UNREGISTERED — the toolbar renders no People or
+              // Files control at all, rather than two disabled ones.
+              {...toolbarPanelSlot}
               // ⚠⚠ THE SERVER'S `host_meetings` VERDICT, UNMODIFIED. Never a lens.
               isOwner={grant.isOwner}
               contextNoun={contextNoun}
@@ -983,4 +1239,133 @@ function FrameStage({
       onSwapSelf={onSwapSelf}
     />
   );
+}
+
+/**
+ * BAL-436 — the SIDE-PANEL STATE MACHINE.
+ *
+ * ⚠⚠ **THE TOGGLE IS THE WHOLE RULING (BAL-132 D11).** Re-clicking the OPEN panel's button
+ * CLOSES it; clicking the other button SWITCHES. There is no tab strip — the design reference
+ * has none, and a strip would imply the two panels coexist.
+ *
+ * ⚠ FOCUS RETURNS TO THE BUTTON THAT OPENED IT, and it is done in the CLOSE HANDLER rather
+ * than in an effect. The `useFocusOnTransition` policy exists because an effect reading
+ * `ref.current` on a state change focuses an element that is about to unmount; restoring focus
+ * in the handler that unmounts the panel has no such ordering problem, because the TOOLBAR
+ * button is already mounted and stays mounted.
+ *
+ * ⚠⚠ A TERMINAL FRAME CLOSES THE PANEL. A frame that has ended must not keep a live roster on
+ * screen — and closing it unmounts the poll, so nothing keeps asking the api about a call that
+ * is over. It deliberately does NOT restore focus there: on a terminal frame the toolbar is
+ * unmounted too, and the terminal card owns the heading and takes focus itself.
+ *
+ * ⚠ AN UNREGISTERED SLOT FORCES `null`. Both GUEST mounts land there structurally, so nothing
+ * downstream needs a second "is it registered?" check.
+ *
+ * ⚠ A HOOK RATHER THAN INLINE STATE, ONLY TO SHED COGNITIVE COMPLEXITY: inline,
+ * `MeetingFrameInner`'s own body scored 27 against SonarCloud's allowed 15. The repo's
+ * precedent is to EXTRACT, never to disable the rule.
+ */
+function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTerminal: boolean }): {
+  readonly panel: MeetingPanelId | null;
+  readonly togglePanel: (id: MeetingPanelId) => void;
+  readonly closePanel: () => void;
+  readonly peopleButtonRef: React.RefObject<HTMLButtonElement | null>;
+  readonly filesButtonRef: React.RefObject<HTMLButtonElement | null>;
+} {
+  const [panel, setPanel] = useState<MeetingPanelId | null>(null);
+  const peopleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const filesButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const focusOpener = useCallback((id: MeetingPanelId): void => {
+    const button = id === 'people' ? peopleButtonRef.current : filesButtonRef.current;
+    button?.focus();
+  }, []);
+
+  const togglePanel = useCallback(
+    (id: MeetingPanelId): void => {
+      setPanel((current) => {
+        if (current === id) {
+          focusOpener(id);
+          return null;
+        }
+        track(MEETING_PANEL_EVENTS.OPENED, { panel: id });
+        return id;
+      });
+    },
+    [focusOpener]
+  );
+
+  const closePanel = useCallback((): void => {
+    setPanel((current) => {
+      if (current !== null) focusOpener(current);
+      return null;
+    });
+  }, [focusOpener]);
+
+  const { isTerminal } = input;
+  useEffect(() => {
+    if (!isTerminal) return;
+    setPanel(null);
+  }, [isTerminal]);
+
+  return {
+    // ⚠ AN UNREGISTERED SLOT IS ALWAYS CLOSED, whatever state happens to be held.
+    panel: input.isRegistered ? panel : null,
+    togglePanel,
+    closePanel,
+    peopleButtonRef,
+    filesButtonRef,
+  };
+}
+
+/**
+ * ⚠ A THIN SWITCH, EXTRACTED for the same reason `FrameStage` is: adding logic here is what
+ * pushes the frame back over the complexity limit. `null` renders nothing at all — the slot
+ * rule, and the state a closed panel is in.
+ */
+function FramePanel({
+  panels,
+  panel,
+  onClose,
+  onSeatsChange,
+  meetingProps,
+  onAnnounce,
+}: Readonly<{
+  /** ⚠ `null` ⇒ UNREGISTERED. Both GUEST mounts, structurally. Renders nothing. */
+  panels: MeetingPanelRegistration | null;
+  panel: MeetingPanelId | null;
+  onClose: () => void;
+  onSeatsChange: (seats: MeetingRoster) => void;
+  meetingProps: Readonly<{ meeting_id?: string }>;
+  /**
+   * ⚠⚠ §16'S **ONE** POLITE LIVE REGION, HANDED DOWN. The panel announces admit / deny /
+   * invite / upload OUTCOMES and a new arrival in the queue through this, never through a
+   * second `aria-live` node of its own — two regions on one surface race.
+   */
+  onAnnounce: (message: string) => void;
+}>): React.JSX.Element | null {
+  if (panels === null) return null;
+  if (panel === 'people') {
+    return (
+      <PeoplePanel
+        panels={panels}
+        onClose={onClose}
+        onSeatsChange={onSeatsChange}
+        meetingProps={meetingProps}
+        onAnnounce={onAnnounce}
+      />
+    );
+  }
+  if (panel === 'files') {
+    return (
+      <FilesPanel
+        panels={panels}
+        onClose={onClose}
+        meetingProps={meetingProps}
+        onAnnounce={onAnnounce}
+      />
+    );
+  }
+  return null;
 }

@@ -378,7 +378,12 @@ export async function authorizeMeetingFileAccess(
   }
 
   /**
-   * ⚠ THE GUEST ARM IS A NAMED, FAIL-CLOSED HOLE — ASSIGNED TO BAL-132 (D2).
+   * ⚠ THE GUEST ARM IS A NAMED, FAIL-CLOSED HOLE — ⚠⚠ **NOW ASSIGNED TO BAL-445**, "a
+   * guest-authenticated read session: ONE primitive for meeting files and in-call chat". The
+   * previous assignment to BAL-132 (D2) is STALE — BAL-132 shipped the anonymous lobby and did
+   * NOT fill this branch, and BAL-436 deliberately did not invent half of the primitive inside
+   * a panel ticket (BAL-437 needs the identical thing for Ably: "a guest has no `user.id`").
+   * One unsolved primitive, two consumers, one ticket.
    *
    * There is NO guest-authenticated read session on `main`: `/join/[token]` resolves an
    * identity CLAIM only, and `guestMayReadMeeting` (`@balo/shared/meetings`) has ZERO
@@ -387,13 +392,15 @@ export async function authorizeMeetingFileAccess(
    * else. A guest reaches no arm and is denied with the same single literal as a stranger.
    *
    * DO NOT call `guestMayReadMeeting` speculatively and DO NOT invent a guest session here:
-   * BAL-132 mints the session, and BAL-132 fills this branch. Calling the predicate now would
+   * BAL-445 mints the session, and BAL-445 fills this branch. Calling the predicate now would
    * mean authorizing a read against a grant with no authenticated subject to bind it to —
    * which is worse than denying.
    *
-   * ⚠ THE ACCEPTANCE CRITERION "Guest access respects BAL-408's `access_scope`" IS NOT MET BY
-   * THIS PR. It is restated as a contract BAL-132 / BAL-388 satisfy. This is a decision (D2),
-   * not an oversight, and the test suite closes the hole by name.
+   * ⚠ THE ACCEPTANCE CRITERION "Guest access respects BAL-408's `access_scope`" IS STILL NOT
+   * MET. It is restated as a contract **BAL-445** / BAL-388 satisfy. This is a decision (D2),
+   * not an oversight, and the test suite closes the hole by name. ⚠ BAL-436's in-call Files
+   * panel is registered on the MEMBER mount ONLY, structurally (both guest mounts read a
+   * `null` panel registration), so it neither depends on nor widens this branch.
    */
 
   // THE CROSS-TENANT ATTEMPT — the thing worth seeing in Axiom. The log distinguishes it from

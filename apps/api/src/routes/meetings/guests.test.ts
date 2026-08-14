@@ -5,12 +5,14 @@ const {
   mockListGuests,
   mockRemoveGuest,
   mockDecideGuestAdmission,
+  mockResendGuestJoinLink,
   mockCheckRateLimit,
 } = vi.hoisted(() => ({
   mockInviteGuests: vi.fn(),
   mockListGuests: vi.fn(),
   mockRemoveGuest: vi.fn(),
   mockDecideGuestAdmission: vi.fn(),
+  mockResendGuestJoinLink: vi.fn(),
   mockCheckRateLimit: vi.fn(),
 }));
 
@@ -29,6 +31,7 @@ vi.mock('../../services/meetings/guest-participation.js', () => ({
   listGuests: mockListGuests,
   removeGuest: mockRemoveGuest,
   decideGuestAdmission: mockDecideGuestAdmission,
+  resendGuestJoinLink: mockResendGuestJoinLink,
 }));
 // The invite window is Redis-backed (`POST /meetings`'s pattern). Mocked at the limiter, not
 // at ioredis, so the assertions below read as "which window refused" rather than as Redis
@@ -85,6 +88,9 @@ const ERROR_STATUS: ReadonlyArray<{ code: string; status: number }> = [
   { code: 'participant_cap_reached', status: 409 },
   { code: 'guest_already_invited', status: 409 },
   { code: 'guest_not_pending', status: 409 },
+  // BAL-436 — `409`, not `404`: the row EXISTS and the actor may host it. It is reachable
+  // strictly AFTER both gates, so it is not an oracle.
+  { code: 'guest_link_not_resendable', status: 409 },
   { code: 'delegate_must_be_client_side', status: 422 },
 ];
 
@@ -170,6 +176,11 @@ describe('meeting guest routes (BAL-408)', () => {
       id: GUEST_ID,
       admission: 'admitted',
       decidedAt: '2026-09-01T10:05:00.000Z',
+    });
+    mockResendGuestJoinLink.mockResolvedValue({
+      ok: true,
+      id: GUEST_ID,
+      expiresAt: '2026-09-08T11:00:00.000Z',
     });
   });
 
@@ -515,6 +526,195 @@ describe('meeting guest routes (BAL-408)', () => {
     });
   });
 
+  // ── BAL-436: POST /guests/:guestId/resend-link ────────────────────────────
+
+  /**
+   * ⚠⚠ THE SECOND EMAIL-EMISSION PRIMITIVE ON THIS SURFACE, and the one aimed at an address
+   * AN ANONYMOUS VISITOR TYPED. It inherits the invite route's posture verbatim, and the raw
+   * rotated token must never reach the response.
+   */
+  describe('the link re-send (BAL-436)', () => {
+    const RESEND_URL = `${GUEST_URL}/resend-link`;
+
+    async function postResend(url = RESEND_URL): Promise<LightMyRequestResponse> {
+      return call({ method: 'POST', url, headers: AUTH_HEADERS });
+    }
+
+    it('200s with the row id and the new expiry — and NOTHING else', async () => {
+      const res = await postResend();
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ id: GUEST_ID, expiresAt: '2026-09-08T11:00:00.000Z' });
+    });
+
+    it('⚠⚠ the RAW TOKEN IS NEVER IN THE RESPONSE — the engine emails it, the UI never sees it', async () => {
+      mockResendGuestJoinLink.mockResolvedValue({
+        ok: true,
+        id: GUEST_ID,
+        expiresAt: '2026-09-08T11:00:00.000Z',
+      });
+
+      const res = await postResend();
+
+      // A 43-char base64url run (the mint's shape) or a 64-char hex hash. Declared locally
+      // rather than shared: the sibling sweep below owns its own copy inside its describe.
+      expect(res.body).not.toMatch(/[A-Za-z0-9_-]{43}|\b[0-9a-f]{64}\b/);
+      expect(res.body.toLowerCase()).not.toContain('token');
+      expect(Object.keys(res.json()).sort((a, b) => a.localeCompare(b))).toEqual([
+        'expiresAt',
+        'id',
+      ]);
+    });
+
+    it('threads the actor from the SESSION and the ids from the PATH', async () => {
+      await postResend();
+
+      expect(mockResendGuestJoinLink).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        guestId: GUEST_ID,
+        actorUserId: USER_ID,
+      });
+    });
+
+    it.each([
+      { code: 'meeting_not_found', status: 404 },
+      { code: 'guest_not_found', status: 404 },
+      { code: 'guest_link_not_resendable', status: 409 },
+    ])('maps $code to $status with the fixed literal only', async ({ code, status }) => {
+      mockResendGuestJoinLink.mockResolvedValue({ ok: false, code });
+
+      const res = await postResend();
+
+      expect(res.statusCode).toBe(status);
+      expect(res.json()).toEqual({ error: code });
+    });
+
+    it('⚠ a nonexistent guest, a foreign guest and a revoked one are IDENTICAL on the wire', async () => {
+      // The service collapses all three into `guest_not_found` precisely so this route is not
+      // an oracle for "does the other party have a guest with this id".
+      mockResendGuestJoinLink.mockResolvedValue({ ok: false, code: 'guest_not_found' });
+
+      const first = await postResend();
+      const second = await postResend(
+        `/meetings/${MEETING_ID}/guests/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/resend-link`
+      );
+
+      expect(first.statusCode).toBe(second.statusCode);
+      expect(first.body).toBe(second.body);
+    });
+
+    it('400s on a malformed guest id, before the service and before the window', async () => {
+      const res = await postResend(`/meetings/${MEETING_ID}/guests/not-a-uuid/resend-link`);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_request' });
+      expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
+      expect(mockCheckRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('consumes ALL THREE windows — (actor, row), then ROW ALONE, then actor', async () => {
+      await postResend();
+
+      expect(mockCheckRateLimit).toHaveBeenCalledTimes(3);
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        expect.objectContaining({
+          keyPrefix: 'ratelimit:meeting-guests:resend-guest',
+          maxRequests: 3,
+        }),
+        // ⚠ THE GUEST ROW, NOT THE MEETING. One external inbox is the resource being
+        // protected; keying on the meeting would let one address exhaust the window for
+        // every other stranded guest on the same call.
+        `${USER_ID}:${GUEST_ID}`
+      );
+      // ⚠⚠ THE WINDOW THAT ACTUALLY BOUNDS THE INBOX. `${userId}:${guestId}` bounds ONE ACTOR
+      // against one row, so an agency of k hosts multiplies it by k — and since every rotation
+      // KILLS the previous credential, that is a griefing vector against the stranded guest,
+      // not merely mail volume. Keyed on the ROW ALONE, the ceiling stops being a function of
+      // headcount.
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        expect.objectContaining({
+          keyPrefix: 'ratelimit:meeting-guests:resend-row',
+          maxRequests: 5,
+        }),
+        GUEST_ID
+      );
+      expect(mockCheckRateLimit).toHaveBeenNthCalledWith(
+        3,
+        expect.anything(),
+        expect.objectContaining({
+          keyPrefix: 'ratelimit:meeting-guests:resend-user',
+          maxRequests: 10,
+        }),
+        USER_ID
+      );
+    });
+
+    it('⚠ A SECOND HOST IS REFUSED once the ROW window is exhausted, having sent nothing', async () => {
+      // The per-actor window is untouched for this host; the row's is not. Fail on the SECOND
+      // check — i.e. the one that does not carry their own id.
+      mockCheckRateLimit.mockImplementation(
+        async (_redis: unknown, config: { keyPrefix: string }) =>
+          config.keyPrefix === 'ratelimit:meeting-guests:resend-row'
+            ? { allowed: false, current: 6, ttlSeconds: 1800 }
+            : { allowed: true, current: 1, ttlSeconds: 3600 }
+      );
+
+      const res = await postResend();
+
+      expect(res.statusCode).toBe(429);
+      expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
+    });
+
+    it('429s with Retry-After and NEVER reaches the service, so no mail is emitted', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 4, ttlSeconds: 900 });
+
+      const res = await postResend();
+
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toEqual({ error: 'rate_limited', cooldownSeconds: 900 });
+      expect(res.headers['retry-after']).toBe('900');
+      expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
+    });
+
+    it('⚠ FAILS CLOSED on a Redis outage — 503, not an unmetered send window', async () => {
+      mockCheckRateLimit.mockRejectedValue(new Error('Redis unavailable'));
+
+      const res = await postResend();
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
+      expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
+    });
+
+    it('⚠ 503s on a Redis that never answers at all, instead of hanging', async () => {
+      vi.useFakeTimers();
+      try {
+        mockCheckRateLimit.mockReturnValue(new Promise(() => {}));
+
+        const pending = postResend();
+        await vi.advanceTimersByTimeAsync(RATE_LIMIT_DEADLINE_MS + 1);
+
+        expect((await pending).statusCode).toBe(503);
+        expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('500s without echoing the thrown message when the service blows up', async () => {
+      mockResendGuestJoinLink.mockRejectedValue(new Error('boom: dana@northwind.example'));
+
+      const res = await postResend();
+
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('northwind.example');
+    });
+  });
+
   // ── 401 ───────────────────────────────────────────────────────────────────
 
   describe('401 without a bearer token, and the service is never reached', () => {
@@ -539,6 +739,12 @@ describe('meeting guest routes (BAL-408)', () => {
         url: `${GUEST_URL}/deny`,
         payload: undefined,
       },
+      {
+        label: 'POST /guests/:id/resend-link',
+        method: 'POST' as const,
+        url: `${GUEST_URL}/resend-link`,
+        payload: undefined,
+      },
     ])('$label', async ({ method, url, payload }) => {
       const res = await call({ method, url, ...(payload ? { payload } : {}) });
 
@@ -548,6 +754,7 @@ describe('meeting guest routes (BAL-408)', () => {
       expect(mockListGuests).not.toHaveBeenCalled();
       expect(mockRemoveGuest).not.toHaveBeenCalled();
       expect(mockDecideGuestAdmission).not.toHaveBeenCalled();
+      expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
     });
   });
 
@@ -721,6 +928,7 @@ describe('meeting guest routes (BAL-408)', () => {
       { label: 'a removal', method: 'DELETE' as const, url: GUEST_URL },
       { label: 'an admit', method: 'POST' as const, url: `${GUEST_URL}/admit` },
       { label: 'a deny', method: 'POST' as const, url: `${GUEST_URL}/deny` },
+      { label: 'a link re-send', method: 'POST' as const, url: `${GUEST_URL}/resend-link` },
     ])('nor does $label', async ({ method, url }) => {
       const res = await call({ method, url, headers: AUTH_HEADERS });
 

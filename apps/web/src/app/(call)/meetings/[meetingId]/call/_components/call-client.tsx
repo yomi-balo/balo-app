@@ -27,6 +27,15 @@ import { resolveWaitingSubject } from '@/lib/meetings/waiting-subject';
 import { MEMBER_JOIN_OUTAGE_ERROR } from '@/lib/meetings/lobby';
 import { joinAsMemberAction } from '@/app/join/_actions/join-as-member';
 import type { MemberJoinResponse } from '@/lib/meetings/join-api-client';
+import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import { getMeetingGuestsAction } from '../_actions/get-meeting-guests';
+import { inviteMeetingGuestsAction } from '../_actions/invite-meeting-guests';
+import { decideGuestAdmissionAction } from '../_actions/decide-guest-admission';
+import { resendGuestLinkAction } from '../_actions/resend-guest-link';
+import { listMeetingFilesAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files';
+import { requestMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/request-meeting-file-upload';
+import { confirmMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/confirm-meeting-file-upload';
+import { getMeetingFileDownloadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/get-meeting-file-download';
 
 /**
  * BAL-435 — the THIRD mount of `MeetingCallSurface`, and the first production caller of
@@ -52,11 +61,24 @@ export interface CallClientProps {
   readonly meetingId: string;
   /** ⚠ Resolved SERVER-SIDE from the session. `null` ⇒ PreJoin omits its identity line. */
   readonly viewerName: string | null;
+  /**
+   * BAL-436 — the BARE, TOKENLESS join URL for this meeting, built SERVER-SIDE from `APP_URL`.
+   *
+   * ⚠⚠ IT IS BUILT ON THE SERVER AND HANDED DOWN, NOT ASSEMBLED HERE FROM
+   * `globalThis.location`. A client-assembled origin is whatever host the page happens to be
+   * served from — a preview deployment, a proxy, a locally-mapped hostname — and a host would
+   * copy that into a colleague's inbox believing it was the product's own link.
+   *
+   * ⚠ IT CARRIES NO TOKEN. The raw guest token never comes back from the api and this UI never
+   * builds a link; whoever opens this lands in the pending lobby and must be admitted.
+   */
+  readonly joinLinkUrl: string;
 }
 
 export function CallClient({
   meetingId,
   viewerName,
+  joinLinkUrl,
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
@@ -217,6 +239,47 @@ export function CallClient({
     router.replace(`/meetings/${meetingId}/end`);
   }, [meetingId, router]);
 
+  /**
+   * BAL-436 — ⚠⚠ **THE SIDE-PANEL REGISTRATION, AND THE ONLY PLACE IT IS BUILT.**
+   *
+   * ⚠ IT CLOSES OVER `meetingId`, WHICH IS WHY THAT ID IS NOT ON `MeetingPanelRegistration`.
+   * No panel component ever handles a meeting id it could send to the wrong action — the
+   * closure IS the containment.
+   *
+   * ⚠ MEMOISED ON `meetingId` ALONE. Every Server Action reference is a module-level import
+   * and therefore already stable, so this object's identity changes only when the meeting
+   * does — which is what keeps `MeetingRouteContextProvider`'s own `useMemo` from being
+   * defeated on every render.
+   *
+   * ⚠⚠ BOTH GUEST MOUNTS PASS NOTHING AND THEREFORE READ `null` — `join-control.tsx` and
+   * `lobby-client.tsx` do not mount this provider at all. That is STRUCTURAL, not a check: a
+   * token-authenticated guest satisfies none of the four gates behind this panel
+   * (`requireAuth` on the guests route, `requireUser()` on both file reads,
+   * `requireOnboardedUser()` on both file writes). ⚠ GUEST FILE ACCESS STAYS CLOSED AND IS
+   * **BAL-445**'s to open — one guest-authenticated read session, shared with BAL-437's chat.
+   */
+  const panels = useMemo<MeetingPanelRegistration>(
+    () => ({
+      joinLinkUrl,
+      loadGuests: () => getMeetingGuestsAction({ meetingId }),
+      inviteGuests: (emails) => inviteMeetingGuestsAction({ meetingId, emails }),
+      decideAdmission: (guestId, decision) =>
+        decideGuestAdmissionAction({ meetingId, guestId, decision }),
+      resendLink: (guestId) => resendGuestLinkAction({ meetingId, guestId }),
+      files: {
+        list: () => listMeetingFilesAction({ meetingId }),
+        requestUpload: (input) => requestMeetingFileUploadAction({ meetingId, ...input }),
+        // ⚠ `source: 'files_tab'` IS FIXED HERE. The Files panel is one of the two in-call
+        // entry points and it always knows which it is; letting a component choose would put a
+        // funnel dimension in the hands of a caller that has no reason to vary it.
+        confirmUpload: (input) =>
+          confirmMeetingFileUploadAction({ meetingId, ...input, source: 'files_tab' }),
+        download: (fileId) => getMeetingFileDownloadAction({ meetingId, fileId }),
+      },
+    }),
+    [meetingId, joinLinkUrl]
+  );
+
   if (phase === 'unavailable') {
     return (
       <CallShell>
@@ -257,6 +320,7 @@ export function CallClient({
       contextNoun={contextNoun}
       waiting={waiting}
       onExit={handleExit}
+      panels={panels}
     >
       <div className="h-full w-full">
         <MeetingCallSurface

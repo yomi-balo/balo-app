@@ -822,4 +822,20 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+
+  // BAL-436 — a host re-sent the join link to an admitted guest who never arrived. That
+  // person, and only that person; the same external `email_address` path as the invite,
+  // because there is no in-app surface for a non-user.
+  // ⚠ EMAIL ONLY AND ONE PUBLISH PER RE-SEND — the payload carries a freshly ROTATED RAW join
+  // token, and the dispatcher shares one payload across a fan-out. Never widen the recipient.
+  // ⚠ `immediate`: the point of a re-send is that somebody is stuck outside a live call.
+  'meeting.guest_link_resent': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'meeting-guest-link-resent',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
 };

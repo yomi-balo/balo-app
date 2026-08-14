@@ -91,6 +91,17 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   'validate-grant.ts',
   'waiting-copy.ts',
   'waiting-subject.ts',
+  // ── BAL-436, the side panel's shared modules ────────────────────────────────────────
+  //
+  // ⚠ `guests-api-client.ts` IS DELIBERATELY ABSENT, on exactly the grounds this allow-list
+  // exists for: it is `server-only` and therefore legitimately imports `@/lib/logging`, the
+  // same carve-out `join-api-client.ts` already has. Every OTHER new module is here.
+  'guest-roster.ts',
+  'guests-copy.ts',
+  'guests-poll.ts',
+  'join-link.ts',
+  'meeting-panels.ts',
+  'present-guest-ids.ts',
 ]);
 
 /**
@@ -180,6 +191,25 @@ const PINNED_FILES: readonly string[] = [
   'lib/meetings/back-to-context.ts',
   'lib/meetings/waiting-subject.ts',
   'lib/meetings/member-join-envelope.ts',
+  // ── BAL-436 — the side panel. ⚠ PINNED **AND** ALLOW-LISTED: the allow-list test above
+  // fails loudly if a name does not resolve, but a MISSING name fails nothing, so a new
+  // module left off `CALL_LIB_FILES` would simply be unscanned. Both lists, always.
+  'components/meeting-side-panel.tsx',
+  'components/people-panel.tsx',
+  'components/people-panel-row.tsx',
+  'components/lobby-queue-row.tsx',
+  'components/files-panel.tsx',
+  'components/files-panel-row.tsx',
+  'lib/meetings/guest-roster.ts',
+  'lib/meetings/guests-poll.ts',
+  'lib/meetings/guests-copy.ts',
+  'lib/meetings/join-link.ts',
+  'lib/meetings/meeting-panels.ts',
+  'lib/meetings/present-guest-ids.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-guests.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/invite-meeting-guests.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/decide-guest-admission.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/resend-guest-link.ts',
 ];
 
 /**
@@ -267,6 +297,35 @@ describe('invariant: the call surface never gates on a lens (BAL-435)', () => {
         `per-actor verdict — which arrives as the \`isOwner\` boolean on the validated grant. ` +
         `\`activeMode\` is a view toggle and is NEVER an authorization input (ADR-1029). The ` +
         `design prototype gets this wrong at balo-in-meeting-ui.jsx:169; do not copy it:\n  ` +
+        offenders.join('\n  ')
+    ).toEqual([]);
+  });
+
+  /**
+   * BAL-436 (Ruling H2) — ⚠⚠ **THE ENGAGEMENT AXIS IS NOT RESOLVED IN THE BROWSER TIER.**
+   *
+   * The two invariants that already police this rule elsewhere
+   * (`authorize-conversation-context.test.ts`, `authorize-meeting-file-access.test.ts`) are
+   * FILE-SCOPED string assertions, each reading only its OWN source. Nothing stopped a new
+   * panel file importing `hasEngagementCapability` — the rule was convention, not a gate.
+   *
+   * It is a gate now, scoped to the same three trees this file already scans. It does not
+   * overreach into the repo-wide version, which stays BAL-438's.
+   */
+  it('⚠⚠ no call-surface file resolves the engagement axis in the browser tier', () => {
+    const offenders = scanned
+      .filter((file) => file.jsx.includes('hasEngagementCapability'))
+      .map((file) => file.rel);
+    expect(
+      offenders,
+      `These call-surface files resolve the ENGAGEMENT axis in the browser tier. The panel ` +
+        `reads \`canHost\` off the guests GET payload. **Do not call the web engagement ` +
+        `resolver here even though it now exists** (\`lib/authz/engagement.ts\`, opened by ` +
+        `BAL-421) — \`canHost\` is already the server's per-actor ` +
+        `\`hasEngagementCapability(HOST_MEETINGS)\` verdict for this exact meeting, computed ` +
+        `behind the tenancy gate that must run first. A second resolution in the browser tier ` +
+        `would be a second expression of one rule, and would run WITHOUT ` +
+        `\`authorizeMeetingParticipation\` in front of it:\n  ` +
         offenders.join('\n  ')
     ).toEqual([]);
   });

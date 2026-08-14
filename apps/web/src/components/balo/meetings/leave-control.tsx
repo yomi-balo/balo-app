@@ -50,7 +50,8 @@ import { MeetingConfirmDialog, MeetingMenu, MeetingMenuItem } from './meeting-ov
  * The client-side host action is `updateParticipants({ '*': { eject: true } })`. Per the
  * `daily-co` skill's own trap list, **eject alone does not revoke a token** — a disconnected
  * participant holding a live token can rejoin. `ban: true` / `DELETE /rooms/:name` is a REST
- * call and the skill assigns `POST /rooms/:name/eject` to **BAL-436**. So ruling **R7** drops the
+ * call and belongs to **BAL-444** (BAL-436 DECLINED it: server-side vendor work in `apps/api`
+ * governed by the `daily-co` skill, not UI). So ruling **R7** drops the
  * "and it can't be undone" clause: it would be false as built. Do not restore it, and do not
  * replace it with "anyone with the link can rejoin" — that advertises the gap and reads as a
  * half-working destructive control.

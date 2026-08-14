@@ -58,6 +58,18 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   'app/(dashboard)/meetings/[meetingId]/_actions/get-meeting-file-download.ts',
   // Lists a meeting's live files (both in-call sources) — pure read.
   'app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files.ts',
+  // ── BAL-436, the in-call People panel's roster read ───────────────────────────────────
+  //
+  // ⚠ THE STANDING BAL-424 OBLIGATION DOES NOT BIND THIS ONE EITHER, for a simpler reason
+  // than the two meeting-file entries above: it resolves NOTHING locally. It forwards a
+  // `GET /meetings/:id/guests` to `apps/api` over the WorkOS-Bearer hop and maps fixed error
+  // literals to copy — there is no repository call, no access resolver and no get-or-create
+  // pair anywhere in its import graph. `authorizeMeetingParticipation` (the real gate) runs
+  // in the other app, on the other side of HTTP.
+  //
+  // ⚠ IT IS THE ONLY POLLED ACTION ON THE ALLOWLIST — the panel re-reads it every ~10s while
+  // it is open — which is a second, independent reason it must never gain a write.
+  'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-guests.ts',
   // ── BAL-421, the case-surface readers ────────────────────────────────────────────────
   //
   // ⚠ THE STANDING BAL-424 OBLIGATION ABOVE BINDS BOTH OF THESE IN SPIRIT, THOUGH NOT BY THE

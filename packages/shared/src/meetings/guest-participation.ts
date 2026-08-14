@@ -355,6 +355,13 @@ export function selectPrimaryMeetingContext(
  * is tested FIRST because it is the stronger statement — "we never resolved a side at all"
  * dominates "the side we resolved was the expert's".
  *
+ * ⚠⚠ THE SECOND CHANNEL-FIRST RULE IN THIS MODULE IS {@link projectGuestForViewer}'s `link`
+ * ARM (BAL-436), AND THE TWO SHOULD BE READ TOGETHER. Both start from the same premise — a
+ * `link` row's `party` is a NOT-NULL PLACEHOLDER, not a resolved side — and both refuse to
+ * derive anything from it: this one refuses to derive MONEY, that one refuses to derive
+ * SAME-PARTY ENTITLEMENT. Adding a third label to `MeetingGuestInviteChannelLabel` means
+ * deciding which side of BOTH rules it falls on.
+ *
  * ⚠ THE WRITE IS BAL-134'S, AND THIS IS ITS CONTRACT. Every guest presence row must derive
  * `party` through this function — never from the guest row's own `party` column — and must
  * set `meeting_guest_id`, never `user_id`. The same assignment is written on
@@ -433,6 +440,10 @@ export interface GuestForProjection {
   readonly participationRole: MeetingParticipationRoleLabel;
   readonly accessScope: GuestAccessScopeLabel;
   readonly admission: MeetingGuestAdmissionLabel;
+  /** ⚠ AS STORED on `meeting_guests.invite_channel`. NEVER taken from request input. */
+  readonly inviteChannel: MeetingGuestInviteChannelLabel;
+  /** `meeting_guests.admission_decided_at` — non-null only on a decided row. */
+  readonly admissionDecidedAt: Date | null;
 }
 
 /**
@@ -456,6 +467,34 @@ export interface GuestForViewer {
   readonly admission: MeetingGuestAdmissionLabel;
   /** ⚠ SAME-PARTY ONLY. `engagement` encodes a DOMAIN MATCH — a fact about the address. */
   readonly accessScope?: GuestAccessScopeLabel;
+  /**
+   * BAL-436 — HOW the row was created. ⚠ PRESENT FOR **EVERY** VIEWER OF EVERY ROW, and that
+   * is argued rather than assumed.
+   *
+   * The projection rule conceals FACTS ABOUT THE ADDRESS — the address itself, its domain,
+   * and `accessScope` (which is a predicate over that domain). `invite_channel` is a fact
+   * about PROVENANCE: somebody with rights named an address (`email`), or somebody arrived
+   * holding the link (`link`). It reveals no address, no domain and no predicate over one.
+   * The same discriminator is already published to PostHog on `guest_admitted` /
+   * `guest_denied` for the identical reason.
+   *
+   * ⚠ IT IS THE **ONLY** INPUT TO A CONSUMER'S "UNVERIFIED" TREATMENT, AND IT MUST NOT BE
+   * DERIVED FROM `admission` INSTEAD. Today the mapping happens to be 1:1 (`pre_admitted` ⇔
+   * `email`) only because exactly two writers exist. BAL-134's trust-by-default work could
+   * legitimately route an email invitee through the queue, at which point the derivation
+   * would silently invert — the badge would vanish from the rows that need it and appear on
+   * rows that do not. A security affordance must not rest on a coincidence of the writer set.
+   */
+  readonly inviteChannel: MeetingGuestInviteChannelLabel;
+  /**
+   * BAL-436 — when a host decided this row, ISO 8601.
+   *
+   * ⚠ OMITTED (not `null`) WHEN THE COLUMN IS NULL, matching this interface's own
+   * optional-by-absence rule. It is non-null only on a row a host has actually decided on,
+   * and it exists so a consumer can time a grace period against a SERVER instant rather than
+   * a client clock that restarts on every panel open and every tab reload.
+   */
+  readonly admissionDecidedAt?: string;
 }
 
 /**
@@ -480,6 +519,12 @@ export interface GuestForViewer {
  * sensitive in itself, but `engagement` is set IFF the address matched one of the client
  * company's registered `party_domains`. Publishing it cross-party is publishing a predicate
  * over the hidden address.
+ *
+ * ── ⚠⚠ BAL-436 — THE `link` CHANNEL SHORT-CIRCUITS THE PARTY RULE, AND IT GOES FIRST ───────
+ *
+ * See the arm's own comment below. It is a NARROWING of ADR-1044's counterparty-concealment
+ * rule (strictly LESS data crosses than before) plus one provenance field, and it mirrors
+ * {@link presencePartyForGuest}'s channel-first ordering for the same stated reason.
  */
 export function projectGuestForViewer(
   guest: GuestForProjection,
@@ -491,7 +536,47 @@ export function projectGuestForViewer(
     party: guest.party,
     participationRole: guest.participationRole,
     admission: guest.admission,
+    inviteChannel: guest.inviteChannel,
+    // Absent rather than null when the column is null — the same optional-by-absence rule the
+    // cross-party fields follow. A key that is present always means "here is a real value".
+    ...(guest.admissionDecidedAt === null
+      ? {}
+      : { admissionDecidedAt: guest.admissionDecidedAt.toISOString() }),
   } as const;
+
+  /*
+    ⚠⚠ THE `link` CHANNEL SHORT-CIRCUITS THE PARTY RULE, FOR THE SAME ONE REASON THE MONEY
+    RULE DOES (see `presencePartyForGuest`): a `link` row's `party` is a NOT-NULL PLACEHOLDER,
+    not a resolved side. `claimLobbyPlace` writes `client` because the column demands *a*
+    value, not because anybody resolved one — so SAME-PARTY ENTITLEMENT, which is DERIVED from
+    a resolved side, is meaningless on this row. The entitled set is therefore EMPTY: `email`,
+    `emailDomain` and `accessScope` are omitted for EVERY viewer, and `displayName` NEVER
+    falls back to the address.
+
+    Three concrete defects this closes, all reachable on `main` before BAL-436:
+      1. A CLIENT-side host viewing an anonymous knocker who typed no name rendered
+         `displayName` EQUAL TO THE SELF-DECLARED ADDRESS — presenting an unverified,
+         attacker-chosen string as the person's name, on the very surface where a host decides
+         whether to let a stranger into a live call.
+      2. An EXPERT-side host viewing the SAME row fell to the cross-party arm and saw
+         `'Guest'`. Two hosts of one meeting saw two different identities for one stranger.
+      3. An unrelated CLIENT-side member — not a host at all — read that stranger's typed
+         address, purely because the placeholder happened to match their side.
+
+    ⚠ WITHHOLDING THE ADDRESS COSTS THE HOST NOTHING REAL. It is exactly as attacker-chosen as
+    the name, so showing it does not raise confidence honestly — it MANUFACTURES confidence,
+    which is the social-engineering vector this arm exists to remove. The host decides on the
+    self-declared NAME plus the consumer's UNVERIFIED framing, which is what "a decision about
+    a stranger at the door" actually is.
+
+    ⚠ AN `email`-CHANNEL ROW IS UNTOUCHED. Its `party` WAS resolved server-side from the
+    inviter's own authorized side (`authorizeMeetingParticipation`), so the original rule still
+    governs it byte for byte, including the same-party `email` / `emailDomain` / `accessScope`
+    fields and the address fallback on `displayName`.
+  */
+  if (guest.inviteChannel === 'link') {
+    return { ...base, displayName: guest.name ?? 'Guest' };
+  }
 
   if (guest.party !== viewerParty) {
     return { ...base, displayName: guest.name ?? 'Guest' };

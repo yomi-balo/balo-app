@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { dailyState, installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { OverflowTile, ParticipantTile } from './participant-tile';
@@ -199,11 +200,33 @@ describe('OverflowTile — the over-cap cell', () => {
     expect(container.querySelectorAll('span[aria-hidden="true"]').length).toBeLessThanOrEqual(3);
   });
 
-  it('⚠ is NON-INTERACTIVE until BAL-436 registers the People slot', () => {
+  it('⚠ is NON-INTERACTIVE when the People slot is UNREGISTERED', () => {
+    // A control that opens nothing is worse than no control — and a hover affordance on a
+    // static cell promises a list the person cannot reach. Both GUEST mounts land here.
     render(<OverflowTile sessionIds={['s-ada']} hiddenCount={4} />);
 
-    // A control that opens nothing is worse than no control.
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('BAL-436 — becomes a REAL button once `onOpenPeople` is supplied', async () => {
+    const user = userEvent.setup();
+    const onOpenPeople = vi.fn();
+    render(<OverflowTile sessionIds={['s-ada']} hiddenCount={4} onOpenPeople={onOpenPeople} />);
+
+    // ⚠ THE COUNT IS IN THE NAME — "Show everyone" alone leaves a screen-reader user without
+    // the number a sighted user just read off the cell.
+    const button = screen.getByRole('button', { name: 'Show everyone — 4 more in the call' });
+    await user.click(button);
+
+    expect(onOpenPeople).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no accessibility violations as an interactive cell', async () => {
+    const { container } = render(
+      <OverflowTile sessionIds={['s-ada', 's-ben']} hiddenCount={3} onOpenPeople={vi.fn()} />
+    );
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it('has no accessibility violations', async () => {

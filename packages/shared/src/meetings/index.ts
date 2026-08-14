@@ -65,6 +65,10 @@ export * from './context-owner';
 // (which consumes it and spreads it into `MeetingCallSurface`'s props) cannot drift. It was
 // previously declared twice and linked by a COMMENT; BAL-435 builds against this one.
 export * from './join-grant';
+// BAL-436 — the ONE address scan and the ONE self-declared-name reduction. `apps/api`'s
+// PUBLIC lobby route runs it at the knock (before the row is written) and `apps/web`'s
+// concealment sweeps import the same scan, so a weakening cannot pass one and fail the other.
+export * from './self-declared-name';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

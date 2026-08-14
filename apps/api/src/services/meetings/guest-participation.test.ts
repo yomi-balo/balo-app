@@ -12,6 +12,7 @@ const {
   mockFindLiveById,
   mockRevoke,
   mockDecideAdmission,
+  mockRotateToken,
   mockListDomainsByParty,
   mockListAdminUserIds,
   mockUserFindById,
@@ -33,6 +34,7 @@ const {
   mockFindLiveById: vi.fn(),
   mockRevoke: vi.fn(),
   mockDecideAdmission: vi.fn(),
+  mockRotateToken: vi.fn(),
   mockListDomainsByParty: vi.fn(),
   mockListAdminUserIds: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -59,6 +61,7 @@ vi.mock('@balo/db', () => ({
     findLiveById: mockFindLiveById,
     revoke: mockRevoke,
     decideAdmission: mockDecideAdmission,
+    rotateToken: mockRotateToken,
   },
   partyDomainsRepository: { listByParty: mockListDomainsByParty },
   partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
@@ -77,6 +80,7 @@ vi.mock('@balo/analytics/server', () => ({
     GUEST_INVITE_OPENED: 'guest_invite_opened',
     GUEST_INVITED: 'guest_invited',
     GUEST_JOINED: 'guest_joined',
+    GUEST_LINK_RESENT: 'guest_link_resent',
     GUEST_REMOVED: 'guest_removed',
   },
 }));
@@ -106,6 +110,7 @@ import {
   inviteGuests,
   listGuests,
   removeGuest,
+  resendGuestJoinLink,
   type InviteGuestInput,
 } from './guest-participation.js';
 
@@ -245,6 +250,7 @@ beforeEach(() => {
   mockFindLiveById.mockResolvedValue(undefined);
   mockRevoke.mockResolvedValue(undefined);
   mockDecideAdmission.mockResolvedValue(undefined);
+  mockRotateToken.mockResolvedValue(undefined);
 
   mockListDomainsByParty.mockResolvedValue([]);
   mockListAdminUserIds.mockResolvedValue([]);
@@ -984,6 +990,9 @@ describe('listGuests — the PARTY-SCOPED roster', () => {
     participationRole: 'guest',
     accessScope: 'engagement',
     admission: 'pre_admitted',
+    // BAL-436 — both are on `MeetingGuestPublic` and both now reach the projector.
+    inviteChannel: 'email',
+    admissionDecidedAt: null,
   };
   const EXPERT_ROW = {
     id: 'g-expert',
@@ -994,6 +1003,24 @@ describe('listGuests — the PARTY-SCOPED roster', () => {
     participationRole: 'guest',
     accessScope: 'meeting',
     admission: 'pre_admitted',
+    inviteChannel: 'email',
+    admissionDecidedAt: null,
+  };
+  /**
+   * BAL-436 — an anonymous LOBBY KNOCK. ⚠ `party` is the NOT-NULL PLACEHOLDER `claimLobbyPlace`
+   * writes, which is precisely why the projector must not derive entitlement from it.
+   */
+  const LINK_ROW = {
+    id: 'g-link',
+    email: 'stranger@somewhere.example',
+    emailDomain: 'somewhere.example',
+    name: 'Taylor Wu',
+    party: 'client',
+    participationRole: 'guest',
+    accessScope: 'meeting',
+    admission: 'pending',
+    inviteChannel: 'link',
+    admissionDecidedAt: null,
   };
 
   it('⚠ a CROSS-PARTY row has NO `email` key at all — absent, not null', async () => {
@@ -1067,6 +1094,49 @@ describe('listGuests — the PARTY-SCOPED roster', () => {
     expect('email' in (result.guests[0] ?? {})).toBe(false);
     expect('email' in (result.guests[1] ?? {})).toBe(true);
   });
+
+  it('BAL-436 — carries `inviteChannel` on every projected row, both directions', async () => {
+    mockListLiveByMeeting.mockResolvedValue([CLIENT_ROW, EXPERT_ROW]);
+
+    const result = await listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID });
+
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.guests.map((guest) => guest.inviteChannel)).toEqual(['email', 'email']);
+  });
+
+  it('BAL-436 — serialises `admissionDecidedAt` when the column is set, omits it when null', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { ...LINK_ROW, admission: 'admitted', admissionDecidedAt: new Date('2026-09-01T10:05:00Z') },
+      CLIENT_ROW,
+    ]);
+
+    const result = await listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID });
+
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.guests[0]?.admissionDecidedAt).toBe('2026-09-01T10:05:00.000Z');
+    expect('admissionDecidedAt' in (result.guests[1] ?? {})).toBe(false);
+  });
+
+  it.each([
+    ['client', 'client' as const],
+    ['expert', 'expert' as const],
+  ])(
+    '⚠⚠ BAL-436 — a `link` row leaks NO address to a %s-side viewer, and never as a displayName',
+    async (_label, side) => {
+      mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side }));
+      mockListLiveByMeeting.mockResolvedValue([{ ...LINK_ROW, name: null }]);
+
+      const result = await listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID });
+
+      if (!result.ok) throw new Error('expected ok');
+      const [guest] = result.guests;
+      expect('email' in (guest ?? {})).toBe(false);
+      expect('emailDomain' in (guest ?? {})).toBe(false);
+      expect('accessScope' in (guest ?? {})).toBe(false);
+      expect(guest?.displayName).toBe('Guest');
+      expect(JSON.stringify(result.guests)).not.toContain('somewhere.example');
+    }
+  );
 
   it('⚠ computes `canHost` with `host_meetings` — the LIVE right, NOT `manage_engagement`', async () => {
     // Inviting is administrative; hosting is live/in-meeting. The two tokens share a holder
@@ -1554,4 +1624,208 @@ describe('decideGuestAdmission — TWO gates, in order, both fail-closed', () =>
       expect(mockCountLiveByMeeting).not.toHaveBeenCalled();
     });
   });
+});
+
+// ── BAL-436: resendGuestJoinLink ─────────────────────────────────────────────────────
+
+/**
+ * ⚠⚠ THE RE-SEND IS A CREDENTIAL-MINTING PRIMITIVE aimed at an address AN ANONYMOUS VISITOR
+ * TYPED. Three properties matter more than the happy path: the gate order, the narrow row
+ * shape it accepts, and the fact that ROTATION KILLS THE PREVIOUS CREDENTIAL.
+ */
+describe('resendGuestJoinLink (BAL-436)', () => {
+  /** An ADMITTED `link`-channel row — the only shape this function accepts. */
+  const ADMITTED_LINK_GUEST = {
+    id: GUEST_ID,
+    meetingId: MEETING_ID,
+    email: 'stranger@somewhere.example',
+    name: 'Taylor Wu',
+    party: 'client',
+    inviteChannel: 'link',
+    admission: 'admitted',
+  };
+
+  /** What `rotateToken` echoes back after a successful rotation. */
+  const ROTATED = {
+    ...ADMITTED_LINK_GUEST,
+    expiresAt: new Date('2026-09-08T11:00:00.000Z'),
+  };
+
+  function resend(): ReturnType<typeof resendGuestJoinLink> {
+    return resendGuestJoinLink({ meetingId: MEETING_ID, guestId: GUEST_ID, actorUserId: USER_ID });
+  }
+
+  beforeEach(() => {
+    mockHasEngagementCapability.mockResolvedValue(true);
+    mockFindLiveById.mockResolvedValue(ADMITTED_LINK_GUEST);
+    mockRotateToken.mockResolvedValue(ROTATED);
+  });
+
+  it('rotates the credential and answers with the row id plus the NEW expiry', async () => {
+    await expect(resend()).resolves.toEqual({
+      ok: true,
+      id: GUEST_ID,
+      expiresAt: '2026-09-08T11:00:00.000Z',
+    });
+  });
+
+  it('⚠ derives the new expiry from the MEETING, never from the mint instant', async () => {
+    await resend();
+
+    // `scheduled_end` + GUEST_TOKEN_TTL_AFTER_END_MS (7 days) — the same rule `createMany`'s
+    // contract enforces by having no SQL default on the column.
+    expect(mockRotateToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guestId: GUEST_ID,
+        tokenHash: 'digest-1',
+        expiresAt: new Date(SCHEDULED_END.getTime() + 7 * 24 * 60 * 60 * 1000),
+        rotatedByUserId: USER_ID,
+      })
+    );
+  });
+
+  it('⚠⚠ the RAW TOKEN never reaches the repository — only the hash does', async () => {
+    await resend();
+
+    expect(JSON.stringify(mockRotateToken.mock.calls)).not.toContain('raw-token-1');
+  });
+
+  /**
+   * ⚠⚠ THE TENANCY SCOPE GOES **INTO THE STATEMENT**, not just into the read in front of it.
+   * This platform has NO RLS, so `rotateToken`'s own `WHERE` is the boundary; a rotate keyed on
+   * `guestId` alone would mint a live credential onto any guest row in the database given only
+   * its uuid. The pre-read exists for a precise error literal, not for safety.
+   */
+  it('⚠⚠ passes the MEETING ID to the rotate, so the UPDATE is tenancy-scoped itself', async () => {
+    await resend();
+
+    expect(mockRotateToken).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, guestId: GUEST_ID })
+    );
+  });
+
+  it('⚠⚠ publishes the RAW token to the notification engine, and nowhere else', async () => {
+    const result = await resend();
+
+    const [payload] = publishedPayloads('meeting.guest_link_resent');
+    expect(payload).toMatchObject({
+      recipientEmail: 'stranger@somewhere.example',
+      joinToken: 'raw-token-1',
+      guestName: 'Taylor Wu',
+      meetingTitle: 'CPQ implementation',
+      scheduledStartIso: SCHEDULED_START.toISOString(),
+      scheduledEndIso: SCHEDULED_END.toISOString(),
+    });
+    // The service's OWN answer carries no credential.
+    expect(JSON.stringify(result)).not.toContain('raw-token-1');
+  });
+
+  it('⚠⚠ the correlationId is NOT the row id — a row-id key would collide with the invite job', async () => {
+    // `MeetingGuestInvitedPayload.correlationId` IS `meeting_guests.id` and is the BullMQ
+    // jobId dedup key. Reusing it here would make every re-send on an invited row a silent
+    // no-op — the exact failure this affordance exists to fix.
+    await resend();
+
+    const [payload] = publishedPayloads('meeting.guest_link_resent');
+    expect(payload?.correlationId).not.toBe(GUEST_ID);
+    // The first 16 hex of the NEW hash — unique per rotation, deterministic for a retry.
+    expect(payload?.correlationId).toBe('digest-1'.slice(0, 16));
+  });
+
+  it('omits `guestName` entirely when the row has no name — never the address', async () => {
+    mockRotateToken.mockResolvedValue({ ...ROTATED, name: null });
+
+    await resend();
+
+    const [payload] = publishedPayloads('meeting.guest_link_resent');
+    expect(payload === undefined ? true : 'guestName' in payload).toBe(false);
+  });
+
+  it('tracks the host as the distinct_id, with no channel or party dimension', async () => {
+    await resend();
+
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_link_resent', { distinct_id: USER_ID });
+  });
+
+  it('⚠ TENANCY FIRST — a failed gate answers its own literal and reads nothing', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue({
+      ok: false,
+      code: 'meeting_not_found',
+    });
+
+    await expect(resend()).resolves.toEqual({ ok: false, code: 'meeting_not_found' });
+    expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+    expect(mockFindLiveById).not.toHaveBeenCalled();
+    expect(mockRotateToken).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a NON-HOST collapses into `meeting_not_found` — never a 403, never an oracle', async () => {
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    await expect(resend()).resolves.toEqual({ ok: false, code: 'meeting_not_found' });
+    expect(mockRotateToken).not.toHaveBeenCalled();
+  });
+
+  it('gates on `host_meetings` — the LIVE right, not `manage_engagement`', async () => {
+    await resend();
+
+    expect(mockHasEngagementCapability).toHaveBeenCalledWith(
+      { id: USER_ID },
+      'host_meetings',
+      CLIENT_SUBJECT
+    );
+  });
+
+  it('answers `guest_not_found` for a guest id this meeting does not have', async () => {
+    mockFindLiveById.mockResolvedValue(undefined);
+
+    await expect(resend()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockRotateToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an EMAIL invitee', { inviteChannel: 'email', admission: 'pre_admitted' }],
+    ['a still-PENDING knock', { inviteChannel: 'link', admission: 'pending' }],
+    ['a DENIED knock', { inviteChannel: 'link', admission: 'denied' }],
+    ['an email row that was somehow admitted', { inviteChannel: 'email', admission: 'admitted' }],
+  ])('⚠ refuses %s with `guest_link_not_resendable`, writing nothing', async (_label, shape) => {
+    mockFindLiveById.mockResolvedValue({ ...ADMITTED_LINK_GUEST, ...shape });
+
+    await expect(resend()).resolves.toEqual({ ok: false, code: 'guest_link_not_resendable' });
+    expect(mockRotateToken).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a rotation that lost a race with a revoke answers `guest_not_found`, not a 500', async () => {
+    mockRotateToken.mockResolvedValue(undefined);
+
+    await expect(resend()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a queue failure does NOT undo a committed rotation — the credential is already live', async () => {
+    mockPublish.mockRejectedValue(new Error('redis is down'));
+
+    await expect(resend()).resolves.toMatchObject({ ok: true, id: GUEST_ID });
+  });
+
+  it('⚠ NO SEAT-CAP CHECK — an admitted guest already holds their seat', async () => {
+    // A cap check here would refuse to rescue a stranded guest precisely when the meeting is
+    // full, i.e. when their own seat is already inside the count.
+    await resend();
+
+    expect(mockCountLiveByMeeting).not.toHaveBeenCalled();
+  });
+
+  it.each(['ended', 'cancelled'])(
+    '⚠ SUCCEEDS on a `%s` meeting — the credential outlives the call by design',
+    async (status) => {
+      mockAuthorizeMeetingParticipation.mockResolvedValue(
+        gateOk({ meeting: meetingRow({ status }) })
+      );
+
+      await expect(resend()).resolves.toMatchObject({ ok: true });
+    }
+  );
 });
