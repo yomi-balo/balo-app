@@ -26,6 +26,13 @@
  * ⚠ THE ONE PLACE A CALLER MAY STILL SUPPLY ITS OWN IS `ResolveAndCacheOptions.busyBlocks`,
  * and that override is SEED/TEST-ONLY — see its docblock in `./resolve-and-cache.ts` for the
  * divergence it deliberately accepts.
+ *
+ * ⚠ AND WHATEVER VENDOR LANDS HERE READS A WINDOW, NEVER A DELTA. ADR-1021's 2026-08-15
+ * amendment (BAL-447) rules that a calendar-change webhook is a bare trigger enqueuing a
+ * whole-window rebuild, uniformly — there is no per-vendor sync path and no delta cursor is
+ * read or stored. The matrix, the evidence and the reasoning are in
+ * `apps/api/src/services/calendar/sync-capability.ts`, which is INERT BY DESIGN: read it,
+ * do not import it.
  */
 import type { BusyBlock } from './types.js';
 

@@ -32,7 +32,8 @@ OneCal is Balo's calendar infrastructure. It handles:
 - **Calendar listing** — surfaces all calendars (Work, Personal, etc.) for the
   conflict-check toggle UI.
 - **Change webhooks (Google/Microsoft)** — OneCal POSTs to Balo's webhook when an expert's
-  calendar changes; Balo does a `syncToken` delta read and recalculates availability.
+  calendar changes; Balo enqueues a **whole-window availability rebuild** — the webhook is a
+  bare trigger. **No delta read, on any provider** (BAL-447 / ADR-1021 amendment 2026-08-15).
   iCloud has no change webhooks yet — see the iCloud note under Constraints.
 - **Availability cache update** — on webhook, Balo recomputes and stores
   `earliest_available_at` per expert (one DB row, not a full event mirror).
@@ -63,8 +64,11 @@ OneCal is Balo's calendar infrastructure. It handles:
    applied in our slot calculator. `freeBusy.get` returns raw busy slots only.
 4. **iCloud uses Basic Auth**, not OAuth — a separate connection path with its own UX
    (app-specific password). Google/Microsoft use hosted OAuth.
-5. **Incremental sync via `syncToken`**, returned as `nextSyncToken` on sync-enabled
-   paginated reads — carry it forward per webhook. (No Cronofy-style change channels.)
+5. **No incremental sync — `syncToken` is not used.** Microsoft never returns one at all
+   (BAL-393 §M2, verified paginated to exhaustion at `pageSize=1`); Google returns one only
+   on the FINAL page (§P3); and availability is sourced from `freeBusy.get`, which has no
+   delta mode on either provider. Every webhook triggers a whole-window re-read instead.
+   (No Cronofy-style change channels either.) See BAL-447 / ADR-1021 amendment 2026-08-15.
 6. **Custom event tagging** via `privateExtendedProperties` / `publicExtendedProperties`
    (`Record<string,string>`), and `list()` can filter by them via `metadataFilters`.
 
@@ -88,7 +92,8 @@ Calendar changes externally (Google/Microsoft)
   → OneCal POSTs a thin { eventType, timestamp } via Svix to /webhooks/onecal
   → verify with svix lib over svix-id / svix-timestamp / svix-signature + endpointSecret
   → dedupe on svix-id; ack 2xx within ~15s
-  → BullMQ job: events.list(..., { syncToken }) delta read → persist nextSyncToken
+  → BullMQ job (deduped on `availability-${expertProfileId}`):
+      windowed freeBusy.get re-read over the whole forward window (NO delta read)
   → recompute earliest_available_at → update availability_cache
 
 iCloud (no change webhooks)
@@ -109,6 +114,13 @@ Consultation cancelled
   → events.delete(endUserAccountId, primaryCalendarId, eventId)
 ```
 
+> **No delta read anywhere in that flow — and this is the line that contradicted Constraint 4.**
+> An earlier version of this summary had the webhook job do `events.list(..., { syncToken })`
+> and persist `nextSyncToken`. That is a full **event** read, which contradicts Constraint 4
+> below — _"Free/busy only for availability… busy slots, no titles — privacy by design"_.
+> **Constraint 4 wins.** Availability is always recomputed from a windowed free/busy read
+> (BAL-447 / ADR-1021 amendment 2026-08-15).
+
 ---
 
 ## Reference Files
@@ -121,7 +133,7 @@ Consultation cancelled
 | ---------------------------------------------------------------------- | ---------------------------------- |
 | OAuth connect (Google/MS) + iCloud Basic Auth + endUserAccount pointer | `references/connect.md`            |
 | List calendars + conflict-check toggle logic                           | `references/calendars.md`          |
-| Webhook subscription + signature verify + syncToken delta read         | `references/webhooks.md`           |
+| Webhook subscription + signature verify + whole-window rebuild trigger | `references/webhooks.md`           |
 | Free/busy fetch + slot calculator + Redis cache pattern                | `references/free-busy.md`          |
 | Write / delete / tag consultation events                               | `references/events.md`             |
 | Availability rules (BAL-195 weekly schedule) — Balo-side computation   | `references/availability-rules.md` |
@@ -178,6 +190,11 @@ endUserAccounts.get(id) / .list(params?) / .delete(id) / .getCredentials(id)
 basicAuth.connect(appId, 'apple', { email, password })   // iCloud app-specific password
 ```
 
+> That list is the **vendor's** surface, not Balo's sanctioned surface. `events.list`'s
+> `syncToken` / `updatedAfter` / `expandRecurrences` params exist on the SDK and Balo uses **none
+> of them** — availability comes from `freeBusy.get` only (Constraints 3 and 4). Reading a
+> vendor capability as permission is exactly the mistake BAL-447 closed.
+
 **Environment variables required:**
 
 ```
@@ -204,7 +221,6 @@ export const calendarConnections = pgTable('calendar_connections', {
   credentialStatus: text('credential_status').notNull().default('ACTIVE'), // ACTIVE | EXPIRED | REVOKED
   webhookSubscriptionId: text('webhook_subscription_id'),
   endpointSecret: text('endpoint_secret'), // encrypted at rest; signature verify
-  syncToken: text('sync_token'), // last nextSyncToken for delta reads
   lastSyncedAt: timestamp('last_synced_at'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -236,6 +252,9 @@ export const availabilityCache = pgTable('availability_cache', {
 **Encrypt `endpoint_secret` at rest** (AES-256, key from env). No provider tokens are
 stored by Balo.
 
+**There is no `sync_token` column, and none is planned.** Balo stores no delta cursor for any
+provider — see Constraint 3 (BAL-447 / ADR-1021 amendment 2026-08-15).
+
 ---
 
 ## Key Constraints & Gotchas
@@ -247,9 +266,16 @@ stored by Balo.
    Subscriptions **don't expire** — OneCal auto-renews the underlying provider channels, so
    no scheduled re-create. On reconnect, `calendarSubscriptions.delete` the old ones and
    re-create; store the fresh `webhookSubscriptionId` + `endpointSecret` per calendar.
-3. **`syncToken` is the delta key.** Store `nextSyncToken` from each sync-enabled read;
-   pass it on the next `events.list`. On a `fullSyncRequired` / `SyncStateNotFound` error,
-   clear the stored token and do a full-window resync.
+3. **There is no delta key. Balo does not delta-sync.** `syncToken` / `nextSyncToken` is never
+   read and never stored, on any provider. Three reasons: (a) the sync token lives on
+   `events.list`, while availability is sourced from `freeBusy.get`, which has **no delta
+   mode** on either provider; (b) switching availability to full event reads would violate
+   Constraint 4's privacy posture; (c) capability is not even uniform — Microsoft never
+   returns a token (BAL-393 §M2) and Google only on the final page (§P3). Every change
+   webhook enqueues a whole-window re-read instead — one strategy for every provider, with
+   no provider-conditional sync path. The matrix, its evidence, and the ruling live in
+   `apps/api/src/services/calendar/sync-capability.ts` (BAL-447 / ADR-1021 amendment
+   2026-08-15).
 4. **Free/busy only for availability.** Use `freeBusy.get` (busy slots, no titles) for
    the slot picker — privacy by design, consistent with fee/detail concealment posture.
    Only read full events when we need our own tagged consultation events (filter via
@@ -305,7 +331,8 @@ REVOKED`), read via `endUserAccounts.get(id)` / `.getCredentials(id)`. On
 ## Webhooks (Google/Microsoft)
 
 Delivered via **Svix** as a thin `{ eventType, timestamp }` payload — it signals _that_ a
-calendar changed, not what; fetch the delta with `events.list({ syncToken })`. Event types:
+calendar changed, not what; enqueue a whole-window availability rebuild. The payload carries
+no event identity and Balo reads no delta (Constraint 3). Event types:
 `calendar.event.changed`, `calendar.event.unknown`, and `enduseraccount.created` /
 `updated` / `deleted` / `credential.updated`.
 
@@ -324,7 +351,7 @@ const payload = wh.verify(rawBody, {
   'svix-timestamp': req.headers['svix-timestamp'],
   'svix-signature': req.headers['svix-signature'],
 }); // throws on bad signature → 400, no retry
-// then enqueue a BullMQ delta-sync job
+// then enqueue a BullMQ whole-window availability rebuild — never a delta (Constraint 3)
 ```
 
 iCloud has no change webhooks — refresh its availability with polling / on-demand
