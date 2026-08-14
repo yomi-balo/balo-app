@@ -1,7 +1,8 @@
 'use client';
 
-import { LayoutGrid, MonitorUp, MoreHorizontal, Settings } from 'lucide-react';
+import { LayoutGrid, MonitorUp, MoreHorizontal, Paperclip, Settings, Users } from 'lucide-react';
 import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
+import type { MeetingPanelId } from '@/lib/meetings/meeting-panels';
 import { BackToContextLink } from './back-to-context-link';
 import { MeetingMenu, MeetingMenuItem } from './meeting-overlay';
 import { MeetingToolbarButton } from './meeting-toolbar-button';
@@ -46,6 +47,14 @@ export interface MoreSheetProps {
   readonly canShareScreen: boolean;
   readonly onToggleScreenShare: () => void;
   readonly onOpenSettings: () => void;
+  /**
+   * BAL-436 — supplied ONLY when the side-panel slot is registered.
+   *
+   * ⚠ `undefined` ⇒ THE TWO ROWS RENDER **NOTHING**. That is the slot rule, and both GUEST
+   * mounts land there structurally (neither mounts the route context that carries the
+   * registration). Never a disabled row.
+   */
+  readonly onTogglePanel?: (id: MeetingPanelId) => void;
 }
 
 export function MoreSheet({
@@ -58,6 +67,7 @@ export function MoreSheet({
   canShareScreen,
   onToggleScreenShare,
   onOpenSettings,
+  onTogglePanel,
 }: Readonly<MoreSheetProps>): React.JSX.Element {
   // ⚠ THE SAME STRUCTURAL SIGNAL THE LINK ITSELF USES: no route context ⇒ an anonymous guest,
   // who has no Balo destination. Read here too so the DIVIDER does not render around nothing.
@@ -113,6 +123,33 @@ export function MoreSheet({
           </p>
         )}
       </div>
+
+      {/*
+        ⚠⚠ BAL-436 — THE PEOPLE AND FILES ROWS, `lg:hidden`: their bar twins are `hidden lg:flex`,
+        so the split is CSS and nothing flashes on first paint. Rendered only when the slot is
+        REGISTERED — an unregistered slot renders NOTHING, never a disabled row.
+
+        ⚠⚠ `lg`, NOT `md`, AND THAT IS THE WHOLE POINT OF THE NUMBER. The panel itself overlays
+        below `lg` (`meeting-side-panel.tsx`), and the toolbar's `PanelSlotButtons` are
+        `hidden lg:flex`. When these rows were `md:hidden` the 768–1023px band had NO way into
+        the panel from the sheet while also showing the desktop buttons — three readers, three
+        answers. All three now say `lg`. ⚠ The Share-screen row above stays `md:hidden` on
+        purpose: its bar twin is `hidden md:flex`, so that pair agrees with itself.
+      */}
+      {onTogglePanel === undefined ? null : (
+        <div className="lg:hidden">
+          <MeetingMenuItem
+            icon={Users}
+            label="People"
+            onSelect={close(() => onTogglePanel('people'))}
+          />
+          <MeetingMenuItem
+            icon={Paperclip}
+            label="Files"
+            onSelect={close(() => onTogglePanel('files'))}
+          />
+        </div>
+      )}
 
       <MeetingMenuItem icon={Settings} label="Camera and sound" onSelect={close(onOpenSettings)} />
 

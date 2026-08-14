@@ -86,7 +86,14 @@ export type GuestServiceErrorCode =
   | 'guest_already_invited'
   | 'delegate_must_be_client_side'
   | 'guest_not_found'
-  | 'guest_not_pending';
+  | 'guest_not_pending'
+  /**
+   * BAL-436 — the row exists and the actor may host it, but it is not a re-sendable row: a
+   * re-send only makes sense for a `link`-channel guest a host has already ADMITTED. An
+   * `email` invitee has an inviter and a re-invite path; a `pending` knock has not been let
+   * in yet, so there is nothing to re-send.
+   */
+  | 'guest_link_not_resendable';
 
 export interface InviteGuestInput {
   email: string;
@@ -129,6 +136,17 @@ export type RemoveGuestResult = { ok: true } | { ok: false; code: GuestServiceEr
 
 export type DecideAdmissionResult =
   | { ok: true; id: string; admission: 'admitted' | 'denied'; decidedAt: string }
+  | { ok: false; code: GuestServiceErrorCode };
+
+/**
+ * BAL-436 — the re-send's answer.
+ *
+ * ⚠⚠ **THE RAW TOKEN IS NOT ON THIS SHAPE, AND MUST NEVER BE.** It goes into the notification
+ * payload and nowhere else — the same rule `inviteGuests` keeps. A UI does not build join
+ * links (`guests.ts` contract point 4); the engine emails them.
+ */
+export type ResendGuestLinkResult =
+  | { ok: true; id: string; expiresAt: string }
   | { ok: false; code: GuestServiceErrorCode };
 
 /** A Postgres unique violation — the concurrent-invite race, mapped rather than 500'd. */
@@ -332,8 +350,11 @@ interface AnnounceInvitesParams {
  * whose database work fully succeeded and invite the caller to retry into a
  * `guest_already_invited`.
  *
- * ⚠ `context` MUST NEVER CARRY THE ADDRESS OR THE TOKEN. `correlationId` is the guest row
- * id, which is exactly enough to find the row and re-send.
+ * ⚠ `context` MUST NEVER CARRY THE ADDRESS OR THE TOKEN. `correlationId` is whatever the
+ * event's own payload uses as its dedup key — the guest row id on the invite/roster events,
+ * and the ROTATED HASH PREFIX on `meeting.guest_link_resent` (see that payload's docblock for
+ * why the two must differ). Either is enough to correlate a failure with a row; neither is a
+ * secret.
  */
 async function publishBestEffort(
   publish: () => Promise<unknown>,
@@ -809,6 +830,14 @@ export async function listGuests(input: {
           participationRole: row.participationRole,
           accessScope: row.accessScope,
           admission: row.admission,
+          // ⚠⚠ BAL-436 — BOTH ALREADY ON `MeetingGuestPublic` AND IN `PUBLIC_COLUMNS`. No
+          // repository change, no new query, no migration. `inviteChannel` is what lets the
+          // panel mark a `link` row UNVERIFIED without DERIVING it from `admission` (a 1:1
+          // mapping today only by coincidence of the current writer set — see
+          // `GuestForViewer.inviteChannel`), and it is ALSO what makes the projector's
+          // `link` arm reachable, which is what stops a self-declared address crossing.
+          inviteChannel: row.inviteChannel,
+          admissionDecidedAt: row.admissionDecidedAt,
         },
         authorized.side
       )
@@ -942,12 +971,14 @@ export async function removeGuest(input: {
  * against 1 free seat is now an expressible state. A DENY is never refused for capacity: it
  * is the host's only control for clearing a flooded queue. See the inline block.
  *
- * ⚠ WHAT IS STILL MISSING IS THE HOST'S **UI**, NOT THE MECHANISM — BAL-436 owns the
- * admit/deny panel. Until it ships, the transition is reachable only by calling the route
- * directly. ⚠⚠ AND BAL-436 CARRIES A SECURITY OBLIGATION THIS LAYER CANNOT DISCHARGE: a
- * `link`-channel `pending` row's name and email are **SELF-DECLARED BY AN ANONYMOUS
- * VISITOR** — anyone with the meeting URL can knock as anyone. The panel must present such
- * entries as UNVERIFIED and must never render the self-declared address as identity.
+ * ⚠⚠ **THE HOST'S UI LANDED IN BAL-436** — the in-call People panel, whose Admit / Deny
+ * controls gate on `canHost` from the GET response. The security obligation this layer could
+ * not discharge (a `link`-channel `pending` row's name and email are SELF-DECLARED BY AN
+ * ANONYMOUS VISITOR — anyone with the meeting URL can knock as anyone) is now discharged at
+ * the DATA LAYER rather than in JSX: `projectGuestForViewer`'s `link` arm omits `email`,
+ * `emailDomain` and `accessScope` for EVERY viewer and never falls `displayName` back to the
+ * address, so the panel cannot render it even by accident. The panel adds the UNVERIFIED
+ * badge on top, keyed on `inviteChannel` and nothing else.
  */
 export async function decideGuestAdmission(input: {
   meetingId: string;
@@ -1072,4 +1103,167 @@ export async function decideGuestAdmission(input: {
     admission: input.decision,
     decidedAt: decided.admissionDecidedAt.toISOString(),
   };
+}
+
+/**
+ * BAL-436 — RE-SEND the join link to a guest who was ADMITTED and never arrived.
+ *
+ * The product case is narrow and real: a host admits somebody out of the waiting queue, the
+ * person's tab has gone stale or their link was lost, and the host has no way to get them
+ * back in. This mints a FRESH credential and emails it to the address on the row — never to
+ * an address the caller names.
+ *
+ * ── ⚠⚠ ROTATION INVALIDATES THE PREVIOUS CREDENTIAL, AND THAT IS CORRECT ────────────────
+ *
+ * The host is re-sending precisely BECAUSE the previous credential is believed lost. Leaving
+ * two live credentials on one row is a second hijack surface opened by the act of rescuing
+ * somebody. **THIS RULING IS BAL-442'S INHERITANCE:** its guest self-service arm must call
+ * THIS SAME FUNCTION behind a different actor gate, never a second rotation primitive.
+ *
+ * ── THE GATES, IN ORDER, BOTH FAIL-CLOSED ───────────────────────────────────────────────
+ *
+ *   1. `authorizeMeetingParticipation` — tenancy first, ALWAYS. The ordering rule is
+ *      unchanged: checking anything about the meeting before authorization is an oracle.
+ *   2. `hasEngagementCapability(HOST_MEETINGS)` — the SAME verdict the panel gated its button
+ *      on, re-checked server-side. ⚠ A UI GATE IS NEVER THE GATE.
+ *
+ * ⚠ IT DOES **NOT** GO THROUGH `authorizeMutation`, and the reason is `removeGuest`'s
+ * verbatim. A re-send is a repair for a meeting that is happening or has just happened; the
+ * credential stays valid for `GUEST_TOKEN_TTL_AFTER_END_MS` past `scheduled_end`, so gating
+ * on the terminal set would refuse the one action that fixes a stranded guest during the very
+ * window the link is supposed to work in. The gate above is still tenancy-scoped and still
+ * fail-closed — only the STATE check is dropped, exactly as `listGuests` and `removeGuest`
+ * drop it.
+ *
+ * ⚠ EVERY REFUSAL AFTER THE GATES IS `guest_not_found` OR `guest_link_not_resendable`, AND
+ * NEITHER IS A 403 — this surface has none (`guests.ts`). A nonexistent id, another meeting's
+ * id and a revoked row are IDENTICAL on the wire, so the route is not an oracle.
+ *
+ * ⚠ NO SEAT-CAP CHECK. This is not an ADDITIVE mutation: an `admitted` guest already holds
+ * their seat, and re-issuing their credential adds nobody to the room. Adding a cap check
+ * here would refuse to rescue a stranded guest precisely when the meeting is full — i.e. when
+ * their seat is already counted.
+ */
+export async function resendGuestJoinLink(input: {
+  meetingId: string;
+  guestId: string;
+  actorUserId: string;
+}): Promise<ResendGuestLinkResult> {
+  const authorized = await authorizeMeetingParticipation({
+    meetingId: input.meetingId,
+    userId: input.actorUserId,
+  });
+  if (!authorized.ok) return { ok: false, code: authorized.code };
+
+  const canHost = await hasEngagementCapability(
+    { id: input.actorUserId },
+    ENGAGEMENT_CAPABILITIES.HOST_MEETINGS,
+    authorized.subject
+  );
+  if (!canHost) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        actorUserId: input.actorUserId,
+        reason: 'no_host_capability',
+      },
+      'Guest link re-send denied'
+    );
+    // Collapsed into the gate's literal: a non-holder learns nothing about the meeting.
+    return { ok: false, code: 'meeting_not_found' };
+  }
+
+  // `meetingId` is the tenancy scope already authorized, so a guest id belonging to another
+  // meeting resolves to `undefined` rather than to somebody else's row.
+  const guest = await meetingGuestsRepository.findLiveById(input.meetingId, input.guestId);
+  if (guest === undefined) {
+    log.warn(
+      { meetingId: input.meetingId, guestId: input.guestId, actorUserId: input.actorUserId },
+      'Guest link re-send refused — no live guest with that id on this meeting'
+    );
+    return { ok: false, code: 'guest_not_found' };
+  }
+
+  // ⚠ THE NARROW SHAPE, AND BOTH HALVES MATTER. An `email` invitee has an inviter and a
+  // remove-then-re-invite path, so rotating theirs here would bypass the attribution that
+  // path records. A `pending` knock has not been let in at all — "re-send" would mint a
+  // credential for somebody nobody has admitted, which is the single control the queue is.
+  if (guest.inviteChannel !== 'link' || guest.admission !== 'admitted') {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        actorUserId: input.actorUserId,
+        inviteChannel: guest.inviteChannel,
+        admission: guest.admission,
+      },
+      'Guest link re-send refused — not an admitted link-channel guest'
+    );
+    return { ok: false, code: 'guest_link_not_resendable' };
+  }
+
+  // ⚠ MINT BEFORE PUBLISH, AND THE ROW IS WRITTEN BEFORE EITHER. See the module docblock —
+  // publishing first would email a credential the database never accepted.
+  const { rawToken, tokenHash } = mintGuestInviteToken();
+  // ⚠ DERIVED FROM THE **MEETING**, never from the mint instant — the rule
+  // `meeting_guests.expires_at` has no SQL default in order to enforce.
+  const expiresAt = new Date(
+    authorized.meeting.scheduledEnd.getTime() + GUEST_TOKEN_TTL_AFTER_END_MS
+  );
+
+  // ⚠⚠ THE REPOSITORY RE-STATES ALL FOUR NARROWING FACTS IN ITS OWN `WHERE` — meeting,
+  // liveness, `link` and `admitted`. The reads above are for a PRECISE ERROR LITERAL, not for
+  // safety: between them and this write a concurrent revoke can land, and this platform has no
+  // RLS, so the statement's own clause has to be the boundary. Passing `meetingId` is what
+  // makes that true rather than aspirational.
+  const rotated = await meetingGuestsRepository.rotateToken({
+    meetingId: input.meetingId,
+    guestId: input.guestId,
+    tokenHash,
+    expiresAt,
+    rotatedByUserId: input.actorUserId,
+  });
+  if (rotated === undefined) {
+    // Lost a race with a concurrent revoke (or with a state change out of the narrow shape).
+    // Same literal — a revoked row and a nonexistent one are the same answer to this caller,
+    // and a distinct code would describe our timing.
+    return { ok: false, code: 'guest_not_found' };
+  }
+
+  // Resolved BEFORE the publish thunk, not inside it: `publishBestEffort` takes a synchronous
+  // factory, and a title lookup is a cosmetic read that must not sit inside the swallow.
+  const meetingTitle = await resolveMeetingTitle(authorized.subject);
+
+  await publishBestEffort(
+    () =>
+      notificationEvents.publish('meeting.guest_link_resent', {
+        // ⚠⚠ **NOT THE ROW ID.** See `MeetingGuestLinkResentPayload.correlationId`: the
+        // invite's jobId dedup key IS the row id, so reusing it here would collide with the
+        // original invite's retained job and the re-send would be silently swallowed — the
+        // exact failure this affordance exists to fix. The new hash's prefix is unique per
+        // rotation, deterministic for a retry, and is not the raw token.
+        correlationId: tokenHash.slice(0, 16),
+        recipientEmail: rotated.email,
+        joinToken: rawToken,
+        ...(rotated.name === null ? {} : { guestName: rotated.name }),
+        meetingTitle,
+        scheduledStartIso: authorized.meeting.scheduledStart.toISOString(),
+        scheduledEndIso: authorized.meeting.scheduledEnd.toISOString(),
+        expiresOn: formatExpiryDate(rotated.expiresAt),
+      }),
+    { event: 'meeting.guest_link_resent', correlationId: tokenHash.slice(0, 16) },
+    'Failed to publish guest link re-send — the rotation itself is committed'
+  );
+
+  trackServer(GUEST_SERVER_EVENTS.GUEST_LINK_RESENT, { distinct_id: input.actorUserId });
+
+  // ⚠ A CREDENTIAL WAS ISSUED — that is a key business event, and it is the one line that
+  // makes a "they never got it" support case answerable. ⚠ NO ADDRESS, NO TOKEN, NO HASH.
+  log.info(
+    { meetingId: input.meetingId, guestId: rotated.id, actorUserId: input.actorUserId },
+    'Guest join link re-sent — the previous credential is now dead'
+  );
+
+  return { ok: true, id: rotated.id, expiresAt: rotated.expiresAt.toISOString() };
 }

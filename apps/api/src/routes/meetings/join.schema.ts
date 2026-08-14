@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sanitizeSelfDeclaredName } from '@balo/shared/meetings';
 
 /**
  * BAL-132 — the Zod boundary for the three join routes.
@@ -37,7 +38,28 @@ export type MeetingIdParams = z.infer<typeof meetingIdParamsSchema>;
  * would remove that bound entirely. `name` is what the host actually reads in the queue.
  */
 export const lobbyClaimBodySchema = z.object({
-  name: z.string().trim().min(1).max(160),
+  /**
+   * ⚠⚠ **SANITISED AT THE BOUNDARY, BEFORE THE ROW IS WRITTEN.** BAL-436's concealment is
+   * FIELD-SCOPED: `projectGuestForViewer`'s `link` arm removes `email`, `emailDomain` and
+   * `accessScope`, and refuses to fall `displayName` back to the address — but the very next
+   * column, `name`, is typed by the same anonymous visitor and IS shown to the host, inside
+   * the queue row, inside the `Admit …` / `Deny …` accessible names, and (on a re-send) inside
+   * a Balo-branded email. A knock as `"dana.okoro@northwind.com"` or
+   * `"Dana Okoro ✅ Verified"` therefore defeats the concealment through the neighbouring
+   * column, and Ruling B's own argument against showing the address — that it MANUFACTURES
+   * confidence rather than raising it honestly — applies to that string word for word.
+   *
+   * ⚠ IT COLLAPSES, IT DOES NOT REJECT. A `400` would tell an anonymous caller which strings
+   * the server dislikes and would strand somebody whose real problem is a typo;
+   * `sanitizeSelfDeclaredName` yields `Guest`, which is exactly what the projector already
+   * shows for a `link` row with no name. ⚠ THE TRANSFORM RUNS **AFTER** `min(1)`, so an empty
+   * knock is still a `400` — the collapse is not a way to send nothing.
+   *
+   * ⚠ WHAT IT DOES NOT COVER is stated in `sanitizeSelfDeclaredName`'s docblock and is NOT
+   * pretended away here: an arbitrary organisational claim ("(Northwind IT)") or a homoglyph
+   * still gets through. The UNVERIFIED badge and the queue disclosure are the answer to those.
+   */
+  name: z.string().trim().min(1).max(160).transform(sanitizeSelfDeclaredName),
   /** ⚠ 254 IS THE RFC 5321 MAXIMUM for a whole address path — matching `guests.schema.ts`. */
   email: z.string().trim().email().max(254),
 });

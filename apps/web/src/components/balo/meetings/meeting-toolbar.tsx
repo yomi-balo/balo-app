@@ -1,6 +1,7 @@
 'use client';
 
-import { Mic, MicOff, MonitorUp, Video, VideoOff } from 'lucide-react';
+import { Mic, MicOff, MonitorUp, Paperclip, Users, Video, VideoOff } from 'lucide-react';
+import type { MeetingPanelId } from '@/lib/meetings/meeting-panels';
 import { LeaveControl } from './leave-control';
 import { MeetingToolbarButton } from './meeting-toolbar-button';
 import { MoreSheet } from './more-sheet';
@@ -44,6 +45,20 @@ export interface MeetingToolbarProps {
   readonly onOpenSettings: () => void;
   readonly moreOpen: boolean;
   readonly onMoreOpenChange: (open: boolean) => void;
+  /**
+   * BAL-436 — which side panel is open, or `null`.
+   *
+   * ⚠ `undefined` (rather than `null`) MEANS **THE SLOT IS NOT REGISTERED AT ALL** — no
+   * People button, no Files button, no More-sheet rows. Both GUEST mounts land here
+   * structurally, because neither mounts the route context that carries the registration.
+   * Absent, never disabled.
+   */
+  readonly openPanel?: MeetingPanelId | null;
+  /** ⚠ Supplied IFF `openPanel` is. Toggling: re-clicking the open panel's button closes it. */
+  readonly onTogglePanel?: (id: MeetingPanelId) => void;
+  /** Focused when a panel closes, so focus returns to the control that opened it. */
+  readonly peopleButtonRef?: React.Ref<HTMLButtonElement>;
+  readonly filesButtonRef?: React.Ref<HTMLButtonElement>;
   /** ⚠⚠ THE SERVER'S `host_meetings` VERDICT — the only input to the end-for-everyone branch. */
   readonly isOwner: boolean;
   readonly contextNoun: string;
@@ -67,6 +82,10 @@ export function MeetingToolbar({
   onOpenSettings,
   moreOpen,
   onMoreOpenChange,
+  openPanel,
+  onTogglePanel,
+  peopleButtonRef,
+  filesButtonRef,
   isOwner,
   contextNoun,
   isCase,
@@ -74,6 +93,10 @@ export function MeetingToolbar({
   onEndForEveryone,
   isEnding,
 }: Readonly<MeetingToolbarProps>): React.JSX.Element {
+  // ⚠ THE SLOT REGISTRATION, READ ONCE. `onTogglePanel === undefined` ⇒ absent everywhere:
+  // no bar buttons, no MoreSheet rows. Hoisted so the two readers cannot drift.
+  const panelSlot = onTogglePanel === undefined ? {} : { onTogglePanel };
+
   return (
     <div className="border-border flex h-[88px] shrink-0 items-center justify-between border-t px-4 pb-[env(safe-area-inset-bottom)] md:h-24 md:justify-center md:gap-2.5">
       <div className="flex items-center gap-2.5">
@@ -124,6 +147,15 @@ export function MeetingToolbar({
             className="hidden md:flex"
           />
         ) : null}
+        {/* ⚠⚠ BAL-436 — see `PanelSlotButtons`. Absent entirely when the slot is unregistered. */}
+        {onTogglePanel === undefined ? null : (
+          <PanelSlotButtons
+            openPanel={openPanel ?? null}
+            onTogglePanel={onTogglePanel}
+            peopleButtonRef={peopleButtonRef}
+            filesButtonRef={filesButtonRef}
+          />
+        )}
         {/* ⚠ SLOT 3 ON MOBILE IS CHAT (BAL-437). It renders NOTHING today. */}
         <MoreSheet
           open={moreOpen}
@@ -135,6 +167,7 @@ export function MeetingToolbar({
           canShareScreen={canShareScreen}
           onToggleScreenShare={onToggleScreenShare}
           onOpenSettings={onOpenSettings}
+          {...panelSlot}
         />
         <span className="bg-border mx-1 hidden h-8 w-px md:block" aria-hidden="true" />
       </div>
@@ -148,5 +181,69 @@ export function MeetingToolbar({
         isEnding={isEnding}
       />
     </div>
+  );
+}
+
+/**
+ * BAL-436 — the desktop People and Files pair.
+ *
+ * ⚠⚠ **DESKTOP ONLY (`hidden lg:flex`), AND SLOT 3 ON MOBILE STAYS CHAT'S AND STAYS EMPTY.**
+ * The mobile ladder (Mic · Camera · Chat · More · Leave) is a FIXED RULE, not a responsive
+ * accident — see the file docblock. People and Files reach a phone through `MoreSheet`,
+ * exactly as Share screen does.
+ *
+ * ⚠⚠ **`lg`, NOT `md` — AND ALL THREE READERS MUST AGREE.** The panel overlays below `lg`
+ * (`meeting-side-panel.tsx`), so these buttons and `MoreSheet`'s People/Files rows are `lg`
+ * too. When these were `md` and the panel was `lg`, the 768–1023px band showed the DESKTOP
+ * buttons, hid the MoreSheet rows, and opened a full-width overlay — i.e. the one width where
+ * every reader disagreed. ⚠ Share screen above stays `md` deliberately: it has no panel and
+ * its own MoreSheet twin is `md:hidden`, so that pair agrees with itself.
+ *
+ * ⚠ `pressed` CARRIES THE STATE while the accessible NAME stays stable ("People", not "Hide
+ * people"), for the reason `MeetingToolbarButton.label` records: a name that changes beside a
+ * flipping `aria-pressed` announces the opposite of the truth. The changing wording lives in
+ * the tooltip, which is a description.
+ *
+ * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY — inline, `MeetingToolbar`'s own body scored
+ * 22 against SonarCloud's allowed 15. The repo's precedent is to EXTRACT, never to disable the
+ * rule (`FrameStage` was split out of `MeetingFrameInner` for exactly this). The markup is
+ * unchanged, line for line.
+ */
+function PanelSlotButtons({
+  openPanel,
+  onTogglePanel,
+  peopleButtonRef,
+  filesButtonRef,
+}: Readonly<{
+  openPanel: MeetingPanelId | null;
+  onTogglePanel: (id: MeetingPanelId) => void;
+  peopleButtonRef?: React.Ref<HTMLButtonElement>;
+  filesButtonRef?: React.Ref<HTMLButtonElement>;
+}>): React.JSX.Element {
+  return (
+    <>
+      <MeetingToolbarButton
+        ref={filesButtonRef}
+        icon={Paperclip}
+        label="Files"
+        tooltip={openPanel === 'files' ? 'Hide files' : 'Files'}
+        state={openPanel === 'files' ? 'active' : 'default'}
+        pressed={openPanel === 'files'}
+        size="desktop"
+        onClick={() => onTogglePanel('files')}
+        className="hidden lg:flex"
+      />
+      <MeetingToolbarButton
+        ref={peopleButtonRef}
+        icon={Users}
+        label="People"
+        tooltip={openPanel === 'people' ? 'Hide people' : 'People'}
+        state={openPanel === 'people' ? 'active' : 'default'}
+        pressed={openPanel === 'people'}
+        size="desktop"
+        onClick={() => onTogglePanel('people')}
+        className="hidden lg:flex"
+      />
+    </>
   );
 }

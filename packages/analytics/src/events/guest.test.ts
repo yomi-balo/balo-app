@@ -21,6 +21,10 @@ describe('GUEST_SERVER_EVENTS', () => {
       // so unlike the `GUEST_INVITE_OPENED` / `GUEST_INVITED` pair above, its position is
       // not collation-sensitive.
       'GUEST_JOINED',
+      // ⚠ BAL-436. `GUEST_LINK_RESENT` sorts here under BOTH ICU `localeCompare` and
+      // code-unit order — after `GUEST_JOINED` (`J` < `L`) and before `GUEST_REMOVED`
+      // (`L` < `R`) — so its position is not collation-sensitive either.
+      'GUEST_LINK_RESENT',
       'GUEST_REMOVED',
     ]);
   });
@@ -31,6 +35,7 @@ describe('GUEST_SERVER_EVENTS', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_INVITE_OPENED).toBe('guest_invite_opened');
     expect(GUEST_SERVER_EVENTS.GUEST_INVITED).toBe('guest_invited');
     expect(GUEST_SERVER_EVENTS.GUEST_JOINED).toBe('guest_joined');
+    expect(GUEST_SERVER_EVENTS.GUEST_LINK_RESENT).toBe('guest_link_resent');
     expect(GUEST_SERVER_EVENTS.GUEST_REMOVED).toBe('guest_removed');
   });
 

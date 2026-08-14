@@ -33,6 +33,9 @@ export {
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
   MEETING_CALL_EVENTS,
+  // BAL-436 — ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package
+  // (`apps/web` cannot import it), not in this one.
+  MEETING_PANEL_EVENTS,
 } from '../events';
 
 export type {
@@ -88,6 +91,15 @@ export type {
   MeetingCallLeaveReason,
   MeetingCallGrantRejectionReason,
   MeetingCallDeviceKind,
+  // BAL-436 — the side panel's client family.
+  MeetingPanelEventMap,
+  MeetingPanelId,
+  MeetingPanelAdmissionDecision,
+  MeetingPanelDecisionOutcome,
+  MeetingPanelInviteOutcome,
+  MeetingPanelOutcome,
+  MeetingPanelFileOutcome,
+  MeetingPanelSizeBucket,
   // BAL-421 — the case surface's client islands annotate their action props with this.
   // ⚠ THE FIRST `Recap*`-FAMILY TYPE IN THIS LIST: `RECAP_EVENTS` was already exported as a
   // VALUE above, but no recap TYPE was, so a client component could not name one. Neither

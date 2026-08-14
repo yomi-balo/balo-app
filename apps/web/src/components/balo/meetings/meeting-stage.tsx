@@ -120,8 +120,12 @@ export function SpotlightLayout({
 export function GalleryLayout({
   tiles,
   activeSpeakerId,
-}: Readonly<StageTilesProps>): React.JSX.Element {
+  onOpenPeople,
+}: Readonly<StageTilesProps & { onOpenPeople?: () => void }>): React.JSX.Element {
   const reduceMotion = useReducedMotion() === true;
+  // ⚠ HOISTED OUT OF THE JSX. Inline, the conditional spread sits inside the `hasOverflow`
+  // ternary below and SonarCloud reads the pair as a nested conditional (S3358).
+  const overflowInteractivity = onOpenPeople === undefined ? {} : { onOpenPeople };
   const hasOverflow = tiles.overflow.length > 0;
   const cellCount = tiles.visible.length + (hasOverflow ? 1 : 0);
   const scrolls = galleryScrollsOnMobile(cellCount);
@@ -164,6 +168,9 @@ export function GalleryLayout({
             // belonged rendered initials derived from a UUID into visible markup.
             sessionIds={tiles.overflow.map((tile) => tile.sessionId)}
             hiddenCount={tiles.overflow.length}
+            // ⚠ BAL-436 — ABSENT ON BOTH GUEST MOUNTS, so the tile stays exactly as shipped:
+            // non-interactive, no hover affordance, no accessible name. The slot rule.
+            {...overflowInteractivity}
           />
         </div>
       ) : null}
@@ -222,6 +229,12 @@ export interface StageContentProps extends StageTilesProps {
   readonly screenSessionId: string | null;
   readonly selfIsPrimary?: boolean;
   readonly onSwapSelf?: () => void;
+  /**
+   * BAL-436 — supplied ONLY when the People slot is registered, and threaded straight through
+   * to `OverflowTile`. ⚠ `undefined` ⇒ the overflow cell stays non-interactive, exactly as it
+   * shipped. Both GUEST mounts land there structurally.
+   */
+  readonly onOpenPeople?: () => void;
 }
 
 /** ⚠ A THIN SWITCH. Adding logic here is what pushes the file back over the complexity limit. */
@@ -232,6 +245,7 @@ export function StageContent({
   screenSessionId,
   selfIsPrimary,
   onSwapSelf,
+  onOpenPeople,
 }: Readonly<StageContentProps>): React.JSX.Element {
   if (kind === 'screenshare') {
     return (
@@ -252,5 +266,8 @@ export function StageContent({
       />
     );
   }
-  return <GalleryLayout tiles={tiles} activeSpeakerId={activeSpeakerId} />;
+  // ⚠ HOISTED for the same reason as `overflowInteractivity` above — an inline conditional
+  // spread beside the two `if` returns reads as a nested conditional to SonarCloud.
+  const peopleSlot = onOpenPeople === undefined ? {} : { onOpenPeople };
+  return <GalleryLayout tiles={tiles} activeSpeakerId={activeSpeakerId} {...peopleSlot} />;
 }

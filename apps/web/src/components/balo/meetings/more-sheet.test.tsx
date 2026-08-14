@@ -209,6 +209,42 @@ describe('MoreSheet — behaviour', () => {
     expect(screen.queryByRole('button', { name: 'Camera and sound' })).toBeNull();
   });
 
+  /**
+   * BAL-436 — ⚠⚠ THE SLOT RULE, ON THE OVERFLOW. `onTogglePanel === undefined` means the two
+   * rows render NOTHING. Both GUEST mounts land there structurally.
+   */
+  describe('the People and Files rows (BAL-436)', () => {
+    it('⚠ renders NEITHER row when the slot is unregistered', async () => {
+      renderMoreSheet({ open: true });
+
+      await screen.findByRole('button', { name: 'Camera and sound' });
+      expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Files' })).toBeNull();
+    });
+
+    it('renders both when it is registered', async () => {
+      renderMoreSheet({ open: true, onTogglePanel: vi.fn() });
+
+      expect(await screen.findByRole('button', { name: 'People' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+    });
+
+    it.each([
+      ['People', 'people'],
+      ['Files', 'files'],
+    ])('closes the sheet and toggles %s', async (label, id) => {
+      const user = userEvent.setup();
+      const onTogglePanel = vi.fn();
+      const onOpenChange = vi.fn();
+      renderMoreSheet({ open: true, onTogglePanel, onOpenChange });
+
+      await user.click(await screen.findByRole('button', { name: label }));
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(onTogglePanel).toHaveBeenCalledWith(id);
+    });
+  });
+
   it('has no accessibility violations, open', async () => {
     renderMoreSheet({ open: true });
 

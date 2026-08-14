@@ -41,6 +41,7 @@ import type {
   MeetingGuestInvitedPayload,
   MeetingGuestAddedPayload,
   MeetingGuestRemovedPayload,
+  MeetingGuestLinkResentPayload,
   ConversationMessagePostedPayload,
   ConversationFileSharedPayload,
   ConversationUnreadDigestDuePayload,
@@ -290,6 +291,11 @@ export type NotificationEvent =
   | 'meeting.guest_invited'
   | 'meeting.guest_added'
   | 'meeting.guest_removed'
+  // BAL-436 — a host re-sent an admitted-but-never-arrived guest's join link, ROTATING their
+  // credential. SERVER-ONLY for the same second reason as `meeting.guest_invited`: it carries
+  // the guest's ONLY join credential, and minting in `apps/api` keeps that secret inside one
+  // process from creation to enqueue.
+  | 'meeting.guest_link_resent'
   // BAL-424 — the conversation primitive, re-anchored off `request_expert_relationships`
   // onto the ADR-1045 §2 context seam. RENAMED from `project.message_posted` /
   // `project.file_shared`: the payload had to change anyway (the anchor became the seam),
@@ -350,6 +356,10 @@ export type ServerOnlyNotificationEvent =
   | 'meeting.guest_invited'
   | 'meeting.guest_added'
   | 'meeting.guest_removed'
+  // BAL-436: published by the SAME service (`resendGuestJoinLink`) and carrying the same
+  // class of secret as `meeting.guest_invited` — a RAW join token. No `publishBodySchema`
+  // arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+  | 'meeting.guest_link_resent'
   // BAL-424: the debounced unread digest is published EXCLUSIVELY by the BAL-420 dispatch
   // tick (`jobs/scheduled-notification-dispatch.ts`) — `scheduleNotification` is an
   // in-process `apps/api` function and ADR-1047 Decision 11 keeps the schedule/cancel seam
@@ -487,6 +497,7 @@ export interface EventPayloadMap {
   'meeting.guest_invited': MeetingGuestInvitedPayload;
   'meeting.guest_added': MeetingGuestAddedPayload;
   'meeting.guest_removed': MeetingGuestRemovedPayload;
+  'meeting.guest_link_resent': MeetingGuestLinkResentPayload;
   'conversation.message_posted': ConversationMessagePostedPayload;
   'conversation.file_shared': ConversationFileSharedPayload;
   'conversation.unread_digest_due': ConversationUnreadDigestDuePayload;

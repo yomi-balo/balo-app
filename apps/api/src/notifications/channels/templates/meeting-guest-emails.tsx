@@ -11,13 +11,13 @@ import {
 } from './shared.js';
 
 /**
- * BAL-408 / ADR-1044 — the two GUEST-FACING emails, in ONE file.
+ * BAL-408 / ADR-1044 (+ BAL-436) — the THREE GUEST-FACING emails, in ONE file.
  *
  * ⚠ CO-LOCATED DELIBERATELY (the `case-billing-emails.tsx` / `engagement-accepted-emails.tsx`
  * precedent). They share an audience (a non-Balo-user external person), a greeting, a pill
- * style and the whole meeting-window block; as two files they were ~40 duplicated lines and
- * would trip SonarCloud's >3% new-code duplication gate. The shared parts are extracted
- * below and used by both.
+ * style and the whole meeting-window block; as separate files they were ~40 duplicated lines
+ * each and would trip SonarCloud's >3% new-code duplication gate. The shared parts are
+ * extracted below and used by all three.
  *
  * ⚠⚠ NEITHER EMAIL CARRIES A BILLING LINE — NO RATE, NO DURATION PRICE, NO BALANCE, NO
  * CURRENCY, EVER. "Billing unaffected — per-minute of expert time, never per-seat" is an
@@ -345,6 +345,95 @@ export function MeetingGuestRemovedEmail({
         <MeetingWhenBlock meetingTitle={meetingTitle} window={window} />
 
         <SupportFooter prefix="Need a hand?" />
+      </Section>
+    </EmailShell>
+  );
+}
+
+// ── meeting.guest_link_resent ────────────────────────────────────────────────────────
+
+interface MeetingGuestLinkResentEmailProps {
+  readonly guestName?: string;
+  readonly meetingTitle: string;
+  readonly scheduledStartIso: string;
+  readonly scheduledEndIso: string;
+  readonly expiresOn: string;
+  /** The CTA, and the ONLY credential-bearing string in the message. */
+  readonly joinUrl: string;
+  /** The SITE ORIGIN, for the shell's legal footer. ⚠ Never `joinUrl` — see the file docblock. */
+  readonly baseUrl: string;
+}
+
+/**
+ * BAL-436 — sent when a host re-sends the join link to a guest who was let in and never
+ * arrived. The previous link has been ROTATED and no longer works.
+ *
+ * ⚠⚠ **NO INVITER IS NAMED, AND THAT IS NOT AN OMISSION.** This row was created by the
+ * RECIPIENT themselves — they arrived holding the meeting link and asked to be let in — so
+ * there is no inviter relationship to attribute. Naming the host who admitted them would
+ * invent one, and CLAUDE.md's attribution rule puts prospective copy on the party anyway.
+ *
+ * ⚠ WARM, NOT ADVERSARIAL, AND NO COUNTDOWN. The expiry is stated as a helpful fact ("good
+ * until {date}, no rush"), never as a deadline — the same framing the invite uses.
+ *
+ * ⚠ IT SAYS PLAINLY THAT THE OLD LINK IS DEAD. Rotation is invisible to the reader otherwise,
+ * and somebody who keeps clicking a link that silently stopped working has a worse time than
+ * somebody who was told.
+ *
+ * ⚠ NO BILLING LINE — see the file docblock. ⚠ Gender-neutral throughout.
+ */
+export function MeetingGuestLinkResentEmail({
+  guestName,
+  meetingTitle,
+  scheduledStartIso,
+  scheduledEndIso,
+  expiresOn,
+  joinUrl,
+  baseUrl,
+}: Readonly<MeetingGuestLinkResentEmailProps>) {
+  const previewText = `Here's a fresh link for "${meetingTitle}".`;
+  const window = formatMeetingWindowUtc(scheduledStartIso, scheduledEndIso);
+
+  // ⚠ THE SAME GUARDED-CLAUSE SHAPE AS THE INVITE. `expiresOn` defaults to `''` at the
+  // template factory, and interpolating it unconditionally renders "…good until . " — a
+  // sentence with a hole in it. Present it or omit it; never render a stub.
+  const expiryClause =
+    expiresOn.trim().length > 0 ? ` It's good until ${expiresOn} — no rush.` : '';
+  const linkText = `This link is just for you, and it replaces the one you had.${expiryClause}`;
+
+  return (
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      <Section style={shared.smallHero}>
+        <LogoRow size="small" />
+        <StatusPill label="🔗 A fresh link" style={guestPillStyle} />
+        <Heading style={shared.smallHeroHeading}>Here&apos;s a new way in</Heading>
+      </Section>
+
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>{greetingFor(guestName)}</Text>
+        <Text style={shared.bodyText}>
+          You&apos;ve been let into the call below. The link you had has stopped working, so
+          here&apos;s a fresh one — open it whenever you&apos;re ready.
+        </Text>
+
+        <MeetingWhenBlock meetingTitle={meetingTitle} window={window} />
+
+        <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
+          <Button style={shared.smallCtaButton} href={joinUrl}>
+            Join the call →
+          </Button>
+        </Section>
+
+        <Callout
+          emoji="🔗"
+          heading="About this link"
+          text={linkText}
+          bg={colors.bg}
+          borderColor={colors.border}
+          headingColor={colors.textSecondary}
+        />
+
+        <SupportFooter prefix="Trouble getting in?" />
       </Section>
     </EmailShell>
   );

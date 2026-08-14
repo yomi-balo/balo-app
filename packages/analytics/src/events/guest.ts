@@ -65,6 +65,12 @@ export const GUEST_SERVER_EVENTS = {
    * got into the room. ⚠ A MINT EVENT, NOT A UNIQUE-VISITOR ONE — see the map entry.
    */
   GUEST_JOINED: 'guest_joined',
+  /**
+   * BAL-436 — a host re-sent the join link to an ADMITTED-but-never-arrived guest, ROTATING
+   * their credential. Fires from `apps/api`'s `resendGuestJoinLink`, which is its only
+   * producer (the constant arrives WITH it, per this module's discipline).
+   */
+  GUEST_LINK_RESENT: 'guest_link_resent',
   /** A guest's access was revoked. */
   GUEST_REMOVED: 'guest_removed',
 } as const;
@@ -186,6 +192,24 @@ export interface GuestServerEventMap {
      */
     admitted: boolean;
     /** ⚠ `meeting_guests.id` — a guest has NO user id. See the module docblock. */
+    distinct_id: string;
+  };
+  /**
+   * BAL-436 — one credential rotation on the re-send path.
+   *
+   * ⚠ NO `invite_channel` PROPERTY, DELIBERATELY. The route accepts ONLY a `link`-channel row
+   * (`resendGuestJoinLink` refuses anything else with `guest_link_not_resendable`), so the
+   * property would be a constant — and a constant dimension is worse than no dimension: it
+   * looks segmentable in the property explorer and segments nothing. Contrast
+   * `guest_admitted` / `guest_denied`, where the channel genuinely varies and is the only
+   * thing that makes their `party` readable.
+   *
+   * ⚠ NO `party` EITHER, FOR THE SAME REASON INVERTED: a `link` row's `party` is the lobby
+   * writer's NOT-NULL PLACEHOLDER, never a resolved side, so emitting it would put every
+   * re-send in the `client` bucket — a WRONG answer, not a coarse one.
+   */
+  [GUEST_SERVER_EVENTS.GUEST_LINK_RESENT]: {
+    /** The HOST's user id. */
     distinct_id: string;
   };
   [GUEST_SERVER_EVENTS.GUEST_INVITE_OPENED]: {

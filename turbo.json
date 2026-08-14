@@ -35,6 +35,7 @@
     "PAYOUT_ENCRYPTION_KEY",
     "INTERNAL_API_SECRET",
     "API_URL",
+    "APP_URL",
     "REDIS_URL",
     "R2_ACCOUNT_ID",
     "R2_ACCESS_KEY_ID",

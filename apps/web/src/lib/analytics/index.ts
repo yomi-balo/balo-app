@@ -33,6 +33,8 @@ export {
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
   MEETING_CALL_EVENTS,
+  /** BAL-436 — the in-call side panel (People and Files). */
+  MEETING_PANEL_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -59,6 +61,14 @@ export type {
   MeetingCallLeaveReason,
   MeetingCallGrantRejectionReason,
   MeetingCallDeviceKind,
+  /** BAL-436 — the side panel's outcome vocabularies, named by the panel and its actions. */
+  MeetingPanelId,
+  MeetingPanelAdmissionDecision,
+  MeetingPanelDecisionOutcome,
+  MeetingPanelInviteOutcome,
+  MeetingPanelOutcome,
+  MeetingPanelFileOutcome,
+  MeetingPanelSizeBucket,
   /** BAL-421 — annotates the case surface's client action handlers. */
   CaseSurfaceAction,
 } from '@balo/analytics/client';

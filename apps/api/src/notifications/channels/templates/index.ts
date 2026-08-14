@@ -54,7 +54,11 @@ import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
 import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
-import { MeetingGuestInvitedEmail, MeetingGuestRemovedEmail } from './meeting-guest-emails.js';
+import {
+  MeetingGuestInvitedEmail,
+  MeetingGuestLinkResentEmail,
+  MeetingGuestRemovedEmail,
+} from './meeting-guest-emails.js';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 import { ActionItemAssignedEmail } from './action-item-assigned.js';
 import { RecapReadyEmail } from './recap-ready.js';
@@ -1251,6 +1255,34 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(inviterName)} invited you to a video call`,
+    };
+  },
+
+  // BAL-436 — a host re-sent an admitted guest's join link, rotating the credential. To that
+  // person ONLY, external `email_address` path. The CTA is the ONLY link and the raw token is
+  // never rendered as copyable text (the `proposal-shared` rule).
+  // ⚠ THE SUBJECT NAMES NOBODY. This row was self-claimed, so there is no inviter to name —
+  // and no `sanitizeSubjectTitle` call is needed because nothing caller-supplied reaches it.
+  // ⚠ NO BILLING LINE — see the file docblock on `meeting-guest-emails.tsx`.
+  'meeting-guest-link-resent': (data) => {
+    const joinToken = (data.joinToken as string) ?? '';
+    return {
+      component: React.createElement(MeetingGuestLinkResentEmail, {
+        guestName: data.guestName as string | undefined,
+        // Engagement-type-agnostic, exactly as the invite's is: the service resolves a real
+        // title or a context-specific label, so this fallback fires only on a malformed
+        // payload and must not name a case.
+        meetingTitle: (data.meetingTitle as string) ?? 'a call',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        scheduledEndIso: (data.scheduledEndIso as string) ?? '',
+        expiresOn: (data.expiresOn as string) ?? '',
+        joinUrl: `${BASE_URL}/join/${joinToken}`,
+        // ⚠ THE SHELL'S FOOTER BASE, DELIBERATELY SEPARATE FROM `joinUrl` — passing the join
+        // URL here would mint `…/join/{RAW_TOKEN}/legal/privacy`: a dead link AND a second
+        // copy of the credential.
+        baseUrl: BASE_URL,
+      }),
+      subject: 'Your new link for the video call',
     };
   },
 

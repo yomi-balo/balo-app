@@ -860,6 +860,36 @@ describe('notificationRules', () => {
       expect(rules.some((r) => r.recipient === 'meeting_party_participants')).toBe(false);
     });
 
+    /**
+     * ⚠⚠ BAL-436 — THE SHAPE TEST FOR THE RE-SEND, AND IT IS A **SAFETY** PROPERTY RATHER THAN
+     * A TIDINESS ONE. `meeting.guest_link_resent`'s payload carries a freshly ROTATED RAW join
+     * token, and the dispatcher shares ONE payload across a fan-out. So a second rule here — or
+     * a fan-out recipient kind such as `meeting_party_participants` — would email a live
+     * credential for a stranger's row to every member of the meeting's party. Without this
+     * test that widening ships green: the rule table has no type-level bound on recipient kind.
+     */
+    it('⚠⚠ meeting.guest_link_resent: EMAIL ONLY, to that person and NOBODY else', () => {
+      const rules = guestRulesFor('meeting.guest_link_resent');
+
+      expect(rules).toHaveLength(1);
+      const [rule] = rules;
+      expect(rule).toMatchObject({
+        channel: 'email',
+        recipient: 'email_address',
+        template: 'meeting-guest-link-resent',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      // ⚠ NO CONDITION. A conditional rule is one a future edit can make not fire at all —
+      // and the whole point of this event is that somebody is stuck outside a live call.
+      expect(rule?.condition).toBeUndefined();
+      // ⚠⚠ NOT A FAN-OUT, RESTATED AS ITS OWN ASSERTION so widening the recipient fails here
+      // rather than in production. `email_address` reads `payload.recipientEmail` — exactly one
+      // external inbox, the one that row belongs to.
+      expect(rules.every((r) => r.recipient === 'email_address')).toBe(true);
+      expect(rules.some((r) => r.channel === 'in-app')).toBe(false);
+    });
+
     it('⚠ there is NO rule key for admit or deny — and that is a product decision', () => {
       // The person is standing in the lobby watching the UI: an email after a DENY is
       // hostile, and one after an ADMIT is redundant with the door opening in front of them.
@@ -871,6 +901,11 @@ describe('notificationRules', () => {
       expect(guestKeys).toEqual([
         'meeting.guest_added',
         'meeting.guest_invited',
+        // ⚠ BAL-436. A RE-SEND is not an admit: it is a host deliberately asking us to mail a
+        // fresh credential to somebody who is already through the door and stuck outside the
+        // room. The email IS the act, so it has a rule — which is the opposite of the two
+        // decisions below, where the door opening in front of the person IS the notification.
+        'meeting.guest_link_resent',
         'meeting.guest_removed',
       ]);
       for (const key of [

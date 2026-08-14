@@ -73,6 +73,7 @@ import {
   inviteGuests,
   listGuests,
   removeGuest,
+  resendGuestJoinLink,
   type GuestServiceErrorCode,
 } from '../../services/meetings/guest-participation.js';
 import {
@@ -107,6 +108,58 @@ const INVITE_USER_RATE_LIMIT: RateLimitConfig = {
 };
 
 /**
+ * BAL-436 — the RE-SEND windows. ⚠ IT IS AN EMAIL-EMISSION PRIMITIVE TOO, aimed at an address
+ * AN ANONYMOUS VISITOR TYPED, so it inherits the invite route's posture exactly: windows
+ * checked before the service, failing CLOSED on a Redis outage.
+ *
+ * ── ⚠⚠ THREE WINDOWS, AND THE THIRD IS NOT SYMMETRY — IT IS THE ONE THAT MATCHES THE
+ *      RESOURCE BEING PROTECTED ───────────────────────────────────────────────────────────
+ *
+ * The protected resource is **one external address's inbox**, and a second protected thing
+ * rides along with it: each rotation KILLS the previous credential, so a re-send aimed at a
+ * stranded guest is also a way to keep that guest stranded.
+ *
+ * The `${userId}:${guestId}` window bounds ONE ACTOR against one row. It does not bound the
+ * ROW: an agency with k admins who may all host this meeting yields **3k emails an hour** to
+ * an unverified address, each one invalidating the link the previous one sent — a griefing
+ * vector against exactly the person the affordance exists to rescue, and a mail-reputation
+ * exposure keyed on a stranger's typed address.
+ *
+ * So the third window is keyed on `guestId` ALONE. It is deliberately looser than the
+ * per-actor one (5, not 3) so that two hosts genuinely helping the same person are not
+ * refused, while the absolute ceiling on one inbox stops being a function of headcount.
+ *
+ * TIGHTER THAN THE INVITE'S, deliberately. A re-send targets ONE existing row, so a
+ * legitimate host needs it once — twice if the first genuinely did not arrive. The per-actor
+ * window then bounds a host sweeping many rows or many meetings.
+ *
+ * ⚠ PRODUCT NUMBERS, NOT PHYSICAL LIMITS — same status as the invite's, and a natural early
+ * migration when `platform_config` (BAL-398) lands. ⚠ That PR is NOT merged; typed consts today.
+ */
+const RESEND_GUEST_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-guests:resend-guest',
+  maxRequests: 3,
+  windowSeconds: 3600,
+};
+
+/**
+ * ⚠⚠ KEYED ON THE GUEST ROW ALONE — the ONLY window that is not a function of how many hosts
+ * the meeting has. See the block above: without it, k admins × 3 = 3k emails an hour to one
+ * unverified inbox, each rotation killing the previous credential.
+ */
+const RESEND_ROW_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-guests:resend-row',
+  maxRequests: 5,
+  windowSeconds: 3600,
+};
+
+const RESEND_USER_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-guests:resend-user',
+  maxRequests: 10,
+  windowSeconds: 3600,
+};
+
+/**
  * Service literal → HTTP status. Exhaustive over `GuestServiceErrorCode` by type, so a new
  * literal cannot ship without a status decision here.
  *
@@ -121,6 +174,11 @@ const GUEST_ERROR_STATUS: Record<GuestServiceErrorCode, number> = {
   participant_cap_reached: 409,
   guest_already_invited: 409,
   guest_not_pending: 409,
+  // BAL-436 — `409`, not `404`: the row EXISTS and the actor may host it, so this is a
+  // conflict with the row's current state (wrong channel, or not yet admitted), which is
+  // exactly what 409 means. It confirms nothing to anyone who was not already entitled to
+  // read this roster — it is reachable strictly AFTER both gates.
+  guest_link_not_resendable: 409,
   delegate_must_be_client_side: 422,
 };
 
@@ -163,16 +221,11 @@ function sendGuestError(
  * upstream proxy kills it. The bound converts that hang into the refusal this docblock
  * always claimed. See `with-deadline.ts` for the verified ioredis mechanism.
  */
-async function enforceInviteRateLimit(
-  userId: string,
-  meetingId: string,
+async function enforceRateLimitWindows(
+  windows: ReadonlyArray<{ config: RateLimitConfig; identifier: string }>,
+  context: Record<string, unknown>,
   reply: FastifyReply
 ): Promise<boolean> {
-  const windows: ReadonlyArray<{ config: RateLimitConfig; identifier: string }> = [
-    { config: INVITE_MEETING_RATE_LIMIT, identifier: `${userId}:${meetingId}` },
-    { config: INVITE_USER_RATE_LIMIT, identifier: userId },
-  ];
-
   for (const { config, identifier } of windows) {
     try {
       const result = await withDeadline(() => checkRateLimit(getRedis(), config, identifier), {
@@ -180,7 +233,7 @@ async function enforceInviteRateLimit(
         label: `rate limit ${config.keyPrefix}`,
       });
       if (result.allowed) continue;
-      log.warn({ userId, meetingId, keyPrefix: config.keyPrefix }, 'Guest invite rate-limited');
+      log.warn({ ...context, keyPrefix: config.keyPrefix }, 'Guest email emission rate-limited');
       reply
         .header('Retry-After', String(result.ttlSeconds))
         .code(429)
@@ -189,19 +242,67 @@ async function enforceInviteRateLimit(
     } catch (error) {
       log.error(
         {
-          userId,
-          meetingId,
+          ...context,
           keyPrefix: config.keyPrefix,
           error: error instanceof Error ? error.message : String(error),
           stack: error instanceof Error ? error.stack : undefined,
         },
-        'Guest invite rate-limit unavailable — failing CLOSED'
+        'Guest email emission rate-limit unavailable — failing CLOSED'
       );
       reply.code(503).send({ error: 'rate_limit_unavailable' });
       return true;
     }
   }
   return false;
+}
+
+/** The INVITE windows: per (actor, meeting), then per actor. See the config docblocks. */
+async function enforceInviteRateLimit(
+  userId: string,
+  meetingId: string,
+  reply: FastifyReply
+): Promise<boolean> {
+  return enforceRateLimitWindows(
+    [
+      { config: INVITE_MEETING_RATE_LIMIT, identifier: `${userId}:${meetingId}` },
+      { config: INVITE_USER_RATE_LIMIT, identifier: userId },
+    ],
+    { route: 'invite', userId, meetingId },
+    reply
+  );
+}
+
+/**
+ * BAL-436 — the RE-SEND windows: per (actor, GUEST ROW), then per GUEST ROW, then per actor.
+ *
+ * ⚠ THE TIGHT WINDOW IS KEYED ON THE **GUEST ROW**, NOT THE MEETING, and that is the whole
+ * point of it: the resource being protected is one external address's inbox, and a host with
+ * several stranded guests on one call must still be able to help each of them. Keying on the
+ * meeting would let three re-sends to ONE address exhaust the window for everybody else on
+ * the call, while doing nothing to stop three addresses being mailed three times each.
+ *
+ * ⚠⚠ THE **SECOND** WINDOW DROPS THE ACTOR, AND THAT IS THE ONE THAT ACTUALLY BOUNDS THE
+ * INBOX. `${userId}:${guestId}` bounds one actor against one row; an agency of k hosts
+ * multiplies it by k. Since every rotation also KILLS the previous credential, that is a
+ * griefing vector against the stranded guest, not merely mail volume. Keyed on the row alone,
+ * the ceiling stops being a function of headcount. ⚠ ORDERED BEFORE the per-actor window so a
+ * host who has personally sent nothing is still told about the bound they actually hit.
+ */
+async function enforceResendRateLimit(
+  userId: string,
+  guestId: string,
+  meetingId: string,
+  reply: FastifyReply
+): Promise<boolean> {
+  return enforceRateLimitWindows(
+    [
+      { config: RESEND_GUEST_RATE_LIMIT, identifier: `${userId}:${guestId}` },
+      { config: RESEND_ROW_RATE_LIMIT, identifier: guestId },
+      { config: RESEND_USER_RATE_LIMIT, identifier: userId },
+    ],
+    { route: 'resend', userId, meetingId, guestId },
+    reply
+  );
 }
 
 /**
@@ -463,6 +564,78 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
       }
     );
   }
+
+  /**
+   * BAL-436 — POST /meetings/:meetingId/guests/:guestId/resend-link
+   *
+   * Re-issue a stranded guest's join credential. `200 { id, expiresAt }`.
+   *
+   * ⚠⚠ **THE RAW TOKEN IS NEVER IN THE RESPONSE.** It goes into the notification payload and
+   * nowhere else — contract point 4: UIs do not build join links, the engine emails them.
+   *
+   * ⚠ ROTATION KILLS THE PREVIOUS CREDENTIAL. That is deliberate: the host is re-sending
+   * because the old one is believed lost, and two live credentials on one row is a second
+   * hijack surface. `resendGuestJoinLink`'s docblock carries the full argument, and BAL-442's
+   * guest self-service arm must call THAT function rather than mint a second rotation path.
+   *
+   * ⚠ TWO GATES, IN ORDER: tenancy (`authorizeMeetingParticipation`) THEN delivery identity
+   * (`hasEngagementCapability(HOST_MEETINGS)`) — the same pair admit/deny uses, and the
+   * server-side re-check of the very `canHost` the panel gated its button on.
+   *
+   * ⚠ RATE-LIMITED, AND ORDERED AFTER VALIDATION BUT BEFORE THE SERVICE, exactly as the
+   * invite route is: validation first so a malformed id cannot consume somebody's window, the
+   * limiter before the service so a refused request costs no database work and emits no mail.
+   * FAIL-CLOSED — a Redis outage answers `503`, never "carry on unlimited".
+   *
+   * ⚠ NO `404` FOR THE WRONG-SHAPE ROW. A nonexistent id, another meeting's id, a revoked row
+   * and a non-holder all answer `404 guest_not_found` / `404 meeting_not_found` identically;
+   * `409 guest_link_not_resendable` is reachable ONLY after both gates pass, so it is not an
+   * oracle. There is still no `403` anywhere on this surface.
+   */
+  fastify.post(
+    '/meetings/:meetingId/guests/:guestId/resend-link',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = resolveUserId(req, reply);
+      if (userId === null) return;
+
+      const params = parseGuestParams(req.params, reply);
+      if (params === null) return;
+
+      if (await enforceResendRateLimit(userId, params.guestId, params.meetingId, reply)) return;
+
+      try {
+        const result = await resendGuestJoinLink({
+          meetingId: params.meetingId,
+          guestId: params.guestId,
+          actorUserId: userId,
+        });
+        if (!result.ok) {
+          sendGuestError(reply, result.code, {
+            route: 'resend',
+            meetingId: params.meetingId,
+            guestId: params.guestId,
+            userId,
+          });
+          return;
+        }
+        reply.code(200).send({ id: result.id, expiresAt: result.expiresAt });
+      } catch (error) {
+        // ⚠ NO EMAIL ADDRESS AND NO TOKEN IN THIS LOG — ids only.
+        log.error(
+          {
+            meetingId: params.meetingId,
+            guestId: params.guestId,
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          },
+          'Guest link re-send failed'
+        );
+        throw error;
+      }
+    }
+  );
 
   log.info('Registered meeting guest routes');
 }

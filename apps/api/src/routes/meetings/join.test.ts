@@ -229,6 +229,54 @@ describe('meeting join routes (BAL-132)', () => {
       });
     });
 
+    /**
+     * ⚠⚠ BAL-436 — THE NAME COLUMN IS THE NEIGHBOUR THE CONCEALMENT DOES NOT COVER.
+     *
+     * `projectGuestForViewer`'s `link` arm strips `email` / `emailDomain` / `accessScope` and
+     * refuses the `displayName`-falls-back-to-the-address rule — but `name` is typed by the
+     * SAME anonymous visitor and IS rendered: in the queue row, in the `Admit …` / `Deny …`
+     * accessible names, and (on a re-send) inside a Balo-branded email. So the sanitiser runs
+     * HERE, at the boundary, before `claimLobbyPlace` ever sees the string.
+     */
+    it('⚠⚠ COLLAPSES A NAME THAT IS AN EMAIL ADDRESS — the service never sees it', async () => {
+      await call({
+        method: 'POST',
+        url: LOBBY_URL,
+        payload: { name: 'dana.okoro@northwind.com', email: 'sam@cloudpeak.example' },
+      });
+
+      expect(mockClaimLobbyPlace).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        name: 'Guest',
+        email: 'sam@cloudpeak.example',
+      });
+    });
+
+    it('⚠ STRIPS A "✅ Verified" SUFFIX — the same attack without an `@`', async () => {
+      await call({
+        method: 'POST',
+        url: LOBBY_URL,
+        payload: { name: 'Dana Okoro ✅ Verified', email: 'sam@cloudpeak.example' },
+      });
+
+      expect(mockClaimLobbyPlace).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        name: 'Dana Okoro',
+        email: 'sam@cloudpeak.example',
+      });
+    });
+
+    it('⚠ AN EMPTY KNOCK IS STILL A 400 — the collapse is not a way to send nothing', async () => {
+      const res = await call({
+        method: 'POST',
+        url: LOBBY_URL,
+        payload: { name: '   ', email: 'sam@cloudpeak.example' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(mockClaimLobbyPlace).not.toHaveBeenCalled();
+    });
+
     it('validates BEFORE consuming a rate-limit window', async () => {
       await call({ method: 'POST', url: LOBBY_URL, payload: { name: 'Sam' } });
 

@@ -70,6 +70,33 @@ export interface DecideMeetingGuestAdmissionInput {
 }
 
 /**
+ * BAL-436 — re-issue one guest's join credential. Every field is decided by the CALLER.
+ *
+ * ⚠ THERE IS NO `meetingId` HERE, unlike `findLiveById`, and that is deliberate rather than
+ * an omission: the caller has ALREADY resolved this row through `findLiveById(meetingId, …)`
+ * behind the tenancy gate, so re-scoping would be a second expression of a check that already
+ * passed. The `id` predicate plus the two liveness predicates are what this statement needs.
+ */
+export interface RotateMeetingGuestTokenInput {
+  /**
+   * ⚠⚠ **THE TENANCY SCOPE, AND IT IS NOT OPTIONAL.** This platform has NO RLS — the `WHERE`
+   * clause IS the boundary. A rotate keyed on `guestId` alone would mint a live credential
+   * onto any guest row in the database given only its uuid, from any caller that reached this
+   * method. It is contained TODAY only because `resendGuestJoinLink` happens to re-read the
+   * row through the meeting-scoped `findLiveById` first — i.e. by a caller's discipline rather
+   * than by this method's own shape. BAL-442's guest-facing arm inherits this primitive.
+   */
+  meetingId: string;
+  guestId: string;
+  /** SHA-256 hex of the NEW raw token. ⚠ The RAW token is never passed here or persisted. */
+  tokenHash: string;
+  /** `meetings.scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`, recomputed by the caller. */
+  expiresAt: Date;
+  /** ATTRIBUTION — the host who re-sent the link. */
+  rotatedByUserId: string;
+}
+
+/**
  * One anonymous LOBBY KNOCK (BAL-132, Decisions 3–6 + 10). Every field is decided by the
  * CALLER — this repository derives nothing from request input.
  *
@@ -838,5 +865,102 @@ export const meetingGuestsRepository = {
       )
       .returning({ id: meetingGuests.id });
     return rows.length;
+  },
+
+  /**
+   * BAL-436 — ROTATE one live guest's join credential: replace `token_hash`, refresh
+   * `expires_at`, and append a `meeting_guest.link_resent` audit row, all in ONE transaction.
+   *
+   * ⚠⚠ **ROTATION INVALIDATES THE PREVIOUS CREDENTIAL, AND THAT IS THE POINT.** A host
+   * re-sends precisely because the previous link is believed lost — forwarded to the wrong
+   * address, buried in a spam folder, or pasted somewhere. Leaving the old hash live would
+   * mean two working credentials on one row, i.e. a second hijack surface opened by the very
+   * act of trying to rescue somebody. `findLiveByTokenHash` resolves on the hash, so the old
+   * link stops resolving on the next click, exactly as `revoke` does.
+   *
+   * ⚠ THE RAW TOKEN NEVER REACHES THIS LAYER. Only the SHA-256 hex arrives, for the reason
+   * `createMany`'s contract states: the Drizzle query-logging hook in `client.ts` sees every
+   * bind parameter, so a raw secret passed here would be captured in the logs. `apps/api`'s
+   * `mintGuestInviteToken` / `hashGuestToken` own the mint.
+   *
+   * ⚠ `expiresAt` IS DERIVED BY THE CALLER FROM THE **MEETING**, never from the mint instant
+   * — the same rule as `createMany`, and the reason `meeting_guests.expires_at` has no SQL
+   * default. It is NOT extend-only here (unlike `extendExpiryForMeeting`): a rotation replaces
+   * the whole credential, so the new window is simply the window the meeting implies.
+   *
+   * ── ⚠⚠ THE `WHERE` CLAUSE IS THE WHOLE BOUNDARY, AND IT CARRIES ALL FOUR PREDICATES ─────
+   *
+   * This platform has NO RLS, so a credential-minting UPDATE is contained by its own `WHERE`
+   * and by nothing else. All four narrowing facts are therefore IN the statement rather than
+   * re-read in front of it:
+   *
+   *   · `meeting_id` — the TENANCY scope. Without it, any guest row in the database is
+   *     rotatable given only its uuid.
+   *   · `deleted_at IS NULL` / `revoked_at IS NULL` — LIVE rows only. Re-minting onto a row
+   *     somebody deliberately switched off would undo a revocation silently.
+   *   · `invite_channel = 'link'` — an `email` invitee has an inviter and a
+   *     remove-then-re-invite path that records attribution; rotating theirs here bypasses it.
+   *   · `admission = 'admitted'` — a `pending` knock has not been let in AT ALL, so a
+   *     "re-send" would mint a credential for somebody nobody admitted, which is the single
+   *     control the queue exists to be.
+   *
+   * ⚠ **ATOMIC, NOT RE-READ.** The service checks the same shape in front of this call for the
+   * sake of a precise error literal (`guest_link_not_resendable` vs `guest_not_found`), but
+   * that check is a COURTESY, not the gate: between the read and the write a concurrent revoke
+   * or admit-reversal could land, and a caller that forgets the read entirely (BAL-442's guest
+   * self-service arm is the one being written against this) still cannot widen the shape.
+   * ⚠ DO NOT "SIMPLIFY" THIS BACK TO `eq(id)` ON THE ARGUMENT THAT THE SERVICE ALREADY
+   * CHECKED — that is precisely the argument that leaves an unguarded primitive behind.
+   *
+   * ⚠ `undefined` therefore means "no row matched ALL FOUR", and the caller cannot tell which
+   * failed from this method alone. That is why the service's own pre-read exists.
+   *
+   * ⚠ THE AUDIT METADATA NEVER CARRIES `token_hash` — the same rule as `createMany` and
+   * `decideAdmission`. Ids and labels only.
+   */
+  rotateToken: async (input: RotateMeetingGuestTokenInput): Promise<MeetingGuest | undefined> => {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(meetingGuests)
+        .set({
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(meetingGuests.id, input.guestId),
+            // ⚠ TENANCY, IN THE STATEMENT. See the docblock — there is no RLS behind this.
+            eq(meetingGuests.meetingId, input.meetingId),
+            isNull(meetingGuests.deletedAt),
+            isNull(meetingGuests.revokedAt),
+            // ⚠ THE NARROW SHAPE, ATOMIC RATHER THAN RE-READ.
+            eq(meetingGuests.inviteChannel, 'link'),
+            eq(meetingGuests.admission, 'admitted')
+          )
+        )
+        .returning();
+
+      if (row === undefined) {
+        return undefined;
+      }
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.rotatedByUserId,
+          action: 'meeting_guest.link_resent',
+          entityType: ENTITY_TYPE,
+          entityId: row.id,
+          metadata: {
+            meetingId: row.meetingId,
+            party: row.party,
+            inviteChannel: row.inviteChannel,
+          },
+        },
+        tx
+      );
+
+      return row;
+    });
   },
 };

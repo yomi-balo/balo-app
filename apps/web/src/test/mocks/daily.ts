@@ -48,6 +48,15 @@ export interface MockTrackState {
 /** A participant, as `useParticipantProperty` reads it. */
 export interface MockParticipant {
   user_name: string | null;
+  /**
+   * BAL-436 — the SERVER-MINTED Decision-1 `user_id` claim (`'u'|'g'` + 32 hex).
+   *
+   * ⚠ OPTIONAL, AND ITS ABSENCE IS A REAL STATE rather than a fixture gap: Daily does not
+   * report a `user_id` for a participant we minted no claim for, and `presentGuestIdsFrom` is
+   * built to fail closed on exactly that. Tests that care about guest↔tile linkage set it;
+   * tests that do not get the honest "identity unknown" answer.
+   */
+  user_id?: string;
   /** ⚠ DAILY'S OWN OWNER FLAG on that participant — the only input to the Host pill. */
   owner: boolean;
 }

@@ -67,6 +67,8 @@ vi.mock('@/components/balo/meetings/meeting-call-surface', () => ({
         data-absent-party={route.waiting?.absentParty ?? ''}
         data-counterparty={route.waiting?.counterpartyFirstName ?? ''}
         data-start-label={route.waiting?.scheduledStartLabel ?? ''}
+        data-has-panels={String(route.panels !== null)}
+        data-join-link={route.panels?.joinLinkUrl ?? ''}
       >
         <button type="button" onClick={() => route.onExit?.('host_ended')}>
           fake host ended
@@ -96,8 +98,12 @@ function grantWith(extra: Record<string, unknown> = {}): Record<string, unknown>
   return { ...GRANT, ...extra };
 }
 
+const JOIN_LINK = `https://balo.test/join/m/${MEETING_ID}`;
+
 function renderClient(): HTMLElement {
-  return render(<CallClient meetingId={MEETING_ID} viewerName="Dana Okoro" />).container;
+  return render(
+    <CallClient meetingId={MEETING_ID} viewerName="Dana Okoro" joinLinkUrl={JOIN_LINK} />
+  ).container;
 }
 
 async function surface(): Promise<HTMLElement> {
@@ -221,7 +227,9 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
 
   it('⚠ clears its timer on unmount', async () => {
     mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
-    const { unmount } = render(<CallClient meetingId={MEETING_ID} viewerName={null} />);
+    const { unmount } = render(
+      <CallClient meetingId={MEETING_ID} viewerName={null} joinLinkUrl={JOIN_LINK} />
+    );
 
     await screen.findByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE });
     unmount();
