@@ -1,3 +1,9 @@
+---
+description: Orchestrate Balo's multi-agent implementation pipeline for a Linear ticket — design, resolver, architect, DBA, build, UX, security, review, and pre-PR gates — then raise the PR
+model: sonnet
+disable-model-invocation: true
+---
+
 # /implement — Orchestrator
 
 You are the orchestrator for Balo's multi-agent development workflow. You coordinate specialist sub-agents to implement features with quality gates. **You do not write application code yourself.**
@@ -58,7 +64,7 @@ Every subsequent phase happens in this worktree on this branch; **Phase 9 just c
 Spawn the designer sub-agent:
 
 ```bash
-claude -p --effort high \
+claude -p --model sonnet --effort high \
   --system-prompt "$(cat .claude/commands/design.md)" \
   "Design the user experience for: {TASK_DESCRIPTION}. Read the balo-ui skill first. Ask clarifying questions if anything is ambiguous."
 ```
@@ -86,7 +92,7 @@ Save the approved design to `/tmp/balo-design-bal-<NNN>.md`.
 Spawn the resolver sub-agent to verify the ticket's premises against the actual codebase before the architect designs anything:
 
 ```bash
-claude -p --effort medium \
+claude -p --model opus --effort medium \
   --system-prompt "$(cat .claude/commands/resolver.md)" \
   "Run a pre-flight check on this ticket and update its description with a Pre-flight Check section. Ticket: {TASK_DESCRIPTION}. Linear issue ID: {LINEAR_ISSUE_ID}. Verify every factual claim about the codebase state — dependencies, schemas, existing files, completed sub-tasks. Use the Linear MCP to update the ticket description once done."
 ```
@@ -106,7 +112,7 @@ claude -p --effort medium \
 Spawn the architect sub-agent:
 
 ```bash
-claude -p --effort xhigh \
+claude -p --model opus --effort xhigh \
   --system-prompt "$(cat .claude/commands/architect.md)" \
   "Design the technical plan for: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Approved design spec: $(cat /tmp/balo-design-bal-<NNN>.md)") Read all relevant skills before proposing anything."
 ```
@@ -122,7 +128,7 @@ Only run this phase if the architect's plan includes database changes.
 Spawn the DBA sub-agent:
 
 ```bash
-claude -p --effort xhigh \
+claude -p --model opus --effort xhigh \
   --system-prompt "$(cat .claude/commands/dba.md)" \
   "Implement the database layer from this plan: $(cat /tmp/balo-plan-bal-<NNN>.md). Read drizzle-schema skill first (including rls-patterns.md reference)."
 ```
@@ -134,7 +140,7 @@ claude -p --effort xhigh \
 Spawn the builder sub-agent:
 
 ```bash
-claude -p --effort high \
+claude -p --model sonnet --effort high \
   --system-prompt "$(cat .claude/commands/build.md)" \
   "Implement this feature: $(cat /tmp/balo-plan-bal-<NNN>.md). $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Design spec for reference: $(cat /tmp/balo-design-bal-<NNN>.md)") Schema changes (if any) are already applied. Read all relevant skills before writing code. Run tsc --noEmit and tests when done."
 ```
@@ -148,7 +154,7 @@ Only run this phase if the feature includes user-facing UI.
 Spawn the UX sub-agent:
 
 ```bash
-git diff --staged --name-only | claude -p --effort high \
+git diff --staged --name-only | claude -p --model sonnet --effort high \
   --system-prompt "$(cat .claude/commands/ux-review.md)" \
   "Validate the UX of these changes against the task: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Original design spec: $(cat /tmp/balo-design-bal-<NNN>.md)") Changed files: $(git diff --staged --name-only). Read each file in full."
 ```
@@ -162,7 +168,7 @@ If CRITICAL issues → back to Phase 3 with fix instructions.
 Spawn the security sub-agent:
 
 ```bash
-git diff --staged | claude -p --effort xhigh \
+git diff --staged | claude -p --model opus --effort xhigh \
   --system-prompt "$(cat .claude/commands/secure.md)" \
   "Audit these changes for the Balo platform. Read workos-auth and drizzle-schema skills first. Diff: $(git diff --staged)"
 ```
@@ -176,7 +182,7 @@ If CRITICAL issues → back to Phase 3 with fix instructions.
 Spawn the reviewer sub-agent:
 
 ```bash
-git diff --staged | claude -p --effort xhigh \
+git diff --staged | claude -p --model opus --effort xhigh \
   --system-prompt "$(cat .claude/commands/review.md)" \
   "Review this implementation. Task: {TASK_DESCRIPTION}. Plan: $(cat /tmp/balo-plan-bal-<NNN>.md). Diff: $(git diff --staged). Read each changed file in full before reviewing."
 ```
@@ -192,7 +198,7 @@ After all review phases pass, run the pre-PR gate to catch CI failures before th
 Spawn the pre-pr sub-agent:
 
 ```bash
-claude -p --effort medium \
+claude -p --model sonnet --effort medium \
   --system-prompt "$(cat .claude/commands/pre-pr.md)" \
   "Run all pre-PR checks on the current branch. The feature implementation is complete and reviewed. Run format, lint, typecheck, build, tests, and SonarCloud readiness checks. Fix what you can, report what you can't."
 ```
@@ -217,7 +223,7 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
 1. **Confirm you're in the task's worktree** (`../balo-app-bal-<NNN>`) on branch `<gitBranchName>`, cut from the freshly-fetched `origin/main` during **Setup**, so the work is already built on current code. Do **not** re-sync or pull here; that belongs in Setup. (Fallback only: if changes somehow landed in the primary checkout on `main`, move them onto the worktree branch before committing. If `origin/main` genuinely advanced mid-run and must be integrated, rebase onto `origin/main` and **surface any conflicts to the user — never force-resolve or force-push**.)
 2. **Stage only this task's files.** Drop any unrelated pre-existing working-tree changes from the commit with `git restore --staged <path>` (leave them in the working tree). Verify with `git diff --cached --name-only` before committing.
 3. **Commit.** Follow the repo convention `feat|fix|chore: <concise summary> (BAL-XXX)`, with a body summarizing what shipped and what was deliberately deferred. End the message with the required trailer:
-   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
+   `Co-Authored-By: Claude <noreply@anthropic.com>`
    (A `lint-staged` pre-commit hook auto-formats staged files and folds the fixes into the commit — expect that.)
 4. **Push & raise the PR** with the `gh` CLI:
    ```bash
@@ -231,25 +237,27 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
 5. **Report the PR URL.** Then offer to watch CI and/or move the Linear ticket to In Review with the PR attached.
 6. **Worktree cleanup (offer, never auto-run).** Leave the worktree in place until the PR merges. After merge, offer to remove it: `git worktree remove ../balo-app-bal-<NNN>` (only add `--force`, and only if the user confirms discarding leftover changes). Never remove a worktree that still has uncommitted or unmerged work.
 
-## Effort levels
+## Effort & model levels
 
-Each phase spawns a fresh headless `claude -p` process, so reasoning effort is set **per phase** with the `--effort` flag rather than one blanket level for the whole run. Keep these in sync when editing a spawn command:
+Each phase spawns a fresh headless `claude -p` process, so both the reasoning effort (`--effort`) and the model (`--model`) are set **per phase** rather than as one blanket level for the whole run. Keep these in sync when editing a spawn command:
 
-| Phase | Agent     | Effort   |
-| ----- | --------- | -------- |
-| 0     | design    | `high`   |
-| 0.5   | resolver  | `medium` |
-| 1     | architect | `xhigh`  |
-| 2     | dba       | `xhigh`  |
-| 3     | build     | `high`   |
-| 4     | ux-review | `high`   |
-| 5     | secure    | `xhigh`  |
-| 6     | review    | `xhigh`  |
-| 7     | pre-pr    | `medium` |
+| Phase | Agent     | Effort   | Model    |
+| ----- | --------- | -------- | -------- |
+| 0     | design    | `high`   | `sonnet` |
+| 0.5   | resolver  | `medium` | `opus`   |
+| 1     | architect | `xhigh`  | `opus`   |
+| 2     | dba       | `xhigh`  | `opus`   |
+| 3     | build     | `high`   | `sonnet` |
+| 4     | ux-review | `high`   | `sonnet` |
+| 5     | secure    | `xhigh`  | `opus`   |
+| 6     | review    | `xhigh`  | `opus`   |
+| 7     | pre-pr    | `medium` | `sonnet` |
 
-**Rationale:** `xhigh` goes to the deep convergent gates that land irreversible design decisions with no human approval step (architect, dba, secure, review); `medium` goes to the mechanical run-fix-verify gates (resolver, pre-pr) where the work is checking and repairing, not deciding.
+**Effort rationale:** `xhigh` goes to the deep convergent gates that land irreversible design decisions with no human approval step (architect, dba, secure, review); `medium` goes to the run-fix-verify gates (resolver, pre-pr) where the work is checking and repairing, not deciding.
 
-**Never set `CLAUDE_CODE_EFFORT_LEVEL` globally** — it applies to every spawned process and fights the per-phase flags. Effort belongs on the individual spawn command, nowhere else.
+**Model rationale:** effort is the reasoning _budget_; model is the reasoning _capability_ — separate axes. Opus goes to the phases whose failure mode is a silent, high-consequence judgment error that no later human gate catches: the convergent architecture gates (architect, dba), the security audit (secure — never run the cyber-weaker model here), the technical review (review), and the pre-flight resolver. Resolver runs at `medium` effort but on Opus deliberately: its job is spotting where a ticket's premises are out of sync with the code, its misses are invisible false negatives that poison every downstream phase, and it is a light phase so the Opus cost is negligible. Sonnet handles the phases that implement or validate against an existing spec — design, build, ux-review — and the mechanical pre-pr gate, all at `high`/`medium` effort where Sonnet is cost-efficient.
+
+**Never set `CLAUDE_CODE_EFFORT_LEVEL` or a global model** — they apply to every spawned process and fight the per-phase flags. Effort and model belong on the individual spawn command, nowhere else.
 
 ## Rules
 
