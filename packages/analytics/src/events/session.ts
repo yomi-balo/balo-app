@@ -1,12 +1,20 @@
+import type { DrawdownKey } from '@balo/shared/credit';
+
 /**
  * BAL-378 (ADR-1040 Lane 2) in-session drawdown / overdraft analytics.
  *
- * TWO client events (`track` from the in-session components) and FOUR server events
+ * FOUR client events (`track` from the in-session components) and FOUR server events
  * (`trackServer` — fired ONLY on the authoritative commit: grace entered / ceiling hit /
  * settlement / receivable, never on an idempotent re-meter replay). Values do NOT share a
  * feature prefix (`session_started`, `low_balance_warning_shown`, `grace_entered`, …), so the
  * key-set guard uses the GENERIC snake_case matcher, not a `session_` prefix regex. Server
  * events carry `distinct_id = companyId` (the natural subject of a company-wallet event).
+ *
+ * ⚠⚠ BAL-403 ADDED `IN_SESSION_PANEL_VIEWED` AND `NUDGE_CLICKED` — the in-call BALANCE drawer's
+ * impression and its one interaction. Both fire from `components/balo/credit/`, OUTSIDE the
+ * `meeting-call-no-lens-gate.test.ts` scanned trees, which is why `IN_SESSION_PANEL_VIEWED`'s
+ * `lens` property is expressible here: it is a copy-selection dimension, not an authorization
+ * gate — see that file's in-call wiring for the full reasoning.
  */
 
 // ── Client (browser `track`) ──────────────────────────────────────────────
@@ -15,6 +23,14 @@ export const SESSION_EVENTS = {
   STARTED: 'session_started',
   /** The in-session low-balance warning card was shown to the member. */
   LOW_BALANCE_WARNING_SHOWN: 'low_balance_warning_shown',
+  /**
+   * BAL-403 — the in-call BALANCE drawer mounted (an impression, per open — the drawer unmounts
+   * on close, so THIS is per-open, unlike the two lifecycle events above which the embedded
+   * variant suppresses in favour of this one).
+   */
+  IN_SESSION_PANEL_VIEWED: 'in_session_panel_viewed',
+  /** BAL-403 — the member clicked the in-call nudge CTA. Fires on click, before the await. */
+  NUDGE_CLICKED: 'session_nudge_clicked',
 } as const;
 
 export interface SessionEventMap {
@@ -26,6 +42,15 @@ export interface SessionEventMap {
   [SESSION_EVENTS.LOW_BALANCE_WARNING_SHOWN]: {
     session_id: string;
     minutes_remaining: number;
+  };
+  [SESSION_EVENTS.IN_SESSION_PANEL_VIEWED]: {
+    session_id: string;
+    /** ⚠ COPY SELECTION, NEVER AUTHORIZATION — see the module docblock. */
+    lens: 'client' | 'member';
+    state: DrawdownKey;
+  };
+  [SESSION_EVENTS.NUDGE_CLICKED]: {
+    session_id: string;
   };
 }
 

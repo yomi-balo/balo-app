@@ -6,12 +6,19 @@ const SNAKE_CASE = /^[a-z]+(_[a-z]+)*$/;
 
 describe('SESSION_EVENTS (client)', () => {
   it('has exactly the expected keys', () => {
-    expect(Object.keys(SESSION_EVENTS)).toEqual(['STARTED', 'LOW_BALANCE_WARNING_SHOWN']);
+    expect(Object.keys(SESSION_EVENTS)).toEqual([
+      'STARTED',
+      'LOW_BALANCE_WARNING_SHOWN',
+      'IN_SESSION_PANEL_VIEWED',
+      'NUDGE_CLICKED',
+    ]);
   });
 
   it('maps each constant to its snake_case event name', () => {
     expect(SESSION_EVENTS.STARTED).toBe('session_started');
     expect(SESSION_EVENTS.LOW_BALANCE_WARNING_SHOWN).toBe('low_balance_warning_shown');
+    expect(SESSION_EVENTS.IN_SESSION_PANEL_VIEWED).toBe('in_session_panel_viewed');
+    expect(SESSION_EVENTS.NUDGE_CLICKED).toBe('session_nudge_clicked');
   });
 
   it('values follow the snake_case naming convention', () => {

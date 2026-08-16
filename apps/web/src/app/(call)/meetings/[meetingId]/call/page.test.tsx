@@ -31,6 +31,9 @@ const {
   mockLogWarn,
   mockResolveChatAccess,
   mockIsRealtimeConfigured,
+  mockFindIdByMeetingId,
+  mockGetSessionDrawdownState,
+  mockAuthorizeMeetingFileAccess,
   dbSpies,
 } = vi.hoisted(() => ({
   mockCheckSessionDrift: vi.fn(),
@@ -39,6 +42,13 @@ const {
   mockLogWarn: vi.fn(),
   mockResolveChatAccess: vi.fn(),
   mockIsRealtimeConfigured: vi.fn(),
+  /** BAL-403 — the Balance slot's ONE repository read. */
+  mockFindIdByMeetingId: vi.fn(),
+  /** BAL-403 fix round 1 (C1) — the SAME membership gate the panel body reads through. */
+  mockGetSessionDrawdownState: vi.fn(),
+  /** BAL-403 fix round 2 (R1) — the SAME composed gate (`resolveInCallDrawdown`) the polled
+   * action runs; this RSC test proves the slot cannot disagree with it. */
+  mockAuthorizeMeetingFileAccess: vi.fn(),
   /**
    * ⚠ A TRIPWIRE, NOT A DEPENDENCY. The page must reach no repository DIRECTLY — the chat
    * anchor's own reads happen behind `resolveMeetingChatAccess`, which is mocked, and are
@@ -53,6 +63,12 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/lib/auth/session-sync', () => ({ checkSessionDrift: mockCheckSessionDrift }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
+vi.mock('@/lib/credit/actions/get-drawdown-state', () => ({
+  getSessionDrawdownState: mockGetSessionDrawdownState,
+}));
+vi.mock('@/lib/meetings/authorize-meeting-file-access', () => ({
+  authorizeMeetingFileAccess: mockAuthorizeMeetingFileAccess,
+}));
 vi.mock('@/lib/logging', () => ({
   log: { warn: mockLogWarn, error: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
@@ -66,6 +82,7 @@ vi.mock('@/lib/realtime/ably-server', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: dbSpies.meetingFindById },
   meetingContextsRepository: { listByMeeting: dbSpies.listByMeeting },
+  creditSessionsRepository: { findIdByMeetingId: mockFindIdByMeetingId },
 }));
 
 vi.mock('./_components/call-client', () => ({
@@ -75,12 +92,14 @@ vi.mock('./_components/call-client', () => ({
     hasChat,
     isRealtimeEnabled,
     chatChannelName,
+    hasBalance,
   }: {
     meetingId: string;
     viewerName: string | null;
     hasChat: boolean;
     isRealtimeEnabled: boolean;
     chatChannelName: string | null;
+    hasBalance: boolean;
   }) => (
     <div
       data-testid="call-client"
@@ -89,6 +108,7 @@ vi.mock('./_components/call-client', () => ({
       data-has-chat={String(hasChat)}
       data-realtime={String(isRealtimeEnabled)}
       data-chat-channel={chatChannelName ?? ''}
+      data-has-balance={String(hasBalance)}
     />
   ),
 }));
@@ -116,6 +136,18 @@ beforeEach(() => {
     anchor: { conversationId: CONVERSATION_ID, subject: {}, writable: true },
   });
   mockIsRealtimeConfigured.mockReturnValue(true);
+  // ⚠ BAL-403 — `undefined` (no row) IS THE EXPECTED DEFAULT: nothing opens a credit session
+  // today, so every existing test in this file that does not care about Balance still exercises
+  // the inert path.
+  mockFindIdByMeetingId.mockResolvedValue(undefined);
+  // ⚠ BAL-403 fix round 1 (C1) — `null` by default (not a live member), so a test that sets a
+  // row on `mockFindIdByMeetingId` without opting in stays denied rather than accidentally
+  // passing the gate.
+  mockGetSessionDrawdownState.mockResolvedValue(null);
+  // ⚠ BAL-403 fix round 2 (R1) — the audience gate defaults to PASS, so existing tests that only
+  // opt into `mockFindIdByMeetingId` / `mockGetSessionDrawdownState` still exercise exactly what
+  // they did before this gate joined the composition.
+  mockAuthorizeMeetingFileAccess.mockResolvedValue({ ok: true, side: 'client' });
 });
 
 describe('MeetingCallPage — route configuration', () => {
@@ -290,6 +322,92 @@ describe('MeetingCallPage — BAL-437, the realtime flag', () => {
 
     expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
       'data-realtime',
+      'false'
+    );
+  });
+});
+
+describe('MeetingCallPage — BAL-403, the BALANCE slot resolves server-side', () => {
+  it('⚠⚠ no credit session for this meeting ⇒ hasBalance: false — the EXPECTED path today', async () => {
+    const container = await renderPage();
+
+    expect(mockFindIdByMeetingId).toHaveBeenCalledWith(MEETING_ID);
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-balance',
+      'false'
+    );
+  });
+
+  it('⚠⚠ C1 — a credit session for this meeting, and the viewer is a LIVE MEMBER ⇒ hasBalance: true', async () => {
+    mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
+    mockGetSessionDrawdownState.mockResolvedValue({ key: 'healthy' });
+
+    const container = await renderPage();
+
+    expect(mockGetSessionDrawdownState).toHaveBeenCalledWith('sess-1');
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-balance',
+      'true'
+    );
+  });
+
+  it('⚠⚠ C1 — a credit session exists but the viewer is NOT a live member ⇒ hasBalance: false, never an existence leak', async () => {
+    mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
+    mockGetSessionDrawdownState.mockResolvedValue(null);
+
+    const container = await renderPage();
+
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-balance',
+      'false'
+    );
+  });
+
+  it('⚠⚠ a throwing repository degrades to hasBalance: false, LOGS the reason, and still renders', async () => {
+    mockFindIdByMeetingId.mockRejectedValue(new Error('db unavailable'));
+
+    const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
+
+    expect(client).toBeInTheDocument();
+    expect(client).toHaveAttribute('data-has-balance', 'false');
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Call page could not resolve the credit session',
+      expect.objectContaining({ meetingId: MEETING_ID })
+    );
+  });
+
+  it('⚠ NO SESSION ⇒ no repository call at all, and no balance', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
+
+    const container = await renderPage();
+
+    expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-balance',
+      'false'
+    );
+  });
+
+  it('⚠⚠ fix round 2 (R1) — a session exists and membership passes, but the audience gate denies ⇒ hasBalance: false, matching the polled action byte-for-byte', async () => {
+    // ⚠ THE EXACT SHAPE THAT DISAGREED PRE-FIX: round 1's RSC never called
+    // `authorizeMeetingFileAccess` at all, so this combination answered `hasBalance: true` here
+    // while `get-meeting-drawdown-state.ts` answered `{ success: true, state: null }` — a
+    // rendered button over an eternal skeleton. `resolveInCallDrawdown` closes the gap by
+    // construction: both callers run this exact same check now.
+    mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
+    mockGetSessionDrawdownState.mockResolvedValue({ key: 'healthy' });
+    mockAuthorizeMeetingFileAccess.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
+
+    const container = await renderPage();
+
+    expect(mockAuthorizeMeetingFileAccess).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+    });
+    expect(mockGetSessionDrawdownState).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-has-balance',
       'false'
     );
   });

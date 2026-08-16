@@ -48,6 +48,13 @@ import {
  *   - Trust-by-default (BAL-134): email invitees drop straight in; link joiners
  *     wait in "Waiting to join" with host Admit.
  *   - Elapsed-time only in-call (no live cost meter).
+ *     SCOPED by ADR-1050 (BAL-403) — not reversed. A conditional funding notice may
+ *     appear in the side panel, but only when the session is non-healthy (low / grace /
+ *     wrap / end). A healthy session still adds NOTHING to the chrome: no badge, no
+ *     auto-open, top bar stays elapsed-only. This prototype therefore remains exact for
+ *     the whole healthy duration of every call. The panel never shows a charge — the
+ *     meter renders runway or fill-toward-ceiling, and money fields are structurally
+ *     absent from the payload. Ships inert until a credit session can be opened.
  *   - Chat is Ably-backed (corrects Feb-era Supabase-Realtime line).
  *   - Files persist to R2 (balo-files), attached to the meeting record.
  *   - "Case" generalised to the engagement context.

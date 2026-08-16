@@ -51,6 +51,7 @@ import { listMeetingFilesAction } from '@/app/(dashboard)/meetings/[meetingId]/_
 import { requestMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/request-meeting-file-upload';
 import { confirmMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/confirm-meeting-file-upload';
 import { getMeetingFileDownloadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/get-meeting-file-download';
+import { getMeetingDrawdownStateAction } from '../_actions/get-meeting-drawdown-state';
 
 /**
  * BAL-435 — the THIRD mount of `MeetingCallSurface`, and the first production caller of
@@ -114,6 +115,14 @@ export interface CallClientProps {
    * gratuitous identifier. The CHANNEL NAME is the only thing the client needs.
    */
   readonly chatChannelName: string | null;
+  /**
+   * BAL-403 — ⚠⚠ **RESOLVED SERVER-SIDE, ONCE**, mirroring `hasChat` exactly. `false` ⇒ the
+   * Balance slot is ABSENT: no toolbar button, no More-sheet row, no poll, no fetch, no panel.
+   *
+   * ⚠⚠ `false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED — nothing in the app opens a
+   * credit session yet. See `page.tsx`'s `resolveBalanceSlot` docblock.
+   */
+  readonly hasBalance: boolean;
 }
 
 export function CallClient({
@@ -123,6 +132,7 @@ export function CallClient({
   hasChat,
   isRealtimeEnabled,
   chatChannelName,
+  hasBalance,
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
@@ -362,8 +372,20 @@ export function CallClient({
             conversationChannel: chatChannelName,
           }
         : null,
+      /**
+       * BAL-403 — ⚠⚠ `null` ⇒ NO BALANCE SLOT. `hasBalance` is the RSC's verdict — `false` for
+       * every meeting today, which is the EXPECTED, inert answer (see `page.tsx`).
+       *
+       * ⚠⚠ `loadDrawdownState` CLOSES OVER `meetingId` ONLY — no credit-session id crosses this
+       * registration. The id is returned BY the action's own success answer, not supplied TO it;
+       * see `meeting-panels.ts`'s `GetMeetingDrawdownResult` docblock for why that keeps the
+       * "registration stays id-free" rule intact.
+       */
+      balance: hasBalance
+        ? { loadDrawdownState: () => getMeetingDrawdownStateAction({ meetingId }) }
+        : null,
     }),
-    [meetingId, joinLinkUrl, hasChat, isRealtimeEnabled, chatChannelName]
+    [meetingId, joinLinkUrl, hasChat, isRealtimeEnabled, chatChannelName, hasBalance]
   );
 
   /**

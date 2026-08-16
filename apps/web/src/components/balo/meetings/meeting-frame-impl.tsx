@@ -24,6 +24,9 @@ import { useMeetingRoute, type MeetingExitReason } from '@/lib/meetings/meeting-
 import { END_MEETING_FAILED_COPY } from '@/lib/meetings/meeting-state';
 import type { MeetingPanelId, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 import type { WaitingFacts, WaitingPhase, WaitingSubject } from '@/lib/meetings/waiting-copy';
+import { useDrawdownPoll, type DrawdownPollState } from '@/lib/meetings/use-drawdown-poll';
+import { resolveAutoOpen } from '@/lib/meetings/drawdown-auto-open';
+import { InCallBalancePanel } from '@/components/balo/credit/in-call-balance-panel';
 import type { MeetingFrameProps } from './meeting-frame-types';
 import { JoinRetryNotice } from './join-notice-card';
 import { BackToContextLink } from './back-to-context-link';
@@ -507,6 +510,10 @@ interface PanelSlotsInput {
   readonly reactionControl: React.ReactNode | null;
   /** BAL-437 — opens the picker from the MoreSheet's mobile row. `null` ⇒ no row. */
   readonly onOpenReactions: (() => void) | null;
+  /** BAL-403 — the Balance slot's own opener button ref. */
+  readonly balanceButtonRef: React.RefObject<HTMLButtonElement | null>;
+  /** BAL-403 — set by the auto-open ladder while an escalation could not steal an open panel. */
+  readonly balanceAttention: boolean;
 }
 
 interface PanelSlots {
@@ -523,6 +530,9 @@ interface PanelSlots {
     unreadChat?: boolean;
     reactionControl?: React.ReactNode;
     onOpenReactions?: () => void;
+    balanceButtonRef?: React.RefObject<HTMLButtonElement | null>;
+    hasBalance?: boolean;
+    balanceAttention?: boolean;
   };
   /** ⚠ THE SEAT CHIP. `null` ⇒ the whole chip is absent — an unavailable count is not a count. */
   readonly roster: MeetingRoster | null;
@@ -553,6 +563,8 @@ function resolvePanelSlots({
   unreadChat,
   reactionControl,
   onOpenReactions,
+  balanceButtonRef,
+  balanceAttention,
 }: Readonly<PanelSlotsInput>): PanelSlots {
   if (panels === null) {
     return { openPeopleSlot: {}, toolbarPanelSlot: {}, roster: null };
@@ -574,6 +586,12 @@ function resolvePanelSlots({
       unreadChat,
       ...(reactionControl === null ? {} : { reactionControl }),
       ...(onOpenReactions === null ? {} : { onOpenReactions }),
+      // BAL-403 — a FOURTH independent registration. `false` for every meeting today (see
+      // `meeting-panels.ts`), which is the expected, inert answer — no toolbar button, no
+      // More-sheet row.
+      balanceButtonRef,
+      hasBalance: panels.balance !== null,
+      balanceAttention,
     },
     roster: seats,
   };
@@ -672,6 +690,213 @@ function useCallRealtimeSlot(input: {
     ),
     onOpenReactions: openReactions,
   };
+}
+
+/** §16's polite announcements for a background escalation. See `useDrawdownBalanceSlot`. */
+const ANNOUNCE_BALANCE_OPENED = 'Your balance needs attention. The Balance panel has opened.';
+const ANNOUNCE_BALANCE_BADGE = 'Your balance needs attention.';
+
+/**
+ * BAL-403 — the drawdown poll plus the auto-open ladder, composed into one hook.
+ *
+ * ⚠ A HOOK RATHER THAN INLINE STATE, ONLY TO SHED COGNITIVE COMPLEXITY — the same reason
+ * `useCallRealtimeSlot` and `useMeetingPanel` are hooks rather than inline `MeetingFrameInner`
+ * logic. The repo's precedent is to EXTRACT, never to disable the SonarCloud rule.
+ *
+ * ⚠⚠ THE LADDER EFFECT DELIBERATELY DEPENDS ONLY ON `[key, isTerminal]`, NOT ON `panel` /
+ * `openPanel` / `closePanel`. Those are read from the closure at DECISION TIME (i.e. as of the
+ * render that changed `key` or `isTerminal`, which is exactly the panel state that matters), and
+ * including them would re-run the ladder's decision on every unrelated panel toggle — which
+ * `resolveAutoOpen`'s own contract forbids (it acts ONLY on an escalation in `key`).
+ *
+ * ── ⚠⚠ FIX ROUND 1 (W5) — `autoOpened` + THE LIVE-REGION ANNOUNCEMENT ─────────────────────────
+ *
+ * `MeetingSidePanel`'s mount effect used to steal focus unconditionally, which was correct for
+ * every open until this ladder's `'open'` decision started firing it from a background poll. An
+ * auto-open now announces `ANNOUNCE_BALANCE_OPENED` through the frame's own §16 live region
+ * INSTEAD of moving focus (`autoOpened` tells `MeetingSidePanel` to skip the move), and the
+ * ladder's `togglePanel` is WRAPPED so any MANUAL toggle clears `autoOpened` before the panel
+ * state itself changes — a click always restores the shipped focus-on-open behaviour.
+ *
+ * A `'badge'` decision never opens anything, so there was previously NO audible signal at all
+ * for it — a purely visual dot. The first badge escalation PAST `low` (rank ≥ 2: near / grace /
+ * wrap / end) now announces once too: a funding interruption is higher-stakes than an unread
+ * chat message, and the region already exists. `low` itself stays silent, matching its own
+ * visual treatment (a dot, not urgent copy).
+ *
+ * ── ⚠⚠ FIX ROUND 2 (R5) — `announcedBadgeRef` RE-ARMS ON DE-ESCALATION ─────────────────────────
+ *
+ * Round 1 set the ref once and never cleared it, so it fired for the FIRST badge escalation past
+ * `low` and stayed silent for every one after — including a SECOND, worse escalation following a
+ * de-escalation (e.g. an admin top-up brings the session back to `healthy`, then it drains
+ * again). Rule 6 of the ladder is explicit that a second drain is a second event worth
+ * surfacing; the visual dot already re-arms with `highestRankRef` resetting on de-escalation, so
+ * the audible half now mirrors it — reset alongside the rank, not independently of it.
+ *
+ * ── ⚠⚠ FIX ROUND 2 (R3) — THE VANISH-CLOSE EFFECT ONLY CLOSES ON A VANISH, NEVER ON A DENIAL ───
+ *
+ * `useDrawdownPoll`'s W2 fix clears `state` to `null` on BOTH a genuine vanish (session
+ * soft-deleted / cancelled mid-call, `status: 'ready'`) AND a non-retryable failure
+ * (`status: 'error'`) — the two are deliberately the same `state: null` shape so a caller cannot
+ * distinguish "gone" from "failed" by inspecting `state` alone; `status` is what disambiguates.
+ * Round 1's vanish-close effect keyed on `state` alone, so it closed the OPEN panel unconditionally
+ * on both — but this effect has `panel` in its dependency list, and it re-runs on every render
+ * that changes `panel`, so a re-open attempt after such a failure closed AGAIN on the very
+ * next tick, before the error card could ever mount: healthy → open → failed → forced closed →
+ * click the (still-present) toolbar button → reopens → closes again, forever, with no card and
+ * no way back.
+ *
+ * ⚠ `status: 'error'` (`retryable: false`) is NOT a membership denial — `get-meeting-drawdown-
+ * state.ts` only emits it when `enterCallAction` itself fails (an expired session, or an invalid
+ * `meetingId`). A membership / audience denial goes through `resolveInCallDrawdown` returning
+ * `null`, which the action folds into the SAME `{ success: true, state: null }` shape as a
+ * genuine vanish — i.e. it arrives on THIS effect's `status === 'ready'` arm, not on `'error'`.
+ *
+ * ⚠ THE GUARD IS `drawdown.status !== 'ready'` — A POSITIVE CHECK ON THE ONE STATUS A VANISH
+ * ACTUALLY CARRIES, NOT A NEGATIVE CHECK EXCLUDING `'error'`. An `status !== 'error'` guard is
+ * NOT the same claim and is itself broken: `useDrawdownPoll`'s `retry()` flips `status` to
+ * `'loading'` BEFORE its fetch resolves, with `state` still `null` — so clicking the error
+ * card's OWN "Try again" button would re-arm this effect (loading ≠ error) and close the panel
+ * out from under the very click meant to recover it, a second dead-control regression inside
+ * the fix for the first one. `'ready'` is the ONE status `useDrawdownPoll`'s `applyResult` ever
+ * pairs with a `state: null` SUCCESS, so it is the only status that may close the panel; both
+ * `'loading'` (a fetch in flight, retried or not) and `'error'` (an expired session / invalid
+ * `meetingId`) must leave it open so `InCallBalancePanel` renders its error card, with a working
+ * retry (see R4).
+ */
+function useDrawdownBalanceSlot(input: {
+  readonly panels: MeetingPanelRegistration | null;
+  readonly panel: MeetingPanelId | null;
+  readonly isTerminal: boolean;
+  readonly openPanel: (id: MeetingPanelId) => void;
+  readonly closePanel: () => void;
+  readonly togglePanel: (id: MeetingPanelId) => void;
+  /** §16's ONE polite live region. */
+  readonly announce: (message: string) => void;
+}): {
+  readonly drawdown: DrawdownPollState;
+  /** `true` while an escalation could not steal an open panel. Cleared by opening Balance. */
+  readonly attention: boolean;
+  /** BAL-403 fix round 1 (W5) — `true` while the OPEN Balance panel was opened by the ladder. */
+  readonly autoOpened: boolean;
+  /** Wraps the frame's `togglePanel`, clearing `autoOpened` on every MANUAL toggle. */
+  readonly togglePanel: (id: MeetingPanelId) => void;
+} {
+  const { panels, panel, isTerminal, openPanel, closePanel, togglePanel, announce } = input;
+  const drawdown = useDrawdownPoll({ balance: panels?.balance ?? null });
+  const highestRankRef = useRef(0);
+  const [attention, setAttention] = useState(false);
+  const [autoOpened, setAutoOpened] = useState(false);
+  /** ⚠ ONLY A SESSION THAT WAS ONCE REAL may auto-close the panel on vanishing — the ordinary
+   * `state: null` before the first poll lands must not be mistaken for a vanished one. */
+  const hadStateRef = useRef(false);
+  /**
+   * ⚠⚠ FIX ROUND 3 — THE VANISH-CLOSE LATCH. Without this, the effect below re-fires on every
+   * render that flips `panel` back to `'balance'` (it is in the dependency list), so a
+   * deliberate re-open after a vanish force-closes the panel again in the same commit — the
+   * Balance control is still registered (`hasBalance` never clears), so the toolbar button and
+   * More-sheet row survive the vanish, but clicking either one mounts and immediately unmounts
+   * the panel, bouncing focus back to the button with nothing to show for it. The latch makes
+   * the auto-close a ONE-TIME reaction to the vanish itself, not a standing veto on the panel
+   * ever being 'balance' again while `state` stays null: it fires once, then a re-open renders
+   * `BalanceUnavailableCard` like any other terminal read. It re-arms only when a fresh real
+   * state lands (the `drawdown.state !== null` branch below), i.e. a genuinely new vanish.
+   */
+  const vanishClosedRef = useRef(false);
+  /** W5 — announce the badge escalation ONCE, the first time it crosses past `low`. */
+  const announcedBadgeRef = useRef(false);
+
+  const key = drawdown.state?.key ?? null;
+  useEffect(() => {
+    const result = resolveAutoOpen({
+      key,
+      highestRank: highestRankRef.current,
+      openPanel: panel,
+      isTerminal,
+    });
+    // ⚠⚠ R5 — RE-ARM THE BADGE ANNOUNCEMENT ON DE-ESCALATION, mirroring the visual dot's own
+    // `highestRankRef` reset. A rank that fell back below the announce threshold means the NEXT
+    // crossing past it is a fresh event, not a repeat of one already announced.
+    if (result.highestRank < 2) {
+      announcedBadgeRef.current = false;
+    }
+    highestRankRef.current = result.highestRank;
+    if (result.decision === 'open') {
+      setAutoOpened(true);
+      openPanel('balance');
+      setAttention(false);
+      // ⚠ INSTEAD OF FOCUS, NOT IN ADDITION TO IT — `MeetingSidePanel` withholds the move for
+      // this mount because `autoOpened` is `true`.
+      announce(ANNOUNCE_BALANCE_OPENED);
+    } else if (result.decision === 'badge') {
+      setAttention(true);
+      if (result.highestRank >= 2 && !announcedBadgeRef.current) {
+        announcedBadgeRef.current = true;
+        announce(ANNOUNCE_BALANCE_BADGE);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, isTerminal]);
+
+  // ⚠ THE BADGE IS THE DEFERRED OPEN — it clears whenever Balance is opened, by ANY route
+  // (toolbar, More sheet, or the ladder's own `'open'` decision above). It does NOT clear on a
+  // further escalation while still closed; `resolveAutoOpen` keeps re-raising it instead.
+  //
+  // ⚠⚠ W5 — THE SAME EFFECT RESETS `autoOpened` THE MOMENT THE PANEL ISN'T BALANCE. A manual
+  // toggle already clears it synchronously (see `handleTogglePanel` below); this is the
+  // fail-safe for every OTHER path that changes `panel` (Escape, the close button, a terminal
+  // frame) so a stale `true` can never leak into a later open this effect did not decide.
+  useEffect(() => {
+    if (panel === 'balance') {
+      setAttention(false);
+    } else {
+      setAutoOpened(false);
+    }
+  }, [panel]);
+
+  // ⚠⚠ THE SESSION VANISHED MID-CALL — a SUCCESS with `state: null` after having had a real one.
+  // The frame closes the panel itself; `InCallBalancePanel` never needs to render that case.
+  //
+  // ⚠⚠ R3 — CLOSE ONLY ON `status === 'ready'` — A POSITIVE CHECK, NOT `!== 'error'`. `state:
+  // null` alone cannot tell a genuine vanish (`status: 'ready'`, `useDrawdownPoll`'s success-
+  // answering-null arm) apart from a fail-closed DENIAL (`status: 'error'`, the W2 arm) — only
+  // `status` does. The first attempt at this fix used `status !== 'error'`, which is NOT the
+  // same claim: `retry()` flips `status` to `'loading'` BEFORE its fetch resolves, with `state`
+  // still `null` — so clicking the error card's own "Try again" re-armed this effect and closed
+  // the panel out from under the click that was supposed to recover it. `'ready'` is the ONE
+  // status `applyResult` ever pairs with a `state: null` SUCCESS; `'loading'` and `'error'` must
+  // both leave the panel open.
+  useEffect(() => {
+    if (drawdown.state !== null) {
+      hadStateRef.current = true;
+      vanishClosedRef.current = false;
+      return;
+    }
+    if (!hadStateRef.current || panel !== 'balance') return;
+    if (drawdown.status !== 'ready') return;
+    // ⚠⚠ FIX ROUND 3 — LATCHED. Without this guard, re-opening Balance after a vanish flips
+    // `panel` back to `'balance'`, this effect re-runs (it's in the deps below), and it closes
+    // the panel again before `BalanceUnavailableCard` can ever render — a dead control for the
+    // rest of the call. One close per vanish; see the ref's docblock above.
+    if (vanishClosedRef.current) return;
+    vanishClosedRef.current = true;
+    closePanel();
+  }, [drawdown.state, drawdown.status, panel, closePanel]);
+
+  /**
+   * W5 — the MANUAL entry point. Clearing `autoOpened` here, BEFORE `togglePanel` flips `panel`,
+   * is what makes a click on the Balance button (or its badge) restore focus-on-open even when
+   * the panel was already open via the ladder.
+   */
+  const handleTogglePanel = useCallback(
+    (id: MeetingPanelId): void => {
+      setAutoOpened(false);
+      togglePanel(id);
+    },
+    [togglePanel]
+  );
+
+  return { drawdown, attention, autoOpened, togglePanel: handleTogglePanel };
 }
 
 function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): React.JSX.Element {
@@ -1115,11 +1340,21 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
    * overflow tile and no panel. Not disabled — ABSENT.
    */
   const panels = route.panels;
-  const { panel, togglePanel, closePanel, peopleButtonRef, filesButtonRef, chatButtonRef } =
-    useMeetingPanel({
-      isRegistered: panels !== null,
-      isTerminal: exitReason !== null || isFatal,
-    });
+  const {
+    panel,
+    // ⚠ RAW — the WRAPPED version (from `useDrawdownBalanceSlot`, below) is what every manual
+    // caller downstream actually uses. See that hook's W5 docblock for why the wrap exists.
+    togglePanel: rawTogglePanel,
+    openPanel,
+    closePanel,
+    peopleButtonRef,
+    filesButtonRef,
+    chatButtonRef,
+    balanceButtonRef,
+  } = useMeetingPanel({
+    isRegistered: panels !== null,
+    isTerminal: exitReason !== null || isFatal,
+  });
 
   /**
    * BAL-437 — ⚠ THE **MORE** TRIGGER, HELD HERE BECAUSE TWO SIBLINGS NEED IT: `MeetingToolbar`
@@ -1137,6 +1372,29 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     moreButtonRef,
   });
 
+  /**
+   * BAL-403 — the drawdown poll (runs while REGISTERED, above `FramePanel`, NOT gated on the
+   * panel being open — see `use-drawdown-poll.ts`'s divergence note) plus the auto-open ladder.
+   *
+   * ⚠ fix round 1 (W5) — RETURNS THE **WRAPPED** `togglePanel`, which every manual caller below
+   * (the toolbar, the More sheet, People/Files/Chat) now uses instead of the raw one, so any
+   * click clears `autoOpened` before `panel` itself changes.
+   */
+  const {
+    drawdown,
+    attention: balanceAttention,
+    autoOpened: balanceAutoOpened,
+    togglePanel,
+  } = useDrawdownBalanceSlot({
+    panels,
+    panel,
+    isTerminal: exitReason !== null || isFatal,
+    openPanel,
+    closePanel,
+    togglePanel: rawTogglePanel,
+    announce,
+  });
+
   const { openPeopleSlot, toolbarPanelSlot, roster } = resolvePanelSlots({
     panels,
     panel,
@@ -1148,6 +1406,8 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     unreadChat: realtime.unreadChat,
     reactionControl,
     onOpenReactions,
+    balanceButtonRef,
+    balanceAttention,
   });
 
   return (
@@ -1341,6 +1601,8 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               meetingProps={meetingProps}
               onAnnounce={announce}
               realtime={realtime}
+              drawdown={drawdown}
+              balanceAutoOpened={balanceAutoOpened}
             />
           </AnimatePresence>
         </div>
@@ -1550,28 +1812,37 @@ function FrameStage({
 function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTerminal: boolean }): {
   readonly panel: MeetingPanelId | null;
   readonly togglePanel: (id: MeetingPanelId) => void;
+  /** BAL-403 — opens without toggling. Auto-open uses this; a user click always uses `togglePanel`. */
+  readonly openPanel: (id: MeetingPanelId) => void;
   readonly closePanel: () => void;
   readonly peopleButtonRef: React.RefObject<HTMLButtonElement | null>;
   readonly filesButtonRef: React.RefObject<HTMLButtonElement | null>;
   readonly chatButtonRef: React.RefObject<HTMLButtonElement | null>;
+  readonly balanceButtonRef: React.RefObject<HTMLButtonElement | null>;
 } {
   const [panel, setPanel] = useState<MeetingPanelId | null>(null);
   const peopleButtonRef = useRef<HTMLButtonElement | null>(null);
   const filesButtonRef = useRef<HTMLButtonElement | null>(null);
   const chatButtonRef = useRef<HTMLButtonElement | null>(null);
+  /** BAL-403 — the fourth opener. Adding it here is a type error until `openers` below agrees. */
+  const balanceButtonRef = useRef<HTMLButtonElement | null>(null);
 
   /**
    * ⚠ A LOOKUP OBJECT, NOT A NESTED TERNARY (SonarCloud). Three slots is where a chained `?:`
    * stops being readable, and a fourth would make the choice for us anyway.
    *
-   * ⚠⚠ IT CLOSES OVER THE THREE REFS DIRECTLY — **NO `useRef` MIRROR, NO RENDER-PHASE WRITE.**
+   * ⚠⚠ IT CLOSES OVER THE FOUR REFS DIRECTLY — **NO `useRef` MIRROR, NO RENDER-PHASE WRITE.**
    * An earlier version rebuilt this object every render and assigned it into a second ref during
    * the render phase, to keep `focusOpener` stable. That was unnecessary and unsafe at once: the
-   * three refs are already stable for the component's whole lifetime (`useRef` returns the same
+   * four refs are already stable for the component's whole lifetime (`useRef` returns the same
    * object forever), so closing over them keeps `focusOpener` stable with an EMPTY dependency
    * list and nothing is written during render. React may render without committing (Strict
    * Mode, a discarded concurrent render), which is precisely why a ref write belongs in an
    * effect or nowhere. Here it is nowhere.
+   *
+   * ⚠⚠ THIS MAP IS `Record<MeetingPanelId, …>` — TOTAL OVER THE UNION. BAL-403 adding `'balance'`
+   * to `MeetingPanelId` is a compile error here until `balance` joins this object; that is the
+   * mechanical forcing function, and it is a feature.
    */
   const focusOpener = useCallback(
     (id: MeetingPanelId): void => {
@@ -1579,13 +1850,14 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
         people: peopleButtonRef,
         files: filesButtonRef,
         chat: chatButtonRef,
+        balance: balanceButtonRef,
       };
       openers[id].current?.focus();
-      // ⚠ THE THREE REF OBJECTS ARE THE ONLY DEPENDENCIES, AND THEY NEVER CHANGE IDENTITY — a
+      // ⚠ THE FOUR REF OBJECTS ARE THE ONLY DEPENDENCIES, AND THEY NEVER CHANGE IDENTITY — a
       // `useRef` result is the same object for the component's whole lifetime. So this callback is
       // stable in practice while still being honestly exhaustive.
     },
-    [peopleButtonRef, filesButtonRef, chatButtonRef]
+    [peopleButtonRef, filesButtonRef, chatButtonRef, balanceButtonRef]
   );
 
   const togglePanel = useCallback(
@@ -1601,6 +1873,21 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
     },
     [focusOpener]
   );
+
+  /**
+   * BAL-403 — opens WITHOUT toggling; a re-call with the same id is a no-op rather than a
+   * close. This is what the auto-open ladder calls; `togglePanel` keeps its close-on-re-click
+   * semantics and stays the ONLY path a user click ever takes.
+   */
+  const openPanel = useCallback((id: MeetingPanelId): void => {
+    setPanel((current) => {
+      if (current === id) return current;
+      // ⚠ THE SAME FUNNEL EVENT A MANUAL OPEN FIRES — auto-opens are not distinguished from
+      // manual ones today (noted as a future property addition in the BAL-403 plan, not built).
+      track(MEETING_PANEL_EVENTS.OPENED, { panel: id });
+      return id;
+    });
+  }, []);
 
   const closePanel = useCallback((): void => {
     setPanel((current) => {
@@ -1619,10 +1906,12 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
     // ⚠ AN UNREGISTERED SLOT IS ALWAYS CLOSED, whatever state happens to be held.
     panel: input.isRegistered ? panel : null,
     togglePanel,
+    openPanel,
     closePanel,
     peopleButtonRef,
     filesButtonRef,
     chatButtonRef,
+    balanceButtonRef,
   };
 }
 
@@ -1640,6 +1929,8 @@ function FramePanel({
   meetingProps,
   onAnnounce,
   realtime,
+  drawdown,
+  balanceAutoOpened,
 }: Readonly<{
   /** ⚠ `null` ⇒ UNREGISTERED. Both GUEST mounts, structurally. Renders nothing. */
   panels: MeetingPanelRegistration | null;
@@ -1657,6 +1948,10 @@ function FramePanel({
   onAnnounce: (message: string) => void;
   /** BAL-437 — the frame's one Ably client's state, threaded into both realtime-aware panels. */
   realtime: MeetingCallRealtime;
+  /** BAL-403 — the frame's one drawdown poll, threaded into the Balance panel body. */
+  drawdown: DrawdownPollState;
+  /** BAL-403 fix round 1 (W5) — `true` ⇒ the ladder opened Balance, not a click. */
+  balanceAutoOpened: boolean;
 }>): React.JSX.Element | null {
   if (panels === null) return null;
   if (panel === 'people') {
@@ -1697,6 +1992,23 @@ function FramePanel({
         fileFeed={realtime.fileFeed}
         meetingProps={meetingProps}
         onAnnounce={onAnnounce}
+      />
+    );
+  }
+  // ⚠ `panels.balance === null` ⇒ NO BALANCE SLOT AT ALL — `false` for every meeting today (see
+  // `meeting-panels.ts`). The toolbar renders no button either, so this branch is unreachable
+  // through the UI while inert; it is still written for the same reason the Chat branch above
+  // is: a slot rule enforced in only one of two places is a slot rule that will be broken in the
+  // other.
+  if (panel === 'balance' && panels.balance !== null) {
+    return (
+      <InCallBalancePanel
+        state={drawdown.state}
+        sessionId={drawdown.sessionId}
+        status={drawdown.status}
+        onClose={onClose}
+        onRetry={drawdown.retry}
+        autoOpened={balanceAutoOpened}
       />
     );
   }

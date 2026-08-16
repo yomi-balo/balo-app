@@ -1,4 +1,5 @@
 import type { GuestForViewer } from '@balo/shared/meetings';
+import type { DrawdownState } from '@balo/shared/credit';
 import type {
   MeetingPanelInviteOutcome,
   MeetingPanelDecisionOutcome,
@@ -54,8 +55,17 @@ import type { MeetingReactionEmoji } from './meeting-reactions';
  * ⚠ DO NOT CALL `guestMayReadMeeting` TO "SUPPORT" GUESTS HERE. Its own docblock forbids
  * speculative calls: authorizing a read against a grant with no authenticated subject to bind
  * it to is worse than denying. **BAL-445** mints the session and fills the arm.
+ *
+ * ── ⚠⚠ BAL-403 ADDED `'balance'` — AND IT SHIPS INERT BY DESIGN ─────────────────────────────
+ *
+ * `MeetingPanelRegistration.balance !== null` requires a `credit_sessions` row for THIS
+ * meeting, and nothing in the app opens one today (`openSessionAction` / `connectSessionAction`
+ * have zero non-test callers — the session-open ticket is deferred and tracked separately). So
+ * `hasBalance: false` is the EXPECTED answer for every meeting right now, not a bug: no slot
+ * button, no More-sheet row, no poll, no fetch, no panel. See `page.tsx`'s `resolveBalanceSlot`
+ * docblock for the full inert-seam reasoning (the same posture BAL-420 and BAL-387 shipped).
  */
-export type MeetingPanelId = 'people' | 'files' | 'chat';
+export type MeetingPanelId = 'people' | 'files' | 'chat' | 'balance';
 
 /** The guests GET payload, exactly as the api returns it. */
 export interface MeetingGuestsPayload {
@@ -241,6 +251,35 @@ export interface MeetingRealtimeRegistration {
   readonly conversationChannel: string | null;
 }
 
+// ── BAL-403 — the BALANCE slot ───────────────────────────────────────────────────────────
+
+/**
+ * ⚠ `retryable` DISTINGUISHES A TRANSPORT BLIP FROM A VERDICT, exactly as the guests result
+ * does above — the poll keeps its schedule on the first, stops on the second.
+ *
+ * ⚠⚠ THE FIRST `success: true` ARM CARRIES `sessionId` AND THE SECOND DOES NOT — that is the
+ * discriminant a consumer narrows on. The id is returned BY the server's own answer, never
+ * supplied TO the client as configuration: `MeetingBalancePanelActions` stays id-free (the
+ * registration closes over `meetingId` only, per the rule at the top of this file), and every
+ * consumer of the id (`nudgeAdminAction`, `in_session_panel_viewed`'s property) re-gates
+ * server-side on its own, so the id is an opaque UUID that authorizes nothing by itself.
+ *
+ * ⚠⚠ THE SECOND ARM — `{ success: true, state: null }` — IS THE **EXPECTED, INERT PATH**
+ * TODAY, AND IT IS A SUCCESS, NOT AN ERROR. See {@link MeetingPanelId}'s BAL-403 note. It means
+ * `credit_sessions.meeting_id` resolved to no row (or a soft-deleted / cancelled one), which is
+ * true of every meeting until the session-open ticket ships. Never surface it as an error state.
+ */
+export type GetMeetingDrawdownResult =
+  | { readonly success: true; readonly state: DrawdownState; readonly sessionId: string }
+  | { readonly success: true; readonly state: null }
+  | { readonly success: false; readonly error: string; readonly retryable: boolean };
+
+/** The Balance half of the registration — one callback, closing over `meetingId`. */
+export interface MeetingBalancePanelActions {
+  /** ⚠ CLOSES OVER `meetingId` IN `call-client.tsx`. No id crosses this interface. */
+  readonly loadDrawdownState: () => Promise<GetMeetingDrawdownResult>;
+}
+
 export interface MeetingPanelRegistration {
   /**
    * ⚠⚠ THE BARE, **TOKENLESS** JOIN URL — `${APP_URL}/join/m/{meetingId}`. Built server-side.
@@ -266,4 +305,12 @@ export interface MeetingPanelRegistration {
   readonly chat: MeetingChatPanelActions | null;
   /** BAL-437 — ⚠⚠ `null` ⇒ NO REACTIONS CONTROL. See {@link MeetingRealtimeRegistration}. */
   readonly realtime: MeetingRealtimeRegistration | null;
+  /**
+   * BAL-403 — ⚠⚠ `null` ⇒ **NO BALANCE SLOT AT ALL.** Resolved SERVER-SIDE in the RSC
+   * (`resolveBalanceSlot` in `page.tsx`), not in the browser, for the identical no-flash reason
+   * `chat` is. **`false`/`null` is the EXPECTED value for every meeting today** — see
+   * {@link MeetingPanelId}'s BAL-403 note. This is the forward seam; nothing opens a credit
+   * session yet.
+   */
+  readonly balance: MeetingBalancePanelActions | null;
 }

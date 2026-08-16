@@ -117,6 +117,15 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   //
   // Lists an in-call conversation's messages (keyset pagination, `{ kind: 'full' }`) — pure read.
   'app/(call)/meetings/[meetingId]/call/_actions/fetch-meeting-thread.ts',
+  // ── BAL-403, the in-call BALANCE panel's polled read ──────────────────────────────────
+  //
+  // ⚠ A pure read of the in-call drawdown projection. Writes nothing: the audience gate and the
+  // membership + capability read both run inside `resolveInCallDrawdown`
+  // (`@/lib/credit/resolve-in-call-drawdown`), the same composed gate `page.tsx`'s
+  // `resolveBalanceSlot` calls to decide the slot's registration. It is the THIRD polled action
+  // on this list — every 10-30s while the Balance slot is registered — which is an independent
+  // reason it must never gain a write.
+  'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-drawdown-state.ts',
 ];
 
 /**

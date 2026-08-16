@@ -35,6 +35,25 @@ export function PanelSkeletonRows(): React.JSX.Element {
   );
 }
 
+/**
+ * BAL-403 fix round 2 (R4) — extracted so `InCallBalancePanel`'s degraded-footnote "Try again"
+ * (rendered ALONGSIDE last-known-good data, not inside a full `PanelErrorCard`) doesn't
+ * duplicate this button's markup a second time. One shape, two callers.
+ */
+export function PanelRetryButton({
+  onRetry,
+}: Readonly<{ onRetry: () => void }>): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onRetry}
+      className="border-border text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center justify-center self-start rounded-lg border px-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+    >
+      Try again
+    </button>
+  );
+}
+
 export interface PanelErrorCardProps {
   readonly title: string;
   /**
@@ -58,13 +77,7 @@ export function PanelErrorCard({
     >
       <p className="text-foreground text-sm font-medium">{title}</p>
       <p className="text-muted-foreground text-xs leading-relaxed">{body}</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="border-border text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center justify-center self-start rounded-lg border px-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-      >
-        Try again
-      </button>
+      <PanelRetryButton onRetry={onRetry} />
     </div>
   );
 }

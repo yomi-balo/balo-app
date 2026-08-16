@@ -56,6 +56,16 @@ import { cn } from '@/lib/utils';
  *
  * ⚠ ESCAPE CLOSES, and returning focus to the button that opened it is the FRAME's job (it
  * holds the ref). Doing it here would mean this component reaching for a node it does not own.
+ *
+ * ── ⚠⚠ FIX ROUND 1 (W5) — `autoOpened` WITHHOLDS THE MOUNT FOCUS ───────────────────────────
+ *
+ * The heading-takes-focus rule above is right for a USER-INITIATED open (a click), which is
+ * every open this shell has had until BAL-403's auto-open ladder. A background poll deciding to
+ * open this panel is not a gesture, and yanking a screen-reader or keyboard user's focus off
+ * whatever they were doing mid-call — to read a panel they did not ask for — is worse than the
+ * silence it replaces. `autoOpened` (default `false`, so every existing manual-open caller is
+ * unaffected) skips the focus move on mount; the CALLER is responsible for saying what happened
+ * through the frame's own polite live region instead (see `meeting-frame-impl.tsx`'s `announce`).
  */
 
 /**
@@ -72,6 +82,12 @@ export interface MeetingSidePanelProps {
   readonly onClose: () => void;
   readonly children: React.ReactNode;
   readonly footer?: React.ReactNode;
+  /**
+   * BAL-403 fix round 1 (W5) — `true` ⇒ this mount was opened by the auto-open ladder, not by a
+   * click, so the heading must NOT steal focus. See the module docblock. Default `false`, so
+   * People / Files / Chat (every existing caller) keep the shipped focus-on-open behaviour.
+   */
+  readonly autoOpened?: boolean;
 }
 
 export function MeetingSidePanel({
@@ -80,14 +96,22 @@ export function MeetingSidePanel({
   onClose,
   children,
   footer,
+  autoOpened = false,
 }: Readonly<MeetingSidePanelProps>): React.JSX.Element {
   const reduceMotion = useReducedMotion() === true;
   const headingRef = useRef<HTMLHeadingElement | null>(null);
+  /**
+   * ⚠ CAPTURED AT MOUNT, DELIBERATELY. The panel mounts once per open (the frame renders it
+   * conditionally, keyed by which panel is open), so `autoOpened` is fixed for this mount's
+   * whole life — a later prop change cannot retroactively decide whether THIS mount stole focus.
+   */
+  const autoOpenedRef = useRef(autoOpened);
 
-  // ⚠ THE HEADING TAKES FOCUS ON OPEN. The panel MOUNTS on open (the frame renders it
-  // conditionally), so a mount effect is the whole of the timing — there is no
-  // `AnimatePresence mode="wait"` here to defer it past the commit.
+  // ⚠ THE HEADING TAKES FOCUS ON OPEN — UNLESS THIS OPEN WAS AUTOMATIC (W5). The panel MOUNTS on
+  // open (the frame renders it conditionally), so a mount effect is the whole of the timing —
+  // there is no `AnimatePresence mode="wait"` here to defer it past the commit.
   useEffect(() => {
+    if (autoOpenedRef.current) return;
     headingRef.current?.focus();
   }, []);
 

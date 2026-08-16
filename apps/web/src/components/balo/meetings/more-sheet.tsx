@@ -8,6 +8,7 @@ import {
   Settings,
   Smile,
   Users,
+  Wallet,
 } from 'lucide-react';
 import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
 import type { MeetingPanelId } from '@/lib/meetings/meeting-panels';
@@ -86,6 +87,13 @@ export interface MoreSheetProps {
    * reach the picker — is the correct destination. ⚠ NOTHING HERE READS IT.
    */
   readonly triggerRef?: React.Ref<HTMLButtonElement>;
+  /**
+   * BAL-403 — ⚠ WHETHER THE **BALANCE** SLOT IS REGISTERED. `false` for every meeting today —
+   * see `meeting-panels.ts`. `false`/`undefined` ⇒ NO row, never a disabled one.
+   */
+  readonly hasBalance?: boolean;
+  /** BAL-403 — the same escalation flag the toolbar button's dot carries (OQ2: yes, same flag). */
+  readonly balanceAttention?: boolean;
 }
 
 export function MoreSheet({
@@ -101,6 +109,8 @@ export function MoreSheet({
   onTogglePanel,
   onOpenReactions,
   triggerRef,
+  hasBalance = false,
+  balanceAttention = false,
 }: Readonly<MoreSheetProps>): React.JSX.Element {
   // ⚠ THE SAME STRUCTURAL SIGNAL THE LINK ITSELF USES: no route context ⇒ an anonymous guest,
   // who has no Balo destination. Read here too so the DIVIDER does not render around nothing.
@@ -181,6 +191,23 @@ export function MoreSheet({
             icon={Paperclip}
             label="Files"
             onSelect={close(() => onTogglePanel('files'))}
+          />
+        </div>
+      )}
+
+      {/*
+        ⚠⚠ BAL-403 — THE BALANCE ROW, `lg:hidden`: its bar twin (`BalanceSlot`) is `hidden
+        lg:flex`, matching People/Files exactly (Decision OQ2: the badge appears here too, driven
+        by the SAME `balanceAttention` flag as the toolbar button, with the same auto-open
+        ladder). Rendered only when the slot is REGISTERED — `false` for every meeting today.
+      */}
+      {onTogglePanel === undefined || !hasBalance ? null : (
+        <div className="lg:hidden">
+          <MeetingMenuItem
+            icon={Wallet}
+            label={balanceAttention ? 'Balance, needs attention' : 'Balance'}
+            badge={balanceAttention}
+            onSelect={close(() => onTogglePanel('balance'))}
           />
         </div>
       )}
