@@ -99,10 +99,23 @@ function grantWith(extra: Record<string, unknown> = {}): Record<string, unknown>
 }
 
 const JOIN_LINK = `https://balo.test/join/m/${MEETING_ID}`;
+/** BAL-437 — the conversation the RSC resolved this meeting's chat onto. */
+const CONVERSATION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 function renderClient(): HTMLElement {
   return render(
-    <CallClient meetingId={MEETING_ID} viewerName="Dana Okoro" joinLinkUrl={JOIN_LINK} />
+    <CallClient
+      meetingId={MEETING_ID}
+      viewerName="Dana Okoro"
+      joinLinkUrl={JOIN_LINK}
+      // ⚠ BAL-437 — the RSC's verdicts, as this suite's default: chat registered, realtime
+      // configured. The absent-slot cases are covered where they are decided
+      // (`meeting-chat-anchor.test.ts`) and where they are rendered
+      // (`meeting-toolbar.test.tsx`), not here.
+      hasChat
+      isRealtimeEnabled
+      chatChannelName={`conversation:${CONVERSATION_ID}`}
+    />
   ).container;
 }
 
@@ -228,7 +241,14 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
   it('⚠ clears its timer on unmount', async () => {
     mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
     const { unmount } = render(
-      <CallClient meetingId={MEETING_ID} viewerName={null} joinLinkUrl={JOIN_LINK} />
+      <CallClient
+        meetingId={MEETING_ID}
+        viewerName={null}
+        joinLinkUrl={JOIN_LINK}
+        hasChat={false}
+        isRealtimeEnabled={false}
+        chatChannelName={null}
+      />
     );
 
     await screen.findByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE });

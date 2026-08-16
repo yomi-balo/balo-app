@@ -90,6 +90,11 @@ export * from './lifecycle';
 // paragraph before touching either boolean: merging it into `isOwner` mints DAILY OWNER TOKENS
 // FOR CLIENTS.
 export * from './end-authority';
+// BAL-437 — the six-emoji in-call reaction vocabulary. ⚠ HERE RATHER THAN IN `apps/web`
+// because `@balo/analytics` needs the SAME union for its `reaction_sent` property and cannot
+// import `apps/web`; it used to hand-restate the six glyphs, which is two definitions of one
+// closed set. See `reactions.ts` for the full argument.
+export * from './reactions';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

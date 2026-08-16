@@ -7,6 +7,12 @@ import {
   CONVERSATION_EVENT_FILE,
   CONVERSATION_EVENT_MESSAGE,
 } from '@/lib/realtime/channels';
+import { fetchRealtimeToken, type RealtimeTokenResult } from '@/lib/realtime/ably-auth';
+import {
+  isConversationFilePayload,
+  isConversationMessagePayload,
+  sanitizeRealtimeBodyHtml,
+} from '@/lib/realtime/message-payload';
 import type {
   ConversationFileView,
   ConversationMessageView,
@@ -15,13 +21,14 @@ import type {
 export type ConversationRealtimeStatus = 'disabled' | 'connecting' | 'connected' | 'failed';
 
 /**
- * What a token fetcher must return. Structurally identical to every
- * `create*RealtimeTokenAction` result on the platform, declared here rather than imported
- * from one of them so this hook depends on NO route's action module (BAL-421).
+ * What a token fetcher must return.
+ *
+ * ⚠ BAL-437 MOVED THE DECLARATION to `@/lib/realtime/ably-auth` (its second consumer is the
+ * in-call hook, which must not import a conversation module). This alias is kept because
+ * `create-case-realtime-token.ts` imports the name FROM HERE, and re-pointing that import
+ * would be churn in a `'use server'` module for no behavioural gain.
  */
-export type ConversationRealtimeTokenResult =
-  | { success: true; tokenRequest: Ably.TokenRequest }
-  | { success: false; disabled?: true; error?: string };
+export type ConversationRealtimeTokenResult = RealtimeTokenResult;
 
 export interface UseConversationRealtimeInput {
   /** Server said realtime is on AND there are channels to join. */
@@ -47,108 +54,14 @@ export interface UseConversationRealtimeInput {
   onFile: (file: ConversationFileView) => void;
 }
 
-function hasStringFields<K extends string>(
-  data: unknown,
-  keys: readonly K[]
-): data is Record<K, string> {
-  if (typeof data !== 'object' || data === null) return false;
-  const record = data as Record<string, unknown>;
-  return keys.every((key) => typeof record[key] === 'string');
-}
-
 /**
- * Full structural guard over every message field the island consumes.
- *
- * ⚠ `conversationId` (BAL-424), NOT `relationshipId`. This guard is STRUCTURAL: naming the
- * wrong field here rejects every inbound message SILENTLY — a green typecheck cannot catch
- * it, because the payload arrives as `unknown` from a third-party transport.
+ * ⚠⚠ BAL-437 MOVED THE THREE PAYLOAD PRIMITIVES to `@/lib/realtime/message-payload` —
+ * `isConversationMessagePayload`, `isConversationFilePayload` and `sanitizeRealtimeBodyHtml`.
+ * The in-call hook needs two of them, and importing them FROM HERE made the CALL surface reach
+ * into the project-request/case conversation feature for a transport-level primitive. That is
+ * the coupling BAL-421 already broke once for the token plumbing (`ably-auth.ts`); this closes
+ * the same seam one import lower down. ⚠ THEY ARE NOT RE-EXPORTED — one path, not two.
  */
-export function isConversationMessagePayload(data: unknown): data is ConversationMessageView {
-  return hasStringFields(data, [
-    'id',
-    'conversationId',
-    'bodyHtml',
-    'senderUserId',
-    'senderName',
-    'createdAtIso',
-  ]);
-}
-
-/** Full structural guard over every file field the island consumes — see the note above. */
-export function isConversationFilePayload(data: unknown): data is ConversationFileView {
-  return (
-    hasStringFields(data, [
-      'id',
-      'conversationId',
-      'fileName',
-      'contentType',
-      'uploadedByUserId',
-      'uploadedByName',
-      'createdAtIso',
-    ]) && typeof (data as { sizeBytes?: unknown }).sizeBytes === 'number'
-  );
-}
-
-/** The only tags a realtime message body may carry (what the server emits). */
-const REALTIME_ALLOWED_TAG = /^<(?:\/?p|br\s*\/?)>$/i;
-
-/** The node-callback Ably hands to `authCallback` implementations. */
-type AblyAuthResultCallback = Parameters<NonNullable<Ably.ClientOptions['authCallback']>>[1];
-
-/**
- * Best-effort error → string for the auth callback: `Error` and Ably's
- * `ErrorInfo` both carry a string `.message` (structural narrowing, no `any`);
- * anything else gets a fixed label instead of '[object Object]'.
- */
-function authErrorMessage(error: unknown): string {
-  if (typeof error === 'string') return error;
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return error.message;
-  }
-  return 'Realtime token request failed';
-}
-
-/**
- * Fetches a token via the Server Action and reports through Ably's
- * NODE-CALLBACK contract — an async `authCallback` that returns a promise
- * silently fails (D1), so this stays a `void`-returning function.
- */
-function fetchRealtimeToken(
-  fetchToken: () => Promise<ConversationRealtimeTokenResult>,
-  callback: AblyAuthResultCallback
-): void {
-  fetchToken()
-    .then((result) => {
-      if (result.success) {
-        callback(null, result.tokenRequest);
-      } else {
-        callback(result.error ?? 'Realtime disabled', null);
-      }
-    })
-    .catch((error: unknown) => {
-      callback(authErrorMessage(error), null);
-    });
-}
-
-/**
- * Client-side defense-in-depth for Ably-delivered `bodyHtml` before it can
- * reach `dangerouslySetInnerHTML`: every tag except `<p>`, `</p>`, `<br>` is
- * escaped in place (no sanitizer dependency in the bundle). Server-built
- * payloads (`plainMessageToHtml` → `sanitizeProjectHtml`) pass through
- * unchanged; a hostile payload renders as inert text.
- */
-export function sanitizeRealtimeBodyHtml(html: string): string {
-  // `<` up to the next `>` (or end of input for an unterminated tag). The
-  // bounded `[^<>]*` body cannot backtrack catastrophically (no nesting).
-  return html.replace(/<[^<>]*>?/g, (tag) =>
-    REALTIME_ALLOWED_TAG.test(tag) ? tag : tag.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  );
-}
 
 /**
  * Subscribe-only Ably client for the conversation island (BAL-271 / A4 — D1).

@@ -195,6 +195,8 @@ export {
   type MeetingPanelOutcome,
   type MeetingPanelFileOutcome,
   type MeetingPanelSizeBucket,
+  type MeetingPanelMessageOutcome,
+  type MeetingPanelReactionEmoji,
 } from './meeting-panel';
 export {
   TRANSCRIPT_SERVER_EVENTS,

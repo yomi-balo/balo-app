@@ -103,6 +103,20 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   // Each origin keeps its own gate (`authorizeMeetingFileAccess` / the case gate + a
   // conversation-scoped lookup); neither performs a write.
   'app/(dashboard)/cases/[engagementId]/_actions/get-case-file-download.ts',
+  // ── BAL-437, the in-call chat panel's thread read ─────────────────────────────────────
+  //
+  // ⚠⚠ THE STANDING BAL-424 OBLIGATION ABOVE BINDS THIS ONE IN SPIRIT, THOUGH NOT BY THE
+  // LETTER OF ITS MODULE NAME. It does not mention `project-request/resolve-conversation-access`,
+  // so `conversation-access-read-only.test.ts` does not enrol it — but it resolves a
+  // conversation all the same, through `@/lib/meetings/meeting-chat-anchor`. That module's
+  // thread lookup is `conversationsRepository.findByContext` — a SELECT. It must NEVER become
+  // `ensureForContext` / `ensureManyForContexts`: minting a conversation row from a READ path
+  // behind a bare `requireUser()` is the exact transitive-write defect BAL-424 closed, and a
+  // MEETING path is where it would be easiest to justify ("the call is happening, so the
+  // thread should exist"). It should not, and this action must not make it so.
+  //
+  // Lists an in-call conversation's messages (keyset pagination, `{ kind: 'full' }`) — pure read.
+  'app/(call)/meetings/[meetingId]/call/_actions/fetch-meeting-thread.ts',
 ];
 
 /**

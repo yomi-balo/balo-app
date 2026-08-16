@@ -36,12 +36,17 @@ import {
 } from '@/lib/meetings/meeting-state';
 import type { MemberJoinResponse } from '@/lib/meetings/join-api-client';
 import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import { meetingChannelName } from '@/lib/realtime/channels';
 import { getMeetingStateAction } from '../_actions/get-meeting-state';
 import { endMeetingAction } from '../_actions/end-meeting';
 import { getMeetingGuestsAction } from '../_actions/get-meeting-guests';
 import { inviteMeetingGuestsAction } from '../_actions/invite-meeting-guests';
 import { decideGuestAdmissionAction } from '../_actions/decide-guest-admission';
 import { resendGuestLinkAction } from '../_actions/resend-guest-link';
+import { createMeetingRealtimeTokenAction } from '../_actions/create-meeting-realtime-token';
+import { fetchMeetingThreadAction } from '../_actions/fetch-meeting-thread';
+import { postMeetingMessageAction } from '../_actions/post-meeting-message';
+import { sendMeetingReactionAction } from '../_actions/send-meeting-reaction';
 import { listMeetingFilesAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files';
 import { requestMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/request-meeting-file-upload';
 import { confirmMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/confirm-meeting-file-upload';
@@ -83,12 +88,41 @@ export interface CallClientProps {
    * builds a link; whoever opens this lands in the pending lobby and must be admitted.
    */
   readonly joinLinkUrl: string;
+  /**
+   * BAL-437 — ⚠⚠ **RESOLVED SERVER-SIDE, ONCE.** `false` ⇒ this meeting has NO conversation
+   * anchor (an `admin` call, a `project_discovery`, two ambiguous holder contexts, or a thread
+   * that was never provisioned) ⇒ the Chat slot is ABSENT: no toolbar button, no More-sheet
+   * row, no panel.
+   *
+   * ⚠ IT IS RESOLVED IN THE RSC RATHER THAN BY A FIRST CLIENT FETCH SO THERE IS NO **FLASH** —
+   * a Chat button that appears on mount and vanishes when the first answer arrives is worse
+   * than one that was never there.
+   */
+  readonly hasChat: boolean;
+  /**
+   * BAL-437 — ⚠ `false` ⇒ NO `ABLY_API_KEY` ⇒ the Reactions control is ABSENT (a reaction with
+   * no transport reaches nobody) while CHAT STAYS REGISTERED, because chat has a durable record
+   * and works entirely over HTTP. It degrades visibly with one line in the panel instead.
+   */
+  readonly isRealtimeEnabled: boolean;
+  /**
+   * BAL-437 — `conversation:{conversationId}`, built SERVER-SIDE from the gate's own resolution,
+   * or `null` when there is no anchor.
+   *
+   * ⚠ IT IS NOT ASSEMBLED HERE FROM A CONVERSATION ID PASSED DOWN, because the conversation id
+   * has no other use on this surface and shipping one to the browser that nothing renders is a
+   * gratuitous identifier. The CHANNEL NAME is the only thing the client needs.
+   */
+  readonly chatChannelName: string | null;
 }
 
 export function CallClient({
   meetingId,
   viewerName,
   joinLinkUrl,
+  hasChat,
+  isRealtimeEnabled,
+  chatChannelName,
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
@@ -286,8 +320,50 @@ export function CallClient({
           confirmMeetingFileUploadAction({ meetingId, ...input, source: 'files_tab' }),
         download: (fileId) => getMeetingFileDownloadAction({ meetingId, fileId }),
       },
+      /**
+       * BAL-437 — ⚠⚠ `null` ⇒ NO CHAT SLOT. `hasChat` is the RSC's verdict, so the control is
+       * absent from first paint rather than after a round trip.
+       *
+       * ⚠⚠ `confirmUpload` BINDS `source: 'chat'` — THE MIRROR OF `'files_tab'` ABOVE, and the
+       * only difference between the two entry points. Both reach the SAME action and therefore
+       * the same single `publishMeetingEvent`, which is what makes "one shared fan-out"
+       * structural. Letting a component choose the source would put a funnel dimension in the
+       * hands of a caller with no reason to vary it.
+       */
+      chat: hasChat
+        ? {
+            fetchThread: (before) => fetchMeetingThreadAction({ meetingId, before }),
+            postMessage: (body) => postMeetingMessageAction({ meetingId, body }),
+            requestUpload: (input) => requestMeetingFileUploadAction({ meetingId, ...input }),
+            confirmUpload: (input) =>
+              confirmMeetingFileUploadAction({ meetingId, ...input, source: 'chat' }),
+          }
+        : null,
+      /**
+       * BAL-437 — ⚠⚠ `null` ⇒ NO REACTIONS CONTROL AND NO ABLY CLIENT AT ALL.
+       *
+       * ⚠ THE MEETING CHANNEL IS ALWAYS PRESENT WHEN REALTIME IS: reactions are meeting-grain
+       * and need no conversation anchor. The conversation channel is `null` in exactly the cases
+       * `hasChat` is false.
+       *
+       * ⚠⚠ **THE "reactions, no chat" SHAPE IS `project_discovery` — NOT `admin`.** An earlier
+       * version of this line named `admin`, which is wrong in a way worth pinning:
+       * `selectPrimaryMeetingContext` DROPS admin rows, so an admin-only meeting resolves to a
+       * primary context of `none` and the participation gate DENIES it outright. Such a call
+       * therefore gets no chat, **no reactions and no token at all** — its artefacts resolve on
+       * the platform axis (ADR-1035). Same for an `ambiguous` context. `project_discovery` is
+       * the shape that really does grant the meeting channel while naming no thread.
+       */
+      realtime: isRealtimeEnabled
+        ? {
+            fetchToken: () => createMeetingRealtimeTokenAction({ meetingId }),
+            sendReaction: (input) => sendMeetingReactionAction({ meetingId, ...input }),
+            meetingChannel: meetingChannelName(meetingId),
+            conversationChannel: chatChannelName,
+          }
+        : null,
     }),
-    [meetingId, joinLinkUrl]
+    [meetingId, joinLinkUrl, hasChat, isRealtimeEnabled, chatChannelName]
   );
 
   /**

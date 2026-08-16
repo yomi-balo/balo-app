@@ -68,8 +68,10 @@ vi.mock('ably', () => ({ Realtime: MockRealtime }));
  */
 const mockTokenAction = vi.fn();
 
+// ⚠ BAL-437 — the sanitiser moved to `@/lib/realtime/message-payload` (the call surface needs
+// it and must not import a conversation module). Same function, same assertions, one home.
+import { sanitizeRealtimeBodyHtml } from '@/lib/realtime/message-payload';
 import {
-  sanitizeRealtimeBodyHtml,
   useConversationRealtime,
   type ConversationRealtimeTokenResult,
 } from './use-conversation-realtime';

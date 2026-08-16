@@ -4,6 +4,9 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { log } from '@/lib/logging';
 import { meetingJoinLinkUrl } from '@/lib/meetings/join-link';
+import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
+import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
+import { conversationChannelName } from '@/lib/realtime/channels';
 import { CallClient } from './_components/call-client';
 
 /**
@@ -45,6 +48,52 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+/**
+ * BAL-437 — ⚠⚠ **THE CHAT SLOT IS RESOLVED HERE, SERVER-SIDE, AND NOWHERE ELSE.**
+ *
+ * Two reasons it is not a client fetch:
+ *   1. **No flash.** A Chat button that appears on mount and vanishes when the first token
+ *      answer arrives is worse than one that was never there.
+ *   2. **The slot rule.** BAL-435's rule is that an unregistered slot renders NOTHING, never a
+ *      disabled control — which is only expressible if the answer is known before paint.
+ *
+ * ⚠⚠ IT NEVER FAILS THE CALL PAGE. Chat is an accessory to a live consultation; if the gate
+ * throws we degrade to `hasChat: false` and log the reason. `warn`, not `error`: the call
+ * proceeds, and a person who came to talk still gets to talk.
+ *
+ * ⚠ NO SESSION ⇒ NO GATE CALL AT ALL. `getCurrentUser()` above already degraded to `null` on a
+ * session failure; asking the gate to authorize a `null` actor would be a second, weaker
+ * opinion about a question that has already been answered.
+ *
+ * ⚠ A PURE-ISH MODULE HELPER RATHER THAN INLINE, ONLY TO SHED COGNITIVE COMPLEXITY — the
+ * page's own body scored 16 against SonarCloud's allowed 15. The repo's precedent is to
+ * EXTRACT, never to disable the rule.
+ */
+async function resolveChatSlot(
+  meetingId: string,
+  userId: string | null
+): Promise<{ hasChat: boolean; chatChannelName: string | null }> {
+  if (userId === null) return { hasChat: false, chatChannelName: null };
+
+  try {
+    const access = await resolveMeetingChatAccess({ meetingId, userId });
+    if (!access.ok || access.anchor === null) {
+      return { hasChat: false, chatChannelName: null };
+    }
+    return {
+      hasChat: true,
+      chatChannelName: conversationChannelName(access.anchor.conversationId),
+    };
+  } catch (error) {
+    log.warn('Call page could not resolve the chat anchor', {
+      meetingId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { hasChat: false, chatChannelName: null };
+  }
+}
+
 export default async function MeetingCallPage({
   params,
 }: Readonly<{ params: Promise<{ meetingId: string }> }>): Promise<React.JSX.Element> {
@@ -60,8 +109,10 @@ export default async function MeetingCallPage({
 
   // ⚠ NAME ONLY, AND ONLY FOR PreJoin's "Joining as …" LINE. Never the email, never the id.
   let viewerName: string | null = null;
+  let userId: string | null = null;
   try {
     const user = await getCurrentUser();
+    userId = user?.id ?? null;
     const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
     viewerName = name.length === 0 ? null : name;
   } catch (error) {
@@ -78,6 +129,8 @@ export default async function MeetingCallPage({
     });
   }
 
+  const { hasChat, chatChannelName } = await resolveChatSlot(meetingId, userId);
+
   return (
     <CallClient
       meetingId={meetingId}
@@ -85,6 +138,11 @@ export default async function MeetingCallPage({
       // ⚠⚠ BUILT SERVER-SIDE, TOKENLESS. See `meetingJoinLinkUrl` — including why the builder
       // lives in `lib/meetings/` rather than in this file.
       joinLinkUrl={meetingJoinLinkUrl(meetingId)}
+      hasChat={hasChat}
+      // ⚠ THE ENV READ HAPPENS ON THE SERVER. `ABLY_API_KEY` is not `NEXT_PUBLIC_*` and must
+      // never become one; the client only ever learns the BOOLEAN.
+      isRealtimeEnabled={isRealtimeConfigured()}
+      chatChannelName={chatChannelName}
     />
   );
 }

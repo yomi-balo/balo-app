@@ -3,13 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Paperclip, Plus } from 'lucide-react';
-import { MEETING_PANEL_EVENTS, track, type MeetingPanelSizeBucket } from '@/lib/analytics';
-import { formatBytes, putWithProgress } from '@/components/balo/document-uploader/upload-file';
-import {
-  MEETING_ALLOWED_CONTENT_TYPES,
-  MEETING_FILE_ACCEPT,
-  MAX_MEETING_FILE_BYTES,
-} from '@/lib/storage/meeting-file-constraints';
+import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
+import { MEETING_FILE_ACCEPT } from '@/lib/storage/meeting-file-constraints';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
 import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { cn } from '@/lib/utils';
@@ -17,6 +12,7 @@ import { MeetingSidePanel } from './meeting-side-panel';
 import { FilesPanelRow } from './files-panel-row';
 import { PanelErrorCard, PanelSkeletonRows } from './panel-states';
 import { useDailyIdentities } from './use-daily-identities';
+import { useMeetingFileUpload } from './use-meeting-file-upload';
 
 /**
  * BAL-436 — the Files panel: a drop zone plus every file on this meeting, from BOTH in-call
@@ -35,17 +31,20 @@ import { useDailyIdentities } from './use-daily-identities';
  *     would invalidate the dashboard recap route from inside a call — a different page nobody
  *     is looking at. Instead `confirmUpload` RETURNS the created row and this panel prepends
  *     it, which is the freshness the AC actually asks for.
- *   · **No Ably publish — BAL-437 owns the in-call channel vocabulary.** Publishing a guessed
- *     event name now would have to be renamed. ⚠⚠ **STATED LIMITATION:** a file another
- *     participant shares while this panel is open does NOT appear until the panel is re-opened
- *     or the window regains focus. Both are wired below. **HAND-OFF TO BAL-437:** when the
- *     in-call channel lands, push an invalidation and delete the focus listener.
+ *   · **BAL-437 LANDED THE ABLY PUBLISH.** `confirmMeetingFileUploadAction` now publishes
+ *     `MEETING_EVENT_FILE` on `meeting:{meetingId}` — ONE fan-out for BOTH in-call entry
+ *     points — and the frame turns that into the `fileRevision` prop below. The `window.focus`
+ *     "Ably substitute" listener BAL-436 shipped as a stopgap is **deleted**, exactly as its
+ *     own docblock promised. The stated limitation it carried ("a file another participant
+ *     shares does not appear until the panel is re-opened") is now closed while this panel is
+ *     open, and remains true only when the transport itself is unconfigured or failed.
  *   · **No notification event.** `conversation.file_shared` exists for an ABSENT counterparty;
  *     an in-call file reaches people who are already in the call.
  *
- * ⚠ CLIENT-SIDE VALIDATION BEFORE THE PRESIGN. The server re-checks type and size from the R2
- * object itself and is the source of truth — but a 10 MB round trip to be told no is a bad
- * experience mid-call.
+ * ⚠ CLIENT-SIDE VALIDATION BEFORE THE PRESIGN, in the SHARED `useMeetingFileUpload` hook —
+ * which the chat paperclip consumes too, so the two in-call entry points cannot end up with
+ * two validation stories. The server re-checks type and size from the R2 object itself and is
+ * the source of truth; a 10 MB round trip to be told no is a bad experience mid-call.
  */
 
 /**
@@ -95,33 +94,6 @@ function startDownload(url: string): void {
   anchor.remove();
 }
 
-/** The size bands PostHog gets. ⚠ A BUCKET, never a byte count, and never the file name. */
-function sizeBucketFor(sizeBytes: number): MeetingPanelSizeBucket {
-  if (sizeBytes < 100 * 1024) return 'under_100kb';
-  if (sizeBytes < 1024 * 1024) return 'under_1mb';
-  if (sizeBytes < 5 * 1024 * 1024) return 'under_5mb';
-  return 'over_5mb';
-}
-
-/**
- * Client-side pre-validation.
- *
- * ⚠ TWO DIFFERENT MESSAGES FOR TWO DIFFERENT REMEDIES — "pick another file" and "pick a
- * smaller file" are not the same instruction, and the server's own copy makes the same split.
- */
-function rejectionFor(file: File): string | null {
-  if (!MEETING_ALLOWED_CONTENT_TYPES.has(file.type)) {
-    return `${file.name} isn't a supported type.`;
-  }
-  if (file.size > MAX_MEETING_FILE_BYTES) {
-    return `${file.name} is ${formatBytes(file.size)} — files must be ${formatBytes(MAX_MEETING_FILE_BYTES)} or smaller.`;
-  }
-  if (file.size === 0) {
-    return `${file.name} appears to be empty.`;
-  }
-  return null;
-}
-
 export interface FilesPanelProps {
   readonly panels: MeetingPanelRegistration;
   readonly onClose: () => void;
@@ -138,6 +110,17 @@ export interface FilesPanelProps {
    * mutations produced, so a screen-reader user shared a file and heard nothing at all.
    */
   readonly onAnnounce: (message: string) => void;
+  /**
+   * BAL-437 — ⚠⚠ **THE REAL INVALIDATION.** The frame bumps this on every inbound
+   * `MEETING_EVENT_FILE`; a change reloads the list. It replaces BAL-436's `window.focus`
+   * listener, which is deleted.
+   *
+   * ⚠ A COUNTER, NOT THE ROW. The row is on the wire, but reloading is what keeps this panel's
+   * list identical to what a fresh open would show — including any row the sender's own
+   * optimistic prepend does not know about. `0` on first mount is not a special case: the load
+   * effect below runs on mount regardless.
+   */
+  readonly fileRevision: number;
 }
 
 export function FilesPanel({
@@ -145,6 +128,7 @@ export function FilesPanel({
   onClose,
   meetingProps,
   onAnnounce,
+  fileRevision,
 }: Readonly<FilesPanelProps>): React.JSX.Element {
   const { identities, probes } = useDailyIdentities();
   const [files, setFiles] = useState<MeetingFileView[] | null>(null);
@@ -166,26 +150,19 @@ export function FilesPanel({
     setHasFailed(true);
   }, [panels]);
 
+  /**
+   * ⚠⚠ MOUNT **AND** EVERY INBOUND FILE, IN ONE EFFECT. `fileRevision` is a dependency, so a
+   * realtime `MEETING_EVENT_FILE` reloads the list exactly once — this is BAL-437's real
+   * invalidation, and it replaced BAL-436's `window.focus` listener rather than joining it.
+   * Two effects would have meant two reloads on any tick where both fired.
+   */
   useEffect(() => {
     isMountedRef.current = true;
     void load();
     return () => {
       isMountedRef.current = false;
     };
-  }, [load]);
-
-  /**
-   * ⚠ THE ABLY SUBSTITUTE, AND IT IS NAMED AS ONE. Until BAL-437's channel exists, a file
-   * another participant shared appears the next time this window is looked at. Cheap, honest,
-   * and deleted the day the real invalidation lands.
-   */
-  useEffect(() => {
-    const onFocus = (): void => {
-      void load();
-    };
-    globalThis.addEventListener('focus', onFocus);
-    return () => globalThis.removeEventListener('focus', onFocus);
-  }, [load]);
+  }, [load, fileRevision]);
 
   useSwallowStrayFileDrops();
 
@@ -198,7 +175,22 @@ export function FilesPanel({
     [onAnnounce]
   );
 
-  const upload = useUploadHandler({ panels, meetingProps, setFiles, setIsUploading, report });
+  const onShared = useCallback((file: MeetingFileView): void => {
+    // ⚠ PREPEND THE RETURNED ROW — the "freshness" the deferred `revalidatePath` was actually
+    // about, and it needs no route invalidation from inside a live call.
+    setFiles((current) => [file, ...(current ?? [])]);
+  }, []);
+
+  const upload = useMeetingFileUpload({
+    // ⚠ `panels.files` CARRIES THE `source: 'files_tab'` BINDING, fixed in `call-client.tsx`.
+    // This component cannot see or choose it — see `use-meeting-file-upload.tsx`.
+    actions: panels.files,
+    meetingProps,
+    onShared,
+    setIsUploading,
+    report,
+    successMessage: (fileName) => `${fileName} is shared with the call.`,
+  });
 
   const onPick = useCallback(
     (picked: FileList | null): void => {
@@ -387,110 +379,6 @@ function useSwallowStrayFileDrops(): void {
       globalThis.removeEventListener('drop', swallow);
     };
   }, []);
-}
-
-/**
- * The three-step upload, extracted.
- *
- * ⚠ EXTRACTED SO `FilesPanel`'s OWN BODY STAYS UNDER SonarCloud's COGNITIVE-COMPLEXITY LIMIT
- * of 15 — the repo's precedent is to extract, never to disable the rule.
- *
- * ⚠ IT REUSES THE SHIPPED `putWithProgress` RATHER THAN A SECOND XHR. One definition of "PUT a
- * file to a presigned URL"; a second would drift on error handling first.
- */
-function useUploadHandler({
-  panels,
-  meetingProps,
-  setFiles,
-  setIsUploading,
-  report,
-}: {
-  panels: MeetingPanelRegistration;
-  meetingProps: Readonly<{ meeting_id?: string }>;
-  setFiles: React.Dispatch<React.SetStateAction<MeetingFileView[] | null>>;
-  setIsUploading: React.Dispatch<React.SetStateAction<boolean>>;
-  report: (kind: 'success' | 'info' | 'error', message: string) => void;
-}): (file: File) => Promise<void> {
-  return useCallback(
-    async (file: File): Promise<void> => {
-      const size_bucket = sizeBucketFor(file.size);
-
-      const rejection = rejectionFor(file);
-      if (rejection !== null) {
-        track(MEETING_PANEL_EVENTS.FILE_SHARED, {
-          ...meetingProps,
-          outcome: 'rejected',
-          size_bucket,
-        });
-        report('error', rejection);
-        return;
-      }
-
-      setIsUploading(true);
-      try {
-        const presigned = await panels.files.requestUpload({
-          contentType: file.type,
-          fileName: file.name,
-          sizeBytes: file.size,
-        });
-        if (!presigned.success) {
-          track(MEETING_PANEL_EVENTS.FILE_SHARED, {
-            ...meetingProps,
-            outcome: 'rejected',
-            size_bucket,
-          });
-          report('error', presigned.error);
-          return;
-        }
-
-        await putWithProgress({
-          url: presigned.presignedUrl,
-          file,
-          // Progress is not surfaced on this surface: the 10 MB cap is pinned to a 60s presign
-          // TTL, so an in-call share is short by construction and a bar would flash.
-          onProgress: () => {},
-        });
-
-        const confirmed = await panels.files.confirmUpload({
-          key: presigned.key,
-          fileName: file.name,
-          sizeBytes: file.size,
-        });
-        if (!confirmed.success) {
-          // ⚠ A DUPLICATE CONFIRM (double-click) IS EXPECTED, NOT AN ERROR — the server maps
-          // the unique violation to friendly copy, and the row it collides with is already in
-          // the list.
-          const isDuplicate = confirmed.error === 'This file was already shared.';
-          track(MEETING_PANEL_EVENTS.FILE_SHARED, {
-            ...meetingProps,
-            outcome: isDuplicate ? 'duplicate' : 'failed',
-            size_bucket,
-          });
-          report(isDuplicate ? 'info' : 'error', confirmed.error);
-          return;
-        }
-
-        // ⚠ PREPEND THE RETURNED ROW — this is the "freshness" the deferred `revalidatePath`
-        // was actually about, and it needs no route invalidation from inside a live call.
-        setFiles((current) => [confirmed.file, ...(current ?? [])]);
-        track(MEETING_PANEL_EVENTS.FILE_SHARED, { ...meetingProps, outcome: 'ok', size_bucket });
-        report('success', `${file.name} is shared with the call.`);
-      } catch {
-        // ⚠ NO `log.error` — `@/lib/logging` is bare pino + AsyncLocalStorage and is NOT
-        // client-safe; the invariant fails the build. The failure is observed by the event
-        // below, whose `outcome` names WHICH step failed and never the file.
-        track(MEETING_PANEL_EVENTS.FILE_SHARED, {
-          ...meetingProps,
-          outcome: 'failed',
-          size_bucket,
-        });
-        report('error', "We couldn't share that file. Please try again.");
-      } finally {
-        setIsUploading(false);
-      }
-    },
-    [panels, meetingProps, setFiles, setIsUploading, report]
-  );
 }
 
 /**
