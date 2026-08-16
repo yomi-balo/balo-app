@@ -92,6 +92,15 @@ export interface DailyMockState {
   currentSpeaker: MockDevice | null;
   /** ⚠ `true` ⇒ `join()` rejects, which is how the fatal-error branch is reached. */
   joinRejects: boolean;
+  /**
+   * ⚠ `true` ⇒ `useDaily()` returns `null`, which is how the "no call object" guards are reached.
+   *
+   * Every component dereference of the call object is already `daily === null`-guarded, so this
+   * is safe to flip AFTER mount — emit any daily event to force the re-render that observes it.
+   * Mirrors {@link joinRejects}: a state flag rather than a per-test module mock, so the shared
+   * `dailyReactModuleMock()` stays the single definition of the vendor surface.
+   */
+  callObjectAbsent: boolean;
 }
 
 const OFF_TRACK: MockTrackState = { isOff: true, persistentTrack: null };
@@ -120,6 +129,7 @@ function defaultState(): DailyMockState {
     currentMic: makeDevice('mic-1', 'MacBook Pro Microphone', 'audioinput'),
     currentSpeaker: makeDevice('spk-1', 'MacBook Pro Speakers', 'audiooutput'),
     joinRejects: false,
+    callObjectAbsent: false,
   };
 }
 
@@ -209,7 +219,7 @@ export function dailyReactModuleMock(): Record<string, unknown> {
   return {
     DailyProvider: ({ children }: { children?: React.ReactNode }) => children,
     useCallObject: () => dailySpies,
-    useDaily: () => dailySpies,
+    useDaily: () => (dailyState.callObjectAbsent ? null : dailySpies),
     useLocalSessionId: () => dailyState.localSessionId,
     useParticipantIds: () => dailyState.participantIds,
     useActiveSpeakerId: () => dailyState.activeSpeakerId,

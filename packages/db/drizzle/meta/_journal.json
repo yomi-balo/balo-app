@@ -463,6 +463,13 @@
       "when": 1786676261991,
       "tag": "0065_bal422_expert_rating_aggregate",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1786714873171,
+      "tag": "0066_bal134_meeting_lifecycle",
+      "breakpoints": true
     }
   ]
 }

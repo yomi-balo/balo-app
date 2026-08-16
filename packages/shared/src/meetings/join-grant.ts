@@ -24,6 +24,28 @@ import type { MeetingContextTypeWithHolder } from './guest-participation';
  *
  * ⚠ THE ROOM IS `privacy: 'private'`. `roomUrl` admits nobody on its own; `token` is the ONLY
  * thing that admits anyone. Treat the pair accordingly.
+ *
+ * ── ⚠⚠ SIX FIELDS AS OF BAL-134, AND WHY THE TWO BOOLEANS MUST NEVER BE MERGED ────────────
+ *
+ * This grant carried FIVE fields from BAL-132 to BAL-436, and two comments in this file said
+ * so in those words. **BAL-134 ADDED A SIXTH — {@link JoinGrant.canEndMeeting}** — so those
+ * comments are now false; they are CORRECTED IN PLACE rather than deleted, because the reason
+ * the sixth field is a SEPARATE field is the single sharpest trap in the feature:
+ *
+ *   · {@link JoinGrant.isOwner} is `hasEngagementCapability(HOST_MEETINGS)` and is the **ONLY**
+ *     input to the Daily meeting token's `is_owner` property. `join-meeting.ts` feeds that
+ *     exact boolean into the mint, and Daily `is_owner` confers VENDOR-LEVEL ROOM POWERS —
+ *     eject and recording control. **Widening it to client principals would mint Daily owner
+ *     tokens for the PAYING SIDE.** ADR-1049's "this is what BAL-435's bare `isOwner` prop
+ *     becomes" is UNSAFE AS WRITTEN and must not be implemented as a rename.
+ *   · {@link JoinGrant.canEndMeeting} is the OR of two independently-resolved axes
+ *     (`@balo/shared/meetings`'s `canEndMeeting`, composed in `apps/api`'s
+ *     `authorize-end-meeting.ts`). It gates ONE thing — whether the End control renders and
+ *     whether `POST /meetings/:id/end` is accepted — and it NEVER reaches a Daily token.
+ *
+ * They diverge the moment the viewer is a client principal, which is the ordinary case for
+ * every client-booked consultation. Neither is redundant, and neither may be derived from the
+ * other. `apps/web`'s `meeting-call-no-lens-gate.test.ts` pins which control resolves on which.
  */
 export interface JoinGrant {
   /** The Daily room URL. ⚠ Admits nobody on its own — the room is private. */
@@ -47,16 +69,37 @@ export interface JoinGrant {
   readonly expiresAt: string;
   /** The Decision-1 encoding — `u`/`g` + 32 hex. ⚠ Never a bare uuid. */
   readonly participantId: string;
+  /**
+   * BAL-134 / ADR-1049 (D3) — MAY THIS VIEWER END THE MEETING FOR EVERYONE?
+   *
+   * ⚠⚠ NOT `isOwner`, AND NOT DERIVABLE FROM IT. See the six-field block on this interface
+   * before changing either. `true` for the delivering expert (and their agency owner/admin) OR
+   * for a client principal — a live member of the BOOKING company holding `CONSUME_CREDITS`.
+   * `false` unconditionally on both GUEST arms, hard-coded server-side exactly as `isOwner` is:
+   * a guest holds no membership and is not on the engagement axis, so they see Leave only.
+   *
+   * ⚠ IT GATES THE **CONTROL**, NOT THE OUTCOME. `POST /meetings/:meetingId/end` re-resolves
+   * both axes server-side on every call; this boolean exists so the UI does not render a
+   * control that would 404. A browser that flips it gains nothing.
+   */
+  readonly canEndMeeting: boolean;
 }
 
 /**
  * BAL-435 (R6 / Q1) — the MEMBER join response's optional CONTEXT envelope.
  *
  * ⚠⚠ IT IS ON THE ENVELOPE, **NOT ON `JoinGrant`**, AND THAT IS THE WHOLE POINT OF THE RULING.
- * `JoinGrant` stays frozen at its five fields, so `MeetingCallSurfaceProps` and both guest call
- * sites are untouched. The call surface's chrome (the top-bar `<h1>` and the "Back to {context}"
- * link) reads this through a route-scoped React Context instead — see
+ * The grant carries only what is needed to ENTER THE ROOM, so `MeetingCallSurfaceProps` and both
+ * guest call sites are untouched. The call surface's chrome (the top-bar `<h1>` and the
+ * "Back to {context}" link) reads this through a route-scoped React Context instead — see
  * `apps/web/src/lib/meetings/meeting-route-context.tsx`.
+ *
+ * ⚠ BAL-435's WORDING HERE WAS "`JoinGrant` stays frozen at its five fields", AND THAT IS NOW
+ * FALSE — BAL-134 added a sixth, `canEndMeeting`. The RULING is unchanged and still binding
+ * (context data rides the envelope, not the grant); only the count was wrong. What earns a place
+ * on the grant is a per-actor AUTHORIZATION verdict the call surface must hold to render safely;
+ * what does not is descriptive context. See `JoinGrant`'s own six-field block for why the two
+ * booleans are separate.
  *
  * ⚠ IT LEAKS NOTHING NEW. `apps/api` already resolves the primary context on this exact path —
  * it is where `MEETING_JOIN_GRANTED.context_type` is emitted from — and the caller only reaches
@@ -96,8 +139,9 @@ export type MeetingViewerRole = 'client' | 'expert';
 /**
  * The wire body of `POST /meetings/:meetingId/join`.
  *
- * ⚠ THE GRANT'S FIVE FIELDS ARE SPREAD AT THE TOP LEVEL, unchanged, so an older client that
- * knows nothing about `context` keeps working byte for byte.
+ * ⚠ THE GRANT'S FIELDS ARE SPREAD AT THE TOP LEVEL, unchanged, so an older client that knows
+ * nothing about `context` keeps working byte for byte. (It said "FIVE fields" until BAL-134
+ * added `canEndMeeting`; the property being described is the SPREAD, not the count.)
  *
  * ⚠⚠ EVERYTHING BESIDE THE GRANT IS **OPTIONAL**, ON PURPOSE. The two GUEST surfaces
  * (`/join/m/[meetingId]`, `/join/[token]`) never receive any of it, so every "absent ⇒ neutral"

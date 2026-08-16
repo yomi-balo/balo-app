@@ -57,6 +57,12 @@ const GRANT = {
   roomUrl: 'https://balo.daily.co/balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
   token: 'daily.jwt.value',
   isOwner: false,
+  /**
+   * BAL-134 / ADR-1049 (D3) — ⚠ ALWAYS `false` ON A GUEST ARM, mirroring `isOwner`.
+   * `joinMeetingAsGuest` hard-codes it server-side; a guest holds neither the engagement
+   * capability nor a client-company membership, so neither half of `canEndMeeting` can be true.
+   */
+  canEndMeeting: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
   participantId: 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };

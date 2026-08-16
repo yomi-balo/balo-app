@@ -11,10 +11,19 @@ describe('MEETING_SERVER_EVENTS', () => {
     // letters, so `_` < `E` and `..._PROVISION_FAILED` comes first. The list below is the
     // `localeCompare` order; do not "correct" it to the code-unit one.
     expect(Object.keys(MEETING_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
-      // BAL-132. `J` < `P`, so this sorts first under both collations.
+      // BAL-134 (5). ⚠ THE ORDER BELOW IS `localeCompare`'s, NOT a code-unit sort's — see the
+      // note above. `MEETING_ENDED` < `MEETING_EXPERT_…` because `N` < `X`; `MEETING_MISSED_…`
+      // < `MEETING_PROVISION_FAILED` because `M` < `P`; and `MEETING_STARTED` <
+      // `MEETING_WAITING_…` because `S` < `W`.
+      'MEETING_ENDED',
+      'MEETING_EXPERT_ABSENT_ALERT',
+      // BAL-132. `J` < `M`, so this sorts before the missed call.
       'MEETING_JOIN_GRANTED',
+      'MEETING_MISSED_CALL',
       'MEETING_PROVISION_FAILED',
       'MEETING_PROVISIONED',
+      'MEETING_STARTED',
+      'MEETING_WAITING_ABANDONED',
     ]);
   });
 
@@ -22,6 +31,54 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_PROVISIONED).toBe('meeting_provisioned');
     expect(MEETING_SERVER_EVENTS.MEETING_PROVISION_FAILED).toBe('meeting_provision_failed');
     expect(MEETING_SERVER_EVENTS.MEETING_JOIN_GRANTED).toBe('meeting_join_granted');
+    expect(MEETING_SERVER_EVENTS.MEETING_STARTED).toBe('meeting_started');
+    expect(MEETING_SERVER_EVENTS.MEETING_WAITING_ABANDONED).toBe('meeting_waiting_abandoned');
+    expect(MEETING_SERVER_EVENTS.MEETING_EXPERT_ABSENT_ALERT).toBe('meeting_expert_absent_alert');
+    expect(MEETING_SERVER_EVENTS.MEETING_MISSED_CALL).toBe('meeting_missed_call');
+    expect(MEETING_SERVER_EVENTS.MEETING_ENDED).toBe('meeting_ended');
+  });
+
+  /**
+   * ⚠⚠ `distinct_id` IS REQUIRED ON EVERY SERVER EVENT AND FOUR OF THE FIVE BAL-134 EVENTS HAVE
+   * NO ACTING HUMAN. `trackServer` destructures it and promotes it to PostHog's `distinctId`,
+   * and the cast means a MISSING property silently becomes `undefined` — an event attributed to
+   * nobody, invisible in every funnel. A COMPILE-TIME assertion: making the property optional
+   * would leave the `@ts-expect-error` unused, which is itself a type error.
+   */
+  it('⚠ every BAL-134 lifecycle event REQUIRES distinct_id', () => {
+    // @ts-expect-error — `distinct_id` is not optional.
+    const missing: MeetingServerEventMap['meeting_missed_call'] = {
+      meeting_id: 'meeting-1',
+      client_joined: false,
+    };
+    expect(missing.meeting_id).toBe('meeting-1');
+  });
+
+  /**
+   * ⚠ `outcome` IS NULLABLE ON `meeting_ended` AND THAT IS A REAL VALUE, NOT "unknown" (D5).
+   * The two human paths and the abandoned wait leave it unset; BAL-412 resolves it from
+   * `meeting_presence`.
+   */
+  it('⚠ `meeting_ended.outcome` accepts null — the ender never sets the outcome', () => {
+    const humanEnd: MeetingServerEventMap['meeting_ended'] = {
+      meeting_id: 'meeting-1',
+      billable_seconds: 1800,
+      expert_present_seconds: 1860,
+      participant_count: 2,
+      outcome: null,
+      ended_by: 'client_principal',
+      distinct_id: 'user-1',
+    };
+    const systemEnd: MeetingServerEventMap['meeting_ended'] = {
+      ...humanEnd,
+      outcome: 'no_show_client',
+      ended_by: 'system_idle',
+      // ⚠ THE MEETING ID — the four system paths have no acting user.
+      distinct_id: 'meeting-1',
+    };
+
+    expect(humanEnd.outcome).toBeNull();
+    expect(systemEnd.ended_by).toBe('system_idle');
   });
 
   it('uses snake_case event values', () => {

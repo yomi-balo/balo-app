@@ -25,6 +25,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startTranscriptPipelineWorker },
     { startScheduledNotificationDispatchWorker, registerScheduledNotificationDispatchCron },
     { startReviewNudgeSweepWorker, registerReviewNudgeSweepCron },
+    { startMeetingLifecycleSweepWorker, registerMeetingLifecycleSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -41,6 +42,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./transcript-pipeline.js'),
     import('./scheduled-notification-dispatch.js'),
     import('./review-nudge-sweep.js'),
+    import('./meeting-lifecycle-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -79,5 +81,11 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // agree. Read that constant's warning before changing either.
   startReviewNudgeSweepWorker();
   await registerReviewNudgeSweepCron();
+  // BAL-134 (ADR-1049): the per-minute meeting lifecycle sweep — Daily presence reconciliation,
+  // the four system terminal rules, and the two absence promises.
+  // ⚠ PER-MINUTE IS NOT A FREE KNOB: it is what bounds the dropped-`participant.left` over-bill
+  // to ONE TICK. Slowing this cadence widens a MONEY error. See the job's docblock.
+  startMeetingLifecycleSweepWorker();
+  await registerMeetingLifecycleSweepCron();
   logger?.info('BullMQ workers started');
 }

@@ -1060,3 +1060,11 @@ export interface ConversationUnreadDigestDuePayload {
   projectRequestId?: string;
   engagementId?: string;
 }
+
+// ── BAL-134 — the two meeting-absence promises (§6) ────────────────────────────────────
+//
+// ⚠ THE PAYLOADS LIVE IN THEIR OWN MODULE AND ARE RE-EXPORTED HERE, not restated: a payload
+// declared twice trips the SonarCloud duplication gate and lets the two copies drift while both
+// compile (memory `reference_notification_event_dup_shared_home`). ⚠ EXTENSIONLESS relative
+// specifier — see the corrected note in `../meetings/index.ts`; a `.js` here 404s Turbopack.
+export * from './meeting-absence';

@@ -347,6 +347,10 @@ function JoinPhaseContent({
         roomUrl={grant.roomUrl}
         token={grant.token}
         isOwner={grant.isOwner}
+        // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is: a guest
+        // holds no company membership and is not on the engagement axis, so they see Leave only
+        // (BAL-134 edge case 24). It is PASSED THROUGH, never defaulted here.
+        canEndMeeting={grant.canEndMeeting}
         expiresAt={grant.expiresAt}
         participantId={grant.participantId}
         // ⚠ THE TRANSITION THAT MATTERS MOST — see `MeetingCallSurface.headingRef`.

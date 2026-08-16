@@ -1,16 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { MEETING_CALL_EVENTS, track } from '@/lib/analytics';
 import { validateGrant, type ValidatedGrant } from '@/lib/meetings/validate-grant';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
+import { END_MEETING_FAILED_COPY, type EndMeetingResult } from '@/lib/meetings/meeting-state';
 import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 import {
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
+  UNKNOWN_WAITING_FACTS,
   waitingCopyFor,
 } from '@/lib/meetings/waiting-copy';
-import { dailySpies, emitDailyEvent, installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
+import {
+  dailySpies,
+  dailyState,
+  emitDailyEvent,
+  installMediaStubs,
+  resetDailyMock,
+} from '@/test/mocks/daily';
 import { CALL_ENDED_TITLE, CALL_LEFT_TITLE } from './meeting-notices';
 import { SKIP_PREJOIN_STORAGE_KEY } from './prejoin';
 import { MeetingFrame } from './meeting-frame-impl';
@@ -51,16 +60,25 @@ vi.mock('motion/react', async () => {
 // jsdom has no `matchMedia`; the repo's convention (7 existing call sites) is to mock the hook.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
+// BAL-134 — the end action's FAILURE arm is a toast, and it is the only voice that arm has.
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+
 const RAW_GRANT = {
   roomUrl: 'https://balo.daily.co/balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
   token: 'daily.jwt.super.secret.value',
   isOwner: false,
+  /**
+   * BAL-134 / ADR-1049 (D3) — ⚠ THE END-AUTHORITY VERDICT, SEPARATE FROM `isOwner`. Defaulting
+   * to `false` keeps "no end control" the fixture's baseline, so a test that wants one has to
+   * ask for it — the same fail-closed posture the route context takes with `panels`.
+   */
+  canEndMeeting: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
   participantId: 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };
 
-function grantFor(isOwner: boolean): ValidatedGrant {
-  const result = validateGrant({ ...RAW_GRANT, isOwner });
+function grantFor(overrides: Partial<typeof RAW_GRANT> = {}): ValidatedGrant {
+  const result = validateGrant({ ...RAW_GRANT, ...overrides });
   if (!result.ok) throw new Error('fixture grant must validate');
   return result.grant;
 }
@@ -100,10 +118,22 @@ interface RouteOptions {
     counterpartyFirstName: string;
     scheduledStartLabel: string;
   } | null;
+  /**
+   * BAL-134 — ⚠ ABSENT ⇒ NO END ACTION IS WIRED, which is what both guest mounts read
+   * structurally. The frame refuses to fall back to a local eject when this is `null`, so a
+   * test that drives End must supply it.
+   */
+  readonly endMeeting?: (() => Promise<EndMeetingResult>) | null;
 }
 
-/** The MEMBER mount: a route provider, with a destination and (optionally) a waiting subject. */
-function renderMember(options: RouteOptions = {}, isOwner = false): HTMLElement {
+/**
+ * The MEMBER mount: a route provider, with a destination and (optionally) a waiting subject.
+ *
+ * ⚠ THE SECOND ARGUMENT IS `canEndMeeting`, NOT `isOwner` — BAL-134 moved the End control onto
+ * the second grant boolean, and `isOwner` (which mints the Daily owner token) gates nothing in
+ * this frame beyond the `is_owner` analytics property.
+ */
+function renderMember(options: RouteOptions = {}, canEndMeeting = false): HTMLElement {
   return render(
     <MeetingRouteContextProvider
       meetingId="0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d"
@@ -114,15 +144,16 @@ function renderMember(options: RouteOptions = {}, isOwner = false): HTMLElement 
       waiting={options.waiting ?? null}
       onExit={options.onExit}
       panels={options.panels ?? null}
+      endMeeting={options.endMeeting ?? null}
     >
-      <MeetingFrame grant={grantFor(isOwner)} />
+      <MeetingFrame grant={grantFor({ canEndMeeting })} />
     </MeetingRouteContextProvider>
   ).container;
 }
 
 /** ⚠ THE GUEST MOUNT: no provider at all, so no destination and no waiting subject exist. */
 function renderGuest(): HTMLElement {
-  return render(<MeetingFrame grant={grantFor(false)} />).container;
+  return render(<MeetingFrame grant={grantFor()} />).container;
 }
 
 async function join(): Promise<void> {
@@ -136,6 +167,7 @@ beforeEach(() => {
   installMediaStubs();
   globalThis.localStorage.clear();
   vi.mocked(track).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 describe('MeetingFrame — ⚠⚠ the terminal latch', () => {
@@ -243,6 +275,9 @@ describe('MeetingFrame — ⚠⚠ the waiting stage names the right party (R10)'
     const expected = waitingCopyFor('client', 'pre-start', {
       counterpartyFirstName: 'Northwind Industrial',
       scheduledStartLabel: '10:00 am',
+      // ⚠ THE ROUTE PROVIDER'S DEFAULT: no mirror has landed in this render, so the frame passes
+      // `UNKNOWN_WAITING_FACTS` down and the copy must be the one that claims the least.
+      ...UNKNOWN_WAITING_FACTS,
     });
     expect(screen.getByText(expected.body)).toBeInTheDocument();
     expect(container.textContent ?? '').not.toContain(CLIENT_WAITING_BODY);
@@ -313,7 +348,24 @@ describe('MeetingFrame — PreJoin has a way out', () => {
   });
 });
 
+/**
+ * BAL-134 / ADR-1049 — ⚠⚠ **THE END IS A SERVER ACT NOW, AND THE LOCAL EJECT ONLY FOLLOWS IT.**
+ *
+ * BAL-435 shipped this as `updateParticipants({ '*': { eject: true } })` alone, and per the
+ * `daily-co` skill's own trap list an eject revokes no token — so a disconnected participant
+ * holding a live one could rejoin a room nothing had closed. The act is now
+ * `POST /meetings/:meetingId/end`, and the eject exists purely so the other screens change
+ * immediately rather than a round trip later. The ORDER is the safety property: ejecting
+ * optimistically would throw everybody out of a call the server never ended.
+ */
 describe('MeetingFrame — the host end, and its pending state', () => {
+  /** Drive the confirm all the way through to the destructive button. */
+  async function pressEndForEveryone(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'Leaving options' }));
+    await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
+    await user.click(await screen.findByRole('button', { name: 'End for everyone' }));
+  }
+
   it('⚠ shows "Ending…" while the leave runs, then lands on the terminal card', async () => {
     // ⚠ `isEnding` used to be set true and false in the same synchronous block, so the pending
     // label was unreachable in production and the confirm dialog only ever went away because
@@ -326,15 +378,19 @@ describe('MeetingFrame — the host end, and its pending state', () => {
         })
     );
     const user = userEvent.setup();
-    renderMember({}, true);
+    const endMeeting = vi
+      .fn<() => Promise<EndMeetingResult>>()
+      .mockResolvedValue({ success: true, alreadyEnded: false });
+    renderMember({ endMeeting }, true);
     await join();
 
-    await user.click(screen.getByRole('button', { name: 'Leaving options' }));
-    await user.click(await screen.findByRole('button', { name: 'End the call for everyone' }));
-    await user.click(await screen.findByRole('button', { name: 'End for everyone' }));
+    await pressEndForEveryone(user);
 
     expect(await screen.findByRole('button', { name: 'Ending…' })).toBeDisabled();
-    expect(dailySpies.updateParticipants).toHaveBeenCalledWith({ '*': { eject: true } });
+    await waitFor(() => {
+      expect(dailySpies.updateParticipants).toHaveBeenCalledWith({ '*': { eject: true } });
+    });
+    expect(endMeeting).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       releaseLeave();
@@ -342,6 +398,101 @@ describe('MeetingFrame — the host end, and its pending state', () => {
 
     expect(await screen.findByRole('heading', { name: CALL_ENDED_TITLE })).toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('⚠⚠ `alreadyEnded` IS A SUCCESS (D10) — a lost race is not a red toast', async () => {
+    // Two `canEndMeeting` holders can press End in the same instant; the server's transition is
+    // a compare-and-set and the loser's `200` is the correct answer.
+    const user = userEvent.setup();
+    renderMember(
+      { endMeeting: () => Promise.resolve({ success: true, alreadyEnded: true }) },
+      true
+    );
+    await join();
+
+    await pressEndForEveryone(user);
+
+    expect(await screen.findByRole('heading', { name: CALL_ENDED_TITLE })).toBeInTheDocument();
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ A REFUSED END EJECTS NOBODY — the call is still running, and it says so', async () => {
+    const user = userEvent.setup();
+    renderMember(
+      { endMeeting: () => Promise.resolve({ success: false, error: END_MEETING_FAILED_COPY }) },
+      true
+    );
+    await join();
+
+    await pressEndForEveryone(user);
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(END_MEETING_FAILED_COPY);
+    });
+    // ⚠ THE WHOLE POINT: no local teardown ran, so everyone is still in the call they are in.
+    expect(dailySpies.updateParticipants).not.toHaveBeenCalled();
+    expect(dailySpies.leave).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: CALL_ENDED_TITLE })).toBeNull();
+  });
+
+  it('⚠⚠ NO WIRED END ACTION ⇒ NO FALLBACK EJECT — it must not re-create the old defect', async () => {
+    // `route.endMeeting === null` is structurally true on both GUEST mounts and is a wiring bug
+    // anywhere else. Falling back to the local-only eject would restore exactly the rejoinable
+    // "ended" call BAL-134 removes.
+    const user = userEvent.setup();
+    renderMember({}, true);
+    await join();
+
+    await pressEndForEveryone(user);
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(END_MEETING_FAILED_COPY);
+    });
+    expect(dailySpies.updateParticipants).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-134 — ⚠⚠ **THE SILENT NO-OP ARM.**
+   *
+   * `if (daily === null || !grant.canEndMeeting) return;` returned WITHOUT a toast, leaving the
+   * confirm dialog open and its button live, while the sibling arm two lines below toasted for
+   * exactly the same class of failure. From the person's side all three are one thing — "I asked
+   * to end the call and it is still running" — so all three now say so.
+   */
+  it('⚠⚠ NO CALL OBJECT ⇒ IT SAYS SO — it does not fail silently under an open confirm', async () => {
+    const user = userEvent.setup();
+    const endMeeting = vi
+      .fn<() => Promise<EndMeetingResult>>()
+      .mockResolvedValue({ success: true, alreadyEnded: false });
+    renderMember({ endMeeting }, true);
+    await join();
+
+    // The call object goes away mid-call — the guard's real-world shape. The mock reads the flag
+    // on every render, so a HANDLED event is needed to force one; a blip and its recovery leave
+    // no other visible state behind.
+    dailyState.callObjectAbsent = true;
+    act(() => emitDailyEvent('network-connection', { event: 'interrupted' }));
+    act(() => emitDailyEvent('network-connection', { event: 'connected' }));
+
+    await pressEndForEveryone(user);
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(END_MEETING_FAILED_COPY);
+    });
+    // ⚠ AND IT STILL DOES NOT HALF-END THE CALL.
+    expect(endMeeting).not.toHaveBeenCalled();
+    expect(dailySpies.updateParticipants).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ WITHOUT canEndMeeting THE CONTROL IS ABSENT — nothing to press, nothing to refuse', async () => {
+    const endMeeting = vi
+      .fn<() => Promise<EndMeetingResult>>()
+      .mockResolvedValue({ success: true, alreadyEnded: false });
+    renderMember({ endMeeting });
+    await join();
+
+    expect(screen.queryByRole('button', { name: 'Leaving options' })).toBeNull();
+    expect(endMeeting).not.toHaveBeenCalled();
   });
 });
 

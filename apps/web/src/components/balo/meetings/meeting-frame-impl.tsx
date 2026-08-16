@@ -21,8 +21,9 @@ import { MEETING_CALL_EVENTS, MEETING_PANEL_EVENTS, track } from '@/lib/analytic
 import { orderTiles, type TileCandidate } from '@/lib/meetings/order-tiles';
 import { isVideoLayout, resolveStageKind, type LayoutOverride } from '@/lib/meetings/resolve-stage';
 import { useMeetingRoute, type MeetingExitReason } from '@/lib/meetings/meeting-route-context';
+import { END_MEETING_FAILED_COPY } from '@/lib/meetings/meeting-state';
 import type { MeetingPanelId, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
-import type { WaitingSubject } from '@/lib/meetings/waiting-copy';
+import type { WaitingFacts, WaitingPhase, WaitingSubject } from '@/lib/meetings/waiting-copy';
 import type { MeetingFrameProps } from './meeting-frame-types';
 import { JoinRetryNotice } from './join-notice-card';
 import { BackToContextLink } from './back-to-context-link';
@@ -68,6 +69,15 @@ import type { MeetingReactionEmoji } from '@/lib/meetings/meeting-reactions';
  * `isOwner` arrives ALREADY DECIDED, server-side, per actor, from
  * `hasEngagementCapability(HOST_MEETINGS)`. **Nothing in this subtree re-derives it, and nothing
  * gates on a lens, `activeMode`, a role string or `platformRole`.**
+ *
+ * ⚠⚠ **BAL-134 / ADR-1049 SPLIT THAT BOOLEAN IN TWO, AND THIS FILE READS BOTH — FOR DIFFERENT
+ * THINGS.** `grant.isOwner` is what minted the Daily OWNER TOKEN, so it stays exactly where it
+ * describes the vendor relationship: the `is_owner` property on the JOINED analytics event, and
+ * `participant-tile.tsx`'s host pill (which reads Daily's OWN per-participant `owner` flag, not
+ * the grant at all). `grant.canEndMeeting` is `isOwner || clientPrincipal`, composed server-side
+ * in `authorize-end-meeting.ts`, and it is the ONLY gate on ending the call for everyone —
+ * because ADR-1049 gives end authority to the paying side too, and widening `isOwner` to say so
+ * would hand a client a Daily owner token. **Never merge them.**
  *
  * ⚠ THE TOKEN AND THE ROOM URL NEVER LEAVE THIS FILE. They go into `daily.join()` and nowhere
  * else — not a log, not an analytics property, not a DOM attribute, not a URL.
@@ -838,31 +848,95 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     [daily, finishExit]
   );
 
+  /**
+   * BAL-134 / ADR-1049 — ⚠⚠ **THE SERVER ENDS THE MEETING. THE LOCAL TEARDOWN IS COSMETIC.**
+   *
+   * BAL-435 shipped this as `daily.updateParticipants({ '*': { eject: true } })` and nothing
+   * else, and **that ended nothing.** Per the `daily-co` skill's own trap list an eject does NOT
+   * revoke a token, and Balo mints tokens with `eject_at_token_exp: false` and `exp` at
+   * scheduled end + 24h — so every "ejected" participant could rejoin immediately, and the
+   * meeting row stayed `in_progress` with its presence intervals open, measuring against the
+   * wall clock. `POST /meetings/:meetingId/end` is what fixes it at the root: it closes the
+   * intervals, writes `status='ended'` + `ended_at` + `ended_by` in ONE transaction, and DELETES
+   * the Daily room so the vendor cannot admit anybody either.
+   *
+   * ⚠⚠ **THE SERVER CALL COMES FIRST, AND THE LOCAL TEARDOWN ONLY RUNS ON ITS SUCCESS.** Ejecting
+   * optimistically would feel a few hundred milliseconds faster and would be dishonest: a refused
+   * or dropped end would have thrown everybody out of a call that is still running, on a surface
+   * where the only recovery is to re-join a room the server never closed. `isEnding` covers the
+   * whole round trip, which is exactly what makes the confirm's "Ending…" a reachable state.
+   *
+   * ⚠ `alreadyEnded` IS A **SUCCESS** (D10) — two holders can press End in the same instant and
+   * the loser's `200` is the correct answer, not a red toast on the one control that must work.
+   *
+   * ⚠ **NO SUCCESS TOAST, DELIBERATELY.** The success feedback is the whole screen changing:
+   * `finishExit` latches terminal and the member route replaces itself with BAL-389's
+   * end-of-call screen. A toast announcing what the page already says is noise on top of a
+   * navigation. The FAILURE arm is the one that needs a voice, because nothing else changes.
+   *
+   * ⚠ `route.endMeeting === null` MEANS **NO END ACTION IS WIRED** — structurally true on both
+   * GUEST mounts (which is belt-and-braces there, since the server hard-codes their
+   * `canEndMeeting` to `false`), and a WIRING BUG anywhere else. Falling back to the local eject
+   * would re-create the exact defect this ticket removes, so it says the call is still running.
+   */
+  const endMeetingAction = route.endMeeting;
   const endForEveryone = useCallback((): void => {
-    if (daily === null || !grant.isOwner) return;
+    /*
+      ⚠⚠ THIS ARM USED TO `return` SILENTLY — with the confirm dialog still open and its button
+      still live, so pressing End did visibly nothing, forever, while the sibling arm two lines
+      below toasted. All three of these are the same class of failure from the person's side ("I
+      asked to end the call and it is still running"), so all three say the same thing.
+
+      ⚠ `daily === null` is the call object not being ready; `!grant.canEndMeeting` is a control
+      that should not have rendered at all (`LeaveControl` omits it from the DOM for non-holders)
+      and is therefore a wiring bug; `endMeetingAction === null` is the guest/unwired mount. None
+      of them is recoverable here, and none of them may fall back to a local eject — that revokes
+      no token and is the exact defect this ticket removes.
+    */
+    if (daily === null || !grant.canEndMeeting || endMeetingAction === null) {
+      toast.error(END_MEETING_FAILED_COPY);
+      return;
+    }
     setIsEnding(true);
     track(MEETING_CALL_EVENTS.ENDED_FOR_ALL, {
       ...meetingProps,
       participant_count: participantIds.length,
     });
-    // ⚠ THE OWNER TOKEN IS WHAT MAKES THIS LEGAL AT DAILY'S END. ⚠ Eject alone does NOT revoke a
-    // token — a disconnected participant holding a live one can rejoin. `ban:true` /
-    // `DELETE /rooms/:name` is a REST call and belongs to **BAL-444** (BAL-436 DECLINED it: it
-    // is server-side vendor work in `apps/api` governed by the `daily-co` skill, not UI, and
-    // nothing is broken by deferring it). That is exactly why the confirm copy does not claim
-    // this cannot be undone (ruling R7).
-    // ⚠ `updateParticipants` IS SYNCHRONOUS in daily-js (it returns the call object, not a
-    // promise) — do not `await` it or chain a `.catch`, both of which would be type errors.
-    daily.updateParticipants({ '*': { eject: true } });
-    leaveRequestedRef.current = true;
-    // ⚠ THE LEAVE IS WHAT `isEnding` COVERS, AND IT IS GENUINELY ASYNCHRONOUS — so the confirm's
-    // "Ending…" is a REACHABLE state rather than a label nothing can ever display. The frame then
-    // latches terminal, which unmounts the toolbar and the dialog with it.
-    daily
-      .leave()
-      .catch(() => {})
-      .finally(() => finishExit('host_ended'));
-  }, [daily, finishExit, grant.isOwner, meetingProps, participantIds.length]);
+    endMeetingAction()
+      .then((result) => {
+        if (!result.success) {
+          toast.error(result.error);
+          setIsEnding(false);
+          return;
+        }
+        // ── The meeting is genuinely over. Everything below is IMMEDIACY, not authority. ──
+        //
+        // ⚠ `updateParticipants` IS SYNCHRONOUS in daily-js (it returns the call object, not a
+        // promise) — do not `await` it or chain a `.catch`, both of which would be type errors.
+        // It exists so the other participants' screens change now rather than whenever their
+        // own poll notices; the room is already deleted server-side.
+        daily.updateParticipants({ '*': { eject: true } });
+        leaveRequestedRef.current = true;
+        // ⚠ THE FRAME LATCHES TERMINAL HERE, which unmounts the toolbar and the confirm with it.
+        daily
+          .leave()
+          .catch(() => {})
+          .finally(() => finishExit('host_ended'));
+      })
+      .catch(() => {
+        // ⚠ THE TRANSPORT ARM. The Server Action itself threw, so no server answered — and the
+        // one thing we must not do is act as though it had.
+        toast.error(END_MEETING_FAILED_COPY);
+        setIsEnding(false);
+      });
+  }, [
+    daily,
+    endMeetingAction,
+    finishExit,
+    grant.canEndMeeting,
+    meetingProps,
+    participantIds.length,
+  ]);
 
   /**
    * ⚠⚠ EJECTED, OR THE ROOM WENT AWAY — **AND IT IS DISTINGUISHED FROM OUR OWN LEAVE BY A REF**,
@@ -1106,9 +1180,26 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               // left the bar emitting a SECOND `<h1>` — two competing answers to "what is this
               // screen". Exactly one per state, always.
               isPrimaryHeading={kind !== 'waiting'}
-              // ⚠ RULING R4 — `● Live` while joined, `Not started` otherwise. NO DURATION, and no
-              // client-side interval timer anywhere in this ticket.
-              clock={hasJoined ? { kind: 'live' } : { kind: 'not_started' }}
+              /*
+                BAL-134 (§7.3) — ⚠⚠ **THE SERVER MIRROR, WITH BAL-435's CHROME AS THE FALLBACK.**
+
+                `route.clock` is produced by the pure `resolveTopBarClock` from the POLLED state,
+                so the EXPERT sees `{elapsed} counted` in amber while they wait — their clock
+                genuinely is running from `max(scheduled_start, their join)` — and the CLIENT
+                correctly keeps `Not started` in the same room state, because nothing is being
+                charged until both parties are present. Two different true sentences about one
+                meeting; BAL-435 could only say `● Live` to both, which is why an expert reads
+                "not started" at minute eight and leaves before a settlement they had earned.
+
+                ⚠ `null` IS A LIVE PATH, NOT A GUARD: both GUEST mounts poll nothing (the state
+                route is member-only) and the member route has no snapshot until the first poll
+                lands. Both keep exactly the chrome BAL-435 shipped rather than flashing
+                "Not started" over a live call.
+
+                ⚠ NO CLIENT-SIDE THRESHOLD AND NO LOCAL DURATION MATH ANYWHERE HERE.
+                `MeetingClockSlot` ticks its own display and drift-corrects against `asOf`.
+              */
+              clock={route.clock ?? (hasJoined ? { kind: 'live' } : { kind: 'not_started' })}
               network={networkState === 'bad' || networkState === 'warning' ? 'unstable' : 'strong'}
               // ⚠⚠ SEAT COUNT, NOT TILE COUNT. It comes from the guests GET — the very counter
               // the server refuses invites on — and it is `null` until the People panel has been
@@ -1170,6 +1261,12 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
                 headingRef={headingRef}
                 displayName={route.viewerName}
                 waiting={route.waiting}
+                // ⚠ BAL-134 — the server's phase label. `'pre-start'` on both guest mounts.
+                waitingPhase={route.waitingPhase}
+                // ⚠ BAL-134 — the facts the copy may not assert without. All-unknown on both
+                // guest mounts and before the first poll, so the copy claims less rather than
+                // more. See `WaitingFacts`.
+                waitingFacts={route.waitingFacts}
                 isJoining={isJoining}
                 micOn={micOn}
                 cameraOn={cameraOn}
@@ -1270,8 +1367,10 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
               // ⚠ BOTH ABSENT WHEN THE SLOT IS UNREGISTERED — the toolbar renders no People or
               // Files control at all, rather than two disabled ones.
               {...toolbarPanelSlot}
-              // ⚠⚠ THE SERVER'S `host_meetings` VERDICT, UNMODIFIED. Never a lens.
-              isOwner={grant.isOwner}
+              // ⚠⚠ THE SERVER'S END-AUTHORITY VERDICT (`isOwner || clientPrincipal`), UNMODIFIED.
+              // Never a lens, and ⚠ NEVER `isOwner` — that one mints the Daily owner token and
+              // would deny the paying client the ability to stop their own per-minute spend.
+              canEndMeeting={grant.canEndMeeting}
               contextNoun={contextNoun}
               isCase={contextNoun === 'case'}
               onLeave={() => exit('self')}
@@ -1300,6 +1399,20 @@ interface FrameStageProps {
   readonly displayName: string | null;
   /** ⚠ `null` ⇒ party-neutral waiting copy (ruling R10). */
   readonly waiting: WaitingSubject | null;
+  /**
+   * BAL-134 (§7.3) — how far the wait has run.
+   *
+   * ⚠⚠ **A LABEL THE SERVER COMPUTED**, from the env-resolved timers. The browser never derives
+   * `near` from a duration; see `meeting-state.ts`'s docblock for why that is structural.
+   * `'pre-start'` on both GUEST mounts, structurally — they mount no route provider.
+   */
+  readonly waitingPhase: WaitingPhase;
+  /**
+   * BAL-134 — the server-mirror facts the waiting copy may not assert without: the no-show floor
+   * in minutes, the settled outcome, and whether an expert has actually been OBSERVED in the
+   * room. All-unknown on both GUEST mounts and before the first poll lands.
+   */
+  readonly waitingFacts: WaitingFacts;
   readonly isJoining: boolean;
   readonly micOn: boolean;
   readonly cameraOn: boolean;
@@ -1331,6 +1444,8 @@ function FrameStage({
   headingRef,
   displayName,
   waiting,
+  waitingPhase,
+  waitingFacts,
   isJoining,
   micOn,
   cameraOn,
@@ -1382,13 +1497,15 @@ function FrameStage({
   if (kind === 'waiting') {
     return (
       <WaitingStage
-        // ⚠ ONLY `pre-start` IS PRODUCED TODAY. BAL-134 owns the transitions; the component and
-        // its copy already ship all four phases so that wiring is a one-line change there.
-        phase="pre-start"
+        // ⚠⚠ BAL-134 — THE PRODUCER BAL-435 LEFT A HOLE FOR. All four phases and both parties'
+        // copy already shipped with the component; this is the line that makes the progression
+        // reachable. The phase is the SERVER's answer, never a threshold computed here.
+        phase={waitingPhase}
         // ⚠⚠ RULING R10 — THE REAL SUBJECT, OR `null` FOR PARTY-NEUTRAL COPY. It used to be
         // hard-coded `absentParty="expert"` with two placeholder literals, which showed the
         // delivering EXPERT the CLIENT's billing promise on a money surface.
         subject={waiting}
+        facts={waitingFacts}
         headingRef={headingRef}
       />
     );

@@ -26,6 +26,17 @@ export const MEETING_SERVER_EVENTS = {
    * join funnel; the guest half is `guest_joined` in `events/guest.ts`.
    */
   MEETING_JOIN_GRANTED: 'meeting_join_granted',
+  // ── BAL-134 / ADR-1049 — the lifecycle. ────────────────────────────────────────────────
+  /** The expert and ≥1 client-side participant were both observed in the room. */
+  MEETING_STARTED: 'meeting_started',
+  /** An expert waited alone, gave up BELOW the no-show floor, and the wait was terminated. */
+  MEETING_WAITING_ABANDONED: 'meeting_waiting_abandoned',
+  /** The Balo-ops salvage alert actually PUBLISHED — not merely that it was scheduled. */
+  MEETING_EXPERT_ABSENT_ALERT: 'meeting_expert_absent_alert',
+  /** Nobody delivering ever turned up and the meeting was terminated as a missed call. */
+  MEETING_MISSED_CALL: 'meeting_missed_call',
+  /** EVERY terminal path — the four system rules and the human End alike. */
+  MEETING_ENDED: 'meeting_ended',
 } as const;
 
 /**
@@ -105,9 +116,100 @@ export interface MeetingServerEventMap {
     /**
      * Whether the token carries Daily owner rights — i.e. the `hasEngagementCapability(
      * HOST_MEETINGS)` verdict. The dimension that answers "is the right person hosting?".
+     *
+     * ⚠ THIS PROPERTY STAYS ON `isOwner` AND MUST NOT BE RETARGETED TO BAL-134's
+     * `canEndMeeting`. It measures who holds DAILY OWNER RIGHTS, which is a different question
+     * from who may press End — see `JoinGrant`'s six-field block.
      */
     is_owner: boolean;
     /** The joining MEMBER's user id. */
+    distinct_id: string;
+  };
+
+  // ── BAL-134 / ADR-1049 — the lifecycle. ──────────────────────────────────────────────────
+  //
+  // ⚠⚠ `distinct_id` IS REQUIRED ON EVERY SERVER EVENT, AND FOUR OF THESE FIVE HAVE NO ACTING
+  // HUMAN. `trackServer` destructures it and promotes it to PostHog's `distinctId`, and the
+  // cast means a MISSING property silently becomes `undefined` — i.e. an event attributed to
+  // nobody, invisible in every funnel. So the four SYSTEM paths carry the **`meetingId`**,
+  // which is the same non-user shape `guest_joined` already uses with `meeting_guests.id`. Only
+  // `meeting_ended` on the HUMAN path carries a real user id.
+
+  /**
+   * The consultation actually began: expert ∧ ≥1 client-side participant both in the room.
+   *
+   * ⚠ FIRES ONCE PER MEETING, guaranteed by the compare-and-set on `markInProgress`
+   * (`in_progress` is not in its FROM set), so a rejoin cannot re-emit it.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_STARTED]: {
+    meeting_id: string;
+    /** ⚠ SIGNED. Negative when both parties were early — that is a real and useful reading. */
+    seconds_from_scheduled_start: number;
+    /** Open intervals at the transition — includes `observer`s, unlike the billable clock. */
+    participant_count: number;
+    /** ⚠ The MEETING id. There is no acting human on a system-observed transition. */
+    distinct_id: string;
+  };
+
+  /**
+   * BAL-134 D9 — the ABANDONED WAIT. An expert held the room alone, left BELOW the no-show
+   * floor, and nobody ever came.
+   *
+   * ⚠ IT IS NOT A NO-SHOW AND MUST NOT BE COUNTED AS ONE. `expertPresentMs` never reached the
+   * floor, so nothing settles in the expert's favour; the meeting ends with a NULL outcome and
+   * BAL-412 resolves it from the presence rows.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_WAITING_ABANDONED]: {
+    meeting_id: string;
+    /** How long the expert actually held the room. ⚠ Always below the no-show floor. */
+    expert_present_seconds: number;
+    distinct_id: string;
+  };
+
+  /**
+   * The Balo-ops salvage alert PUBLISHED.
+   *
+   * ⚠ EMITTED WHEN IT ACTUALLY PUBLISHES, NOT WHEN IT IS SCHEDULED. The promise is armed
+   * minutes earlier and its fire-time recheck skips it whenever the expert turned up in the
+   * meantime — which is the COMMON case. Counting schedules would report an operational
+   * failure rate several times higher than the real one.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_EXPERT_ABSENT_ALERT]: {
+    meeting_id: string;
+    minutes_past_start: number;
+    distinct_id: string;
+  };
+
+  /** The missed-call rule fired: no expert interval EVER, past the termination threshold. */
+  [MEETING_SERVER_EVENTS.MEETING_MISSED_CALL]: {
+    meeting_id: string;
+    /**
+     * Did a client-side participant turn up to an empty room? The dimension that separates
+     * "nobody came" from "the paying side was stood up", which are very different incidents.
+     */
+    client_joined: boolean;
+    distinct_id: string;
+  };
+
+  /**
+   * EVERY terminal path — the four system rules and the human End alike. The one event a
+   * funnel can count meetings by.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_ENDED]: {
+    meeting_id: string;
+    /** ⚠ MEASUREMENT, NOT MONEY. BAL-412 settles; this ticket only produces the numbers. */
+    billable_seconds: number;
+    expert_present_seconds: number;
+    /** Presence intervals recorded across the whole meeting, all parties. */
+    participant_count: number;
+    /**
+     * ⚠ `null` IS A REAL VALUE, NOT "unknown" (D5). The two HUMAN paths and the abandoned wait
+     * deliberately leave it unset — the ender never sets the outcome.
+     */
+    outcome: 'completed' | 'no_show_client' | 'missed_call' | null;
+    /** `meetings.ended_by`. ⚠ ALL FOUR system rules report `system_idle`; `outcome` separates them. */
+    ended_by: 'client_principal' | 'expert_host' | 'system_idle';
+    /** The acting user on a human End; the MEETING id on all four system paths. */
     distinct_id: string;
   };
 }

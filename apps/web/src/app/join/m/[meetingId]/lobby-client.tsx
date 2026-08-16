@@ -319,6 +319,9 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
         roomUrl={grant.roomUrl}
         token={grant.token}
         isOwner={grant.isOwner}
+        // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is — see
+        // `join-control.tsx`. PASSED THROUGH, never defaulted here.
+        canEndMeeting={grant.canEndMeeting}
         expiresAt={grant.expiresAt}
         participantId={grant.participantId}
         // ⚠ THE TRANSITION THAT MATTERS MOST. Without this the one state the visitor actually

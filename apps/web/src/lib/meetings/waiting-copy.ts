@@ -13,8 +13,14 @@
  * all.**
  *
  * ⚠⚠ BAL-435's OWN FINDING TEXT ("counted from the scheduled start") IS STALE AND WAS EXPLICITLY
- * REJECTED (ruling R2). Do not "correct" any string below back toward it. `waiting-copy.test.ts`
- * asserts the phrase appears nowhere in this module.
+ * REJECTED (ruling R2). Do not "correct" any string below back toward it.
+ *
+ * ⚠⚠ AND DO NOT RE-ADD THE PHRASE-GREP THAT USED TO GUARD IT. `waiting-copy.test.ts` asserted
+ * that the literal `"scheduled start"` appeared in no string, and it PASSED for months over a
+ * `running` body reading *"Your time is counted from {scheduledStartLabel}"* — because the string
+ * interpolated a FORMATTED TIME, so the banned phrase never appeared while the false claim it was
+ * written to stop survived intact. Every sentence here is now pinned by EQUALITY against its exact
+ * expected text; a grep cannot see a claim assembled from a variable.
  *
  * ── RULINGS THIS MODULE IMPLEMENTS ──────────────────────────────────────────────────────────
  *
@@ -56,7 +62,60 @@ export interface WaitingCopy {
   readonly body: string;
 }
 
-export interface WaitingCopyInput {
+/**
+ * BAL-134 — ⚠⚠ **THE FACTS FROM THE SERVER MIRROR THAT THE COPY MAY NOT ASSERT WITHOUT.**
+ *
+ * Every field here exists because a sentence below was found claiming something the browser had
+ * no basis for. They arrive on the polled snapshot; before the first poll lands they are all
+ * {@link UNKNOWN_WAITING_FACTS}, and every string is written so that the unknown answer is
+ * *quieter*, never *wronger*.
+ */
+export interface WaitingFacts {
+  /**
+   * The no-show floor in whole minutes, **as the SERVER computes it**. `null` ⇒ the server did
+   * not say, and the copy then names no number at all.
+   *
+   * ⚠⚠ **NEVER A CONSTANT IN THIS BUNDLE.** `NO_SHOW_FLOOR_MS` is env-overridable
+   * (`MEETING_NO_SHOW_FLOOR_MINUTES`) and only `apps/api` reads that env. The browser is not
+   * COMPUTING a threshold here — the phase label already arrives server-computed — but it was
+   * STATING one ("the 15-minute mark") as a hard-coded literal, which drifts silently from an
+   * overridden server and only in the environment that was overridden. If you find yourself
+   * importing `NO_SHOW_FLOOR_MS` into `apps/web` to fill this in, stop.
+   */
+  readonly noShowFloorMinutes: number | null;
+  /**
+   * The settled outcome as the server labelled it, or `null`.
+   *
+   * ⚠⚠ `null` IS A REAL, COMMON ANSWER, NOT AN ABSENCE — both human end paths and the abandoned
+   * wait write `outcome NULL` by design (D5). It is the whole reason the `settled` copy branches:
+   * a terminal status alone is NOT evidence of a money outcome.
+   */
+  readonly outcome: string | null;
+  /**
+   * Has the server **OBSERVED** an expert in the room *right now*?
+   *
+   * ⚠ NOT "did an expert ever join". Presence is written from Daily's webhooks server-to-server,
+   * so there is a real observation window (webhook lag) in which the phase has advanced and no
+   * expert interval is open. Nothing is counted in that window, and the copy must not say it is.
+   */
+  readonly expertPresenceObserved: boolean;
+}
+
+/**
+ * ⚠ THE PRE-MIRROR VALUE: before the first poll lands, and on every surface that polls nothing.
+ * Each field is the answer that makes the copy claim LESS, never more.
+ */
+export const UNKNOWN_WAITING_FACTS: WaitingFacts = {
+  noShowFloorMinutes: null,
+  outcome: null,
+  expertPresenceObserved: false,
+};
+
+/** ⚠ The two outcome labels the copy branches on. Every other label takes the neutral arm. */
+const OUTCOME_NO_SHOW_CLIENT = 'no_show_client';
+const OUTCOME_MISSED_CALL = 'missed_call';
+
+export interface WaitingCopyInput extends WaitingFacts {
   /** The counterparty's FIRST name. ⚠ Gender-neutral by construction — never a pronoun. */
   readonly counterpartyFirstName: string;
   /** The scheduled start, already formatted in the VIEWER's timezone. */
@@ -91,30 +150,86 @@ export const CLIENT_WAITING_BODY =
   "The consultation timer starts once your expert joins. You won't be charged for waiting.";
 
 /**
+ * ⚠⚠ THE NO-SHOW FLOOR, NAMED WITH THE SERVER'S NUMBER — OR WITH NO NUMBER AT ALL.
+ *
+ * Falling back to a shipped `15` would re-create the exact drift {@link WaitingFacts} exists to
+ * remove: a hard-coded threshold in the browser bundle wearing an interpolation, disagreeing
+ * silently with a server running `MEETING_NO_SHOW_FLOOR_MINUTES`.
+ *
+ * ⚠ THE UNKNOWN ARM IS RE-WORDED, NOT TRUNCATED. "…settles as a no-show at the mark" is not
+ * English; each fragment therefore carries its own pair, as data rather than as a branch inside
+ * every sentence that needs one.
+ */
+const FLOOR_PHRASES = {
+  /** For the FORWARD-LOOKING sentence: what happens if nobody arrives. */
+  mark: {
+    known: (minutes: number) => `at the ${minutes}-minute mark`,
+    unknown: 'once the minimum is reached',
+  },
+  /** For the RETROSPECTIVE sentence: what has already been settled. */
+  minimum: {
+    known: (minutes: number) => `at the ${minutes}-minute minimum`,
+    unknown: 'at the minimum',
+  },
+} as const;
+
+function floorPhrase(minutes: number | null, kind: keyof typeof FLOOR_PHRASES): string {
+  const phrases = FLOOR_PHRASES[kind];
+  return minutes === null ? phrases.unknown : phrases.known(minutes);
+}
+
+/**
  * THE EXPERT IS WAITING; the CLIENT is the absent party. R2 — Option A, whole.
  *
- * ⚠ "counted from {start}" is exact in the common case (an expert who joined at or after the
- * scheduled start) and is the phrase BAL-134's help doc will use. It also fixes the shipped
- * patch's own imprecision: "counting the moment you join" over-promises to an expert who
- * arrived early.
+ * ── ⚠⚠ THE ANCHOR IS **THE JOIN**, NOT THE SCHEDULED START (BAL-134) ────────────────────────
+ *
+ * `running` used to read *"Your time is counted from {scheduledStartLabel}."* — which renders as
+ * "Your time is counted from 10:00", i.e. counted from the scheduled start, **the exact reading
+ * the clock rule at the top of this file rejects.** An expert joining a 10:00 call at 10:05 is
+ * anchored server-side at 10:05 and settles at 10:20; the screen promised 10:00. A five-minute
+ * over-promise, on the one surface this ticket exists to make trustworthy.
+ *
+ * ⚠ AND THE OLD GUARD DID NOT CATCH IT: the test asserted the literal phrase "scheduled start"
+ * appeared nowhere, but the string interpolated a FORMATTED TIME, so the banned phrase never
+ * appeared while the false claim survived. The guard is now an equality assertion on the exact
+ * expected sentence — see `waiting-copy.test.ts`.
+ *
+ * ⚠ `pre-start` IS JOIN-ANCHORED FOR THE SAME REASON (`waiting-state-patch.jsx:223`). The truth
+ * is `max(scheduled, join)`, and "starts counting THEN" names only the first half of that.
  */
 const CLIENT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
   'pre-start': ({ counterpartyFirstName, scheduledStartLabel }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
-    body: `Due to start at ${scheduledStartLabel}. Your time starts counting then — there's no waiting room, so ${counterpartyFirstName} will come straight in.`,
+    body: `Due to start at ${scheduledStartLabel}. Your time starts counting the moment you join — there's no waiting room, so ${counterpartyFirstName} will come straight in.`,
   }),
-  running: ({ counterpartyFirstName, scheduledStartLabel }) => ({
+  running: ({ counterpartyFirstName }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
-    body: `Your time is counted from ${scheduledStartLabel}. Nothing for you to do.`,
+    body: `Your time is counted from when you joined. Nothing for you to do.`,
   }),
-  near: ({ counterpartyFirstName }) => ({
+  near: ({ counterpartyFirstName, noShowFloorMinutes }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
-    body: `Still counting. If ${counterpartyFirstName} doesn't arrive, this settles as a no-show at the 15-minute mark.`,
+    body: `Still counting. If ${counterpartyFirstName} doesn't arrive, this settles as a no-show ${floorPhrase(noShowFloorMinutes, 'mark')}.`,
   }),
-  settled: ({ counterpartyFirstName }) => ({
-    title: `${counterpartyFirstName} didn't join`,
-    body: "Settled as a no-show at the 15-minute minimum. You're free to leave — your recap and payout summary will be emailed.",
-  }),
+  /**
+   * ⚠⚠ **A TERMINAL STATUS IS NOT EVIDENCE OF A NO-SHOW.** `resolveWaitingPhase` returns
+   * `settled` for ANY terminal status with no reference to the outcome, so this arm used to
+   * claim a 15-minute no-show settlement — and a payout summary — on paths that settled nothing:
+   * the client principal ending the call at minute three (ADR-1049 gives them that authority),
+   * the idle end, and every other human End. All three carry `outcome: null`.
+   *
+   * The payload has always carried the answer. `no_show_client` keeps the sentence it earned;
+   * everything else gets one that states the fact (the call is over) and promises no settlement.
+   */
+  settled: ({ counterpartyFirstName, outcome, noShowFloorMinutes }) =>
+    outcome === OUTCOME_NO_SHOW_CLIENT
+      ? {
+          title: `${counterpartyFirstName} didn't join`,
+          body: `Settled as a no-show ${floorPhrase(noShowFloorMinutes, 'minimum')}. You're free to leave — your recap and payout summary will be emailed.`,
+        }
+      : {
+          title: 'This call has ended',
+          body: "You're free to leave. We're working out how it settles, and your recap will be emailed.",
+        },
 };
 
 /**
@@ -137,10 +252,25 @@ const EXPERT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
     title: `Waiting for ${counterpartyFirstName} to join`,
     body: `Still no sign of ${counterpartyFirstName}. We've flagged this to the Balo team and someone is looking into it. You haven't been charged.`,
   }),
-  settled: ({ counterpartyFirstName }) => ({
-    title: `${counterpartyFirstName} didn't make it`,
-    body: "We're sorry this didn't happen. Nothing has been charged and your hold has been released. We'll be in touch to get you rebooked.",
-  }),
+  /**
+   * ⚠ THE SAME RULE AS THE EXPERT SIDE, MIRRORED: "your hold has been released" is a MONEY claim
+   * and only the `missed_call` outcome is evidence for it. A call the client themselves ended at
+   * minute three is terminal with `outcome: null` and has released nothing yet.
+   *
+   * ⚠⚠ THE `missed_call` COPY IS **UNCHANGED, INCLUDING ITS DELIBERATE ABSENCE OF A REBOOKING
+   * CTA.** "We'll be in touch" is a promise a human keeps; a button here would ask a client who
+   * has just been stood up to do the work of rescheduling.
+   */
+  settled: ({ counterpartyFirstName, outcome }) =>
+    outcome === OUTCOME_MISSED_CALL
+      ? {
+          title: `${counterpartyFirstName} didn't make it`,
+          body: "We're sorry this didn't happen. Nothing has been charged and your hold has been released. We'll be in touch to get you rebooked.",
+        }
+      : {
+          title: 'This call has ended',
+          body: "You haven't been charged for waiting. We're working out the details and will confirm by email.",
+        },
 };
 
 const WAITING_COPY: Record<WaitingAbsentParty, Record<WaitingPhase, CopyBuilder>> = {
@@ -148,13 +278,42 @@ const WAITING_COPY: Record<WaitingAbsentParty, Record<WaitingPhase, CopyBuilder>
   expert: EXPERT_ABSENT,
 };
 
+/**
+ * BAL-134 — ⚠⚠ **THE PHASE LABEL ALONE CANNOT SAY "THE EXPERT HAS NOT BEEN SEEN YET".**
+ *
+ * Presence is observed server-to-server from Daily (D1), so there is a real window — webhook lag,
+ * seconds — in which `resolveWaitingPhase` has already returned `running` while no expert
+ * interval is open. In that window the server measures `expertPresentMs` as **ZERO**, the TopBar
+ * chip correctly reads "Not started" (it gates on presence), and the body was simultaneously
+ * saying *"Your time is counted…"*. Two contradictory statements on one screen, and the copy was
+ * the one that was wrong — the inverse of the failure this ticket exists to fix, and a breach of
+ * phase 1's rule that nothing counted means nothing claimed.
+ *
+ * So a counting phase with no observed expert falls back to the `pre-start` sentence, which
+ * states when counting BEGINS and asserts no elapsed time. Only the expert-side progression is
+ * affected: the client-side strings claim no counted time on any phase.
+ *
+ * ⚠ IT DOES NOT TOUCH `settled`. A terminal meeting is terminal whether or not anybody is still
+ * in the room, and that arm already branches on the outcome rather than on a clock.
+ */
+function effectivePhase(
+  absentParty: WaitingAbsentParty,
+  phase: WaitingPhase,
+  expertPresenceObserved: boolean
+): WaitingPhase {
+  if (absentParty !== 'client') return phase;
+  if (expertPresenceObserved) return phase;
+  return phase === 'running' || phase === 'near' ? 'pre-start' : phase;
+}
+
 /** ⚠ TOTAL over both parties × all four phases — the `Record` types are the proof. */
 export function waitingCopyFor(
   absentParty: WaitingAbsentParty,
   phase: WaitingPhase,
   input: WaitingCopyInput
 ): WaitingCopy {
-  return WAITING_COPY[absentParty][phase](input);
+  const resolved = effectivePhase(absentParty, phase, input.expertPresenceObserved);
+  return WAITING_COPY[absentParty][resolved](input);
 }
 
 /**
@@ -176,15 +335,23 @@ export const NEUTRAL_WAITING_COPY: WaitingCopy = {
  * The copy for this phase, or the neutral copy when the subject is unknown.
  *
  * ⚠ `subject === null` IS A LIVE PATH, NOT A DEFENSIVE ONE — see {@link NEUTRAL_WAITING_COPY}.
+ *
+ * ⚠ THE SUBJECT AND THE FACTS COME FROM **DIFFERENT SOURCES** AND ARE THEREFORE TWO ARGUMENTS:
+ * the subject is assembled once from the join envelope (who is missing, and from when), while
+ * the facts arrive on every tick of the polled mirror. Folding the facts into `WaitingSubject`
+ * would break R10's "wholly present or wholly absent" guarantee, because a guest mount has a
+ * `null` subject and would still need somewhere to put an unknown floor.
  */
 export function resolveWaitingCopy(
   phase: WaitingPhase,
-  subject: WaitingSubject | null
+  subject: WaitingSubject | null,
+  facts: WaitingFacts
 ): WaitingCopy {
   if (subject === null) return NEUTRAL_WAITING_COPY;
   return waitingCopyFor(subject.absentParty, phase, {
     counterpartyFirstName: subject.counterpartyFirstName,
     scheduledStartLabel: subject.scheduledStartLabel,
+    ...facts,
   });
 }
 

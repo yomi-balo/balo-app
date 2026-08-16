@@ -55,6 +55,8 @@ const GRANT = {
   roomUrl: 'https://balo.daily.co/balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
   token: 'daily.jwt.value',
   isOwner: false,
+  /** BAL-134 (D3) — ⚠ ALWAYS `false` on a guest arm, hard-coded server-side beside `isOwner`. */
+  canEndMeeting: false,
   expiresAt: '2026-09-02T11:00:00.000Z',
   participantId: 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };

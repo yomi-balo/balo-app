@@ -1,6 +1,6 @@
 import { pgTable, uuid, text, timestamp, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
-import { meetingStatusEnum, meetingOutcomeEnum } from './enums';
+import { meetingStatusEnum, meetingOutcomeEnum, meetingEndedByEnum } from './enums';
 import { timestamps, softDelete } from './helpers';
 import { meetingContexts } from './meeting-contexts';
 import { meetingPresence } from './meeting-presence';
@@ -72,6 +72,18 @@ export const meetings = pgTable(
     // `end` transition to decide the outcome in the same statement, which is
     // transition logic this ticket does not own.
     outcome: meetingOutcomeEnum('outcome'),
+    /**
+     * BAL-134 / ADR-1049 — WHO ended it, on the axis ORTHOGONAL to `outcome`'s WHY. NULL
+     * unless `status='ended'` (CHECK `meeting_ended_by_requires_ended`, one-directional for
+     * the same reason `meeting_outcome_requires_ended` is). See `meetingEndedByEnum` for the
+     * three labels and why all four SYSTEM paths share `system_idle`.
+     *
+     * ⚠ NO DEFAULT, DELIBERATELY. A default would have to name a `meeting_ended_by` label in
+     * the same migration that creates the type — safe here (a standalone `CREATE TYPE`
+     * commits its labels atomically) but meaningless: a `scheduled` meeting has no ender, and
+     * a stamped-by-default one would be a lie every reader would have to un-learn.
+     */
+    endedBy: meetingEndedByEnum('ended_by'),
 
     scheduledStart: timestamp('scheduled_start', { withTimezone: true }).notNull(),
     scheduledEnd: timestamp('scheduled_end', { withTimezone: true }).notNull(),
@@ -103,6 +115,23 @@ export const meetings = pgTable(
     // total); when it is NOT NULL the RHS compares a NOT NULL column to a literal ⇒ never
     // NULL. The CHECK therefore never "passes by being unknown".
     check('meeting_outcome_requires_ended', sql`${t.outcome} IS NULL OR ${t.status} = 'ended'`),
+    // BAL-134 — the SAME one-directional shape as `meeting_outcome_requires_ended`, and NOT
+    // biconditional for a DIFFERENT reason than that one. There, biconditionality would force
+    // the end transition to decide the OUTCOME; here it would force every already-`ended` row
+    // to name an ender. `ended_by ⇒ ended` is the whole invariant: nothing may claim an ender
+    // on a meeting that never ended.
+    //
+    // ⚠ THE ENUM-LITERAL CAVEAT IS SATISFIED, AND NOT BY LUCK. This CHECK names `'ended'` —
+    // a `meeting_status` label created by the standalone `CREATE TYPE` in 0056, NOT one of
+    // the `meeting_ended_by` labels created in 0066 alongside it. So even though Postgres
+    // permits a just-created type's labels inside the same transaction (they are born with
+    // it), this constraint would be safe even if it did not: it references no new label at
+    // all. Any FUTURE `ALTER TYPE meeting_status ADD VALUE` still may not rewrite this line
+    // in its own migration (`reference_enum_default_same_tx_migration_hazard`).
+    //
+    // No three-valued-logic hole: `IS NULL` is total, and when `ended_by` IS NOT NULL the RHS
+    // compares a NOT NULL column to a literal ⇒ never NULL.
+    check('meeting_ended_by_requires_ended', sql`${t.endedBy} IS NULL OR ${t.status} = 'ended'`),
   ]
 );
 
@@ -131,3 +160,13 @@ export type NewMeeting = typeof meetings.$inferInsert;
 export type MeetingStatus = (typeof meetingStatusEnum.enumValues)[number];
 /** Why a meeting ended (schema-derived — single source of truth). */
 export type MeetingOutcome = (typeof meetingOutcomeEnum.enumValues)[number];
+/**
+ * WHO ended a meeting (BAL-134 / ADR-1049 — schema-derived, single source of truth for the
+ * PERSISTED value). `@balo/shared/meetings`'s `end-authority.ts` declares the same union for
+ * the two apps to reason about WITHOUT value-importing `@balo/db` (the client-bundle footgun,
+ * memory `reference_balo_db_client_bundle_footgun`) — that one is the wire/pure-logic type,
+ * this one is derived from the pgEnum and is what a repository signature must use, so a label
+ * added to the enum without updating the shared copy fails to compile at the seam between
+ * them rather than silently diverging.
+ */
+export type MeetingEndedBy = (typeof meetingEndedByEnum.enumValues)[number];

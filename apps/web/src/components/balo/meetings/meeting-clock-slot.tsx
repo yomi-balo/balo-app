@@ -47,8 +47,28 @@ function formatElapsed(ms: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-const CHIP_BASE =
-  'hidden shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs sm:flex tabular-nums';
+const CHIP_BASE = 'shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs tabular-nums';
+
+/**
+ * ⚠ THE CHROME-ONLY ARMS MAY YIELD SPACE ON A PHONE. `Not started` and `● Live` restate what the
+ * stage below already shows; on a 375px bar the meeting title is worth more.
+ */
+const CHIP_COMPACT_HIDDEN = 'hidden sm:flex';
+
+/**
+ * BAL-134 — ⚠⚠ **THE TWO DURATION ARMS RENDER AT EVERY WIDTH, AND THAT IS A MONEY DECISION.**
+ *
+ * `CHIP_BASE` used to carry `hidden … sm:flex` for all four arms, so below 640px the amber
+ * "counted" chip **did not render at all** — an expert on a phone saw no clock whatsoever, which
+ * is precisely the situation this ticket exists to fix and precisely the device an expert waiting
+ * on a late client is most likely to be holding. The entire visible artifact of the TopBar fix
+ * was absent exactly where it mattered most.
+ *
+ * `billable` joins it for the same reason: both arms report a span that settles money, unlike the
+ * two above which report only chrome. The bar is safe for it — the chip is `shrink-0` inside a
+ * `min-w-0` flex row whose title carries `truncate`, so the title gives way and nothing overflows.
+ */
+const CHIP_ALWAYS_VISIBLE = 'flex';
 
 /**
  * ⚠ THE SNAPSHOT TICKS FROM `asOf`, so the chip stays honest across a slow render or a
@@ -88,7 +108,7 @@ export function MeetingClockSlot({
       <span
         aria-live="off"
         aria-label="Not started"
-        className={cn(CHIP_BASE, 'text-muted-foreground bg-white/6')}
+        className={cn(CHIP_BASE, CHIP_COMPACT_HIDDEN, 'text-muted-foreground bg-white/6')}
       >
         Not started
       </span>
@@ -97,7 +117,11 @@ export function MeetingClockSlot({
 
   if (state.kind === 'live') {
     return (
-      <span aria-live="off" aria-label="Live" className={cn(CHIP_BASE, 'text-success bg-white/6')}>
+      <span
+        aria-live="off"
+        aria-label="Live"
+        className={cn(CHIP_BASE, CHIP_COMPACT_HIDDEN, 'text-success bg-white/6')}
+      >
         <span className="bg-success h-1.5 w-1.5 rounded-full" aria-hidden="true" />
         {/* ⚠ An expression, not bare text: the chip is `flex gap-1.5`, so a literal space would
             stack ON TOP of the gap. This also matches the `{elapsed}` arms below. */}
@@ -113,7 +137,7 @@ export function MeetingClockSlot({
       <span
         aria-live="off"
         aria-label={`Elapsed ${elapsed}`}
-        className={cn(CHIP_BASE, 'text-muted-foreground bg-white/6')}
+        className={cn(CHIP_BASE, CHIP_ALWAYS_VISIBLE, 'text-muted-foreground bg-white/6')}
       >
         <span className="bg-success h-1.5 w-1.5 rounded-full" aria-hidden="true" />
         {elapsed}
@@ -127,7 +151,7 @@ export function MeetingClockSlot({
     <span
       aria-live="off"
       aria-label={`${elapsed} counted`}
-      className={cn(CHIP_BASE, 'bg-warning/15 text-warning')}
+      className={cn(CHIP_BASE, CHIP_ALWAYS_VISIBLE, 'bg-warning/15 text-warning')}
     >
       <Clock className="h-3 w-3" aria-hidden="true" />
       {elapsed} counted

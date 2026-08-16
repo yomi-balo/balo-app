@@ -11,6 +11,8 @@ import {
   userFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
+import { findProjectionForMeeting } from './_shared/consultation-projection';
+import { InvalidPresenceTimestampError, meetingPresenceRepository } from './meeting-presence';
 import {
   meetingsRepository,
   MeetingContextRequiredError,
@@ -490,5 +492,522 @@ describe('meetingsRepository.softDelete', () => {
       contexts: [{ contextType: 'case', contextId: engagement.id }],
     });
     expect(second.contexts).toHaveLength(1);
+  });
+});
+
+// ── BAL-134 / ADR-1049 — THE LIFECYCLE TRANSITIONS (§4.3) ──────────────────────────────────
+
+/** A meeting scheduled `offsetMinutes` from now, in whatever status the test needs. */
+async function lifecycleMeeting(
+  status: 'scheduled' | 'waiting_for_participants' | 'in_progress',
+  offsetMinutes = -30
+): Promise<string> {
+  const start = new Date(Date.now() + offsetMinutes * 60_000);
+  const { meeting } = await meetingFactory({
+    values: { status, scheduledStart: start, scheduledEnd: new Date(start.getTime() + HOUR_MS) },
+  });
+  return meeting.id;
+}
+
+describe('meetingsRepository.listLifecycleCandidates', () => {
+  it('returns live, in-status meetings at or after the lookback floor, OLDEST FIRST', async () => {
+    const older = await lifecycleMeeting('waiting_for_participants', -50);
+    const newer = await lifecycleMeeting('scheduled', -10);
+    const inProgress = await lifecycleMeeting('in_progress', -30);
+
+    const rows = await meetingsRepository.listLifecycleCandidates({
+      statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
+      scheduledStartAfter: new Date(Date.now() - 24 * HOUR_MS),
+      limit: 50,
+    });
+
+    const ids = rows.map((row) => row.id);
+    expect(ids).toContain(older);
+    expect(ids).toContain(newer);
+    expect(ids).toContain(inProgress);
+    // Ascending, so a caller that fills its batch can name the OLDEST scheduled_start it
+    // reached in the no-silent-caps warning.
+    expect(ids.indexOf(older)).toBeLessThan(ids.indexOf(inProgress));
+    expect(ids.indexOf(inProgress)).toBeLessThan(ids.indexOf(newer));
+  });
+
+  it('EXCLUDES terminal statuses, soft-deleted meetings, and anything before the floor', async () => {
+    const ended = await lifecycleMeeting('scheduled', -20);
+    await meetingsRepository.endMeeting({
+      id: ended,
+      outcome: 'missed_call',
+      endedBy: 'system_idle',
+      endedAt: new Date(),
+      actorUserId: null,
+    });
+    const cancelledSeed = await meetingFactory({
+      values: { scheduledStart: new Date(Date.now() - 20 * 60_000) },
+    });
+    await meetingsRepository.cancel(cancelledSeed.meeting.id);
+    const deleted = await lifecycleMeeting('waiting_for_participants', -20);
+    await meetingsRepository.softDelete(deleted);
+    // ⚠ THE LOOKBACK FLOOR IS THE ONLY THING BOUNDING THE SCAN. A meeting three days stale is
+    // a data-repair problem, not a live meeting — and without the floor the sweep's cost grows
+    // without limit forever.
+    const ancient = await lifecycleMeeting('waiting_for_participants', -3 * 24 * 60);
+    const live = await lifecycleMeeting('in_progress', -5);
+
+    const ids = (
+      await meetingsRepository.listLifecycleCandidates({
+        statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
+        scheduledStartAfter: new Date(Date.now() - 24 * HOUR_MS),
+        limit: 50,
+      })
+    ).map((row) => row.id);
+
+    expect(ids).toContain(live);
+    expect(ids).not.toContain(ended);
+    expect(ids).not.toContain(cancelledSeed.meeting.id);
+    expect(ids).not.toContain(deleted);
+    expect(ids).not.toContain(ancient);
+  });
+
+  it('honours the batch limit — the bound the caller must warn about when it fills', async () => {
+    await lifecycleMeeting('scheduled', -30);
+    await lifecycleMeeting('scheduled', -29);
+    await lifecycleMeeting('scheduled', -28);
+
+    const rows = await meetingsRepository.listLifecycleCandidates({
+      statuses: ['scheduled'],
+      scheduledStartAfter: new Date(Date.now() - 24 * HOUR_MS),
+      limit: 2,
+    });
+    expect(rows).toHaveLength(2);
+  });
+
+  it('short-circuits an empty status list and a non-positive limit without querying', async () => {
+    await lifecycleMeeting('scheduled', -30);
+
+    await expect(
+      meetingsRepository.listLifecycleCandidates({
+        statuses: [],
+        scheduledStartAfter: new Date(Date.now() - 24 * HOUR_MS),
+        limit: 50,
+      })
+    ).resolves.toEqual([]);
+    await expect(
+      meetingsRepository.listLifecycleCandidates({
+        statuses: ['scheduled'],
+        scheduledStartAfter: new Date(Date.now() - 24 * HOUR_MS),
+        limit: 0,
+      })
+    ).resolves.toEqual([]);
+  });
+});
+
+describe('meetingsRepository.markWaitingForParticipants / markInProgress', () => {
+  it('moves scheduled → waiting_for_participants, stamping NOTHING else', async () => {
+    const id = await lifecycleMeeting('scheduled');
+
+    const moved = await meetingsRepository.markWaitingForParticipants(id);
+
+    expect(moved?.status).toBe('waiting_for_participants');
+    // `started_at` belongs to `in_progress` — it means "the consultation began", not
+    // "somebody opened the door".
+    expect(moved?.startedAt).toBeNull();
+    expect(moved?.endedAt).toBeNull();
+    expect(moved?.endedBy).toBeNull();
+  });
+
+  it('a SECOND call returns undefined — the common case, not an error', async () => {
+    const id = await lifecycleMeeting('scheduled');
+    expect(await meetingsRepository.markWaitingForParticipants(id)).toBeDefined();
+
+    // The second, third and fourth participants to join all reach this with the meeting
+    // already moved, and two webhooks racing the first join both call it.
+    expect(await meetingsRepository.markWaitingForParticipants(id)).toBeUndefined();
+    expect((await meetingsRepository.findById(id))?.status).toBe('waiting_for_participants');
+  });
+
+  it('markInProgress stamps started_at from waiting_for_participants', async () => {
+    const id = await lifecycleMeeting('waiting_for_participants');
+    const startedAt = new Date(Date.now() - 3 * 60_000);
+
+    const moved = await meetingsRepository.markInProgress(id, startedAt);
+
+    expect(moved?.status).toBe('in_progress');
+    expect(moved?.startedAt?.getTime()).toBe(startedAt.getTime());
+  });
+
+  it('markInProgress also accepts scheduled — the SAME-INSTANT DOUBLE JOIN', async () => {
+    const id = await lifecycleMeeting('scheduled');
+
+    // §4.1 declares `scheduled → in_progress` legal. Requiring the intermediate state would
+    // leave such a meeting stuck at `scheduled` and therefore matched by the MISSED-CALL rule
+    // — ending a call that is actually running.
+    const moved = await meetingsRepository.markInProgress(id, new Date());
+    expect(moved?.status).toBe('in_progress');
+  });
+
+  it('⚠ started_at CANNOT be overwritten by a later markInProgress (the rejoin guard)', async () => {
+    const id = await lifecycleMeeting('waiting_for_participants');
+    const first = new Date(Date.now() - 10 * 60_000);
+    await meetingsRepository.markInProgress(id, first);
+
+    // `in_progress` is not in the FROM set, so the second caller matches zero rows. Every
+    // clock anchored on `started_at` is therefore stable across a drop+rejoin.
+    expect(await meetingsRepository.markInProgress(id, new Date())).toBeUndefined();
+    expect((await meetingsRepository.findById(id))?.startedAt?.getTime()).toBe(first.getTime());
+  });
+
+  it('neither mutator touches a terminal, soft-deleted or unknown meeting', async () => {
+    const cancelled = await meetingFactory();
+    await meetingsRepository.cancel(cancelled.meeting.id);
+    const deleted = await lifecycleMeeting('scheduled');
+    await meetingsRepository.softDelete(deleted);
+    const unknown = randomUUID();
+
+    expect(
+      await meetingsRepository.markWaitingForParticipants(cancelled.meeting.id)
+    ).toBeUndefined();
+    expect(
+      await meetingsRepository.markInProgress(cancelled.meeting.id, new Date())
+    ).toBeUndefined();
+    expect(await meetingsRepository.markWaitingForParticipants(deleted)).toBeUndefined();
+    expect(await meetingsRepository.markInProgress(deleted, new Date())).toBeUndefined();
+    expect(await meetingsRepository.markWaitingForParticipants(unknown)).toBeUndefined();
+    expect(await meetingsRepository.markInProgress(unknown, new Date())).toBeUndefined();
+
+    expect((await meetingsRepository.findById(cancelled.meeting.id))?.status).toBe('cancelled');
+  });
+});
+
+describe('meetingsRepository.endMeeting', () => {
+  /** Open an expert interval on a meeting, `minutesAgo` in the past. */
+  async function openExpertInterval(meetingId: string, minutesAgo: number): Promise<string> {
+    const expert = await userFactory();
+    const opened = await meetingPresenceRepository.open({
+      meetingId,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: new Date(Date.now() - minutesAgo * 60_000),
+    });
+    return opened.id;
+  }
+
+  it('⚠⚠ ONE STATEMENT: status, ended_at, ended_by and outcome are stamped TOGETHER', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    const endedAt = new Date(Date.now() - 60_000);
+
+    const result = await meetingsRepository.endMeeting({
+      id,
+      outcome: 'completed',
+      endedBy: 'system_idle',
+      endedAt,
+      actorUserId: null,
+    });
+
+    // `resolveClockCeiling` prefers `meetings.ended_at` over the wall clock ONLY for a meeting
+    // that is BOTH `ended` AND has a non-null `ended_at`. Split across two statements, a reader
+    // landing between them sees `ended` with a NULL `ended_at`, falls back to the wall clock,
+    // and measures every still-open interval to *now* — the 16-hour over-bill pinned in
+    // `meeting-presence.integration.test.ts`. This assertion is that requirement, executed.
+    const persisted = await meetingsRepository.findById(id);
+    expect(persisted?.status).toBe('ended');
+    expect(persisted?.endedAt?.getTime()).toBe(endedAt.getTime());
+    expect(persisted?.endedBy).toBe('system_idle');
+    expect(persisted?.outcome).toBe('completed');
+    expect(result?.meeting.endedAt?.getTime()).toBe(endedAt.getTime());
+  });
+
+  it('closes EVERY open presence interval in the same transaction, clamped to ended_at', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    await openExpertInterval(id, 30);
+    const client = await userFactory();
+    await meetingPresenceRepository.open({
+      meetingId: id,
+      userId: client.id,
+      meetingGuestId: null,
+      party: 'client',
+      joinedAt: new Date(Date.now() - 25 * 60_000),
+    });
+    const endedAt = new Date(Date.now() - 5 * 60_000);
+
+    const result = await meetingsRepository.endMeeting({
+      id,
+      outcome: 'completed',
+      endedBy: 'expert_host',
+      endedAt,
+      actorUserId: null,
+    });
+
+    expect(result?.closedIntervals).toBe(2);
+    // After this there is NO open interval left to mis-measure — the two guards (`ended_at`
+    // as ceiling, and no open interval) are independent on purpose.
+    expect(await meetingPresenceRepository.listOpen(id)).toHaveLength(0);
+    for (const row of await meetingPresenceRepository.listByMeeting(id)) {
+      expect(row.leftAt?.getTime()).toBe(endedAt.getTime());
+    }
+  });
+
+  it('writes EXACTLY ONE meeting.ended audit row, carrying endedBy / outcome / closedIntervals', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    await openExpertInterval(id, 20);
+    const actor = await userFactory();
+    const endedAt = new Date(Date.now() - 60_000);
+
+    await meetingsRepository.endMeeting({
+      id,
+      outcome: null,
+      endedBy: 'client_principal',
+      endedAt,
+      actorUserId: actor.id,
+    });
+
+    const rows = (await auditEventsForEntity(id)).filter((row) => row.action === 'meeting.ended');
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect(row?.actorUserId).toBe(actor.id);
+    expect(row?.entityType).toBe('meeting');
+    expect(row?.metadata).toMatchObject({
+      endedBy: 'client_principal',
+      outcome: null,
+      closedIntervals: 1,
+      // ⚠ ISO STRING, NOT a Date — `metadata` is jsonb, so a Date round-trips as a string and
+      // typing it otherwise would be a lie on the way back out.
+      endedAt: endedAt.toISOString(),
+    });
+  });
+
+  it('D5 — a HUMAN end leaves outcome NULL, which the one-directional CHECK permits', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    const actor = await userFactory();
+
+    const result = await meetingsRepository.endMeeting({
+      id,
+      outcome: null,
+      endedBy: 'expert_host',
+      endedAt: new Date(),
+      actorUserId: actor.id,
+    });
+
+    // "The ender never sets the outcome" (ADR-1049) — BAL-412 resolves it from
+    // `meeting_presence`. `meeting_outcome_requires_ended` is `outcome ⇒ ended`, never
+    // biconditional, so `ended` + NULL outcome is legal and is exactly what this writes.
+    expect(result?.meeting.outcome).toBeNull();
+    expect(result?.meeting.endedBy).toBe('expert_host');
+    expect(result?.meeting.status).toBe('ended');
+  });
+
+  it.each([
+    ['scheduled' as const, 'missed_call' as const],
+    ['waiting_for_participants' as const, 'no_show_client' as const],
+    ['in_progress' as const, 'completed' as const],
+  ])(
+    'ends a %s meeting (the CAS is an EXCLUSION, so every non-terminal state is endable)',
+    async (status, outcome) => {
+      const id = await lifecycleMeeting(status);
+
+      const result = await meetingsRepository.endMeeting({
+        id,
+        outcome,
+        endedBy: 'system_idle',
+        endedAt: new Date(),
+        actorUserId: null,
+      });
+
+      // `scheduled` is included on purpose: that IS the missed-call path — nobody ever joined.
+      expect(result?.meeting.status).toBe('ended');
+      expect(result?.meeting.outcome).toBe(outcome);
+    }
+  );
+
+  it('D10 — A SECOND END IS AN IDEMPOTENT NO-OP: undefined, and NOTHING changed', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    const firstActor = await userFactory();
+    const secondActor = await userFactory();
+    const firstEndedAt = new Date(Date.now() - 10 * 60_000);
+
+    const first = await meetingsRepository.endMeeting({
+      id,
+      outcome: 'completed',
+      endedBy: 'expert_host',
+      endedAt: firstEndedAt,
+      actorUserId: firstActor.id,
+    });
+    expect(first).toBeDefined();
+
+    // Two `canEndMeeting` holders press End at the same instant. The loser must get an
+    // idempotent success, never a 409 surfaced as an error on the one control that must
+    // always work.
+    const second = await meetingsRepository.endMeeting({
+      id,
+      outcome: 'no_show_client',
+      endedBy: 'client_principal',
+      endedAt: new Date(),
+      actorUserId: secondActor.id,
+    });
+    expect(second).toBeUndefined();
+
+    const persisted = await meetingsRepository.findById(id);
+    expect(persisted?.endedAt?.getTime()).toBe(firstEndedAt.getTime());
+    expect(persisted?.endedBy).toBe('expert_host');
+    expect(persisted?.outcome).toBe('completed');
+    // No SECOND audit row — the losing end must leave no trace at all.
+    expect(
+      (await auditEventsForEntity(id)).filter((row) => row.action === 'meeting.ended')
+    ).toHaveLength(1);
+  });
+
+  it('⚠ THE LOSING END ROLLS BACK ITS PRESENCE CLOSURES TOO — "undefined" means "changed nothing"', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    await meetingsRepository.endMeeting({
+      id,
+      outcome: 'completed',
+      endedBy: 'expert_host',
+      endedAt: new Date(Date.now() - 10 * 60_000),
+      actorUserId: null,
+    });
+
+    // A stray `participant.joined` lands AFTER the meeting was ended (the D2 replay shape).
+    const straggler = await openExpertInterval(id, 5);
+
+    // The presence close runs BEFORE the status CAS (the R5 ordering), so this second end
+    // closes that interval and only THEN discovers it lost. Returning at that point would
+    // COMMIT the closure on a call that is supposed to be a pure no-op; the transaction rolls
+    // back instead.
+    expect(
+      await meetingsRepository.endMeeting({
+        id,
+        outcome: null,
+        endedBy: 'client_principal',
+        endedAt: new Date(),
+        actorUserId: null,
+      })
+    ).toBeUndefined();
+
+    const open = await meetingPresenceRepository.listOpen(id);
+    expect(open.map((row) => row.id)).toEqual([straggler]);
+  });
+
+  it('refuses a CANCELLED, a SOFT-DELETED and an unknown meeting, all as undefined', async () => {
+    const cancelled = await meetingFactory();
+    await meetingsRepository.cancel(cancelled.meeting.id);
+    const deleted = await lifecycleMeeting('in_progress');
+    await meetingsRepository.softDelete(deleted);
+
+    for (const id of [cancelled.meeting.id, deleted, randomUUID()]) {
+      expect(
+        await meetingsRepository.endMeeting({
+          id,
+          outcome: 'completed',
+          endedBy: 'system_idle',
+          endedAt: new Date(),
+          actorUserId: null,
+        })
+      ).toBeUndefined();
+    }
+
+    // A cancelled meeting stays cancelled — `ended` must never overwrite it.
+    expect((await meetingsRepository.findById(cancelled.meeting.id))?.status).toBe('cancelled');
+  });
+
+  it('THE RESIDUAL CLOSED: after endMeeting, clocks() measures to ended_at, never the wall clock', async () => {
+    const id = await lifecycleMeeting('in_progress');
+    const expert = await userFactory();
+    const client = await userFactory();
+    const joinedAt = new Date(Date.now() - 40 * 60_000);
+    await meetingPresenceRepository.open({
+      meetingId: id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt,
+    });
+    await meetingPresenceRepository.open({
+      meetingId: id,
+      userId: client.id,
+      meetingGuestId: null,
+      party: 'client',
+      joinedAt,
+    });
+
+    const endedAt = new Date(joinedAt.getTime() + 30 * 60_000);
+    await meetingsRepository.endMeeting({
+      id,
+      outcome: 'completed',
+      endedBy: 'expert_host',
+      endedAt,
+      actorUserId: null,
+    });
+
+    // No explicit `now` — exactly how a settlement job (BAL-412) would call it. Both intervals
+    // were open when the meeting ended; both are now closed AT `ended_at`, and `ended_at` is
+    // additionally the resolved ceiling. 30 minutes, not "however long ago that was".
+    const clocks = await meetingPresenceRepository.clocks(id);
+    expect(clocks.billableMs).toBe(30 * 60_000);
+    expect(clocks.expertPresentMs).toBe(30 * 60_000);
+  });
+
+  it('writes NO consultation projection change — an ended meeting still occupies the slot', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    const before = await findProjectionForMeeting(created.meeting.id);
+    expect(before?.status).toBe('confirmed');
+
+    await meetingsRepository.endMeeting({
+      id: created.meeting.id,
+      outcome: 'completed',
+      endedBy: 'expert_host',
+      endedAt: new Date(),
+      actorUserId: null,
+    });
+
+    // ⚠ CORRECT AND DELIBERATE, not a miss. `consultationStatusForMeeting` maps every
+    // non-`cancelled` label to `confirmed`, so an ENDED meeting KEEPS occupying the expert's
+    // calendar slot — the booked window was consumed. Re-advertising it as free would be the
+    // bug, which is also why these transitions trigger no availability rebuild.
+    const after = await findProjectionForMeeting(created.meeting.id);
+    expect(after?.status).toBe('confirmed');
+    expect(after?.startAt.getTime()).toBe(before?.startAt.getTime());
+  });
+
+  it('rejects a NON-FINITE endedAt before writing anything', async () => {
+    const id = await lifecycleMeeting('in_progress');
+
+    await expect(
+      meetingsRepository.endMeeting({
+        id,
+        outcome: 'completed',
+        endedBy: 'system_idle',
+        endedAt: new Date('nonsense'),
+        actorUserId: null,
+      })
+    ).rejects.toThrow(InvalidPresenceTimestampError);
+
+    expect((await meetingsRepository.findById(id))?.status).toBe('in_progress');
+  });
+});
+
+describe('meetings — the ended_by CHECK', () => {
+  it('meeting_ended_by_requires_ended rejects an ender on a NON-ended meeting (23514)', async () => {
+    const { meeting } = await meetingFactory();
+
+    await expectConstraintViolation('23514', (tx) =>
+      tx.update(meetings).set({ endedBy: 'expert_host' }).where(eq(meetings.id, meeting.id))
+    );
+  });
+
+  it('an ended meeting may carry an ender — and may also carry NONE (one-directional)', async () => {
+    // The nullable column is not a gap: rows that were already `ended` before migration 0066
+    // must remain representable, and inventing an ender for them would be worse than a NULL.
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', endedAt: new Date(), endedBy: 'system_idle' },
+    });
+    expect(meeting.endedBy).toBe('system_idle');
+
+    const { meeting: unattributed } = await meetingFactory({
+      values: { status: 'ended', endedAt: new Date() },
+    });
+    expect(unattributed.endedBy).toBeNull();
   });
 });

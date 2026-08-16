@@ -11,6 +11,8 @@ const VALID = {
   roomUrl: 'https://balo.daily.co/balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
   token: 'daily.jwt.super.secret.value',
   isOwner: true,
+  /** BAL-134 / ADR-1049 (D3) — the sixth field. REQUIRED, and never inferred from `isOwner`. */
+  canEndMeeting: true,
   expiresAt: '2026-09-02T11:00:00.000Z',
   participantId: 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
 };
@@ -38,6 +40,42 @@ describe('validateGrant — shape', () => {
   it('rejects a non-boolean isOwner — a truthy string must never become host rights', () => {
     expect(validateGrant({ ...VALID, isOwner: 'true' })).toEqual({ ok: false, reason: 'shape' });
     expect(validateGrant({ ...VALID, isOwner: 1 })).toEqual({ ok: false, reason: 'shape' });
+  });
+
+  /**
+   * BAL-134 / ADR-1049 (D3) — ⚠⚠ **THE SIXTH FIELD IS REQUIRED, AND IT IS NOT DERIVED.**
+   *
+   * A grant that omits `canEndMeeting` must be REJECTED rather than defaulted, in either
+   * direction: defaulting to `false` would silently strip the client principal's ability to stop
+   * their own per-minute spend, and defaulting to `isOwner` would re-merge the two booleans D3
+   * exists to keep apart. The only honest answer to "the server did not tell us" is refusal.
+   */
+  it('⚠⚠ rejects a non-boolean canEndMeeting, exactly as it does isOwner', () => {
+    expect(validateGrant({ ...VALID, canEndMeeting: 'true' })).toEqual({
+      ok: false,
+      reason: 'shape',
+    });
+    expect(validateGrant({ ...VALID, canEndMeeting: 1 })).toEqual({ ok: false, reason: 'shape' });
+  });
+
+  it('⚠⚠ rejects an ABSENT canEndMeeting — never defaulted, never inferred from isOwner', () => {
+    const withoutEndAuthority: Record<string, unknown> = { ...VALID };
+    delete withoutEndAuthority.canEndMeeting;
+    expect(validateGrant(withoutEndAuthority)).toEqual({ ok: false, reason: 'shape' });
+  });
+
+  it('⚠⚠ carries the two booleans INDEPENDENTLY — all four combinations survive validation', () => {
+    // `isOwner` mints the Daily owner token; `canEndMeeting` gates the End control and nothing
+    // else. If validation ever collapsed one into the other, the mixed rows below would break.
+    for (const isOwner of [true, false]) {
+      for (const canEndMeeting of [true, false]) {
+        const result = validateGrant({ ...VALID, isOwner, canEndMeeting });
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        expect(result.grant.isOwner).toBe(isOwner);
+        expect(result.grant.canEndMeeting).toBe(canEndMeeting);
+      }
+    }
   });
 
   it('rejects an empty roomUrl', () => {

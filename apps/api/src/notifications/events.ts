@@ -45,6 +45,8 @@ import type {
   ConversationMessagePostedPayload,
   ConversationFileSharedPayload,
   ConversationUnreadDigestDuePayload,
+  MeetingExpertAbsentPayload,
+  MeetingClientAbsentPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -296,6 +298,11 @@ export type NotificationEvent =
   // the guest's ONLY join credential, and minting in `apps/api` keeps that secret inside one
   // process from creation to enqueue.
   | 'meeting.guest_link_resent'
+  // BAL-134 / ADR-1049 — the two ABSENCE promises. Both SERVER-ONLY (see below): both are
+  // published EXCLUSIVELY by BAL-420's dispatch tick, and `scheduleNotification` is an
+  // in-process `apps/api` function that ADR-1047 Decision 11 keeps off HTTP entirely.
+  | 'meeting.expert_absent'
+  | 'meeting.client_absent'
   // BAL-424 — the conversation primitive, re-anchored off `request_expert_relationships`
   // onto the ADR-1045 §2 context seam. RENAMED from `project.message_posted` /
   // `project.file_shared`: the payload had to change anyway (the anchor became the seam),
@@ -360,6 +367,15 @@ export type ServerOnlyNotificationEvent =
   // class of secret as `meeting.guest_invited` — a RAW join token. No `publishBodySchema`
   // arm; adding one would be a `StraySchemaArm` and fail `tsc`.
   | 'meeting.guest_link_resent'
+  // BAL-134: both absence promises are published EXCLUSIVELY by the BAL-420 dispatch tick, so
+  // neither has a `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail
+  // `tsc`. ⚠ `meeting.expert_absent` MUST stay server-only for a SECOND, INDEPENDENT reason:
+  // it resolves `recipient: 'admin'`, i.e. it is a BALO-FACING ALERT — and
+  // `WebSchedulableNotificationEvent`'s own docblock makes that API-only BY CONSTRUCTION,
+  // because `replace_pending` is itself a suppression primitive and this alert exists precisely
+  // because somebody might prefer Balo not to know. `web-schedulable-policy.test.ts` asserts it.
+  | 'meeting.expert_absent'
+  | 'meeting.client_absent'
   // BAL-424: the debounced unread digest is published EXCLUSIVELY by the BAL-420 dispatch
   // tick (`jobs/scheduled-notification-dispatch.ts`) — `scheduleNotification` is an
   // in-process `apps/api` function and ADR-1047 Decision 11 keeps the schedule/cancel seam
@@ -498,6 +514,8 @@ export interface EventPayloadMap {
   'meeting.guest_added': MeetingGuestAddedPayload;
   'meeting.guest_removed': MeetingGuestRemovedPayload;
   'meeting.guest_link_resent': MeetingGuestLinkResentPayload;
+  'meeting.expert_absent': MeetingExpertAbsentPayload;
+  'meeting.client_absent': MeetingClientAbsentPayload;
   'conversation.message_posted': ConversationMessagePostedPayload;
   'conversation.file_shared': ConversationFileSharedPayload;
   'conversation.unread_digest_due': ConversationUnreadDigestDuePayload;

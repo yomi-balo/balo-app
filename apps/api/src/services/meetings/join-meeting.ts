@@ -61,7 +61,6 @@ import {
   trackServer,
   type GuestJoinMethod,
 } from '@balo/analytics/server';
-import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { extractEmailDomain } from '@balo/shared/domains';
 import { createLogger } from '@balo/shared/logging';
 
@@ -86,8 +85,8 @@ import {
   hashGuestToken,
   mintGuestInviteToken,
 } from '../../lib/guest-token.js';
-import { hasEngagementCapability } from './authorize-engagement-host.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
+import { resolveEndAuthority } from './authorize-end-meeting.js';
 import { assertMeetingJoinable } from './meeting-liveness.js';
 import { canonicalEmail } from './guest-participation.js';
 import { resolveMeetingContextLabel } from './resolve-meeting-context-label.js';
@@ -333,19 +332,34 @@ export async function joinMeetingAsMember(
     return deny('meeting_not_provisioned', 'no_venue', { meetingId, userId });
   }
 
-  // 4. ⚠ OWNER RIGHTS, RESOLVED PER ACTOR. This is the SECOND `resolveHostContext` in the
-  //    request — the gate's expert arm already did one for `manage_engagement` — and that is
-  //    correct and unavoidable, not waste: `HostContext.resolvedForActorId` is the
-  //    confused-deputy brand, so a context is an answer about ONE actor and must be
-  //    re-resolved per actor. `listGuests` already pays exactly this cost.
+  // 4. ⚠ OWNER RIGHTS AND END AUTHORITY, RESOLVED PER ACTOR. `resolveEndAuthority` runs the
+  //    SECOND `resolveHostContext` of the request — the gate's expert arm already did one for
+  //    `manage_engagement` — and that is correct and unavoidable, not waste:
+  //    `HostContext.resolvedForActorId` is the confused-deputy brand, so a context is an answer
+  //    about ONE actor and must be re-resolved per actor. `listGuests` already pays this cost.
   //    ⚠ NEVER `lens === 'expert'`, never a role comparison (ADR-1029).
-  const [isOwner, names] = await Promise.all([
-    hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, subject),
+  //
+  //    ⚠⚠⚠ **`isOwner` AND `canEndMeeting` ARE TWO SEPARATE FIELDS AND MUST NEVER BE MERGED.**
+  //    THIS IS THE SHARPEST TRAP IN BAL-134, so it is written at the line where it would be
+  //    made: `isOwner` — and ONLY `isOwner` — is fed into `mint(...)` below, where it becomes
+  //    the Daily meeting token's `is_owner` property. Daily `is_owner` confers VENDOR-LEVEL
+  //    ROOM POWERS (eject, recording control). `canEndMeeting` is the OR of the engagement axis
+  //    and a CLIENT-side membership token, so assigning it to `isOwner` — or "simplifying"
+  //    these into one boolean — WOULD MINT DAILY OWNER TOKENS FOR THE PAYING SIDE. ADR-1049's
+  //    "this is what BAL-435's bare `isOwner` prop becomes" is unsafe as written and is
+  //    deliberately NOT implemented as a rename. See `join-grant.ts`'s six-field block.
+  const [endAuthority, names] = await Promise.all([
+    resolveEndAuthority({ userId, companyId, subject }),
     // ⚠ `findNamesByIds` PROJECTS FIRST AND LAST NAME ONLY. Never `findById` /
     // `findWithCompany`, which hydrate `workosId`, email and phone — and this value flows
     // into a token that reaches a browser (memory `reference_drizzle_with_hydration_leaks_secrets`).
     usersRepository.findNamesByIds([userId]),
   ]);
+  // ⚠ THE ENGAGEMENT-AXIS HALF, REUSED RATHER THAN RE-RESOLVED. `resolveEndAuthority` already
+  // asked `hasEngagementCapability(HOST_MEETINGS)`; asking again here would be a second
+  // `resolveHostContext` on the same request AND a second answer that could disagree with the
+  // one the End control was gated on.
+  const isOwner = endAuthority.isExpertHost;
 
   const [person] = names;
   const userName = personDisplayName(
@@ -389,9 +403,12 @@ export async function joinMeetingAsMember(
     grant: {
       roomUrl: venue.roomUrl,
       token: minted.token,
+      // ⚠ THE MINT'S BOOLEAN — Daily owner rights. See step 4.
       isOwner,
       expiresAt: liveness.expiresAt.toISOString(),
       participantId,
+      // ⚠ BAL-134 — A SEPARATE, SIXTH FIELD. Gates the End control only; never reaches Daily.
+      canEndMeeting: endAuthority.canEndMeeting,
     },
     context,
     // ⚠ R10 — the waiting stage's only honest inputs. `viewerRole` is the GATE's verdict, never
@@ -508,6 +525,12 @@ export async function joinMeetingAsGuest(input: JoinMeetingAsGuestInput): Promis
       isOwner: false,
       expiresAt: liveness.expiresAt.toISOString(),
       participantId,
+      // ⚠⚠ BAL-134 — A GUEST MAY NEVER END A MEETING. UNCONDITIONALLY false, hard-coded here
+      // exactly as `isOwner` is, and for a reason of the same shape: a guest holds no
+      // `company_members` row (so every membership token fails closed) and is not on the
+      // engagement axis at all. They see Leave only — the ADR's intent, delivered structurally
+      // rather than by a token check. Pinned by a test.
+      canEndMeeting: false,
     },
   };
 }

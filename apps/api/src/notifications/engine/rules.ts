@@ -838,4 +838,63 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+
+  // ── BAL-134 / ADR-1049 — the two absence promises (§6.2) ────────────────────────────────
+  //
+  // ⚠⚠ THE BALO-STAFF PATH ALREADY EXISTS — DO NOT INVENT A PARALLEL ONE. The ticket's note
+  // that this "may need a separate path rather than a new template" is WRONG:
+  // `dispatcher.ts` resolves `recipient: 'admin'` + `channel: 'email'` to the literal
+  // `process.env.OPS_NOTIFICATION_EMAIL`, setting BOTH `recipientEmail` and `recipientId` to
+  // it, and `notification_log`'s exactly-one CHECK against `recipient_email` keeps the send
+  // auditable. The shipped precedent is `project.match_requested` above. A normal rule plus a
+  // template IS the pattern.
+  //
+  // ⚠ `critical`, AND THAT IS NOT DECORATION. Balo has committed to CONTACTING the expert, so
+  // a human must actually see this. ⚠ WHEN `OPS_NOTIFICATION_EMAIL` IS UNSET the dispatcher
+  // `log.warn`s and SILENTLY SKIPS — which is why BAL-134 adds it to `.env.example` and emits
+  // one boot-time `log.warn` from `index.ts`.
+  //
+  // ⚠ NO IN-APP ARM: ops is an inbox, not a Balo user with a notification bell.
+  'meeting.expert_absent': [
+    {
+      channel: 'email',
+      recipient: 'admin',
+      template: 'meeting-expert-absent-admin',
+      timing: 'immediate',
+      priority: 'critical',
+    },
+  ],
+
+  // The CLIENT company's side — a helpful fact, never a billing threat. `meeting_party_
+  // participants` reads the publisher-resolved `payload.recipientUserIds` (rebuilt at fire
+  // time by the recheck), which is what keeps a membership read out of `engine/resolver.ts`.
+  //
+  // ⚠⚠ **NO SMS ARM (D13) — DEFERRED, NOT DROPPED.** The AC says "SMS + in-app"; two
+  // INDEPENDENT structural blocks in the shipped code make it unbuildable here. (1)
+  // `processSmsJob` resolves the number from `usersRepository.findById(payload.recipientId)
+  // .phone`, so a guest or delegate with no user row is unreachable BY CONSTRUCTION — and
+  // those are exactly the people BAL-408 exists to support. (2) The `recipientPhoneVerified`
+  // gate reads `ctx.data.user`, which the resolver hydrates ONLY on the single-recipient path;
+  // a FAN-OUT never populates it, so the verified-phone gate cannot even be EVALUATED on the
+  // recipient kind this nudge needs. The AC amendment and a follow-up ticket are recorded in
+  // the PR rather than the gap being quietly reinterpreted.
+  //
+  // ⚠ BOTH ARMS SHARE ONE TEMPLATE NAME, resolved per channel — `getEmailTemplate` throws on a
+  // miss (→ a dead job), and `getInAppTemplate` silently degrades to "You have a new
+  // notification", so BOTH registries must carry `meeting-client-absent`.
+  'meeting.client_absent': [
+    {
+      channel: 'in-app',
+      recipient: 'meeting_party_participants',
+      template: 'meeting-client-absent',
+      timing: 'immediate',
+    },
+    {
+      channel: 'email',
+      recipient: 'meeting_party_participants',
+      template: 'meeting-client-absent',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
 };

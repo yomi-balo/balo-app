@@ -31,9 +31,11 @@ import { MeetingFrame } from './meeting-frame';
  *     analytics property, never rendered, never in a URL. It reaches `daily.join()` and nothing
  *     else.
  *   · `isOwner` IS ALREADY DECIDED, SERVER-SIDE, per actor, from
- *     `hasEngagementCapability(HOST_MEETINGS)`. Host controls gate on THIS BOOLEAN — never on
- *     `activeMode`, a lens, or a role string (ADR-1029). `leave-control.tsx` is where that lands
- *     and `meeting-call-no-lens-gate.test.ts` is what holds it.
+ *     `hasEngagementCapability(HOST_MEETINGS)`. It is what mints the Daily OWNER TOKEN, and it
+ *     is never re-derived here — never from `activeMode`, a lens, or a role string (ADR-1029).
+ *   · **BAL-134 ADDED `canEndMeeting` BESIDE IT, AND MOVED THE END CONTROL ONTO THAT.**
+ *     `leave-control.tsx` is where that lands and `meeting-call-no-lens-gate.test.ts` is what
+ *     holds it. The two must never be merged — see the two props' own docblocks.
  *   · `participantId` IS THE DECISION-1 ENCODING (`u`/`g` + 32 hex). Passed to Daily verbatim.
  *   · `expiresAt` IS SCHEDULED END + 24h and `eject_at_token_exp` is FALSE — so expiry does NOT
  *     eject anyone. It is parsed for VALIDITY and then IGNORED. **There is no countdown.**
@@ -49,8 +51,25 @@ export interface MeetingCallSurfaceProps {
   readonly roomUrl: string;
   /** ⚠ THE DAILY JWT. Never log, persist, or render this. */
   readonly token: string;
-  /** The server's `host_meetings` verdict. ⚠ Gate host controls on THIS, never on a lens. */
+  /**
+   * The server's `host_meetings` verdict.
+   *
+   * ⚠⚠ IT MINTS THE DAILY OWNER TOKEN, AND THAT IS **ALL** IT IS FOR HERE. It is passed
+   * through to Daily and read by `participant-tile.tsx` (via Daily's own per-participant
+   * `owner` flag) and by the JOINED analytics event. **It no longer gates the End control** —
+   * see {@link MeetingCallSurfaceProps.canEndMeeting}.
+   */
   readonly isOwner: boolean;
+  /**
+   * BAL-134 / ADR-1049 (D4) — MAY THIS VIEWER END THE MEETING FOR EVERYONE?
+   *
+   * ⚠⚠ **THE GATE ON THE END CONTROL, AND THE ONLY ONE.** `isOwner` is the expert-host half;
+   * this is `isOwner || clientPrincipal`, composed server-side. Gating End on `isOwner` would
+   * deny the paying client the ability to stop their own per-minute spend; widening `isOwner`
+   * instead would hand them a Daily OWNER TOKEN. Two fields is the only shape that is right on
+   * both counts, and `meeting-call-no-lens-gate.test.ts` pins which control reads which.
+   */
+  readonly canEndMeeting: boolean;
   /** ISO 8601 — scheduled end + 24h. ⚠ Expiry does NOT eject; see the docblock. */
   readonly expiresAt: string;
   /** The Decision-1 encoding: `u`/`g` + 32 hex. Never a bare uuid. */
@@ -84,13 +103,14 @@ export const MeetingCallSurface: MeetingCallSurfaceComponent = ({
   roomUrl,
   token,
   isOwner,
+  canEndMeeting,
   expiresAt,
   participantId,
   headingRef,
 }: Readonly<MeetingCallSurfaceProps>) => {
   const result = useMemo(
-    () => validateGrant({ roomUrl, token, isOwner, expiresAt, participantId }),
-    [roomUrl, token, isOwner, expiresAt, participantId]
+    () => validateGrant({ roomUrl, token, isOwner, canEndMeeting, expiresAt, participantId }),
+    [roomUrl, token, isOwner, canEndMeeting, expiresAt, participantId]
   );
 
   const rejection = result.ok ? null : result.reason;

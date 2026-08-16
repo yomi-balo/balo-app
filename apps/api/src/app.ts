@@ -10,6 +10,7 @@ import { stripeRoutes } from './routes/stripe/index.js';
 import { sessionsRoutes } from './routes/sessions/index.js';
 import { creditRoutes } from './routes/credit/index.js';
 import { meetingsRoutes } from './routes/meetings/index.js';
+import { dailyRoutes } from './routes/daily/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   // `trustProxy: 1` trusts exactly one proxy hop (the Railway edge), so
@@ -50,6 +51,9 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // Meeting booking + Daily room provisioning (BAL-129). Ships INERT — no live producer
   // until BAL-400's booking UI calls it.
   await fastify.register(meetingsRoutes);
+  // BAL-134 — the Daily presence webhook. Raw-body scoped INSIDE this plugin, exactly as the
+  // Stripe one is; a global registration would corrupt JSON parsing on every other route.
+  await fastify.register(dailyRoutes);
 
   // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
   // and @faker-js/faker never load in production.

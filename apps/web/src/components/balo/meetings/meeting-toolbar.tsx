@@ -109,8 +109,17 @@ export interface MeetingToolbarProps {
   readonly reactionControl?: React.ReactNode;
   /** BAL-437 — opens the picker from `MoreSheet`'s `md:hidden` row. Same registration signal. */
   readonly onOpenReactions?: () => void;
-  /** ⚠⚠ THE SERVER'S `host_meetings` VERDICT — the only input to the end-for-everyone branch. */
-  readonly isOwner: boolean;
+  /**
+   * BAL-134 / ADR-1049 — ⚠⚠ THE SERVER'S END-AUTHORITY VERDICT (`isOwner || clientPrincipal`),
+   * the only input to the end-for-everyone branch.
+   *
+   * ⚠ THIS REPLACED `isOwner` HERE, AND THE TWO MUST NOT BE RE-MERGED. `isOwner` is the
+   * `host_meetings` verdict AND the sole input to the Daily `is_owner` token property, so
+   * gating End on it would both deny the paying client the ability to stop their own spend and
+   * — if widened to admit them — mint Daily owner tokens for clients. `meeting-call-no-lens-gate`
+   * pins `isOwner` out of this file for exactly that reason.
+   */
+  readonly canEndMeeting: boolean;
   readonly contextNoun: string;
   readonly isCase: boolean;
   readonly onLeave: () => void;
@@ -142,7 +151,7 @@ export function MeetingToolbar({
   unreadChat = false,
   reactionControl,
   onOpenReactions,
-  isOwner,
+  canEndMeeting,
   contextNoun,
   isCase,
   onLeave,
@@ -242,7 +251,7 @@ export function MeetingToolbar({
       </div>
 
       <LeaveControl
-        isOwner={isOwner}
+        canEndMeeting={canEndMeeting}
         contextNoun={contextNoun}
         isCase={isCase}
         onLeave={onLeave}

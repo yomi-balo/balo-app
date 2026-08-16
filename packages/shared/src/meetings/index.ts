@@ -41,9 +41,20 @@
 // `@balo/db`'s webhook resolver consumers and an `apps/web` join surface must all reach ONE
 // definition without value-importing `@balo/db`.
 //
-// ⚠ EXPLICIT `.js` EXTENSIONS. This package compiles under `moduleResolution: nodenext`,
-// where an extensionless relative specifier is TS2835. The rest of `packages/shared`
-// predates that and is already red for it; new code here does not add to the pile.
+// ⚠⚠ **NO `.js` EXTENSIONS ON RELATIVE IMPORTS IN `packages/shared`. EVER.** (Corrected by
+// BAL-134 — the paragraph that stood here was FALSE and was a live trap sitting directly above
+// the lines this ticket edits.)
+//
+// The old text claimed "EXPLICIT `.js` EXTENSIONS … an extensionless relative specifier is
+// TS2835". Every re-export below it was, and still is, EXTENSIONLESS — so the comment
+// described the opposite of the code, and following it would have been actively harmful:
+// `@balo/shared`'s `exports` map points at RAW `./src/*.ts`, so a `./foo.js` specifier resolves
+// to a file that does not exist. Turbopack answers 404 and `next build`, the E2E job and the
+// Vercel deploy all die while `tsc`, `eslint` and `vitest` stay green (memory
+// `reference_balo_shared_no_js_extensions_in_reexports`).
+//
+// ⚠ `apps/api` HAS THE **OPPOSITE** RULE — it compiles to real ESM and its relative imports DO
+// carry `.js`. Follow what each package actually does; the two are not interchangeable.
 export * from './bookable-contexts';
 export * from './bounds';
 export * from './room-name';
@@ -69,6 +80,16 @@ export * from './join-grant';
 // PUBLIC lobby route runs it at the knock (before the row is written) and `apps/web`'s
 // concealment sweeps import the same scan, so a weakening cannot pass one and fail the other.
 export * from './self-declared-name';
+// BAL-134 — the five lifecycle timers as typed defaults. ⚠ NO `process.env` in there: this
+// subpath is client-reachable, and the env-override reader lives in `apps/api` alone (D8).
+export * from './timers';
+// BAL-134 / ADR-1049 — the lifecycle's pure core: the legal-edge map, the four SYSTEM terminal
+// rules and their disjointness, and the SERVER-computed waiting phase. Reads no clock.
+export * from './lifecycle';
+// BAL-134 (D3) — `canEndMeeting`, the SIXTH `JoinGrant` field. ⚠ Read that module's first
+// paragraph before touching either boolean: merging it into `isOwner` mints DAILY OWNER TOKENS
+// FOR CLIENTS.
+export * from './end-authority';
 // BAL-437 — the six-emoji in-call reaction vocabulary. ⚠ HERE RATHER THAN IN `apps/web`
 // because `@balo/analytics` needs the SAME union for its `reaction_sent` property and cannot
 // import `apps/web`; it used to hand-restate the six glyphs, which is two definitions of one

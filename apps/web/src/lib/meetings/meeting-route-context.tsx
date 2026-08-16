@@ -2,9 +2,16 @@
 
 import { createContext, useContext, useMemo } from 'react';
 import type { MeetingCallLeaveReason } from '@balo/analytics/events';
+import type { MeetingClockState } from '@/components/balo/meetings/meeting-clock-slot';
 import type { BackTo } from './back-to-context';
+import type { EndMeetingResult } from './meeting-state';
 import type { MeetingPanelRegistration } from './meeting-panels';
-import type { WaitingSubject } from './waiting-copy';
+import {
+  UNKNOWN_WAITING_FACTS,
+  type WaitingFacts,
+  type WaitingPhase,
+  type WaitingSubject,
+} from './waiting-copy';
 
 /**
  * BAL-435 — ROUTE-SCOPED AMBIENT DATA FOR THE CALL FRAME, AS A CONTEXT RATHER THAN A PROP.
@@ -108,6 +115,62 @@ export interface MeetingRouteValue {
    * identity on every render of the provider's parent.
    */
   readonly panels: MeetingPanelRegistration | null;
+  /**
+   * BAL-134 (§7.1) — **HOW FAR THE WAIT HAS RUN. A LABEL THE SERVER COMPUTED.**
+   *
+   * ⚠⚠ THE BROWSER NEVER COMPUTES A THRESHOLD. `resolveWaitingPhase` runs in `apps/api` against
+   * the ENV-RESOLVED timers and sends the answer as one of four words; the four strings for
+   * both parties already ship in `waiting-copy.ts`. That is the acceptance criterion verbatim
+   * ("all timing is server-authoritative; the client renders a mirror") and it structurally
+   * prevents an overridden server from disagreeing with a default-carrying browser bundle.
+   *
+   * ⚠ `'pre-start'` ON BOTH GUEST MOUNTS, STRUCTURALLY — they mount no provider, so they keep
+   * exactly the value BAL-435 hard-coded, and the copy they see is the party-neutral set
+   * (`waiting` is `null` for them too).
+   */
+  readonly waitingPhase: WaitingPhase;
+  /**
+   * BAL-134 — **THE SERVER-MIRROR FACTS THE WAITING COPY MAY NOT ASSERT WITHOUT.**
+   *
+   * ⚠⚠ SEPARATE FROM `waiting` ON PURPOSE, BECAUSE THEY COME FROM DIFFERENT SOURCES. `waiting`
+   * is assembled ONCE from the join envelope (who is missing, and from when); these arrive on
+   * every tick of the polled mirror. Folding them together would break R10's "wholly present or
+   * wholly absent" guarantee — a guest mount has a `null` subject and would still need somewhere
+   * to record an unknown no-show floor.
+   *
+   * ⚠ `UNKNOWN_WAITING_FACTS` ON BOTH GUEST MOUNTS AND BEFORE THE FIRST POLL, STRUCTURALLY. Each
+   * unknown makes the copy claim LESS: no number, no settled outcome, no counted time.
+   */
+  readonly waitingFacts: WaitingFacts;
+  /**
+   * BAL-134 (§7.3) — **THE TOP-BAR CLOCK CHIP'S STATE, OR `null` FOR "NO SERVER MIRROR".**
+   *
+   * ⚠⚠ `null` IS A LIVE PATH, NOT A GUARD, AND IT IS WHY THIS IS NULLABLE RATHER THAN
+   * DEFAULTED TO `{ kind: 'not_started' }`. Both GUEST mounts read it structurally (the state
+   * route is member-only), and so does the member route for the window between joining and the
+   * first poll landing. `null` means the frame keeps its shipped `hasJoined ? live :
+   * not_started` chrome — "Not started" on a guest's screen for the length of a live call would
+   * be a regression this ticket has no reason to ship.
+   *
+   * ⚠ IT IS PRODUCED BY THE PURE `resolveTopBarClock`, from the SERVER's `viewerRole` — never
+   * from a lens, and never from a locally-computed duration.
+   */
+  readonly clock: MeetingClockState | null;
+  /**
+   * BAL-134 / ADR-1049 — **END THE MEETING FOR EVERYONE, SERVER-SIDE.**
+   *
+   * ⚠⚠ `null` ON BOTH GUEST MOUNTS, STRUCTURALLY — the same mechanism `panels` and `backTo`
+   * already use. That is not belt-and-braces for the `canEndMeeting` gate; it is the second,
+   * independent half of it. A guest holds no company membership and is not on the engagement
+   * axis, so the server hard-codes `canEndMeeting: false` for them AND there is no action here
+   * for them to reach. Neither alone would be enough to reason about; together they are.
+   *
+   * ⚠⚠ THE FRAME MUST **NOT** FALL BACK TO A LOCAL EJECT WHEN THIS IS `null`. A client-side
+   * `updateParticipants({ '*': { eject: true } })` revokes NO token — the very defect BAL-134
+   * fixes — so a `null` here with `canEndMeeting` true is a WIRING BUG, and the honest
+   * response is to tell the person the call is still running rather than to half-end it.
+   */
+  readonly endMeeting: (() => Promise<EndMeetingResult>) | null;
 }
 
 const EMPTY: MeetingRouteValue = {
@@ -123,6 +186,13 @@ const EMPTY: MeetingRouteValue = {
   // ⚠ NEUTRAL WAITING COPY ON BOTH GUEST MOUNTS, STRUCTURALLY — no viewer role, no name, no
   // clock claim. See the field's docblock.
   waiting: null,
+  // ⚠ BAL-134 — THE THREE STRUCTURALLY-NEUTRAL GUEST VALUES. `'pre-start'` is exactly what
+  // BAL-435 hard-coded, `null` keeps the shipped top-bar chrome, and `null` means there is no
+  // end action to reach. See each field's docblock.
+  waitingPhase: 'pre-start',
+  waitingFacts: UNKNOWN_WAITING_FACTS,
+  clock: null,
+  endMeeting: null,
 };
 
 const MeetingRouteContext = createContext<MeetingRouteValue>(EMPTY);
@@ -144,6 +214,10 @@ export function MeetingRouteContextProvider({
   waiting,
   onExit,
   panels = null,
+  waitingPhase = 'pre-start',
+  waitingFacts = UNKNOWN_WAITING_FACTS,
+  clock = null,
+  endMeeting = null,
   children,
 }: Readonly<{
   meetingId: string | null;
@@ -158,14 +232,49 @@ export function MeetingRouteContextProvider({
    * keeps "absent" the fail-closed default rather than something a caller can forget INTO.
    */
   panels?: MeetingPanelRegistration | null;
+  /** BAL-134 — ⚠ DEFAULTS TO THE SHIPPED `'pre-start'`, so an unwired mount is unchanged. */
+  waitingPhase?: WaitingPhase;
+  /** BAL-134 — ⚠ DEFAULTS TO ALL-UNKNOWN, which is the copy that claims the least. */
+  waitingFacts?: WaitingFacts;
+  /** BAL-134 — ⚠ DEFAULTS TO `null` = NO MIRROR, i.e. the frame keeps its shipped chrome. */
+  clock?: MeetingClockState | null;
+  /** BAL-134 — ⚠ DEFAULTS TO `null` = NO END ACTION. Fail-closed, exactly like `panels`. */
+  endMeeting?: (() => Promise<EndMeetingResult>) | null;
   children: React.ReactNode;
 }>): React.JSX.Element {
   // ⚠ MEMOISED, not an inline object literal — an inline value gives every consumer of this
   // context a new identity on every render of the provider's parent. Callers pass a `backTo`,
-  // a `waiting`, an `onExit` and a `panels` that are themselves stable (see `call-client.tsx`).
+  // a `waiting`, an `onExit`, a `panels`, a `clock` and an `endMeeting` that are themselves
+  // stable (see `call-client.tsx`).
   const value = useMemo<MeetingRouteValue>(
-    () => ({ meetingId, viewerName, title, backTo, contextNoun, waiting, onExit, panels }),
-    [meetingId, viewerName, title, backTo, contextNoun, waiting, onExit, panels]
+    () => ({
+      meetingId,
+      viewerName,
+      title,
+      backTo,
+      contextNoun,
+      waiting,
+      onExit,
+      panels,
+      waitingPhase,
+      waitingFacts,
+      clock,
+      endMeeting,
+    }),
+    [
+      meetingId,
+      viewerName,
+      title,
+      backTo,
+      contextNoun,
+      waiting,
+      onExit,
+      panels,
+      waitingPhase,
+      waitingFacts,
+      clock,
+      endMeeting,
+    ]
   );
   return <MeetingRouteContext.Provider value={value}>{children}</MeetingRouteContext.Provider>;
 }
