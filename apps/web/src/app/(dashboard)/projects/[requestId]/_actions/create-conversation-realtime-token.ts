@@ -9,17 +9,11 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import { isThreadOpenStatus } from '@/lib/project-request/conversation-view-types';
-import { getAblyRest, isRealtimeConfigured } from '@/lib/realtime/ably-server';
+import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
+import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
 import { conversationChannelName } from '@/lib/realtime/channels';
 
 const inputSchema = z.object({ requestId: z.uuid() });
-
-/**
- * Explicit token TTL (ms): bounds how long a revoked participant can keep a
- * live subscription (vs Ably's 60-min default). ably-js auto-renews through
- * `authCallback`, which re-validates entitlement on every refresh.
- */
-const TOKEN_TTL_MS = 15 * 60 * 1000;
 
 export type CreateConversationRealtimeTokenResult =
   | { success: true; tokenRequest: Ably.TokenRequest }
@@ -88,14 +82,14 @@ export async function createConversationRealtimeTokenAction(
       return { success: false, error: 'No open conversations on this request.' };
     }
 
+    /**
+     * ⚠⚠ THE `disabled` GATE STAYS **HERE**, AHEAD OF THE ENSURE BELOW, EVEN THOUGH
+     * `mintSubscribeOnlyToken` RE-CHECKS IT. The ensure is a WRITE; running it in an
+     * environment with no realtime transport at all (dev/CI) would mint conversation rows for
+     * a token that is never issued. Ordering is behaviour here, not tidiness.
+     */
     if (!isRealtimeConfigured()) {
       log.warn('Realtime disabled (no ABLY_API_KEY)', { requestId, userId: user.id });
-      return { success: false, disabled: true };
-    }
-
-    const rest = getAblyRest();
-    if (rest === null) {
-      // Unreachable after the isRealtimeConfigured() gate; defensive.
       return { success: false, disabled: true };
     }
 
@@ -110,20 +104,16 @@ export async function createConversationRealtimeTokenAction(
       entitledRelationshipIds.map((id) => ({ contextType: 'relationship' as const, contextId: id }))
     );
 
-    const tokenRequest = await rest.auth.createTokenRequest({
+    // ⚠ BAL-437 — THE SHARED MINTING TAIL. Subscribe-only, explicit channels, one TTL.
+    const minted = await mintSubscribeOnlyToken({
       clientId: user.id,
-      ttl: TOKEN_TTL_MS,
-      capability: JSON.stringify(
-        Object.fromEntries(
-          [...conversationIdByRelationship.values()].map((conversationId) => [
-            conversationChannelName(conversationId),
-            ['subscribe'],
-          ])
-        )
-      ),
+      channels: [...conversationIdByRelationship.values()].map(conversationChannelName),
     });
+    if (!minted.success) {
+      return { success: false, disabled: true };
+    }
 
-    return { success: true, tokenRequest };
+    return { success: true, tokenRequest: minted.tokenRequest };
   } catch (error) {
     log.error('Failed to create conversation realtime token', {
       requestId,

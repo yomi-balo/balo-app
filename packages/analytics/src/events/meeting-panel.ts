@@ -19,6 +19,8 @@
  * because a `null` reaches PostHog as a real value and creates a bogus breakdown bucket.
  */
 
+import type { MeetingReactionEmoji } from '@balo/shared/meetings';
+
 export const MEETING_PANEL_EVENTS = {
   OPENED: 'meeting_panel_opened',
   GUEST_DECIDED: 'meeting_panel_guest_decided',
@@ -27,10 +29,18 @@ export const MEETING_PANEL_EVENTS = {
   LINK_RESENT: 'meeting_panel_link_resent',
   FILE_SHARED: 'meeting_panel_file_shared',
   FILE_DOWNLOADED: 'meeting_panel_file_downloaded',
+  // ── BAL-437 — the chat slot and the reaction control ────────────────────────────────
+  MESSAGE_SENT: 'meeting_panel_message_sent',
+  REACTION_SENT: 'meeting_panel_reaction_sent',
 } as const;
 
-/** Which slot the single-slot panel is showing. ⚠ `chat` is BAL-437's and is not declared. */
-export type MeetingPanelId = 'people' | 'files';
+/**
+ * Which slot the single-slot panel is showing.
+ *
+ * ⚠ BAL-437 ADDED `'chat'` HERE, WHICH MAKES `OPENED` FIRE WITH `panel: 'chat'` FOR FREE — the
+ * forward reference this line used to carry is now discharged.
+ */
+export type MeetingPanelId = 'people' | 'files' | 'chat';
 
 /** What a host decided about a waiting person. */
 export type MeetingPanelAdmissionDecision = 'admit' | 'deny';
@@ -80,6 +90,34 @@ export type MeetingPanelFileOutcome = 'ok' | 'rejected' | 'duplicate' | 'failed'
  */
 export type MeetingPanelSizeBucket = 'under_100kb' | 'under_1mb' | 'under_5mb' | 'over_5mb';
 
+/**
+ * How an in-call message send resolved.
+ *
+ * ⚠ `rejected` IS A VALIDATION REFUSAL the person can fix (empty, over the character limit, a
+ * closed thread); `failed` means the send genuinely broke. Collapsing them would make "people
+ * are typing over the limit" look like an outage.
+ */
+export type MeetingPanelMessageOutcome = 'ok' | 'rejected' | 'failed';
+
+/**
+ * The six-member reaction set.
+ *
+ * ⚠⚠ **AN ALIAS OF THE ONE DEFINITION IN `@balo/shared/meetings`, NOT A RESTATEMENT.** An
+ * earlier version of this line hand-wrote the six glyphs and argued that `@balo/analytics`
+ * cannot import `apps/web`. The premise was true and the conclusion was wrong: the fix for a
+ * set two packages both need is to move it to the package they BOTH depend on, which is what
+ * `@balo/shared` is for (CLAUDE.md — one definition, in the owning package). While it was
+ * restated, adding a seventh emoji in `apps/web` and forgetting this line typechecked on both
+ * sides and only showed up as a missing PostHog breakdown bucket.
+ *
+ * ⚠ THE ALIAS NAME IS KEPT because `AllEvents`, the `apps/web` re-export allowlist and the
+ * client barrel all name it; re-pointing those would be churn for no behavioural gain.
+ *
+ * ⚠ THE GLYPH IS THE PRODUCT QUESTION ("which reactions do people actually use?") and it is
+ * NOT personal data. The SENDER is — which is why no event below carries one.
+ */
+export type MeetingPanelReactionEmoji = MeetingReactionEmoji;
+
 export interface MeetingPanelEventMap {
   [MEETING_PANEL_EVENTS.OPENED]: {
     meeting_id?: string;
@@ -111,6 +149,21 @@ export interface MeetingPanelEventMap {
   };
   [MEETING_PANEL_EVENTS.FILE_DOWNLOADED]: {
     meeting_id?: string;
+    outcome: MeetingPanelOutcome;
+  };
+  /** ⚠ AN OUTCOME AND NOTHING ELSE. Never the body, never a length, never a preview. */
+  [MEETING_PANEL_EVENTS.MESSAGE_SENT]: {
+    meeting_id?: string;
+    outcome: MeetingPanelMessageOutcome;
+  };
+  /**
+   * ⚠⚠ THE GLYPH AND AN OUTCOME — **NEVER A SENDER AND NEVER THE `nonce`.** The nonce is an
+   * echo-suppression tag; sent to PostHog it would correlate one person's taps across a call
+   * for no product question anybody asked.
+   */
+  [MEETING_PANEL_EVENTS.REACTION_SENT]: {
+    meeting_id?: string;
+    emoji: MeetingPanelReactionEmoji;
     outcome: MeetingPanelOutcome;
   };
 }

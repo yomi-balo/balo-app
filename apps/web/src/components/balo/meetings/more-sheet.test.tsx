@@ -104,7 +104,7 @@ describe('MoreSheet — the slot rule', () => {
     expect(frameElement.textContent ?? '').not.toMatch(/raise|hand/i);
   });
 
-  it('⚠ registers NO Chat, Files, People or Reactions row — an absent slot, not a dead one', async () => {
+  it('⚠ registers NO Files, People or Reactions row — an absent slot, not a dead one', async () => {
     renderMoreSheet({ open: true });
 
     await screen.findByRole('button', { name: 'Camera and sound' });
@@ -242,6 +242,50 @@ describe('MoreSheet — behaviour', () => {
 
       expect(onOpenChange).toHaveBeenCalledWith(false);
       expect(onTogglePanel).toHaveBeenCalledWith(id);
+    });
+  });
+
+  /**
+   * BAL-437 — ⚠⚠ **THERE IS NO `Chat` ROW HERE, AND THAT IS DELIBERATE.**
+   *
+   * Chat's bar twin is the mobile ladder's slot 3, and unlike People / Files / Share screen
+   * that button carries NO breakpoint class — it is visible from 320px up. A row here would be
+   * a SECOND live control for the same slot at every width, doubling the tab order and what a
+   * screen-reader user hears. The Reactions row exists precisely because ITS bar twin IS hidden
+   * below `md`, exactly like Share screen's.
+   */
+  describe('Chat and Reactions (BAL-437)', () => {
+    it('⚠⚠ renders NO Chat row even when the panel slot IS registered — and takes no `hasChat`', async () => {
+      renderMoreSheet({ open: true, onTogglePanel: vi.fn() });
+
+      await screen.findByRole('button', { name: 'People' });
+      expect(screen.queryByRole('button', { name: /^chat$/i })).toBeNull();
+    });
+
+    it('⚠ renders NO Reactions row when realtime is unregistered', async () => {
+      renderMoreSheet({ open: true, onTogglePanel: vi.fn() });
+
+      await screen.findByRole('button', { name: 'People' });
+      expect(screen.queryByRole('button', { name: 'React' })).toBeNull();
+      expect(frameElement.querySelectorAll('[disabled]')).toHaveLength(0);
+    });
+
+    it('renders the React row when realtime IS registered', async () => {
+      renderMoreSheet({ open: true, onOpenReactions: vi.fn() });
+
+      expect(await screen.findByRole('button', { name: 'React' })).toBeInTheDocument();
+    });
+
+    it('closes the sheet and opens the picker', async () => {
+      const user = userEvent.setup();
+      const onOpenReactions = vi.fn();
+      const onOpenChange = vi.fn();
+      renderMoreSheet({ open: true, onOpenReactions, onOpenChange });
+
+      await user.click(await screen.findByRole('button', { name: 'React' }));
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(onOpenReactions).toHaveBeenCalledTimes(1);
     });
   });
 

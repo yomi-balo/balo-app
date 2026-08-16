@@ -1,6 +1,16 @@
 'use client';
 
-import { Mic, MicOff, MonitorUp, Paperclip, Users, Video, VideoOff } from 'lucide-react';
+import { forwardRef } from 'react';
+import {
+  MessageSquare,
+  Mic,
+  MicOff,
+  MonitorUp,
+  Paperclip,
+  Users,
+  Video,
+  VideoOff,
+} from 'lucide-react';
 import type { MeetingPanelId } from '@/lib/meetings/meeting-panels';
 import { LeaveControl } from './leave-control';
 import { MeetingToolbarButton } from './meeting-toolbar-button';
@@ -12,8 +22,13 @@ import { MoreSheet } from './more-sheet';
  * ── ⚠⚠ THE MOBILE LADDER IS A FIXED RULE, NOT A RESPONSIVE ACCIDENT ─────────────────────────
  *
  * From 320px to 767px the bar holds **Mic · Camera · Chat · More · Leave** and nothing else.
- * Chat is BAL-437's slot, so its cell is EMPTY today — but the ORDER is already encoded, so Chat
- * drops into slot 3 with no layout change when it lands.
+ * ⚠ BAL-437 FILLED SLOT 3, with no layout change — the order was already encoded.
+ *
+ * ⚠⚠ THE CHAT BUTTON CARRIES **NO BREAKPOINT CLASS**, unlike People / Files / Share screen. It
+ * is the one control the mobile ladder names AND the one every desktop call wants in reach, so
+ * it is a single always-visible button rather than a bar/MoreSheet pair. That is exactly why
+ * `MoreSheet` has no Chat row: a row plus an always-visible twin is two live controls for one
+ * slot, doubling the tab order and what a screen-reader user hears.
  *
  * ⚠ THE BREAKPOINT IS DONE IN **CSS** (`hidden md:inline-flex`), not with `useIsMobile`.
  * `useIsMobile` renders `false` on the first paint, so a JS-gated ladder flashes the DESKTOP bar
@@ -46,6 +61,13 @@ export interface MeetingToolbarProps {
   readonly moreOpen: boolean;
   readonly onMoreOpenChange: (open: boolean) => void;
   /**
+   * BAL-437 — ⚠ FORWARDED STRAIGHT TO `MoreSheet`'s TRIGGER, read by nothing here. The frame
+   * holds it because `ReactionPicker` (which the frame builds) must focus the More button when
+   * the MOBILE picker closes — its own trigger is `display: none` at that width. See
+   * `more-sheet.tsx`'s `triggerRef` doc.
+   */
+  readonly moreButtonRef?: React.Ref<HTMLButtonElement>;
+  /**
    * BAL-436 — which side panel is open, or `null`.
    *
    * ⚠ `undefined` (rather than `null`) MEANS **THE SLOT IS NOT REGISTERED AT ALL** — no
@@ -59,6 +81,34 @@ export interface MeetingToolbarProps {
   /** Focused when a panel closes, so focus returns to the control that opened it. */
   readonly peopleButtonRef?: React.Ref<HTMLButtonElement>;
   readonly filesButtonRef?: React.Ref<HTMLButtonElement>;
+  readonly chatButtonRef?: React.Ref<HTMLButtonElement>;
+  /**
+   * BAL-437 — ⚠ WHETHER THE **CHAT** SLOT IS REGISTERED, which is NARROWER than
+   * `onTogglePanel !== undefined`. A meeting can have People and Files and no conversation
+   * anchor at all (an `admin` call, a `project_discovery`, an ambiguous or unprovisioned
+   * context) — those calls get no Chat control, not a disabled one.
+   */
+  readonly hasChat?: boolean;
+  /**
+   * BAL-437 — ⚠⚠ A **DOT, NOT A COUNT.** A count implies a read-state model this ticket does
+   * not build (there is no per-message watermark on this surface). It is set when a message
+   * arrives while the panel is closed, cleared when the panel opens, and never persists across
+   * a page load. ⚠ IT IS NOT ANNOUNCED through the §16 live region: a per-message announcement
+   * during a live call is noise, and that region is for mutation outcomes.
+   */
+  readonly unreadChat?: boolean;
+  /**
+   * BAL-437 — the desktop Reactions control, BUILT BY THE FRAME (which owns the picker's open
+   * state and the floater layer) and slotted in here. ⚠ `undefined` ⇒ REALTIME IS UNCONFIGURED
+   * and the slot is ABSENT — never a disabled emoji button.
+   *
+   * ⚠ IT ARRIVES AS A NODE RATHER THAN AS PROPS because the picker is a controlled overlay
+   * whose open state must survive the toolbar re-rendering, and because the floater layer it
+   * feeds lives over the STAGE, not in the bar.
+   */
+  readonly reactionControl?: React.ReactNode;
+  /** BAL-437 — opens the picker from `MoreSheet`'s `md:hidden` row. Same registration signal. */
+  readonly onOpenReactions?: () => void;
   /** ⚠⚠ THE SERVER'S `host_meetings` VERDICT — the only input to the end-for-everyone branch. */
   readonly isOwner: boolean;
   readonly contextNoun: string;
@@ -82,10 +132,16 @@ export function MeetingToolbar({
   onOpenSettings,
   moreOpen,
   onMoreOpenChange,
+  moreButtonRef,
   openPanel,
   onTogglePanel,
   peopleButtonRef,
   filesButtonRef,
+  chatButtonRef,
+  hasChat = false,
+  unreadChat = false,
+  reactionControl,
+  onOpenReactions,
   isOwner,
   contextNoun,
   isCase,
@@ -93,9 +149,8 @@ export function MeetingToolbar({
   onEndForEveryone,
   isEnding,
 }: Readonly<MeetingToolbarProps>): React.JSX.Element {
-  // ⚠ THE SLOT REGISTRATION, READ ONCE. `onTogglePanel === undefined` ⇒ absent everywhere:
-  // no bar buttons, no MoreSheet rows. Hoisted so the two readers cannot drift.
-  const panelSlot = onTogglePanel === undefined ? {} : { onTogglePanel };
+  // ⚠ THE THREE REGISTRATIONS, RESOLVED ONCE, IN A PURE HELPER. See `resolveToolbarSlots`.
+  const { panelSlot, reactionSlot } = resolveToolbarSlots({ onTogglePanel, onOpenReactions });
 
   return (
     <div className="border-border flex h-[88px] shrink-0 items-center justify-between border-t px-4 pb-[env(safe-area-inset-bottom)] md:h-24 md:justify-center md:gap-2.5">
@@ -147,6 +202,10 @@ export function MeetingToolbar({
             className="hidden md:flex"
           />
         ) : null}
+        {/* ⚠ BAL-437 — the desktop Reactions control, built by the frame. `hidden md:flex` is
+            carried by the picker itself, mirroring Share screen above. Absent when realtime is
+            unconfigured. */}
+        {reactionControl}
         {/* ⚠⚠ BAL-436 — see `PanelSlotButtons`. Absent entirely when the slot is unregistered. */}
         {onTogglePanel === undefined ? null : (
           <PanelSlotButtons
@@ -156,10 +215,19 @@ export function MeetingToolbar({
             filesButtonRef={filesButtonRef}
           />
         )}
-        {/* ⚠ SLOT 3 ON MOBILE IS CHAT (BAL-437). It renders NOTHING today. */}
+        {/* ⚠⚠ BAL-437 — SLOT 3 ON MOBILE, AND VISIBLE AT EVERY WIDTH. See the file docblock for
+            why this one control carries no breakpoint class and has no MoreSheet twin. */}
+        <ChatSlot
+          ref={chatButtonRef}
+          hasChat={hasChat}
+          isOpen={openPanel === 'chat'}
+          unread={unreadChat}
+          onTogglePanel={onTogglePanel}
+        />
         <MoreSheet
           open={moreOpen}
           onOpenChange={onMoreOpenChange}
+          triggerRef={moreButtonRef}
           showLayoutToggle={showLayoutToggle}
           isGallery={isGallery}
           onToggleLayout={onToggleLayout}
@@ -168,6 +236,7 @@ export function MeetingToolbar({
           onToggleScreenShare={onToggleScreenShare}
           onOpenSettings={onOpenSettings}
           {...panelSlot}
+          {...reactionSlot}
         />
         <span className="bg-border mx-1 hidden h-8 w-px md:block" aria-hidden="true" />
       </div>
@@ -183,6 +252,104 @@ export function MeetingToolbar({
     </div>
   );
 }
+
+/**
+ * The three independent slot registrations, resolved once.
+ *
+ * ⚠ A PURE MODULE HELPER RATHER THAN INLINE `const`s, ONLY TO SHED COGNITIVE COMPLEXITY —
+ * exactly as `PanelSlotButtons` was extracted, and for exactly the same reason. The logic is
+ * unchanged.
+ *
+ * ⚠ EACH IS SPREAD RATHER THAN PASSED AS AN EXPLICIT `undefined`, so `MoreSheet`'s own
+ * "is it registered?" checks stay plain `=== undefined` comparisons.
+ */
+function resolveToolbarSlots({
+  onTogglePanel,
+  onOpenReactions,
+}: Readonly<{
+  onTogglePanel?: (id: MeetingPanelId) => void;
+  onOpenReactions?: () => void;
+}>): {
+  panelSlot: { onTogglePanel?: (id: MeetingPanelId) => void };
+  reactionSlot: { onOpenReactions?: () => void };
+} {
+  return {
+    panelSlot: onTogglePanel === undefined ? {} : { onTogglePanel },
+    reactionSlot: onOpenReactions === undefined ? {} : { onOpenReactions },
+  };
+}
+
+/**
+ * BAL-437 — the Chat slot, which is ABSENT unless the panel registration AND the chat anchor
+ * are both present.
+ *
+ * ⚠ EXTRACTED SO THE CONDITION LIVES IN ONE PLACE AND OFF `MeetingToolbar`'s own body, which
+ * SonarCloud scores at 15. `null` is the slot rule: absent, never disabled.
+ */
+const ChatSlot = forwardRef<
+  HTMLButtonElement,
+  Readonly<{
+    hasChat: boolean;
+    isOpen: boolean;
+    unread: boolean;
+    onTogglePanel?: (id: MeetingPanelId) => void;
+  }>
+>(function ChatSlot({ hasChat, isOpen, unread, onTogglePanel }, ref) {
+  if (!hasChat || onTogglePanel === undefined) return null;
+  return (
+    <ChatSlotButton
+      ref={ref}
+      isOpen={isOpen}
+      unread={unread}
+      onToggle={() => onTogglePanel('chat')}
+    />
+  );
+});
+
+/**
+ * BAL-437 — the Chat control plus its unread dot.
+ *
+ * ⚠⚠ THE DOT IS A **SIBLING SPAN**, NOT A PROP ON `MeetingToolbarButton`. That primitive is
+ * deliberately one `<button>` with one icon and no slots; growing it a badge API for one caller
+ * would put a decoration into the control every other surface in this feature uses. The wrapper
+ * is `relative` and the dot is `absolute`, so the 46/48px tap target is untouched.
+ *
+ * ⚠⚠ THE DOT IS **NOT** THE ACCESSIBLE NAME, AND IT IS NOT `aria-hidden` EITHER. A purely
+ * visual unread marker is invisible to a screen-reader user, so the state rides the accessible
+ * name via a visually-hidden suffix — "Chat, new messages" — which is announced once when the
+ * button is reached rather than shouted on every arrival through the §16 live region.
+ *
+ * ⚠ THE NAME STAYS "Chat" WHILE `aria-pressed` CARRIES OPEN/CLOSED, for the reason
+ * `MeetingToolbarButton.label` records: a name that changes beside a flipping `aria-pressed`
+ * announces the opposite of the truth. The unread suffix is orthogonal to pressed-ness.
+ */
+const ChatSlotButton = forwardRef<
+  HTMLButtonElement,
+  Readonly<{ isOpen: boolean; unread: boolean; onToggle: () => void }>
+>(function ChatSlotButton({ isOpen, unread, onToggle }, ref) {
+  return (
+    <span className="relative inline-flex shrink-0">
+      <MeetingToolbarButton
+        ref={ref}
+        icon={MessageSquare}
+        label={unread ? 'Chat, new messages' : 'Chat'}
+        tooltip={isOpen ? 'Hide chat' : 'Chat'}
+        state={isOpen ? 'active' : 'default'}
+        pressed={isOpen}
+        size="mobile"
+        onClick={onToggle}
+        className="md:h-12 md:w-12 md:rounded-[14px]"
+      />
+      {unread ? (
+        <span
+          data-testid="chat-unread-dot"
+          aria-hidden="true"
+          className="bg-primary border-background pointer-events-none absolute top-0.5 right-0.5 h-2.5 w-2.5 rounded-full border-2"
+        />
+      ) : null}
+    </span>
+  );
+});
 
 /**
  * BAL-436 — the desktop People and Files pair.

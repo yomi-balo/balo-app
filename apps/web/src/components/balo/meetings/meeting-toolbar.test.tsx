@@ -91,7 +91,7 @@ describe('MeetingToolbar — the day-one control set', () => {
     }
   });
 
-  describe('⚠ ruling R5 — raise hand is cut WHOLE to BAL-437', () => {
+  describe('⚠ ruling R5 — raise hand is cut WHOLE (now to BAL-460)', () => {
     it('is absent from the bar, closed', () => {
       const container = renderToolbar();
 
@@ -248,6 +248,97 @@ describe('MeetingToolbar — the day-one control set', () => {
         'aria-pressed',
         'false'
       );
+    });
+
+    /**
+     * BAL-437 — ⚠⚠ **CHAT AND REACTIONS ARE TWO FURTHER, NARROWER REGISTRATIONS.**
+     *
+     * `onTogglePanel` alone gets you People and Files. Chat additionally needs `hasChat` (a
+     * meeting can have People and Files and NO conversation anchor — an `admin` call, a
+     * `project_discovery`, an ambiguous context). Reactions need `onOpenReactions`, which is
+     * absent when `ABLY_API_KEY` is unset. Every absence is ABSENCE, never a disabled control.
+     */
+    it('⚠⚠ renders NO Chat control when the panel slot is registered but chat is NOT', () => {
+      const container = renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasChat: false });
+
+      expect(screen.queryByRole('button', { name: /^chat/i })).toBeNull();
+      expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
+    });
+
+    it('renders the Chat control when `hasChat` is true', () => {
+      renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasChat: true });
+
+      expect(screen.getByRole('button', { name: 'Chat' })).toBeInTheDocument();
+    });
+
+    it('⚠⚠ the Chat button carries NO breakpoint class — slot 3 on mobile, present on desktop', () => {
+      renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasChat: true });
+
+      const chat = screen.getByRole('button', { name: 'Chat' });
+      // Unlike People / Files (`hidden lg:flex`) this control is visible at every width, which
+      // is why `MoreSheet` deliberately has no Chat row.
+      expect([...chat.classList]).not.toContain('hidden');
+    });
+
+    it('asks the frame to toggle chat', async () => {
+      const user = userEvent.setup();
+      const onTogglePanel = vi.fn();
+      renderToolbar({ openPanel: null, onTogglePanel, hasChat: true });
+
+      await user.click(screen.getByRole('button', { name: 'Chat' }));
+
+      expect(onTogglePanel).toHaveBeenCalledWith('chat');
+    });
+
+    it('⚠ the name stays "Chat" while `aria-pressed` carries open/closed', () => {
+      renderToolbar({ openPanel: 'chat', onTogglePanel: vi.fn(), hasChat: true });
+
+      expect(screen.getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    describe('⚠ the unread dot (BAL-437)', () => {
+      it('is absent by default', () => {
+        const container = renderToolbar({
+          openPanel: null,
+          onTogglePanel: vi.fn(),
+          hasChat: true,
+        });
+
+        expect(container.querySelector('[data-testid="chat-unread-dot"]')).toBeNull();
+      });
+
+      it('⚠⚠ renders a DOT and says so in the ACCESSIBLE NAME — not a count, not silent', () => {
+        const container = renderToolbar({
+          openPanel: null,
+          onTogglePanel: vi.fn(),
+          hasChat: true,
+          unreadChat: true,
+        });
+
+        expect(container.querySelector('[data-testid="chat-unread-dot"]')).toBeInTheDocument();
+        // A purely visual marker is invisible to a screen-reader user; the state rides the name.
+        expect(screen.getByRole('button', { name: 'Chat, new messages' })).toBeInTheDocument();
+        // ⚠ A DOT, NOT A COUNT — a number would imply a read-state model this ticket does not build.
+        expect(container.textContent ?? '').not.toMatch(/\d/);
+      });
+    });
+
+    it('⚠ renders NO Reactions control when realtime is unregistered', () => {
+      const container = renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasChat: true });
+
+      expect(screen.queryByRole('button', { name: 'React' })).toBeNull();
+      expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
+    });
+
+    it('renders the frame-supplied Reactions control when realtime IS registered', () => {
+      renderToolbar({
+        openPanel: null,
+        onTogglePanel: vi.fn(),
+        reactionControl: <button type="button">React</button>,
+        onOpenReactions: vi.fn(),
+      });
+
+      expect(screen.getByRole('button', { name: 'React' })).toBeInTheDocument();
     });
 
     it.each([

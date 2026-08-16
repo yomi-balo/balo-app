@@ -102,6 +102,21 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   'join-link.ts',
   'meeting-panels.ts',
   'present-guest-ids.ts',
+  // ── BAL-437, in-call chat and reactions ─────────────────────────────────────────────
+  //
+  // ⚠ `meeting-chat-anchor.ts` IS DELIBERATELY ABSENT, on exactly the grounds this allow-list
+  // exists for: it is `server-only`, it legitimately value-imports `@balo/db`, and it reaches
+  // `@/lib/logging` transitively through the gate it composes — the same carve-out
+  // `guests-api-client.ts` and `join-api-client.ts` already hold. It is therefore NOT pinned
+  // below either; the four Server Actions that call it ARE, and none of them may name the
+  // engagement-axis seam.
+  //
+  // ⚠ `call-action-entry.ts` IS HERE AND NOT CARVED OUT: unlike `meeting-chat-anchor.ts` it
+  // imports NOTHING but `zod` — no `@balo/db`, and deliberately not `@/lib/logging` (which is
+  // why it narrows errors itself rather than calling `errorMessage`). It is scannable, so it is
+  // scanned.
+  'call-action-entry.ts',
+  'meeting-reactions.ts',
 ]);
 
 /**
@@ -210,6 +225,23 @@ const PINNED_FILES: readonly string[] = [
   'app/(call)/meetings/[meetingId]/call/_actions/invite-meeting-guests.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/decide-guest-admission.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/resend-guest-link.ts',
+  // ── BAL-437 — in-call chat and reactions. ⚠ PINNED **AND** ALLOW-LISTED, same reasoning as
+  // BAL-436's block above: a missing name fails nothing, so an unpinned new module is silently
+  // unscanned. ⚠ `chat-panel-list.tsx` is the one that matters most here — it exists BECAUSE
+  // `MessageList` takes a prop named `lens`, which this very scan forbids in this directory.
+  'components/chat-panel.tsx',
+  'components/chat-panel-list.tsx',
+  'components/chat-composer.tsx',
+  'components/use-meeting-file-upload.tsx',
+  'components/use-meeting-realtime.ts',
+  'components/reaction-picker.tsx',
+  'components/reaction-floaters.tsx',
+  'lib/meetings/call-action-entry.ts',
+  'lib/meetings/meeting-reactions.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/create-meeting-realtime-token.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/fetch-meeting-thread.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/post-meeting-message.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/send-meeting-reaction.ts',
 ];
 
 /**

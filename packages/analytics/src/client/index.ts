@@ -100,6 +100,8 @@ export type {
   MeetingPanelOutcome,
   MeetingPanelFileOutcome,
   MeetingPanelSizeBucket,
+  MeetingPanelMessageOutcome,
+  MeetingPanelReactionEmoji,
   // BAL-421 — the case surface's client islands annotate their action props with this.
   // ⚠ THE FIRST `Recap*`-FAMILY TYPE IN THIS LIST: `RECAP_EVENTS` was already exported as a
   // VALUE above, but no recap TYPE was, so a client component could not name one. Neither

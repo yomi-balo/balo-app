@@ -6,18 +6,11 @@ import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
-import { getAblyRest, isRealtimeConfigured } from '@/lib/realtime/ably-server';
+import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
 import { conversationChannelName } from '@/lib/realtime/channels';
 import type { ConversationRealtimeTokenResult } from '@/components/balo/conversation/use-conversation-realtime';
 
 const inputSchema = z.object({ engagementId: z.uuid() }).strict();
-
-/**
- * Explicit token TTL (ms): bounds how long a revoked participant can keep a live subscription
- * (vs Ably's 60-minute default). ably-js auto-renews through `authCallback`, which re-runs the
- * FULL gate below on every refresh — so entitlement staleness is bounded by this value.
- */
-const TOKEN_TTL_MS = 15 * 60 * 1000;
 
 /**
  * BAL-421 — the Ably token endpoint for the CASE conversation island.
@@ -39,6 +32,11 @@ const TOKEN_TTL_MS = 15 * 60 * 1000;
  * Posting is refused by `postCaseMessageAction`, which is the only writer.
  *
  * ⚠ `clientId = user.id`, so Ably itself attributes every connection to a real user.
+ *
+ * ⚠ BAL-437 — THE MINTING TAIL IS NOW `mintSubscribeOnlyToken`, SHARED WITH THE PROJECT-REQUEST
+ * AND IN-CALL TOKEN ACTIONS. The RESULT SHAPE AND EVERY DENIAL LITERAL ARE UNCHANGED; only the
+ * `isRealtimeConfigured` → `getAblyRest` → `createTokenRequest` tail moved, and `TOKEN_TTL_MS`
+ * collapsed from three declarations to one.
  */
 export async function createCaseRealtimeTokenAction(
   input: z.infer<typeof inputSchema>
@@ -66,26 +64,18 @@ export async function createCaseRealtimeTokenAction(
       return { success: false, error: 'You do not have access to this conversation.' };
     }
 
-    if (!isRealtimeConfigured()) {
+    const minted = await mintSubscribeOnlyToken({
+      clientId: user.id,
+      channels: [conversationChannelName(access.conversationId)],
+    });
+    if (!minted.success) {
+      // ⚠ THE LOG STAYS HERE, NOT IN THE HELPER — `engagementId` is the whole value of the
+      // line, and the helper is deliberately correlation-id-free.
       log.warn('Realtime disabled (no ABLY_API_KEY)', { engagementId, userId: user.id });
       return { success: false, disabled: true };
     }
 
-    const rest = getAblyRest();
-    if (rest === null) {
-      // Unreachable after the isRealtimeConfigured() gate; defensive.
-      return { success: false, disabled: true };
-    }
-
-    const tokenRequest = await rest.auth.createTokenRequest({
-      clientId: user.id,
-      ttl: TOKEN_TTL_MS,
-      capability: JSON.stringify({
-        [conversationChannelName(access.conversationId)]: ['subscribe'],
-      }),
-    });
-
-    return { success: true, tokenRequest };
+    return { success: true, tokenRequest: minted.tokenRequest };
   } catch (error) {
     log.error('Failed to create case realtime token', {
       engagementId,
