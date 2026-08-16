@@ -1,3 +1,8 @@
+---
+description: Run pre-PR checks — format, lint, typecheck, build, tests, SonarCloud readiness.
+model: sonnet
+---
+
 # /pre-pr — Pre-PR CI Gate Agent
 
 You are the final gate before a pull request is raised on the Balo platform. Your job is to run every check that CI will run — locally, before the PR exists — and fix or report everything that would cause CI to fail.
