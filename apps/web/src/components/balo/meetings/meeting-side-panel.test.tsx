@@ -70,6 +70,26 @@ describe('MeetingSidePanel — structure', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Files' })).toHaveFocus();
   });
 
+  it('⚠⚠ W5 — a MANUAL open (autoOpened omitted) still focuses the heading', () => {
+    render(
+      <MeetingSidePanel title="Balance" onClose={vi.fn()}>
+        <p>body</p>
+      </MeetingSidePanel>
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Balance' })).toHaveFocus();
+  });
+
+  it('⚠⚠ W5 — an AUTO open (autoOpened: true) does NOT steal focus', () => {
+    render(
+      <MeetingSidePanel title="Balance" onClose={vi.fn()} autoOpened>
+        <p>body</p>
+      </MeetingSidePanel>
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Balance' })).not.toHaveFocus();
+  });
+
   it('renders a count pill when given one, and NOTHING when not — never a zero placeholder', () => {
     const { rerender } = render(
       <MeetingSidePanel title="People" count={4} onClose={vi.fn()}>

@@ -330,6 +330,91 @@ describe('MeetingToolbar — the day-one control set', () => {
       expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
     });
 
+    /**
+     * BAL-403 — the Balance slot: a FOURTH independent registration, `false` for every meeting
+     * today. Modelled on Chat/Reactions above — absent, never disabled.
+     */
+    describe('the Balance slot (BAL-403)', () => {
+      it('⚠ renders NO Balance control when the slot is unregistered', () => {
+        const container = renderToolbar({ openPanel: null, onTogglePanel: vi.fn() });
+
+        expect(screen.queryByRole('button', { name: /balance/i })).toBeNull();
+        expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
+      });
+
+      it('renders the Balance control when `hasBalance` is true', () => {
+        renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasBalance: true });
+
+        expect(screen.getByRole('button', { name: 'Balance' })).toBeInTheDocument();
+      });
+
+      it('⚠⚠ the Balance button carries the SAME `hidden lg:flex` breakpoint as People/Files', () => {
+        renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasBalance: true });
+
+        const button = screen.getByRole('button', { name: 'Balance' });
+        expect([...button.classList]).toContain('hidden');
+        expect([...button.classList]).toContain('lg:flex');
+      });
+
+      it('⚠⚠ S1 — the WRAPPER span is hidden below `lg` too, not just the button', () => {
+        renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasBalance: true });
+
+        const button = screen.getByRole('button', { name: 'Balance' });
+        const wrapper = button.parentElement;
+        // Below `lg` a bare `inline-flex` wrapper around a `hidden` button is a zero-width flex
+        // item that still draws `gap` on both sides — the wrapper itself must be `hidden` too.
+        expect(wrapper?.classList.contains('hidden')).toBe(true);
+        expect(wrapper?.classList.contains('lg:inline-flex')).toBe(true);
+      });
+
+      it('asks the frame to toggle balance', async () => {
+        const user = userEvent.setup();
+        const onTogglePanel = vi.fn();
+        renderToolbar({ openPanel: null, onTogglePanel, hasBalance: true });
+
+        await user.click(screen.getByRole('button', { name: 'Balance' }));
+
+        expect(onTogglePanel).toHaveBeenCalledWith('balance');
+      });
+
+      it('⚠ the name stays "Balance" while `aria-pressed` carries open/closed', () => {
+        renderToolbar({ openPanel: 'balance', onTogglePanel: vi.fn(), hasBalance: true });
+
+        expect(screen.getByRole('button', { name: 'Balance' })).toHaveAttribute(
+          'aria-pressed',
+          'true'
+        );
+      });
+
+      describe('the attention dot', () => {
+        it('is absent by default', () => {
+          const container = renderToolbar({
+            openPanel: null,
+            onTogglePanel: vi.fn(),
+            hasBalance: true,
+          });
+
+          expect(container.querySelector('[data-testid="balance-attention-dot"]')).toBeNull();
+        });
+
+        it('⚠⚠ renders a DOT and says so in the ACCESSIBLE NAME — not disabled, not silent', () => {
+          const container = renderToolbar({
+            openPanel: null,
+            onTogglePanel: vi.fn(),
+            hasBalance: true,
+            balanceAttention: true,
+          });
+
+          expect(
+            container.querySelector('[data-testid="balance-attention-dot"]')
+          ).toBeInTheDocument();
+          expect(
+            screen.getByRole('button', { name: 'Balance, needs attention' })
+          ).toBeInTheDocument();
+        });
+      });
+    });
+
     it('renders the frame-supplied Reactions control when realtime IS registered', () => {
       renderToolbar({
         openPanel: null,

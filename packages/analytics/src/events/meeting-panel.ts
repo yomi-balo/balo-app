@@ -39,8 +39,12 @@ export const MEETING_PANEL_EVENTS = {
  *
  * ⚠ BAL-437 ADDED `'chat'` HERE, WHICH MAKES `OPENED` FIRE WITH `panel: 'chat'` FOR FREE — the
  * forward reference this line used to carry is now discharged.
+ *
+ * ⚠⚠ BAL-403 ADDED `'balance'` — AND THIS DECLARATION MUST STAY IN SYNC WITH THE OTHER ONE,
+ * `apps/web/src/lib/meetings/meeting-panels.ts`'s `MeetingPanelId`. The two are independent
+ * (this package cannot import from `apps/web`), so a future slot must be added to BOTH by hand.
  */
-export type MeetingPanelId = 'people' | 'files' | 'chat';
+export type MeetingPanelId = 'people' | 'files' | 'chat' | 'balance';
 
 /** What a host decided about a waiting person. */
 export type MeetingPanelAdmissionDecision = 'admit' | 'deny';

@@ -2,11 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
+import { deriveDrawdownState, type DrawdownState } from '@balo/shared/credit';
 import { MEETING_CALL_EVENTS, track } from '@/lib/analytics';
 import { validateGrant, type ValidatedGrant } from '@/lib/meetings/validate-grant';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
 import { END_MEETING_FAILED_COPY, type EndMeetingResult } from '@/lib/meetings/meeting-state';
-import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type {
+  GetMeetingDrawdownResult,
+  MeetingPanelRegistration,
+} from '@/lib/meetings/meeting-panels';
 import {
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
@@ -106,6 +110,43 @@ function panelsFake(): MeetingPanelRegistration {
       confirmUpload: vi.fn(),
       download: vi.fn(),
     },
+    // BAL-403 — explicit `null`, matching the shipped "inert by default" registration. Without
+    // this, the fixture's missing `balance` key is `undefined`, and `!== null` reads that as
+    // registered — a false positive this ticket's own tests would otherwise fall into.
+    balance: null,
+  } as unknown as MeetingPanelRegistration;
+}
+
+const DRAWDOWN_NOW = new Date('2026-07-16T12:00:00.000Z');
+
+/** BAL-403 — a `DrawdownState` built off the real projection, so the fixture stays honest. */
+function drawdownStateFor(
+  overrides: Partial<Parameters<typeof deriveDrawdownState>[0]> = {}
+): DrawdownState {
+  return deriveDrawdownState({
+    status: 'active',
+    connectedAt: new Date('2026-07-16T11:58:00.000Z'),
+    clientRateMinorPerMinute: 450,
+    effectiveCeilingMinor: 15000,
+    graceBoundMinutes: 30,
+    graceEnteredAt: null,
+    balanceMinor: 45000,
+    mandatePresent: true,
+    lens: 'client',
+    now: DRAWDOWN_NOW,
+    ...overrides,
+  });
+}
+
+/**
+ * BAL-403 — `panelsFake()` plus a registered Balance slot whose poll resolves to `result` on
+ * every call (a single fixed answer is enough: these tests only exercise the FIRST, immediate
+ * read on mount, never the schedule).
+ */
+function panelsFakeWithBalance(result: GetMeetingDrawdownResult): MeetingPanelRegistration {
+  return {
+    ...panelsFake(),
+    balance: { loadDrawdownState: vi.fn().mockResolvedValue(result) },
   } as unknown as MeetingPanelRegistration;
 }
 
@@ -638,5 +679,428 @@ describe('MeetingFrame — the side panel (BAL-436)', () => {
 
     expect(await screen.findByRole('heading', { name: CALL_ENDED_TITLE })).toBeInTheDocument();
     expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
+  });
+});
+
+/**
+ * BAL-403 — the Balance slot: registered-means-openable (same rule as People/Files), the
+ * drawdown poll's immediate mount read, and the auto-open ladder. ⚠ SHIPS INERT — `panels.balance`
+ * is `null` for every meeting today; these tests exercise the wiring with a fake registration.
+ */
+describe('MeetingFrame — the Balance slot (BAL-403)', () => {
+  it('⚠ renders NO Balance control when the slot is unregistered (balance: null)', async () => {
+    renderMember({ panels: panelsFake() });
+    await join();
+
+    expect(screen.queryByRole('button', { name: /balance/i })).toBeNull();
+  });
+
+  it('registered + healthy: the button is present, and nothing auto-opens', async () => {
+    const panels = panelsFakeWithBalance({
+      success: true,
+      state: drawdownStateFor(),
+      sessionId: 'sess-1',
+    });
+    renderMember({ panels });
+    await join();
+
+    expect(await screen.findByRole('button', { name: 'Balance' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 2, name: 'Balance' })).toBeNull();
+  });
+
+  it('⚠⚠ auto-opens on a FIRST escalation with no panel already open', async () => {
+    const panels = panelsFakeWithBalance({
+      success: true,
+      state: drawdownStateFor({ balanceMinor: 3600 }), // 'low'
+      sessionId: 'sess-1',
+    });
+    renderMember({ panels });
+    await join();
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Balance' })).toBeInTheDocument();
+  });
+
+  it('⚠⚠ an escalation while People is already open BADGES, never switches — and opening it clears the badge', async () => {
+    const user = userEvent.setup();
+    let resolveLoad: (result: GetMeetingDrawdownResult) => void = () => {};
+    const load = vi.fn(
+      () =>
+        new Promise<GetMeetingDrawdownResult>((resolve) => {
+          resolveLoad = resolve;
+        })
+    );
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    renderMember({ panels });
+    await join();
+
+    // Open People BEFORE the drawdown poll's first answer lands.
+    await user.click(screen.getByRole('button', { name: 'People' }));
+    await screen.findByRole('heading', { level: 2, name: 'People' });
+
+    // Now let the poll resolve to an escalated key.
+    act(() => {
+      resolveLoad({
+        success: true,
+        state: drawdownStateFor({ balanceMinor: 3600 }),
+        sessionId: 'sess-1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Balance, needs attention' })).toBeInTheDocument();
+    });
+    // ⚠ RULE 3 — NEVER A SWITCH. People stays exactly where it was.
+    expect(screen.getByRole('heading', { level: 2, name: 'People' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Balance, needs attention' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Balance' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Balance, needs attention' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Balance' })).toBeInTheDocument();
+  });
+
+  it('⚠⚠ W4 — an escalation that lands while Balance is ALREADY open (manually) is not a steal', async () => {
+    const user = userEvent.setup();
+    let resolveLoad: (result: GetMeetingDrawdownResult) => void = () => {};
+    const load = vi.fn(
+      () =>
+        new Promise<GetMeetingDrawdownResult>((resolve) => {
+          resolveLoad = resolve;
+        })
+    );
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    renderMember({ panels });
+    await join();
+
+    // Balance is registered from the RSC's verdict (structural), so the button is clickable
+    // before the poll's first answer lands — open it manually, ahead of any escalation.
+    await user.click(await screen.findByRole('button', { name: 'Balance' }));
+    await screen.findByRole('heading', { level: 2, name: 'Balance' });
+
+    // Now the poll's first answer is an escalation ('low') — but the panel is ALREADY open.
+    act(() => {
+      resolveLoad({
+        success: true,
+        state: drawdownStateFor({ balanceMinor: 3600 }),
+        sessionId: 'sess-1',
+      });
+    });
+
+    // The toolbar button must still say plain "Balance" — the person is already looking at it.
+    await screen.findByRole('progressbar');
+    expect(screen.queryByRole('button', { name: 'Balance, needs attention' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Balance' })).toBeInTheDocument();
+  });
+});
+
+describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 1 (W5 — auto-open focus/announce)', () => {
+  it('a MANUAL open still focuses the Balance heading', async () => {
+    const user = userEvent.setup();
+    const panels = panelsFakeWithBalance({
+      success: true,
+      state: drawdownStateFor(),
+      sessionId: 'sess-1',
+    });
+    renderMember({ panels });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Balance' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Balance' })).toHaveFocus();
+  });
+
+  it('an AUTO-open does NOT steal focus, and announces through the §16 live region instead', async () => {
+    const panels = panelsFakeWithBalance({
+      success: true,
+      state: drawdownStateFor({ balanceMinor: 3600 }), // 'low' — a first, panel-stealing escalation
+      sessionId: 'sess-1',
+    });
+    const container = renderMember({ panels });
+    await join();
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Balance' });
+    expect(heading).not.toHaveFocus();
+
+    const region = container.querySelector('output[aria-live="polite"]');
+    await waitFor(() =>
+      expect(region?.textContent).toBe(
+        'Your balance needs attention. The Balance panel has opened.'
+      )
+    );
+  });
+
+  it('a BADGE escalation past low (e.g. grace) announces once too, without opening anything', async () => {
+    let resolveLoad: (result: GetMeetingDrawdownResult) => void = () => {};
+    const load = vi.fn(
+      () =>
+        new Promise<GetMeetingDrawdownResult>((resolve) => {
+          resolveLoad = resolve;
+        })
+    );
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    const user = userEvent.setup();
+    const container = renderMember({ panels });
+    await join();
+
+    await user.click(screen.getByRole('button', { name: 'People' }));
+    await screen.findByRole('heading', { level: 2, name: 'People' });
+
+    act(() => {
+      resolveLoad({
+        success: true,
+        state: drawdownStateFor({
+          status: 'grace',
+          graceEnteredAt: DRAWDOWN_NOW,
+          balanceMinor: -1000,
+        }),
+        sessionId: 'sess-1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Balance, needs attention' })).toBeInTheDocument();
+    });
+    const region = container.querySelector('output[aria-live="polite"]');
+    expect(region?.textContent).toBe('Your balance needs attention.');
+  });
+});
+
+describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 1 (C2 — retry)', () => {
+  it('the error card\'s "Try again" button actually re-fetches', async () => {
+    const user = userEvent.setup();
+    // ⚠ A NON-RETRYABLE VERDICT, not a transport rejection — the poll reaches `status: 'error'`
+    // after ONE tick only when the answer is a verdict; a transport blip alone would still read
+    // `'loading'` until the failure cap.
+    const load = vi.fn().mockResolvedValue({ success: false, error: 'boom', retryable: false });
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    renderMember({ panels });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Balance' }));
+    await screen.findByTestId('panel-error');
+    expect(load).toHaveBeenCalledTimes(1);
+
+    load.mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' });
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await screen.findByRole('progressbar');
+  });
+});
+
+describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R3 — the had-state-then-failed path)', () => {
+  /**
+   * ⚠⚠ THE EXACT GAP THE EXISTING C2 TEST DID NOT COVER — it passed only because ITS failure
+   * arrived on the FIRST tick, before `hadStateRef.current` was ever set. This test drives a
+   * REAL state in first, so the vanish-close effect's OTHER branch — the one that used to force
+   * the panel shut on ANY `state: null`, this failure included — is what actually runs.
+   *
+   * ⚠ `{ success: false, retryable: false }` is NOT a membership denial — see
+   * `resolve-in-call-drawdown.ts`'s docblock and `use-drawdown-poll.ts`'s `applyResult`. A
+   * membership / audience denial folds into `{ success: true, state: null }` instead (the SAME
+   * shape as a genuine vanish, on the `ready` arm covered by the next test below); THIS shape is
+   * what `get-meeting-drawdown-state.ts` emits only when `enterCallAction` itself fails — an
+   * expired session, or an invalid `meetingId`.
+   *
+   * `document.dispatchEvent(new Event('visibilitychange'))` is `useDrawdownPoll`'s OWN
+   * "resume with an immediate fetch" path (see its module docblock and
+   * `use-drawdown-poll.test.ts`'s visibility suite) — the same mechanism a real second poll tick
+   * would use, without waiting on the real 30s/10s schedule.
+   */
+  it('a FAILURE (expired session / invalid meetingId) after a real state stays OPEN and renders the error card, rather than force-closing with no way back', async () => {
+    const user = userEvent.setup();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' })
+      .mockResolvedValue({ success: false, error: 'boom', retryable: false });
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    renderMember({ panels });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Balance' }));
+    // ⚠ REAL DATA LANDS FIRST — this is what sets `hadStateRef.current = true`.
+    await screen.findByRole('progressbar');
+    expect(load).toHaveBeenCalledTimes(1);
+
+    // The "next tick" — a mid-call failure (expired session / invalid meetingId), not a denial.
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+    // ⚠⚠ THE REGRESSION: round 1 force-closed the panel here — no error card, no way back, and
+    // clicking the (still-present) toolbar button re-opened onto the SAME close on the very next
+    // render, because the effect re-ran on `panel` changing. The panel must stay OPEN.
+    expect(screen.getByRole('heading', { level: 2, name: 'Balance' })).toBeInTheDocument();
+    expect(await screen.findByTestId('panel-error')).toBeInTheDocument();
+
+    // ⚠ AND THE RECOVERY PATH C2 SHIPPED IS ACTUALLY REACHABLE FROM HERE.
+    load.mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' });
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+    await screen.findByRole('progressbar');
+  });
+
+  it('a genuine VANISH (a success answering state: null) still auto-closes exactly as before', async () => {
+    const user = userEvent.setup();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' })
+      .mockResolvedValue({ success: true, state: null });
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    renderMember({ panels });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Balance' }));
+    await screen.findByRole('progressbar');
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+    // The panel closes — `InCallBalancePanel` never needs to render the vanished case at all.
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { level: 2, name: 'Balance' })).toBeNull()
+    );
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 3 — THE GAP NEITHER R2 TEST ABOVE EXERCISED: what happens on a RE-OPEN after
+   * the vanish-close fired. `hasBalance` never clears (the RSC registration is static for the
+   * call), so the toolbar button survives the vanish — this drives the click and asserts the
+   * panel actually opens and stays open, rendering `BalanceUnavailableCard`, instead of the
+   * close effect re-firing on the very next commit and stranding the control dead forever.
+   */
+  it('⚠⚠ a RE-OPEN after a vanish-close opens the panel and renders the unavailable card, rather than force-closing again', async () => {
+    const user = userEvent.setup();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' })
+      .mockResolvedValue({ success: true, state: null });
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    renderMember({ panels });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Balance' }));
+    await screen.findByRole('progressbar');
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+    // The first vanish still auto-closes exactly as before.
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { level: 2, name: 'Balance' })).toBeNull()
+    );
+
+    // The toolbar button is STILL PRESENT — `hasBalance` never clears on a vanish — and a
+    // deliberate re-open must actually open the panel, not close it right back out.
+    await user.click(screen.getByRole('button', { name: 'Balance' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Balance' })).toBeInTheDocument();
+    expect(await screen.findByTestId('balance-panel-unavailable')).toBeInTheDocument();
+  });
+});
+
+describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R5 — the badge re-arms)', () => {
+  it('a SECOND escalation past the threshold, after a de-escalation, announces AGAIN', async () => {
+    const user = userEvent.setup();
+    // ⚠ TICK 1 IS DEFERRED, exactly like the existing W5 badge test above — People must be
+    // OPEN before this answer lands, or an escalation into a `null` `openPanel` decides `'open'`
+    // (rule 3) instead of `'badge'`, and the whole scenario tests the wrong branch.
+    let resolveTick1: (result: GetMeetingDrawdownResult) => void = () => {};
+    const load = vi.fn();
+    load.mockImplementationOnce(
+      () =>
+        new Promise<GetMeetingDrawdownResult>((resolve) => {
+          resolveTick1 = resolve;
+        })
+    );
+    // Tick 2 — de-escalates all the way back to healthy (rank 0).
+    load.mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' });
+    // Tick 3+ — escalates again, past the threshold a SECOND time.
+    load.mockResolvedValue({
+      success: true,
+      state: drawdownStateFor({
+        status: 'wrapped',
+        graceEnteredAt: null,
+        mandatePresent: false,
+        balanceMinor: 0,
+      }),
+      sessionId: 'sess-1',
+    });
+    const panels = {
+      ...panelsFake(),
+      balance: { loadDrawdownState: load },
+    } as unknown as MeetingPanelRegistration;
+    const container = renderMember({ panels });
+    await join();
+
+    // Keep People open throughout — every escalation is then a BADGE, never a steal or an open.
+    await user.click(screen.getByRole('button', { name: 'People' }));
+    await screen.findByRole('heading', { level: 2, name: 'People' });
+
+    // Tick 1 lands now, escalating past the announce threshold — the FIRST announcement.
+    act(() => {
+      resolveTick1({
+        success: true,
+        state: drawdownStateFor({
+          status: 'grace',
+          graceEnteredAt: DRAWDOWN_NOW,
+          balanceMinor: -1000,
+        }),
+        sessionId: 'sess-1',
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Balance, needs attention' })).toBeInTheDocument();
+    });
+    const region = container.querySelector('output[aria-live="polite"]');
+    expect(region?.textContent).toBe('Your balance needs attention.');
+
+    // Tick 2 — de-escalates to healthy. Rank 0 never badges; no announcement, but the ref resets.
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+    // Tick 3 — escalates again, past the threshold a second time.
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+
+    // ⚠⚠ THE REGRESSION: round 1 never reset `announcedBadgeRef`, so this SECOND, more
+    // severe escalation would leave the region's text UNCHANGED — a screen-reader user hears
+    // about the first funding interruption and never the second. `announce()` re-writes an
+    // UNCHANGED string with a trailing zero-width space precisely so a genuine re-announcement
+    // is observable here: the region's `textContent` must have grown, not stayed identical.
+    await waitFor(() => expect(region?.textContent).not.toBe('Your balance needs attention.'));
+    // ⚠ AN ESCAPE, NEVER THE LITERAL CHARACTER — see `announce`'s own docblock in
+    // `meeting-frame-impl.tsx`: an invisible code point pasted into source is unreviewable.
+    expect(region?.textContent).toBe(`Your balance needs attention.${'\u200B'}`);
   });
 });

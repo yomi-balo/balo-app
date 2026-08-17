@@ -145,6 +145,58 @@ describe('InSessionPanel — member lens', () => {
   });
 });
 
+describe('InSessionPanel — BAL-403, variant="embedded"', () => {
+  it('renders NO expert name, NO live/paused pill, NO elapsed clock', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.healthyClient} sessionId="sess-1" />);
+    expect(screen.queryByText('Jordan Ellis')).not.toBeInTheDocument();
+    expect(screen.queryByText('In consultation')).not.toBeInTheDocument();
+    expect(screen.queryByText('Session time')).not.toBeInTheDocument();
+    expect(screen.queryByText('00:42:00')).not.toBeInTheDocument();
+  });
+
+  it('still renders the meter and the notice card', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.lowClient} sessionId="sess-1" />);
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getByText('About 8 minutes of balance left')).toBeInTheDocument();
+  });
+
+  it('⚠⚠ OQ1 — suppresses the client-lens primary "Top up" button, and its secondary with it', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.lowClient} sessionId="sess-1" />);
+    expect(screen.queryByRole('button', { name: /top up/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Keep going' })).not.toBeInTheDocument();
+    // The notice copy itself is untouched.
+    expect(screen.getByText('About 8 minutes of balance left')).toBeInTheDocument();
+  });
+
+  it('the member lens keeps its NudgeButton exactly as shipped', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.lowMember} sessionId="sess-1" />);
+    expect(screen.getByRole('button', { name: 'Let Sam know' })).toBeInTheDocument();
+  });
+
+  it('healthy renders no notice card and no countdown', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.healthyClient} sessionId="sess-1" />);
+    expect(
+      screen.getByText("You're all set — time draws from your balance as you talk.")
+    ).toBeInTheDocument();
+  });
+
+  it('fires NEITHER lifecycle event', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.lowClient} sessionId="sess-1" />);
+    expect(track).not.toHaveBeenCalledWith(SESSION_EVENTS.STARTED, expect.anything());
+    expect(track).not.toHaveBeenCalledWith(
+      SESSION_EVENTS.LOW_BALANCE_WARNING_SHOWN,
+      expect.anything()
+    );
+  });
+
+  it('has no accessibility violations', async () => {
+    const { container } = render(
+      <InSessionPanel variant="embedded" state={STATES.graceClient} sessionId="sess-1" />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  }, 15000);
+});
+
 describe('InSessionPanel — tone discipline', () => {
   it.each(Object.entries(STATES))('never renders the word "overdraft" (%s)', (_name, state) => {
     renderPanel(state);

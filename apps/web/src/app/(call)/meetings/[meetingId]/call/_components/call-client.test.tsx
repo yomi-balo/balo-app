@@ -69,6 +69,10 @@ vi.mock('@/components/balo/meetings/meeting-call-surface', () => ({
         data-start-label={route.waiting?.scheduledStartLabel ?? ''}
         data-has-panels={String(route.panels !== null)}
         data-join-link={route.panels?.joinLinkUrl ?? ''}
+        // ⚠ BAL-403 — whether the BALANCE arm is registered.
+        data-has-balance={String(
+          route.panels?.balance !== null && route.panels?.balance !== undefined
+        )}
       >
         <button type="button" onClick={() => route.onExit?.('host_ended')}>
           fake host ended
@@ -102,7 +106,7 @@ const JOIN_LINK = `https://balo.test/join/m/${MEETING_ID}`;
 /** BAL-437 — the conversation the RSC resolved this meeting's chat onto. */
 const CONVERSATION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
-function renderClient(): HTMLElement {
+function renderClient(overrides: Partial<{ hasBalance: boolean }> = {}): HTMLElement {
   return render(
     <CallClient
       meetingId={MEETING_ID}
@@ -115,6 +119,9 @@ function renderClient(): HTMLElement {
       hasChat
       isRealtimeEnabled
       chatChannelName={`conversation:${CONVERSATION_ID}`}
+      // ⚠ BAL-403 — `false` by default, mirroring the RSC's expected-inert answer today. The
+      // registration itself is covered below (`CallClient — the balance registration`).
+      hasBalance={overrides.hasBalance ?? false}
     />
   ).container;
 }
@@ -248,6 +255,7 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
         hasChat={false}
         isRealtimeEnabled={false}
         chatChannelName={null}
+        hasBalance={false}
       />
     );
 
@@ -400,6 +408,20 @@ describe('CallClient — ⚠ where a member goes when the call ends', () => {
     await user.click(screen.getByRole('button', { name: 'fake leave' }));
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith(`/meetings/${MEETING_ID}/end`));
+  });
+});
+
+describe('CallClient — BAL-403, the balance registration', () => {
+  it('⚠ hasBalance: false ⇒ `panels.balance` is null', async () => {
+    renderClient({ hasBalance: false });
+
+    expect(await surface()).toHaveAttribute('data-has-balance', 'false');
+  });
+
+  it('hasBalance: true ⇒ `panels.balance` carries a callback', async () => {
+    renderClient({ hasBalance: true });
+
+    expect(await surface()).toHaveAttribute('data-has-balance', 'true');
   });
 });
 

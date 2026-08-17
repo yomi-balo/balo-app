@@ -150,6 +150,13 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // scanned.
   'call-action-entry.ts',
   'meeting-reactions.ts',
+  // ── BAL-403, the in-call balance slot ───────────────────────────────────────────────
+  // ⚠ BOTH LISTS, ALWAYS — a name left off CALL_LIB_FILES is silently unscanned (a false
+  // green); a name left off PINNED_FILES fails nothing. Neither module names `lens`: the
+  // DrawdownState's `lens` field is read OUTSIDE this tree, in
+  // components/balo/credit/in-call-balance-panel.tsx, deliberately — see below.
+  'drawdown-auto-open.ts',
+  'use-drawdown-poll.ts',
 ]);
 
 /**
@@ -284,6 +291,11 @@ const PINNED_FILES: readonly string[] = [
   'app/(call)/meetings/[meetingId]/call/_actions/fetch-meeting-thread.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/post-meeting-message.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/send-meeting-reaction.ts',
+  // ── BAL-403 — the in-call balance slot. ⚠ PINNED **AND** ALLOW-LISTED, same reasoning as
+  // BAL-436/BAL-134/BAL-437 above.
+  'lib/meetings/drawdown-auto-open.ts',
+  'lib/meetings/use-drawdown-poll.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-drawdown-state.ts',
 ];
 
 /**
@@ -301,6 +313,17 @@ const VIEW_GATE_TOKENS: readonly string[] = [
   'role ===',
   "role === '",
 ];
+
+/**
+ * BAL-403 — `DrawdownState` carries a field named `lens` (`drawdown-state.ts:71`). It is
+ * **presentational copy selection**, not authorization: the membership gate and the capability
+ * branch both run server-side in `get-drawdown-state.ts:63–73`, and the client renders the
+ * verdict. Because this scan is a **substring** match with no per-file exemption, the one module
+ * that reads that field lives OUTSIDE all three scanned trees, in
+ * `components/balo/credit/in-call-balance-panel.tsx` — beside `in-session-panel.tsx`, which
+ * already reads it and is already outside the scan. Same resolution BAL-437 reached for
+ * `chat-panel-list.tsx` (see its docblock): **avoid the token, never exempt a file.**
+ */
 
 /**
  * BAL-134 / ADR-1049 (D4) — ⚠⚠ **THE FILES THAT RENDER THE END CONTROL.** These may name

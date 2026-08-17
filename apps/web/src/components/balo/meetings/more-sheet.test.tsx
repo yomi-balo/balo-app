@@ -289,6 +289,58 @@ describe('MoreSheet — behaviour', () => {
     });
   });
 
+  /**
+   * BAL-403 — the Balance row, `lg:hidden`. Rendered only when `hasBalance` — never a disabled
+   * row for a registered-but-absent slot, matching the toolbar's own rule.
+   */
+  describe('the Balance row (BAL-403)', () => {
+    it('⚠ renders NO row when the slot is unregistered', async () => {
+      renderMoreSheet({ open: true, onTogglePanel: vi.fn() });
+
+      await screen.findByRole('button', { name: 'People' });
+      expect(screen.queryByRole('button', { name: /balance/i })).toBeNull();
+    });
+
+    it('⚠ renders NO row when `onTogglePanel` itself is unregistered, even with hasBalance', async () => {
+      renderMoreSheet({ open: true, hasBalance: true });
+
+      await screen.findByRole('button', { name: 'Camera and sound' });
+      expect(screen.queryByRole('button', { name: /balance/i })).toBeNull();
+    });
+
+    it('renders the row when registered', async () => {
+      renderMoreSheet({ open: true, onTogglePanel: vi.fn(), hasBalance: true });
+
+      expect(await screen.findByRole('button', { name: 'Balance' })).toBeInTheDocument();
+    });
+
+    it('closes the sheet and toggles balance', async () => {
+      const user = userEvent.setup();
+      const onTogglePanel = vi.fn();
+      const onOpenChange = vi.fn();
+      renderMoreSheet({ open: true, onTogglePanel, onOpenChange, hasBalance: true });
+
+      await user.click(await screen.findByRole('button', { name: 'Balance' }));
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(onTogglePanel).toHaveBeenCalledWith('balance');
+    });
+
+    it('⚠⚠ OQ2 — carries the SAME attention flag as the toolbar button, in its accessible name and a dot', async () => {
+      renderMoreSheet({
+        open: true,
+        onTogglePanel: vi.fn(),
+        hasBalance: true,
+        balanceAttention: true,
+      });
+
+      expect(
+        await screen.findByRole('button', { name: 'Balance, needs attention' })
+      ).toBeInTheDocument();
+      expect(screen.getByTestId('menu-item-attention-dot')).toBeInTheDocument();
+    });
+  });
+
   it('has no accessibility violations, open', async () => {
     renderMoreSheet({ open: true });
 

@@ -4,6 +4,7 @@ import { useCallback, useState, useTransition } from 'react';
 import { Bell, Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { track, SESSION_EVENTS } from '@/lib/analytics';
 import { nudgeAdminAction } from '@/lib/credit/actions/session-mutations';
 
 /**
@@ -12,6 +13,9 @@ import { nudgeAdminAction } from '@/lib/credit/actions/session-mutations';
  * When "Top up" is not the member's to press, the constructive action is to nudge the
  * team's billing admin. On click it calls {@link nudgeAdminAction}; on success it toasts
  * and flips to the warm "We let {admin} know" confirmation. Team-framed, no "overdraft".
+ *
+ * ⚠ BAL-403 — ONE ADDITIVE `track()` CALL, NO BEHAVIOURAL CHANGE. `session_nudge_clicked`
+ * fires on CLICK, before the `await`, so a failed action still records the intent.
  */
 
 interface NudgeButtonProps {
@@ -39,6 +43,7 @@ export function NudgeButton({
   const [isPending, startTransition] = useTransition();
 
   const handleNudge = useCallback((): void => {
+    track(SESSION_EVENTS.NUDGE_CLICKED, { session_id: sessionId });
     startTransition(async () => {
       const result = await nudgeAdminAction(sessionId);
       if (result.success) {

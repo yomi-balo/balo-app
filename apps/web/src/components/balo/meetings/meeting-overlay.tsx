@@ -138,11 +138,19 @@ export function MeetingMenuItem({
   label,
   onSelect,
   destructive = false,
+  badge = false,
 }: Readonly<{
   icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   label: string;
   onSelect: () => void;
   destructive?: boolean;
+  /**
+   * BAL-403 — a visual attention dot beside the icon. ⚠ THE CALLER'S `label` MUST ALREADY CARRY
+   * THE STATE (e.g. "Balance, needs attention") — this dot is `aria-hidden`, exactly like the
+   * toolbar's own unread/attention dots, because a purely visual marker is invisible to a
+   * screen-reader user.
+   */
+  badge?: boolean;
 }>): React.JSX.Element {
   return (
     <button
@@ -153,10 +161,19 @@ export function MeetingMenuItem({
         destructive ? 'text-destructive' : 'text-foreground'
       )}
     >
-      <Icon
-        className={cn('h-[19px] w-[19px]', destructive ? '' : 'text-muted-foreground')}
-        aria-hidden
-      />
+      <span className="relative inline-flex shrink-0">
+        <Icon
+          className={cn('h-[19px] w-[19px]', destructive ? '' : 'text-muted-foreground')}
+          aria-hidden
+        />
+        {badge ? (
+          <span
+            data-testid="menu-item-attention-dot"
+            aria-hidden="true"
+            className="bg-primary border-card pointer-events-none absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border-2"
+          />
+        ) : null}
+      </span>
       {label}
     </button>
   );

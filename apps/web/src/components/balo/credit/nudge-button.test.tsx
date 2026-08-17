@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
+import { track, SESSION_EVENTS } from '@/lib/analytics';
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -79,6 +80,28 @@ describe('NudgeButton', () => {
     render(<NudgeButton sessionId={SESSION_ID} label="Ask your admin to top up" />);
     await user.click(screen.getByRole('button', { name: 'Ask your admin to top up' }));
     expect(await screen.findByText('We let your admin know')).toBeInTheDocument();
+  });
+
+  describe('BAL-403 — session_nudge_clicked', () => {
+    it('fires on click, with the session id', async () => {
+      const user = userEvent.setup();
+      render(<NudgeButton sessionId={SESSION_ID} label="Let Sam know" adminName="Sam" />);
+
+      await user.click(screen.getByRole('button', { name: 'Let Sam know' }));
+
+      expect(track).toHaveBeenCalledWith(SESSION_EVENTS.NUDGE_CLICKED, { session_id: SESSION_ID });
+    });
+
+    it('⚠ fires even when the action then FAILS — the intent is what is recorded', async () => {
+      const user = userEvent.setup();
+      mockNudge.mockResolvedValue({ success: false, error: 'Could not send that nudge.' });
+      render(<NudgeButton sessionId={SESSION_ID} label="Let Sam know" adminName="Sam" />);
+
+      await user.click(screen.getByRole('button', { name: 'Let Sam know' }));
+
+      expect(track).toHaveBeenCalledWith(SESSION_EVENTS.NUDGE_CLICKED, { session_id: SESSION_ID });
+      expect(toast.error).toHaveBeenCalled();
+    });
   });
 
   it('has no accessibility violations', async () => {

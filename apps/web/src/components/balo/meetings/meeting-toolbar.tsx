@@ -10,6 +10,8 @@ import {
   Users,
   Video,
   VideoOff,
+  Wallet,
+  type LucideIcon,
 } from 'lucide-react';
 import type { MeetingPanelId } from '@/lib/meetings/meeting-panels';
 import { LeaveControl } from './leave-control';
@@ -109,6 +111,19 @@ export interface MeetingToolbarProps {
   readonly reactionControl?: React.ReactNode;
   /** BAL-437 — opens the picker from `MoreSheet`'s `md:hidden` row. Same registration signal. */
   readonly onOpenReactions?: () => void;
+  /** BAL-403 — focused when the Balance panel closes, so focus returns to its opener. */
+  readonly balanceButtonRef?: React.Ref<HTMLButtonElement>;
+  /**
+   * BAL-403 — ⚠ WHETHER THE **BALANCE** SLOT IS REGISTERED. `false` for every meeting today
+   * (nothing opens a credit session yet) — see `meeting-panels.ts`. `false`/`undefined` ⇒ the
+   * control is ABSENT, never disabled.
+   */
+  readonly hasBalance?: boolean;
+  /**
+   * BAL-403 — ⚠⚠ SET BY THE AUTO-OPEN LADDER while an escalation could not steal an open panel.
+   * Cleared the moment Balance is opened, by any route. See `drawdown-auto-open.ts`.
+   */
+  readonly balanceAttention?: boolean;
   /**
    * BAL-134 / ADR-1049 — ⚠⚠ THE SERVER'S END-AUTHORITY VERDICT (`isOwner || clientPrincipal`),
    * the only input to the end-for-everyone branch.
@@ -151,6 +166,9 @@ export function MeetingToolbar({
   unreadChat = false,
   reactionControl,
   onOpenReactions,
+  balanceButtonRef,
+  hasBalance = false,
+  balanceAttention = false,
   canEndMeeting,
   contextNoun,
   isCase,
@@ -224,6 +242,18 @@ export function MeetingToolbar({
             filesButtonRef={filesButtonRef}
           />
         )}
+        {/* ⚠⚠ BAL-403 — its OWN slot, not folded into `PanelSlotButtons` (that pair is People +
+            Files, gated together on one registration; Balance is a FOURTH, independent one —
+            `false` for every meeting today). `hidden lg:flex`, matching People/Files: it is NOT
+            part of the fixed mobile ladder (Mic · Camera · Chat · More · Leave), so its mobile
+            home is the More sheet row, exactly like People and Files. */}
+        <BalanceSlot
+          ref={balanceButtonRef}
+          hasBalance={hasBalance}
+          isOpen={openPanel === 'balance'}
+          attention={balanceAttention}
+          onTogglePanel={onTogglePanel}
+        />
         {/* ⚠⚠ BAL-437 — SLOT 3 ON MOBILE, AND VISIBLE AT EVERY WIDTH. See the file docblock for
             why this one control carries no breakpoint class and has no MoreSheet twin. */}
         <ChatSlot
@@ -246,6 +276,8 @@ export function MeetingToolbar({
           onOpenSettings={onOpenSettings}
           {...panelSlot}
           {...reactionSlot}
+          hasBalance={hasBalance}
+          balanceAttention={balanceAttention}
         />
         <span className="bg-border mx-1 hidden h-8 w-px md:block" aria-hidden="true" />
       </div>
@@ -306,57 +338,142 @@ const ChatSlot = forwardRef<
 >(function ChatSlot({ hasChat, isOpen, unread, onTogglePanel }, ref) {
   if (!hasChat || onTogglePanel === undefined) return null;
   return (
-    <ChatSlotButton
+    <PanelDotSlotButton
       ref={ref}
+      icon={MessageSquare}
+      baseLabel="Chat"
+      attentionLabel="Chat, new messages"
+      hasAttention={unread}
       isOpen={isOpen}
-      unread={unread}
+      openTooltip="Chat"
+      hideTooltip="Hide chat"
+      size="mobile"
+      // ⚠ NO BREAKPOINT CLASS, on purpose — Chat is visible from 320px up (the fixed mobile
+      // ladder's reserved slot 3). See the file docblock.
+      wrapperClassName="relative inline-flex shrink-0"
+      buttonClassName="md:h-12 md:w-12 md:rounded-[14px]"
+      dotTestId="chat-unread-dot"
       onToggle={() => onTogglePanel('chat')}
     />
   );
 });
 
 /**
- * BAL-437 — the Chat control plus its unread dot.
+ * BAL-403 fix round 1 (S2) — the shared dot-slot idiom `ChatSlotButton` and `BalanceSlotButton`
+ * were structurally identical copies of (~35 lines differing only in icon, label, tooltip,
+ * size, `className` and the dot's breakpoint). SonarCloud flags >3% new-code duplication;
+ * extracting the ONE shape both toolbar controls share is what keeps it under the gate.
  *
  * ⚠⚠ THE DOT IS A **SIBLING SPAN**, NOT A PROP ON `MeetingToolbarButton`. That primitive is
- * deliberately one `<button>` with one icon and no slots; growing it a badge API for one caller
- * would put a decoration into the control every other surface in this feature uses. The wrapper
- * is `relative` and the dot is `absolute`, so the 46/48px tap target is untouched.
+ * deliberately one `<button>` with one icon and no slots; growing it a badge API for these two
+ * callers would put a decoration into the control every other surface in this feature uses. The
+ * wrapper is `relative` and the dot is `absolute`, so the 46/48px tap target is untouched.
  *
  * ⚠⚠ THE DOT IS **NOT** THE ACCESSIBLE NAME, AND IT IS NOT `aria-hidden` EITHER. A purely
- * visual unread marker is invisible to a screen-reader user, so the state rides the accessible
- * name via a visually-hidden suffix — "Chat, new messages" — which is announced once when the
- * button is reached rather than shouted on every arrival through the §16 live region.
+ * visual marker is invisible to a screen-reader user, so the state rides the accessible name via
+ * a visually-hidden suffix (e.g. "Chat, new messages") — announced once when the button is
+ * reached, rather than shouted on every arrival through the §16 live region.
  *
- * ⚠ THE NAME STAYS "Chat" WHILE `aria-pressed` CARRIES OPEN/CLOSED, for the reason
+ * ⚠ THE NAME STAYS THE BASE LABEL WHILE `aria-pressed` CARRIES OPEN/CLOSED, for the reason
  * `MeetingToolbarButton.label` records: a name that changes beside a flipping `aria-pressed`
- * announces the opposite of the truth. The unread suffix is orthogonal to pressed-ness.
+ * announces the opposite of the truth. The dot suffix is orthogonal to pressed-ness.
  */
-const ChatSlotButton = forwardRef<
+const PanelDotSlotButton = forwardRef<
   HTMLButtonElement,
-  Readonly<{ isOpen: boolean; unread: boolean; onToggle: () => void }>
->(function ChatSlotButton({ isOpen, unread, onToggle }, ref) {
+  Readonly<{
+    icon: LucideIcon;
+    baseLabel: string;
+    attentionLabel: string;
+    hasAttention: boolean;
+    isOpen: boolean;
+    openTooltip: string;
+    hideTooltip: string;
+    size: 'mobile' | 'desktop';
+    /** ⚠ S1 — carried by the WRAPPER too, not just the button, so a `hidden lg:flex` button
+     * cannot leave a zero-width flex item still drawing `gap` on both sides below that width. */
+    wrapperClassName: string;
+    buttonClassName: string;
+    dotTestId: string;
+    onToggle: () => void;
+  }>
+>(function PanelDotSlotButton(
+  {
+    icon,
+    baseLabel,
+    attentionLabel,
+    hasAttention,
+    isOpen,
+    openTooltip,
+    hideTooltip,
+    size,
+    wrapperClassName,
+    buttonClassName,
+    dotTestId,
+    onToggle,
+  },
+  ref
+) {
   return (
-    <span className="relative inline-flex shrink-0">
+    <span className={wrapperClassName}>
       <MeetingToolbarButton
         ref={ref}
-        icon={MessageSquare}
-        label={unread ? 'Chat, new messages' : 'Chat'}
-        tooltip={isOpen ? 'Hide chat' : 'Chat'}
+        icon={icon}
+        label={hasAttention ? attentionLabel : baseLabel}
+        tooltip={isOpen ? hideTooltip : openTooltip}
         state={isOpen ? 'active' : 'default'}
         pressed={isOpen}
-        size="mobile"
+        size={size}
         onClick={onToggle}
-        className="md:h-12 md:w-12 md:rounded-[14px]"
+        className={buttonClassName}
       />
-      {unread ? (
+      {hasAttention ? (
         <span
-          data-testid="chat-unread-dot"
+          data-testid={dotTestId}
           aria-hidden="true"
           className="bg-primary border-background pointer-events-none absolute top-0.5 right-0.5 h-2.5 w-2.5 rounded-full border-2"
         />
       ) : null}
     </span>
+  );
+});
+
+/**
+ * BAL-403 — the Balance slot, ABSENT unless the panel registration AND the Balance registration
+ * are both present. `false` for every meeting today — see `meeting-panels.ts`.
+ *
+ * ⚠ `hidden lg:flex`, UNLIKE `ChatSlot` — Balance is NOT part of the fixed mobile ladder (Mic ·
+ * Camera · Chat · More · Leave), so its mobile home is the `MoreSheet` row, exactly like People
+ * and Files. See `PanelSlotButtons`'s docblock for why `lg` (not `md`) is the shared split.
+ */
+const BalanceSlot = forwardRef<
+  HTMLButtonElement,
+  Readonly<{
+    hasBalance: boolean;
+    isOpen: boolean;
+    attention: boolean;
+    onTogglePanel?: (id: MeetingPanelId) => void;
+  }>
+>(function BalanceSlot({ hasBalance, isOpen, attention, onTogglePanel }, ref) {
+  if (!hasBalance || onTogglePanel === undefined) return null;
+  return (
+    <PanelDotSlotButton
+      ref={ref}
+      icon={Wallet}
+      baseLabel="Balance"
+      attentionLabel="Balance, needs attention"
+      hasAttention={attention}
+      isOpen={isOpen}
+      openTooltip="Balance"
+      hideTooltip="Hide balance"
+      size="desktop"
+      // ⚠⚠ S1 — `hidden lg:flex` ON THE WRAPPER TOO. The button alone carried this class while
+      // the wrapper stayed a bare `inline-flex` — so below `lg` the wrapper was a zero-width
+      // flex item still drawing `gap` on both sides in the toolbar's flex row (~10px stray).
+      wrapperClassName="relative hidden shrink-0 lg:inline-flex"
+      buttonClassName="hidden lg:flex"
+      dotTestId="balance-attention-dot"
+      onToggle={() => onTogglePanel('balance')}
+    />
   );
 });
 
