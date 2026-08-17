@@ -19,7 +19,7 @@
  * delta-sync Google EVEN THOUGH GOOGLE CAN, because:
  *   1. the sync token is on `events.list`, while availability is sourced from `freeBusy.get`,
  *      which has NO delta mode on either provider;
- *   2. switching availability to full event reads violates the onecal skill's Constraint 4
+ *   2. switching availability to full event reads violates the apiroc skill's Constraint 4
  *      privacy posture (busy slots, no titles);
  *   3. a delta-fed cache feeds the ADVERTISE path from a different source than the ACCEPT
  *      path — the divergence `../availability/vendor-busy.ts` exists to make unrepresentable.
