@@ -91,7 +91,7 @@ import {
  * ⚠ SCAN A IS VACUOUSLY TRUE ON MERGE, AND THAT IS INTENDED — said plainly here rather than
  * implied away, in the register of `../notifications/web-schedulable-policy.test.ts:25-29`.
  * `syncToken` / `sync_token` appears NOWHERE in the repo today outside the matrix module and
- * the `onecal` skill's prose: the delta path was specified and never built, so the scan
+ * the `apiroc` skill's prose: the delta path was specified and never built, so the scan
  * currently catches nothing. It exists to become a LIVE TRIPWIRE the moment BAL-396 writes its
  * first `events.list({ syncToken })` — precisely the moment the mistake would be made, long
  * after the reasoning above has left anyone's head. A guard that implies it caught something
@@ -402,7 +402,7 @@ function providerNamesIn(raw: string): string[] {
 /**
  * ⚠ EVENT-CONTENT MARKERS — a SECOND ban, for the harm the sync-token ban does not cover.
  *
- * Reason (2) of the ruling is the onecal skill's Constraint 4 privacy posture: availability is
+ * Reason (2) of the ruling is the apiroc skill's Constraint 4 privacy posture: availability is
  * sourced from free/busy (busy slots, no titles), never from event bodies. Banning the CURSOR
  * does not ban that harm. An adapter written as
  *
@@ -590,7 +590,7 @@ describe('Layer 3 / Scan E — the sync path reads free/busy, never event conten
       markersInCode(readRaw(rel), EVENT_CONTENT_MARKERS),
       `${rel} reads calendar EVENT CONTENT on the availability path. Availability must reach a ` +
         `vendor only through vendorBusyProvider.listBusyBlocks, which is a windowed free/busy ` +
-        `read — busy slots, no titles (onecal skill, Constraint 4). A timestamp-differenced ` +
+        `read — busy slots, no titles (apiroc skill, Constraint 4). A timestamp-differenced ` +
         `events.list({ updatedAfter }) is the option ADR-1021's 2026-08-15 amendment REJECTED: ` +
         `it is a full event read AND it is blind to deletions, so a cancelled meeting never ` +
         `leaves the cache. Full event reads are sanctioned only for Balo's OWN tagged ` +
