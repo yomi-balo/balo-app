@@ -221,7 +221,7 @@ describe('useDrawdownPoll — failures', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DRAWDOWN_POLL_INTERVAL_MS * 3);
     });
-    expect(load.mock.calls.length).toBe(callsAtCap);
+    expect(load.mock.calls).toHaveLength(callsAtCap);
   });
 });
 
@@ -282,7 +282,7 @@ describe('useDrawdownPoll — ⚠⚠ C2, retry()', () => {
     load.mockResolvedValue(ok(stateFor()));
     act(() => result.current.retry());
 
-    await waitFor(() => expect(load.mock.calls.length).toBe(callsAtCap + 1));
+    await waitFor(() => expect(load.mock.calls).toHaveLength(callsAtCap + 1));
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(result.current.state?.key).toBe('healthy');
 
@@ -290,7 +290,7 @@ describe('useDrawdownPoll — ⚠⚠ C2, retry()', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DRAWDOWN_POLL_INTERVAL_MS);
     });
-    expect(load.mock.calls.length).toBe(callsAtCap + 2);
+    expect(load.mock.calls).toHaveLength(callsAtCap + 2);
   });
 
   it('re-fetches after a TERMINAL verdict too', async () => {
@@ -340,7 +340,7 @@ describe('useDrawdownPoll — ⚠⚠ fix round 2 (R6), retry() is guarded', () =
       // ⚠ A SECOND CLICK WHILE THE FIRST FETCH IS STILL OUTSTANDING — must not double-spend.
       result.current.retry();
     });
-    expect(load.mock.calls.length).toBe(callsAtCap + 1);
+    expect(load.mock.calls).toHaveLength(callsAtCap + 1);
 
     await act(async () => {
       resolveRetry(ok(stateFor()));
@@ -351,7 +351,7 @@ describe('useDrawdownPoll — ⚠⚠ fix round 2 (R6), retry() is guarded', () =
     // The latch released on settlement — a LATER retry() (not a burst) fetches again.
     load.mockResolvedValue(fail(false));
     act(() => result.current.retry());
-    await waitFor(() => expect(load.mock.calls.length).toBe(callsAtCap + 2));
+    await waitFor(() => expect(load.mock.calls).toHaveLength(callsAtCap + 2));
   });
 
   it('resets lastKeyRef — a retried fetch that fails again schedules at the BASELINE cadence, never a stale URGENT one', async () => {
@@ -377,13 +377,13 @@ describe('useDrawdownPoll — ⚠⚠ fix round 2 (R6), retry() is guarded', () =
     // retry()'s own fetch ALSO fails (retryable) — the failure branch it lands in never sets
     // `lastKeyRef`, so only `retry()`'s own reset can clear the stale `'grace'` key.
     act(() => result.current.retry());
-    await waitFor(() => expect(load.mock.calls.length).toBe(callsAtCap + 1));
+    await waitFor(() => expect(load.mock.calls).toHaveLength(callsAtCap + 1));
 
     // If `lastKeyRef` were still `'grace'`, this would already have fired a fetch.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DRAWDOWN_POLL_URGENT_INTERVAL_MS);
     });
-    expect(load.mock.calls.length).toBe(callsAtCap + 1);
+    expect(load.mock.calls).toHaveLength(callsAtCap + 1);
 
     // It fires only once the full BASELINE interval has elapsed.
     await act(async () => {
@@ -391,7 +391,7 @@ describe('useDrawdownPoll — ⚠⚠ fix round 2 (R6), retry() is guarded', () =
         DRAWDOWN_POLL_INTERVAL_MS - DRAWDOWN_POLL_URGENT_INTERVAL_MS
       );
     });
-    expect(load.mock.calls.length).toBe(callsAtCap + 2);
+    expect(load.mock.calls).toHaveLength(callsAtCap + 2);
   });
 });
 

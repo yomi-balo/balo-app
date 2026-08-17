@@ -259,18 +259,21 @@ describe('InCallBalancePanel — accessibility', () => {
     expect(await axe(container)).toHaveNoViolations();
   }, 15000);
 
-  it('has no violations, loading', async () => {
-    const { container } = renderPanel(null, { status: 'loading', sessionId: null });
-    expect(await axe(container)).toHaveNoViolations();
-  }, 15000);
-
-  it('has no violations, error with no last-known state', async () => {
-    const { container } = renderPanel(null, { status: 'error', sessionId: null });
-    expect(await axe(container)).toHaveNoViolations();
-  }, 15000);
-
-  it('⚠⚠ R2 — has no violations, denied/vanished (state null, status ready)', async () => {
-    const { container } = renderPanel(null, { status: 'ready', sessionId: null });
-    expect(await axe(container)).toHaveNoViolations();
-  }, 15000);
+  // The three no-state arms differ only by `status`, but each renders a DIFFERENT card, so axe
+  // has to run once per arm rather than once for `state === null`:
+  //   loading → the skeleton · error → PanelErrorCard · ready → BalanceUnavailableCard.
+  // ⚠⚠ The `ready` row is R2's denied/vanished arm — the one that used to render an empty
+  // landmark. Do not collapse this table to a single case.
+  it.each([
+    { status: 'loading', arm: 'first-load skeleton' },
+    { status: 'error', arm: 'error card, no last-known state' },
+    { status: 'ready', arm: 'R2 denied/vanished — BalanceUnavailableCard' },
+  ] as const)(
+    'has no violations with no state ($arm)',
+    async ({ status }) => {
+      const { container } = renderPanel(null, { status, sessionId: null });
+      expect(await axe(container)).toHaveNoViolations();
+    },
+    15000
+  );
 });
