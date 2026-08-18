@@ -64,10 +64,16 @@ import { CalendarNotConnectedError, CalendarAuthError } from './errors';
 const EXPERT_ID = 'expert-profile-123';
 
 const makeConnection = (
-  overrides: Partial<{ tokenExpiresAt: Date; accessToken: string; refreshToken: string }> = {}
+  overrides: Partial<{
+    tokenExpiresAt: Date;
+    accessToken: string;
+    refreshToken: string;
+    provider: string;
+  }> = {}
 ) => ({
   id: 'conn-1',
   expertProfileId: EXPERT_ID,
+  provider: 'google',
   accessToken: 'encrypted-access',
   refreshToken: 'encrypted-refresh',
   tokenExpiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2h from now
@@ -123,12 +129,39 @@ describe('token-manager', () => {
       const result = await getValidAccessToken(EXPERT_ID);
 
       expect(result).toBe('new-access-token');
-      expect(mockUpdateConnectionTokens).toHaveBeenCalledWith(EXPERT_ID, {
+      // A2 (security review CRITICAL) — `provider` MUST be threaded through so the
+      // repository write is scoped to this connection's own provider, not merely this
+      // expert (an expert-scoped-only write can land on a DIFFERENT provider's row once
+      // an expert holds two live connections).
+      expect(mockUpdateConnectionTokens).toHaveBeenCalledWith(EXPERT_ID, 'google', {
         accessToken: 'encrypted_new-access-token',
         refreshToken: 'encrypted_new-refresh-token',
         tokenExpiresAt: expect.any(Date),
       });
       expect(mockTrackServer).toHaveBeenCalled();
+    });
+
+    it("scopes the token write to the connection's OWN provider, not merely the expert (A2 regression pin)", async () => {
+      const connection = makeConnection({
+        provider: 'microsoft',
+        tokenExpiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      });
+      mockFindConnectionByExpertProfileId.mockResolvedValue(connection);
+
+      const mockRefresh = vi.fn().mockResolvedValue({
+        access_token: 'new-access-token',
+        refresh_token: 'new-refresh-token',
+        expires_in: 3600,
+      });
+      mockGetCronofyAppClient.mockReturnValue({ refreshAccessToken: mockRefresh });
+
+      await getValidAccessToken(EXPERT_ID);
+
+      expect(mockUpdateConnectionTokens).toHaveBeenCalledWith(
+        EXPERT_ID,
+        'microsoft',
+        expect.anything()
+      );
     });
 
     it('handles refresh without new refresh token', async () => {
@@ -146,7 +179,7 @@ describe('token-manager', () => {
 
       await getValidAccessToken(EXPERT_ID);
 
-      expect(mockUpdateConnectionTokens).toHaveBeenCalledWith(EXPERT_ID, {
+      expect(mockUpdateConnectionTokens).toHaveBeenCalledWith(EXPERT_ID, 'google', {
         accessToken: 'encrypted_new-access-token',
         refreshToken: undefined,
         tokenExpiresAt: expect.any(Date),
@@ -181,6 +214,35 @@ describe('token-manager', () => {
       expect(mockUpdateConnectionStatus).not.toHaveBeenCalled();
     });
 
+    it('throws CalendarNotConnectedError for an Apiroc-shaped row (null tokenExpiresAt)', async () => {
+      // BAL-467: an Apiroc-shaped row stores only end_user_account_id — no Cronofy
+      // token fields — so the oldest-live-first lookup must not NPE on `.getTime()`.
+      const connection = makeConnection({
+        tokenExpiresAt: null as unknown as Date,
+      });
+      mockFindConnectionByExpertProfileId.mockResolvedValue(connection);
+
+      await expect(getValidAccessToken(EXPERT_ID)).rejects.toThrow(CalendarNotConnectedError);
+    });
+
+    it('throws CalendarNotConnectedError for an Apiroc-shaped row (null accessToken)', async () => {
+      const connection = makeConnection({
+        accessToken: null as unknown as string,
+      });
+      mockFindConnectionByExpertProfileId.mockResolvedValue(connection);
+
+      await expect(getValidAccessToken(EXPERT_ID)).rejects.toThrow(CalendarNotConnectedError);
+    });
+
+    it('throws CalendarNotConnectedError for an Apiroc-shaped row (null refreshToken)', async () => {
+      const connection = makeConnection({
+        refreshToken: null as unknown as string,
+      });
+      mockFindConnectionByExpertProfileId.mockResolvedValue(connection);
+
+      await expect(getValidAccessToken(EXPERT_ID)).rejects.toThrow(CalendarNotConnectedError);
+    });
+
     it('throws when CRONOFY_CLIENT_ID is missing during refresh', async () => {
       delete process.env.CRONOFY_CLIENT_ID;
       const connection = makeConnection({
@@ -197,6 +259,17 @@ describe('token-manager', () => {
   describe('forceRefreshToken', () => {
     it('throws CalendarNotConnectedError when no connection found', async () => {
       mockFindConnectionByExpertProfileId.mockResolvedValue(undefined);
+
+      await expect(forceRefreshToken(EXPERT_ID)).rejects.toThrow(CalendarNotConnectedError);
+    });
+
+    it('throws CalendarNotConnectedError for an Apiroc-shaped row (null token fields)', async () => {
+      const connection = makeConnection({
+        accessToken: null as unknown as string,
+        refreshToken: null as unknown as string,
+        tokenExpiresAt: null as unknown as Date,
+      });
+      mockFindConnectionByExpertProfileId.mockResolvedValue(connection);
 
       await expect(forceRefreshToken(EXPERT_ID)).rejects.toThrow(CalendarNotConnectedError);
     });

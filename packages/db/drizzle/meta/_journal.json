@@ -470,6 +470,13 @@
       "when": 1786714873171,
       "tag": "0066_bal134_meeting_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1787013949994,
+      "tag": "0067_bal467_apiroc_per_provider_connections",
+      "breakpoints": true
     }
   ]
 }

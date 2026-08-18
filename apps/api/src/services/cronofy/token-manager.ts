@@ -15,11 +15,25 @@ export async function getValidAccessToken(expertProfileId: string): Promise<stri
   if (!connection) {
     throw new CalendarNotConnectedError(expertProfileId);
   }
+  if (
+    connection.tokenExpiresAt === null ||
+    connection.accessToken === null ||
+    connection.refreshToken === null
+  ) {
+    // BAL-467: an Apiroc-shaped row stores only end_user_account_id — Balo holds no
+    // provider tokens for Apiroc — so there is no Cronofy credential to refresh here.
+    throw new CalendarNotConnectedError(expertProfileId);
+  }
 
   const expiresIn = connection.tokenExpiresAt.getTime() - Date.now();
 
   if (expiresIn < ONE_HOUR_MS) {
-    return refreshAccessToken(expertProfileId, connection.id, connection.refreshToken);
+    return refreshAccessToken(
+      expertProfileId,
+      connection.provider,
+      connection.id,
+      connection.refreshToken
+    );
   }
 
   return decryptCalendarToken(connection.accessToken);
@@ -33,16 +47,36 @@ export async function forceRefreshToken(expertProfileId: string): Promise<string
   if (!connection) {
     throw new CalendarNotConnectedError(expertProfileId);
   }
+  if (
+    connection.tokenExpiresAt === null ||
+    connection.accessToken === null ||
+    connection.refreshToken === null
+  ) {
+    // BAL-467: an Apiroc-shaped row stores only end_user_account_id — Balo holds no
+    // provider tokens for Apiroc — so there is no Cronofy credential to refresh here.
+    throw new CalendarNotConnectedError(expertProfileId);
+  }
 
-  return refreshAccessToken(expertProfileId, connection.id, connection.refreshToken);
+  return refreshAccessToken(
+    expertProfileId,
+    connection.provider,
+    connection.id,
+    connection.refreshToken
+  );
 }
 
 /**
  * Refreshes the access token using the encrypted refresh token.
  * On `invalid_grant`, marks the connection as `auth_error`.
+ *
+ * `provider` (BAL-467 fix brief A2) is threaded through so `updateConnectionTokens` can
+ * scope its write to THIS (expert, provider) connection — see that method's docblock for
+ * why an expert-scoped-only write is unsafe now that an expert may hold two live
+ * connections.
  */
 async function refreshAccessToken(
   expertProfileId: string,
+  provider: string,
   connectionId: string,
   encryptedRefreshToken: string
 ): Promise<string> {
@@ -65,7 +99,7 @@ async function refreshAccessToken(
 
     const expiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000);
 
-    await calendarRepository.updateConnectionTokens(expertProfileId, {
+    await calendarRepository.updateConnectionTokens(expertProfileId, provider, {
       accessToken: encryptCalendarToken(tokenResponse.access_token),
       refreshToken: tokenResponse.refresh_token
         ? encryptCalendarToken(tokenResponse.refresh_token)
