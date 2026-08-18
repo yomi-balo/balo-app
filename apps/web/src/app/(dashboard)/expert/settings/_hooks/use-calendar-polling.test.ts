@@ -27,6 +27,8 @@ import { useCalendarPolling } from './use-calendar-polling';
 import type { CalendarConnection } from '../_types/calendar';
 
 const connectedResult: CalendarConnection = {
+  // BAL-396 fix round 2, Finding 6 — required field.
+  provider: 'google',
   status: 'connected',
   providerEmail: 'test@gmail.com',
   lastSyncedAt: null,

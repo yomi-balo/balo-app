@@ -29,6 +29,8 @@ const mockStartReviewNudgeSweep = vi.fn();
 const mockRegisterReviewNudgeSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartMeetingLifecycleSweep = vi.fn();
 const mockRegisterMeetingLifecycleSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartCalendarHealthProbe = vi.fn();
+const mockRegisterCalendarHealthProbeCron = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -96,6 +98,15 @@ vi.mock('./meeting-lifecycle-sweep.js', () => ({
   startMeetingLifecycleSweepWorker: () => mockStartMeetingLifecycleSweep(),
   registerMeetingLifecycleSweepCron: () => mockRegisterMeetingLifecycleSweepCron(),
 }));
+// BAL-396: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in BAL-378, BAL-380, BAL-387, BAL-420, BAL-390 and BAL-134 — six tickets in a row. It
+// must land in the SAME COMMIT as the `worker.ts` registration.
+vi.mock('./calendar-health-probe.js', () => ({
+  startCalendarHealthProbeWorker: () => mockStartCalendarHealthProbe(),
+  registerCalendarHealthProbeCron: () => mockRegisterCalendarHealthProbeCron(),
+}));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
 }));
@@ -129,6 +140,8 @@ describe('startWorkers', () => {
     expect(mockStartAvailabilityCache).not.toHaveBeenCalled();
     expect(mockStartScheduledNotificationDispatch).not.toHaveBeenCalled();
     expect(mockRegisterScheduledNotificationDispatchCron).not.toHaveBeenCalled();
+    expect(mockStartCalendarHealthProbe).not.toHaveBeenCalled();
+    expect(mockRegisterCalendarHealthProbeCron).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -165,6 +178,8 @@ describe('startWorkers', () => {
     expect(mockRegisterReviewNudgeSweepCron).toHaveBeenCalled();
     expect(mockStartMeetingLifecycleSweep).toHaveBeenCalled();
     expect(mockRegisterMeetingLifecycleSweepCron).toHaveBeenCalled();
+    expect(mockStartCalendarHealthProbe).toHaveBeenCalled();
+    expect(mockRegisterCalendarHealthProbeCron).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

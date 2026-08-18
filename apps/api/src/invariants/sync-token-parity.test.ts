@@ -11,8 +11,8 @@ import {
 } from '../services/calendar/sync-capability.js';
 
 /**
- * BAL-447 / ADR-1021 (amendment 2026-08-15) — NOBODY MAY ASSUME SYNC-TOKEN PARITY, AND
- * NOBODY MAY DELTA-SYNC.
+ * BAL-447 / ADR-1021 (amendment 2026-08-15, amended again 18 Aug 2026 for BAL-396) — NOBODY
+ * MAY ASSUME SYNC-TOKEN PARITY, AND NOBODY MAY DELTA-SYNC.
  *
  * The ruling this file guards:
  *
@@ -20,7 +20,8 @@ import {
  * > bare trigger that enqueues a whole-window availability rebuild; availability is always
  * > recomputed from a windowed free/busy read via `vendorBusyProvider.listBusyBlocks`.
  * > `syncToken` / `nextSyncToken` is never read and never stored. There is no
- * > provider-conditional sync path.
+ * > provider-conditional sync path, and no code outside the vendor boundary reads calendar
+ * > EVENT CONTENT on the availability path.
  *
  * ⚠⚠ THE BAR THIS FILE IS WRITTEN TO: IT MUST FAIL WHEN SOMEONE WRITES DELTA-READ CODE, NOT
  * MERELY WHEN SOMEONE FLIPS A BOOLEAN. `expect(microsoft.supportsSyncToken).toBe(false)` on
@@ -38,61 +39,86 @@ import {
  *
  * ⚠⚠ EVERY LAYER-3 SCAN DERIVES ITS SUBJECTS FROM A DIRECTORY WALK; NONE OF THEM PINS A FILE
  * LIST. `repositories-never-notify.test.ts` pins one — correct there, because its subjects are
- * shipped repositories. Here the code being guarded against DOES NOT EXIST YET (BAL-396 writes
- * the Apiroc adapter), and a pinned list would pass VACUOUSLY for exactly the future files that
- * matter. Scan A walks all of `apps/api/src`; Scan B walks `PROVIDER_SCAN_DIRS`; Scan E walks the
- * strictly wider `EVENT_CONTENT_SCAN_DIRS`. `SYNC_PATH_FILES` survives only as an asserted SUBSET
- * sanity check — it is no longer any scan's subject, because a pinned subject let BAL-396 opt out
- * by simply adding a NEW file (empirically reproduced during review: a fresh
- * `services/calendar/<name>.ts` containing `switch (provider)` passed every assertion in this
- * file). Deriving from the walk closes that BY CONSTRUCTION.
+ * shipped repositories. Here new files are exactly the risk (BAL-396 wrote the whole Apiroc
+ * adapter after this file first shipped), and a pinned list would pass VACUOUSLY for exactly
+ * the future files that matter. Scans A, B and E all walk `ALL_SOURCE_FILES` — the full
+ * `apps/api/src` tree — and subtract only their own NAMED exemptions.
+ * `SYNC_PATH_FILES` survives only as an asserted SUBSET sanity check — it is no scan's subject
+ * list, because a pinned subject let a new file opt out by simply not being listed (empirically
+ * reproduced during BAL-447's review: a fresh `services/calendar/<name>.ts` containing
+ * `switch (provider)` passed every assertion in this file). Deriving from the walk closes that
+ * BY CONSTRUCTION.
  *
- * ⚠⚠ SCAN B AND SCAN E DO **NOT** SHARE A BOUNDARY, AND THE ASYMMETRY IS THE DESIGN. Each scan
- * gets the WIDEST directory set it can carry with ZERO exemptions — because the moment a boundary
- * needs an allowlist it starts growing one, and this file forbids that elsewhere.
- *   · Scan B (provider names / branch forms) is the NARROWER of the two, and narrower ONLY
- *     because three existing files under `routes/calendar/` legitimately name both providers:
- *     `auth.ts` (the `z.enum(['google','microsoft'])` connect surface), `api.ts` (the
- *     `office365` ↔ `microsoft` translation), and `types.ts` (the frontend-facing
- *     `CalendarProvider` union). Scanning that directory for provider names would flag exactly
- *     the code that is fine, and a three-file exemption is the allowlist this file forbids. So
- *     Scan B narrows the DIRECTORY instead and carries `routes/calendar/webhook.ts` as a pinned
- *     addition.
- *   · Scan E (event-content reads) carries `routes/calendar/` IN FULL, with no exemption list,
- *     because none is needed: `events.list` / `updatedAfter` / `expandRecurrences` appear
- *     NOWHERE under that directory today — it is Cronofy-era code — and nothing there ever
- *     should read event content. Reusing Scan B's narrower set here would have been a
- *     coincidence of implementation, not a boundary anyone argued for.
- *   Scan E's wider boundary is DELIBERATELY AIMED AT BAL-396: `routes/calendar/` is exactly where
- *   the Apiroc/Svix webhook receiver will land, and a new route file there doing
- *   `events.list(acct, cal, { updatedAfter: lastSyncedAt })` is the single most likely form of the
- *   option ADR-1021's 2026-08-15 amendment rejected. Under the old shared boundary that file
- *   evaded Scan E entirely. It no longer does.
+ * ⚠⚠ ADR-1021's 18 Aug 2026 (BAL-396) AMENDMENT §1/§2 WIDENED SCANS B AND E FROM A
+ * THREE-/FOUR-DIRECTORY ALLOWLIST TO TREE-WIDE, EACH WITH ONLY NAMED EXEMPTIONS:
+ *   · Scan B (provider literals) now walks ALL of `apps/api/src`, exempting exactly
+ *     `lib/apiroc/` (the vendor boundary — the SDK's uppercase `ProviderType` and the display
+ *     labels it drives) and `routes/calendar/` (the connect surface — the `z.enum(['google',
+ *     'microsoft'])` and the `office365` translation). Nowhere else may a provider name or a
+ *     provider branch appear — this is now genuinely wider than the old boundary:
+ *     `services/meetings/`, `services/consultation-events/`, `services/auth/`, all of `lib/`
+ *     except `lib/apiroc/`, all of `routes/` except `routes/calendar/`, and `notifications/`
+ *     are newly covered.
+ *   · Scan E (event-content reads) now walks ALL of `apps/api/src`, exempting exactly
+ *     `services/consultation-events/` — the one directory ADR-1021 §2 sanctions for a full
+ *     event-content read (Balo's OWN tagged consultation events; write / delete / reconcile).
+ *     It ALSO carries a SHAPE GATE unique to that exemption: an `events.list` inside it must
+ *     ALSO carry `metadataFilters` AND `nextPageToken` — tag-filtered AND paginated to
+ *     exhaustion, never a bare listing. `updatedAfter` / `expandRecurrences` stay banned
+ *     TREE-WIDE, including inside that one exemption — there is no reading list content by
+ *     timestamp-diff anywhere, ever.
+ *   · The two exemption sets are DISJOINT, and that disjointness is itself asserted (Scan E's
+ *     final property): `services/consultation-events/` is scanned by Scan B (it may name no
+ *     provider), and `lib/apiroc/` + `routes/calendar/` are scanned by Scan E (they may read
+ *     no event content). No directory is exempt from both.
+ *   · Scan C, scoped to the now-deleted `routes/calendar/webhook.ts` (Cronofy's bare-trigger
+ *     receiver), is RETIRED — its subject no longer exists, and the property it guarded
+ *     (`changes_since` declared but never read) is structurally unrepresentable once the
+ *     Cronofy payload type is gone. It is REPLACED by a sharper assertion that the live
+ *     Apiroc free/busy port (`services/availability/vendor-busy.ts`) makes a genuine
+ *     `freeBusy.get` call, reads no event content, and is the ONLY thing either availability
+ *     consumer calls into a vendor through.
+ *
+ * ⚠⚠ FIX ROUND 2 (BAL-396, Finding 3) — THE WALK PREVIOUSLY SAW NO `.tsx` FILE AT ALL. Scans B
+ * and E's "tree-wide" claim above was true only of `.ts` files: `collectSourceFiles` filtered on
+ * `entry.name.endsWith('.ts')`, which is false for every `.tsx` file. All 51 files under
+ * `notifications/channels/templates/` — including this ticket's own new
+ * `calendar-reconnect-required.tsx` — were silently unscanned. The docblock's own anti-vacuity
+ * witness for that directory (`templates/index.ts`) made the coverage LOOK proven: it is the
+ * ONE `.ts` file there, so it said nothing about the other 50. Fixed by widening the walk to
+ * `.ts` AND `.tsx` — same shape as this repo's existing precedent,
+ * `notifications/channels/templates/review-emails.test.ts`'s
+ * `entry.endsWith('.ts') || entry.endsWith('.tsx')` scan — and by re-pointing the anti-vacuity
+ * witnesses at a genuine `.tsx` file so the claim is honest going forward.
+ *
+ * Widening surfaced a REAL false positive, fixed alongside it: `templates/shared.tsx` and
+ * `templates/review-email-shared.tsx` both carry a CSS font stack containing
+ * `fonts.googleapis.com` and `-apple-system` — ordinary English/CSS words that are substrings
+ * of the provider names `google` / `apple`, with zero connection to a calendar provider.
+ * `PROVIDER_NAMES` matching is a bare substring scan, so it cannot tell "font stack" from
+ * "provider literal" by the word alone. Rather than exempt the two files outright (which would
+ * also blind Scan B to a REAL provider literal added to them later), `providerNamesIn` now
+ * strips exactly those two idioms before matching — narrower than a file exemption, and itself
+ * covered by a positive/negative regression control below.
  *
  * ⚠⚠ WHAT THIS GUARD DOES **NOT** CATCH — stated plainly, because a guard whose limits are
  * unwritten gets read as total:
- *   1. PROVIDER CONDITIONALITY IN A NEW FILE UNDER `routes/calendar/`. That directory is outside
- *      `PROVIDER_SCAN_DIRS` for the reason given in the asymmetry note above — three existing
- *      files there legitimately name both providers, and the fix for a directory that trips a
- *      legitimate file is NARROW THE DIRECTORY, never weaken the matcher or grow an exemption
- *      list. `routes/calendar/webhook.ts` is carried as a pinned addition, but a NEW file there
- *      (BAL-396's webhook receiver) is unscanned by Scan B and could branch on the provider.
- *      ⚠ THE RESIDUE IS NARROWER THAN IT LOOKS: such a file is still fully covered by Scan A
- *      (no sync token, tree-wide) and by Scan E (no event content — `routes/calendar/` IS inside
- *      `EVENT_CONTENT_SCAN_DIRS`). What escapes is provider CONDITIONALITY alone, on a path that
- *      can neither read a cursor nor read event content.
- *   2. DELTA CODE OUTSIDE `apps/api/src` — `apps/web`, `packages/db`, a worker in another
+ *   1. DELTA CODE OUTSIDE `apps/api/src` — `apps/web`, `packages/db`, a worker in another
  *      package. The walk root is `apps/api/src` and nothing here reaches past it.
- *   3. A DELTA READ SPELLED IN VOCABULARY NO MARKER SET NAMES. The scans are keyword scans over
+ *   2. A DELTA READ SPELLED IN VOCABULARY NO MARKER SET NAMES. The scans are keyword scans over
  *      source text; a vendor SDK that calls its cursor something else entirely slips through.
- *   4. SOMEONE DELETING THIS FILE. No test guards its own existence.
+ *   3. SOMEONE DELETING THIS FILE. No test guards its own existence.
+ *   4. PROVIDER CONDITIONALITY OR EVENT-CONTENT READS INSIDE `lib/apiroc/` OR
+ *      `routes/calendar/` (Scan B's exemptions) OR INSIDE `services/consultation-events/`
+ *      (Scan E's exemption) — each is scanned by the OTHER ban (Scan E / Scan B respectively,
+ *      per the disjointness property), never by both.
  * Layers 1 and 2 are unaffected by all four — they are property assertions over the matrix.
  *
  * ⚠ SCAN A IS VACUOUSLY TRUE ON MERGE, AND THAT IS INTENDED — said plainly here rather than
  * implied away, in the register of `../notifications/web-schedulable-policy.test.ts:25-29`.
  * `syncToken` / `sync_token` appears NOWHERE in the repo today outside the matrix module and
  * the `apiroc` skill's prose: the delta path was specified and never built, so the scan
- * currently catches nothing. It exists to become a LIVE TRIPWIRE the moment BAL-396 writes its
+ * currently catches nothing. It exists to become a LIVE TRIPWIRE the moment anyone writes a
  * first `events.list({ syncToken })` — precisely the moment the mistake would be made, long
  * after the reasoning above has left anyone's head. A guard that implies it caught something
  * it did not is worse than no guard.
@@ -119,7 +145,8 @@ import {
  * line (`isCommentLine`). That errs toward FALSE ALARMS — a trailing `const x = 1; // syncToken`
  * or a block-comment body line not starting with `*` will trip it — and that direction is the
  * correct one to be wrong in for a fail-closed invariant. It is NOT a tokenizer and does not
- * claim to be.
+ * claim to be. THIS IS ALSO WHY A REQUIRED marker (the Scan E shape gate) is checked the SAME
+ * way: a comment claiming pagination happens is not evidence that it does.
  *
  * ⚠ NOTE / FOLLOW-UP FOR `packages/shared` (deliberately NOT fixed here). `stripComments` in
  * `packages/shared/src/testing/strip-comments.ts` has the string-literal bug described above.
@@ -180,19 +207,10 @@ function markersInCode(raw: string, markers: readonly string[]): string[] {
   return markers.filter((marker) => code.includes(marker));
 }
 
-/** Non-overlapping occurrences of `needle` in `haystack`. No regex (S5852). */
-function occurrenceCount(haystack: string, needle: string): number {
-  let count = 0;
-  let at = haystack.indexOf(needle);
-  while (at !== -1) {
-    count += 1;
-    at = haystack.indexOf(needle, at + needle.length);
-  }
-  return count;
-}
-
 /**
- * Every non-test, non-`.d.ts` TypeScript file under `apps/api/src`, as paths relative to it.
+ * Every non-test, non-`.d.ts` TypeScript file under `apps/api/src` — `.ts` AND `.tsx`
+ * (BAL-396 fix round 2, Finding 3: a `.ts`-only filter left every `.tsx` file, all 51 of them
+ * under `notifications/channels/templates/`, unscanned) — as paths relative to it.
  *
  * Test files are excluded because a test may legitimately NAME a forbidden construct while
  * proving it absent — this file being the obvious example.
@@ -206,7 +224,7 @@ function collectSourceFiles(dir: string, prefix: string): string[] {
       out.push(...collectSourceFiles(path.join(dir, entry.name), rel));
       continue;
     }
-    if (!entry.name.endsWith('.ts')) continue;
+    if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.tsx')) continue;
     if (entry.name.endsWith('.d.ts')) continue;
     if (entry.name.includes('.test.') || entry.name.includes('.spec.')) continue;
     out.push(rel);
@@ -215,6 +233,11 @@ function collectSourceFiles(dir: string, prefix: string): string[] {
 }
 
 const ALL_SOURCE_FILES = collectSourceFiles(SRC_DIR, '');
+
+/** True when `rel` equals, or falls under, one of `dirsOrFiles`. No regex (S5852). */
+function isUnderAny(rel: string, dirsOrFiles: readonly string[]): boolean {
+  return dirsOrFiles.some((entry) => rel === entry || rel.startsWith(entry));
+}
 
 // ── Layer 1 — DATA: the observed divergence is still recorded ────────────────────────────
 
@@ -274,11 +297,6 @@ describe('Layer 2 — the sync strategy is uniform and provider-agnostic', () =>
 
 // ── Layer 3 — SOURCE ─────────────────────────────────────────────────────────────────────
 
-/**
- * ⚠ `changes_since` IS NOT A MARKER HERE, AND CANNOT BE: `routes/calendar/webhook.ts:14`
- * DECLARES it on the Cronofy payload type. Scan C is its correct home, where
- * *declared-but-never-read* is asserted — a sharper property than a ban would have been.
- */
 const SYNC_TOKEN_MARKERS = ['syncToken', 'SyncToken', 'sync_token'] as const;
 
 const MATRIX_REL = 'services/calendar/sync-capability.ts';
@@ -298,21 +316,22 @@ const SCAN_A_EXEMPT = [
   'invariants/',
 ] as const;
 
-function isExemptFromScanA(rel: string): boolean {
-  return SCAN_A_EXEMPT.some((exempt) => rel.startsWith(exempt));
-}
-
 describe('Layer 3 / Scan A — no module under apps/api reads or stores a sync token', () => {
-  const scanned = ALL_SOURCE_FILES.filter((rel) => !isExemptFromScanA(rel));
+  const scanned = ALL_SOURCE_FILES.filter((rel) => !isUnderAny(rel, SCAN_A_EXEMPT));
 
   it('scans the full apps/api source surface (guards a vacuous pass)', () => {
-    // 164 non-test, non-`.d.ts` .ts files today. A walk that resolved the wrong directory,
-    // or silently returned [], would pass every absence assertion below for the wrong reason.
-    // The floor is deliberately loose — this asserts "the walk ran", not a file census.
-    expect(ALL_SOURCE_FILES.length).toBeGreaterThan(120);
-    expect(ALL_SOURCE_FILES).toContain('routes/calendar/webhook.ts');
+    // 240+ non-test, non-`.d.ts` `.ts`/`.tsx` files today (190+ `.ts`, 51 `.tsx` — BAL-396 fix
+    // round 2, Finding 3 widened the walk to include `.tsx`). A walk that resolved the wrong
+    // directory, or silently returned [], would pass every absence assertion below for the
+    // wrong reason. The floor is deliberately loose — this asserts "the walk ran", not a file
+    // census.
+    expect(ALL_SOURCE_FILES.length).toBeGreaterThan(200);
     expect(ALL_SOURCE_FILES).toContain('services/availability/vendor-busy.ts');
     expect(ALL_SOURCE_FILES).toContain(MATRIX_REL);
+    // A genuine `.tsx` file — proves the walk really does pick up that extension now.
+    expect(ALL_SOURCE_FILES).toContain(
+      'notifications/channels/templates/calendar-reconnect-required.tsx'
+    );
   });
 
   it('the exemption removed the matrix, and removed only what it claims to', () => {
@@ -323,8 +342,8 @@ describe('Layer 3 / Scan A — no module under apps/api reads or stores a sync t
     expect(scanned).not.toContain(MATRIX_REL);
     expect(
       ALL_SOURCE_FILES.length - scanned.length,
-      'Scan A exempted nothing — `isExemptFromScanA` has become a no-op, so the "the matcher ' +
-        'fires on real repo content" control below is the only thing still proving the scan works.'
+      'Scan A exempted nothing — `isUnderAny` has become a no-op, so the "the matcher fires on ' +
+        'real repo content" control below is the only thing still proving the scan works.'
     ).toBeGreaterThanOrEqual(1);
   });
 
@@ -383,19 +402,38 @@ describe('Layer 3 / Scan A — no module under apps/api reads or stores a sync t
 });
 
 /**
- * ⚠⚠ NEVER USE A BARE `provider` MARKER. Four of the five files `SYNC_PATH_FILES` names contain
- * `vendorBusyProvider` / `VendorBusyProvider` — THE PORT ITSELF, the abstraction the ruling
- * depends on — and `routes/calendar/webhook.ts` logs the prose `'disconnected by provider'`.
- * A bare marker would flag exactly the code that makes the invariant true. If widening
- * `PROVIDER_SCAN_DIRS` ever trips a legitimate file, NARROW THE DIRECTORY SET — never these two
- * lists.
+ * ⚠⚠ NEVER USE A BARE `provider` MARKER. Several sync-path files contain `vendorBusyProvider` /
+ * `VendorBusyProvider` — THE PORT ITSELF, the abstraction the ruling depends on. A bare marker
+ * would flag exactly the code that makes the invariant true.
  */
 const PROVIDER_NAMES = ['google', 'microsoft', 'apple', 'icloud'] as const;
 const PROVIDER_BRANCH_FORMS = ['provider ===', 'switch (provider'] as const;
 
-/** Which known provider names a source's CODE lines name, case-insensitively. */
+/**
+ * BAL-396 fix round 2, Finding 3 — the two idioms `PROVIDER_NAMES`' bare substring scan cannot
+ * tell apart from a real provider literal: `templates/shared.tsx` and
+ * `templates/review-email-shared.tsx`'s CSS font stack contains `fonts.googleapis.com`
+ * (substring `google`) and `-apple-system` (substring `apple`), neither with any connection to
+ * a calendar provider. Stripped before matching so Scan B keeps catching an actual `google` /
+ * `apple` literal anywhere else, including elsewhere in these same two files — see the file
+ * docblock for why this is narrower, and safer, than exempting the files outright.
+ */
+const KNOWN_SAFE_PROVIDER_SUBSTRINGS = ['googleapis', '-apple-system'] as const;
+
+/** `text` with every occurrence of a known-safe substring removed. `split`/`join`, not regex
+ *  (S5852) — exact substring removal, nothing pattern-based. */
+function withoutKnownSafeProviderSubstrings(text: string): string {
+  let out = text;
+  for (const safe of KNOWN_SAFE_PROVIDER_SUBSTRINGS) {
+    out = out.split(safe).join('');
+  }
+  return out;
+}
+
+/** Which known provider names a source's CODE lines name, case-insensitively — after removing
+ *  the known-safe non-provider idioms above. */
 function providerNamesIn(raw: string): string[] {
-  const lower = codeLines(raw).toLowerCase();
+  const lower = withoutKnownSafeProviderSubstrings(codeLines(raw).toLowerCase());
   return PROVIDER_NAMES.filter((name) => lower.includes(name));
 }
 
@@ -410,111 +448,135 @@ function providerNamesIn(raw: string): string[] {
  *
  * ships EXACTLY the option ADR-1021's 2026-08-15 amendment rejected — a full event-content read,
  * differenced by timestamp instead of by cursor — while containing none of `SYNC_TOKEN_MARKERS`.
- * It is not hypothetical: `calendar_connections.lastSyncedAt` already exists and is already
- * written on every change webhook by `handleChange`, so the ingredients are on the shelf.
- *
- * ⚠ SCOPED TO `EVENT_CONTENT_SCAN_DIRS`, NOT THE TREE. Constraint 4's second sentence explicitly
- * sanctions full event reads for Balo's OWN tagged consultation events (write / delete /
- * reconcile). Those live outside the sync path and a tree-wide ban would flag them.
  */
 const EVENT_CONTENT_MARKERS = ['events.list', 'updatedAfter', 'expandRecurrences'] as const;
 
-/**
- * SCAN B's directory boundary, relative to `apps/api/src` — where a PROVIDER LITERAL is banned.
- *
- * ⚠ THIS IS THE BOUNDARY `services/calendar/sync-capability.ts` ALREADY ARGUES IS THE CHECKABLE
- * ONE: inside the sync path a provider literal has no legitimate business. `routes/calendar/` is
- * deliberately absent — three files there legitimately name both providers, so including it would
- * need the three-file exemption list this guard forbids. See the asymmetry note and limitation (1)
- * in the file docblock. `services/calendar/` IS present and is where the reproduced opt-out landed.
- */
-const PROVIDER_SCAN_DIRS = ['jobs/', 'services/availability/', 'services/calendar/'] as const;
+/** The two markers that are banned TREE-WIDE with NO exemption whatsoever — not even inside
+ *  `CONSULTATION_EVENT_DIR`. There is no legitimate reason to differ an event read by
+ *  timestamp or to expand recurrences anywhere in this codebase. */
+const DELTA_SHAPE_MARKERS = ['updatedAfter', 'expandRecurrences'] as const;
+
+/** The one directory ADR-1021 §2 sanctions for a full event-content read: Balo's OWN tagged
+ *  consultation events (write / delete / reconcile-by-tag). Availability must never take this
+ *  path — that is Scan C's job to keep true. */
+const CONSULTATION_EVENT_DIR = 'services/consultation-events/';
 
 /**
- * SCAN E's directory boundary — where an EVENT-CONTENT READ is banned. STRICTLY WIDER than
- * `PROVIDER_SCAN_DIRS`, and wider with ZERO exemptions.
+ * SCAN B's exemption set — where a PROVIDER LITERAL may legitimately appear.
  *
- * ⚠ `routes/calendar/` IS INCLUDED, AND THAT IS THE POINT OF THIS SPLIT. Nothing under it contains
- * any of `EVENT_CONTENT_MARKERS` — it is Cronofy-era code — so no exemption is required, and
- * nothing there ever should read event content. It is also exactly where BAL-396's Apiroc/Svix
- * webhook receiver will land, which is the most likely home for the rejected
- * `events.list(acct, cal, { updatedAfter: lastSyncedAt })` shape. Sharing Scan B's narrower set
- * would have left that file unscanned by this ban.
+ * ⚠⚠ TREE-WIDE AS OF ADR-1021's 18 Aug 2026 (BAL-396) amendment §1, replacing the former
+ * three-directory boundary. Provider conditionality now has EXACTLY TWO homes outside the
+ * matrix and this directory, and is banned everywhere else under `apps/api/src`.
  */
-const EVENT_CONTENT_SCAN_DIRS = [...PROVIDER_SCAN_DIRS, 'routes/calendar/'] as const;
-
-/** Exempt from Scans B and E: the matrix declares the vocabulary it would otherwise be flagged for. */
-const SCAN_B_EXEMPT: readonly string[] = [MATRIX_REL];
-
-function isUnderDirs(rel: string, dirs: readonly string[]): boolean {
-  return dirs.some((dir) => rel.startsWith(dir));
-}
+const PROVIDER_SCAN_EXEMPT: readonly string[] = [
+  MATRIX_REL, // the matrix declares the vocabulary it would be flagged for
+  'invariants/', // guards must name what they forbid
+  'lib/apiroc/', // THE VENDOR BOUNDARY — the SDK's uppercase ProviderType, and display labels
+  'routes/calendar/', // THE CONNECT SURFACE — z.enum + the office365 translation
+];
 
 /**
- * A scan subject list — DERIVED FROM THE WALK, so a new file cannot opt out.
+ * SCAN E's exemption set — where a full EVENT-CONTENT READ may legitimately appear.
  *
- * `SYNC_PATH_FILES` contributes only the entries that fall outside `dirs`, and is otherwise
- * demoted to the subset sanity check below. For Scan B that pinned addition is
- * `routes/calendar/webhook.ts`; for Scan E there is none left to add, because
- * `EVENT_CONTENT_SCAN_DIRS` already covers `routes/calendar/` — the union is written the same way
- * for both so that neither can silently lose a declared sync-path file.
+ * ⚠ EXACTLY ONE ENTRY, AND IT IS DISJOINT FROM `PROVIDER_SCAN_EXEMPT` (asserted below). Growing
+ * this list, or letting it overlap Scan B's, is exactly the hole this amendment closes — see
+ * the file docblock's "two exemption sets are DISJOINT" note.
  */
-function scanSubjectsFor(dirs: readonly string[]): readonly string[] {
-  return [
-    ...ALL_SOURCE_FILES.filter((rel) => isUnderDirs(rel, dirs) && !SCAN_B_EXEMPT.includes(rel)),
-    ...SYNC_PATH_FILES.filter((rel) => !isUnderDirs(rel, dirs)),
-  ].sort((a, b) => a.localeCompare(b));
-}
+const EVENT_CONTENT_SCAN_EXEMPT: readonly string[] = [CONSULTATION_EVENT_DIR];
 
-/** Scan B's subjects: the provider-literal ban. */
-const PROVIDER_SCAN_FILES: readonly string[] = scanSubjectsFor(PROVIDER_SCAN_DIRS);
+const PROVIDER_SCAN_FILES: readonly string[] = ALL_SOURCE_FILES.filter(
+  (rel) => !isUnderAny(rel, PROVIDER_SCAN_EXEMPT)
+);
 
-/** Scan E's subjects: the event-content ban. A strict SUPERSET of `PROVIDER_SCAN_FILES`. */
-const EVENT_CONTENT_SCAN_FILES: readonly string[] = scanSubjectsFor(EVENT_CONTENT_SCAN_DIRS);
+const EVENT_CONTENT_SCAN_FILES: readonly string[] = ALL_SOURCE_FILES.filter(
+  (rel) => !isUnderAny(rel, EVENT_CONTENT_SCAN_EXEMPT)
+);
 
-describe('Layer 3 / Scan B — the sync path names no provider', () => {
-  it('derives its subjects from the walk, and SYNC_PATH_FILES is a SUBSET of them', () => {
+describe('Layer 3 / Scan B — no provider literal outside the vendor boundary or the connect surface', () => {
+  it('SYNC_PATH_FILES is a SUBSET of the scanned surface (none of it opts out)', () => {
     for (const rel of SYNC_PATH_FILES) {
       expect(ALL_SOURCE_FILES, `SYNC_PATH_FILES names ${rel}, which no longer exists`).toContain(
         rel
       );
       expect(
         PROVIDER_SCAN_FILES,
-        `${rel} is a declared sync-path file but falls outside PROVIDER_SCAN_DIRS and is not ` +
-          `carried as a pinned addition — it would be scanned by nothing.`
+        `${rel} is a declared sync-path file but falls inside a Scan B exemption — it would be ` +
+          `scanned by nothing.`
       ).toContain(rel);
     }
-    // The walk really contributed more than the pinned list — otherwise the derivation is a
-    // no-op and the opt-out this fix closes is back.
+    // The walk really is tree-wide, not merely SYNC_PATH_FILES re-derived.
     expect(
       PROVIDER_SCAN_FILES.length,
-      'The derived scan set is no larger than SYNC_PATH_FILES — the directory walk contributed ' +
-        'nothing, so a new file under PROVIDER_SCAN_DIRS would again go unscanned.'
+      'The scanned set is no larger than SYNC_PATH_FILES — the directory walk contributed ' +
+        'nothing, so a new file anywhere under apps/api/src would again go unscanned.'
     ).toBeGreaterThan(SYNC_PATH_FILES.length);
     // A concrete file the walk found and no list ever pinned.
     expect(PROVIDER_SCAN_FILES).toContain('jobs/worker.ts');
+    // Newly covered surface, named in the file docblock — the walk really did widen.
+    expect(PROVIDER_SCAN_FILES).toContain('notifications/channels/templates/index.ts');
+    // BAL-396 fix round 2, Finding 3 — a GENUINE `.tsx` witness. `templates/index.ts` above is
+    // the ONE `.ts` file in that directory; on its own it proved nothing about the other 50
+    // `.tsx` templates (that was the defect this fix closes). This one is `.tsx`.
+    expect(PROVIDER_SCAN_FILES).toContain(
+      'notifications/channels/templates/calendar-reconnect-required.tsx'
+    );
+    expect(PROVIDER_SCAN_FILES).toContain('services/consultation-events/reconcile-by-tag.ts');
     // And the matrix, which names every provider by design, is out.
     expect(PROVIDER_SCAN_FILES).not.toContain(MATRIX_REL);
   });
 
   it('reads every subject, and no read is empty (guards a dead scan)', () => {
     for (const rel of PROVIDER_SCAN_FILES) {
-      expect(readRaw(rel).length, `${rel} read as empty`).toBeGreaterThan(200);
+      expect(readRaw(rel).length, `${rel} read as empty`).toBeGreaterThan(0);
     }
   });
 
   it('the provider matcher fires on a file that DOES name providers (positive control)', () => {
-    // `routes/calendar/auth.ts` carries `z.enum(['google', 'microsoft'])`. If the matcher
-    // silently stopped matching, the absence assertions below would prove nothing.
+    // `routes/calendar/auth.ts` carries `z.enum(['google', 'microsoft'])`. It is EXEMPT from
+    // Scan B (the connect surface legitimately names both providers), but the matcher itself
+    // must still fire on it, or the absence assertions below would prove nothing.
     expect(providerNamesIn(readRaw('routes/calendar/auth.ts'))).toEqual(['google', 'microsoft']);
   });
+
+  it(
+    '⚠ BAL-396 fix round 2 — the font-stack idioms are stripped, but a real provider literal ' +
+      'sitting right next to one still fires (regression control for the .tsx false positive ' +
+      'the widened walk surfaced)',
+    () => {
+      // The exact two idioms found in templates/shared.tsx and templates/review-email-shared.tsx.
+      expect(providerNamesIn('fonts.googleapis.com/css2?family=DM+Sans')).toEqual([]);
+      expect(providerNamesIn("'DM Sans', -apple-system, BlinkMacSystemFont")).toEqual([]);
+      // The exemption is a substring removal, not a name removal — a genuine `google` / `apple`
+      // sitting right next to the idiom must still trip the scan.
+      expect(providerNamesIn('fonts.googleapis.com google')).toEqual(['google']);
+      expect(providerNamesIn('-apple-system apple')).toEqual(['apple']);
+    }
+  );
+
+  it(
+    'the known-safe substrings really occur in the widened .tsx surface (guards a dead ' +
+      'exemption — if these files ever stop containing the idiom, the exemption above would ' +
+      'be exempting nothing)',
+    () => {
+      for (const rel of [
+        'notifications/channels/templates/shared.tsx',
+        'notifications/channels/templates/review-email-shared.tsx',
+      ]) {
+        const raw = codeLines(readRaw(rel)).toLowerCase();
+        expect(
+          KNOWN_SAFE_PROVIDER_SUBSTRINGS.some((safe) => raw.includes(safe)),
+          `${rel} no longer contains a KNOWN_SAFE_PROVIDER_SUBSTRINGS idiom — narrow the exemption`
+        ).toBe(true);
+      }
+    }
+  );
 
   it.each([...PROVIDER_SCAN_FILES])('%s names no calendar provider', (rel) => {
     expect(
       providerNamesIn(readRaw(rel)),
-      `${rel} names a calendar provider. The sync path is provider-AGNOSTIC by ADR-1021 ` +
-        `(amendment 2026-08-15): one strategy for every provider. A vendor lands inside ` +
-        `vendorBusyProvider.listBusyBlocks and nowhere else. AMEND THE ADR FIRST.`
+      `${rel} names a calendar provider. Provider conditionality is banned outside ` +
+        `lib/apiroc/ and routes/calendar/ (ADR-1021, 18 Aug 2026 amendment §1). A vendor lands ` +
+        `inside vendorBusyProvider.listBusyBlocks and nowhere else. AMEND THE ADR FIRST.`
     ).toEqual([]);
   });
 
@@ -529,45 +591,25 @@ describe('Layer 3 / Scan B — the sync path names no provider', () => {
   });
 });
 
-describe('Layer 3 / Scan E — the sync path reads free/busy, never event content', () => {
-  /**
-   * ⚠ THE ASYMMETRY IS ASSERTED, NOT MERELY DOCUMENTED. Scan E's boundary is wider than Scan B's
-   * on purpose (see the file docblock), and the widening exists for ONE reason: `routes/calendar/`
-   * is where BAL-396's Apiroc/Svix webhook receiver lands. If someone "tidies" the two sets back
-   * into one, this fails — rather than silently reopening the hole the split closed.
-   */
-  it('⚠ scans a STRICTLY WIDER set than Scan B — routes/calendar/ is inside this ban', () => {
-    for (const rel of PROVIDER_SCAN_FILES) {
-      expect(
-        EVENT_CONTENT_SCAN_FILES,
-        `${rel} is scanned by Scan B but not by Scan E. Scan E's boundary must remain a SUPERSET ` +
-          `of Scan B's — it is the wider ban, not a different one.`
-      ).toContain(rel);
-    }
-    // The concrete files only the wider boundary brings in. `routes/calendar/` needs NO exemption
-    // list: none of EVENT_CONTENT_MARKERS appears anywhere under it, and none ever should.
-    for (const rel of [
-      'routes/calendar/api.ts',
-      'routes/calendar/auth.ts',
-      'routes/calendar/types.ts',
-    ]) {
-      expect(
-        EVENT_CONTENT_SCAN_FILES,
-        `${rel} is not scanned for event content. routes/calendar/ is inside ` +
-          `EVENT_CONTENT_SCAN_DIRS precisely so BAL-396's future webhook route cannot land an ` +
-          `events.list({ updatedAfter }) there unscanned.`
-      ).toContain(rel);
-    }
-    expect(
-      EVENT_CONTENT_SCAN_FILES.length,
-      'Scan E is no wider than Scan B — routes/calendar/ has been dropped from ' +
-        'EVENT_CONTENT_SCAN_DIRS and BAL-396 can again add an unscanned route file.'
-    ).toBeGreaterThan(PROVIDER_SCAN_FILES.length);
+describe('Layer 3 / Scan E — no event-content read outside the consultation-event boundary', () => {
+  it('scans the full tree; CONSULTATION_EVENT_DIR is the one exemption', () => {
+    expect(ALL_SOURCE_FILES).toContain('services/consultation-events/reconcile-by-tag.ts');
+    expect(EVENT_CONTENT_SCAN_FILES).not.toContain(
+      'services/consultation-events/reconcile-by-tag.ts'
+    );
+    // Scan E is STRICTLY WIDER than the old shared boundary: lib/apiroc/ and routes/calendar/
+    // — Scan B's exemptions — are themselves INSIDE Scan E's scanned set.
+    expect(EVENT_CONTENT_SCAN_FILES).toContain('lib/apiroc/oauth.ts');
+    expect(EVENT_CONTENT_SCAN_FILES).toContain('routes/calendar/auth.ts');
+    // BAL-396 fix round 2, Finding 3 — a genuine `.tsx` witness (see Scan B's note above).
+    expect(EVENT_CONTENT_SCAN_FILES).toContain(
+      'notifications/channels/templates/calendar-reconnect-required.tsx'
+    );
   });
 
   it('reads every subject, and no read is empty (guards a dead scan)', () => {
     for (const rel of EVENT_CONTENT_SCAN_FILES) {
-      expect(readRaw(rel).length, `${rel} read as empty`).toBeGreaterThan(200);
+      expect(readRaw(rel).length, `${rel} read as empty`).toBeGreaterThan(0);
     }
   });
 
@@ -585,46 +627,161 @@ describe('Layer 3 / Scan E — the sync path reads free/busy, never event conten
     ]);
   });
 
+  // ── E1 — the two differencing/expansion markers are banned TREE-WIDE, no exemption ──────
+
+  it(
+    '⚠ E1 — NO file, anywhere, contains updatedAfter or expandRecurrences (not even inside ' +
+      'CONSULTATION_EVENT_DIR)',
+    () => {
+      const offenders = ALL_SOURCE_FILES.filter(
+        (rel) => markersInCode(readRaw(rel), DELTA_SHAPE_MARKERS).length > 0
+      );
+      expect(
+        offenders,
+        `These files reference updatedAfter or expandRecurrences. ADR-1021's 2026-08-15 ` +
+          `amendment rejected timestamp-differenced / recurrence-expanded event reads EVERYWHERE, ` +
+          `including inside services/consultation-events/ — that exemption covers a full read of ` +
+          `Balo's own tagged events, never a delta one. AMEND THE ADR FIRST; do not allowlist:\n  ` +
+          offenders.join('\n  ')
+      ).toEqual([]);
+    }
+  );
+
+  // ── E2 — events.list is banned everywhere except CONSULTATION_EVENT_DIR ──────────────────
+
+  it('E2 — no file outside CONSULTATION_EVENT_DIR contains events.list', () => {
+    const offenders = EVENT_CONTENT_SCAN_FILES.filter((rel) =>
+      markersInCode(readRaw(rel), ['events.list']).includes('events.list')
+    );
+    expect(
+      offenders,
+      `These files read events.list outside services/consultation-events/. Availability must ` +
+        `reach a vendor only through vendorBusyProvider.listBusyBlocks — a windowed free/busy ` +
+        `read, never an event listing (apiroc skill, Constraint 4). AMEND THE ADR FIRST; do not ` +
+        `allowlist:\n  ${offenders.join('\n  ')}`
+    ).toEqual([]);
+  });
+
+  // ── E3 — the shape gate: an events.list inside the exemption must be filtered + paginated ─
+
+  const consultationEventFiles = ALL_SOURCE_FILES.filter((rel) =>
+    rel.startsWith(CONSULTATION_EVENT_DIR)
+  );
+  const consultationEventListFiles = consultationEventFiles.filter((rel) =>
+    markersInCode(readRaw(rel), ['events.list']).includes('events.list')
+  );
+
+  it('E4 — non-vacuity: the exemption directory exists, is scanned, and actually uses events.list', () => {
+    expect(consultationEventFiles.length).toBeGreaterThan(0);
+    expect(
+      consultationEventListFiles.length,
+      'services/consultation-events/ contains no events.list call at all — the shape gate ' +
+        'below would be asserting over an empty set and proving nothing.'
+    ).toBeGreaterThan(0);
+  });
+
+  it.each([...consultationEventListFiles])(
+    'E3 — %s reads events.list only tag-filtered AND paginated to exhaustion',
+    (rel) => {
+      const found = markersInCode(readRaw(rel), ['metadataFilters', 'nextPageToken']);
+      expect(
+        found,
+        `${rel} calls events.list but is missing ${['metadataFilters', 'nextPageToken']
+          .filter((m) => !found.includes(m))
+          .join(
+            ' and '
+          )}. Inside services/consultation-events/, a listing read must be BOTH tag-filtered ` +
+          `(metadataFilters) and paginated to exhaustion (follows nextPageToken) — never a bare ` +
+          `listing. AMEND THE ADR FIRST.`
+      ).toEqual(['metadataFilters', 'nextPageToken']);
+    }
+  );
+
+  // ── E5 — positive control, retained verbatim ─────────────────────────────────────────────
+
+  it("E5 — the shape gate's own matcher fires on a bare (unfiltered, unpaginated) listing", () => {
+    const bareListing = [
+      'export async function listAll(acct: string, cal: string) {',
+      '  return client.events.list(acct, cal, {});',
+      '}',
+    ].join('\n');
+    expect(markersInCode(bareListing, ['events.list'])).toEqual(['events.list']);
+    expect(markersInCode(bareListing, ['metadataFilters', 'nextPageToken'])).toEqual([]);
+  });
+
+  // ── E6 — the two exemption sets are disjoint; every file is covered by at least one ban ──
+
+  it('⚠ E6 — Scan B and Scan E exemptions are DISJOINT', () => {
+    for (const entry of EVENT_CONTENT_SCAN_EXEMPT) {
+      expect(
+        PROVIDER_SCAN_EXEMPT,
+        `${entry} is exempt from BOTH Scan B and Scan E — that is a hole, not a boundary.`
+      ).not.toContain(entry);
+    }
+  });
+
+  it('E6 — services/consultation-events/ is scanned by Scan B (it must name no provider)', () => {
+    expect(consultationEventFiles.length).toBeGreaterThan(0);
+    for (const rel of consultationEventFiles) {
+      expect(PROVIDER_SCAN_FILES, `${rel} is unscanned by BOTH bans`).toContain(rel);
+    }
+  });
+
+  it('E6 — lib/apiroc/ and routes/calendar/ are scanned by Scan E (they must read no event content)', () => {
+    for (const dir of ['lib/apiroc/', 'routes/calendar/']) {
+      const files = ALL_SOURCE_FILES.filter((rel) => rel.startsWith(dir));
+      expect(files.length).toBeGreaterThan(0);
+      for (const rel of files) {
+        expect(EVENT_CONTENT_SCAN_FILES, `${rel} is unscanned by BOTH bans`).toContain(rel);
+      }
+    }
+  });
+
+  it('E6 — every source file is covered by at least one of the two bans', () => {
+    const uncovered = ALL_SOURCE_FILES.filter(
+      (rel) => !PROVIDER_SCAN_FILES.includes(rel) && !EVENT_CONTENT_SCAN_FILES.includes(rel)
+    );
+    expect(
+      uncovered,
+      `These files are exempt from BOTH Scan B and Scan E — an exemption has swallowed a hole ` +
+        `instead of a boundary:\n  ${uncovered.join('\n  ')}`
+    ).toEqual([]);
+  });
+
   it.each([...EVENT_CONTENT_SCAN_FILES])('%s reads no event content', (rel) => {
     expect(
       markersInCode(readRaw(rel), EVENT_CONTENT_MARKERS),
-      `${rel} reads calendar EVENT CONTENT on the availability path. Availability must reach a ` +
-        `vendor only through vendorBusyProvider.listBusyBlocks, which is a windowed free/busy ` +
-        `read — busy slots, no titles (apiroc skill, Constraint 4). A timestamp-differenced ` +
-        `events.list({ updatedAfter }) is the option ADR-1021's 2026-08-15 amendment REJECTED: ` +
-        `it is a full event read AND it is blind to deletions, so a cancelled meeting never ` +
-        `leaves the cache. Full event reads are sanctioned only for Balo's OWN tagged ` +
-        `consultation events, which do not live here. AMEND THE ADR FIRST.`
+      `${rel} reads calendar EVENT CONTENT. Availability must reach a vendor only through ` +
+        `vendorBusyProvider.listBusyBlocks, which is a windowed free/busy read — busy slots, no ` +
+        `titles (apiroc skill, Constraint 4). Full event reads are sanctioned only for Balo's ` +
+        `OWN tagged consultation events, in services/consultation-events/. AMEND THE ADR FIRST.`
     ).toEqual([]);
   });
 });
 
-describe('Layer 3 / Scan C — the webhook stays a bare trigger', () => {
-  const webhookCode = codeLines(readRaw('routes/calendar/webhook.ts'));
-
-  it('the webhook still RECEIVES a delta cursor (positive control)', () => {
-    expect(webhookCode).toContain('changes_since');
+describe('Layer 3 / Scan C — availability reaches a vendor only as a windowed free/busy read', () => {
+  it('the port makes a FREE/BUSY call (positive control — it is no longer a stub)', () => {
+    expect(codeLines(readRaw('services/availability/vendor-busy.ts'))).toContain('freeBusy.get');
   });
 
-  /**
-   * ⚠ COUNTED, NOT FORM-MATCHED. The previous pair of assertions banned two spellings
-   * (`notification.changes_since`, `changes_since:`) and `const { changes_since } = notification;`
-   * evaded both — and `webhook.ts:99` ALREADY destructures `notification`, so that is the natural
-   * shape someone would reach for. Occurrence-counting is spelling-independent: the cursor is
-   * DECLARED exactly once, on the payload type at `webhook.ts:14`, and any read at all is a
-   * second occurrence.
-   */
-  it('⚠ and never READS it — the cursor is declared once and referenced nowhere else', () => {
+  it('and reads no events there', () => {
     expect(
-      occurrenceCount(webhookCode, 'changes_since'),
-      `routes/calendar/webhook.ts mentions changes_since more than once. It is DECLARED on the ` +
-        `Cronofy payload type and must never be READ: ADR-1021 (amendment 2026-08-15) makes the ` +
-        `webhook a bare trigger that enqueues a whole-window rebuild. AMEND THE ADR FIRST.`
-    ).toBe(1);
+      markersInCode(readRaw('services/availability/vendor-busy.ts'), [
+        ...EVENT_CONTENT_MARKERS,
+        'events.create',
+        'events.get',
+      ])
+    ).toEqual([]);
   });
 
-  it('a change notification enqueues a WHOLE-WINDOW rebuild', () => {
-    expect(webhookCode).toContain('enqueueAvailabilityCacheRebuild');
+  it('both consumers still read the SHARED port, not their own vendor call', () => {
+    for (const rel of [
+      'services/availability/resolve-and-cache.ts',
+      'services/availability/window-availability.ts',
+    ]) {
+      expect(codeLines(readRaw(rel))).toContain('vendorBusyProvider.listBusyBlocks');
+      expect(markersInCode(readRaw(rel), ['freeBusy', 'getApirocClient'])).toEqual([]);
+    }
   });
 });
 
@@ -646,7 +803,7 @@ describe('Layer 3 / Scan C — the webhook stays a bare trigger', () => {
  *
  * ⚠ ONE RECONCILIATION SITE PER DECLARATION, DELIBERATELY. This is not the place to grow a
  * general vocabulary-drift guard; `apps/web`'s mirror is out of scope (the sync path is
- * `apps/api` by construction — see limitation (2) in the file docblock).
+ * `apps/api` by construction — see limitation (1) in the file docblock).
  */
 interface ProviderUnionSite {
   readonly rel: string;
@@ -671,6 +828,16 @@ function singleQuotedLiteralsIn(segment: string): string[] {
     if (literal !== undefined) out.push(literal);
   }
   return out;
+}
+
+function occurrenceCount(haystack: string, needle: string): number {
+  let count = 0;
+  let at = haystack.indexOf(needle);
+  while (at !== -1) {
+    count += 1;
+    at = haystack.indexOf(needle, at + needle.length);
+  }
+  return count;
 }
 
 function providerUnionAt(site: ProviderUnionSite): string[] {

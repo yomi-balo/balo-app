@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CALENDAR_SERVER_EVENTS } from './calendar';
+import { CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from './calendar';
 
 describe('CALENDAR_SERVER_EVENTS', () => {
   it('exposes exactly the calendar server events (guards against accidental drift)', () => {
@@ -7,13 +7,12 @@ describe('CALENDAR_SERVER_EVENTS', () => {
       'AVAILABILITY_CACHE_REBUILT',
       'AVAILABILITY_OVERRIDE_CREATED',
       'AVAILABILITY_OVERRIDE_DELETED',
+      'CREDENTIALS_REVOKED',
       'DISCONNECTED',
       'OAUTH_COMPLETED',
       'OAUTH_FAILED',
-      'RELINK_URL_GENERATED',
+      'RECONNECT_RESOLVED',
       'SYNC_PENDING_AUTO_RESOLVED',
-      'TOKEN_REFRESHED',
-      'WEBHOOK_RECEIVED',
     ]);
   });
 
@@ -30,5 +29,18 @@ describe('CALENDAR_SERVER_EVENTS', () => {
     for (const value of Object.values(CALENDAR_SERVER_EVENTS)) {
       expect(value).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);
     }
+  });
+});
+
+describe('toCalendarEventProvider (BAL-396 §10.4)', () => {
+  it('narrows the two known providers', () => {
+    expect(toCalendarEventProvider('google')).toBe('google');
+    expect(toCalendarEventProvider('microsoft')).toBe('microsoft');
+  });
+
+  it('degrades anything else to undefined rather than asserting', () => {
+    expect(toCalendarEventProvider('office365')).toBeUndefined();
+    expect(toCalendarEventProvider('')).toBeUndefined();
+    expect(toCalendarEventProvider('GOOGLE')).toBeUndefined();
   });
 });

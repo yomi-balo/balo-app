@@ -95,7 +95,6 @@ const FAT_PROFILE = {
   username: 'amara',
   rateCents: 33_700,
   stripeConnectId: 'acct_secret_connect',
-  cronofyUserId: 'cro_secret',
 };
 
 const AGENCY_PROFILE = {

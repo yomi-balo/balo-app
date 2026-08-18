@@ -1,0 +1,97 @@
+import { Button, Heading, Section, Text } from '@react-email/components';
+import { shared, EmailShell, LogoRow, SupportFooter } from './shared.js';
+
+// ── Reconnect-required styles (structured on onboarding-reminder.tsx) ──────
+const styles = {
+  hero: {
+    ...shared.heroBase,
+    padding: '36px 40px 32px',
+  },
+  heroHeading: {
+    ...shared.heroHeadingBase,
+    fontSize: '24px',
+    margin: '14px 0 10px',
+    lineHeight: '1.28',
+  } as const,
+  heroSubtext: {
+    ...shared.heroSubtext,
+    fontSize: '15px',
+    color: 'rgba(255,255,255,0.70)',
+  } as const,
+  bodyText: {
+    ...shared.bodyText,
+    margin: '0 0 20px',
+  } as const,
+  ctaButton: {
+    ...shared.ctaButton,
+    fontSize: '15px',
+    padding: '13px 32px',
+    letterSpacing: '0.01em',
+  } as const,
+};
+
+// ── Template ─────────────────────────────────────────────────────
+
+interface CalendarReconnectRequiredEmailProps {
+  readonly firstName: string;
+  readonly providerLabel: string;
+  readonly ctaUrl: string;
+  readonly baseUrl: string;
+}
+
+/**
+ * BAL-396 §7 (Objection 5) — the reconnect email `calendar.auth_error` already fired but had
+ * no template (no rule either — see `engine/rules.ts`). Sent to the DELIVERING EXPERT whose
+ * Apiroc credential broke, at most once per breakage (`credential-status.ts` owns the
+ * notify-once suppression; the engine itself provides none).
+ *
+ * Gender-neutral, warm, and NEVER adversarial (CLAUDE.md copy rules): this is a quiet fact —
+ * "your availability is paused" — not a countdown or a threat. Second person is correct here
+ * (prospective copy would normally name the PARTY, but the party IS the recipient).
+ */
+export function CalendarReconnectRequiredEmail({
+  firstName = 'there',
+  providerLabel,
+  ctaUrl,
+  baseUrl,
+}: Readonly<CalendarReconnectRequiredEmailProps>) {
+  const previewText = 'Your calendar disconnected — reconnect to keep taking bookings.';
+
+  return (
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      {/* ── Hero ── */}
+      <Section style={styles.hero}>
+        <LogoRow />
+        <Heading style={styles.heroHeading}>Your calendar disconnected</Heading>
+        <Text style={styles.heroSubtext}>
+          Nothing else has changed — your profile, rate and past bookings are untouched.
+        </Text>
+      </Section>
+
+      {/* ── Body card ── */}
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>Hi {firstName},</Text>
+
+        <Text style={styles.bodyText}>
+          Balo lost access to your {providerLabel}, so your availability is paused until it&apos;s
+          reconnected. Nothing else has changed — your profile, rate and past bookings are
+          untouched.
+        </Text>
+
+        <Text style={styles.bodyText}>
+          If you turned Balo&apos;s access off at your calendar provider, you may need to remove it
+          there first before reconnecting — the consent screen won&apos;t ask again otherwise.
+        </Text>
+
+        {/* CTA */}
+        <Section style={{ ...shared.ctaWrapper, margin: '32px 0 28px' }}>
+          <Button style={styles.ctaButton} href={ctaUrl}>
+            Reconnect calendar →
+          </Button>
+        </Section>
+
+        <SupportFooter prefix="Need a hand reconnecting?" />
+      </Section>
+    </EmailShell>
+  );
+}

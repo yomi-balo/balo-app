@@ -40,6 +40,9 @@ const makeSubCalendar = (overrides: Partial<SubCalendar> = {}): SubCalendar => (
 });
 
 const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarConnection => ({
+  // BAL-396 fix round 2, Finding 6 — required field; this component takes `provider` as its
+  // own separate prop, so the value here is only for type shape, not behaviour under test.
+  provider: 'google',
   status: 'sync_pending',
   providerEmail: 'yomi@gmail.com',
   lastSyncedAt: null,

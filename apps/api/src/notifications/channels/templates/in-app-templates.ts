@@ -1,4 +1,5 @@
 import { formatAudMinor, formatExpiryDateShort } from './credit-format.js';
+import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 
 interface InAppOutput {
   title: string;
@@ -323,6 +324,18 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       title: 'Your team is set up',
       body: `${teamName} is on Balo — colleagues who sign up with your email domain will join automatically.`,
       actionUrl: '/settings/team',
+    };
+  },
+
+  // BAL-396 §7 (Objection 5) — `calendar.auth_error` already existed and already published;
+  // this is its first in-app entry (no rule existed either — see `engine/rules.ts`). Recipient
+  // is the delivering expert. Straight into the calendar tab — the whole point of the nudge.
+  'calendar-reconnect-required': (data) => {
+    const providerLabel = calendarProviderLabel(data.provider);
+    return {
+      title: 'Reconnect your calendar',
+      body: `Balo lost access to your ${providerLabel} — your availability is paused until it's reconnected.`,
+      actionUrl: '/expert/settings?tab=calendar',
     };
   },
 

@@ -8,7 +8,7 @@ export type { ServerEvents, ServerEventName } from '../types';
 export { EXPERT_SERVER_EVENTS } from '../events/expert';
 export { EXPERT_PAYOUT_SERVER_EVENTS } from '../events/expert-payouts';
 export { NOTIFICATION_SERVER_EVENTS } from '../events/notifications';
-export { CALENDAR_SERVER_EVENTS } from '../events/calendar';
+export { CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from '../events/calendar';
 export { SEARCH_SERVER_EVENTS } from '../events/search';
 export { PROJECT_SERVER_EVENTS } from '../events/project';
 export { BILLING_SERVER_EVENTS } from '../events/billing';

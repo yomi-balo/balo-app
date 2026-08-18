@@ -31,9 +31,9 @@ description: >
 > An earlier revision of this skill documented v1.2.2 and `https://api.onecalunified.com`;
 > both are stale. (Both hosts still answer, but write the new one.)
 >
-> **Supersedes the Cronofy skill**, deleted in PR #197. ⚠ The Cronofy _skill_ is gone; the
-> Cronofy _code_ is still live (`apps/api/src/lib/cronofy.ts`, `apps/api/src/services/cronofy/`)
-> until BAL-396 removes it. Absence of the skill is not absence of the integration.
+> **Supersedes the Cronofy skill**, deleted in PR #197. BAL-396 has since removed the Cronofy
+> _code_ too — `apps/api/src/lib/cronofy.ts` and `apps/api/src/services/cronofy/` no longer
+> exist. Apiroc is the only calendar integration in the codebase.
 
 ## How to read this document
 
@@ -317,7 +317,7 @@ rather than picking a side.
 ## SDK Initialisation
 
 ```typescript
-// apps/api/src/lib/apiroc.ts
+// apps/api/src/lib/apiroc/client.ts
 import { UnifiedCalendarApi } from '@apiroc/unified-calendar-api-node-sdk';
 import { getOAuthUrl } from '@apiroc/unified-calendar-api-node-sdk/oauth';
 
@@ -340,6 +340,12 @@ export function connectUrl(provider: 'GOOGLE' | 'MICROSOFT', state: string) {
   });
 }
 ```
+
+⚠ The shipped boundary is **lazy** (`getApirocClient()`, `client.ts:53`) and every call goes
+through **`callApiroc(operation, fn)`** (`index.ts:50`), whose contract is that `fn` wraps
+**exactly one** fallible SDK call. Fan out across accounts with separate `callApiroc`
+invocations — never a `Promise.all` inside one. `connectUrl` lives in `lib/apiroc/oauth.ts`
+(BAL-396).
 
 **Resource surface (verified, v2.0.1 [stat]):**
 `apiroc.calendars` · `apiroc.events` · `apiroc.endUserAccounts` · `apiroc.freeBusy` ·
@@ -400,17 +406,18 @@ APIROC_REDIRECT_URI=https://api.balo.expert/auth/apiroc/callback
 
 ## DB Schema (Drizzle)
 
-⚠ **This is the TARGET shape. Part of it has since shipped — check which half you are
-reading.** Corrected 2026-08-18 against `packages/db/src/schema/calendar.ts` @ `eb6d4b2`.
+⚠ **This is the TARGET shape, and as of BAL-396 the shipped
+`packages/db/src/schema/calendar.ts` matches it.** Corrected 2026-08-18 against migrations
+`0067` (BAL-467) + `0068`/`0069` (BAL-396).
 
-| Claim below                                            | Reality in `main` today                                                                                                                                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Unique on `(expertId, provider)`                       | ✅ **SHIPPED** (BAL-467, migration `0067`) — partial, on `deleted_at IS NULL`                                                                                                                          |
-| `endUserAccountId` column                              | ✅ shipped — but **nullable**, not `.notNull()`                                                                                                                                                        |
-| `credentialStatus` with `ACTIVE \| EXPIRED \| REVOKED` | ❌ **does not exist.** The column is `status`, CHECK-constrained to `connected \| sync_pending \| auth_error`. Writing `'ACTIVE'` fails `23514`. Rename is BAL-396 §2/§9                               |
-| No token columns                                       | ❌ `access_token` / `refresh_token` / `cronofy_sub` / `token_expires_at` all still there, now **nullable** — the table is dual-tenanted Cronofy+Apiroc for one release (BAL-396 drops the Cronofy arm) |
-| `calendar_subscriptions` table                         | ❌ **does not exist at all** (BAL-468). `calendar_sub_calendars` is a different thing                                                                                                                  |
-| `availability_cache`                                   | ✅ shipped and live                                                                                                                                                                                    |
+| Claim below                                                            | Reality in `main` today                                                                                                                                |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Unique on `(expertId, provider)`                                       | ✅ **SHIPPED** (BAL-467, migration `0067`) — partial, on `deleted_at IS NULL`                                                                          |
+| `endUserAccountId` column                                              | ✅ shipped; **`NOT NULL` as of `0069`**, and deliberately **NON-unique** (BAL-396 §5)                                                                  |
+| `credentialStatus` with `ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED` | ✅ **SHIPPED** (BAL-396, migration `0068`) — renamed from `status`. ⚠ `SYNC_PENDING` is **Balo-side only**, it has no vendor counterpart               |
+| No token columns                                                       | ✅ true — `access_token` / `refresh_token` / `cronofy_sub` / `token_expires_at` / `channel_id` all **dropped** by `0069`. Balo stores only the pointer |
+| `calendar_subscriptions` table                                         | ❌ **does not exist at all** (BAL-468). `calendar_sub_calendars` is a different thing                                                                  |
+| `availability_cache`                                                   | ✅ shipped and live                                                                                                                                    |
 
 **Read the real file before writing a query.** Full as-built column list, the upsert arbiter,
 and the cardinality invariant are in `references/connect-and-credentials.md`.

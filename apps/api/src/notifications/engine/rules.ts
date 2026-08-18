@@ -625,6 +625,11 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // an email + in-app milestone notice naming the team. Corporate-only gating lives at
   // the emit site — SOLO / JOIN / already_linked never publish this event.
   'agency.provisioned': emailAndInApp('owner', 'agency-provisioned'),
+  // BAL-396 §7 (Objection 5) — `calendar.auth_error` already existed and already fired; it had
+  // no rule, so `engine/worker.ts`'s `log.warn('No notification rules found for event')` was
+  // its only effect. This is the missing rule, not a new event. `recipient: 'expert'` resolves
+  // via `payload.expertProfileId` (resolver.ts) — the connection's own expert, email + in-app.
+  'calendar.auth_error': emailAndInApp('expert', 'calendar-reconnect-required'),
   // BAL-374: onboarding-completion reminder — EMAIL ONLY to the un-onboarded user
   // (recipient 'self' via payload.userId). No in-app (the user hasn't onboarded, the
   // bell is irrelevant). One event fires for all three cadence steps; the step lives

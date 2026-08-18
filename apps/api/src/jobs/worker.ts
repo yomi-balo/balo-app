@@ -26,6 +26,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startScheduledNotificationDispatchWorker, registerScheduledNotificationDispatchCron },
     { startReviewNudgeSweepWorker, registerReviewNudgeSweepCron },
     { startMeetingLifecycleSweepWorker, registerMeetingLifecycleSweepCron },
+    { startCalendarHealthProbeWorker, registerCalendarHealthProbeCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -43,6 +44,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./scheduled-notification-dispatch.js'),
     import('./review-nudge-sweep.js'),
     import('./meeting-lifecycle-sweep.js'),
+    import('./calendar-health-probe.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -87,5 +89,10 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // to ONE TICK. Slowing this cadence widens a MONEY error. See the job's docblock.
   startMeetingLifecycleSweepWorker();
   await registerMeetingLifecycleSweepCron();
+  // BAL-396 (§9, ADR-1021 amendment 18 Aug 2026): the 15-minute Apiroc calendar credential
+  // health probe — the platform's only PROACTIVE breakage signal (a dead credential is
+  // detected here, before any booking attempt touches it).
+  startCalendarHealthProbeWorker();
+  await registerCalendarHealthProbeCron();
   logger?.info('BullMQ workers started');
 }

@@ -80,6 +80,10 @@ export interface ExpertReferralInvitedPayload {
 export interface CalendarAuthErrorPayload {
   correlationId: string; // connectionId
   expertProfileId: string;
+  // BAL-396 §7 — required, not optional: both publishers (the two Cronofy call sites this PR
+  // rewrites/deletes) already hold `connection.provider`. Drives the template's
+  // `providerLabel` copy.
+  provider: string;
 }
 
 export interface ProjectRequestSubmittedPayload {

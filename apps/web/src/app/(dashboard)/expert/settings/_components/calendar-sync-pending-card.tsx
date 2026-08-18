@@ -5,6 +5,7 @@ import { AlertTriangle, Check, ChevronDown, ExternalLink, Info, RefreshCw } from
 import { AnimatePresence, motion } from 'motion/react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { CALENDAR_HELP_URL } from '../_lib/calendar-help';
 import { GoogleIcon, MicrosoftIcon } from './calendar-provider-icons';
 import type { CalendarConnection, CalendarProvider } from '../_types/calendar';
 
@@ -113,7 +114,7 @@ export function CalendarSyncPendingCard({
             Fix permissions
           </Button>
           <a
-            href="https://docs.cronofy.com/developers/faqs/initial-sync/"
+            href={CALENDAR_HELP_URL}
             target="_blank"
             rel="noreferrer"
             className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs transition-colors"

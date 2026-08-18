@@ -57,6 +57,7 @@ vi.mock('../../lib/queue.js', () => ({ getQueue: mockGetQueue }));
 import {
   availabilityCache,
   availabilityRulesRepository,
+  calendarRepository,
   caseEngagementsRepository,
   companies,
   consultations,
@@ -77,6 +78,7 @@ import {
   rescheduleMeeting,
   softDeleteMeeting,
 } from '../meetings/meeting-availability.js';
+import { isWindowAvailableForExpert } from './window-availability.js';
 import { resolveAndCacheAvailability } from './resolve-and-cache.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -325,5 +327,99 @@ describe('BAL-428 — booking a meeting removes the slot the marketplace adverti
     expect(await resolveEarliest(booked.expertProfileId)).toBe('2026-09-07T10:00:00.000Z');
     expect(await resolveEarliest(bystander.expertProfileId)).toBe(NINE_AM);
     expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * BAL-396 §9 — THE ACCEPT PATH, END TO END, AGAINST REAL POSTGRES.
+ *
+ * Every other proof in this ticket is a unit test against a mocked `calendarRepository`. This
+ * is the one that proves the whole chain for real: a row in `calendar_connections` (this
+ * ticket's step 1/2 schema and repository work) reaches `vendorBusyProvider.listBusyBlocks`
+ * (`listBusyReadTargets`, real SQL) and the booking gate (`isWindowAvailableForExpert`)
+ * answers `false` — a clean 409 — rather than throwing a 500 or silently double-booking.
+ */
+describe('BAL-396 §9.4 — the booking gate fails CLOSED on an unreadable calendar connection', () => {
+  it('is bookable with no calendar connection at all — the merge-commit no-op, proven against real rows', async () => {
+    const expert = await seedBookableExpert();
+
+    // No `calendar_connections` row exists for this expert — `listBusyReadTargets` filters on
+    // `end_user_account_id IS NOT NULL`, so it returns `[]` in real SQL and the vendor client
+    // is never constructed. §9.3's rollout-seam claim, proven rather than asserted from a mock.
+    await expect(
+      isWindowAvailableForExpert(expert.expertProfileId, at('09:00'), at('10:00'), NOW)
+    ).resolves.toBe(true);
+  });
+
+  it('is UNBOOKABLE while the connection is SYNC_PENDING — never provisioned, so unreadable', async () => {
+    const expert = await seedBookableExpert();
+    await calendarRepository.upsertApirocConnection({
+      expertProfileId: expert.expertProfileId,
+      provider: 'google',
+      endUserAccountId: `eua_${randomUUID()}`,
+      credentialStatus: 'SYNC_PENDING',
+    });
+
+    // Nothing about the window changed — the expert's published hours are still wide open.
+    // What makes it unbookable is the unreadable connection, and ONLY that.
+    await expect(
+      isWindowAvailableForExpert(expert.expertProfileId, at('09:00'), at('10:00'), NOW)
+    ).resolves.toBe(false);
+  });
+
+  it('is UNBOOKABLE when ACTIVE but never provisioned — zero sub-calendar rows', async () => {
+    const expert = await seedBookableExpert();
+    await calendarRepository.upsertApirocConnection({
+      expertProfileId: expert.expertProfileId,
+      provider: 'google',
+      endUserAccountId: `eua_${randomUUID()}`,
+      credentialStatus: 'ACTIVE',
+    });
+
+    await expect(
+      isWindowAvailableForExpert(expert.expertProfileId, at('09:00'), at('10:00'), NOW)
+    ).resolves.toBe(false);
+  });
+
+  it('EXPIRED and REVOKED are unreadable too', async () => {
+    for (const credentialStatus of ['EXPIRED', 'REVOKED'] as const) {
+      const expert = await seedBookableExpert();
+      await calendarRepository.upsertApirocConnection({
+        expertProfileId: expert.expertProfileId,
+        provider: 'google',
+        endUserAccountId: `eua_${randomUUID()}`,
+        credentialStatus,
+      });
+
+      await expect(
+        isWindowAvailableForExpert(expert.expertProfileId, at('09:00'), at('10:00'), NOW)
+      ).resolves.toBe(false);
+    }
+  });
+
+  it('an ACTIVE connection provisioned with every sub-calendar conflict-check OFF is READABLE and contributes nothing — the expert’s explicit choice, not a failure', async () => {
+    const expert = await seedBookableExpert();
+    const connection = await calendarRepository.upsertApirocConnection({
+      expertProfileId: expert.expertProfileId,
+      provider: 'google',
+      endUserAccountId: `eua_${randomUUID()}`,
+      credentialStatus: 'ACTIVE',
+    });
+    await calendarRepository.replaceSubCalendars(connection.id, [
+      {
+        calendarId: 'cal-primary',
+        name: 'Primary',
+        provider: 'google',
+        isPrimary: true,
+        conflictCheck: false,
+      },
+    ]);
+
+    // Provisioned (a sub-calendar row exists) and ACTIVE — readable — but with no
+    // conflict-checked calendar it contributes no busy blocks, per §9.4's table. Still
+    // bookable, and no client-construction error either.
+    await expect(
+      isWindowAvailableForExpert(expert.expertProfileId, at('09:00'), at('10:00'), NOW)
+    ).resolves.toBe(true);
   });
 });

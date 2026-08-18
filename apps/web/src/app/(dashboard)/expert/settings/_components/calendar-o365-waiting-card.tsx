@@ -3,6 +3,7 @@
 import { Clock, ExternalLink, RefreshCw } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { CALENDAR_HELP_URL } from '../_lib/calendar-help';
 import { MicrosoftIcon } from './calendar-provider-icons';
 
 interface CalendarO365WaitingCardProps {
@@ -66,7 +67,7 @@ export function CalendarO365WaitingCard({
       </div>
 
       <a
-        href="https://docs.cronofy.com/calendar-admins/faqs/need-admin-approval-error/"
+        href={CALENDAR_HELP_URL}
         target="_blank"
         rel="noreferrer"
         className="text-primary mt-4 mb-5 inline-flex items-center gap-1 text-[13px] hover:underline"

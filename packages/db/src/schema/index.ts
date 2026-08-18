@@ -16,6 +16,7 @@ export * from './notifications';
 export * from './scheduled-notifications';
 export * from './user-notifications';
 export * from './calendar';
+export * from './meeting-calendar-events';
 export * from './availability';
 export * from './consultations';
 export * from './project-tags';

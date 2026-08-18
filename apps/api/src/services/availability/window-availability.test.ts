@@ -16,6 +16,11 @@ vi.mock('@balo/db', () => ({
   availabilityRulesRepository: { listByExpertProfileId: mockListRules },
   consultationsRepository: { listConfirmedInRange: mockListConfirmedInRange },
   availabilityOverridesRepository: { listUpcoming: mockListUpcoming },
+  // ⚠ `vendor-busy.ts` is NOT mocked (spied per test instead — see below), so its real
+  // `listBusyReadTargets` call needs a real shape here. Defaulting to `[]` targets keeps
+  // every test that doesn't care about vendor busy on the pre-BAL-396 behaviour ([] blocks,
+  // no vendor client constructed).
+  calendarRepository: { listBusyReadTargets: vi.fn().mockResolvedValue([]) },
 }));
 // ⚠ `./resolver.js` and `./overrides.js` are deliberately NOT mocked. The pure decision logic
 // IS what this adapter exists to reach, and mocking it would leave nothing under test but four
@@ -24,7 +29,7 @@ vi.mock('@balo/db', () => ({
 import { isWindowAvailableForExpert } from './window-availability.js';
 // ⚠ NOT mocked — spied where it matters. What must be true is that this adapter reads the SAME
 // port object `resolveAndCacheAvailability` reads, which a module mock would paper over.
-import { vendorBusyProvider } from './vendor-busy.js';
+import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
 
 const EXPERT_PROFILE_ID = '66666666-6666-4666-8666-666666666666';
 const NOW = new Date('2026-09-07T00:00:00.000Z');
@@ -196,6 +201,70 @@ describe('vendor free/busy comes from the SHARED port, never an inline []', () =
     ]);
 
     await expect(check()).resolves.toBe(false);
+
+    spy.mockRestore();
+  });
+
+  /**
+   * ⚠⚠ round-2 fix #10 — THE CONCURRENCY REGRESSION TEST. A prior version `await`ed the
+   * vendor round-trip serially, BEFORE the three Balo-owned reads, so `POST /meetings` paid a
+   * full un-overlapped Apiroc round-trip even on a window the pure resolver would reject
+   * cheaply anyway. If the vendor call were still gated ahead of the others, none of the
+   * three DB reads below would have fired yet while the vendor promise is still pending.
+   */
+  it('issues the vendor free/busy read CONCURRENTLY with the three Balo-owned reads, not serially before them', async () => {
+    let resolveVendor: ((blocks: never[]) => void) | undefined;
+    const vendorPromise = new Promise<never[]>((resolve) => {
+      resolveVendor = resolve;
+    });
+    const spy = vi
+      .spyOn(vendorBusyProvider, 'listBusyBlocks')
+      .mockReturnValue(vendorPromise as never);
+
+    const resultPromise = check();
+
+    // Let the microtask queue turn WITHOUT resolving the vendor promise. If the vendor read
+    // were still serialised ahead of the Balo-owned reads, none of these would be called yet.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockListRules).toHaveBeenCalled();
+    expect(mockListConfirmedInRange).toHaveBeenCalled();
+    expect(mockListUpcoming).toHaveBeenCalled();
+
+    resolveVendor?.([]);
+    await expect(resultPromise).resolves.toBe(true);
+
+    spy.mockRestore();
+  });
+});
+
+describe('BAL-396 §9.4 — the booking gate FAILS CLOSED on an untrustworthy vendor answer', () => {
+  /**
+   * The ticket's named mandatory case: `vendorBusyProvider.listBusyBlocks` throwing
+   * `VendorBusyUnavailableError` (an unreadable connection, or a failed vendor read) must be
+   * CAUGHT here and turned into `false` — never propagated, which would make `POST /meetings`
+   * answer a `500` where it should answer a clean `409`.
+   */
+  it('is false — not a rethrow — when the vendor port throws VendorBusyUnavailableError', async () => {
+    const spy = vi
+      .spyOn(vendorBusyProvider, 'listBusyBlocks')
+      .mockRejectedValue(
+        new VendorBusyUnavailableError(EXPERT_PROFILE_ID, 'connection unreadable')
+      );
+
+    await expect(check()).resolves.toBe(false);
+
+    spy.mockRestore();
+  });
+
+  it('does not swallow an unrelated error — only VendorBusyUnavailableError fails closed here', async () => {
+    const spy = vi
+      .spyOn(vendorBusyProvider, 'listBusyBlocks')
+      .mockRejectedValue(new Error('boom — not a vendor-busy error'));
+
+    await expect(check()).rejects.toThrow('boom — not a vendor-busy error');
 
     spy.mockRestore();
   });

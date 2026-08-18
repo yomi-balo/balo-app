@@ -41,7 +41,7 @@ import type { RecapLens, RecapPartyView } from '@/lib/meetings/recap-view-types'
 
 /**
  * The PROJECTED expert-profile row a meeting surface is allowed to hold — six display columns,
- * and structurally NOT `rateCents` / `stripeConnectId` / `cronofyUserId`. Derived from the
+ * and structurally NOT `rateCents` / `stripeConnectId`. Derived from the
  * repository so the two cannot drift.
  *
  * ⚠ MODULE-PRIVATE, exactly as it was in `load-recap.ts` before the move. Callers pass the

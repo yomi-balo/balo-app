@@ -1,0 +1,51 @@
+import type { CreateEventInput } from '@apiroc/unified-calendar-api-node-sdk';
+import { meetingCalendarEventsRepository, type MeetingCalendarEvent } from '@balo/db';
+import { getApirocClient, callApiroc } from '../../lib/apiroc/index.js';
+
+export interface WriteConsultationEventInput {
+  readonly meetingId: string;
+  readonly connectionId: string;
+  readonly endUserAccountId: string;
+  /** The calendar written to — becomes `meeting_calendar_events.calendar_id`, the value
+   *  `delete-consultation-event.ts` reads back later (never the current `target_calendar_id`,
+   *  which the expert may change afterwards). */
+  readonly calendarId: string;
+  readonly baloBookingId: string;
+  readonly event: CreateEventInput;
+}
+
+/**
+ * BAL-396 §5/§10.6 — one `events.create`, then record the VENDOR-RETURNED id. Ships INERT: no
+ * live caller until BAL-400 wires booking.
+ *
+ * ⚠⚠ THE VENDOR-RETURNED ID, NEVER A DERIVED ONE (apiroc skill §M1). Microsoft answers HTTP
+ * 200 to a caller-supplied `id` and silently substitutes a Graph id — a success response that
+ * quietly did something else. `event-mapper.ts` never sets `id` for exactly this reason, but
+ * IF a caller ever supplies one anyway, this asserts the vendor honoured it and throws on a
+ * mismatch rather than silently recording the wrong id.
+ */
+export async function writeConsultationEvent(
+  input: WriteConsultationEventInput
+): Promise<MeetingCalendarEvent> {
+  const client = getApirocClient();
+  const created = await callApiroc('events.create', () =>
+    client.events.create(input.endUserAccountId, input.calendarId, input.event)
+  );
+
+  const requestedId = input.event.id;
+  if (requestedId !== undefined && created.id !== requestedId) {
+    throw new Error(
+      `Apiroc events.create returned a different event id than requested ` +
+        `(requested=${requestedId}, returned=${created.id}) — apiroc skill §M1: a vendor ` +
+        `silently substituted a different id instead of honouring the caller-supplied one.`
+    );
+  }
+
+  return meetingCalendarEventsRepository.record({
+    meetingId: input.meetingId,
+    connectionId: input.connectionId,
+    calendarId: input.calendarId,
+    vendorEventId: created.id,
+    baloBookingId: input.baloBookingId,
+  });
+}

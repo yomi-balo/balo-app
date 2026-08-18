@@ -73,17 +73,29 @@ vi.mock('@sentry/node', () => ({
   captureException: vi.fn(),
 }));
 
+// BAL-396 fix round 2, Finding 7 — synced to the REAL `CALENDAR_SERVER_EVENTS`
+// (packages/analytics/src/events/calendar.ts): dropped the two Cronofy-era keys that no
+// longer exist (`WEBHOOK_RECEIVED`, `RELINK_URL_GENERATED`), added the two BAL-396 keys that
+// do (`CREDENTIALS_REVOKED`, `RECONNECT_RESOLVED`), and added `toCalendarEventProvider` — which
+// `routes/calendar/auth.ts` now imports from this same module. This mock was previously only
+// exercised by tests that never reached those paths, so the drift shipped green; the next
+// route that imports the missing export fails with vitest's "No `toCalendarEventProvider`
+// export is defined on the mock".
 vi.mock('@balo/analytics/server', () => ({
   trackServer: vi.fn(),
   CALENDAR_SERVER_EVENTS: Object.freeze({
-    WEBHOOK_RECEIVED: 'calendar_webhook_received',
-    AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
-    SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
-    DISCONNECTED: 'calendar_disconnected',
-    RELINK_URL_GENERATED: 'calendar_relink_url_generated',
     OAUTH_COMPLETED: 'calendar_oauth_completed',
     OAUTH_FAILED: 'calendar_oauth_failed',
+    DISCONNECTED: 'calendar_disconnected',
+    AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
+    SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
+    AVAILABILITY_OVERRIDE_CREATED: 'availability_override_created',
+    AVAILABILITY_OVERRIDE_DELETED: 'availability_override_deleted',
+    CREDENTIALS_REVOKED: 'calendar_credentials_revoked',
+    RECONNECT_RESOLVED: 'calendar_reconnect_resolved',
   }),
+  toCalendarEventProvider: (p: string): 'google' | 'microsoft' | undefined =>
+    p === 'google' || p === 'microsoft' ? p : undefined,
 }));
 
 import type { FastifyInstance } from 'fastify';

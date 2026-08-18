@@ -56,9 +56,6 @@ export const expertProfiles = pgTable(
 
     availableForWork: boolean('available_for_work').default(true).notNull(),
 
-    cronofyUserId: text('cronofy_user_id'),
-    cronofySyncStatus: text('cronofy_sync_status').default('not_connected'),
-
     stripeConnectId: text('stripe_connect_id'),
 
     searchable: boolean('searchable').default(false).notNull(),

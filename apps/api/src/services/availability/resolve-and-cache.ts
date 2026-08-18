@@ -14,12 +14,27 @@ import {
 } from './resolver-inputs.js';
 import { resolve } from './resolver.js';
 import type { BusyBlock } from './types.js';
-import { vendorBusyProvider } from './vendor-busy.js';
+import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
 
 const log = createLogger('availability-resolve-and-cache');
 
 const DEFAULT_HORIZON_DAYS = 14;
 const DEFAULT_MIN_MINUTES = 15;
+
+/**
+ * ⚠⚠ round-2 fix #11 — `status` distinguishes an ACTUAL rebuild from a SKIP (settings
+ * missing, or the vendor busy read was untrustworthy — see the two `return` sites below).
+ * `earliestAvailableAt: null` is ambiguous by itself: it is also the legitimate answer for an
+ * expert who genuinely has no open slot. Callers (the BullMQ worker in
+ * `jobs/availability-cache.ts`) MUST branch on `status`, not on whether `earliestAvailableAt`
+ * is `null`, before reporting success or firing `AVAILABILITY_CACHE_REBUILT`.
+ */
+export interface ResolveAndCacheResult {
+  status: 'completed' | 'skipped';
+  /** Present only when `status === 'skipped'`. */
+  skipReason?: 'expert_settings_not_found' | 'vendor_busy_unavailable' | 'vendor_read_error';
+  earliestAvailableAt: Date | null;
+}
 
 export interface ResolveAndCacheOptions {
   /**
@@ -57,7 +72,7 @@ export interface ResolveAndCacheOptions {
 export async function resolveAndCacheAvailability(
   expertProfileId: string,
   options: ResolveAndCacheOptions = {}
-): Promise<{ earliestAvailableAt: Date | null }> {
+): Promise<ResolveAndCacheResult> {
   const now = options.now ?? new Date();
 
   // Load the expert's resolver settings (timezone + booking rules) first.
@@ -67,7 +82,11 @@ export async function resolveAndCacheAvailability(
       { expertProfileId },
       'Skipping availability cache rebuild — expert profile or timezone not found'
     );
-    return { earliestAvailableAt: null };
+    return {
+      status: 'skipped',
+      skipReason: 'expert_settings_not_found',
+      earliestAvailableAt: null,
+    };
   }
   const timezone = settings.timezone;
 
@@ -94,17 +113,53 @@ export async function resolveAndCacheAvailability(
 
   // Vendor free/busy comes from the SHARED port unless a caller overrode it (seed only) — see
   // `ResolveAndCacheOptions.busyBlocks` and `./vendor-busy.ts`.
-  const busyBlocksSource =
+  //
+  // ⚠⚠ BAL-396 §9.4 — THE ADVERTISE PATH SKIPS THE CACHE WRITE, IT DOES NOT FAIL THE JOB.
+  // `vendorBusyProvider.listBusyBlocks` THROWS `VendorBusyUnavailableError` when it cannot
+  // trust its answer (an unreadable connection, or a vendor read that failed). Overwriting
+  // `availability_cache` with a result computed WITHOUT that data would replace last-known-
+  // good with a possibly-wrong "more available than reality" answer, which is worse than a
+  // stale one — so the rejection is turned into a tagged result BEFORE `Promise.all` sees it
+  // (a raw rejection there would abort the whole rebuild the same way, but this makes the
+  // "vendor failure ≠ every other read failing" distinction explicit rather than incidental).
+  type BusyBlocksOutcome =
+    | { readonly ok: true; readonly value: BusyBlock[] }
+    | { readonly ok: false; readonly error: unknown };
+  const busyBlocksSource: Promise<BusyBlocksOutcome> = (
     options.busyBlocks === undefined
       ? vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo)
-      : Promise.resolve(options.busyBlocks);
+      : Promise.resolve(options.busyBlocks)
+  ).then(
+    (value): BusyBlocksOutcome => ({ ok: true, value }),
+    (error: unknown): BusyBlocksOutcome => ({ ok: false, error })
+  );
 
-  const [rules, baloConsultations, overrides, busyBlocks] = await Promise.all([
+  const [rules, baloConsultations, overrides, busyOutcome] = await Promise.all([
     availabilityRulesRepository.listByExpertProfileId(expertProfileId),
     consultationsRepository.listConfirmedInRange(expertProfileId, loadFrom, loadTo),
     availabilityOverridesRepository.listUpcoming(expertProfileId),
     busyBlocksSource,
   ]);
+
+  if (!busyOutcome.ok) {
+    const err = busyOutcome.error;
+    const isVendorUnavailable = err instanceof VendorBusyUnavailableError;
+    log.warn(
+      {
+        expertProfileId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      isVendorUnavailable
+        ? 'Skipping availability cache rebuild — vendor busy read unavailable; leaving last-known-good cache in place'
+        : 'Skipping availability cache rebuild — unexpected error reading vendor busy; leaving last-known-good cache in place'
+    );
+    return {
+      status: 'skipped',
+      skipReason: isVendorUnavailable ? 'vendor_busy_unavailable' : 'vendor_read_error',
+      earliestAvailableAt: null,
+    };
+  }
+  const busyBlocks = busyOutcome.value;
 
   // ⚠ ALL THREE ROW PROJECTIONS ARE SHARED WITH BAL-129's `window-availability.ts` (see
   // `./resolver-inputs.ts`), as are the load pad above and the vendor-busy port. What this
@@ -142,7 +197,7 @@ export async function resolveAndCacheAvailability(
     'Availability cache rebuilt'
   );
 
-  return { earliestAvailableAt: result.earliestAvailableAt };
+  return { status: 'completed', earliestAvailableAt: result.earliestAvailableAt };
 }
 
 function guardedNumber(n: unknown, fallback: number): number {

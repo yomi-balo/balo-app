@@ -1,10 +1,11 @@
-import { eq, and, asc, isNull, lt } from 'drizzle-orm';
+import { eq, and, asc, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   calendarConnections,
   calendarSubCalendars,
   availabilityCache,
   type CalendarConnection,
+  type CalendarCredentialStatus,
   type CalendarSubCalendar,
   type NewCalendarSubCalendar,
 } from '../schema';
@@ -29,32 +30,55 @@ import {
  *       OLDEST live connection rather than whatever Postgres happens to return, plus a
  *       sibling in class (a) for callers that know which provider they mean.
  *
- * A method with no marking is genuinely unaffected (keyed by `connectionId`, `channelId`,
- * or not expert-scoped at all).
+ * A method with no marking is genuinely unaffected (keyed by `connectionId` or not
+ * expert-scoped at all).
  *
- * ⚠ `@deprecated dies with BAL-396` marks the Cronofy-only surface. Those methods touch
- * columns (`access_token`, `refresh_token`, `token_expires_at`, `channel_id`) that an
- * Apiroc row leaves NULL, so an Apiroc connection is never a meaningful target for them
- * and making them provider-aware would be wasted work on code scheduled for deletion.
+ * ⚠⚠ BAL-396 REMOVED THE CRONOFY WRITE SURFACE FROM THIS FILE. `upsertConnection`,
+ * `updateConnectionTokens`, `updateConnectionChannelId`, `findConnectionByChannelId`,
+ * `updateConnectionStatus` and the expert-wide `updateTargetCalendarId` are GONE — not
+ * migrated. Every one of them either wrote a column Apiroc never populates
+ * (`access_token`, `refresh_token`, `token_expires_at`, `channel_id`) or wrote the old
+ * `status` vocabulary, and the two fan-outs among them were known imprecisions that a
+ * per-provider world makes wrong rather than merely imprecise. Their replacements —
+ * `upsertApirocConnection`, `setCredentialStatusForProvider`,
+ * `updateTargetCalendarIdForProvider` — are ALL provider-scoped or connection-keyed.
+ *
+ * ⚠ THE CREDENTIAL-STATUS VOCABULARY IS TYPED, NOT STRINGLY. Every status argument below is
+ * a `CalendarCredentialStatus`, so `'connected'` / `'auth_error'` are COMPILE ERRORS rather
+ * than queries that quietly match zero rows (see the column's docblock in `schema/calendar.ts`).
  */
 
 // ── Input types ──────────────────────────────────────────────────
 
-interface UpsertConnectionInput {
+/**
+ * The Apiroc connect/reconnect payload. Note what is ABSENT: no tokens, no `cronofySub`, no
+ * channel id. Balo stores a POINTER (`endUserAccountId`) and a status, and refreshes nothing
+ * (apiroc skill, Constraint 1).
+ */
+export interface UpsertApirocConnectionInput {
   expertProfileId: string;
-  cronofySub: string;
   provider: string;
+  endUserAccountId: string;
   providerEmail?: string | null;
-  accessToken: string;
-  refreshToken: string;
-  tokenExpiresAt: Date;
-  status?: string;
+  /** Defaults to `'ACTIVE'`. The callback passes `'SYNC_PENDING'` when first provisioning fails. */
+  credentialStatus?: CalendarCredentialStatus;
 }
 
-interface UpdateTokensInput {
-  accessToken: string;
-  refreshToken?: string;
-  tokenExpiresAt: Date;
+/**
+ * One expert connection the free/busy read can act on, with the calendar ids that read
+ * requires. Compound because `GetFreeBusyInput.calendarIds` is REQUIRED by the vendor SDK:
+ * a connection without conflict-checked sub-calendars is not a readable target, and the
+ * caller must be able to tell "nothing to check" from "cannot check".
+ */
+export interface BusyReadTarget {
+  connectionId: string;
+  provider: string;
+  endUserAccountId: string;
+  credentialStatus: CalendarCredentialStatus;
+  /** Only sub-calendars with `conflict_check = true`. May be empty. */
+  calendarIds: string[];
+  /** False when the connection has NO sub-calendar rows at all (never provisioned). */
+  provisioned: boolean;
 }
 
 interface ReplaceSubCalendarInput {
@@ -180,80 +204,43 @@ export const calendarRepository = {
   },
 
   /**
-   * (c) LEGACY-SINGLE-CONNECTION-shaped — find a calendar connection by push notification
-   * channel ID.
+   * (a) PROVIDER-SCOPED — create or reconnect THIS expert's connection for THIS provider.
+   * The ONLY writer that mints a `calendar_connections` row in an Apiroc world.
    *
-   * ⚠⚠ CORRECTED IN THE BAL-467 FIX BRIEF (review WARNING, D6). Previously documented "✅
-   * Unaffected by BAL-467 … already names exactly one row" — that is no longer accurate.
-   * `channel_id` is written by `updateConnectionChannelId`, which is expert-scoped ONLY
-   * (no provider term — see that method's docblock) and therefore fans out across ALL of
-   * an expert's live connections. Once an expert holds two live connections (the
-   * cardinality BAL-467 legalized), that write can leave the SAME `channel_id` on both
-   * rows, and `findFirst` with no explicit order picks whichever Postgres happens to
-   * return. `OLDEST_LIVE_FIRST` makes that deterministic rather than arbitrary — it does
-   * NOT make it correct; a genuinely correct answer needs `channel_id` scoped per
-   * connection, which is Cronofy-only surface scheduled to die with BAL-396, not extended
-   * here.
+   * ⚠⚠ THE ARBITER MUST NAME `provider` AND MUST RESTATE `targetWhere`.
+   * `cal_conn_expert_provider_idx` is PARTIAL on `deleted_at IS NULL`, and Postgres only
+   * selects a partial index as an ON CONFLICT arbiter when the statement REPEATS its
+   * predicate. Omit either and **EVERY** upsert raises **42P10 — "there is no unique or
+   * exclusion constraint matching the ON CONFLICT specification"** at PLAN time: on the
+   * first statement, on an empty table, with `tsc` and the mocked unit test both green
+   * (that test mocks the Drizzle client, so `onConflictDoUpdate` only records its argument
+   * and never reaches a planner). Only `calendar.integration.test.ts` on real Postgres, and
+   * `invariants/calendar-connection-cardinality.test.ts` on the source text, can catch it.
    *
-   * CRONOFY-ONLY.
-   *
-   * @deprecated dies with BAL-396 (Cronofy removal).
-   */
-  async findConnectionByChannelId(channelId: string): Promise<CalendarConnection | undefined> {
-    return db.query.calendarConnections.findFirst({
-      where: and(
-        eq(calendarConnections.channelId, channelId),
-        isNull(calendarConnections.deletedAt)
-      ),
-      orderBy: OLDEST_LIVE_FIRST,
-    });
-  },
-
-  /**
-   * (a) PROVIDER-SCOPED — upsert THIS expert's connection for THIS provider.
-   *
-   * ⚠⚠ THE ARBITER CHANGED IN BAL-467 AND IT HAD TO. It used to be
-   * `target: [expertProfileId]`, matching the old `cal_conn_expert_profile_idx`. That
-   * index is DROPPED by migration 0067, so leaving the arbiter alone would make the live
-   * Cronofy connect path raise **42P10 — "there is no unique or exclusion constraint
-   * matching the ON CONFLICT specification"** on its very first statement.
-   *
-   * ⚠⚠ `targetWhere` IS MANDATORY, NOT DECORATION. `cal_conn_expert_provider_idx` is
-   * PARTIAL on `deleted_at IS NULL`. Postgres only selects a partial index as an
-   * ON CONFLICT arbiter when the statement RESTATES its predicate; omit it and arbiter
-   * inference fails AT PLAN TIME, so EVERY upsert raises 42P10 — including the first, on
-   * an empty table. **Typecheck and the mocked unit test both stay green**, because the
-   * unit test mocks the Drizzle client and only records the argument object. Only
-   * `calendar.integration.test.ts`, on real Postgres, catches this. House precedent:
-   * `repositories/reviews.ts`, `repositories/conversations.ts`.
-   *
-   * ⚠ `isNull()` renders `"deleted_at" is null` with NO bound parameter, so this is NOT
-   * the `reference_pg_partial_index_arbiter_param_42p10` hazard (that one is a Drizzle
-   * `eq()` emitting a `$1` Param, which can never match an index predicate). Do not
-   * "fix" this into raw `sql` with inlined literals — there is no literal to inline.
+   * ⚠ `isNull()` renders `"deleted_at" is null` with NO bound parameter, so this is NOT the
+   * `reference_pg_partial_index_arbiter_param_42p10` hazard (that one is a Drizzle `eq()`
+   * emitting a `$1` Param, which can never match an index predicate). Do not "fix" this
+   * into raw `sql` with inlined literals — there is no literal to inline.
    *
    * ⚠ RECONNECT AFTER DISCONNECT INSERTS A FRESH ROW. A soft-deleted row is invisible to
-   * the partial index, so it cannot be the conflict target; the soft-deleted row is left
-   * behind as history. That is correct and matches `company_members` / `agency_members`.
-   * The `deletedAt: null` in `set` below is therefore only ever reached when a LIVE row
-   * is re-upserted — it is a no-op safety belt, not the reconnect mechanism.
+   * the partial index, so it cannot be the conflict target; the soft-deleted row stays
+   * behind as history. Matches `company_members` / `agency_members`. The `deletedAt: null`
+   * in `set` is therefore only reached when a LIVE row is re-upserted — a no-op safety
+   * belt, not the reconnect mechanism.
    *
-   * @deprecated The INPUT SHAPE dies with BAL-396 — `cronofySub` and the three encrypted
-   * token fields are Cronofy-only and an Apiroc row leaves all four NULL. BAL-396 owns
-   * the Apiroc writer. The ARBITER above is permanent.
+   * ⚠ RECONNECT CLEARS THE NOTIFICATION MARKER. `reconnectNotifiedAt: null` in `set` is not
+   * decoration: it is what lets a SECOND breakage notify the expert again. Leave it out and
+   * an expert who reconnects, then breaks again, is never told.
    */
-  async upsertConnection(data: UpsertConnectionInput): Promise<CalendarConnection> {
+  async upsertApirocConnection(data: UpsertApirocConnectionInput): Promise<CalendarConnection> {
     const [result] = await db
       .insert(calendarConnections)
       .values({
         expertProfileId: data.expertProfileId,
-        cronofySub: data.cronofySub,
         provider: data.provider,
+        endUserAccountId: data.endUserAccountId,
         providerEmail: data.providerEmail ?? null,
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        tokenExpiresAt: data.tokenExpiresAt,
-        status: data.status ?? 'connected',
+        credentialStatus: data.credentialStatus ?? 'ACTIVE',
         deletedAt: null,
       })
       .onConflictDoUpdate({
@@ -261,14 +248,13 @@ export const calendarRepository = {
         // ⚠⚠ See the warning above. Removing this line breaks EVERY upsert with 42P10.
         targetWhere: isNull(calendarConnections.deletedAt),
         set: {
-          cronofySub: data.cronofySub,
-          // `provider` is INTENTIONALLY absent: it is now half the arbiter, so the
-          // conflicting row necessarily already holds this exact value.
+          // `provider` is INTENTIONALLY absent: it is half the arbiter, so the conflicting
+          // row necessarily already holds this exact value.
+          endUserAccountId: data.endUserAccountId,
           providerEmail: data.providerEmail ?? null,
-          accessToken: data.accessToken,
-          refreshToken: data.refreshToken,
-          tokenExpiresAt: data.tokenExpiresAt,
-          status: data.status ?? 'connected',
+          credentialStatus: data.credentialStatus ?? 'ACTIVE',
+          reconnectNotifiedAt: null,
+          credentialCheckedAt: new Date(),
           updatedAt: new Date(),
           deletedAt: null,
         },
@@ -279,37 +265,25 @@ export const calendarRepository = {
   },
 
   /**
-   * (a) PROVIDER-SCOPED — rewrites the Cronofy credential columns for ONE (expert, provider)
-   * connection.
+   * (a) PROVIDER-SCOPED — replaces the deleted expert-wide `updateConnectionStatus` fan-out.
    *
-   * ⚠⚠ CHANGED IN THE BAL-467 FIX BRIEF (security review CRITICAL, A2). This used to be
-   * expert-scoped ONLY. The docblock argued an Apiroc row "is never a meaningful target"
-   * for this write because it leaves `access_token`/`refresh_token`/`token_expires_at`
-   * NULL — true, but that explains why the row SHOULD have no tokens; it does not PREVENT
-   * the write. With a Cronofy row and an Apiroc row live for the same expert (post
-   * BAL-467's per-provider cardinality), an expert-scoped-only `WHERE` can match the
-   * Apiroc row too and overwrite its NULL token columns with Cronofy's — silently
-   * corrupting a connection this code was never meant to touch. Not a cross-tenant break
-   * (still expert-scoped), but a cross-PROVIDER one.
+   * ⚠ THE FAN-OUT WAS THE BUG. One provider's EXPIRED must never brand the other
+   * provider's connection broken: that would show an expert "reconnect Microsoft" because
+   * their Google token lapsed, and — via §9.4's fail-closed booking gate — would make them
+   * unbookable on a calendar that is perfectly healthy.
    *
-   * CRONOFY-ONLY in practice — Balo holds no provider tokens for Apiroc (apiroc skill,
-   * Constraint 1), so this write only ever has a meaningful target when `provider` is a
-   * Cronofy provider. Its one caller, `services/cronofy/token-manager.ts`, always knows
-   * which provider it is refreshing (it read the connection row first).
-   *
-   * @deprecated dies with BAL-396 (Cronofy removal).
+   * ⚠ WRITING `'ACTIVE'` ALSO CLEARS `reconnectNotifiedAt`. See {@link setCredentialStatus}.
    */
-  async updateConnectionTokens(
+  async setCredentialStatusForProvider(
     expertProfileId: string,
     provider: string,
-    data: UpdateTokensInput
+    credentialStatus: CalendarCredentialStatus
   ): Promise<void> {
     await db
       .update(calendarConnections)
       .set({
-        accessToken: data.accessToken,
-        ...(data.refreshToken !== undefined && { refreshToken: data.refreshToken }),
-        tokenExpiresAt: data.tokenExpiresAt,
+        credentialStatus,
+        ...(credentialStatus === 'ACTIVE' ? { reconnectNotifiedAt: null } : {}),
         updatedAt: new Date(),
       })
       .where(
@@ -322,49 +296,68 @@ export const calendarRepository = {
   },
 
   /**
-   * (b) FAN-OUT — sets `status` on ALL of this expert's live connections.
+   * Keyed by connection id — the health probe and the credential-status service already
+   * hold the row, so neither needs to re-derive (expert, provider) from it.
    *
-   * ⚠ THIS IS A KNOWN IMPRECISION, NOT AN OVERSIGHT. One provider's `auth_error` should
-   * not brand the other's connection as broken. Making it per-provider requires the
-   * credential-status lifecycle that gives the value meaning (`ACTIVE | EXPIRED |
-   * REVOKED`, plus the `status` → `credential_status` rename), and that is BAL-396 §2/§9
-   * — which owns all seven live Cronofy call sites for this column. Today every caller
-   * (`services/cronofy/{oauth,retry,token-manager}.ts`, `routes/calendar/webhook.ts`) is
-   * a Cronofy path where the expert has exactly one connection, so the fan-out and the
-   * per-provider write are the same write.
+   * ⚠⚠ WRITING `'ACTIVE'` CLEARS `reconnectNotifiedAt`, IN THE SAME STATEMENT. That marker
+   * means "the expert has already been told about THIS breakage"; a connection that is
+   * healthy again has no current breakage, so leaving the marker set would silently
+   * suppress the notification for the NEXT one. Keeping the clear here rather than at the
+   * call site makes "ACTIVE ⇒ marker NULL" an invariant of this repository instead of a
+   * step a caller can forget. Non-ACTIVE writes leave the marker exactly as it was — that
+   * is what makes the notify-once check meaningful.
    */
-  async updateConnectionStatus(expertProfileId: string, status: string): Promise<void> {
+  async setCredentialStatus(
+    connectionId: string,
+    credentialStatus: CalendarCredentialStatus
+  ): Promise<void> {
     await db
       .update(calendarConnections)
-      .set({ status, updatedAt: new Date() })
-      .where(
-        and(
-          eq(calendarConnections.expertProfileId, expertProfileId),
-          isNull(calendarConnections.deletedAt)
-        )
-      );
+      .set({
+        credentialStatus,
+        ...(credentialStatus === 'ACTIVE' ? { reconnectNotifiedAt: null } : {}),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(calendarConnections.id, connectionId), isNull(calendarConnections.deletedAt)));
   },
 
   /**
-   * Update push notification channel ID.
+   * Stamp a probe ATTEMPT against one connection — the probe's scan key, so a connection is
+   * never re-selected twice in one interval.
    *
-   * CRONOFY-ONLY — `channel_id` is a Cronofy push-channel handle. Apiroc delivers change
-   * notifications via Svix-signed webhooks against a `calendar_subscriptions` row that
-   * BAL-468 creates; it never writes this column. Not made provider-aware for the same
-   * reason as `updateConnectionTokens`.
+   * ⚠⚠ BAL-396 FIX ROUND — STAMPED ON A CLASSIFIED FAILURE TOO, NOT ONLY ON SUCCESS. The
+   * original contract ("only a successful data call proves the credential works") is still
+   * true of the credential STATUS, which this method never writes. But this column is also
+   * `listConnectionsDueForHealthCheck`'s `ORDER BY ... ASC NULLS FIRST` scan key — and a
+   * connection whose calls keep failing was never stamped, so it sorted FIRST forever and
+   * starved every healthy connection out of the batch. Stamping on a CLASSIFIED failure too
+   * ("we attempted this connection at T, whatever the answer") fixes the starvation without
+   * touching credential status: the health probe still decides ACTIVE/EXPIRED/etc through
+   * `applyCredentialFailure`/`setCredentialStatus`, never through this method.
    *
-   * @deprecated dies with BAL-396 (Cronofy removal).
+   * `checkedAt` is a parameter rather than `new Date()` so one sweep tick stamps ONE instant
+   * across every connection it examined — the batch is the unit of evidence.
    */
-  async updateConnectionChannelId(expertProfileId: string, channelId: string): Promise<void> {
+  async markCredentialChecked(connectionId: string, checkedAt: Date): Promise<void> {
     await db
       .update(calendarConnections)
-      .set({ channelId, updatedAt: new Date() })
-      .where(
-        and(
-          eq(calendarConnections.expertProfileId, expertProfileId),
-          isNull(calendarConnections.deletedAt)
-        )
-      );
+      .set({ credentialCheckedAt: checkedAt, updatedAt: new Date() })
+      .where(and(eq(calendarConnections.id, connectionId), isNull(calendarConnections.deletedAt)));
+  },
+
+  /**
+   * Stamp the reconnect notification.
+   *
+   * ⚠ CALL THIS **AFTER** THE PUBLISH, NEVER BEFORE. House precedent: `markDunned()` on
+   * `credit_receivables`. Stamping first turns a failed publish into permanent silence —
+   * the sweep would see the marker on every later tick and never retry; stamping after
+   * turns it into at-most-one-extra email, which is the survivable direction.
+   */
+  async markReconnectNotified(connectionId: string, notifiedAt: Date): Promise<void> {
+    await db
+      .update(calendarConnections)
+      .set({ reconnectNotifiedAt: notifiedAt, updatedAt: new Date() })
+      .where(and(eq(calendarConnections.id, connectionId), isNull(calendarConnections.deletedAt)));
   },
 
   /**
@@ -381,37 +374,14 @@ export const calendarRepository = {
   },
 
   /**
-   * (c) LEGACY-SINGLE-CONNECTION, fanning out — sets `target_calendar_id` on ALL of this
-   * expert's live connections.
-   *
-   * ⚠ THE AMENDMENT SAYS "`targetCalendarId` IS PER CONNECTION", so this fan-out is
-   * WRONG under the new ruling — writing one provider's chosen calendar id onto the other
-   * provider's row is meaningless (calendar ids are namespaced per provider account).
-   * It is left as-is only because its two live callers (`routes/calendar/api.ts`,
-   * `services/cronofy/oauth.ts`) are Cronofy paths with exactly one connection, where the
-   * fan-out degenerates to the correct single write.
-   *
-   * NEW CODE MUST CALL `updateTargetCalendarIdForProvider`. BAL-396 retires this one.
-   */
-  async updateTargetCalendarId(expertProfileId: string, targetCalendarId: string): Promise<void> {
-    await db
-      .update(calendarConnections)
-      .set({ targetCalendarId, updatedAt: new Date() })
-      .where(
-        and(
-          eq(calendarConnections.expertProfileId, expertProfileId),
-          isNull(calendarConnections.deletedAt)
-        )
-      );
-  },
-
-  /**
    * (a) PROVIDER-SCOPED — set the event-write target calendar for ONE connection.
    *
    * The amendment's "`targetCalendarId` is per connection" clause, expressed directly:
    * a calendar id is only meaningful inside the provider account that issued it.
    *
-   * ⚠ INERT — no caller until BAL-396 wires event writes.
+   * ⚠ THE EXPERT-WIDE `updateTargetCalendarId` FAN-OUT IT REPLACED IS DELETED (BAL-396).
+   * That one wrote one provider's chosen calendar id onto the other provider's row, where
+   * it addresses nothing — harmless only while every expert had exactly one connection.
    */
   async updateTargetCalendarIdForProvider(
     expertProfileId: string,
@@ -478,20 +448,146 @@ export const calendarRepository = {
   },
 
   /**
-   * Find connected connections whose lastSyncedAt is before the threshold.
+   * Live, healthy connections not proven since the threshold — the 15-minute
+   * availability-staleness cron's candidate list.
    *
-   * ✅ Unaffected by BAL-467 — not expert-scoped. It now returns one row per (expert,
-   * provider) rather than one per expert, which is exactly what the availability job
-   * wants: each provider connection syncs on its own cadence.
+   * ✅ Unaffected by BAL-467 — not expert-scoped. It returns one row per (expert, provider),
+   * which is exactly what the availability job wants: each provider connection syncs on its
+   * own cadence.
+   *
+   * ⚠⚠ THE STATUS TERM IS WHY `credential_status` IS A TYPED COLUMN. This filter used to
+   * read `eq(status, 'connected')`. Renaming the column WITHOUT typing it would have left
+   * this literal compiling against the new vocabulary and matching ZERO ROWS FOREVER — the
+   * cron would run every 15 minutes, find nothing, and report nothing wrong, so no
+   * connected expert's availability would ever be resynced again. With
+   * `.$type<CalendarCredentialStatus>()` the stale literal is a `tsc` error instead.
+   * `calendar.integration.test.ts` pins the behaviour on real Postgres as well.
+   *
+   * ⚠⚠ BAL-396 FIX ROUND — REPOINTED FROM `last_synced_at` TO `credential_checked_at`, AND
+   * THIS IS NOT A COSMETIC RENAME. `last_synced_at`'s ONLY production writer was
+   * `updateLastSyncedAt`, called solely from the Cronofy-era webhook route BAL-396 DELETED.
+   * With no writer left, every row's `last_synced_at` is NULL forever, `lt(NULL, threshold)`
+   * is NULL (not true), and the old query returned `[]` on every tick — a PERMANENT no-op,
+   * not the "pre-existing behaviour left untouched" a stale comment here used to claim.
+   * `credential_checked_at` DOES have a live writer (`markCredentialChecked`, stamped by the
+   * health probe on every attempt — see that method's docblock — and by
+   * `upsertApirocConnection` on connect/reconnect), so this is a real signal again: it is
+   * the platform's ONLY time-based availability-rebuild trigger until BAL-468 ships the
+   * webhook.
+   *
+   * ⚠ `or(isNull(...), lt(...))` — a NEVER-CHECKED connection (fresh INSERT; `set` only
+   * stamps `credential_checked_at` on the UPDATE arm — see `upsertApirocConnection`) MUST
+   * match immediately rather than waiting out one full threshold window unrebuilt. Pinned by
+   * `calendar.integration.test.ts` (a never-checked connection returns from this query).
    */
   async findStaleConnections(threshold: Date): Promise<CalendarConnection[]> {
     return db.query.calendarConnections.findMany({
       where: and(
-        eq(calendarConnections.status, 'connected'),
+        eq(calendarConnections.credentialStatus, 'ACTIVE'),
         isNull(calendarConnections.deletedAt),
-        lt(calendarConnections.lastSyncedAt, threshold)
+        or(
+          isNull(calendarConnections.credentialCheckedAt),
+          lt(calendarConnections.credentialCheckedAt, threshold)
+        )
       ),
     });
+  },
+
+  /**
+   * The health probe's candidate scan: live connections whose credential has not been
+   * PROVEN since `checkedBefore`. A NULL `credential_checked_at` counts as never-checked and
+   * therefore sorts FIRST.
+   *
+   * ⚠ RETURNS NON-ACTIVE CONNECTIONS TOO, DELIBERATELY. The probe is also the healer: a
+   * `SYNC_PENDING` connection whose probe call succeeds gets re-provisioned and flipped to
+   * `ACTIVE`, and an `EXPIRED`/`REVOKED` one whose call now succeeds was reconnected out of
+   * band. Filtering to `ACTIVE` here would make every broken connection permanently broken.
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST WARN ABOUT WHEN IT FILLS (no silent caps —
+   * precedent `MEETING_LIFECYCLE_BATCH_LIMIT`). Coverage, not burst, is what stretches as
+   * experts grow: a filled batch means some connections waited a tick, which must be
+   * visible in logs rather than inferred.
+   *
+   * ⚠ ORDERING IS `NULLS FIRST`, WHICH `cal_conn_credential_check_idx` DOES NOT ITSELF
+   * PROVIDE (it is a plain ASC btree, so Postgres sorts). The index is here for the
+   * PREDICATE — live rows, by check time — and the batch is ≤ a few hundred rows, so the
+   * sort is not the cost that matters. `id` breaks ties so a tick's batch is stable rather
+   * than planner-dependent (same reasoning as `OLDEST_LIVE_FIRST`).
+   *
+   * ⚠ NO `end_user_account_id IS NOT NULL` FILTER — REMOVED IN THE BAL-396 FIX ROUND.
+   * Migration 0069 made the column `NOT NULL`, so every live row already carries a pointer;
+   * the predicate was vacuous (always true) rather than protective, and Postgres enforces it
+   * at the constraint level regardless of what this query asks for.
+   */
+  async listConnectionsDueForHealthCheck(
+    checkedBefore: Date,
+    limit: number
+  ): Promise<CalendarConnection[]> {
+    return db.query.calendarConnections.findMany({
+      where: and(
+        isNull(calendarConnections.deletedAt),
+        or(
+          isNull(calendarConnections.credentialCheckedAt),
+          lt(calendarConnections.credentialCheckedAt, checkedBefore)
+        )
+      ),
+      orderBy: [
+        sql`${calendarConnections.credentialCheckedAt} asc nulls first`,
+        asc(calendarConnections.id),
+      ],
+      limit,
+    });
+  },
+
+  /**
+   * Every live connection this expert holds, with the conflict-checked calendar ids the
+   * free/busy read needs. ONE round trip (the sub-calendars come back through the declared
+   * relation, not a second query).
+   *
+   * ⚠⚠ RETURNS NON-ACTIVE CONNECTIONS TOO, DELIBERATELY — AND OMITTING THEM WOULD BE A
+   * SAFETY BUG, NOT A TIDY-UP. An unreadable connection (`SYNC_PENDING`, `EXPIRED`,
+   * `REVOKED`, or provisioned with zero sub-calendar rows) must make the booking gate fail
+   * CLOSED. Filtering them out here would hand the gate an empty list, which it reads as
+   * "this expert has no external calendar" — failing OPEN, and double-booking an expert in
+   * front of a paying client. The caller distinguishes "nothing to check" from "cannot
+   * check"; this method must give it the material to do so.
+   *
+   * ⚠ NO `end_user_account_id IS NOT NULL` FILTER — REMOVED IN THE BAL-396 FIX ROUND.
+   * Migration 0069 made the column `NOT NULL`, so every live row already carries a pointer;
+   * a Cronofy-era row without one cannot exist any more (the "rollout seam" this predicate
+   * used to describe closed when 0069 landed). `endUserAccountId` on the returned row is
+   * therefore `string`, not `string | null` — no runtime guard is needed to narrow it.
+   *
+   * ⚠ No token or PII column is projected, so the `with:` hydration cannot leak one
+   * (`reference_drizzle_with_hydration_leaks_secrets`); the return type is a purpose-built
+   * projection rather than the row.
+   */
+  async listBusyReadTargets(expertProfileId: string): Promise<BusyReadTarget[]> {
+    const rows = await db.query.calendarConnections.findMany({
+      where: and(
+        eq(calendarConnections.expertProfileId, expertProfileId),
+        isNull(calendarConnections.deletedAt)
+      ),
+      columns: {
+        id: true,
+        provider: true,
+        endUserAccountId: true,
+        credentialStatus: true,
+      },
+      with: {
+        subCalendars: { columns: { calendarId: true, conflictCheck: true } },
+      },
+      orderBy: OLDEST_LIVE_FIRST,
+    });
+
+    return rows.map((row) => ({
+      connectionId: row.id,
+      provider: row.provider,
+      endUserAccountId: row.endUserAccountId,
+      credentialStatus: row.credentialStatus,
+      calendarIds: row.subCalendars.filter((sub) => sub.conflictCheck).map((sub) => sub.calendarId),
+      provisioned: row.subCalendars.length > 0,
+    }));
   },
 
   // ── Sub-calendar methods ────────────────────────────────────────
@@ -620,9 +716,10 @@ export const calendarRepository = {
    *
    * ⚠ The `with: { subCalendars: true }` hydration is safe to expose: `calendar_sub_calendars`
    * carries no tokens and no PII beyond a calendar display name the expert already sees.
-   * The CONNECTION row itself, however, carries `access_token` / `refresh_token`, so a
-   * caller that forwards this value to a client MUST project columns explicitly
-   * (`reference_drizzle_with_hydration_leaks_secrets`).
+   * The CONNECTION row itself, however, still carries `access_token` / `refresh_token` until
+   * migration 0069 drops them, so a caller that forwards this value to a client MUST project
+   * columns explicitly (`reference_drizzle_with_hydration_leaks_secrets`). Even after 0069 the
+   * rule holds for `end_user_account_id` — a vendor pointer is not a client-facing field.
    */
   async findConnectionWithSubCalendars(
     expertProfileId: string

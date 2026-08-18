@@ -14,6 +14,22 @@ const log = createLogger('availability-cache-worker');
 export const AVAILABILITY_CACHE_QUEUE = 'rebuild-availability-cache';
 export const STALENESS_CHECK_QUEUE = 'staleness-check';
 
+/**
+ * ⚠⚠ round-2 fix #8 — THIS CONSTANT AND `calendar-health-probe.ts`'s `PROBE_INTERVAL_MS` ARE
+ * ONE COUPLED INVARIANT, NOT TWO INDEPENDENT NUMBERS. `findStaleConnections` below treats a
+ * connection as stale once its `credential_checked_at` is older than this threshold — but
+ * under NORMAL operation `credential_checked_at` is refreshed only once per
+ * `PROBE_INTERVAL_MS` (the health probe's own re-probe cadence). If `PROBE_INTERVAL_MS` ever
+ * drops to or below this threshold, every connection's `credential_checked_at` stays "fresh
+ * enough" and `findStaleConnections` silently returns `[]` on every tick forever — the EXACT
+ * permanent-no-op failure class this file's own docblock says round 1 just closed (the
+ * `last_synced_at`-with-no-writer bug), re-armed by an unrelated tuning change in a different
+ * file. `calendar-health-probe.ts` imports this constant and asserts the ordering at module
+ * load — see its `PROBE_INTERVAL_MS` docblock — so the coupling fails LOUDLY instead of
+ * silently if it is ever inverted.
+ */
+export const STALENESS_CHECK_THRESHOLD_MS = 15 * 60 * 1000;
+
 // ── Job data shapes ──────────────────────────────────────────────
 
 export interface AvailabilityCacheJobData {
@@ -88,7 +104,21 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
     async (job: Job<AvailabilityCacheJobData>) => {
       const { expertProfileId } = job.data;
 
-      await resolveAndCacheAvailability(expertProfileId);
+      const result = await resolveAndCacheAvailability(expertProfileId);
+
+      // ⚠⚠ round-2 fix #11 — a SKIPPED rebuild (expert settings missing, or the vendor busy
+      // read was untrustworthy — `resolveAndCacheAvailability` leaves last-known-good in
+      // place either way) used to be reported IDENTICALLY to a completed one: same job.log
+      // line, same `AVAILABILITY_CACHE_REBUILT` analytics fire. Branch on `result.status`, not
+      // on `earliestAvailableAt` being `null` — that is also the legitimate answer for an
+      // expert who genuinely has no open slot.
+      if (result.status === 'skipped') {
+        job.log(
+          `Availability cache rebuild SKIPPED for expert ${expertProfileId} ` +
+            `(${result.skipReason ?? 'unknown reason'}) — last-known-good cache left in place`
+        );
+        return;
+      }
 
       trackServer(CALENDAR_SERVER_EVENTS.AVAILABILITY_CACHE_REBUILT, {
         distinct_id: expertProfileId,
@@ -123,14 +153,22 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
 // ── Worker: Staleness check ──────────────────────────────────────
 
 /**
- * Checks for stale calendar connections (no webhook in 15 minutes)
- * and enqueues rebuild jobs for each.
+ * Checks for calendar connections whose credential hasn't been PROVEN in the last 15
+ * minutes and enqueues rebuild jobs for each.
+ *
+ * ⚠⚠ BAL-396 FIX ROUND — THIS IS NOW THE PLATFORM'S ONLY TIME-BASED AVAILABILITY-REBUILD
+ * TRIGGER. It used to key off `last_synced_at`, stamped only by the Cronofy-era webhook
+ * route BAL-396 deletes — so with no writer left, this cron was a PERMANENT no-op (every
+ * tick found zero stale connections and reported nothing wrong). `findStaleConnections` now
+ * keys off `credential_checked_at` (stamped by the health probe and by connect/reconnect —
+ * see `calendarRepository.findStaleConnections`'s docblock), restoring a real periodic
+ * rebuild until BAL-468 ships the Apiroc webhook.
  */
 export function startStalenessCheckWorker(): Worker {
   const worker = new Worker(
     STALENESS_CHECK_QUEUE,
     async (job: Job) => {
-      const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+      const staleThreshold = new Date(Date.now() - STALENESS_CHECK_THRESHOLD_MS);
       const staleConnections = await calendarRepository.findStaleConnections(staleThreshold);
 
       if (staleConnections.length === 0) {

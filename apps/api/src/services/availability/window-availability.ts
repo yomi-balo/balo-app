@@ -12,7 +12,8 @@ import {
   toResolverRules,
 } from './resolver-inputs.js';
 import { isWindowBookable } from './resolver.js';
-import { vendorBusyProvider } from './vendor-busy.js';
+import type { BusyBlock } from './types.js';
+import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
 
 const log = createLogger('availability-window-check');
 
@@ -78,16 +79,62 @@ export async function isWindowAvailableForExpert(
   const loadFrom = new Date(start.getTime() - CONSULTATION_LOAD_PAD_MS);
   const loadTo = new Date(end.getTime() + CONSULTATION_LOAD_PAD_MS);
 
-  const [rules, baloConsultations, overrides, busyBlocks] = await Promise.all([
+  // ⚠ THE SHARED PORT, NOT AN INLINE `[]`. `resolveAndCacheAvailability` reads vendor
+  // free/busy from this SAME object (BAL-396 §9), so the booking gate gets whatever vendor
+  // is wired there in the same commit. An inline `[]` here would have kept double-booking
+  // over an expert's real external commitments with nothing failing.
+  //
+  // ⚠⚠ BAL-396 §9.4 — FAILS CLOSED. `vendorBusyProvider.listBusyBlocks` THROWS
+  // `VendorBusyUnavailableError` when it cannot trust its answer (an unreadable connection,
+  // or a vendor read that failed) — it MUST be caught, never allowed to propagate, otherwise
+  // `POST /meetings` would answer a `500` where it should answer a clean `409`. Caught
+  // SEPARATELY from the three Balo-owned reads below: this function's own fail-closed
+  // contract is specifically about vendor trust, not about a `@balo/db` outage, which stays
+  // an uncaught 500 exactly as it always has.
+  //
+  // ⚠⚠ round-2 fix #10 — RUN CONCURRENTLY WITH THE THREE BALO-OWNED READS, NOT BEFORE THEM.
+  // A prior version `await`ed the vendor round-trip serially, ahead of `Promise.all` below —
+  // paying a full un-overlapped Apiroc round-trip on every `POST /meetings`, even one the
+  // pure resolver would have cheaply rejected anyway (outside published hours, etc.). The
+  // fail-closed catch is still required; it just no longer needs to be serial to get it. This
+  // mirrors `resolve-and-cache.ts`'s identical `BusyBlocksOutcome` tagging (its §9.4 comment)
+  // exactly, so the two call sites can't drift on how they turn a rejection into a value the
+  // `Promise.all` can carry.
+  type BusyBlocksOutcome =
+    | { readonly ok: true; readonly value: BusyBlock[] }
+    | { readonly ok: false; readonly error: unknown };
+  // ⚠ Scan C (`invariants/sync-token-parity.test.ts`) greps for the exact contiguous substring
+  // `vendorBusyProvider.listBusyBlocks` on a non-comment code line — keep that call on ONE
+  // physical line if this is ever reformatted; splitting the member access across lines (as a
+  // pure `prettier`-style break would) makes the scan blind, not the call wrong.
+  const vendorBusyRead = vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo);
+  const busyBlocksSource: Promise<BusyBlocksOutcome> = vendorBusyRead.then(
+    (value): BusyBlocksOutcome => ({ ok: true, value }),
+    (error: unknown): BusyBlocksOutcome => ({ ok: false, error })
+  );
+
+  const [rules, baloConsultations, overrides, busyOutcome] = await Promise.all([
     availabilityRulesRepository.listByExpertProfileId(expertProfileId),
     consultationsRepository.listConfirmedInRange(expertProfileId, loadFrom, loadTo),
     availabilityOverridesRepository.listUpcoming(expertProfileId),
-    // ⚠ THE SHARED PORT, NOT AN INLINE `[]`. `resolveAndCacheAvailability` reads vendor
-    // free/busy from this SAME object, so when BAL-194/195 wires Cronofy at the advertise call
-    // site the booking gate gets it in the same commit. An inline `[]` here would have kept
-    // double-booking over an expert's real external commitments with nothing failing.
-    vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo),
+    busyBlocksSource,
   ]);
+
+  if (!busyOutcome.ok) {
+    const err = busyOutcome.error;
+    if (err instanceof VendorBusyUnavailableError) {
+      log.warn(
+        {
+          expertProfileId,
+          error: err.message,
+        },
+        'Booking window rejected — vendor busy read unavailable (fail-closed)'
+      );
+      return false;
+    }
+    throw err;
+  }
+  const busyBlocks = busyOutcome.value;
 
   return isWindowBookable({
     // ⚠ THE SAME PROJECTIONS `resolveAndCacheAvailability` USES (`./resolver-inputs.ts`), so

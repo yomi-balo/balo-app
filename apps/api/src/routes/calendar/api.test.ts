@@ -4,54 +4,47 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 
 const {
   mockFindConnectionWithSubCalendars,
-  mockFindConnectionByExpertProfileId,
+  mockListConnectionsByExpertProfileId,
+  mockFindSubCalendarsByConnectionId,
+  mockFindConnectionByExpertAndProvider,
   mockFindSubCalendarByCalendarId,
   mockUpdateConflictCheck,
-  mockUpdateTargetCalendarId,
-  mockDisconnectCalendar,
-  mockListAndStoreCalendars,
-  mockWithCronofyRetry,
-  mockGetValidAccessToken,
-  mockGetCronofyUserClient,
+  mockUpdateTargetCalendarIdForProvider,
+  mockSoftDeleteConnection,
+  mockDisconnectProvider,
+  mockEnqueueAvailabilityCacheRebuild,
 } = vi.hoisted(() => ({
   mockFindConnectionWithSubCalendars: vi.fn(),
-  mockFindConnectionByExpertProfileId: vi.fn(),
+  mockListConnectionsByExpertProfileId: vi.fn(),
+  mockFindSubCalendarsByConnectionId: vi.fn(),
+  mockFindConnectionByExpertAndProvider: vi.fn(),
   mockFindSubCalendarByCalendarId: vi.fn(),
   mockUpdateConflictCheck: vi.fn(),
-  mockUpdateTargetCalendarId: vi.fn(),
-  mockDisconnectCalendar: vi.fn(),
-  mockListAndStoreCalendars: vi.fn(),
-  mockWithCronofyRetry: vi.fn(),
-  mockGetValidAccessToken: vi.fn(),
-  mockGetCronofyUserClient: vi.fn(),
+  mockUpdateTargetCalendarIdForProvider: vi.fn(),
+  mockSoftDeleteConnection: vi.fn(),
+  mockDisconnectProvider: vi.fn(),
+  mockEnqueueAvailabilityCacheRebuild: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   calendarRepository: {
     findConnectionWithSubCalendars: mockFindConnectionWithSubCalendars,
-    findConnectionByExpertProfileId: mockFindConnectionByExpertProfileId,
+    listConnectionsByExpertProfileId: mockListConnectionsByExpertProfileId,
+    findSubCalendarsByConnectionId: mockFindSubCalendarsByConnectionId,
+    findConnectionByExpertAndProvider: mockFindConnectionByExpertAndProvider,
     findSubCalendarByCalendarId: mockFindSubCalendarByCalendarId,
     updateConflictCheck: mockUpdateConflictCheck,
-    updateTargetCalendarId: mockUpdateTargetCalendarId,
+    updateTargetCalendarIdForProvider: mockUpdateTargetCalendarIdForProvider,
+    softDeleteConnection: mockSoftDeleteConnection,
   },
 }));
 
-vi.mock('../../services/cronofy/oauth.js', () => ({
-  disconnectCalendar: mockDisconnectCalendar,
-  listAndStoreCalendars: mockListAndStoreCalendars,
+vi.mock('../../services/calendar/apiroc-connection.js', () => ({
+  disconnectProvider: mockDisconnectProvider,
 }));
 
-vi.mock('../../services/cronofy/retry.js', () => ({
-  withCronofyRetry: mockWithCronofyRetry,
-}));
-
-vi.mock('../../services/cronofy/token-manager.js', () => ({
-  getValidAccessToken: mockGetValidAccessToken,
-}));
-
-vi.mock('../../lib/cronofy.js', () => ({
-  getCronofyUserClient: mockGetCronofyUserClient,
-  getCronofyAppClient: vi.fn(),
+vi.mock('../../jobs/availability-cache.js', () => ({
+  enqueueAvailabilityCacheRebuild: mockEnqueueAvailabilityCacheRebuild,
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -80,12 +73,14 @@ vi.mock('@balo/analytics/server', () => ({
   trackServer: vi.fn(),
   CALENDAR_SERVER_EVENTS: Object.freeze({
     DISCONNECTED: 'calendar_disconnected',
-    RELINK_URL_GENERATED: 'calendar_relink_url_generated',
   }),
+  toCalendarEventProvider: (p: string) => (p === 'google' || p === 'microsoft' ? p : undefined),
 }));
 
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
+import { trackServer } from '@balo/analytics/server';
+import { toLegacyStatus } from './api.js';
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -96,7 +91,32 @@ const AUTH_HEADERS = {
   'x-internal-api-key': TEST_SECRET,
 };
 
-describe('calendar API routes', () => {
+function buildConnection(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'conn-1',
+    expertProfileId: EXPERT_UUID,
+    provider: 'google',
+    providerEmail: 'dana@example.com',
+    credentialStatus: 'ACTIVE',
+    lastSyncedAt: null,
+    targetCalendarId: 'cal-primary',
+    ...overrides,
+  };
+}
+
+function buildSubCalendar(overrides: Record<string, unknown> = {}) {
+  return {
+    calendarId: 'cal-primary',
+    name: 'Primary',
+    provider: 'google',
+    isPrimary: true,
+    conflictCheck: true,
+    color: null,
+    ...overrides,
+  };
+}
+
+describe('calendar API routes (BAL-396)', () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
@@ -113,110 +133,118 @@ describe('calendar API routes', () => {
     vi.clearAllMocks();
   });
 
-  // ── GET /api/calendar/connection ──────────────────────────────
+  describe('toLegacyStatus', () => {
+    it('maps the DB vocabulary onto the web vocabulary, collapsing EXPIRED/REVOKED', () => {
+      expect(toLegacyStatus('ACTIVE')).toBe('connected');
+      expect(toLegacyStatus('SYNC_PENDING')).toBe('sync_pending');
+      expect(toLegacyStatus('EXPIRED')).toBe('auth_error');
+      expect(toLegacyStatus('REVOKED')).toBe('auth_error');
+    });
+  });
+
+  // ── GET /api/calendar/connection ────────────────────────────────
 
   describe('GET /api/calendar/connection', () => {
     it('returns 401 without auth header', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: '/api/calendar/connection',
-        query: { expertProfileId: EXPERT_UUID },
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
       });
       expect(res.statusCode).toBe(401);
     });
 
-    it('returns 400 for invalid expertProfileId', async () => {
+    it('returns 400 for an invalid expertProfileId', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: '/api/calendar/connection',
-        query: { expertProfileId: 'not-a-uuid' },
+        url: '/api/calendar/connection?expertProfileId=not-a-uuid',
         headers: AUTH_HEADERS,
       });
       expect(res.statusCode).toBe(400);
     });
 
-    it('returns connection with sub-calendars mapped', async () => {
-      mockFindConnectionWithSubCalendars.mockResolvedValue({
-        status: 'connected',
-        providerEmail: 'user@gmail.com',
-        lastSyncedAt: new Date('2024-01-01T00:00:00Z'),
-        targetCalendarId: 'cal-1',
-        subCalendars: [
-          {
-            calendarId: 'cal-1',
-            name: 'Primary',
-            provider: 'google',
-            isPrimary: true,
-            conflictCheck: true,
-            color: '#4285F4',
-          },
-        ],
-      });
+    it('returns { connection: null, connections: [] } when nothing is connected', async () => {
+      mockFindConnectionWithSubCalendars.mockResolvedValue(undefined);
+      mockListConnectionsByExpertProfileId.mockResolvedValue([]);
 
       const res = await app.inject({
         method: 'GET',
-        url: '/api/calendar/connection',
-        query: { expertProfileId: EXPERT_UUID },
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ connection: null, connections: [] });
+    });
+
+    it('keeps the legacy single-connection shape AND returns the new per-provider summaries', async () => {
+      mockFindConnectionWithSubCalendars.mockResolvedValue({
+        ...buildConnection(),
+        subCalendars: [buildSubCalendar()],
+      });
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection(),
+        buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: 'cal-ms' }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([buildSubCalendar()]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
         headers: AUTH_HEADERS,
       });
 
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.connection.status).toBe('connected');
-      expect(body.connection.subCalendars[0].id).toBe('cal-1');
-      expect(body.connection.subCalendars[0].primary).toBe(true);
-      expect(body.connection.subCalendars[0].conflictChecking).toBe(true);
-    });
-
-    it('maps office365 provider to microsoft', async () => {
-      mockFindConnectionWithSubCalendars.mockResolvedValue({
+      expect(body.connection).toEqual({
+        // BAL-396 fix round 2, Finding 6 — the connection-level provider, always present
+        // regardless of subCalendars (which can be empty while SYNC_PENDING).
+        provider: 'google',
         status: 'connected',
-        providerEmail: 'user@outlook.com',
+        providerEmail: 'dana@example.com',
         lastSyncedAt: null,
-        targetCalendarId: null,
+        targetCalendarId: 'cal-primary',
         subCalendars: [
           {
-            calendarId: 'cal-o365',
-            name: 'Outlook',
-            provider: 'office365',
-            isPrimary: true,
-            conflictCheck: true,
-            color: null,
+            id: 'cal-primary',
+            name: 'Primary',
+            provider: 'google',
+            primary: true,
+            conflictChecking: true,
+            color: undefined,
           },
         ],
       });
-
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/connection',
-        query: { expertProfileId: EXPERT_UUID },
-        headers: AUTH_HEADERS,
-      });
-
-      expect(res.json().connection.subCalendars[0].provider).toBe('microsoft');
+      expect(body.connections).toHaveLength(2);
+      expect(body.connections[1].provider).toBe('microsoft');
     });
 
-    it('returns null when no connection', async () => {
+    // BAL-396 fix round, Finding 7 — the `office365` translation was Cronofy-only and dead:
+    // migration 0069 deletes every Cronofy-era row (the only source of that value), and Apiroc
+    // always writes lowercase `google` / `microsoft` directly. What remains defensible is that
+    // `provider` is a bare `text` column with no CHECK, so `mapProvider` still narrows rather
+    // than asserts — this pins the fallback for a value outside the known union.
+    it('falls back to google for a provider value outside the known union (no CHECK constrains the column)', async () => {
       mockFindConnectionWithSubCalendars.mockResolvedValue(undefined);
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ provider: 'something-unexpected' }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
 
       const res = await app.inject({
         method: 'GET',
-        url: '/api/calendar/connection',
-        query: { expertProfileId: EXPERT_UUID },
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
         headers: AUTH_HEADERS,
       });
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().connection).toBeNull();
+      expect(res.json().connections[0].provider).toBe('google');
     });
 
-    it('returns 500 when repository throws', async () => {
-      mockFindConnectionWithSubCalendars.mockRejectedValue(new Error('DB error'));
+    it('returns 500 when the repository throws', async () => {
+      mockFindConnectionWithSubCalendars.mockRejectedValue(new Error('db down'));
 
       const res = await app.inject({
         method: 'GET',
-        url: '/api/calendar/connection',
-        query: { expertProfileId: EXPERT_UUID },
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
         headers: AUTH_HEADERS,
       });
 
@@ -224,31 +252,46 @@ describe('calendar API routes', () => {
     });
   });
 
-  // ── POST /api/calendar/disconnect ─────────────────────────────
+  // ── POST /api/calendar/disconnect ───────────────────────────────
 
   describe('POST /api/calendar/disconnect', () => {
-    it('returns 401 without auth', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/disconnect',
-        headers: { 'content-type': 'application/json' },
-        payload: { expertProfileId: EXPERT_UUID },
-      });
-      expect(res.statusCode).toBe(401);
-    });
-
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for an invalid body', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/disconnect',
         headers: AUTH_HEADERS,
-        payload: { expertProfileId: 'bad' },
+        payload: { expertProfileId: 'not-a-uuid' },
       });
       expect(res.statusCode).toBe(400);
     });
 
-    it('disconnects and returns success', async () => {
-      mockDisconnectCalendar.mockResolvedValue(undefined);
+    it('with provider: disconnects that provider only, rebuilds availability, tracks with provider', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/calendar/disconnect',
+        headers: AUTH_HEADERS,
+        payload: { expertProfileId: EXPERT_UUID, provider: 'google' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockDisconnectProvider).toHaveBeenCalledWith(EXPERT_UUID, 'google');
+      expect(mockDisconnectProvider).toHaveBeenCalledTimes(1);
+      expect(mockSoftDeleteConnection).not.toHaveBeenCalled();
+      expect(mockEnqueueAvailabilityCacheRebuild).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        expect.anything()
+      );
+      expect(trackServer).toHaveBeenCalledWith('calendar_disconnected', {
+        provider: 'google',
+        distinct_id: EXPERT_UUID,
+      });
+    });
+
+    it('without provider: loops over every live connection, then soft-deletes as a backstop', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ provider: 'google' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft' }),
+      ]);
 
       const res = await app.inject({
         method: 'POST',
@@ -258,75 +301,103 @@ describe('calendar API routes', () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ success: true });
-      expect(mockDisconnectCalendar).toHaveBeenCalledWith(EXPERT_UUID);
+      expect(mockDisconnectProvider).toHaveBeenNthCalledWith(1, EXPERT_UUID, 'google');
+      expect(mockDisconnectProvider).toHaveBeenNthCalledWith(2, EXPERT_UUID, 'microsoft');
+      expect(mockSoftDeleteConnection).toHaveBeenCalledWith(EXPERT_UUID);
+      expect(trackServer).toHaveBeenCalledWith('calendar_disconnected', {
+        distinct_id: EXPERT_UUID,
+      });
     });
 
-    it('returns 500 when disconnect throws', async () => {
-      mockDisconnectCalendar.mockRejectedValue(new Error('Revoke failed'));
+    it('returns 500 when disconnectProvider throws', async () => {
+      mockDisconnectProvider.mockRejectedValue(new Error('vendor down'));
 
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/disconnect',
         headers: AUTH_HEADERS,
-        payload: { expertProfileId: EXPERT_UUID },
+        payload: { expertProfileId: EXPERT_UUID, provider: 'google' },
       });
 
       expect(res.statusCode).toBe(500);
     });
   });
 
-  // ── POST /api/calendar/toggle-conflict-check ──────────────────
+  // ── POST /api/calendar/toggle-conflict-check ────────────────────
 
   describe('POST /api/calendar/toggle-conflict-check', () => {
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for an invalid body', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/toggle-conflict-check',
         headers: AUTH_HEADERS,
-        payload: { expertProfileId: 'bad' },
+        payload: { expertProfileId: EXPERT_UUID },
       });
       expect(res.statusCode).toBe(400);
     });
 
-    it('returns 404 when no connection found', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue(undefined);
-
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/toggle-conflict-check',
-        headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          calendarId: 'cal-1',
-          conflictCheck: false,
-        },
-      });
-
-      expect(res.statusCode).toBe(404);
-    });
-
-    it('returns 404 when sub-calendar not found', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({ id: 'conn-1' });
+    it('returns 404 when no connection owns the calendar id', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([buildConnection()]);
       mockFindSubCalendarByCalendarId.mockResolvedValue(undefined);
 
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/toggle-conflict-check',
         headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          calendarId: 'cal-nonexistent',
-          conflictCheck: true,
-        },
+        payload: { expertProfileId: EXPERT_UUID, calendarId: 'cal-unknown', conflictCheck: false },
       });
 
       expect(res.statusCode).toBe(404);
     });
 
-    it('returns 400 when disabling conflict check on primary calendar', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({ id: 'conn-1' });
-      mockFindSubCalendarByCalendarId.mockResolvedValue({ isPrimary: true });
+    it('returns 400 when disabling conflict-check on the primary calendar', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([buildConnection()]);
+      mockFindSubCalendarByCalendarId.mockResolvedValue(buildSubCalendar({ isPrimary: true }));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/calendar/toggle-conflict-check',
+        headers: AUTH_HEADERS,
+        payload: { expertProfileId: EXPERT_UUID, calendarId: 'cal-primary', conflictCheck: false },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(mockUpdateConflictCheck).not.toHaveBeenCalled();
+    });
+
+    it('resolves the owning connection by calendar id (across a second provider) and toggles', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ id: 'conn-1', provider: 'google' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft' }),
+      ]);
+      mockFindSubCalendarByCalendarId
+        .mockResolvedValueOnce(undefined) // not on conn-1
+        .mockResolvedValueOnce(buildSubCalendar({ isPrimary: false, calendarId: 'cal-ms' })); // on conn-2
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/calendar/toggle-conflict-check',
+        headers: AUTH_HEADERS,
+        payload: { expertProfileId: EXPERT_UUID, calendarId: 'cal-ms', conflictCheck: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockUpdateConflictCheck).toHaveBeenCalledWith('conn-2', 'cal-ms', true);
+      // BAL-396 fix round, Finding 5 — `listBusyReadTargets` filters on `conflict_check`, so
+      // toggling it changes what the booking gate reads; without a rebuild the advertise cache
+      // goes stale against it (409s on advertised slots when toggled ON, under-advertised when
+      // toggled OFF). Matches the disconnect handler's rebuild call.
+      expect(mockEnqueueAvailabilityCacheRebuild).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        expect.anything()
+      );
+    });
+
+    it('rebuilds availability even when disabling conflict-check (the under-advertised direction)', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([buildConnection()]);
+      mockFindSubCalendarByCalendarId.mockResolvedValue(
+        buildSubCalendar({ isPrimary: false, calendarId: 'cal-secondary' })
+      );
 
       const res = await app.inject({
         method: 'POST',
@@ -334,77 +405,23 @@ describe('calendar API routes', () => {
         headers: AUTH_HEADERS,
         payload: {
           expertProfileId: EXPERT_UUID,
-          calendarId: 'cal-1',
+          calendarId: 'cal-secondary',
           conflictCheck: false,
         },
       });
 
-      expect(res.statusCode).toBe(400);
-      expect(res.json().error).toContain('Cannot disable conflict checking on primary');
-    });
-
-    it('toggles conflict check on non-primary calendar', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({ id: 'conn-1' });
-      mockFindSubCalendarByCalendarId.mockResolvedValue({ isPrimary: false });
-      mockUpdateConflictCheck.mockResolvedValue(undefined);
-
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/toggle-conflict-check',
-        headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          calendarId: 'cal-2',
-          conflictCheck: true,
-        },
-      });
-
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ success: true });
-      expect(mockUpdateConflictCheck).toHaveBeenCalledWith('conn-1', 'cal-2', true);
-    });
-
-    it('allows enabling conflict check on primary calendar', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({ id: 'conn-1' });
-      mockFindSubCalendarByCalendarId.mockResolvedValue({ isPrimary: true });
-      mockUpdateConflictCheck.mockResolvedValue(undefined);
-
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/toggle-conflict-check',
-        headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          calendarId: 'cal-1',
-          conflictCheck: true,
-        },
-      });
-
-      expect(res.statusCode).toBe(200);
-    });
-
-    it('returns 500 when repository throws', async () => {
-      mockFindConnectionByExpertProfileId.mockRejectedValue(new Error('DB error'));
-
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/toggle-conflict-check',
-        headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          calendarId: 'cal-1',
-          conflictCheck: true,
-        },
-      });
-
-      expect(res.statusCode).toBe(500);
+      expect(mockEnqueueAvailabilityCacheRebuild).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        expect.anything()
+      );
     });
   });
 
-  // ── POST /api/calendar/set-target-calendar ────────────────────
+  // ── POST /api/calendar/set-target-calendar ──────────────────────
 
   describe('POST /api/calendar/set-target-calendar', () => {
-    it('returns 400 for invalid body', async () => {
+    it('returns 400 for an invalid body', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/set-target-calendar',
@@ -414,44 +431,37 @@ describe('calendar API routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('returns 404 when no connection found', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue(undefined);
+    it('with provider: 404 when no connection exists for it', async () => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
 
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/set-target-calendar',
         headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          targetCalendarId: 'cal-1',
-        },
+        payload: { expertProfileId: EXPERT_UUID, targetCalendarId: 'cal-x', provider: 'google' },
       });
 
       expect(res.statusCode).toBe(404);
     });
 
-    it('returns 404 when target calendar not in sub-calendars', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({ id: 'conn-1' });
+    it('with provider: 404 when the calendar is not one of that connection’s sub-calendars', async () => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
       mockFindSubCalendarByCalendarId.mockResolvedValue(undefined);
 
       const res = await app.inject({
         method: 'POST',
         url: '/api/calendar/set-target-calendar',
         headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          targetCalendarId: 'cal-nonexistent',
-        },
+        payload: { expertProfileId: EXPERT_UUID, targetCalendarId: 'cal-x', provider: 'google' },
       });
 
       expect(res.statusCode).toBe(404);
-      expect(res.json().error).toContain('Calendar not found');
+      expect(mockUpdateTargetCalendarIdForProvider).not.toHaveBeenCalled();
     });
 
-    it('sets target calendar on success', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({ id: 'conn-1' });
-      mockFindSubCalendarByCalendarId.mockResolvedValue({ calendarId: 'cal-1' });
-      mockUpdateTargetCalendarId.mockResolvedValue(undefined);
+    it('with provider: writes per-provider on success', async () => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+      mockFindSubCalendarByCalendarId.mockResolvedValue(buildSubCalendar());
 
       const res = await app.inject({
         method: 'POST',
@@ -459,192 +469,78 @@ describe('calendar API routes', () => {
         headers: AUTH_HEADERS,
         payload: {
           expertProfileId: EXPERT_UUID,
-          targetCalendarId: 'cal-1',
+          targetCalendarId: 'cal-primary',
+          provider: 'google',
         },
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ success: true });
-      expect(mockUpdateTargetCalendarId).toHaveBeenCalledWith(EXPERT_UUID, 'cal-1');
-    });
-
-    it('returns 500 when repository throws', async () => {
-      mockFindConnectionByExpertProfileId.mockRejectedValue(new Error('DB error'));
-
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/set-target-calendar',
-        headers: AUTH_HEADERS,
-        payload: {
-          expertProfileId: EXPERT_UUID,
-          targetCalendarId: 'cal-1',
-        },
-      });
-
-      expect(res.statusCode).toBe(500);
-    });
-  });
-
-  // ── POST /api/calendar/refresh-calendars ──────────────────────
-
-  describe('POST /api/calendar/refresh-calendars', () => {
-    it('returns 400 for invalid body', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/refresh-calendars',
-        headers: AUTH_HEADERS,
-        payload: { expertProfileId: 'not-uuid' },
-      });
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('refreshes calendars via withCronofyRetry', async () => {
-      mockWithCronofyRetry.mockImplementation(
-        async (_id: string, fn: (token: string) => Promise<void>) => {
-          await fn('mock-access-token');
-        }
+      expect(mockUpdateTargetCalendarIdForProvider).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        'google',
+        'cal-primary'
       );
-      mockListAndStoreCalendars.mockResolvedValue(undefined);
+    });
+
+    it('without provider: resolves the owning connection from the calendar id', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ id: 'conn-1', provider: 'google' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft' }),
+      ]);
+      mockFindSubCalendarByCalendarId
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(buildSubCalendar({ calendarId: 'cal-ms' }));
 
       const res = await app.inject({
         method: 'POST',
-        url: '/api/calendar/refresh-calendars',
+        url: '/api/calendar/set-target-calendar',
         headers: AUTH_HEADERS,
-        payload: { expertProfileId: EXPERT_UUID },
+        payload: { expertProfileId: EXPERT_UUID, targetCalendarId: 'cal-ms' },
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ success: true });
-      expect(mockWithCronofyRetry).toHaveBeenCalledWith(EXPERT_UUID, expect.any(Function));
+      expect(mockUpdateTargetCalendarIdForProvider).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        'microsoft',
+        'cal-ms'
+      );
     });
 
-    it('returns 500 when refresh throws', async () => {
-      mockWithCronofyRetry.mockRejectedValue(new Error('Token expired'));
+    it('without provider: 404 when no connection owns the calendar id', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([buildConnection()]);
+      mockFindSubCalendarByCalendarId.mockResolvedValue(undefined);
 
       const res = await app.inject({
         method: 'POST',
-        url: '/api/calendar/refresh-calendars',
+        url: '/api/calendar/set-target-calendar',
         headers: AUTH_HEADERS,
-        payload: { expertProfileId: EXPERT_UUID },
-      });
-
-      expect(res.statusCode).toBe(500);
-    });
-  });
-
-  // ── GET /api/calendar/relink ─────────────────────────────────
-
-  describe('GET /api/calendar/relink', () => {
-    it('returns 401 without auth header', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: EXPERT_UUID },
-      });
-      expect(res.statusCode).toBe(401);
-    });
-
-    it('returns 400 for invalid expertProfileId', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: 'not-a-uuid' },
-        headers: AUTH_HEADERS,
-      });
-      expect(res.statusCode).toBe(400);
-    });
-
-    it('returns 404 when no connection exists', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue(undefined);
-
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: EXPERT_UUID },
-        headers: AUTH_HEADERS,
+        payload: { expertProfileId: EXPERT_UUID, targetCalendarId: 'cal-unknown' },
       });
 
       expect(res.statusCode).toBe(404);
     });
+  });
 
-    it('returns 400 when connection is not in sync_pending state', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({
-        id: 'conn-1',
-        status: 'connected',
-      });
+  // ── Deleted endpoints ────────────────────────────────────────────
 
+  describe('deleted endpoints (BAL-396)', () => {
+    it('GET /api/calendar/relink no longer exists', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: EXPERT_UUID },
+        url: `/api/calendar/relink?expertProfileId=${EXPERT_UUID}`,
         headers: AUTH_HEADERS,
       });
-
-      expect(res.statusCode).toBe(400);
-      expect(res.json().error).toContain('not in sync_pending state');
+      expect(res.statusCode).toBe(404);
     });
 
-    it('returns relink URL on success', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({
-        id: 'conn-1',
-        status: 'sync_pending',
-      });
-      mockGetValidAccessToken.mockResolvedValue('mock-access-token');
-      mockGetCronofyUserClient.mockReturnValue({
-        userInfo: vi.fn().mockResolvedValue({
-          profiles: [{ profile_relink_url: 'https://app.cronofy.com/relink/abc' }],
-        }),
-      });
-
+    it('POST /api/calendar/refresh-calendars no longer exists', async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: EXPERT_UUID },
+        method: 'POST',
+        url: '/api/calendar/refresh-calendars',
         headers: AUTH_HEADERS,
+        payload: { expertProfileId: EXPERT_UUID },
       });
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json().relinkUrl).toBe('https://app.cronofy.com/relink/abc');
-    });
-
-    it('returns 400 when no relink URL in profile', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({
-        id: 'conn-1',
-        status: 'sync_pending',
-      });
-      mockGetValidAccessToken.mockResolvedValue('mock-access-token');
-      mockGetCronofyUserClient.mockReturnValue({
-        userInfo: vi.fn().mockResolvedValue({
-          profiles: [{ profile_relink_url: null }],
-        }),
-      });
-
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: EXPERT_UUID },
-        headers: AUTH_HEADERS,
-      });
-
-      expect(res.statusCode).toBe(400);
-      expect(res.json().error).toContain('No relink URL available');
-    });
-
-    it('returns 500 when token retrieval fails', async () => {
-      mockFindConnectionByExpertProfileId.mockResolvedValue({
-        id: 'conn-1',
-        status: 'sync_pending',
-      });
-      mockGetValidAccessToken.mockRejectedValue(new Error('Token error'));
-
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/calendar/relink',
-        query: { expertProfileId: EXPERT_UUID },
-        headers: AUTH_HEADERS,
-      });
-
-      expect(res.statusCode).toBe(500);
+      expect(res.statusCode).toBe(404);
     });
   });
 });

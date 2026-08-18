@@ -79,6 +79,9 @@ import { CalendarTab } from './calendar-tab';
 // ── Helpers ─────────────────────────────────────────────────────
 
 const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarConnection => ({
+  // BAL-396 fix round 2, Finding 6 — the connection-level provider (api.ts's
+  // `mapConnectionToFrontend`), always present regardless of `subCalendars`.
+  provider: 'google',
   status: 'connected',
   providerEmail: 'yomi@gmail.com',
   lastSyncedAt: '2026-04-09T00:00:00Z',
@@ -354,7 +357,14 @@ describe('CalendarTab', () => {
 
   it('calls fixCalendarPermissionsAction when Fix permissions is clicked', async () => {
     const user = userEvent.setup();
-    mockGetCalendarConnection.mockResolvedValue(makeConnection({ status: 'sync_pending' }));
+    // A SYNC_PENDING connection has ZERO sub-calendars by construction (the review
+    // provisioning flow has not run yet). No `calendar_provider` URL param here either (this
+    // test simulates a plain page load, not the OAuth-callback round trip) — the provider comes
+    // from `connection.provider` (BAL-396 fix round 2, Finding 6), which `makeConnection()`
+    // defaults to 'google'.
+    mockGetCalendarConnection.mockResolvedValue(
+      makeConnection({ status: 'sync_pending', subCalendars: [] })
+    );
     mockFixPermissions.mockResolvedValue({ success: false, error: 'Failed' });
 
     render(<CalendarTab />);
@@ -368,7 +378,75 @@ describe('CalendarTab', () => {
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.FIX_PERMISSIONS_CLICKED, {
       provider: 'google',
     });
-    expect(mockFixPermissions).toHaveBeenCalled();
+    // BAL-396 §8.5: `/relink` is deleted — "fix permissions" now re-runs OAuth, so the
+    // action needs the provider it is fixing.
+    expect(mockFixPermissions).toHaveBeenCalledWith('google');
+  });
+
+  it(
+    '⚠ BAL-396 fix round 2, Finding 6 — reads the provider from the STORED CONNECTION on a ' +
+      'plain page load (refresh, bookmark, returning next day — no calendar_provider URL ' +
+      'param), not the hardcoded "google" default. INVERTS the prior version of this test, ' +
+      "which pinned the defect: it asserted 'google' for exactly this scenario, which could " +
+      'never distinguish "read correctly" from "fell back to the wrong hardcoded default" ' +
+      'because the fixture and the default happened to agree. Using a MICROSOFT connection ' +
+      'here is what makes the assertion meaningful.',
+    async () => {
+      const user = userEvent.setup();
+      // The real stuck-Microsoft-expert shape: a SYNC_PENDING connection with zero
+      // sub-calendars (by construction), landed on with NO OAuth-callback URL params at all —
+      // `connectingProvider`'s hardcoded 'google' default is untouched, exactly like a user
+      // returning to the page a day later.
+      mockGetCalendarConnection.mockResolvedValue(
+        makeConnection({ provider: 'microsoft', status: 'sync_pending', subCalendars: [] })
+      );
+      mockFixPermissions.mockResolvedValue({ success: false, error: 'Failed' });
+
+      render(<CalendarTab />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Fix permissions/i })).toBeInTheDocument();
+      });
+
+      // The card itself must show Microsoft branding, not the Google default (Finding 6 also
+      // covers CalendarSyncPendingCard's `provider` prop, not just the click handler).
+      expect(screen.getByText('Microsoft 365')).toBeInTheDocument();
+      expect(screen.queryByText('Google Calendar')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Fix permissions/i }));
+
+      expect(mockFixPermissions).toHaveBeenCalledWith('microsoft');
+      expect(mockFixPermissions).not.toHaveBeenCalledWith('google');
+    }
+  );
+
+  it('uses the provider from the OAuth round trip when fixing permissions for a stuck Microsoft expert (BAL-396 fix round, Finding 4)', async () => {
+    const user = userEvent.setup();
+    // The real production shape: the browser lands back from the Apiroc callback with
+    // calendar_connected=true&calendar_status=sync_pending&calendar_provider=microsoft, and
+    // the freshly-provisioned connection genuinely has no sub-calendars yet. If
+    // `auth.ts`'s success redirect ever drops `calendar_provider` again, this proves it by
+    // asserting the ACT action is called with 'microsoft' — not merely that some button
+    // rendered. (Now backed by `connection.provider` too, per Finding 6 above — both signals
+    // agree here.)
+    mockSearchParams = new URLSearchParams(
+      'calendar_connected=true&calendar_status=sync_pending&calendar_provider=microsoft'
+    );
+    mockGetCalendarConnection.mockResolvedValue(
+      makeConnection({ provider: 'microsoft', status: 'sync_pending', subCalendars: [] })
+    );
+    mockFixPermissions.mockResolvedValue({ success: false, error: 'Failed' });
+
+    render(<CalendarTab />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Fix permissions/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: /Fix permissions/i }));
+
+    expect(mockFixPermissions).toHaveBeenCalledWith('microsoft');
+    expect(mockFixPermissions).not.toHaveBeenCalledWith('google');
   });
 
   it('shows error toast when fix permissions fails', async () => {
@@ -507,6 +585,21 @@ describe('CalendarTab', () => {
     });
     // Should show Microsoft branding, not Google
     expect(screen.getByText(/Microsoft 365 sign-in session expired/i)).toBeInTheDocument();
+  });
+
+  it('ignores an unallowlisted calendar_provider value instead of casting it through (BAL-396 fix round, Finding 2)', async () => {
+    mockSearchParams = new URLSearchParams();
+    mockSearchParams.set('calendar_error', 'state_expired');
+    mockSearchParams.set('calendar_provider', '"><script>alert(1)</script>');
+    mockGetCalendarConnection.mockResolvedValue(null);
+
+    render(<CalendarTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Connection attempt timed out')).toBeInTheDocument();
+    });
+    // Falls back to the default (Google) branding rather than trusting the raw param.
+    expect(screen.queryByText(/Microsoft 365 sign-in session expired/i)).not.toBeInTheDocument();
   });
 
   it('skips guidance modal on retry from session_expired with Microsoft', async () => {

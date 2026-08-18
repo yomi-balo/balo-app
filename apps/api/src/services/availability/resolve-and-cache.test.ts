@@ -27,7 +27,14 @@ vi.mock('@balo/db', () => ({
   availabilityRulesRepository: { listByExpertProfileId: mockListRules },
   consultationsRepository: { listConfirmedInRange: mockListConsultations },
   availabilityOverridesRepository: { listUpcoming: mockListUpcoming },
-  calendarRepository: { upsertAvailabilityCache: mockUpsertCache },
+  calendarRepository: {
+    upsertAvailabilityCache: mockUpsertCache,
+    // ⚠ `vendor-busy.ts` is NOT mocked (spied per test instead), so its real
+    // `listBusyReadTargets` call needs a real shape here. `[]` targets keeps every test that
+    // doesn't care about vendor busy on the pre-BAL-396 behaviour ([] blocks, no vendor
+    // client constructed).
+    listBusyReadTargets: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -46,7 +53,7 @@ vi.mock('./resolver.js', () => ({
 import { resolveAndCacheAvailability } from './resolve-and-cache';
 // ⚠ NOT mocked — spied per test. The property under test is that this module reads the SHARED
 // port object, which a module mock would hide behind an equally shared fake.
-import { vendorBusyProvider } from './vendor-busy.js';
+import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -136,15 +143,22 @@ describe('resolveAndCacheAvailability', () => {
     });
     expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, earliest);
     expect(mockInfo).toHaveBeenCalled();
-    expect(result).toEqual({ earliestAvailableAt: earliest });
+    expect(result).toEqual({ status: 'completed', earliestAvailableAt: earliest });
   });
 
-  it('returns null and warns when findResolverSettings is null (missing profile or timezone)', async () => {
+  // ⚠ round-2 fix #11 — `status` is what a caller (the BullMQ worker) must branch on to tell
+  // a genuine rebuild apart from a skip; `earliestAvailableAt: null` alone is ambiguous with
+  // "this expert genuinely has no open slot".
+  it('returns status "skipped" and warns when findResolverSettings is null (missing profile or timezone)', async () => {
     mockFindResolverSettings.mockResolvedValue(null);
 
     const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
-    expect(result).toEqual({ earliestAvailableAt: null });
+    expect(result).toEqual({
+      status: 'skipped',
+      skipReason: 'expert_settings_not_found',
+      earliestAvailableAt: null,
+    });
     expect(mockListRules).not.toHaveBeenCalled();
     expect(mockListConsultations).not.toHaveBeenCalled();
     expect(mockResolve).not.toHaveBeenCalled();
@@ -213,7 +227,9 @@ describe('resolveAndCacheAvailability', () => {
     const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
 
     expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, null);
-    expect(result).toEqual({ earliestAvailableAt: null });
+    // ⚠ round-2 fix #11 — this IS a completed rebuild (the resolver ran and wrote the cache);
+    // `earliestAvailableAt: null` here is the legitimate "no open slot" answer, not a skip.
+    expect(result).toEqual({ status: 'completed', earliestAvailableAt: null });
   });
 
   it('lets an explicit horizonDays option win over env and the default', async () => {
@@ -324,6 +340,79 @@ describe('resolveAndCacheAvailability', () => {
     );
 
     spy.mockRestore();
+  });
+
+  describe('BAL-396 §9.4 — the advertise path SKIPS the cache write on an untrustworthy vendor answer', () => {
+    /**
+     * The ticket's ruling: overwriting `availability_cache` with a result computed WITHOUT
+     * the vendor's data would replace last-known-good with a possibly-wrong answer — worse
+     * than leaving the stale one. `vendorBusyProvider.listBusyBlocks` throwing
+     * `VendorBusyUnavailableError` must therefore skip `upsertAvailabilityCache` entirely,
+     * not merely fall back to `busyBlocks: []`.
+     */
+    it('does not write the cache when the vendor port throws VendorBusyUnavailableError', async () => {
+      mockFindResolverSettings.mockResolvedValue(settings());
+      mockListRules.mockResolvedValue([]);
+      mockListConsultations.mockResolvedValue([]);
+
+      const spy = vi
+        .spyOn(vendorBusyProvider, 'listBusyBlocks')
+        .mockRejectedValue(new VendorBusyUnavailableError(EXPERT_ID, 'connection unreadable'));
+
+      const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+      expect(result).toEqual({
+        status: 'skipped',
+        skipReason: 'vendor_busy_unavailable',
+        earliestAvailableAt: null,
+      });
+      expect(mockUpsertCache).not.toHaveBeenCalled();
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ expertProfileId: EXPERT_ID }),
+        expect.stringContaining('Skipping availability cache rebuild')
+      );
+
+      spy.mockRestore();
+    });
+
+    it('skipReason is "vendor_read_error" (not "vendor_busy_unavailable") for an unclassified vendor rejection', async () => {
+      mockFindResolverSettings.mockResolvedValue(settings());
+      mockListRules.mockResolvedValue([]);
+      mockListConsultations.mockResolvedValue([]);
+
+      const spy = vi
+        .spyOn(vendorBusyProvider, 'listBusyBlocks')
+        .mockRejectedValue(new Error('unexpected programmer error'));
+
+      const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+      expect(result).toEqual({
+        status: 'skipped',
+        skipReason: 'vendor_read_error',
+        earliestAvailableAt: null,
+      });
+      expect(mockUpsertCache).not.toHaveBeenCalled();
+
+      spy.mockRestore();
+    });
+
+    it('an explicit busyBlocks seed override bypasses the vendor port entirely, so a vendor outage cannot affect it', async () => {
+      mockFindResolverSettings.mockResolvedValue(settings());
+      mockListRules.mockResolvedValue([]);
+      mockListConsultations.mockResolvedValue([]);
+      mockResolve.mockReturnValue({ earliestAvailableAt: null });
+
+      const spy = vi.spyOn(vendorBusyProvider, 'listBusyBlocks');
+
+      const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW, busyBlocks: [] });
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: 'completed', earliestAvailableAt: null });
+      expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, null);
+
+      spy.mockRestore();
+    });
   });
 
   it('an explicit busyBlocks option is a SEED-ONLY override — the vendor port is not consulted', async () => {

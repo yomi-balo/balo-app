@@ -64,6 +64,23 @@ const PINNED_REPOSITORIES: readonly string[] = [
    */
   'meetings.ts',
   'consultations.ts',
+  /**
+   * BAL-396 adds the two CALENDAR repositories, for the same three reasons.
+   *
+   * `meeting-calendar-events.ts` is written from `services/consultation-events/` — a path
+   * that WILL notify once booking is wired — and its rows are written inside
+   * meeting-mutation flows, so a publish smuggled in here would fire before the booking
+   * commits. Identical in shape to the `meetings.ts` / `consultations.ts` argument above.
+   *
+   * `calendar.ts` is pinned because BAL-396 gives it a genuine near-miss: the reconnect
+   * notification is published by `services/calendar/credential-status.ts`, immediately
+   * BEFORE it calls `calendarRepository.markReconnectNotified`. Those two lines sit next to
+   * each other at the call site precisely so the repository stays ignorant of the publish;
+   * "publish, then stamp" collapsing INTO the repository is the specific regression this
+   * pin catches, and it would fire from inside a transaction and could not be rolled back.
+   */
+  'meeting-calendar-events.ts',
+  'calendar.ts',
 ];
 
 /**
