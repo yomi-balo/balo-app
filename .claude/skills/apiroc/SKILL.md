@@ -114,11 +114,27 @@ Apiroc is Balo's calendar infrastructure. It handles:
    Cronofy-style change channels either.) See BAL-447 / ADR-1021 amendment 2026-08-15.
 6. **Custom event tagging** via `privateExtendedProperties` / `publicExtendedProperties`
    (`Record<string,string>`), queryable via `metadataFilters`. ⚠ On Microsoft the tag is
-   **write-and-query-only — never echoed back on a read** (§M3).
+   **write-and-query-only on create/update — those return `{}`** (§M3). ⚠ Nuance corrected
+   2026-08-18: a `metadataFilters` **read does echo the tag back** on Microsoft
+   (`captures/phase1/microsoft/05-metadata-filter.json`). Never special-case Microsoft as
+   "tag always absent" — it is absent on the create/update response only.
 
 ---
 
 ## Architecture Summary
+
+⚠⚠ **This is the DESIGN. Almost none of it is wired today** (checked 2026-08-18 against
+`main` @ `eb6d4b2`). Read it as the target flow, not as a map of code you can go and open:
+
+| Step                                          | State                                                                           |
+| --------------------------------------------- | ------------------------------------------------------------------------------- |
+| SDK client + error boundary                   | **shipped but INERT** — `apps/api/src/lib/apiroc/`, no caller outside its tests |
+| `calendar_connections` per (expert, provider) | **shipped** — BAL-467, migration `0067`                                         |
+| Connect / callback / free-busy / event writes | **not built** — every calendar route is still Cronofy (BAL-396)                 |
+| Apiroc webhook route, subscriptions, renewal  | **not built**; `svix` is not even a dependency (BAL-468)                        |
+| `vendorBusyProvider.listBusyBlocks`           | **returns `[]`** — the availability seam exists, unwired                        |
+
+Per-area detail, with the real signatures, is in `references/`.
 
 ```
 Expert connects calendar (Google / Microsoft)
@@ -187,7 +203,7 @@ be wrong.
 | ------------------------------------------ | -------------------------------------- | ------------------------------------------------ | --------------------------------- |
 | Caller-supplied event `id`                 | **honoured** — returns the id you sent | **200 OK, silently substituted** with a Graph id | ⚠⚠ see M1                         |
 | `nextSyncToken`                            | on the final page                      | **never returned, on any page**                  | ⚠⚠ see M2                         |
-| `privateExtendedProperties` echoed on read | `{"baloBookingId":"spike-test-1"}`     | **`{}` — never echoed**                          | see M3                            |
+| `privateExtendedProperties` echoed on read | `{"baloBookingId":"spike-test-1"}`     | **echoed on a filtered read; `{}` on writes**    | see M3                            |
 | `metadataFilters` query                    | works                                  | **works** (negative-control verified)            | M3                                |
 | `allowedOnlineMeetingProviders`            | `["hangoutsMeet"]`                     | `[]` — none                                      | no Teams link generation          |
 | Calendar `timeZone`                        | populated (`Australia/Melbourne`)      | **absent**                                       | can't rely on it; use Balo's tz   |
@@ -225,12 +241,26 @@ Balo's ruling (BAL-447) is that **no provider delta-syncs** — see Constraint 3
 its evidence, and the ruling live in `apps/api/src/services/calendar/sync-capability.ts`,
 guarded by `apps/api/src/invariants/sync-token-parity.test.ts`.
 
-### M3 — Microsoft tags are write-and-query-only, never readable back
+### M3 — Microsoft drops the tag from WRITE responses, but a filtered read returns it
 
-`privateExtendedProperties` came back `{}` on create, on read, and after `PUT` — and
-`publicExtendedProperties` was `{}` too, so it isn't merely relocated. But the tag **is**
-persisted and **is** queryable. Verified with a negative control (a filter that was silently
-ignored would also "match 1 of 1"):
+⚠ **Corrected 2026-08-18 against the raw capture.** An earlier revision of this section said
+the tag "came back `{}` on create, on read, and after `PUT`" and concluded it is _never_
+readable on Microsoft. **The read half of that is false.** Re-checked against
+`captures/phase1/microsoft/05-metadata-filter.json`, a `metadataFilters` list read returns
+`"privateExtendedProperties": {"baloBookingId": "spike-test-1"}` **[live]**.
+
+What is actually true:
+
+| Microsoft operation                  | `privateExtendedProperties` in the response |
+| ------------------------------------ | ------------------------------------------- |
+| `events.create` response             | `{}` — dropped **[live]**                   |
+| `events.update` (`PUT`) response     | `{}` — dropped **[live]**                   |
+| `events.list` with `metadataFilters` | **echoed in full [live]**                   |
+
+So the tag **is** persisted, **is** queryable, and **is** readable — it is only the write
+responses that omit it. `publicExtendedProperties` is `{}` on the write responses too, so it
+isn't merely relocated. The query itself was verified with a negative control (a filter that
+was silently ignored would also "match 1 of 1"):
 
 | Query                                              | Result                    |
 | -------------------------------------------------- | ------------------------- |
@@ -239,30 +269,48 @@ ignored would also "match 1 of 1"):
 | `metadataFilters={"baloBookingId":"tag-BBB"}`      | → exactly `BAL393 B` ✔    |
 | `metadataFilters={"baloBookingId":"tag-NOPE"}`     | → `[]` ✔ (filter is real) |
 
-**→ Reconciliation by _querying_ the tag works on both providers. Reconciliation by _reading
-the tag off a fetched event_ works only on Google.** Never round-trip a Microsoft event
-expecting its tag back.
+**→ Reconciliation by _querying_ the tag works on both providers, and the fetched events carry
+the tag on both.** The single rule that survives: **never verify a write by reading the echo
+off its own create/update response** — on Microsoft that field is empty even though the write
+succeeded. Verify by querying instead. ⚠ Do not write a mapper that special-cases Microsoft as
+"tag always absent": it is absent on write responses only, and such a mapper would discard a
+tag that is really there.
 
 ---
 
 ## Where the rules live
 
-The `references/*.md` sub-files this skill used to list were Cronofy's and were **deleted**
-with the Cronofy skill in PR #197. They do not exist. Until BAL-395 writes Apiroc ones, these
-are the real artefacts:
+This skill has two layers. **SKILL.md is the load-bearing summary — the constraints, the
+provider divergences, and the evidence.** The `references/*.md` sub-files carry the _how_: the
+as-built code patterns a builder needs open in front of them while writing a calendar path.
+Read SKILL.md first, then exactly the reference your task touches.
 
-| Subject                                                   | Where                                                                    |
-| --------------------------------------------------------- | ------------------------------------------------------------------------ |
-| All captured runtime behaviour (the evidence)             | `spikes/apiroc-probe/FINDINGS.md` on the BAL-393 branch (PR #211)        |
-| The sync-strategy ruling + provider capability matrix     | `apps/api/src/services/calendar/sync-capability.ts` (shipped, **inert**) |
-| The guard that keeps delta-sync out                       | `apps/api/src/invariants/sync-token-parity.test.ts`                      |
-| The single busy-block port every availability path uses   | `apps/api/src/services/availability/vendor-busy.ts`                      |
-| Connection model + SDK adapter boundary (error + logging) | BAL-467                                                                  |
-| Connect, free/busy, event write, reconnect, health probe  | BAL-396                                                                  |
-| Webhooks, subscription lifecycle, renewal                 | BAL-468                                                                  |
-| Pre-consent explainer + partial-grant recovery UX         | BAL-462                                                                  |
-| OAuth app registration (BYOC branding + scopes)           | BAL-394                                                                  |
-| Vendor liaison (bug reports, auto-renew question)         | BAL-455                                                                  |
+| Reference                                 | Read it when you are…                                                                    |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `references/sdk-adapter.md`               | Adding or changing any Apiroc call — the boundary, error normalisation, retry, logging   |
+| `references/connect-and-credentials.md`   | Touching connect, the OAuth callback, credential status, reconnect, or disconnect        |
+| `references/availability-and-freebusy.md` | Touching free/busy, the slot calculator, the availability cache, or anything sync-shaped |
+| `references/webhooks-and-events.md`       | Touching inbound webhooks / subscriptions, or writing consultation events to a calendar  |
+
+⚠ The references describe **shipped code** and are versioned with it. Where a reference and
+this file disagree, the reference is describing what is actually in the repo — fix the drift
+rather than picking a side.
+
+**The artefacts themselves**, which both layers point at:
+
+| Subject                                                  | Where                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| All captured runtime behaviour (the evidence)            | `spikes/apiroc-probe/FINDINGS.md` on the BAL-393 branch (PR #211)        |
+| The sync-strategy ruling + provider capability matrix    | `apps/api/src/services/calendar/sync-capability.ts` (shipped, **inert**) |
+| The guard that keeps delta-sync out                      | `apps/api/src/invariants/sync-token-parity.test.ts`                      |
+| The single busy-block port every availability path uses  | `apps/api/src/services/availability/vendor-busy.ts`                      |
+| The SDK adapter boundary (error + logging)               | `apps/api/src/lib/apiroc/`                                               |
+| Connection model + SDK adapter boundary                  | BAL-467 (shipped, PR #219)                                               |
+| Connect, free/busy, event write, reconnect, health probe | BAL-396                                                                  |
+| Webhooks, subscription lifecycle, renewal                | BAL-468                                                                  |
+| Pre-consent explainer + partial-grant recovery UX        | BAL-462                                                                  |
+| OAuth app registration (BYOC branding + scopes)          | BAL-394                                                                  |
+| Vendor liaison (bug reports, auto-renew question)        | BAL-455                                                                  |
 
 ---
 
@@ -352,13 +400,20 @@ APIROC_REDIRECT_URI=https://api.balo.expert/auth/apiroc/callback
 
 ## DB Schema (Drizzle)
 
-⚠ **This is the TARGET shape, not what is in the database today.** The shipped
-`packages/db/src/schema/calendar.ts` is still Cronofy-shaped: `calendar_connections` is
-**unique on `expertProfileId`** (one connection per expert), stores encrypted `access_token` /
-`refresh_token` columns, keys on `cronofy_sub`, and its `status` values are
-`connected | sync_pending | auth_error` — not the `ACTIVE | EXPIRED | REVOKED` vocabulary
-below. Sub-calendars live in `calendar_sub_calendars`. The expand-contract migration to
-`(expertId, provider)` uniqueness is BAL-467 §1; read the real file before writing a query.
+⚠ **This is the TARGET shape. Part of it has since shipped — check which half you are
+reading.** Corrected 2026-08-18 against `packages/db/src/schema/calendar.ts` @ `eb6d4b2`.
+
+| Claim below                                            | Reality in `main` today                                                                                                                                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Unique on `(expertId, provider)`                       | ✅ **SHIPPED** (BAL-467, migration `0067`) — partial, on `deleted_at IS NULL`                                                                                                                          |
+| `endUserAccountId` column                              | ✅ shipped — but **nullable**, not `.notNull()`                                                                                                                                                        |
+| `credentialStatus` with `ACTIVE \| EXPIRED \| REVOKED` | ❌ **does not exist.** The column is `status`, CHECK-constrained to `connected \| sync_pending \| auth_error`. Writing `'ACTIVE'` fails `23514`. Rename is BAL-396 §2/§9                               |
+| No token columns                                       | ❌ `access_token` / `refresh_token` / `cronofy_sub` / `token_expires_at` all still there, now **nullable** — the table is dual-tenanted Cronofy+Apiroc for one release (BAL-396 drops the Cronofy arm) |
+| `calendar_subscriptions` table                         | ❌ **does not exist at all** (BAL-468). `calendar_sub_calendars` is a different thing                                                                                                                  |
+| `availability_cache`                                   | ✅ shipped and live                                                                                                                                                                                    |
+
+**Read the real file before writing a query.** Full as-built column list, the upsert arbiter,
+and the cardinality invariant are in `references/connect-and-credentials.md`.
 
 ```typescript
 // calendar_connections — pointer + status, NOT tokens. Unique on (expertId, provider).
@@ -441,8 +496,14 @@ provider — see Constraint 3 (BAL-447 / ADR-1021 amendment 2026-08-15).
    **[live]**.
 5. **Slot rules are ours.** Apply BAL-195 weekly schedule, duration, and padding in Balo's slot
    calculator over the returned busy slots. Apiroc does not compute bookable slots.
-6. **Forward window.** Cap `freeBusy.get` / event reads to `now → now + N days` (carry the
-   60-day convention unless changed).
+6. **Forward window — there are TWO horizons, and neither is 60 days.** ⚠ An earlier
+   revision said "carry the 60-day convention"; **no 60-day value exists anywhere in the
+   repo.** Shipped: a **14-day advertise horizon** (`resolve-and-cache.ts`, overridable via
+   the `RESOLVER_HORIZON_DAYS` env, default 14) for what the availability cache and expert
+   search reason about, and a **365-day booking horizon**
+   (`MAX_BOOKING_HORIZON_DAYS` in `@balo/shared/meetings`) for how far ahead a meeting may be
+   placed. Cap `freeBusy.get` to the horizon of the caller's question — do not invent a third.
+   See `references/availability-and-freebusy.md`.
 7. **Target calendar for writes.** Write consultation events to the expert's
    `targetCalendarId` (defaults to the `isPrimary` calendar on first connect); tag with
    `privateExtendedProperties.baloBookingId`. **Balo creates no calendars.**
@@ -520,6 +581,13 @@ error envelopes, plus a third vocabulary on the OAuth callback:
   and reasons.
 - **OAuth callback** — a query string, `?error=missing_required_permissions&error_description=…`.
   The only snake_case, genuinely enumerable vocabulary of the three. Appears nowhere else.
+
+**409 is captured [live], contra the "still unverified" note below.** A Google create with a
+duplicate caller-supplied id returns Envelope A with a **numeric** `error`:
+`{"error": 409, "message": "The requested identifier already exists.", …}`. Traced through the
+shipped boundary it classifies to `kind: 'unknown'`, which is **never retried** — so a
+derived-id retry fails un-retryably on Google while silently double-booking on Microsoft
+(§M1). One more reason caller-supplied ids are not an idempotency lever.
 
 Six distinct values of the wire `error` field have been observed: `"Error"`, `404`,
 `"InvalidRefreshToken"`, `"InternalServerError"`, a `ZodError` object, and (callback only)
@@ -683,7 +751,7 @@ The composed failure:
 | Fact                                                             | Value **[live]**                                                     |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
 | Create response fields                                           | **only** `{ webhookSubscriptionId, endpointSecret }`                 |
-| `expiration` on the **create response**                          | **absent from the type; `null` in practice** ← the trap              |
+| `expiration` on the **create response**                          | **the key is absent from the response body entirely** ← the trap     |
 | `expiration` in the stored record (`calendarSubscriptions.list`) | a real timestamp — **exactly 7 days** after creation                 |
 | Provider channel identifiers                                     | `subscriptionId` (uuid) + `resourceId` — Google `watch` channel refs |
 | `endpointSecret`                                                 | present, 38 chars                                                    |
@@ -751,7 +819,9 @@ const payload = wh.verify(rawBody, {
   'svix-id': req.headers['svix-id'],
   'svix-timestamp': req.headers['svix-timestamp'],
   'svix-signature': req.headers['svix-signature'],
-}); // throws on bad signature → 400, no retry
+}); // throws on bad signature → reject. ⚠ Only "2xx stops retries" is [live];
+// nothing establishes how Svix treats a 4xx here. Design for "any non-2xx is retried"
+// and make the handler idempotent rather than relying on a status to suppress delivery.
 // then enqueue a BullMQ whole-window availability rebuild — never a delta (Constraint 3)
 ```
 
@@ -825,7 +895,7 @@ Google-only in capability and is now **ruled out for every provider** by BAL-447
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Does Apiroc auto-renew subscriptions before the 7-day expiry?                | **Unknown.** Needs a 7-day observation or a vendor answer (BAL-455).                                                                                             |
 | Actual sandbox rate-limit magnitude; is `Retry-After` really emitted?        | **Unmeasured.** The rate-limit probe was never run.                                                                                                              |
-| 409 / 5xx wire shapes                                                        | **Assumed Envelope A, unverified** — not reachable synthetically.                                                                                                |
+| 5xx wire shapes                                                              | **Assumed Envelope A, unverified** — not reachable synthetically. (**409 is now CAPTURED** — see below.)                                                         |
 | Do subscriptions survive a revoke → reconnect cycle?                         | **Untested.** The account id does; the subscriptions are open.                                                                                                   |
 | Would `credential.updated` fire on a working `calendar` subscription?        | **Unknowable** until the 500 (Constraint 13) is fixed.                                                                                                           |
 | Does BYOC put Balo's branding on the consent screen? Can scopes be narrowed? | **Open — BAL-394.** Microsoft currently has `Calendars.ReadWrite` **without** `.Shared`, so shared/delegate calendars are likely invisible to Microsoft experts. |
