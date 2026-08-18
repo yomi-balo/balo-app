@@ -598,5 +598,41 @@ describe('oauth', () => {
 
       expect(mockUserClient.deleteNotificationChannel).not.toHaveBeenCalled();
     });
+
+    it('skips channel close for an Apiroc-shaped row (channelId set, accessToken null)', async () => {
+      // BAL-467: Balo holds no Cronofy access token for an Apiroc connection, so the
+      // best-effort channel close must not attempt to decrypt a null token.
+      const mockApp = { revokeAuthorization: vi.fn().mockResolvedValue(undefined) };
+      mockGetCronofyAppClient.mockReturnValue(mockApp);
+      mockFindConnectionByExpertProfileId.mockResolvedValue({
+        id: 'conn-1',
+        expertProfileId: EXPERT_ID,
+        channelId: 'ch-1',
+        accessToken: null,
+        refreshToken: null,
+      });
+
+      await disconnectCalendar(EXPERT_ID);
+
+      expect(mockUserClient.deleteNotificationChannel).not.toHaveBeenCalled();
+      expect(mockSoftDeleteConnection).toHaveBeenCalledWith(EXPERT_ID);
+    });
+
+    it('skips revoke for an Apiroc-shaped row (refreshToken null)', async () => {
+      const mockApp = { revokeAuthorization: vi.fn().mockResolvedValue(undefined) };
+      mockGetCronofyAppClient.mockReturnValue(mockApp);
+      mockFindConnectionByExpertProfileId.mockResolvedValue({
+        id: 'conn-1',
+        expertProfileId: EXPERT_ID,
+        channelId: null,
+        accessToken: null,
+        refreshToken: null,
+      });
+
+      await disconnectCalendar(EXPERT_ID);
+
+      expect(mockApp.revokeAuthorization).not.toHaveBeenCalled();
+      expect(mockSoftDeleteConnection).toHaveBeenCalledWith(EXPERT_ID);
+    });
   });
 });

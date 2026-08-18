@@ -281,30 +281,38 @@ export async function registerPushChannel(
 
 // ── Disconnect ──────────────────────────────────────────────────
 
-/**
- * Disconnects a calendar connection.
- * Closes push channel (best effort), revokes authorization (best effort),
- * deletes sub-calendars, soft-deletes connection, and clears availability cache.
- */
-export async function disconnectCalendar(expertProfileId: string): Promise<void> {
-  const connection = await calendarRepository.findConnectionByExpertProfileId(expertProfileId);
-  if (!connection) return;
+type DisconnectingConnection = {
+  channelId: string | null;
+  accessToken: string | null;
+  refreshToken: string | null;
+};
 
-  // 1. Close push channel (best effort)
-  if (connection.channelId) {
-    try {
-      const accessToken = decryptCalendarToken(connection.accessToken);
-      const userClient = getCronofyUserClient(accessToken);
-      await userClient.deleteNotificationChannel({ channel_id: connection.channelId });
-    } catch (err: unknown) {
-      log.warn(
-        { expertProfileId, error: err instanceof Error ? err.message : String(err) },
-        'Failed to close push channel during disconnect (best effort)'
-      );
-    }
+/** Best-effort: closes the Cronofy push channel for a connection being disconnected. */
+async function closePushChannelBestEffort(
+  connection: DisconnectingConnection,
+  expertProfileId: string
+): Promise<void> {
+  if (!connection.channelId || !connection.accessToken) return;
+
+  try {
+    const accessToken = decryptCalendarToken(connection.accessToken);
+    const userClient = getCronofyUserClient(accessToken);
+    await userClient.deleteNotificationChannel({ channel_id: connection.channelId });
+  } catch (err: unknown) {
+    log.warn(
+      { expertProfileId, error: err instanceof Error ? err.message : String(err) },
+      'Failed to close push channel during disconnect (best effort)'
+    );
   }
+}
 
-  // 2. Revoke Cronofy authorization (best effort)
+/** Best-effort: revokes the Cronofy authorization for a connection being disconnected. */
+async function revokeAuthorizationBestEffort(
+  connection: DisconnectingConnection,
+  expertProfileId: string
+): Promise<void> {
+  if (!connection.refreshToken) return;
+
   try {
     const refreshToken = decryptCalendarToken(connection.refreshToken);
     const revokeClientId = process.env.CRONOFY_CLIENT_ID;
@@ -324,6 +332,22 @@ export async function disconnectCalendar(expertProfileId: string): Promise<void>
       'Failed to revoke Cronofy authorization during disconnect (best effort)'
     );
   }
+}
+
+/**
+ * Disconnects a calendar connection.
+ * Closes push channel (best effort), revokes authorization (best effort),
+ * deletes sub-calendars, soft-deletes connection, and clears availability cache.
+ */
+export async function disconnectCalendar(expertProfileId: string): Promise<void> {
+  const connection = await calendarRepository.findConnectionByExpertProfileId(expertProfileId);
+  if (!connection) return;
+
+  // 1. Close push channel (best effort)
+  await closePushChannelBestEffort(connection, expertProfileId);
+
+  // 2. Revoke Cronofy authorization (best effort)
+  await revokeAuthorizationBestEffort(connection, expertProfileId);
 
   // 3. Delete sub-calendars
   await calendarRepository.deleteSubCalendarsByConnectionId(connection.id);

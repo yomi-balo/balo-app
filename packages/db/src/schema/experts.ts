@@ -351,10 +351,22 @@ export const expertProfilesRelations = relations(expertProfiles, ({ one, many })
     fields: [expertProfiles.id],
     references: [expertPayoutDetails.expertProfileId],
   }),
-  calendarConnection: one(calendarConnections, {
-    fields: [expertProfiles.id],
-    references: [calendarConnections.expertProfileId],
-  }),
+  /**
+   * ⚠⚠ D1 (BAL-467 review WARNING) — WAS `calendarConnection: one(calendarConnections, …)`.
+   * Under ADR-1021's 18-Aug-2026 amendment §1 an expert may hold TWO live connections (one
+   * per provider), so a singular `one()` relation named a row ARBITRARILY-of-N and applied
+   * no `deleted_at` filter — it could surface a disconnected connection too. This sat
+   * outside `repositories/calendar.ts`'s per-method cardinality audit AND outside
+   * `calendar-connection-cardinality.test.ts`'s reach (that file only reads the table and
+   * the repository, not this one). Renamed to `many()` — plural, so `with: {
+   * calendarConnections: true }` reads correctly and a future caller cannot reach for the
+   * old singular name without the type actually changing shape under them. No `deleted_at`
+   * filter is applied here either; a caller wanting only LIVE connections must filter after
+   * hydrating, same as `listConnectionsByExpertProfileId` in the repository.
+   *
+   * There are no current consumers (grepped before renaming) — this relation is unused.
+   */
+  calendarConnections: many(calendarConnections),
 }));
 
 export const expertCompetencyRelations = relations(expertCompetency, ({ one }) => ({
