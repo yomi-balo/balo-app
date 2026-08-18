@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { saveDraftAction } from '@/app/(apply)/expert/apply/_actions/save-draft';
+import { STEP_CONFIG, type StepKey } from '@/app/(apply)/expert/apply/_actions/schemas';
 import { log } from '@/lib/logging';
 
 /**
@@ -10,8 +11,13 @@ import { log } from '@/lib/logging';
  * (which owns auth, Zod validation, and the idempotent/transactional writes).
  * Fire-and-forget from the client; the beacon ignores the response body.
  */
+// Derived from STEP_CONFIG rather than re-listed: the hand-written union here had
+// already drifted, omitting 'agency' (added by BAL-356), so an agency-step beacon 400d
+// while saveDraftAction itself accepted the step. Deriving it can't drift again.
+const STEP_KEYS = STEP_CONFIG.map((step) => step.key) as [StepKey, ...StepKey[]];
+
 const bodySchema = z.object({
-  step: z.enum(['profile', 'products', 'assessment', 'certifications', 'work-history', 'terms']),
+  step: z.enum(STEP_KEYS),
   data: z.unknown(),
   expertProfileId: z.string().uuid().optional(),
 });

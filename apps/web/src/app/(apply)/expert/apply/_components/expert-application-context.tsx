@@ -352,7 +352,16 @@ export function ExpertApplicationProvider({
 
   // Idle auto-save
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSavedDataRef = useRef<string>('');
+  // Per-step saved snapshots (BAL-342). A single shared baseline held only the
+  // last-saved step's data, so every hop after the first looked dirty and re-saved.
+  const lastSavedByStepRef = useRef<Partial<Record<StepKey, string>>>({});
+  // Beacon flushes are ATTEMPTS, not saves: `sendBeacon` returning true means the UA
+  // queued the bytes, never that the server stored them (the request can be dropped, or
+  // answered 401/500 — none of which the page ever observes). Tracked separately from
+  // `lastSavedByStepRef` so a repeat background doesn't re-send an identical payload,
+  // while a tab that proves it is still alive goes straight back to being re-savable.
+  // Only a confirmed `saveDraftAction` success may ever write `lastSavedByStepRef`.
+  const beaconAttemptByStepRef = useRef<Partial<Record<StepKey, string>>>({});
 
   // Fire analytics on mount
   const hasTrackedRef = useRef(false);
@@ -430,9 +439,16 @@ export function ExpertApplicationProvider({
     expertProfileId,
   });
 
-  // Seed the saved-snapshot baseline so a pristine first load isn't seen as dirty.
+  // Seed EVERY step's baseline so a pristine load isn't seen as dirty. At mount all step
+  // data is hydrated straight from the persisted draft, so nothing needs re-saving until
+  // the user actually edits it — seeding only the initial step left every other step's
+  // first departure firing a save of data already in the DB (BAL-342). Eager on purpose:
+  // a lazy "seed on entry if unset" would stamp EDITED data as the baseline after a
+  // failed save, silently discarding the pending write.
   useEffect(() => {
-    lastSavedDataRef.current = JSON.stringify(getStepData(getCurrentStepKey()));
+    for (const step of STEP_CONFIG) {
+      lastSavedByStepRef.current[step.key] = JSON.stringify(getStepData(step.key));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -453,7 +469,7 @@ export function ExpertApplicationProvider({
           setExpertProfileId(result.expertProfileId);
         }
         setAutoSaveState('saved');
-        lastSavedDataRef.current = JSON.stringify(data);
+        lastSavedByStepRef.current[stepKey] = JSON.stringify(data);
         // Reset saved indicator after 2s
         setTimeout(() => setAutoSaveState('idle'), 2000);
         return true;
@@ -472,8 +488,9 @@ export function ExpertApplicationProvider({
   const scheduleIdleSave = useCallback((): void => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(async () => {
-      const currentData = JSON.stringify(getStepData(getCurrentStepKey()));
-      if (currentData !== lastSavedDataRef.current) {
+      const stepKey = getCurrentStepKey();
+      const currentData = JSON.stringify(getStepData(stepKey));
+      if (currentData !== lastSavedByStepRef.current[stepKey]) {
         await performSave();
       }
     }, 30_000);
@@ -485,8 +502,9 @@ export function ExpertApplicationProvider({
   // Synchronous (returns void) and owns its own promise, so callers navigate
   // immediately without a `void` operator or a floating promise.
   const saveIfDirty = useCallback((): void => {
-    const currentData = JSON.stringify(getStepData(getCurrentStepKey()));
-    if (currentData === lastSavedDataRef.current) return; // no unsaved changes
+    const stepKey = getCurrentStepKey();
+    const currentData = JSON.stringify(getStepData(stepKey));
+    if (currentData === lastSavedByStepRef.current[stepKey]) return; // no unsaved changes
     performSave().catch(() => {
       // performSave resolves false and shows its own error toast; guard only so
       // the promise is handled.
@@ -507,22 +525,35 @@ export function ExpertApplicationProvider({
   useEffect(() => {
     const flush = (): void => {
       const { stepKey, data, expertProfileId: profileId } = flushStateRef.current;
-      // Only flush when there are unsaved changes relative to the last successful save.
-      if (JSON.stringify(data) === lastSavedDataRef.current) return;
+      // Only flush when there are unsaved changes relative to THAT step's last save...
+      const serialized = JSON.stringify(data);
+      if (serialized === lastSavedByStepRef.current[stepKey]) return;
+      // ...and don't re-send bytes already queued for this step while still hidden.
+      if (serialized === beaconAttemptByStepRef.current[stepKey]) return;
 
       const payload: Record<string, unknown> = { step: stepKey, data };
       if (profileId) payload.expertProfileId = profileId; // omit when null
       const body = JSON.stringify(payload);
 
       if (typeof globalThis.navigator?.sendBeacon === 'function') {
-        globalThis.navigator.sendBeacon(
+        const queued = globalThis.navigator.sendBeacon(
           '/api/expert/apply/flush-draft',
           new Blob([body], { type: 'application/json' })
         );
+        // Record the ATTEMPT (not a save) so re-backgrounding a still-hidden tab doesn't
+        // re-flush identical bytes. Cleared the moment the tab is shown again, because a
+        // queued beacon that was never confirmed must stay re-savable.
+        if (queued) beaconAttemptByStepRef.current[stepKey] = serialized;
       } else {
         // Fallback when sendBeacon is unavailable: a keepalive fetch reusing the
         // SAME fresh body built above from flushStateRef, so it stays stale-safe
         // (the effect's first-render `performSave` closure would save stale data).
+        // Deliberately pessimistic — it records no attempt and advances no baseline.
+        // `res.ok` would NOT justify one either: the route answers 200 with
+        // `{ success: false }` on an ownership/validation failure, so even a resolved
+        // response is not proof of a write. A repeat flush here is an idempotent
+        // over-save, which is the safe direction; on a real unload the promise may
+        // never settle at all.
         globalThis
           .fetch('/api/expert/apply/flush-draft', {
             method: 'POST',
@@ -536,14 +567,24 @@ export function ExpertApplicationProvider({
       }
     };
 
+    // The tab is back, so it never unloaded and no queued beacon can be trusted to have
+    // landed. Drop the attempt record; the step's real baseline was never touched, so a
+    // later navigation or idle tick re-saves it.
+    const clearBeaconAttempts = (): void => {
+      beaconAttemptByStepRef.current = {};
+    };
+
     const onVisibilityChange = (): void => {
       if (globalThis.document.visibilityState === 'hidden') flush();
+      else clearBeaconAttempts();
     };
 
     globalThis.addEventListener('pagehide', flush);
+    globalThis.addEventListener('pageshow', clearBeaconAttempts); // bfcache restore
     globalThis.document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       globalThis.removeEventListener('pagehide', flush);
+      globalThis.removeEventListener('pageshow', clearBeaconAttempts);
       globalThis.document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, []);
