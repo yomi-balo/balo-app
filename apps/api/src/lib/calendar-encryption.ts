@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 
 /**
  * BAL-468 §6 — the cipher for `calendar_subscriptions.endpoint_secret` at rest.
