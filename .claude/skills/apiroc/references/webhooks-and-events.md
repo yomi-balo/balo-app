@@ -16,30 +16,45 @@ Evidence tags follow SKILL.md: **[live]** = observed against the real API in the
 
 ---
 
-## ⚠ Almost none of this is built yet. Know what you are looking at.
+## ⚠ A mixed bag now — Part A is still design, Part B mostly shipped. Know what you are looking at.
 
-Both halves are **design + evidence**, not shipped code. Every code block below that is not
-attributed to a real file is **the intended shape**, not something you can go and read.
+**This split changed under BAL-396, and it is the single most important fact in this file.**
+Part A (inbound Svix webhooks, subscriptions) is still **design + evidence**, not shipped code —
+BAL-468's scope, untouched by this branch. Part B (outbound consultation-event writes) is
+**mostly shipped**: `apps/api/src/services/consultation-events/` exists, complete and tested, for
+create/delete/reconcile (not update). It ships **INERT** — nothing calls it yet, because the
+booking flow that would (BAL-400) hasn't landed — but "nobody calls it" is a different claim from
+"it doesn't exist", and this file used to conflate the two. Every code block below that is not
+attributed to a real file is still **the intended shape**; a growing number now ARE attributed to a
+real file, and those are shipped, not sketches — read each block's own comment before assuming
+either way.
 
-| Piece                                                          | State today                                                                                         | Ticket  |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------- |
-| Apiroc SDK singleton + error boundary (`callApiroc`)           | **Shipped, INERT** — `apps/api/src/lib/apiroc/` (no live caller)                                    | BAL-467 |
-| `calendar_connections.end_user_account_id` + index             | **Shipped**, nullable; written by nobody yet                                                        | BAL-467 |
-| `findConnectionsByEndUserAccountId`                            | **Shipped, INERT** — `packages/db/src/repositories/calendar.ts`                                     | BAL-467 |
-| Apiroc connect / free-busy / **event writes**                  | **Not built**                                                                                       | BAL-396 |
-| Apiroc **webhook route**, subscription CRUD, renewal           | **Not built**                                                                                       | BAL-468 |
-| `calendar_subscriptions` table                                 | **Does not exist.** SKILL.md's DB block is the target shape; `schema/calendar.ts` has no such table | BAL-468 |
-| `svix` package                                                 | **Not a dependency** of `apps/api`                                                                  | BAL-468 |
-| Vendor liaison (auto-renew answer, the 500, delete-on-expired) | **Open**                                                                                            | BAL-455 |
+| Piece                                                          | State today                                                                                                                                                                                                                                  | Ticket                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| Apiroc SDK singleton + error boundary (`callApiroc`)           | **Shipped, LIVE.** BAL-396 gave it real callers — the OAuth connect callback, `freeBusy.get`, the health probe — not the tested-but-unused boundary BAL-467 shipped                                                                          | BAL-467 → BAL-396         |
+| `calendar_connections.end_user_account_id` + index             | **Shipped and LIVE** — written by `persistApirocConnection` → `upsertApirocConnection` from `GET /auth/apiroc/callback` (`routes/calendar/auth.ts`), not "by nobody"                                                                         | BAL-396                   |
+| `findConnectionsByEndUserAccountId`                            | **Shipped, still INERT** — `packages/db/src/repositories/calendar.ts`; zero non-test callers. BAL-468's future webhook-identity resolver                                                                                                     | BAL-467                   |
+| Apiroc **connect / free-busy**                                 | **Shipped, LIVE** — `/auth/apiroc/callback`, `provisionConnection`, `vendorBusyProvider.listBusyBlocks` all have real callers on this branch                                                                                                 | BAL-396                   |
+| Apiroc **event writes** (create/delete/reconcile)              | **Shipped, complete, tested — but INERT.** `apps/api/src/services/consultation-events/` exists in full; zero non-test callers outside that directory                                                                                         | BAL-396, caller = BAL-400 |
+| Apiroc **webhook route**, subscription CRUD, renewal           | **Not built**                                                                                                                                                                                                                                | BAL-468                   |
+| `calendar_subscriptions` table                                 | **Does not exist.** SKILL.md's DB block is the target shape; `schema/calendar.ts` has no such table                                                                                                                                          | BAL-468                   |
+| `svix` package                                                 | **Not a dependency** of `apps/api`                                                                                                                                                                                                           | BAL-468                   |
+| A cipher for `endpoint_secret`                                 | **No candidate exists.** `calendar-encryption.ts` is deleted; `apps/api/src/lib/encryption.ts` is Airwallex-payout-specific (decrypt-only, keyed on `PAYOUT_ENCRYPTION_KEY`) and is not a substitute — see [A1](#a1--the-subscription-model) | BAL-468                   |
+| Vendor liaison (auto-renew answer, the 500, delete-on-expired) | **Open**                                                                                                                                                                                                                                     | BAL-455                   |
 
-⚠ **`apps/api/src/routes/calendar/webhook.ts` is the CRONOFY handler, not an Apiroc one.** It
-serves `POST /webhooks/cronofy`, parses a `{ notification, channel }` body, resolves identity from
-`channel.channel_id`, and **performs no signature verification of any kind** — its only guard is
+⚠ **`apps/api/src/routes/calendar/webhook.ts` — the old CRONOFY handler — no longer exists.**
+BAL-396's own commit (`70fdfe7`) deleted it as part of completing the Cronofy removal (migration
+0069 dropped the last Cronofy identity columns in the same PR). There is nothing left at
+`routes/calendar/webhook.ts` to accidentally copy — the file itself is gone, not merely
+deprecated. For the record, in case an older worktree or a stale local branch still has it: it
+served `POST /webhooks/cronofy`, parsed a `{ notification, channel }` body, resolved identity from
+`channel.channel_id`, and **performed no signature verification of any kind** — its only guard was
 string equality between the body's `channel.callback_url` and `${API_BASE_URL}/webhooks/cronofy`.
-That guard is not authentication (the body is attacker-supplied in its entirety) and it has no
-Apiroc analogue anyway: the Apiroc body has two fields and neither is a URL. **Do not use that file
-as the template.** The shipped template for a verified webhook is `apps/api/src/routes/daily/` —
-see [A3](#a3--verification-and-idempotency).
+That guard was not authentication (the body was attacker-supplied in its entirety) and it had no
+Apiroc analogue anyway: the Apiroc body has two fields and neither is a URL. **Do not resurrect
+that shape as the template.** The shipped template for a verified webhook is
+`apps/api/src/routes/daily/` (confirmed present on this branch: `index.ts` + `webhook.ts` +
+`webhook.test.ts`) — see [A3](#a3--verification-and-idempotency).
 
 ⚠ SKILL.md's Architecture Summary sketches the Apiroc inbound flow in present tense
 ("verify with svix … dedupe on svix-id … ack 2xx"). That is the **design**, adopted from the
@@ -106,12 +121,28 @@ Drizzle block is the target shape):
 | `endpoint_secret`         | create response                       | **encrypted at rest** — see below                          |
 | `expiration`              | **`calendarSubscriptions.list` only** | never from the create response                             |
 
-**`endpoint_secret` at rest.** Reuse the shipped cipher — `encryptCalendarToken` /
-`decryptCalendarToken` in `apps/api/src/lib/calendar-encryption.ts` (AES-256-GCM, key derived by
-SHA-256 from `CALENDAR_ENCRYPTION_KEY`, stored as `iv:authTag:ciphertext` in base64). The function
-names say "token" but they cipher an arbitrary string; do not write a second one, and do not invent
-a second env key. The secret is the _only_ thing standing between a guessed URL and a forged
-availability rebuild, so it never lands in a log line, an analytics property, or an error body.
+**`endpoint_secret` at rest — ⚠ NO CIPHER FOR THIS EXISTS ON THIS BRANCH, AND THAT IS A REAL GAP
+FOR BAL-468 TO CLOSE, NOT SOMETHING TO PAPER OVER.** This section previously pointed at
+`encryptCalendarToken` / `decryptCalendarToken` in `apps/api/src/lib/calendar-encryption.ts`. That
+file is **gone** — BAL-396's Cronofy removal (migration 0069) dropped every Cronofy token column
+(`access_token`, `refresh_token`, `token_expires_at`, …) from `calendar_connections`, and the
+generic cipher that encrypted them at rest went with it. There is no `CALENDAR_ENCRYPTION_KEY` env
+var anywhere in `apps/api/.env.example` or `turbo.json` on this branch either.
+
+The only cipher left in the repo is `apps/api/src/lib/encryption.ts`'s `decryptValue` — and it is
+**not a substitute**: it is Airwallex-payout-specific, keyed on `PAYOUT_ENCRYPTION_KEY` (a
+deliberately separate secret from any future calendar key — do not reuse a payout key for a
+calendar secret), and it ships **decrypt-only** (there is no matching `encryptValue` in this repo;
+whatever encrypts a payout value at rest lives outside `apps/api`). Reusing it for
+`endpoint_secret` would mean sharing a key across two unrelated trust boundaries with no encrypt
+half to call.
+
+**BAL-468 needs an explicit cipher decision before it can store `endpointSecret` at all** — either
+resurrect an AES-256-GCM helper shaped like the old `calendar-encryption.ts` (own key, own env var,
+`iv:authTag:ciphertext` in base64, encrypt **and** decrypt) or pick another already-shipped one this
+file hasn't found. Whichever it is: the secret is the _only_ thing standing between a guessed URL
+and a forged availability rebuild, so it must never land in a log line, an analytics property, or
+an error body — that requirement is unchanged by the cipher's disappearance.
 
 ## A2 · ⚠⚠ Identity is in the URL, not the body
 
@@ -232,10 +263,12 @@ same.
 ### Verification
 
 ```typescript
-// Intended shape — BAL-468. `svix` is not yet a dependency of apps/api.
+// Intended shape — BAL-468. `svix` is not yet a dependency of apps/api, AND the decrypt call
+// below names a function that no longer exists on this branch — see A1's cipher-gap callout.
+// Whatever BAL-468 lands as the replacement cipher's decrypt half goes here.
 import { Webhook } from 'svix';
 
-const wh = new Webhook(decryptCalendarToken(row.endpointSecret));
+const wh = new Webhook(decryptCalendarSecret(row.endpointSecret)); // ⚠ placeholder name — no shipped implementation
 wh.verify(rawBody, {
   'svix-id': headers['svix-id'],
   'svix-timestamp': headers['svix-timestamp'],
@@ -311,7 +344,12 @@ do not let it be decided by accident.
 ### The enqueue
 
 ```typescript
-// apps/api/src/jobs/availability-cache.ts — SHIPPED (today's caller is the Cronofy webhook)
+// apps/api/src/jobs/availability-cache.ts — SHIPPED. ⚠ Today's callers are NOT a webhook of
+// any kind (the Cronofy webhook this comment used to name was deleted by BAL-396 itself, and
+// the Apiroc webhook is still BAL-468): the live callers on this branch are the OAuth connect
+// callback (`routes/calendar/auth.ts`), the schedule editor and availability-override routes
+// (`routes/experts/schedule.ts`, `routes/experts/availability-overrides.ts`), and booking-time
+// meeting-availability (`services/meetings/meeting-availability.ts`).
 export async function enqueueAvailabilityCacheRebuild(
   expertProfileId: string,
   log: FastifyBaseLogger
@@ -463,7 +501,7 @@ matter.
 - [ ] Subscription is `subscriptionType: 'event'` with an explicit `calendarId`. Never `'calendar'`.
 - [ ] One subscription row per subscribed calendar, per connection. `N` per expert is expected.
 - [ ] `webhookUrl` is HTTPS and encodes **Balo's** subscription row id — no vendor ids in the path.
-- [ ] `endpoint_secret` encrypted with `encryptCalendarToken`; never logged, never in analytics.
+- [ ] `endpoint_secret` encrypted at rest with BAL-468's cipher of record (none shipped yet — see [A1](#a1--the-subscription-model)); never logged, never in analytics.
 - [ ] `expiration` read from `calendarSubscriptions.list`, never from the create response.
 - [ ] `fastify-raw-body` registered scoped: `global: false`, `encoding: false`, `runFirst: true`,
       route in the `routes` array — **and re-registered in the route's test file**.
@@ -500,20 +538,48 @@ request body is identical apart from the target calendar):
 }
 ```
 
+⚠ **SUPERSEDED — this is what actually shipped, not the intended shape.** B1 previously sketched
+a `consultationRepository.setCalendarEventId(consultationId, created.id)` call. There is no
+`consultationRepository`, no `consultationId`, and no `calendar_event_id` column anywhere in this
+codebase — `meeting_calendar_events` (`packages/db/src/schema/meeting-calendar-events.ts`) is a
+**dedicated projection table**, keyed on Balo's `meeting_id`, purpose-built for exactly this
+docblock's own stated reason: "before this table there was NO column for it anywhere… and both
+obvious homes are closed" (`meetings` is FORBIDDEN by `invariants/meetings-no-context-column.test.ts`;
+`consultations` is a derived read model with a deleted `create()`).
+
+The real, shipped code — `apps/api/src/services/consultation-events/write-consultation-event.ts`,
+COMPLETE and TESTED, but **INERT: no live caller until BAL-400 wires booking**
+(`services/consultation-events/index.ts`'s own docblock says so):
+
 ```typescript
-// Intended shape — BAL-396.
-const created = await callApiroc('events.create', () =>
-  getApirocClient().events.create(connection.endUserAccountId, connection.targetCalendarId, {
-    title,
-    description, // ← the Daily join URL lives HERE
-    start: { dateTime: startsAt.toISOString(), timeZone: 'UTC' },
-    end: { dateTime: endsAt.toISOString(), timeZone: 'UTC' },
-    transparency: 'opaque', // ← blocks time; without it the slot stays bookable
-    privateExtendedProperties: { baloBookingId },
-  })
-);
-await consultationRepository.setCalendarEventId(consultationId, created.id); // ← VENDOR-RETURNED
+// apps/api/src/services/consultation-events/write-consultation-event.ts — SHIPPED, INERT.
+export async function writeConsultationEvent(
+  input: WriteConsultationEventInput
+): Promise<MeetingCalendarEvent> {
+  const client = getApirocClient();
+  const created = await callApiroc('events.create', () =>
+    client.events.create(input.endUserAccountId, input.calendarId, input.event)
+  );
+
+  const requestedId = input.event.id;
+  if (requestedId !== undefined && created.id !== requestedId) {
+    throw new Error(/* Apiroc substituted the event id — never trust it silently, see B2 */);
+  }
+
+  return meetingCalendarEventsRepository.record({
+    meetingId: input.meetingId,
+    connectionId: input.connectionId,
+    calendarId: input.calendarId,
+    vendorEventId: created.id, // ← VENDOR-RETURNED, asserted equal to any requested id above
+    baloBookingId: input.baloBookingId,
+  });
+}
 ```
+
+`event` itself is built by the sibling, equally-shipped `buildConsultationEvent`
+(`event-mapper.ts`) — no provider branch, `transparency: 'opaque'`, no `id`, no attendees, no
+`generateMeetingUrlProvider`, `start`/`end` in UTC. The behavioural rules B1 originally documented
+are unchanged; only the persistence target moved from a sketch to a real table:
 
 | Decision        | Rule                                                                                                                                                |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -522,7 +588,7 @@ await consultationRepository.setCalendarEventId(consultationId, created.id); // 
 | Tag             | `privateExtendedProperties.baloBookingId`. `Record<string,string>` **[stat]** — values must be strings                                              |
 | Daily join URL  | In `description` (and/or `location`). Balo mints its own room, so vendor meeting-URL generation is unused                                           |
 | Timezone        | Send UTC and let Balo's own tz layer render. Microsoft calendars expose **no** `timeZone` field at all **[live]**                                   |
-| Store           | The **vendor-returned** `id`, on Balo's consultation record                                                                                         |
+| Store           | The **vendor-returned** `id`, in `meeting_calendar_events.vendor_event_id`, keyed on Balo's `meeting_id` — never a consultation record              |
 
 **Why no vendor meeting-URL generation.** `CreateEventInput.generateMeetingUrlProvider` exists
 **[stat]**, and Balo does not use it: rooms come from Daily (see the `daily-co` skill), the join URL
@@ -580,13 +646,20 @@ returns **never retry, fail closed**. So on Google a derived-id retry surfaces a
 
 ### The correct idempotency design
 
-1. **Key idempotency off Balo's own record.** Before creating, read the consultation's stored
-   `calendar_event_id`. Non-null ⇒ the event exists; do not create.
-2. **Store the vendor-returned id** immediately after the create, in the same transaction as the
-   state change that depends on it.
-3. **Never send `id`.** Let the vendor generate it.
+⚠ **This is exactly what shipped, not just a design rule — see B1's `writeConsultationEvent`.**
+
+1. **Key idempotency off Balo's own record.** Before creating, check for a live
+   `meeting_calendar_events` row keyed on `meeting_id` (`findLiveByMeetingId`). A row ⇒ the event
+   exists; do not create. Shipped as `meeting_calendar_event_meeting_uq`, a partial unique on
+   `meeting_id` — there is no `calendar_event_id` column on any table (see B1); the row itself is
+   the "does this exist" check.
+2. **Store the vendor-returned id** immediately after the create, in the same call —
+   `writeConsultationEvent` does exactly this, via `meetingCalendarEventsRepository.record`'s
+   `onConflictDoUpdate` (a retry updates in place; a rebook after a soft-delete inserts a fresh row).
+3. **Never send `id`.** Let the vendor generate it. Shipped: `buildConsultationEvent` never sets
+   `CreateEventInput.id`.
 4. **If a derived id is ever genuinely required**, assert the returned id equals the requested one
-   and treat a mismatch as an error:
+   and treat a mismatch as an error — shipped verbatim in `write-consultation-event.ts`:
 
    ```typescript
    const created = await callApiroc('events.create', () => client.events.create(acct, cal, input));
@@ -596,11 +669,19 @@ returns **never retry, fail closed**. So on Google a derived-id retry surfaces a
    ```
 
 5. **The crash-between-create-and-store window is real** and no vendor id closes it. If the create
-   succeeds and the write of `calendar_event_id` fails, a retry would double-book. Recover the same
-   way you reconcile — **query by tag** (B4) before creating, or sweep for orphans afterwards. That
-   is what the `baloBookingId` tag is _for_; it is the durable link that survives a lost response.
+   succeeds and the write to `meeting_calendar_events` fails, a retry would double-book. Recover the
+   same way you reconcile — **query by tag** (B4) before creating, or sweep for orphans afterwards.
+   That is what the `baloBookingId` tag is _for_; it is the durable link that survives a lost
+   response. Nothing sweeps for orphans today — `reconcileByTag` exists but has no scheduled caller
+   (see the header table).
 
 ## B3 · Updating and deleting
+
+⚠ **Update is still `intended shape` — nothing built it.** There is no
+`update-consultation-event.ts` anywhere in `services/consultation-events/`; the directory ships
+exactly `write-consultation-event.ts`, `delete-consultation-event.ts`, `reconcile-by-tag.ts`, and
+`event-mapper.ts`. A reschedule that needs to move an existing calendar event still has this design
+to work from, not a real function to call.
 
 **Update** is `events.update(endUserAccountId, calendarId, eventId, data)`, a `PUT`, with
 `UpdateEventInput = Partial<Omit<CreateEventInput, 'id' | 'generateMeetingUrlProvider'>>` **[stat]**
@@ -613,13 +694,28 @@ same event was still matched by a `metadataFilters` query. Never re-send the tag
 an update; a partial `PUT` that omits it leaves it alone, and one that includes it is a no-op at
 best.
 
-**Delete** is `events.delete(endUserAccountId, calendarId, eventId)` → `200 {"success": true}`
-**[live]** on both providers. Delete by the **stored vendor id**.
+**Delete IS built** — `apps/api/src/services/consultation-events/delete-consultation-event.ts`
+ships COMPLETE and TESTED, calling `events.delete(endUserAccountId, calendarId, eventId)` →
+`200 {"success": true}` **[live]** on both providers, by the **stored vendor id** (never a
+re-derived one) read off the `meeting_calendar_events` row. It ships INERT — no live caller until
+BAL-400 wires cancellation — and it marks Balo's row soft-deleted BEFORE calling the vendor (round-2
+fix #14 in its own docblock: an orphaned vendor event is recoverable via `reconcileByTag`; a lost
+Balo row pointing at an already-vendor-deleted event is not).
+
+⚠ **Gap worth flagging, not a defect (the function is INERT so nothing depends on it yet):** the
+shipped `deleteConsultationEvent` does **not** itself catch a `404` from `events.delete` — it lets
+`callApiroc` throw an `ApirocError { kind: 'not_found' }` straight up to the caller. The
+"treat `404` as converged" design rule below is real and still correct (`classifyRetry('not_found')`
+does answer "never retry"), but nothing in this function currently swallows that error and clears
+the row on a 404 specifically — a caller that doesn't separately handle `not_found` would surface
+it as a hard failure instead of a no-op. Whoever wires BAL-400's cancel flow needs to either add
+that catch here or handle it at the call site; it isn't done today.
 
 ⚠ **Treat a `404` on delete as converged, not as a failure.** The expert may have deleted the event
 by hand; the desired end state ("no consultation event on that calendar") already holds. The shipped
-`classifyRetry` agrees — `not_found` → never retry. Clear Balo's stored `calendar_event_id` and move
-on. A `403` is different: that is the expired-credential condition (SKILL.md's
+`classifyRetry` agrees — `not_found` → never retry. Clear Balo's stored row —
+`meetingCalendarEventsRepository.softDeleteByMeetingId`, not a `calendar_event_id` column, which
+does not exist (see B1) — and move on. A `403` is different: that is the expired-credential condition (SKILL.md's
 [Credential expiry & reconnect detection](../SKILL.md)), and it means reconnect, not retry.
 
 ## B4 · Reconciliation by `metadataFilters`
@@ -660,26 +756,55 @@ Verified with a negative control, which matters — a filter that was silently i
 
 ### Paginate to exhaustion. Always.
 
+⚠ **SHIPPED, not a sketch.** `apps/api/src/lib/apiroc/paginate.ts`'s `paginateApiroc` is a real,
+generic, tested helper — and `reconcileByTag`
+(`apps/api/src/services/consultation-events/reconcile-by-tag.ts`) is its live consumer for exactly
+this "find Balo's tagged events" case, though `reconcileByTag` itself is INERT (no live caller yet
+— see the header table). Both are COMPLETE, not aspirational:
+
 ```typescript
-// Intended shape — BAL-396 §5 / BAL-468 §2. One `callApiroc` per page (never Promise.all).
-async function findTaggedEvents(acct: string, cal: string, baloBookingId: string) {
-  const found: Event[] = [];
+// apps/api/src/lib/apiroc/paginate.ts — SHIPPED. The shared "paginate TO EXHAUSTION" loop, used
+// by every Apiroc list call in this codebase, not just events.list.
+export const APIROC_PAGINATE_MAX_PAGES = 500;
+
+export async function paginateApiroc<T>(
+  operation: string,
+  fetchPage: (pageToken: string | undefined) => Promise<ApirocPage<T>>
+): Promise<T[]> {
+  const results: T[] = [];
   let pageToken: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const res = await callApiroc('events.list', () =>
-      getApirocClient().events.list(acct, cal, {
-        metadataFilters: { baloBookingId },
-        pageSize: PAGE_SIZE,
-        pageToken,
-      })
-    );
-    found.push(...res.data); // Microsoft's trailing page has data: [] — harmless, still terminates
-    if (res.nextPageToken === undefined) break; // ← the ONLY termination condition
-    pageToken = res.nextPageToken;
+  let pageCount = 0;
+  for (;;) {
+    const page = await callApiroc(operation, () => fetchPage(pageToken));
+    results.push(...page.data);
+    pageCount += 1;
+    if (!page.nextPageToken) break; // ← the normal termination condition
+    if (page.nextPageToken === pageToken) break; // ← guards a vendor that echoes a stuck cursor
+    if (pageCount >= APIROC_PAGINATE_MAX_PAGES) break; // ← hard cap; both breaks log a `warn`
+    pageToken = page.nextPageToken;
   }
-  return found;
+  return results;
+}
+
+// apps/api/src/services/consultation-events/reconcile-by-tag.ts — SHIPPED, INERT.
+export async function reconcileByTag(input: ReconcileByTagInput): Promise<Event[]> {
+  const client = getApirocClient();
+  return paginateApiroc('events.list', (pageToken) =>
+    client.events.list(input.endUserAccountId, input.calendarId, {
+      metadataFilters: { baloBookingId: input.baloBookingId },
+      ...(pageToken ? { pageToken } : {}),
+    })
+  );
 }
 ```
+
+The shipped version goes one guard further than this file's earlier sketch: it also aborts (with a
+`warn` log naming the operation) the moment the SAME `nextPageToken` is handed back twice in a row
+— a vendor cursor bug the page cap alone would still let run up to 500 calls deep before stopping.
+Read `APIROC_PAGINATE_MAX_PAGES`'s own docblock in `paginate.ts` for why that cap is not merely
+theoretical: `provisionConnection` → `listAllCalendars` runs this same helper synchronously inside
+the OAuth callback route and inside the `concurrency: 1` health-probe worker, so a hang here would
+wedge the platform's only proactive breakage signal.
 
 | Rule                                                   | Why                                                                                                                                                                                                      |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -687,8 +812,8 @@ async function findTaggedEvents(acct: string, cal: string, baloBookingId: string
 | ⚠ **Default page size is 400**                         | Any calendar under 400 events returns everything on page 1 — the bug is **invisible in dev and on test accounts** and only appears on a busy expert's real calendar. Test with a forced small `pageSize` |
 | Microsoft emits a **trailing empty page** (`count: 0`) | One extra round-trip to terminate **[live]**. Terminate on the token, not on `data.length === 0`                                                                                                         |
 | Do **not** read `nextSyncToken`                        | Constraint 3 — Balo stores no delta cursor. `sync-token-parity.test.ts` fails the build if you name it                                                                                                   |
-| One `callApiroc` per page                              | `callApiroc`'s contract is exactly one fallible SDK call; a fan-out lands multiple captures in the sink and the request-id evidence is dropped                                                           |
-| Cap the loop                                           | An unbounded `while (token)` against an unmeasured vendor rate limit is an outage waiting to happen                                                                                                      |
+| One `callApiroc` per page                              | `callApiroc`'s contract is exactly one fallible SDK call; a fan-out lands multiple captures in the sink and the request-id evidence is dropped — `paginateApiroc` enforces this by construction          |
+| Cap the loop, AND detect a stuck cursor                | Shipped as `APIROC_PAGINATE_MAX_PAGES = 500` plus a same-token-twice guard in `paginateApiroc` — both log a `warn`, never truncate silently                                                              |
 
 ⚠ `events.list` is sanctioned **only** for reconciling Balo's own tagged consultation events.
 Availability comes from `freeBusy.get` — busy slots, no titles, privacy by design (Constraint 4).
@@ -705,8 +830,9 @@ Reading a vendor capability as permission is exactly the mistake BAL-447 closed.
 - [ ] `id` is **not** sent. If it ever is, the returned id is asserted equal and a mismatch throws.
 - [ ] The **vendor-returned** `created.id` is persisted, in the same transaction as the state change
       that depends on it.
-- [ ] Idempotency reads Balo's stored `calendar_event_id` first; the crash window is closed by a
-      tag query or an orphan sweep, not by a derived id.
+- [ ] Idempotency reads Balo's stored `meeting_calendar_events` row (by `meeting_id`) first — not
+      a `calendar_event_id` column, which does not exist; the crash window is closed by a tag query
+      or an orphan sweep, not by a derived id.
 - [ ] No write is verified by string-comparing the response echo (`dateTime`, tz label, description,
       `transparency` — all diverge).
 - [ ] Update is a partial `PUT` that does not re-send the tag.
@@ -724,11 +850,26 @@ Reading a vendor capability as permission is exactly the mistake BAL-447 closed.
 Recorded here so the next person does not re-derive them. Each is a place SKILL.md or the BAL-393
 FINDINGS say one thing and the shipped code or the raw capture says another.
 
-| Claim                                                                    | What is actually there                                                                                                                                      |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SKILL.md's inbound flow, in present tense                                | No Apiroc webhook route exists. `routes/calendar/webhook.ts` is Cronofy, does **no** signature verification, and reads identity from the body               |
-| SKILL.md's `calendarSubscriptions` Drizzle block                         | Correctly labelled a target — but worth stating flatly: **the table does not exist**, and neither does the `svix` dependency                                |
-| Lifecycle table: `expiration` "absent from the type; `null` in practice" | The **key is absent from the response body**. `=== null` never fires                                                                                        |
-| §M3: Microsoft tag "never echoed back on a read"                         | The captured `metadataFilters` read **does** echo it; only `create` and `update` return `{}`                                                                |
-| "Still unverified: 409 wire shapes"                                      | Captured — Google duplicate-id create returns `{"error": 409, "message": "The requested identifier already exists.", …}`, Envelope A with a numeric `error` |
-| Webhook snippet: bad signature "→ 400, no retry"                         | Only a `200` was observed to stop retries. Nothing establishes how Svix treats a `4xx`; design for "any non-2xx is retried"                                 |
+| Claim                                                                    | What is actually there                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SKILL.md's inbound flow, in present tense                                | No Apiroc webhook route exists. `routes/calendar/webhook.ts` **used to be** the Cronofy handler (no signature verification, identity read from the body) — BAL-396 deleted that file outright; nothing has replaced it |
+| SKILL.md's `calendarSubscriptions` Drizzle block                         | Correctly labelled a target — but worth stating flatly: **the table does not exist**, and neither does the `svix` dependency                                                                                           |
+| Lifecycle table: `expiration` "absent from the type; `null` in practice" | The **key is absent from the response body**. `=== null` never fires                                                                                                                                                   |
+| §M3: Microsoft tag "never echoed back on a read"                         | The captured `metadataFilters` read **does** echo it; only `create` and `update` return `{}`                                                                                                                           |
+| "Still unverified: 409 wire shapes"                                      | Captured — Google duplicate-id create returns `{"error": 409, "message": "The requested identifier already exists.", …}`, Envelope A with a numeric `error`                                                            |
+| Webhook snippet: bad signature "→ 400, no retry"                         | Only a `200` was observed to stop retries. Nothing establishes how Svix treats a `4xx`; design for "any non-2xx is retried"                                                                                            |
+
+### Reconciliation against BAL-396's shipped code (this pass, 2026-08-18)
+
+The previous revision of this file described Part B ("Outbound: writing consultation events") as
+entirely unbuilt design. BAL-396 (`70fdfe7`, this branch) shipped most of it for real:
+
+| Claim in the prior revision                                                                                                | What is actually there                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B1: store the vendor id via `consultationRepository.setCalendarEventId(...)`                                               | No such repository or column exists. A dedicated table, `meeting_calendar_events`, ships instead — keyed on `meeting_id`, written by `meetingCalendarEventsRepository.record`                                                                                                                                   |
+| B1/B2/B4 code blocks marked "Intended shape — BAL-396"                                                                     | `write-consultation-event.ts`, `delete-consultation-event.ts`, `reconcile-by-tag.ts`, `event-mapper.ts` all ship COMPLETE and TESTED in `services/consultation-events/` — INERT (no live caller) until BAL-400, but not aspirational sketches any more                                                          |
+| B4's hand-rolled `findTaggedEvents` pagination loop                                                                        | A real, shared, generic `paginateApiroc` helper ships in `lib/apiroc/paginate.ts`, used by `reconcileByTag` and by calendar provisioning — with a same-cursor-twice guard the sketch never had                                                                                                                  |
+| A1: `endpoint_secret` cipher is `encryptCalendarToken`/`decryptCalendarToken` in `apps/api/src/lib/calendar-encryption.ts` | That file is deleted (BAL-396's Cronofy token-column removal took it with it). No replacement cipher exists anywhere in the repo — a real gap for BAL-468, not a stale pointer to fix and move on from                                                                                                          |
+| A4's enqueue snippet: "today's caller is the Cronofy webhook"                                                              | That webhook route no longer exists (BAL-396 deleted it). Today's real callers are the OAuth connect callback, the schedule/override routes, and booking-time meeting-availability — none of them a webhook                                                                                                     |
+| Header table: `callApiroc`, `end_user_account_id` "INERT" / "written by nobody"                                            | Both are live as of BAL-396 — the OAuth connect callback writes `end_user_account_id` and calls `callApiroc` for real, `freeBusy.get` and the health probe do too. Only the consultation-event write/delete/reconcile trio and the webhook-identity resolver (`findConnectionsByEndUserAccountId`) remain INERT |
+| B3: Update and delete both "intended shape"                                                                                | Delete shipped (`delete-consultation-event.ts`, COMPLETE, TESTED, INERT). Update did not — there is still no `update-consultation-event.ts` anywhere                                                                                                                                                            |
