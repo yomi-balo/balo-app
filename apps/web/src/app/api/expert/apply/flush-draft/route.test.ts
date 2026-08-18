@@ -10,6 +10,7 @@ vi.mock('@/app/(apply)/expert/apply/_actions/save-draft', () => ({
 // `@/lib/logging` is auto-mocked in src/test/setup.ts.
 
 import { POST } from './route';
+import { STEP_CONFIG } from '@/app/(apply)/expert/apply/_actions/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -54,6 +55,21 @@ describe('POST /api/expert/apply/flush-draft', () => {
 
     expect(res.status).toBe(200);
     expect(mockSaveDraftAction).toHaveBeenCalledWith(payload);
+  });
+
+  it('accepts every step in STEP_CONFIG, including agency (BAL-342)', async () => {
+    // The route used to re-list the step union by hand and had drifted, omitting the
+    // 'agency' step that BAL-356 added — so an agency-step beacon 400d even though
+    // saveDraftAction itself accepts it. The enum is now derived from STEP_CONFIG.
+    for (const step of STEP_CONFIG) {
+      mockSaveDraftAction.mockResolvedValue({ success: true, expertProfileId: PROFILE_ID });
+
+      const res = await POST(makeRequest({ step: step.key, data: {} }));
+
+      expect(res.status, `step ${step.key} should be accepted`).toBe(200);
+    }
+    expect(mockSaveDraftAction).toHaveBeenCalledTimes(STEP_CONFIG.length);
+    expect(mockSaveDraftAction.mock.calls.map((call) => call[0].step)).toContain('agency');
   });
 
   it('maps an Unauthorized throw to 401', async () => {

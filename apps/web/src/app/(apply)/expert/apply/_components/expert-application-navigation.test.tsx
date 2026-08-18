@@ -305,6 +305,53 @@ describe('expert-application navigation', () => {
     expect(current()).toBe('5');
     expect(saveDraftMock).not.toHaveBeenCalled();
   });
+
+  it('does not save when hopping between untouched steps of a resumed draft (BAL-342)', async () => {
+    // Every step's baseline is seeded at mount from the persisted draft, so leaving a
+    // step nobody edited is never dirty — not even on its FIRST departure. Seeding only
+    // the initial step left this hop firing a save of data already in the DB.
+    const user = userEvent.setup();
+    renderHarness(termsDraft); // starts on Terms (index 6), max reached 6
+
+    await user.click(screen.getByRole('button', { name: 'to-0' }));
+    expect(current()).toBe('0');
+
+    await user.click(screen.getByRole('button', { name: 'to-6' }));
+    expect(current()).toBe('6');
+
+    expect(saveDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('does not redundantly re-save an unchanged step on later hops (BAL-342)', async () => {
+    // Per-step baselines: with a single shared snapshot, leaving ANY step after the
+    // first save compared against the previously-saved step's data and always looked
+    // dirty. Each step must be measured against its own last-saved snapshot.
+    const user = userEvent.setup();
+    renderHarness(termsDraft); // starts on Terms (index 6), seeded clean
+
+    // Hop 1 — leave a pristine Terms. Clean, so no save.
+    await user.click(screen.getByRole('button', { name: 'to-0' }));
+    expect(current()).toBe('0');
+    expect(saveDraftMock).not.toHaveBeenCalled();
+
+    // Edit Profile, then leave it — the one legitimate save in this whole run.
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+    await user.click(screen.getByRole('button', { name: 'to-6' }));
+    await waitFor(() => expect(saveDraftMock).toHaveBeenCalledTimes(1));
+    expect(saveDraftMock.mock.calls[0]?.[0]).toMatchObject({ step: 'profile' });
+    expect(current()).toBe('6');
+
+    // Hop 2 — leave Terms again, still untouched. Under the old shared baseline this
+    // compared Terms' data to Profile's snapshot and fired a redundant save.
+    await user.click(screen.getByRole('button', { name: 'to-0' }));
+    expect(current()).toBe('0');
+
+    // Hop 3 — leave Profile again with no further edits: its own baseline matches.
+    await user.click(screen.getByRole('button', { name: 'to-6' }));
+    expect(current()).toBe('6');
+
+    expect(saveDraftMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── pagehide / visibilitychange beacon flush (explicit AC) ───────
@@ -317,11 +364,19 @@ describe('expert-application unload flush', () => {
     saveDraftMock.mockResolvedValue({ success: true } as Awaited<
       ReturnType<typeof saveDraftAction>
     >);
-    sendBeacon = vi.fn();
+    sendBeacon = vi.fn().mockReturnValue(true);
     Object.defineProperty(globalThis.navigator, 'sendBeacon', {
       value: sendBeacon,
       configurable: true,
       writable: true,
+    });
+  });
+
+  // Several tests stamp `visibilityState`; restore it so the block stays order-independent.
+  afterEach(() => {
+    Object.defineProperty(globalThis.document, 'visibilityState', {
+      value: 'visible',
+      configurable: true,
     });
   });
 
@@ -346,6 +401,129 @@ describe('expert-application unload flush', () => {
     expect(blob).toBeInstanceOf(Blob);
     const text = await readBlobText(blob as Blob);
     expect(JSON.parse(text)).toEqual({ step: 'profile', data: changedProfile });
+  });
+
+  it('does not re-flush the same payload when a live tab is backgrounded twice (BAL-342)', async () => {
+    const user = userEvent.setup();
+    renderHarness(null);
+
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+
+    Object.defineProperty(globalThis.document, 'visibilityState', {
+      value: 'hidden',
+      configurable: true,
+    });
+    globalThis.document.dispatchEvent(new Event('visibilitychange'));
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+
+    // The tab never unloaded — backgrounding it again with no further edits must not
+    // re-send an identical payload, because the queued beacon recorded an ATTEMPT for
+    // this step. Its real saved baseline is deliberately untouched — see the tests below,
+    // which prove the step is still re-savable and still re-flushable.
+    globalThis.document.dispatchEvent(new Event('visibilitychange'));
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+  });
+
+  it('still saves a step whose beacon was only queued, never confirmed (BAL-342)', async () => {
+    // sendBeacon returning true means "queued", not "stored" — the request can still be
+    // dropped, or answered 401/500 unobserved. The step's real baseline must therefore be
+    // untouched, so the next navigation re-saves it rather than silently losing the edit.
+    const user = userEvent.setup();
+    renderHarness(termsDraft); // starts on Terms (index 6)
+
+    await user.click(screen.getByRole('button', { name: 'edit-terms' }));
+
+    Object.defineProperty(globalThis.document, 'visibilityState', {
+      value: 'hidden',
+      configurable: true,
+    });
+    globalThis.document.dispatchEvent(new Event('visibilitychange'));
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+
+    // The tab comes back — it never unloaded, so nothing is confirmed.
+    Object.defineProperty(globalThis.document, 'visibilityState', {
+      value: 'visible',
+      configurable: true,
+    });
+    globalThis.document.dispatchEvent(new Event('visibilitychange'));
+
+    await user.click(screen.getByRole('button', { name: 'prev' }));
+
+    await waitFor(() => expect(saveDraftMock).toHaveBeenCalledTimes(1));
+    expect(saveDraftMock.mock.calls[0]?.[0]).toMatchObject({
+      step: 'terms',
+      data: { termsAccepted: true },
+    });
+  });
+
+  it('lets a real save through while still hidden — save paths ignore beacon attempts (BAL-342)', async () => {
+    // Load-bearing asymmetry: `saveIfDirty` / `scheduleIdleSave` measure against the
+    // SAVED baseline only, never against `beaconAttemptByStepRef`. Folding the attempt
+    // guard into them (an easy good-faith "DRY" refactor) would resurrect the data-loss
+    // path, so pin it here with no intervening `visible` transition to clear the attempt.
+    const user = userEvent.setup();
+    renderHarness(termsDraft);
+
+    await user.click(screen.getByRole('button', { name: 'edit-terms' }));
+
+    Object.defineProperty(globalThis.document, 'visibilityState', {
+      value: 'hidden',
+      configurable: true,
+    });
+    globalThis.document.dispatchEvent(new Event('visibilitychange'));
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+
+    // Still hidden, attempt still on record — a real navigation must save anyway.
+    await user.click(screen.getByRole('button', { name: 'prev' }));
+
+    await waitFor(() => expect(saveDraftMock).toHaveBeenCalledTimes(1));
+    expect(saveDraftMock.mock.calls[0]?.[0]).toMatchObject({ step: 'terms' });
+  });
+
+  it('re-flushes after the tab is shown again, since nothing was ever confirmed (BAL-342)', async () => {
+    const user = userEvent.setup();
+    renderHarness(null);
+
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+
+    const hide = (): void => {
+      Object.defineProperty(globalThis.document, 'visibilityState', {
+        value: 'hidden',
+        configurable: true,
+      });
+      globalThis.document.dispatchEvent(new Event('visibilitychange'));
+    };
+    const show = (): void => {
+      Object.defineProperty(globalThis.document, 'visibilityState', {
+        value: 'visible',
+        configurable: true,
+      });
+      globalThis.document.dispatchEvent(new Event('visibilitychange'));
+    };
+
+    hide();
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    hide(); // still hidden, identical payload → suppressed
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+
+    show(); // proves the tab survived → the queued attempt is no longer trustworthy
+    hide();
+    expect(sendBeacon).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not suppress a re-flush when sendBeacon refuses the payload (BAL-342)', async () => {
+    // A false return means the UA rejected it outright (e.g. over the queue quota) —
+    // nothing was queued, so the next background must try again.
+    const user = userEvent.setup();
+    sendBeacon.mockReturnValue(false);
+    renderHarness(null);
+
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+
+    globalThis.dispatchEvent(new Event('pagehide'));
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    globalThis.dispatchEvent(new Event('pagehide'));
+    expect(sendBeacon).toHaveBeenCalledTimes(2);
   });
 
   it('beacons on visibilitychange when the document becomes hidden', async () => {
