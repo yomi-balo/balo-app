@@ -10,8 +10,11 @@ const {
   mockDeleteSubCalendarsByConnectionId,
   mockSoftDeleteConnectionForProvider,
   mockClearAvailabilityCache,
+  mockListLiveByConnectionId,
+  mockSoftDeleteByConnectionId,
   mockCalendarsList,
   mockEndUserAccountsDelete,
+  mockCalendarSubscriptionsDelete,
   mockLog,
 } = vi.hoisted(() => ({
   mockUpsertApirocConnection: vi.fn(),
@@ -23,8 +26,11 @@ const {
   mockDeleteSubCalendarsByConnectionId: vi.fn(),
   mockSoftDeleteConnectionForProvider: vi.fn(),
   mockClearAvailabilityCache: vi.fn(),
+  mockListLiveByConnectionId: vi.fn(),
+  mockSoftDeleteByConnectionId: vi.fn(),
   mockCalendarsList: vi.fn(),
   mockEndUserAccountsDelete: vi.fn(),
+  mockCalendarSubscriptionsDelete: vi.fn(),
   mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -40,6 +46,10 @@ vi.mock('@balo/db', () => ({
     softDeleteConnectionForProvider: mockSoftDeleteConnectionForProvider,
     clearAvailabilityCache: mockClearAvailabilityCache,
   },
+  calendarSubscriptionsRepository: {
+    listLiveByConnectionId: mockListLiveByConnectionId,
+    softDeleteByConnectionId: mockSoftDeleteByConnectionId,
+  },
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -50,6 +60,7 @@ vi.mock('../../lib/apiroc/index.js', () => ({
   getApirocClient: () => ({
     calendars: { list: mockCalendarsList },
     endUserAccounts: { delete: mockEndUserAccountsDelete },
+    calendarSubscriptions: { delete: mockCalendarSubscriptionsDelete },
   }),
   callApiroc: async (_operation: string, fn: () => Promise<unknown>) => fn(),
   paginateApiroc: async (
@@ -372,7 +383,10 @@ describe('provisionConnection', () => {
 });
 
 describe('disconnectProvider', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListLiveByConnectionId.mockResolvedValue([]);
+  });
 
   it('returns silently when no connection exists for this (expert, provider)', async () => {
     mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
@@ -380,6 +394,7 @@ describe('disconnectProvider', () => {
     expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
     expect(mockDeleteSubCalendarsByConnectionId).not.toHaveBeenCalled();
     expect(mockSoftDeleteConnectionForProvider).not.toHaveBeenCalled();
+    expect(mockListLiveByConnectionId).not.toHaveBeenCalled();
   });
 
   it('deletes the vendor account, sub-calendars, then soft-deletes, in order', async () => {
@@ -402,5 +417,56 @@ describe('disconnectProvider', () => {
     expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
     expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
     expect(mockLog.warn).toHaveBeenCalled();
+  });
+
+  // ── BAL-468 §10 — subscription teardown ──────────────────────────────────────────────────
+
+  it('⚠ deletes every live subscription at the vendor BEFORE the End User Account delete', async () => {
+    const order: string[] = [];
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockListLiveByConnectionId.mockResolvedValue([
+      { id: 'row-1', webhookSubscriptionId: 'wsub-1' },
+      { id: 'row-2', webhookSubscriptionId: 'wsub-2' },
+    ]);
+    mockCalendarSubscriptionsDelete.mockImplementation(async () => {
+      order.push('subscription-delete');
+      return { success: true };
+    });
+    mockEndUserAccountsDelete.mockImplementation(async () => {
+      order.push('account-delete');
+      return { success: true };
+    });
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-1');
+    expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-2');
+    expect(order).toEqual(['subscription-delete', 'subscription-delete', 'account-delete']);
+  });
+
+  it('a failed per-subscription vendor delete is best-effort and does not abort teardown', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockListLiveByConnectionId.mockResolvedValue([
+      { id: 'row-1', webhookSubscriptionId: 'wsub-1' },
+    ]);
+    mockCalendarSubscriptionsDelete.mockRejectedValue(new Error('vendor 500'));
+    mockEndUserAccountsDelete.mockResolvedValue({ success: true });
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ context: 'disconnect' }),
+      'apiroc_subscription_delete_failed'
+    );
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
+  });
+
+  it('⚠ softDeleteByConnectionId is NOT optional — always called, before the sub-calendar teardown', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockEndUserAccountsDelete.mockResolvedValue({ success: true });
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
   });
 });

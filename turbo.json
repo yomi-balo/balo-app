@@ -61,7 +61,9 @@
     "MEETING_IDLE_END_MINUTES",
     "APIROC_API_KEY",
     "APIROC_APP_ID",
-    "APIROC_REDIRECT_URI"
+    "APIROC_REDIRECT_URI",
+    "CALENDAR_ENCRYPTION_KEY",
+    "APIROC_WEBHOOK_BASE_URL"
   ],
   "tasks": {
     "build": {

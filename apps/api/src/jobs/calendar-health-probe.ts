@@ -21,6 +21,7 @@ import {
   enqueueAvailabilityCacheRebuild,
   STALENESS_CHECK_THRESHOLD_MS,
 } from './availability-cache.js';
+import { enqueueSubscriptionReconcile } from './calendar-subscription-reconcile.js';
 
 const log = createLogger('calendar-health-probe');
 
@@ -168,6 +169,10 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
     // `provisionConnection` already wrote `ACTIVE` (and, via `setCredentialStatusForProvider`,
     // already cleared `reconnectNotifiedAt` — do NOT clear it again here).
     await enqueueAvailabilityCacheRebuild(connection.expertProfileId, enqueueLogger);
+    // BAL-468 §8.4 — the desired calendar set just changed (re-provisioning may have added or
+    // removed sub-calendars); this is exactly the brief's "reconcile subscriptions against the
+    // resulting sub-calendar set".
+    await enqueueSubscriptionReconcile(connection.id, { force: false }, enqueueLogger);
     // ⚠⚠ round-2 fix #12 — `SYNC_PENDING_AUTO_RESOLVED` must mean what its name says. Before
     // this fix it fired for BOTH branches of `needsReprovision`, including the ACTIVE-with-
     // zero-sub-calendars branch above, which was never `SYNC_PENDING` at all — the metric no
@@ -188,7 +193,11 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
   }
 
   if (connection.credentialStatus === 'ACTIVE') {
-    // Already healthy and already provisioned — nothing to heal.
+    // Already healthy and already provisioned — nothing to heal. BAL-468 §8.4 — THE
+    // MAINTENANCE SWEEP: the probe already visits every connection on a 15-minute cron,
+    // re-probing each at most once per `PROBE_INTERVAL_MS` (1h), so subscription renewal
+    // inherits a proven, batch-bounded, starvation-free scheduler for free.
+    await enqueueSubscriptionReconcile(connection.id, { force: false }, enqueueLogger);
     return false;
   }
 
@@ -197,6 +206,9 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
   // `'ACTIVE'` — no separate clear call.
   await calendarRepository.setCredentialStatus(connection.id, 'ACTIVE');
   await enqueueAvailabilityCacheRebuild(connection.expertProfileId, enqueueLogger);
+  // BAL-468 §8.4/§8.6 — force: true. Whether subscriptions survive a revoke → reconnect cycle
+  // at all is untested; forcing a fresh create-then-delete makes the answer not matter.
+  await enqueueSubscriptionReconcile(connection.id, { force: true }, enqueueLogger);
   const eventProvider = toCalendarEventProvider(connection.provider);
   if (eventProvider) {
     trackServer(CALENDAR_SERVER_EVENTS.RECONNECT_RESOLVED, {

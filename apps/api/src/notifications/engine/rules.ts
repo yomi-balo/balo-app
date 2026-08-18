@@ -630,6 +630,20 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // its only effect. This is the missing rule, not a new event. `recipient: 'expert'` resolves
   // via `payload.expertProfileId` (resolver.ts) — the connection's own expert, email + in-app.
   'calendar.auth_error': emailAndInApp('expert', 'calendar-reconnect-required'),
+  // BAL-468 — the daily calendar-subscription monitor's non-zero-arm alert. IN-APP ONLY,
+  // matching `billing.details_confirmed`'s shape: this is an ops signal for Balo staff, not a
+  // time-critical email — the `log.error('apiroc_subscription_expiry_alert')` in the sweep
+  // itself is the real paging channel. `recipient: 'admin_users'` (NOT `'admin'`, which
+  // resolves to the single `OPS_NOTIFICATION_EMAIL` literal and silently skips the send when
+  // that var is unset). Server-only (published by the sweep).
+  'calendar.subscription_lapse': [
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'calendar-subscription-lapse-admin',
+      timing: 'immediate',
+    },
+  ],
   // BAL-374: onboarding-completion reminder — EMAIL ONLY to the un-onboarded user
   // (recipient 'self' via payload.userId). No in-app (the user hasn't onboarded, the
   // bell is irrelevant). One event fires for all three cadence steps; the step lives

@@ -76,6 +76,8 @@ export const CALENDAR_SERVER_EVENTS = {
   // BAL-396 (ADR-1021 amendment 18 Aug 2026 §6) — Apiroc credential-health lifecycle.
   CREDENTIALS_REVOKED: 'calendar_credentials_revoked',
   RECONNECT_RESOLVED: 'calendar_reconnect_resolved',
+  // BAL-468 — the daily calendar-subscription monitor's non-zero-arm alert.
+  SUBSCRIPTION_LAPSE_DETECTED: 'calendar_subscription_lapse_detected',
 } as const;
 
 export interface CalendarServerEventMap {
@@ -134,6 +136,16 @@ export interface CalendarServerEventMap {
   [CALENDAR_SERVER_EVENTS.RECONNECT_RESOLVED]: {
     provider: 'google' | 'microsoft';
     /** = expertProfileId. */
+    distinct_id: string;
+  };
+  [CALENDAR_SERVER_EVENTS.SUBSCRIPTION_LAPSE_DETECTED]: {
+    /** Live subscriptions expiring inside SUBSCRIPTION_EXPIRY_ALERT_MS. */
+    expiring_count: number;
+    /** Live subscriptions the vendor has never confirmed (past the 2h grace). */
+    unconfirmed_count: number;
+    /** Live ACTIVE connections with ZERO live subscriptions — the silent-expiry shape. */
+    unsubscribed_connection_count: number;
+    /** Platform-level sweep — precedent 'system:fx-display' (jobs/fx-display-rate-sweep.ts). */
     distinct_id: string;
   };
 }

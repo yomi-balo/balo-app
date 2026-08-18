@@ -431,6 +431,28 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('calendar-subscription-lapse-admin (BAL-468)', () => {
+    it('renders both counts in the body', () => {
+      const result = getInAppTemplate('calendar-subscription-lapse-admin', {
+        expiringCount: 3,
+        unconfirmedCount: 1,
+        unsubscribedConnectionCount: 2,
+      });
+      expect(result).toEqual({
+        title: 'Calendar subscriptions need attention',
+        body: '3 calendar subscription(s) expire within 48 hours and 2 connection(s) have none — the renewal sweep may be falling behind.',
+      });
+    });
+
+    it('degrades every field to 0 on empty data — never NaN/undefined', () => {
+      const result = getInAppTemplate('calendar-subscription-lapse-admin', {});
+      expect(result.body).toBe(
+        '0 calendar subscription(s) expire within 48 hours and 0 connection(s) have none — the renewal sweep may be falling behind.'
+      );
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('credit-dormancy-reminder (BAL-380)', () => {
     it('renders the 60-day copy with the formatted balance + short date', () => {
       const result = getInAppTemplate('credit-dormancy-reminder', {
