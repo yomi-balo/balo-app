@@ -60,11 +60,11 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     throw new Error('Profile or user not found');
   }
 
-  // `calendar`: a live calendar_connections row in the `connected` state (BAL-234).
-  // A revoked/errored connection (`auth_error`, `sync_pending`) is not connected.
-  // This replaces the dead `cronofySyncStatus` read (no writer) and keeps the
-  // check vendor-agnostic for the ADR-1021 migration.
-  const calendar = connection?.status === 'connected';
+  // `calendar`: a live calendar_connections row with an ACTIVE credential (BAL-234,
+  // BAL-396 §3 — `status` renamed to `credential_status`, vocabulary ACTIVE | SYNC_PENDING |
+  // EXPIRED | REVOKED). A revoked/errored/pending connection is not connected. This replaces
+  // the dead `cronofySyncStatus` read (no writer) and keeps the check vendor-agnostic.
+  const calendar = connection?.credentialStatus === 'ACTIVE';
 
   const items = {
     profile: Boolean(

@@ -1,85 +1,64 @@
 import { describe, it, expect } from 'vitest';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { calendarConnections, type CalendarConnection } from '../schema';
 import { expertDraftFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { calendarRepository } from './calendar';
+import { calendarRepository, type UpsertApirocConnectionInput } from './calendar';
 
 /**
- * BAL-467 — `calendar_connections` against REAL Postgres.
+ * BAL-467 + BAL-396 — `calendar_connections` against REAL Postgres.
  *
  * ADR-1021, amendment 18 Aug 2026 §1: "A calendar connection is per (expert, provider) …
  * unique on `(expertId, provider)`. An expert may hold connections to multiple providers
  * at once … connect, disconnect, and reconnect are per-provider."
  *
- * ⚠⚠ THIS SUITE IS NOT A COVERAGE CHECKBOX. It is the ONLY gate in the repository that
- * can catch the two failure modes BAL-467 introduces, both of which leave typecheck,
- * lint AND the existing unit test green:
+ * ⚠⚠ THIS SUITE IS NOT A COVERAGE CHECKBOX. It is the ONLY gate in the repository that can
+ * catch these failure modes, every one of which leaves typecheck, lint AND the mocked unit
+ * test green:
  *
- *   · **42P10** — migration 0067 DROPS `cal_conn_expert_profile_idx`, which was
- *     `upsertConnection`'s ON CONFLICT arbiter. An arbiter that still names
- *     `expertProfileId` alone, or that omits `targetWhere` for the new PARTIAL index,
- *     fails arbiter inference AT PLAN TIME — so the FIRST upsert on an EMPTY table
- *     raises "no unique or exclusion constraint matching the ON CONFLICT specification".
- *     `calendar.test.ts` cannot see this: it mocks the whole Drizzle client, so
- *     `onConflictDoUpdate` merely records its argument and never reaches a planner.
- *     This is the live Cronofy connect path — a break here is a production outage.
+ *   · **42P10** — `cal_conn_expert_provider_idx` is PARTIAL, so `upsertApirocConnection`'s
+ *     ON CONFLICT arbiter must name `provider` AND restate `targetWhere`. Omit either and
+ *     arbiter inference fails AT PLAN TIME: the FIRST upsert on an EMPTY table raises "no
+ *     unique or exclusion constraint matching the ON CONFLICT specification".
+ *     `calendar.test.ts` cannot see it — it mocks the Drizzle client, so
+ *     `onConflictDoUpdate` merely records its argument and never reaches a planner. This is
+ *     the live calendar connect path; a break here is a production outage.
  *
- *   · **23502** — an Apiroc connection stores ONLY the `end_user_account_id` pointer
- *     (Balo holds no provider tokens). If any of the four Cronofy `NOT NULL`s survives
- *     the migration, that insert fails and the table is unwritable for the vendor this
- *     ticket exists to onboard.
+ *   · **23502** — an Apiroc connection stores ONLY the `end_user_account_id` pointer (Balo
+ *     holds no provider tokens); migration 0069 dropped every Cronofy identity column
+ *     outright, so a stray reference to one is now a compile error, not a runtime 23502.
  *
- * ⚠ Correction (fix brief round 2, item 14 — measured with `DOCKER_HOST=tcp://127.0.0.1:1`):
- * this comment used to claim Docker-down makes `pnpm test:integration` print "No test files
- * found" and EXIT 0. That's not what happens — the console banner DOES say "exiting with
- * code 0", but `global-setup.ts` throws FIRST (before Testcontainers can start), and the
- * process actually exits 1. Docker-down turns CI red, it does not silently pass. Still check
- * the test COUNT, not just the exit code, when running this locally — a 0-exit with 0 tests
- * run is the shape a REGRESSION in the harness itself (not Docker being down) would take.
+ *   · **A VOCABULARY THAT MIGRATED ONE WAY AND IS QUERIED THE OTHER** — migration 0068
+ *     renames `status` → `credential_status` and replaces `connected|sync_pending|auth_error`
+ *     with `ACTIVE|SYNC_PENDING|EXPIRED|REVOKED`. `.$type<CalendarCredentialStatus>()` turns
+ *     the stale literal into a `tsc` error, but only real Postgres proves the CHECK, the
+ *     DEFAULT and `findStaleConnections` actually agree with it.
+ *
+ * ⚠ Correction (BAL-467 fix brief round 2, item 14 — measured with
+ * `DOCKER_HOST=tcp://127.0.0.1:1`): a comment here used to claim Docker-down makes
+ * `pnpm test:integration` print "No test files found" and EXIT 0. The console banner does say
+ * "exiting with code 0", but `global-setup.ts` throws FIRST and the process actually exits 1.
+ * Docker-down turns CI red; it does not silently pass. Still check the test COUNT, not just
+ * the exit code — a 0-exit with 0 tests run is the shape a regression in the HARNESS itself
+ * would take.
  */
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
-/**
- * A Cronofy-shaped upsert payload. `upsertConnection`'s input still requires
- * `cronofySub` + the three token fields — that shape is Cronofy-only and dies with
- * BAL-396; BAL-467 changes only its ARBITER.
- */
-function cronofyInput(
+/** The Apiroc connect payload: a pointer and a status, no tokens (apiroc Constraint 1). */
+function apirocInput(
   expertProfileId: string,
   provider: string,
-  overrides: { cronofySub?: string; accessToken?: string; status?: string } = {}
-): Parameters<typeof calendarRepository.upsertConnection>[0] {
+  overrides: Partial<UpsertApirocConnectionInput> = {}
+): UpsertApirocConnectionInput {
   return {
     expertProfileId,
     provider,
-    cronofySub: overrides.cronofySub ?? `sub_${provider}`,
+    endUserAccountId: `eua_${provider}`,
     providerEmail: `expert@${provider}.example`,
-    accessToken: overrides.accessToken ?? `enc_access_${provider}`,
-    refreshToken: `enc_refresh_${provider}`,
-    tokenExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
-    ...(overrides.status === undefined ? {} : { status: overrides.status }),
+    ...overrides,
   };
-}
-
-/**
- * Insert an APIROC-SHAPED row directly. Deliberately NOT via `upsertConnection`: no
- * Apiroc writer exists yet (BAL-396 owns it), and routing through the Cronofy-shaped
- * input would populate the very columns this asserts can be NULL.
- */
-async function insertApirocConnection(
-  expertProfileId: string,
-  provider: string,
-  endUserAccountId: string
-): Promise<CalendarConnection> {
-  const [row] = await db
-    .insert(calendarConnections)
-    .values({ expertProfileId, provider, endUserAccountId })
-    .returning();
-  if (row === undefined) throw new Error('apiroc insert returned no row');
-  return row;
 }
 
 /**
@@ -103,6 +82,14 @@ async function stampCreatedAt(connectionId: string, iso: string): Promise<void> 
     .where(eq(calendarConnections.id, connectionId));
 }
 
+/** Stamp the probe's scan key directly — `markCredentialChecked` is itself under test. */
+async function stampCheckedAt(connectionId: string, checkedAt: Date | null): Promise<void> {
+  await db
+    .update(calendarConnections)
+    .set({ credentialCheckedAt: checkedAt })
+    .where(eq(calendarConnections.id, connectionId));
+}
+
 /**
  * The common two-provider fixture: a google connection genuinely OLDER than a microsoft
  * one, so `OLDEST_LIVE_FIRST` has a real ordering to resolve.
@@ -110,16 +97,18 @@ async function stampCreatedAt(connectionId: string, iso: string): Promise<void> 
 async function seedGoogleThenMicrosoft(
   expertProfileId: string
 ): Promise<{ google: CalendarConnection; microsoft: CalendarConnection }> {
-  const google = await calendarRepository.upsertConnection(cronofyInput(expertProfileId, 'google'));
-  const microsoft = await calendarRepository.upsertConnection(
-    cronofyInput(expertProfileId, 'microsoft')
+  const google = await calendarRepository.upsertApirocConnection(
+    apirocInput(expertProfileId, 'google')
+  );
+  const microsoft = await calendarRepository.upsertApirocConnection(
+    apirocInput(expertProfileId, 'microsoft')
   );
   await stampCreatedAt(google.id, '2026-01-01T00:00:00.000Z');
   await stampCreatedAt(microsoft.id, '2026-02-01T00:00:00.000Z');
   return { google, microsoft };
 }
 
-/** Every LIVE row for an expert, oldest first — read straight from the table. */
+/** Every LIVE row for an expert — read straight from the table. */
 async function liveRows(expertProfileId: string): Promise<CalendarConnection[]> {
   return db
     .select()
@@ -140,15 +129,27 @@ async function allRows(expertProfileId: string): Promise<CalendarConnection[]> {
     .where(eq(calendarConnections.expertProfileId, expertProfileId));
 }
 
+/** One row by id, straight from the table (no repository read in the way). */
+async function readRow(connectionId: string): Promise<CalendarConnection> {
+  const [row] = await db
+    .select()
+    .from(calendarConnections)
+    .where(eq(calendarConnections.id, connectionId));
+  if (row === undefined) throw new Error(`connection ${connectionId} not found`);
+  return row;
+}
+
 // ── The cardinality ruling, positively ───────────────────────────
 
 describe('calendar_connections — per (expert, provider) cardinality [ADR-1021 §1, 18 Aug 2026]', () => {
   it('lets ONE expert hold a live google AND a live microsoft connection at once', async () => {
     const expert = await expertDraftFactory();
 
-    const google = await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    const microsoft = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'microsoft')
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
     );
 
     expect(google.id).not.toBe(microsoft.id);
@@ -159,87 +160,101 @@ describe('calendar_connections — per (expert, provider) cardinality [ADR-1021 
 
   it('rejects a SECOND live row for the same (expert, provider) with 23505', async () => {
     const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
 
     // A raw insert, NOT an upsert: the upsert's whole job is to take the DO UPDATE arm.
     // This probes the index itself, which is what actually holds the ruling.
     await expectConstraintViolation('23505', (tx) =>
       tx
         .insert(calendarConnections)
-        .values({ expertProfileId: expert.id, provider: 'google', cronofySub: 'sub_dupe' })
+        .values({ expertProfileId: expert.id, provider: 'google', endUserAccountId: 'eua_dupe' })
     );
 
     expect(await liveRows(expert.id)).toHaveLength(1);
   });
 });
 
-// ── The 42P10 regression gate ────────────────────────────────────
+// ── The 42P10 arbiter gate + the Apiroc row shape ────────────────
 
-describe('calendarRepository.upsertConnection — the 42P10 arbiter gate', () => {
+describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate', () => {
   /**
-   * ⚠⚠ THE TEST THE LIVE CRONOFY CONNECT PATH HANGS ON. If the arbiter loses `provider`
-   * or its `targetWhere`, Postgres cannot infer the arbiter and this raises 42P10 on the
-   * FIRST statement below — not the second. Nothing else in CI catches it.
+   * ⚠⚠ THE TEST THE CALENDAR CONNECT PATH HANGS ON. If the arbiter loses `provider` or its
+   * `targetWhere`, Postgres cannot infer the arbiter and this raises 42P10 on the FIRST
+   * statement below — not the second. Nothing else in CI catches it.
    */
   it('INSERTS on first call and UPDATES IN PLACE on the second — one row, same id, no 42P10', async () => {
     const expert = await expertDraftFactory();
 
-    const first = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'google', { cronofySub: 'sub_one', accessToken: 'enc_one' })
+    const first = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_one' })
     );
-
-    const second = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'google', {
-        cronofySub: 'sub_two',
-        accessToken: 'enc_two',
-        status: 'sync_pending',
+    const second = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', {
+        endUserAccountId: 'eua_two',
+        credentialStatus: 'SYNC_PENDING',
       })
     );
 
     expect(second.id).toBe(first.id);
-    expect(second.cronofySub).toBe('sub_two');
-    expect(second.accessToken).toBe('enc_two');
-    expect(second.status).toBe('sync_pending');
+    expect(second.endUserAccountId).toBe('eua_two');
+    expect(second.credentialStatus).toBe('SYNC_PENDING');
     expect(await liveRows(expert.id)).toHaveLength(1);
+  });
+
+  /**
+   * ⚠ MIGRATION 0069 LANDED THIS PRECONDITION. It used to assert the four Cronofy identity
+   * columns stayed NULL on every Apiroc row — the evidence that dropping them was safe. 0069
+   * dropped them; the columns no longer exist to assert against. What survives is the positive
+   * half: an Apiroc row writes ONLY its pointer plus Balo's own lifecycle columns.
+   */
+  it('writes a row with ONLY the pointer set, on the new vocabulary default', async () => {
+    const expert = await expertDraftFactory();
+
+    const row = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_apiroc_1' })
+    );
+
+    expect(row.endUserAccountId).toBe('eua_apiroc_1');
+    // The new vocabulary's default, proving migration 0068's `SET DEFAULT 'ACTIVE'` landed —
+    // drizzle-kit emitted no default change for the renamed column, so this is the ONLY
+    // gate on the hand-added statement. A surviving `'connected'` default would fail the
+    // new CHECK on any insert that omits the column.
+    expect(row.credentialStatus).toBe('ACTIVE');
+    // A fresh connect has PROVEN nothing yet, so it is a probe candidate immediately.
+    expect(row.credentialCheckedAt).toBeNull();
+    expect(row.reconnectNotifiedAt).toBeNull();
   });
 
   it('upserting a SECOND provider takes the INSERT arm, leaving the first untouched', async () => {
     const expert = await expertDraftFactory();
 
-    const google = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'google', { accessToken: 'enc_google' })
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_google' })
     );
-    await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'microsoft', { accessToken: 'enc_microsoft' })
+    await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft', { endUserAccountId: 'eua_microsoft' })
     );
 
-    // The pre-BAL-467 arbiter would have UPDATED the google row's provider to
-    // 'microsoft' here, silently destroying the google connection.
+    // A `provider`-less arbiter would have UPDATED the google row's pointer here, silently
+    // destroying the google connection.
     const reread = await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google');
     expect(reread?.id).toBe(google.id);
-    expect(reread?.accessToken).toBe('enc_google');
+    expect(reread?.endUserAccountId).toBe('eua_google');
     expect(await liveRows(expert.id)).toHaveLength(2);
   });
 
   it('reconnect AFTER disconnect INSERTS a fresh row beside the soft-deleted one — the partial-predicate proof', async () => {
     const expert = await expertDraftFactory();
 
-    const first = await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
+    const first = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
-    // Correction (fix brief round 2, item 14): this used to claim a NON-partial unique
-    // index "fails HERE with 23505". Measured — it would not: Postgres only requires
-    // predicate implication when the arbiter index IS partial (`predicate_implied_by`
-    // against an empty predicate is trivially true), so a non-partial unique index is
-    // still INFERABLE as the ON CONFLICT arbiter here. The upsert would instead take the
-    // DO UPDATE arm and RESURRECT the soft-deleted row via `deletedAt: null`
-    // (`repositories/calendar.ts`'s `set` clause) — same row id, not a fresh one. The two
-    // assertions below still catch that regression (id unchanged; only 1 row total instead
-    // of 2), just for a different reason than originally documented — this is the
-    // documented Balo soft-delete/unique footgun, but the failure mode is silent
-    // resurrection, not 23505.
-    const reconnected = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'google', { cronofySub: 'sub_reconnected' })
+    // A NON-partial unique index would still be INFERABLE as the arbiter here (predicate
+    // implication is only required when the arbiter index IS partial), so the upsert would
+    // take the DO UPDATE arm and RESURRECT the soft-deleted row via `deletedAt: null` — same
+    // id, not a fresh one. Both assertions below catch that.
+    const reconnected = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_reconnected' })
     );
 
     expect(reconnected.id).not.toBe(first.id);
@@ -248,44 +263,522 @@ describe('calendarRepository.upsertConnection — the 42P10 arbiter gate', () =>
     // The soft-deleted row survives as history rather than being resurrected.
     expect(await allRows(expert.id)).toHaveLength(2);
   });
+
+  /**
+   * ⚠ THE ONE-LINE REGRESSION THAT WOULD SILENCE EVERY SECOND BREAKAGE. `reconnectNotifiedAt`
+   * means "this expert has already been told about THIS breakage". A reconnect ends the
+   * breakage, so the marker must go — otherwise the notify-once check suppresses the email
+   * for the NEXT one, permanently.
+   */
+  it('re-upserting a LIVE row clears reconnectNotifiedAt and stamps credentialCheckedAt', async () => {
+    const expert = await expertDraftFactory();
+    const created = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.setCredentialStatus(created.id, 'EXPIRED');
+    await calendarRepository.markReconnectNotified(
+      created.id,
+      new Date('2026-08-17T00:00:00.000Z')
+    );
+    expect((await readRow(created.id)).reconnectNotifiedAt).toBeInstanceOf(Date);
+
+    const reconnected = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+
+    expect(reconnected.id).toBe(created.id);
+    expect(reconnected.credentialStatus).toBe('ACTIVE');
+    expect(reconnected.reconnectNotifiedAt).toBeNull();
+    expect(reconnected.credentialCheckedAt).toBeInstanceOf(Date);
+  });
 });
 
-// ── The Apiroc row shape (§1b — the four DROP NOT NULLs) ─────────
+// ── The credential-status vocabulary, on real Postgres ───────────
 
-describe('calendar_connections — an Apiroc-shaped row is writable', () => {
-  it('accepts a row with only end_user_account_id set and all four Cronofy columns NULL', async () => {
+describe('calendar_connections.credential_status — the CHECK is the backstop', () => {
+  it('accepts every value in the new vocabulary', async () => {
     const expert = await expertDraftFactory();
+    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
 
-    // Fails 23502 if ANY of cronofy_sub / access_token / refresh_token /
-    // token_expires_at kept its NOT NULL through migration 0067.
-    const row = await insertApirocConnection(expert.id, 'google', 'eua_apiroc_1');
-
-    expect(row.endUserAccountId).toBe('eua_apiroc_1');
-    expect(row.cronofySub).toBeNull();
-    expect(row.accessToken).toBeNull();
-    expect(row.refreshToken).toBeNull();
-    expect(row.tokenExpiresAt).toBeNull();
-    // `status` defaults, so an Apiroc insert that omits it still satisfies
-    // cal_conn_status_check — which is why BAL-467 leaves that column alone.
-    expect(row.status).toBe('connected');
+    for (const status of ['ACTIVE', 'SYNC_PENDING', 'EXPIRED', 'REVOKED'] as const) {
+      await calendarRepository.setCredentialStatus(row.id, status);
+      expect((await readRow(row.id)).credentialStatus).toBe(status);
+    }
   });
 
-  it('an Apiroc row and a Cronofy row coexist for one expert on different providers', async () => {
+  /**
+   * ⚠ THE MIGRATION-DIRECTION PROOF. `'connected'` is the Cronofy vocabulary migration 0068
+   * translated away. `.$type<>()` makes it a compile error in Balo code, but nothing stops a
+   * hand-written statement, a stale seed script or a rolled-back migration from writing it —
+   * the CHECK is what makes that impossible rather than merely discouraged. Raw SQL, because
+   * the typed column will not express the legacy value at all.
+   */
+  it('REJECTS the retired Cronofy vocabulary with 23514', async () => {
     const expert = await expertDraftFactory();
 
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await insertApirocConnection(expert.id, 'microsoft', 'eua_apiroc_2');
+    // `end_user_account_id` is supplied so the statement fails on the CHECK under test
+    // (23514), not on the unrelated NOT NULL migration 0069 added (23502).
+    await expectConstraintViolation('23514', (tx) =>
+      tx.execute(
+        sql`INSERT INTO calendar_connections
+              (expert_profile_id, provider, end_user_account_id, credential_status)
+            VALUES (${expert.id}, 'google', 'eua_probe', 'connected')`
+      )
+    );
+  });
 
-    const live = await calendarRepository.listConnectionsByExpertProfileId(expert.id);
-    expect(live).toHaveLength(2);
-    // The table is genuinely dual-tenanted for one release: each row carries exactly
-    // one vendor's identity and NULLs the other's.
-    const google = live.find((row) => row.provider === 'google');
-    const microsoft = live.find((row) => row.provider === 'microsoft');
-    expect(google?.cronofySub).toBe('sub_google');
-    expect(google?.endUserAccountId).toBeNull();
-    expect(microsoft?.endUserAccountId).toBe('eua_apiroc_2');
-    expect(microsoft?.cronofySub).toBeNull();
+  it('REJECTS a lower-cased new value — the vocabulary is case-exact', async () => {
+    const expert = await expertDraftFactory();
+
+    await expectConstraintViolation('23514', (tx) =>
+      tx.execute(
+        sql`INSERT INTO calendar_connections
+              (expert_profile_id, provider, end_user_account_id, credential_status)
+            VALUES (${expert.id}, 'google', 'eua_probe', 'active')`
+      )
+    );
+  });
+});
+
+// ── Per-provider status writes (replacing the deleted fan-out) ───
+
+describe('calendarRepository.setCredentialStatusForProvider', () => {
+  /**
+   * ⚠ REPLACES THE PINNED FAN-OUT. This suite used to assert that `updateConnectionStatus`
+   * branded BOTH providers — "asserted as-is, not as-desired", with a note that BAL-396 would
+   * have to CHOOSE to change it. This is that choice, asserted the other way: one provider's
+   * breakage must never brand the other, because the booking gate fails CLOSED on a
+   * non-ACTIVE connection and would make the expert unbookable on a healthy calendar.
+   */
+  it('moves ONE provider and leaves the other ACTIVE', async () => {
+    const expert = await expertDraftFactory();
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
+
+    await calendarRepository.setCredentialStatusForProvider(expert.id, 'google', 'EXPIRED');
+
+    expect(
+      (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google'))
+        ?.credentialStatus
+    ).toBe('EXPIRED');
+    expect(
+      (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'microsoft'))
+        ?.credentialStatus
+    ).toBe('ACTIVE');
+  });
+
+  it('clears the notification marker when the provider goes back to ACTIVE, and not otherwise', async () => {
+    const expert = await expertDraftFactory();
+    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.markReconnectNotified(row.id, new Date('2026-08-17T00:00:00.000Z'));
+
+    await calendarRepository.setCredentialStatusForProvider(expert.id, 'google', 'REVOKED');
+    expect((await readRow(row.id)).reconnectNotifiedAt).toBeInstanceOf(Date);
+
+    await calendarRepository.setCredentialStatusForProvider(expert.id, 'google', 'ACTIVE');
+    expect((await readRow(row.id)).reconnectNotifiedAt).toBeNull();
+  });
+
+  it('leaves a soft-deleted connection alone', async () => {
+    const expert = await expertDraftFactory();
+    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
+
+    await calendarRepository.setCredentialStatusForProvider(expert.id, 'google', 'EXPIRED');
+
+    expect((await readRow(row.id)).credentialStatus).toBe('ACTIVE');
+  });
+});
+
+describe('calendarRepository — connection-keyed credential writes', () => {
+  it('setCredentialStatus writes one row and clears the marker only on the heal', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
+    );
+    await calendarRepository.markReconnectNotified(google.id, new Date('2026-08-17T00:00:00.000Z'));
+
+    await calendarRepository.setCredentialStatus(google.id, 'EXPIRED');
+    expect((await readRow(google.id)).credentialStatus).toBe('EXPIRED');
+    expect((await readRow(google.id)).reconnectNotifiedAt).toBeInstanceOf(Date);
+    expect((await readRow(microsoft.id)).credentialStatus).toBe('ACTIVE');
+
+    await calendarRepository.setCredentialStatus(google.id, 'ACTIVE');
+    expect((await readRow(google.id)).reconnectNotifiedAt).toBeNull();
+  });
+
+  it('markCredentialChecked stamps the caller-supplied instant', async () => {
+    const expert = await expertDraftFactory();
+    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const checkedAt = new Date('2026-08-18T09:30:00.000Z');
+
+    await calendarRepository.markCredentialChecked(row.id, checkedAt);
+
+    expect((await readRow(row.id)).credentialCheckedAt?.toISOString()).toBe(
+      checkedAt.toISOString()
+    );
+  });
+
+  it('markReconnectNotified stamps the marker for that connection only', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
+    );
+    const notifiedAt = new Date('2026-08-18T09:45:00.000Z');
+
+    await calendarRepository.markReconnectNotified(google.id, notifiedAt);
+
+    expect((await readRow(google.id)).reconnectNotifiedAt?.toISOString()).toBe(
+      notifiedAt.toISOString()
+    );
+    expect((await readRow(microsoft.id)).reconnectNotifiedAt).toBeNull();
+  });
+});
+
+// ── findStaleConnections — the Objection-1 regression test ───────
+
+describe('calendarRepository.findStaleConnections', () => {
+  /**
+   * ⚠⚠ THE DIRECT REGRESSION TEST FOR THE SILENT-ZERO-ROWS MODE. The filter used to read
+   * `eq(status, 'connected')`. Had the column been renamed without being TYPED, that literal
+   * would still compile, match ZERO rows forever, and leave the 15-minute staleness cron
+   * reporting nothing wrong while no connected expert's availability was ever resynced.
+   * A vocabulary that migrated one way and is queried the other fails HERE, on real Postgres.
+   */
+  it('returns a freshly-seeded ACTIVE connection whose credential was last checked before the threshold', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await stampCheckedAt(google.id, new Date('2000-01-01T00:00:00.000Z'));
+
+    const stale = await calendarRepository.findStaleConnections(
+      new Date('2001-01-01T00:00:00.000Z')
+    );
+
+    expect(stale.map((row) => row.id)).toContain(google.id);
+  });
+
+  /**
+   * ⚠⚠ THE BAL-396 FIX-ROUND MANDATORY TEST. `findStaleConnections` used to filter on
+   * `last_synced_at`, whose only production writer was the Cronofy-era webhook route this
+   * PR deletes — so every row's `last_synced_at` is NULL forever, `lt(NULL, threshold)` is
+   * NULL (not true), and the query returned `[]` on EVERY tick: a PERMANENT no-op, not a
+   * genuinely-empty result. Repointing at `credential_checked_at` — which a fresh connect
+   * leaves NULL until the first probe or reconnect — restores a real signal: a never-synced
+   * connection is exactly the one most in need of an availability rebuild, so it must be a
+   * candidate from the moment it connects, not excluded the way NULL `last_synced_at` used
+   * to exclude it.
+   */
+  it('returns a NEVER-CHECKED connection — a never-synced connection must not be a permanent no-op', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    // A fresh connect already leaves credential_checked_at NULL (see the `upsertApirocConnection`
+    // "writes a row with ONLY the pointer set" test above) — no extra stamp needed.
+
+    const stale = await calendarRepository.findStaleConnections(
+      new Date('2001-01-01T00:00:00.000Z')
+    );
+
+    expect(stale.map((row) => row.id)).toContain(google.id);
+  });
+
+  it('EXCLUDES a connection whose credential was proven inside the threshold window', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await stampCheckedAt(google.id, new Date('2026-08-18T11:50:00.000Z'));
+
+    const stale = await calendarRepository.findStaleConnections(
+      new Date('2026-08-18T11:45:00.000Z')
+    );
+
+    expect(stale.map((row) => row.id)).not.toContain(google.id);
+  });
+
+  it('returns ONE ROW PER PROVIDER — what the availability job wants', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
+    );
+    await stampCheckedAt(google.id, new Date('2000-01-01T00:00:00.000Z'));
+    await stampCheckedAt(microsoft.id, new Date('2000-01-01T00:00:00.000Z'));
+
+    const stale = await calendarRepository.findStaleConnections(
+      new Date('2001-01-01T00:00:00.000Z')
+    );
+    const ours = stale.filter((row) => row.expertProfileId === expert.id);
+    expect(ours.map((row) => row.id).sort()).toEqual([google.id, microsoft.id].sort());
+  });
+
+  it('EXCLUDES a broken connection — a dead credential is not a resync candidate', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await stampCheckedAt(google.id, new Date('2000-01-01T00:00:00.000Z'));
+    await calendarRepository.setCredentialStatus(google.id, 'EXPIRED');
+
+    const stale = await calendarRepository.findStaleConnections(
+      new Date('2001-01-01T00:00:00.000Z')
+    );
+
+    expect(stale.map((row) => row.id)).not.toContain(google.id);
+  });
+});
+
+// ── listConnectionsDueForHealthCheck — the probe's candidate scan ─
+
+describe('calendarRepository.listConnectionsDueForHealthCheck', () => {
+  it('puts NEVER-CHECKED connections first, then the oldest check', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
+    );
+    await stampCheckedAt(microsoft.id, new Date('2026-08-18T08:00:00.000Z'));
+    await stampCheckedAt(google.id, null);
+
+    const due = await calendarRepository.listConnectionsDueForHealthCheck(
+      new Date('2026-08-18T09:00:00.000Z'),
+      50
+    );
+    const ours = due.filter((row) => row.expertProfileId === expert.id);
+
+    // NULL means "never proven", which is the most urgent candidate — an ASC sort that
+    // defaulted to NULLS LAST would starve exactly those connections.
+    expect(ours.map((row) => row.id)).toEqual([google.id, microsoft.id]);
+  });
+
+  it('EXCLUDES a connection already proven inside the interval', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await stampCheckedAt(google.id, new Date('2026-08-18T08:59:00.000Z'));
+
+    const due = await calendarRepository.listConnectionsDueForHealthCheck(
+      new Date('2026-08-18T08:00:00.000Z'),
+      50
+    );
+
+    expect(due.map((row) => row.id)).not.toContain(google.id);
+  });
+
+  it('returns NON-ACTIVE connections too — the probe is also the healer', async () => {
+    const expert = await expertDraftFactory();
+    const pending = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { credentialStatus: 'SYNC_PENDING' })
+    );
+    const expired = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft', { credentialStatus: 'EXPIRED' })
+    );
+
+    const due = await calendarRepository.listConnectionsDueForHealthCheck(
+      new Date('2026-08-18T09:00:00.000Z'),
+      50
+    );
+    const ourIds = due.filter((row) => row.expertProfileId === expert.id).map((row) => row.id);
+
+    // Filtering to ACTIVE here would make every broken connection permanently broken.
+    expect(ourIds).toContain(pending.id);
+    expect(ourIds).toContain(expired.id);
+  });
+
+  it('EXCLUDES a soft-deleted connection', async () => {
+    const expert = await expertDraftFactory();
+    const disconnected = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
+    );
+    await calendarRepository.softDeleteConnectionForProvider(expert.id, 'microsoft');
+
+    const due = await calendarRepository.listConnectionsDueForHealthCheck(
+      new Date('2026-08-18T09:00:00.000Z'),
+      50
+    );
+
+    // A disconnected connection must not be probed — a vendor call spent to learn nothing,
+    // and an email about a calendar the expert unhooked themselves.
+    expect(due.map((row) => row.id)).not.toContain(disconnected.id);
+  });
+
+  it('honours the batch bound', async () => {
+    const expert = await expertDraftFactory();
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
+
+    const due = await calendarRepository.listConnectionsDueForHealthCheck(
+      new Date('2026-08-18T09:00:00.000Z'),
+      1
+    );
+
+    expect(due).toHaveLength(1);
+  });
+});
+
+// ── listBusyReadTargets — what the free/busy read may act on ─────
+
+describe('calendarRepository.listBusyReadTargets', () => {
+  it('returns only conflict-checked calendar ids, with the pointer the vendor call needs', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_busy' })
+    );
+    await calendarRepository.replaceSubCalendars(google.id, [
+      {
+        calendarId: 'cal_work',
+        name: 'Work',
+        provider: 'google',
+        isPrimary: true,
+        conflictCheck: true,
+      },
+      {
+        calendarId: 'cal_personal',
+        name: 'Personal',
+        provider: 'google',
+        isPrimary: false,
+        conflictCheck: false,
+      },
+    ]);
+
+    const targets = await calendarRepository.listBusyReadTargets(expert.id);
+
+    expect(targets).toEqual([
+      {
+        connectionId: google.id,
+        provider: 'google',
+        endUserAccountId: 'eua_busy',
+        credentialStatus: 'ACTIVE',
+        calendarIds: ['cal_work'],
+        provisioned: true,
+      },
+    ]);
+  });
+
+  /**
+   * ⚠ TWO DIFFERENT EMPTY ANSWERS. `calendarIds: []` with `provisioned: true` is the expert's
+   * explicit choice to conflict-check nothing — not a failure. `provisioned: false` means
+   * Balo never listed this account's calendars, so the read CANNOT be performed
+   * (`GetFreeBusyInput.calendarIds` is required by the vendor) and the booking gate must fail
+   * closed. Conflating them fails the gate OPEN and double-books the expert.
+   */
+  it('reports provisioned: false for a connection with NO sub-calendar rows', async () => {
+    const expert = await expertDraftFactory();
+    await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { credentialStatus: 'SYNC_PENDING' })
+    );
+
+    const [target] = await calendarRepository.listBusyReadTargets(expert.id);
+
+    expect(target).toMatchObject({
+      credentialStatus: 'SYNC_PENDING',
+      calendarIds: [],
+      provisioned: false,
+    });
+  });
+
+  it('reports provisioned: true with an EMPTY id list when the expert conflict-checks nothing', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.replaceSubCalendars(google.id, [
+      {
+        calendarId: 'cal_personal',
+        name: 'Personal',
+        provider: 'google',
+        isPrimary: true,
+        conflictCheck: false,
+      },
+    ]);
+
+    const [target] = await calendarRepository.listBusyReadTargets(expert.id);
+
+    expect(target).toMatchObject({ calendarIds: [], provisioned: true });
+  });
+
+  it('returns a BROKEN connection too, so the caller can fail closed rather than open', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.replaceSubCalendars(google.id, [
+      {
+        calendarId: 'cal_work',
+        name: 'Work',
+        provider: 'google',
+        isPrimary: true,
+        conflictCheck: true,
+      },
+    ]);
+    await calendarRepository.setCredentialStatus(google.id, 'EXPIRED');
+
+    const [target] = await calendarRepository.listBusyReadTargets(expert.id);
+
+    // Dropping it here would look like "this expert has no external calendar" — the exact
+    // shape of a double-booking in front of a paying client.
+    expect(target).toMatchObject({ credentialStatus: 'EXPIRED', calendarIds: ['cal_work'] });
+  });
+
+  it('unions across providers, oldest connection first', async () => {
+    const expert = await expertDraftFactory();
+    const { google, microsoft } = await seedGoogleThenMicrosoft(expert.id);
+    await calendarRepository.replaceSubCalendars(google.id, [
+      {
+        calendarId: 'cal_g',
+        name: 'G',
+        provider: 'google',
+        isPrimary: true,
+        conflictCheck: true,
+      },
+    ]);
+    await calendarRepository.replaceSubCalendars(microsoft.id, [
+      {
+        calendarId: 'cal_m',
+        name: 'M',
+        provider: 'microsoft',
+        isPrimary: true,
+        conflictCheck: true,
+      },
+    ]);
+
+    const targets = await calendarRepository.listBusyReadTargets(expert.id);
+
+    expect(targets.map((target) => target.calendarIds)).toEqual([['cal_g'], ['cal_m']]);
+  });
+
+  it('EXCLUDES a soft-deleted connection', async () => {
+    const expert = await expertDraftFactory();
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
+
+    expect(
+      (await calendarRepository.listBusyReadTargets(expert.id)).map((t) => t.provider).sort()
+    ).toEqual(['google', 'microsoft']);
+
+    await calendarRepository.softDeleteConnectionForProvider(expert.id, 'microsoft');
+    expect(
+      (await calendarRepository.listBusyReadTargets(expert.id)).map((t) => t.provider)
+    ).toEqual(['google']);
+  });
+
+  it('returns [] for an expert with no connection at all', async () => {
+    const expert = await expertDraftFactory();
+    expect(await calendarRepository.listBusyReadTargets(expert.id)).toEqual([]);
   });
 });
 
@@ -294,9 +787,11 @@ describe('calendar_connections — an Apiroc-shaped row is writable', () => {
 describe('calendarRepository — provider-scoped reads', () => {
   it('findConnectionByExpertAndProvider returns the matching provider and nothing else', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    const microsoft = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'microsoft')
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
     );
 
     expect(
@@ -312,7 +807,7 @@ describe('calendarRepository — provider-scoped reads', () => {
 
   it('findConnectionByExpertAndProvider excludes a soft-deleted connection', async () => {
     const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     expect(
@@ -349,14 +844,20 @@ describe('calendarRepository — provider-scoped reads', () => {
     const alex = await expertDraftFactory();
     const dana = await expertDraftFactory();
 
-    await insertApirocConnection(alex.id, 'google', 'eua_shared');
-    await insertApirocConnection(dana.id, 'google', 'eua_shared');
-    await insertApirocConnection(alex.id, 'microsoft', 'eua_other');
+    await calendarRepository.upsertApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    await calendarRepository.upsertApirocConnection(
+      apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    await calendarRepository.upsertApirocConnection(
+      apirocInput(alex.id, 'microsoft', { endUserAccountId: 'eua_other' })
+    );
 
-    // ⚠ TWO EXPERTS ON ONE END USER ACCOUNT IS LEGAL, and this is why the method returns
-    // an array: `cal_conn_end_user_account_idx` is deliberately NON-unique, because no
-    // ruling establishes one-account-per-expert. A singular signature would hand
-    // BAL-468's webhook handler an arbitrary one of these two rows.
+    // ⚠ TWO EXPERTS ON ONE END USER ACCOUNT IS LEGAL, and BAL-396 RULED IT STAYS THAT WAY:
+    // the vendor keys End User Accounts by provider account, not by Balo's `externalId`, so
+    // two experts connecting the same Google account very likely receive the SAME id. A
+    // unique index would surface that as a bare 23505 at connect time.
     const shared = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared');
     expect(shared).toHaveLength(2);
     expect(shared.map((row) => row.expertProfileId).sort()).toEqual([alex.id, dana.id].sort());
@@ -367,7 +868,9 @@ describe('calendarRepository — provider-scoped reads', () => {
 
   it('findConnectionsByEndUserAccountId excludes soft-deleted rows', async () => {
     const expert = await expertDraftFactory();
-    await insertApirocConnection(expert.id, 'google', 'eua_gone');
+    await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_gone' })
+    );
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_gone')).toEqual([]);
@@ -388,8 +891,6 @@ describe('calendarRepository — LEGACY-SINGLE-CONNECTION reads answer determini
 
   it('findConnectionByExpertProfileId still returns the oldest when microsoft was connected FIRST', async () => {
     const expert = await expertDraftFactory();
-    // Reversed ages, same insertion order — the answer must follow created_at, not
-    // insertion order and not the UUID tie-break.
     const { google, microsoft } = await seedGoogleThenMicrosoft(expert.id);
     await stampCreatedAt(microsoft.id, '2025-01-01T00:00:00.000Z');
 
@@ -400,10 +901,7 @@ describe('calendarRepository — LEGACY-SINGLE-CONNECTION reads answer determini
 
   it('findConnectionByExpertProfileId skips to the surviving provider once the oldest is disconnected', async () => {
     const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    const microsoft = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'microsoft')
-    );
+    const { microsoft } = await seedGoogleThenMicrosoft(expert.id);
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     expect((await calendarRepository.findConnectionByExpertProfileId(expert.id))?.id).toBe(
@@ -430,18 +928,19 @@ describe('calendarRepository — LEGACY-SINGLE-CONNECTION reads answer determini
   });
 });
 
-// ── Writes: provider-scoped siblings vs the documented fan-outs ──
+// ── Writes: provider-scoped siblings vs the documented fan-out ───
 
 describe('calendarRepository — per-provider writes', () => {
   it('updateTargetCalendarIdForProvider writes ONE connection, leaving the other alone', async () => {
     const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'microsoft'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     await calendarRepository.updateTargetCalendarIdForProvider(expert.id, 'google', 'cal_google');
 
     // "targetCalendarId is per connection" — a calendar id is only meaningful inside the
-    // provider account that issued it.
+    // provider account that issued it. The expert-wide fan-out that used to write BOTH rows
+    // is deleted (BAL-396).
     expect(
       (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google'))
         ?.targetCalendarId
@@ -454,9 +953,9 @@ describe('calendarRepository — per-provider writes', () => {
 
   it('softDeleteConnectionForProvider disconnects ONE provider and leaves the other live', async () => {
     const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    const microsoft = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'microsoft')
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
     );
 
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
@@ -466,91 +965,26 @@ describe('calendarRepository — per-provider writes', () => {
     expect(live[0]?.id).toBe(microsoft.id);
     expect(await allRows(expert.id)).toHaveLength(2);
   });
-});
 
-describe('calendarRepository — the DOCUMENTED fan-outs (pinned so BAL-396 knows what it changes)', () => {
-  it('softDeleteConnection disconnects EVERY provider — whole-account disconnect', async () => {
+  it('softDeleteConnection disconnects EVERY provider — the whole-account disconnect', async () => {
     const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'microsoft'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
 
+    // Deliberately a fan-out: this is "disconnect my calendar" in the whole-account sense,
+    // and the path `expert_profiles` teardown depends on.
     await calendarRepository.softDeleteConnection(expert.id);
 
     expect(await liveRows(expert.id)).toHaveLength(0);
     expect(await allRows(expert.id)).toHaveLength(2);
   });
 
-  it('updateConnectionStatus brands BOTH providers — the known imprecision BAL-396 §2 fixes', async () => {
-    const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'microsoft'));
-
-    await calendarRepository.updateConnectionStatus(expert.id, 'auth_error');
-
-    // ⚠ ASSERTED AS-IS, NOT AS-DESIRED. One provider's auth failure should not brand the
-    // other's connection; making it per-provider needs the credential-status lifecycle
-    // that gives the value meaning, which is BAL-396 §2/§9. Pinning today's behaviour
-    // means that ticket has to CHOOSE to change it rather than discover it.
-    const live = await calendarRepository.listConnectionsByExpertProfileId(expert.id);
-    expect(live.map((row) => row.status)).toEqual(['auth_error', 'auth_error']);
-  });
-
-  it('updateTargetCalendarId (legacy) writes BOTH providers — superseded by the per-provider sibling', async () => {
-    const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'microsoft'));
-
-    await calendarRepository.updateTargetCalendarId(expert.id, 'cal_everything');
-
-    const live = await calendarRepository.listConnectionsByExpertProfileId(expert.id);
-    expect(live.map((row) => row.targetCalendarId)).toEqual(['cal_everything', 'cal_everything']);
-  });
-});
-
-// ── Methods unaffected by BAL-467, pinned as such ────────────────
-
-describe('calendarRepository — connection reads unaffected by the cardinality change', () => {
-  it('findConnectionByChannelId still names exactly one row across two providers', async () => {
-    const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'microsoft'));
-
-    await calendarRepository.updateConnectionChannelId(expert.id, 'chn_shared');
-    // The channel write is itself a fan-out (Cronofy-only, dies with BAL-396), so scope
-    // the read by re-keying one row to a distinct channel.
-    await db
-      .update(calendarConnections)
-      .set({ channelId: 'chn_google' })
-      .where(eq(calendarConnections.id, google.id));
-
-    expect((await calendarRepository.findConnectionByChannelId('chn_google'))?.id).toBe(google.id);
-    expect(await calendarRepository.findConnectionByChannelId('chn_absent')).toBeUndefined();
-  });
-
-  it('findStaleConnections now returns ONE ROW PER PROVIDER — what the availability job wants', async () => {
-    const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    const microsoft = await calendarRepository.upsertConnection(
-      cronofyInput(expert.id, 'microsoft')
-    );
-
-    const longAgo = new Date('2000-01-01T00:00:00.000Z');
-    await db
-      .update(calendarConnections)
-      .set({ lastSyncedAt: longAgo })
-      .where(eq(calendarConnections.expertProfileId, expert.id));
-
-    const stale = await calendarRepository.findStaleConnections(
-      new Date('2001-01-01T00:00:00.000Z')
-    );
-    const ours = stale.filter((row) => row.expertProfileId === expert.id);
-    expect(ours.map((row) => row.id).sort()).toEqual([google.id, microsoft.id].sort());
-  });
-
   it('updateLastSyncedAt is keyed by connectionId, so it touches only that provider', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'microsoft'));
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     await calendarRepository.updateLastSyncedAt(google.id);
 
@@ -562,68 +996,5 @@ describe('calendarRepository — connection reads unaffected by the cardinality 
       (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'microsoft'))
         ?.lastSyncedAt
     ).toBeNull();
-  });
-
-  it('updateConnectionTokens rewrites the Cronofy credential columns for ONE (expert, provider) connection', async () => {
-    const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-
-    const expiresAt = new Date('2098-06-01T00:00:00.000Z');
-    await calendarRepository.updateConnectionTokens(expert.id, 'google', {
-      accessToken: 'enc_rotated',
-      refreshToken: 'enc_rotated_refresh',
-      tokenExpiresAt: expiresAt,
-    });
-
-    const row = await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google');
-    expect(row?.accessToken).toBe('enc_rotated');
-    expect(row?.refreshToken).toBe('enc_rotated_refresh');
-    expect(row?.tokenExpiresAt?.toISOString()).toBe(expiresAt.toISOString());
-  });
-
-  it('updateConnectionTokens leaves the refresh token alone when it is omitted', async () => {
-    const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-
-    await calendarRepository.updateConnectionTokens(expert.id, 'google', {
-      accessToken: 'enc_rotated_only',
-      tokenExpiresAt: new Date('2098-06-01T00:00:00.000Z'),
-    });
-
-    const row = await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google');
-    expect(row?.accessToken).toBe('enc_rotated_only');
-    expect(row?.refreshToken).toBe('enc_refresh_google');
-  });
-
-  /**
-   * A2 (security review CRITICAL) — the regression this fix exists for. Before the fix,
-   * `updateConnectionTokens` was scoped by `expertProfileId` ALONE, so with a Cronofy row
-   * AND an Apiroc row live for one expert, refreshing the Cronofy connection's tokens would
-   * ALSO write those tokens onto the Apiroc row's (previously NULL) token columns —
-   * corrupting a connection this write was never meant to touch. Provider scoping must
-   * leave the sibling connection completely untouched, not merely "still present".
-   */
-  it('does NOT touch a sibling connection for a different provider on the same expert (A2 regression)', async () => {
-    const expert = await expertDraftFactory();
-    await calendarRepository.upsertConnection(cronofyInput(expert.id, 'google'));
-    await insertApirocConnection(expert.id, 'microsoft', 'eua-untouched');
-
-    await calendarRepository.updateConnectionTokens(expert.id, 'google', {
-      accessToken: 'enc_rotated_google_only',
-      refreshToken: 'enc_rotated_google_refresh',
-      tokenExpiresAt: new Date('2098-06-01T00:00:00.000Z'),
-    });
-
-    const google = await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google');
-    expect(google?.accessToken).toBe('enc_rotated_google_only');
-
-    const microsoft = await calendarRepository.findConnectionByExpertAndProvider(
-      expert.id,
-      'microsoft'
-    );
-    expect(microsoft?.endUserAccountId).toBe('eua-untouched');
-    expect(microsoft?.accessToken).toBeNull();
-    expect(microsoft?.refreshToken).toBeNull();
-    expect(microsoft?.tokenExpiresAt).toBeNull();
   });
 });

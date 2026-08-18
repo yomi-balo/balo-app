@@ -477,6 +477,20 @@
       "when": 1787013949994,
       "tag": "0067_bal467_apiroc_per_provider_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1787039718705,
+      "tag": "0068_bal396_apiroc_credential_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1787045922502,
+      "tag": "0069_bal396_cronofy_removal",
+      "breakpoints": true
     }
   ]
 }

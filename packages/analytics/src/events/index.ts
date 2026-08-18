@@ -29,6 +29,7 @@ export {
   type CalendarEventMap,
   CALENDAR_SERVER_EVENTS,
   type CalendarServerEventMap,
+  toCalendarEventProvider,
 } from './calendar';
 export { NOTIFICATION_SERVER_EVENTS, type NotificationServerEventMap } from './notifications';
 export {

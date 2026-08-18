@@ -98,7 +98,10 @@ describe('availability-cache jobs', () => {
         log: vi.fn(),
       };
 
-      mockResolveAndCacheAvailability.mockResolvedValue({ earliestAvailableAt: null });
+      mockResolveAndCacheAvailability.mockResolvedValue({
+        status: 'completed',
+        earliestAvailableAt: null,
+      });
 
       await capturedAvailabilityProcessor!(mockJob);
 
@@ -107,6 +110,35 @@ describe('availability-cache jobs', () => {
         distinct_id: 'expert-1',
       });
       expect(mockJob.log).toHaveBeenCalledWith(expect.stringContaining('expert-1'));
+    });
+
+    /**
+     * ⚠⚠ round-2 fix #11 — THE SKIP-VS-COMPLETED REGRESSION TEST. Before this fix the worker
+     * reported a SKIPPED rebuild (expert settings missing, or the vendor busy read was
+     * untrustworthy) IDENTICALLY to a completed one: same job.log line, same
+     * `AVAILABILITY_CACHE_REBUILT` analytics fire — indistinguishable from a genuine success
+     * in every log and every dashboard.
+     */
+    it('does NOT fire AVAILABILITY_CACHE_REBUILT, and logs a distinguishable message, when the rebuild is SKIPPED', async () => {
+      startAvailabilityCacheWorker();
+
+      const mockJob = {
+        data: { expertProfileId: 'expert-1' },
+        log: vi.fn(),
+      };
+
+      mockResolveAndCacheAvailability.mockResolvedValue({
+        status: 'skipped',
+        skipReason: 'vendor_busy_unavailable',
+        earliestAvailableAt: null,
+      });
+
+      await capturedAvailabilityProcessor!(mockJob);
+
+      expect(mockTrackServer).not.toHaveBeenCalled();
+      const [loggedMessage] = mockJob.log.mock.calls[0] as [string];
+      expect(loggedMessage).toContain('SKIPPED');
+      expect(loggedMessage).toContain('vendor_busy_unavailable');
     });
   });
 

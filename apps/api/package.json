@@ -30,7 +30,6 @@
     "@types/react": "19.2.2",
     "ai": "^7.0.31",
     "bullmq": "^5.70.4",
-    "cronofy": "^3.8.4",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
     "fastify": "^5.7.1",

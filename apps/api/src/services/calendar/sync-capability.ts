@@ -115,32 +115,27 @@ export function resolveSyncStrategy(provider: CalendarProvider): SyncStrategy {
 /**
  * The files constituting the sync path TODAY, relative to `apps/api/src`.
  *
- * ⚠ THIS IS NOT THE GUARD'S SCAN SUBJECT, AND MUST NOT BECOME ONE AGAIN. Scan B / Scan E of
- * `../../invariants/sync-token-parity.test.ts` DERIVE their subjects from a directory walk,
- * precisely so a new file cannot opt out of the ban by not being listed here (empirically
+ * ⚠ THIS IS NOT THE GUARD'S SCAN SUBJECT, AND MUST NOT BECOME ONE AGAIN.
+ * `../../invariants/sync-token-parity.test.ts` DERIVES its subjects from a directory walk,
+ * precisely so a new file cannot opt out of a ban by not being listed here (empirically
  * reproduced in review: a fresh `services/calendar/<name>.ts` containing `switch (provider)`
- * passed a pinned-list scan). This list survives as an asserted SUBSET sanity check — every entry
- * must exist and must fall inside the scanned set — and as the one place
- * `routes/calendar/webhook.ts` is carried for Scan B.
+ * passed a pinned-list scan). This list survives as an asserted SUBSET sanity check only — every
+ * entry must exist and must fall inside the scanned set.
  *
- * ⚠ THE TWO SCANS WALK DIFFERENT BOUNDARIES, AND THE ASYMMETRY IS DELIBERATE. Scan B (provider
- * literals) walks `jobs/`, `services/availability/` and `services/calendar/` only — `routes/calendar/`
- * is excluded because `auth.ts`, `api.ts` and `types.ts` legitimately name both providers, and
- * including it would need a three-file exemption list. Scan E (event-content reads) walks those
- * three dirs PLUS `routes/calendar/` in full, with no exemption list, because none of
- * `events.list` / `updatedAfter` / `expandRecurrences` appears anywhere under it and none ever
- * should — which is what puts BAL-396's future Apiroc/Svix webhook route inside that ban.
+ * ⚠⚠ AS OF ADR-1021's 18 Aug 2026 (BAL-396) amendment §1/§2, Scan B (provider literals) and
+ * Scan E (event-content reads) are BOTH TREE-WIDE over `apps/api/src`, replacing the
+ * three-/four-directory boundaries this list used to feed. Scan B exempts exactly
+ * `lib/apiroc/` and `routes/calendar/`; Scan E exempts exactly `services/consultation-events/`.
+ * Neither scan reads this list to build its subject set any more — the tree walk IS the subject
+ * set, minus its own exemption. This array is kept only as a named pointer to the files that
+ * matter most on the sync path, asserted to still exist and still be scanned.
  *
- * ⚠ SCOPE IS STILL THE POINT. A tree-wide provider-literal ban would flag legitimate provider
- * handling (the OAuth connect URLs and the frontend-facing union in `routes/calendar/auth.ts` /
- * `api.ts` / `types.ts`, the `office365` ↔ `microsoft` translation in `services/cronofy/oauth.ts`,
- * Graph calendar-id encoding) and degrade into an allowlist nobody reads. Inside the sync path a
- * provider literal has no legitimate business, and THAT — as a directory boundary, not a file
- * list — is the checkable line. When a directory trips a legitimate file, NARROW THE DIRECTORY;
- * never weaken the matcher.
+ * ⚠ `routes/calendar/webhook.ts` — Cronofy's bare-trigger receiver — is DELETED by BAL-396
+ * (Cronofy removal). It carries no successor entry: the Apiroc/Svix webhook route (BAL-468)
+ * lands under `routes/calendar/`, which Scan B still exempts (it legitimately names both
+ * providers) and which Scan E still bans event-content reads in tree-wide.
  */
 export const SYNC_PATH_FILES = [
-  'routes/calendar/webhook.ts',
   'jobs/availability-cache.ts',
   'services/availability/vendor-busy.ts',
   'services/availability/resolve-and-cache.ts',

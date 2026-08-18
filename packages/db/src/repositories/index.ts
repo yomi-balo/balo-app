@@ -47,6 +47,13 @@ export {
 } from './scheduled-notifications';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
+export type { UpsertApirocConnectionInput, BusyReadTarget } from './calendar';
+export type { CalendarConnection, CalendarCredentialStatus, CalendarSubCalendar } from '../schema';
+export { CALENDAR_CREDENTIAL_STATUSES } from '../schema';
+// ── Consultation calendar events (BAL-396 §5) — the vendor event id's only home ──────────
+export { meetingCalendarEventsRepository } from './meeting-calendar-events';
+export type { RecordCalendarEventInput } from './meeting-calendar-events';
+export type { MeetingCalendarEvent, NewMeetingCalendarEvent } from '../schema';
 export { availabilityRulesRepository, type WeeklyRuleInput } from './availability-rules';
 export { availabilityOverridesRepository } from './availability-overrides';
 export type { CreateAvailabilityOverrideInput } from './availability-overrides';

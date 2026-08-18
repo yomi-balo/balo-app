@@ -4,6 +4,7 @@ import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
 import { log } from '@/lib/logging';
 import { calendarApiFetch } from '../_lib/calendar-api';
+import { setCalendarConnectNonceCookie } from '../_lib/calendar-connect-cookie';
 import type { CalendarProvider } from '../_types/calendar';
 
 export interface InitiateCalendarConnectResult {
@@ -20,10 +21,18 @@ export const initiateCalendarConnectAction = withAuth(
     }
 
     try {
-      const data = await calendarApiFetch<{ authUrl: string }>('/api/calendar/connect', {
-        method: 'POST',
-        body: JSON.stringify({ expertProfileId, provider }),
-      });
+      const data = await calendarApiFetch<{ authUrl: string; nonce: string }>(
+        '/api/calendar/connect',
+        {
+          method: 'POST',
+          body: JSON.stringify({ expertProfileId, provider }),
+        }
+      );
+
+      // BAL-396 fix round, Finding 1 — bind this connect attempt to the browser that started
+      // it, before the browser ever leaves for the vendor's OAuth page. Scoped by `provider`
+      // (round 2, Finding 5) so an interleaved connect for the other provider cannot clobber it.
+      await setCalendarConnectNonceCookie(data.nonce, provider);
 
       log.info('Calendar connect initiated', {
         userId: session.user.id,

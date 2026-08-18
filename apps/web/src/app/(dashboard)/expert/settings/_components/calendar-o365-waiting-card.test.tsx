@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { CALENDAR_HELP_URL } from '../_lib/calendar-help';
 import { CalendarO365WaitingCard } from './calendar-o365-waiting-card';
 
 describe('CalendarO365WaitingCard', () => {
@@ -24,10 +25,7 @@ describe('CalendarO365WaitingCard', () => {
   it('renders the external admin approval guide link', () => {
     render(<CalendarO365WaitingCard onTryAgain={vi.fn()} onCancel={vi.fn()} />);
     const link = screen.getByText('View admin approval guide');
-    expect(link).toHaveAttribute(
-      'href',
-      'https://docs.cronofy.com/calendar-admins/faqs/need-admin-approval-error/'
-    );
+    expect(link).toHaveAttribute('href', CALENDAR_HELP_URL);
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noreferrer');
   });

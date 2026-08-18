@@ -22,6 +22,11 @@ vi.mock('../_lib/calendar-api', () => ({
   calendarApiFetch: (...args: unknown[]) => mockCalendarApiFetch(...args),
 }));
 
+const mockSetCalendarConnectNonceCookie = vi.fn();
+vi.mock('../_lib/calendar-connect-cookie', () => ({
+  setCalendarConnectNonceCookie: (...args: unknown[]) => mockSetCalendarConnectNonceCookie(...args),
+}));
+
 import { initiateCalendarConnectAction } from './initiate-calendar-connect';
 
 const EXPERT_SESSION = {
@@ -56,7 +61,10 @@ describe('initiateCalendarConnectAction', () => {
   });
 
   it('returns connectUrl on success', async () => {
-    mockCalendarApiFetch.mockResolvedValueOnce({ authUrl: 'https://cronofy.com/auth/url' });
+    mockCalendarApiFetch.mockResolvedValueOnce({
+      authUrl: 'https://cronofy.com/auth/url',
+      nonce: 'nonce-abc',
+    });
 
     const result = await initiateCalendarConnectAction('google');
 
@@ -68,6 +76,17 @@ describe('initiateCalendarConnectAction', () => {
       method: 'POST',
       body: JSON.stringify({ expertProfileId: 'profile-1', provider: 'google' }),
     });
+  });
+
+  it('binds the connect attempt to the browser via the CSRF nonce cookie (BAL-396 fix round, Finding 1)', async () => {
+    mockCalendarApiFetch.mockResolvedValueOnce({
+      authUrl: 'https://apiroc.example.com/oauth/authorize',
+      nonce: 'nonce-abc',
+    });
+
+    await initiateCalendarConnectAction('google');
+
+    expect(mockSetCalendarConnectNonceCookie).toHaveBeenCalledWith('nonce-abc', 'google');
   });
 
   it('returns error when API call fails', async () => {

@@ -13,6 +13,14 @@ export {
   type ApirocFailureKind,
 } from './errors.js';
 export { classifyRetry, type RetryDecision } from './retry.js';
+export {
+  toApirocProviderType,
+  buildApirocAuthorizeUrl,
+  type ApirocOAuthProvider,
+  type BuildApirocAuthorizeUrlParams,
+} from './oauth.js';
+export { classifyCredentialFailure, type CredentialVerdict } from './reconnect.js';
+export { paginateApiroc } from './paginate.js';
 export type {
   ApirocZodIssue,
   ApirocCapture,

@@ -3,43 +3,87 @@
 This file is the **how** behind SKILL.md's "Error Handling" and "Own the boundary — BAL-467 §2"
 sections. SKILL.md tells you _why_ the vendor SDK cannot be consumed directly (two incompatible
 wire envelopes, five SDK defects, an unsilenceable console logger); this file tells you what
-BAL-467 actually shipped in `apps/api/src/lib/apiroc/` and exactly how to add a new Apiroc call
-on top of it. Read it when you are about to write code that talks to Apiroc — BAL-396
-(connect / free-busy / events / health probe) or BAL-468 (webhooks / subscription lifecycle).
-Everything below is **as-built against commit `eb6d4b2`** unless it is explicitly marked as a
-later ticket's job. Evidence tags follow SKILL.md's convention (see "How to read this
-document"): **[live]** = observed against the real API in the BAL-393 spike, **[stat]** = read
-out of the published SDK bundle, **[docs]** = vendor docs only. Untagged prose is a Balo design
-rule or a statement about Balo's own shipped code.
+BAL-467 and BAL-396 actually shipped in `apps/api/src/lib/apiroc/` and exactly how to add a new
+Apiroc call on top of it. Read it when you are about to write code that talks to Apiroc — BAL-396
+(connect / free-busy / events / health probe, now shipped) or BAL-468 (webhooks / subscription
+lifecycle, still to come). Everything below is **as-built against commit `70fdfe7`** (BAL-396,
+which merged directly on top of BAL-467's `eb6d4b2` — the core adapter files below
+(`client.ts`, `errors.ts`, `interceptor.ts`, `retry.ts`, `logging.ts`, `sdk-shape.test.ts`) are
+byte-for-byte unchanged between the two commits; only `index.ts` (8 new export lines) and four
+whole new files are BAL-396's) unless explicitly marked as a later ticket's job. Evidence tags
+follow SKILL.md's convention (see "How to read this document"): **[live]** = observed against the
+real API in the BAL-393 spike, **[stat]** = read out of the published SDK bundle, **[docs]** =
+vendor docs only. Untagged prose is a Balo design rule or a statement about Balo's own shipped
+code.
 
-> ⚠ **The boundary ships INERT.** It is constructed, tested, and exported — and **nothing calls
-> it yet.** `apps/api/src/routes/calendar/api.ts` is still entirely Cronofy
-> (`services/cronofy/oauth.ts`, `lib/cronofy.ts`, `withCronofyRetry`); it does not import
-> `lib/apiroc/` at all. You will be the first live caller. There is no in-repo call-site
-> precedent to copy, which is what this file substitutes for.
+> ⚠ **The boundary now ships LIVE.** BAL-467 shipped it constructed, tested, and exported with no
+> caller; BAL-396 is the first live caller, and by a wide margin. `callApiroc` / `getApirocClient`
+> are now called from `services/calendar/apiroc-connection.ts` (connect/provision/disconnect),
+> `services/calendar/credential-status.ts` (the reconnect-required flip), the free/busy read in
+> `services/availability/vendor-busy.ts` the booking gate depends on,
+> `services/consultation-events/` (event write/delete/reconcile), `jobs/calendar-health-probe.ts`,
+> and `routes/calendar/auth.ts` (the OAuth connect flow, via the new `oauth.ts` — see §1). Cronofy
+> is gone outright: there is no `services/cronofy/`, `lib/cronofy.ts`, or `withCronofyRetry`
+> anywhere left in the tree (`find apps/api/src -iname '*cronofy*'` returns nothing); the only
+> surviving trace repo-wide is the removal migration,
+> `packages/db/drizzle/0069_bal396_cronofy_removal.sql`. §4's call site and §8's checklist are no
+> longer hypothetical — read the real call sites they now point at.
 
 ---
 
 ## 1. Module map
 
-Everything lives in `apps/api/src/lib/apiroc/`. Six source files, seven test files — the extra
-test is the shape tripwire, which has no source module of its own.
+Everything lives in `apps/api/src/lib/apiroc/`. Ten source files, eleven test files — the extra
+test is the shape tripwire, which has no source module of its own. Six of the ten (`index.ts`,
+`client.ts`, `errors.ts`, `interceptor.ts`, `retry.ts`, `logging.ts`) are BAL-467's, unchanged
+since. Four (`oauth.ts`, `reconnect.ts`, `paginate.ts`, `provider-labels.ts`) are BAL-396's.
 
-| File                | Responsibility                                                                                                                 | Do you touch it to add a call? |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
-| `index.ts`          | The public surface + `callApiroc(operation, fn)`, the one sanctioned call wrapper. Opens the `AsyncLocalStorage` capture sink. | **No** — you import from it    |
-| `client.ts`         | Lazy `UnifiedCalendarApi` singleton, `initApirocBoundary`, `ApirocInitReport`                                                  | No                             |
-| `errors.ts`         | `ApirocError`, `ApirocConfigError`, `ApirocFailureKind`, `normalizeApirocError`                                                | No                             |
-| `interceptor.ts`    | The documented private reach into axios; capture of `x-request-id`, sanitized route template, Envelope B Zod recovery          | No                             |
-| `retry.ts`          | `classifyRetry` — pure, no BullMQ coupling                                                                                     | No                             |
-| `logging.ts`        | `createLogger('apiroc')` + winston `Console` transport suppression                                                             | No                             |
-| `sdk-shape.test.ts` | The tripwire that fails loudly on an SDK/bundler bump (§7)                                                                     | Only on a vendor upgrade       |
+| File                 | Responsibility                                                                                                                              | Do you touch it to add a call?               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `index.ts`           | The public surface + `callApiroc(operation, fn)`, the one sanctioned call wrapper. Opens the `AsyncLocalStorage` capture sink.              | **No** — you import from it                  |
+| `client.ts`          | Lazy `UnifiedCalendarApi` singleton, `initApirocBoundary`, `ApirocInitReport`                                                               | No                                           |
+| `errors.ts`          | `ApirocError`, `ApirocConfigError`, `ApirocFailureKind`, `normalizeApirocError`                                                             | No                                           |
+| `interceptor.ts`     | The documented private reach into axios; capture of `x-request-id`, sanitized route template, Envelope B Zod recovery                       | No                                           |
+| `retry.ts`           | `classifyRetry` — pure, no BullMQ coupling                                                                                                  | No                                           |
+| `logging.ts`         | `createLogger('apiroc')` + winston `Console` transport suppression                                                                          | No                                           |
+| `oauth.ts`           | `toApirocProviderType`, `buildApirocAuthorizeUrl` — the lowercase→uppercase provider translation and the hosted-OAuth authorize URL builder | No — a Scan B exception, see below           |
+| `reconnect.ts`       | `classifyCredentialFailure` — composes `ApirocError.kind` + `wireMessage` into a `CredentialVerdict` (§3.1)                                 | No — one caller (`credential-status.ts`)     |
+| `paginate.ts`        | `paginateApiroc` — the shared "follow `nextPageToken` to exhaustion" loop, page-capped and cursor-progress-checked                          | No — you import it for a paginating endpoint |
+| `provider-labels.ts` | `calendarProviderLabel` — the one Balo-facing provider display-label map, consumed by notification templates                                | No — a Scan B exception, see below           |
+| `sdk-shape.test.ts`  | The tripwire that fails loudly on an SDK/bundler bump (§7)                                                                                  | Only on a vendor upgrade                     |
 
-**The answer to "which file do I touch to add a new call" is: none of them.** Adding an Apiroc
-call is writing a _caller_ — in `services/calendar/`, `services/availability/`, `jobs/`, or a
-route — that imports `callApiroc` and `getApirocClient` from this directory. New files under
-`lib/apiroc/` are boundary machinery only; feature logic there would also silently enter the
-recursive source scan in `sdk-shape.test.ts` (§7).
+**The answer to "which file do I touch to add a new call" is: almost never one of them.** Adding
+an Apiroc call is writing a _caller_ — in `services/calendar/`, `services/availability/`, `jobs/`,
+or a route — that imports `callApiroc`, `getApirocClient`, and (for a paginating endpoint)
+`paginateApiroc` from this directory. New files under `lib/apiroc/` are boundary machinery only,
+and would also silently enter the recursive source scan in `sdk-shape.test.ts` (§7, confirmed
+still `{ recursive: true }` over `lib/apiroc/**`) — that rule is unchanged and still the default.
+
+⚠ **BAL-396 added three files here, and the rule bent for exactly two of them — deliberately,
+not by drift.** `invariants/sync-token-parity.test.ts`'s Scan B (ADR-1021's 18 Aug 2026 amendment
+§1) bans a provider literal (`'google'`, `'microsoft'`, a `provider ===`/`switch (provider` form)
+EVERYWHERE under `apps/api/src` except exactly two directories: `lib/apiroc/` (this one — "the
+SDK's uppercase `ProviderType`, and display labels it drives") and `routes/calendar/` (the connect
+surface). `oauth.ts` and `provider-labels.ts` exist BECAUSE that vocabulary has to live somewhere,
+and Scan B says it can only be here or in the connect surface — so they are the sanctioned
+exception, not a violation of "feature logic never lives under `lib/apiroc/`". Each holds exactly
+one translation and nothing else: `provider-labels.ts` is a pure 3-way string lookup,
+`oauth.ts` a pure URL-builder plus a config guard (§8's checklist item 1's "provider-literal site"
+note is this). Both are themselves scanned by Scan E (no event-content read) and by
+`sdk-shape.test.ts` — the exemption is narrow, not a blanket pass.
+
+`reconnect.ts` is a THIRD, different kind of exception, and does not touch provider literals at
+all: `classifyCredentialFailure` is a second interpretive layer on top of `errors.ts`'s taxonomy
+(§3.1) — reads `err.kind` and `err.wireMessage`, writes nothing, calls nothing. It stops at
+producing a `CredentialVerdict`; the DB write, the availability-cache clear, and the notification
+publish it triggers all live in `services/calendar/credential-status.ts`, OUTSIDE this directory
+— that file is the sole caller. `paginate.ts` needs no exception at all: it is boundary machinery
+proper, the same shape as `retry.ts` — a generic per-page `callApiroc` loop with no provider or
+feature awareness.
+
+The rule as it actually stands: **provider-literal translation and vendor-error interpretation may
+live in `lib/apiroc/`; DB writes, cache invalidation, and notification publishing may not** — a
+new file that does the latter still belongs in `services/`, `jobs/`, or a route, full stop.
 
 ---
 
@@ -57,6 +101,14 @@ export {
   type ApirocFailureKind,
 } from './errors.js';
 export { classifyRetry, type RetryDecision } from './retry.js';
+export {
+  toApirocProviderType,
+  buildApirocAuthorizeUrl,
+  type ApirocOAuthProvider,
+  type BuildApirocAuthorizeUrlParams,
+} from './oauth.js';
+export { classifyCredentialFailure, type CredentialVerdict } from './reconnect.js';
+export { paginateApiroc } from './paginate.js';
 export type {
   ApirocZodIssue,
   ApirocCapture,
@@ -67,6 +119,10 @@ export type { ApirocConsoleSuppressionTier } from './logging.js';
 
 export async function callApiroc<T>(operation: string, fn: () => Promise<T>): Promise<T>;
 ```
+
+The three new exports (`oauth.js`, `reconnect.js`, `paginate.js`) are BAL-396's — `index.ts` is the
+only one of the six BAL-467 core files that changed on this branch (8 added lines, confirmed by
+`git diff eb6d4b2 70fdfe7 -- lib/apiroc/index.ts`), and this is the whole diff.
 
 **Deliberately NOT exported from `index.ts`** — reach for any of these and you are working
 around the boundary rather than through it:
@@ -123,11 +179,15 @@ style note — see §3.3 for the two shapes that break it and what the boundary 
 A fan-out is `Promise.all(conns.map((c) => callApiroc('freeBusy.get', () => api.freeBusy.get(...))))`,
 never one `callApiroc` around the whole `Promise.all`.
 
-**Environment.** Today the boundary reads exactly one variable: `APIROC_API_KEY`, present in
-`apps/api/.env.example` and in `turbo.json`'s `globalEnv`. `APIROC_APP_ID` and
-`APIROC_REDIRECT_URI` belong to the connect flow and are **not yet introduced** — adding them is
-BAL-396's job, and they must land in both files (a `globalEnv` omission silently changes the
-turbo cache key rather than failing).
+**Environment.** All three variables BAL-467 anticipated now exist, shipped by BAL-396, in both
+`apps/api/.env.example` and `turbo.json`'s `globalEnv` (confirmed present in both — a `globalEnv`
+omission would silently change the turbo cache key rather than failing, so both were checked, not
+just one): `APIROC_API_KEY` (read by `client.ts::getApirocClient`), and `APIROC_APP_ID` /
+`APIROC_REDIRECT_URI` (read by `oauth.ts::buildApirocAuthorizeUrl`, §1 — absent either one throws
+`ApirocConfigError`, never a silent `!`). `.env.example`'s inline comment on `APIROC_API_KEY` still
+reads "the boundary is INERT in this ticket… no live caller yet" — that line is a BAL-467 leftover
+and is now stale prose in a comment, not a statement to trust; see the top-of-file warning above
+for the current, LIVE reality.
 
 ---
 
@@ -150,11 +210,26 @@ classes are an input, the kinds are the output.
 | `UnifiedCalendarApiError`            | `network`      | `undefined` | no HTTP response — timeout / DNS / socket          |
 | anything else (string, plain object) | `unknown`      | best-effort | never throws; fails closed                         |
 
-⚠ **`reconnect_required` is deliberately NOT a kind.** Distinguishing a revoked expert
-credential from a bad platform API key — both arrive as 401 / `AuthenticationError` — needs
-`wireMessage` composed with the `credential_status` column vocabulary. That is **BAL-396 §2's
-job and does not exist yet.** This boundary's contract stops at _classify by status, carry the
-raw evidence untouched_. Do not invent your own reading of `wireMessage` in the meantime.
+⚠ **`reconnect_required` is deliberately NOT an `ApirocFailureKind`, and still isn't** —
+confirmed unchanged in `errors.ts` (byte-for-byte identical to the BAL-467 commit): the closed
+union above is still exactly eight values, `reconnect_required` is not one of them, and
+`normalizeApirocError` still classifies by HTTP status only. Distinguishing a revoked expert
+credential from a bad platform API key — both arrive as 401 / `AuthenticationError` — needed
+`wireMessage` composed with a credential-status vocabulary; **that composition is BAL-396's job,
+and it now exists, one layer above this boundary, in `lib/apiroc/reconnect.ts`**:
+`classifyCredentialFailure(err: ApirocError): CredentialVerdict` reads `err.kind` and
+`err.wireMessage` and returns one of four verdicts — `reconnect_required`,
+`platform_auth_failure`, `transient`, or `other` — see its file docblock for the exhaustive
+discriminator table and why an ABSENT `wireMessage` resolves to `platform_auth_failure`, never
+the expert's fault. It is exported
+from `index.ts` alongside `callApiroc`, so a caller never has to reach past this boundary to use
+it — but it stops at the verdict: the only caller, `services/calendar/credential-status.ts`'s
+`applyCredentialFailure`, owns the side effects (flipping `credential_status`, clearing the
+availability cache, publishing the `calendar.auth_error` notification, at most once per breakage).
+This boundary's OWN contract is unchanged: `errors.ts` classifies by status and carries the raw
+evidence untouched; `reconnect.ts` is the next slice composing on top of it, exactly as this
+file's BAL-467-era text anticipated. Do not invent a THIRD reading of `wireMessage` outside
+`reconnect.ts` — that file is now the one sanctioned place.
 
 The thrown object:
 
@@ -344,7 +419,7 @@ Given a thrown boundary error:
 | the SDK's `.details`     | Always `undefined` — there is no such wire field **[live]**                                                                                                                       |
 | the wire `error` field   | Observed as `"Error"`, the number `404`, `"InvalidRefreshToken"`, `"InternalServerError"`, and a `ZodError` object **[live]** — a `string \| number \| object` union, not an enum |
 | `err.wireErrorRaw`       | Log-only evidence, unknown and unparsed. Never compare it to a literal                                                                                                            |
-| `err.wireMessage`        | **Not yet** — composing it into a reconnect signal is BAL-396 §2. Log it, don't switch on it                                                                                      |
+| `err.wireMessage`        | Not directly. `classifyCredentialFailure` (`lib/apiroc/reconnect.ts`, §3.1) composes it into a reconnect signal — call THAT, don't re-read `wireMessage` yourself                 |
 
 ⚠ **The ordering hazard, restated for callers.** If you ever write a second normalizer, a
 `catch` that checks a base class before its subclasses silently swallows the specific cases —
@@ -355,7 +430,31 @@ exactly this.
 ⚠ **`ApirocConfigError` is not an `ApirocError`.** A `catch (e) { if (e instanceof ApirocError) … }`
 misses it entirely. Handle configuration failure separately, or let it propagate as a 500.
 
-A representative call site (there is no shipped one to copy yet):
+A real, shipped call site — `jobs/calendar-health-probe.ts`'s `probeAndHeal`, condensed (see the
+file for the mass-failure breaker and the deferred-write batching that sit around this):
+
+```typescript
+await callApiroc('calendars.list', () =>
+  getApirocClient().calendars.list(endUserAccountId, { pageSize: 1 })
+);
+// … success path: markCredentialChecked / re-provision / heal (see the file) …
+```
+
+```typescript
+// catch site, elsewhere in the same file — the ApirocError is DEFERRED, not handled inline:
+if (!(err instanceof ApirocError)) {
+  /* not this boundary's error — rethrow/skip, see the file */
+}
+const verdict = classifyCredentialFailure(err); // lib/apiroc/reconnect.ts, §3.1
+// … later, batched: await applyCredentialFailure(connection, err, 'health_probe');
+```
+
+`applyCredentialFailure` (`services/calendar/credential-status.ts`, §3.1) is where `err.kind`,
+`err.operation`, `err.status`, and `err.requestId` actually get logged, and where the
+`kind === 'unauthorized' || kind === 'forbidden'` branch this file's earlier revision left as a
+TODO now really exists — reached through `classifyCredentialFailure`, never a hand-rolled check.
+A minimal caller that only needs normalized-error logging (no reconnect handling) still looks like
+the shape below:
 
 ```typescript
 try {
@@ -373,9 +472,6 @@ try {
       },
       'calendar_list_failed'
     );
-    if (err.kind === 'unauthorized' || err.kind === 'forbidden') {
-      // BAL-396 §2 owns turning this into a reconnect signal — until then, surface, don't guess.
-    }
   }
   throw err;
 }
@@ -386,7 +482,11 @@ try {
 ## 5. Retry policy as built
 
 The policy lives in **one place**, `retry.ts::classifyRetry` — pure, no I/O, no BullMQ coupling.
-BAL-396/468 map its output onto job options; **that mapping does not exist yet.**
+Confirmed still true on this branch: no caller anywhere under `apps/api/src` invokes
+`classifyRetry` (`grep -rn classifyRetry` finds only its own definition, its own test, and the
+`index.ts` re-export). **BAL-396 shipped without wiring this mapping** — none of its callers
+(`calendar-health-probe.ts`, `apiroc-connection.ts`, `vendor-busy.ts`, `consultation-events/`) map
+a `classifyRetry` decision onto BullMQ job options; that remains a future ticket's job.
 
 ```typescript
 export type RetryDecision =
@@ -535,11 +635,22 @@ re-implement any of it, and you should not need to open `interceptor.ts`.
 9. **Never write `syncToken`** anywhere under `apps/api/src` — Scan A of
    `apps/api/src/invariants/sync-token-parity.test.ts` covers the whole tree (only
    `services/calendar/sync-capability.ts` and `invariants/` are exempt), and `sdk-shape.test.ts`
-   independently scans `lib/apiroc/**`. If your new file lands under `jobs/`,
-   `services/availability/`, `services/calendar/`, or `routes/calendar/`, Scans B and E apply too.
-10. **Put feature logic outside `lib/apiroc/`.** That directory is the vendor boundary; a new
-    file there enters the recursive source scan and reads as boundary machinery to the next
-    person.
+   independently scans `lib/apiroc/**`. Scans B (no provider literal) and E (no event-content
+   read) are now **tree-wide over all of `apps/api/src`** as of ADR-1021's 18 Aug 2026 (BAL-396)
+   amendment §1/§2 — not scoped to `jobs/`, `services/availability/`, `services/calendar/`, or
+   `routes/calendar/` as an earlier revision of this checklist said. Scan B exempts exactly
+   `lib/apiroc/` and `routes/calendar/`; Scan E exempts exactly `services/consultation-events/`.
+   Your new file is covered by whichever of the two it does NOT fall inside (the two exemption
+   sets are disjoint and jointly exhaustive — `sync-token-parity.test.ts`'s own Scan E6 asserts
+   this).
+10. **Put feature logic outside `lib/apiroc/`**, with two narrow, named exceptions (§1): a
+    provider-literal translation (Scan B's exemption — `oauth.ts`'s uppercase `ProviderType`,
+    `provider-labels.ts`'s display labels) or a pure interpretive layer over `ApirocError`
+    (`reconnect.ts`'s `classifyCredentialFailure`, which writes and calls nothing). Anything that
+    touches the DB, the availability cache, or a notification — even calendar-connection logic —
+    still belongs in `services/`, `jobs/`, or a route. A file that doesn't fit either exception
+    also enters the recursive source scan in `sdk-shape.test.ts` and reads as boundary machinery
+    to the next person.
 11. **New env vars go in two places** — `apps/api/.env.example` **and** `turbo.json`'s
     `globalEnv` (that is how `APIROC_API_KEY` shipped).
 12. **Test it.** Unit-test the caller with the SDK method mocked; assert the `ApirocError.kind`
@@ -553,12 +664,12 @@ re-implement any of it, and you should not need to open `interceptor.ts`.
 SKILL.md was written before BAL-467 merged; a few of its forward-looking statements are now
 stale. Where they conflict, **the shipped code wins** and is described above.
 
-| SKILL.md says                                                                                                                                       | The shipped code does                                                                                                                                                                                                 |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "SDK Initialisation" shows `apps/api/src/lib/apiroc.ts` with a module-level `export const apiroc = new UnifiedCalendarApi({...})`                   | A directory `apps/api/src/lib/apiroc/` with a **lazy** `getApirocClient()`. A module-level const would crash the shared Fastify app builder and every route test when `APIROC_API_KEY` is unset                       |
-| "Environment variables required: `APIROC_API_KEY`, `APIROC_APP_ID`, `APIROC_REDIRECT_URI`"                                                          | Only `APIROC_API_KEY` exists (`.env.example` + `turbo.json` `globalEnv`). The other two are BAL-396's                                                                                                                 |
-| Earlier revisions of "Where the rules live" listed the SDK adapter boundary as pending on BAL-467 and said no `references/*.md` files existed       | BAL-467 merged as `eb6d4b2`. SKILL.md's table was reconciled alongside this file, which is the reference it now points at                                                                                             |
-| "Own the boundary — BAL-467 §2" is written as work to do; defects 1 and 3 (400 payload discarded, `requestId` dropped) are described as unmitigated | Both are mitigated as built — `requestId` and the recovered Zod issue array reach the thrown `ApirocError`, pinned end-to-end in `interceptor.test.ts`                                                                |
-| The SDK normalisation table is presented as the taxonomy                                                                                            | That is the **SDK's** taxonomy. Balo's is eight `ApirocFailureKind` values; 409 maps to `unknown`, and `reconnect_required` deliberately does not exist yet (BAL-396 §2)                                              |
-| "Retry policy: 400 never · 401/403 never · 404 never · 429 back off by `retryAfter` · 5xx and network yes"                                          | Same, plus two as-built refinements: a documented `5000 ms` default when `Retry-After` is absent, and `unknown` **fails closed**                                                                                      |
-| "The boundary must patch or replace that transport"                                                                                                 | One tier, as built: override `winston.transports.Console.prototype.log`, via a `require` rooted at the SDK's own resolved path. Safe only because no Balo package declares winston — a premise `logging.test.ts` pins |
+| SKILL.md says                                                                                                                                       | The shipped code does                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "SDK Initialisation" shows `apps/api/src/lib/apiroc.ts` with a module-level `export const apiroc = new UnifiedCalendarApi({...})`                   | A directory `apps/api/src/lib/apiroc/` with a **lazy** `getApirocClient()`. A module-level const would crash the shared Fastify app builder and every route test when `APIROC_API_KEY` is unset                                                                                 |
+| "Environment variables required: `APIROC_API_KEY`, `APIROC_APP_ID`, `APIROC_REDIRECT_URI`"                                                          | Was true only of BAL-467 (only `APIROC_API_KEY` existed then). BAL-396 shipped the other two — all three now present in both `.env.example` and `turbo.json` `globalEnv`; this divergence is CLOSED                                                                             |
+| Earlier revisions of "Where the rules live" listed the SDK adapter boundary as pending on BAL-467 and said no `references/*.md` files existed       | BAL-467 merged as `eb6d4b2`. SKILL.md's table was reconciled alongside this file, which is the reference it now points at                                                                                                                                                       |
+| "Own the boundary — BAL-467 §2" is written as work to do; defects 1 and 3 (400 payload discarded, `requestId` dropped) are described as unmitigated | Both are mitigated as built — `requestId` and the recovered Zod issue array reach the thrown `ApirocError`, pinned end-to-end in `interceptor.test.ts`                                                                                                                          |
+| The SDK normalisation table is presented as the taxonomy                                                                                            | That is the **SDK's** taxonomy. Balo's is eight `ApirocFailureKind` values; 409 maps to `unknown`. `reconnect_required` is still deliberately not one of the eight, but the composition BAL-396 §2 owed now ships — `lib/apiroc/reconnect.ts::classifyCredentialFailure` (§3.1) |
+| "Retry policy: 400 never · 401/403 never · 404 never · 429 back off by `retryAfter` · 5xx and network yes"                                          | Same, plus two as-built refinements: a documented `5000 ms` default when `Retry-After` is absent, and `unknown` **fails closed**                                                                                                                                                |
+| "The boundary must patch or replace that transport"                                                                                                 | One tier, as built: override `winston.transports.Console.prototype.log`, via a `require` rooted at the SDK's own resolved path. Safe only because no Balo package declares winston — a premise `logging.test.ts` pins                                                           |

@@ -53,6 +53,16 @@ type CalendarViewState =
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 
+/**
+ * BAL-396 fix round, Finding 2 — a real guard, not `as CalendarProvider`. `calendar_provider`
+ * comes off the OAuth callback redirect's query string, which is browser-editable; casting it
+ * unchecked would let any string flow into `connectingProvider` state and the provider-branded
+ * copy/analytics that read it.
+ */
+function isCalendarProvider(value: string | null): value is CalendarProvider {
+  return value === 'google' || value === 'microsoft';
+}
+
 // ── Component ────────────────────────────────────────────────
 
 export function CalendarTab(): React.JSX.Element {
@@ -70,7 +80,10 @@ export function CalendarTab(): React.JSX.Element {
     const calendarConnected = searchParams.get('calendar_connected');
     const calendarError = searchParams.get('calendar_error');
     const calendarStatus = searchParams.get('calendar_status');
-    const calendarProvider = searchParams.get('calendar_provider') as CalendarProvider | null;
+    const calendarProviderParam = searchParams.get('calendar_provider');
+    const calendarProvider = isCalendarProvider(calendarProviderParam)
+      ? calendarProviderParam
+      : null;
 
     // Restore provider from the error redirect URL so session_expired shows the right branding
     if (calendarProvider) {
@@ -247,10 +260,16 @@ export function CalendarTab(): React.JSX.Element {
   }, []);
 
   const handleFixPermissions = useCallback(async () => {
-    const provider = connection?.subCalendars[0]?.provider ?? connectingProvider;
+    // BAL-396 fix round 2, Finding 6 — `connection.provider` (always present) comes FIRST. A
+    // SYNC_PENDING connection has ZERO sub-calendars by construction, so
+    // `subCalendars[0]?.provider` is undefined for exactly the case this button exists for; on
+    // a plain page load (refresh, bookmark, next day — no `calendar_provider` URL param),
+    // falling straight to the hardcoded `connectingProvider` default ('google') started a
+    // GOOGLE OAuth round trip for a stuck MICROSOFT expert.
+    const provider = connection?.provider ?? connectingProvider;
     track(CALENDAR_EVENTS.FIX_PERMISSIONS_CLICKED, { provider });
 
-    const result = await fixCalendarPermissionsAction();
+    const result = await fixCalendarPermissionsAction(provider);
     if (result.success && result.relinkUrl) {
       globalThis.location.href = result.relinkUrl;
     } else {
@@ -314,7 +333,8 @@ export function CalendarTab(): React.JSX.Element {
         {viewState === 'connected' && connection && (
           <CalendarConnectedCard
             connection={connection}
-            provider={connection.subCalendars[0]?.provider ?? connectingProvider}
+            // BAL-396 fix round 2, Finding 6 — same fix as handleFixPermissions above.
+            provider={connection.provider ?? connectingProvider}
             onDisconnect={handleDisconnect}
             onReconnect={handleReconnect}
             onToggleConflictCheck={handleToggleConflictCheck}
@@ -324,7 +344,10 @@ export function CalendarTab(): React.JSX.Element {
         {viewState === 'sync_pending' && connection && (
           <CalendarSyncPendingCard
             connection={connection}
-            provider={connection.subCalendars[0]?.provider ?? connectingProvider}
+            // BAL-396 fix round 2, Finding 6 — same fix as handleFixPermissions above; this is
+            // the exact card the defect was reported against (wrong-provider icon/copy on a
+            // plain page load for a stuck expert).
+            provider={connection.provider ?? connectingProvider}
             onFixPermissions={handleFixPermissions}
           />
         )}

@@ -649,6 +649,34 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('calendar-reconnect-required (BAL-396 §7)', () => {
+    it('names the Google label and deep-links to the calendar settings tab', () => {
+      const result = getInAppTemplate('calendar-reconnect-required', { provider: 'google' });
+      expect(result).toEqual({
+        title: 'Reconnect your calendar',
+        body: "Balo lost access to your Google Calendar — your availability is paused until it's reconnected.",
+        actionUrl: '/expert/settings?tab=calendar',
+      });
+    });
+
+    it('names the Microsoft 365 label', () => {
+      const result = getInAppTemplate('calendar-reconnect-required', { provider: 'microsoft' });
+      expect(result.body).toContain('Microsoft 365 calendar');
+    });
+
+    /**
+     * ⚠ BAL-396 FIX ROUND — THE DOUBLED-NOUN REGRESSION TEST. "your Google Calendar
+     * calendar" / "your calendar calendar" used to be PINNED as the expected string here —
+     * the test asserted the bug rather than catching it. `calendarProviderLabel` now
+     * composes the trailing noun itself, so no call site appends a second one.
+     */
+    it('degrades an unrecognised or absent provider to the generic noun, with no doubled "calendar"', () => {
+      const result = getInAppTemplate('calendar-reconnect-required', {});
+      expect(result.body).toContain('your calendar —');
+      expect(result.body).not.toMatch(/calendar\s+calendar/i);
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

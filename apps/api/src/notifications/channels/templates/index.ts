@@ -43,6 +43,7 @@ import {
 } from './party-domain-join.js';
 import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
+import { CalendarReconnectRequiredEmail } from './calendar-reconnect-required.js';
 import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
 import { CreditAutoTopupExecutedEmail } from './credit-auto-topup-executed.js';
@@ -70,6 +71,7 @@ import {
   ConversationUnreadDigestEmail,
   unreadDigestSummary,
 } from './conversation-unread-digest.js';
+import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -894,6 +896,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       subject: 'Finish setting up your Balo account',
     };
   },
+
+  // BAL-396 §7 (Objection 5) — `calendar.auth_error` already existed and already published;
+  // this is its first template (no rule existed either — see `engine/rules.ts`). Recipient is
+  // the DELIVERING EXPERT (`recipient: 'expert'` via `payload.expertProfileId`). `providerLabel`
+  // derives from the payload's `provider` field — never branch on it beyond this label lookup.
+  'calendar-reconnect-required': (data) => ({
+    component: React.createElement(CalendarReconnectRequiredEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      providerLabel: calendarProviderLabel(data.provider),
+      ctaUrl: `${BASE_URL}/expert/settings?tab=calendar`,
+      baseUrl: BASE_URL,
+    }),
+    subject: 'Reconnect your calendar to keep taking bookings',
+  }),
 
   // BAL-380 (ADR-1040 Lane 3) dormancy reminder — server-only, EMAIL to the company's
   // billing admins. `window` (60|30 in the merged payload) selects the copy + subject;
