@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { z } from 'zod';
 import {
   CALENDAR_CONNECT_PROVIDERS,
   calendarConnectNonceCookieName,
@@ -186,6 +187,14 @@ export interface UnverifiedStateFields {
  * guarantee the state is even well-formed). Mirrors `routes/calendar/auth.ts`'s existing
  * Cronofy-era pattern (`auth.ts:104-120`). Never use this for anything that requires trust —
  * call `verifyConnectState` for that.
+ *
+ * ⚠ BAL-397 fix round — `expertProfileId` is narrowed to a UUID SHAPE, not merely to
+ * `typeof === 'string'`. This is defence in depth, not the primary control: the callback's
+ * error arm no longer forwards this value to analytics at all (see the `distinct_id` note in
+ * `routes/calendar/auth.ts`). But the payload is attacker-authored on every arm that calls this
+ * function, so a future consumer that reaches for the field gets a bounded, well-shaped value
+ * instead of arbitrary text of arbitrary length. `z.string().uuid()` — no hand-rolled regex, so
+ * no ReDoS surface (S5852) is added on a public route.
  */
 export function readStatePayloadUnverified(state: string): UnverifiedStateFields {
   try {
@@ -195,9 +204,9 @@ export function readStatePayloadUnverified(state: string): UnverifiedStateFields
       expertProfileId?: unknown;
       provider?: unknown;
     };
-    const rawExpertProfileId = payload.expertProfileId;
     const rawProvider = payload.provider;
-    const expertProfileId = typeof rawExpertProfileId === 'string' ? rawExpertProfileId : undefined;
+    const parsedId = z.string().uuid().safeParse(payload.expertProfileId);
+    const expertProfileId = parsedId.success ? parsedId.data : undefined;
     const provider = typeof rawProvider === 'string' ? rawProvider : undefined;
     return { expertProfileId, provider };
   } catch {

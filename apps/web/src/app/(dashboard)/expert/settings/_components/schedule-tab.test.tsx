@@ -12,9 +12,18 @@ vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
-// Stub the calendar tab (has its own fetch + searchParams) — we only assert it mounts below.
-vi.mock('./calendar-tab', () => ({
-  CalendarTab: () => <div data-testid="calendar-tab-stub">calendar</div>,
+// Stub the calendar section (has its own fetch + searchParams) — we only assert it mounts below.
+vi.mock('./calendar-connections-section', () => ({
+  CalendarConnectionsSection: () => (
+    <div data-testid="calendar-connections-section-stub">calendar</div>
+  ),
+}));
+
+// BAL-397 §3.1 — DateOverridesCard moved up out of the calendar section into ScheduleTab
+// itself, so it now needs its own stub here (it has its own fetch, unrelated to the calendar
+// section's, and a failed calendar fetch must not take it down).
+vi.mock('./date-overrides-card', () => ({
+  DateOverridesCard: () => <div data-testid="date-overrides-card-stub">time off</div>,
 }));
 
 // Stub the Radix-heavy timezone combobox so we can drive the timezone handler deterministically.
@@ -130,7 +139,16 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
     expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save schedule' })).toBeInTheDocument();
-    expect(screen.getByTestId('calendar-tab-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('calendar-connections-section-stub')).toBeInTheDocument();
+  });
+
+  // Relocated from calendar-tab.test.tsx (BAL-397 §3.1) — DateOverridesCard now renders
+  // from ScheduleTab directly, no longer nested inside the calendar section, so a broken
+  // calendar fetch can never take Time off down with it.
+  it('mounts the Time off card even when no calendar is connected', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+    expect(screen.getByTestId('date-overrides-card-stub')).toBeInTheDocument();
   });
 
   it('shows booking rules but no consultation-length or booking-window control', async () => {

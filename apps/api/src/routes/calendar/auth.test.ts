@@ -10,6 +10,7 @@ const {
   mockPersistApirocConnection,
   mockProvisionConnection,
   mockEnqueueAvailabilityCacheRebuild,
+  mockEndUserAccountsGet,
 } = vi.hoisted(() => ({
   mockBuildApirocAuthorizeUrl: vi.fn(),
   mockSignConnectState: vi.fn(),
@@ -18,10 +19,17 @@ const {
   mockPersistApirocConnection: vi.fn(),
   mockProvisionConnection: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
+  mockEndUserAccountsGet: vi.fn(),
 }));
 
+// BAL-397 fix round — the callback now resolves the browser-supplied `endUserAccountId`
+// against the HMAC-trusted `expertProfileId` via `endUserAccounts.get`, so the SDK boundary is
+// a live collaborator of this route (it was inert before). `callApiroc` is passed through
+// verbatim: its normalisation is `lib/apiroc/errors.test.ts`'s subject, not this file's.
 vi.mock('../../lib/apiroc/index.js', () => ({
   buildApirocAuthorizeUrl: mockBuildApirocAuthorizeUrl,
+  getApirocClient: () => ({ endUserAccounts: { get: mockEndUserAccountsGet } }),
+  callApiroc: <T>(_operation: string, fn: () => Promise<T>): Promise<T> => fn(),
 }));
 
 // BAL-396 fix round, Finding 1 — `extractCookieValue` / `buildClearConnectNonceCookieHeader` /
@@ -110,6 +118,11 @@ describe('calendar auth routes (BAL-396)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // BAL-397 fix round — default the vendor-account ownership lookup to the HAPPY shape (the
+    // account really does carry this expert's id as its `externalId`), so every pre-existing
+    // SHAPE 2 fixture below still exercises what it was written to exercise. The binding's own
+    // failure modes are driven explicitly in the `vendor-account ownership binding` block.
+    mockEndUserAccountsGet.mockResolvedValue({ id: 'eua-1', externalId: EXPERT_UUID });
   });
 
   function injectConnect(body?: Record<string, unknown>, headers?: Record<string, string>) {
@@ -283,10 +296,14 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain('calendar_error=o365_admin_approval');
       expect(res.headers.location).toContain('calendar_provider=microsoft');
+      // BAL-397 fix round — `distinct_id` is 'unknown' on EVERY unverified arm, even when the
+      // state happens to carry a well-formed id: there is no signature check here, so the id
+      // is browser-authored. `provider` still rides along because it is laundered through the
+      // `toCalendarEventProvider` allowlist first.
       expect(trackServer).toHaveBeenCalledWith('calendar_oauth_failed', {
         error_code: 'o365_admin_approval',
         provider: 'microsoft',
-        distinct_id: EXPERT_UUID,
+        distinct_id: 'unknown',
       });
       // BAL-396 fix round 2, Finding 5 — the unverified state named 'microsoft', so ONLY that
       // provider's cookie is cleared, not the google one too (which a concurrent, still
@@ -318,6 +335,46 @@ describe('calendar auth routes (BAL-396)', () => {
       );
     });
 
+    // BAL-397 fix round (security WARNING) — unauthenticated analytics/identity injection.
+    it('SHAPE 1: a forged expertProfileId in the UNVERIFIED state never reaches PostHog as distinct_id', async () => {
+      mockReadStatePayloadUnverified.mockReturnValue({
+        expertProfileId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        provider: 'google',
+      });
+
+      await injectCallback({ error: 'access_denied', state: 'attacker-authored-state' });
+
+      expect(trackServer).toHaveBeenCalledWith(
+        'calendar_oauth_failed',
+        expect.objectContaining({ distinct_id: 'unknown' })
+      );
+      expect(trackServer).not.toHaveBeenCalledWith(
+        'calendar_oauth_failed',
+        expect.objectContaining({ distinct_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' })
+      );
+    });
+
+    // BAL-397 fix round (security WARNING) — the public route's string params are bounded, so
+    // an unauthenticated caller cannot push unbounded text into Axiom/PostHog.
+    it('rejects an over-long error_description instead of logging it', async () => {
+      const res = await injectCallback({ error: 'x', error_description: 'a'.repeat(5000) });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_error=invalid_callback');
+      expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+    });
+
+    it('rejects an over-long endUserAccountId instead of persisting it', async () => {
+      const res = await injectCallback(
+        { endUserAccountId: 'a'.repeat(500), state: 'valid-state' },
+        nonceCookieHeader()
+      );
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_error=invalid_callback');
+      expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+    });
+
     it('SHAPE 1: an unallowlisted provider from the unverified state never reaches the redirect Location (Finding 2)', async () => {
       mockReadStatePayloadUnverified.mockReturnValue({
         expertProfileId: EXPERT_UUID,
@@ -346,7 +403,12 @@ describe('calendar auth routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain('calendar_connected=true');
-      expect(res.headers.location).toContain('calendar_status=connected');
+      // BAL-397 §13.2 — the real DB vocabulary rides the wire now, not the retired
+      // `connected`/`sync_pending` strings.
+      expect(res.headers.location).toContain('calendar_status=ACTIVE');
+      // BAL-397 §13.1 — the callback lands on the Schedule tab (where the calendar section
+      // actually renders), not the dead `?tab=calendar`.
+      expect(res.headers.location).toContain('tab=schedule');
       // BAL-396 fix round, Finding 4 — the success redirect now carries the provider too, so
       // apps/web can recover it even when the fresh connection has zero sub-calendars yet.
       expect(res.headers.location).toContain('calendar_provider=google');
@@ -398,7 +460,7 @@ describe('calendar auth routes (BAL-396)', () => {
         nonceCookieHeader()
       );
 
-      expect(res.headers.location).toContain('calendar_status=sync_pending');
+      expect(res.headers.location).toContain('calendar_status=SYNC_PENDING');
     });
 
     it('SHAPE 2: an expired state redirects state_expired without calling the connection services', async () => {
@@ -508,6 +570,124 @@ describe('calendar auth routes (BAL-396)', () => {
         expect(replay.headers.location).toContain('calendar_error=state_csrf_mismatch');
         // Still exactly one persist — the replay never reached the persistence branch.
         expect(mockPersistApirocConnection).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    // ── BAL-397 fix round — the vendor-account ownership binding (security CRITICAL) ─────
+    //
+    // THE ATTACK THESE PIN: an authenticated expert starts a legitimate connect for their OWN
+    // profile (so `state` verifies and their own nonce cookie matches), never visits the
+    // vendor, and instead hits the callback directly with ANOTHER expert's `endUserAccountId`.
+    // Before this fix that repointed their connection row at the victim's Apiroc account —
+    // reading the victim's free/busy and writing Balo's consultation events into the victim's
+    // calendar. `verifyConnectState` + the nonce cookie both PASS in every case below; the
+    // ownership check is the only thing standing between the request and persistence.
+    describe('vendor-account ownership binding', () => {
+      const VICTIM_UUID = '11111111-2222-4333-8444-555555555555';
+
+      beforeEach(() => {
+        mockVerifyConnectState.mockReturnValue({
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          nonce: VALID_NONCE,
+        });
+        mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+        mockProvisionConnection.mockResolvedValue('ACTIVE');
+      });
+
+      it('an endUserAccountId belonging to ANOTHER expert persists nothing and redirects down the opaque path', async () => {
+        mockEndUserAccountsGet.mockResolvedValue({
+          id: 'victim-eua',
+          externalId: VICTIM_UUID,
+        });
+
+        const res = await injectCallback(
+          { endUserAccountId: 'victim-eua', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
+        expect(res.headers.location).not.toContain('calendar_connected=true');
+        expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+        expect(mockProvisionConnection).not.toHaveBeenCalled();
+        expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
+      });
+
+      it('reuses state_csrf_mismatch rather than minting a distinct code — no existence oracle for account ids', async () => {
+        // An UNKNOWN id (the lookup 404s) and a REAL id owned by someone else must be
+        // indistinguishable to the browser, or the endpoint enumerates valid account ids.
+        mockEndUserAccountsGet.mockRejectedValueOnce(new Error('End user account not found'));
+        const unknownId = await injectCallback(
+          { endUserAccountId: 'does-not-exist', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        mockEndUserAccountsGet.mockResolvedValueOnce({ id: 'victim-eua', externalId: VICTIM_UUID });
+        const someoneElses = await injectCallback(
+          { endUserAccountId: 'victim-eua', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(unknownId.headers.location).toBe(someoneElses.headers.location);
+        expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+      });
+
+      it('FAILS CLOSED when the account lookup itself fails (5xx / network / timeout)', async () => {
+        mockEndUserAccountsGet.mockRejectedValue(new Error('socket hang up'));
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
+        expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+      });
+
+      it('FAILS CLOSED on an account with no externalId — Balo did not create it', async () => {
+        mockEndUserAccountsGet.mockResolvedValue({ id: 'eua-1', externalId: null });
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
+        expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+      });
+
+      it('resolves the account the CALLBACK named — not one derived from the state', async () => {
+        await injectCallback(
+          { endUserAccountId: 'eua-from-query', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(mockEndUserAccountsGet).toHaveBeenCalledWith('eua-from-query');
+      });
+
+      it('lets the matching account through to persistence', async () => {
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.headers.location).toContain('calendar_connected=true');
+        expect(mockPersistApirocConnection).toHaveBeenCalledWith({
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          endUserAccountId: 'eua-1',
+        });
+      });
+
+      it('never reaches the vendor lookup when the CSRF nonce already failed', async () => {
+        // Ordering matters: an unauthenticated-ish caller must not be able to probe the vendor
+        // at all until they have proven they started this flow in this browser.
+        const res = await injectCallback({ endUserAccountId: 'eua-1', state: 'valid-state' });
+
+        expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
+        expect(mockEndUserAccountsGet).not.toHaveBeenCalled();
       });
     });
   });

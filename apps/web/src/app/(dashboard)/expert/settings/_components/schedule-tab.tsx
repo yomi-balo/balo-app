@@ -18,7 +18,8 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { track, SCHEDULE_EVENTS } from '@/lib/analytics';
-import { CalendarTab } from './calendar-tab';
+import { CalendarConnectionsSection } from './calendar-connections-section';
+import { DateOverridesCard } from './date-overrides-card';
 import { ScheduleDayRow } from './schedule-day-row';
 import { ScheduleTimezoneCombobox } from './schedule-timezone-combobox';
 import { BookingRulesSection } from './booking-rules-section';
@@ -445,10 +446,14 @@ export function ScheduleTab(): React.JSX.Element {
         </motion.div>
       </motion.div>
 
-      {/* Existing calendar connection, stacked below the weekly editor */}
+      {/* Calendar connections, stacked below the weekly editor */}
       <div className="border-border/60 mt-8 border-t pt-8">
-        <CalendarTab />
+        <CalendarConnectionsSection />
       </div>
+
+      {/* BAL-397 §3.1 — moved up from inside the calendar section: a failed calendar fetch
+          must not take Time off (an independent feature with its own fetch) down with it. */}
+      <DateOverridesCard />
     </div>
   );
 }

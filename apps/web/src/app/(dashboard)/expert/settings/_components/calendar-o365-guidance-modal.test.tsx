@@ -1,54 +1,44 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { CALENDAR_HELP_URL } from '../_lib/calendar-help';
 import { CalendarO365GuidanceModal } from './calendar-o365-guidance-modal';
 
 describe('CalendarO365GuidanceModal', () => {
-  it('renders the header with Microsoft 365 title', () => {
-    render(<CalendarO365GuidanceModal onContinue={vi.fn()} onCancel={vi.fn()} />);
+  it('does not render dialog content when closed', () => {
+    render(<CalendarO365GuidanceModal open={false} onContinue={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('renders a titled, described dialog with the four-step "what to expect" list', () => {
+    render(<CalendarO365GuidanceModal open onContinue={vi.fn()} onCancel={vi.fn()} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
     expect(screen.getByText('Connect Microsoft 365')).toBeInTheDocument();
     expect(screen.getByText('Outlook or Microsoft 365 work account')).toBeInTheDocument();
-  });
-
-  it('renders the admin approval callout', () => {
-    render(<CalendarO365GuidanceModal onContinue={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText('Your IT admin may need to approve this once')).toBeInTheDocument();
-    expect(screen.getByText(/once for your entire company/i)).toBeInTheDocument();
-  });
-
-  it('renders all four "What to expect" steps', () => {
-    render(<CalendarO365GuidanceModal onContinue={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText('What to expect')).toBeInTheDocument();
-    expect(screen.getByText('A Microsoft sign-in window opens')).toBeInTheDocument();
-    expect(screen.getByText('Sign in with your work account')).toBeInTheDocument();
-    expect(screen.getByText(/If prompted for admin approval/i)).toBeInTheDocument();
-    expect(screen.getByText(/Once approved, click "Connect" again/i)).toBeInTheDocument();
-  });
-
-  it('renders the external admin approval guide link', () => {
-    render(<CalendarO365GuidanceModal onContinue={vi.fn()} onCancel={vi.fn()} />);
-    const link = screen.getByText('Admin approval guide');
-    expect(link).toHaveAttribute('href', CALENDAR_HELP_URL);
-    expect(link).toHaveAttribute('target', '_blank');
-    expect(link).toHaveAttribute('rel', 'noreferrer');
+    expect(screen.getAllByRole('listitem')).toHaveLength(4);
   });
 
   it('calls onContinue when "Continue to Microsoft 365" is clicked', async () => {
+    const onContinue = vi.fn();
     const user = userEvent.setup();
-    const mockContinue = vi.fn();
-    render(<CalendarO365GuidanceModal onContinue={mockContinue} onCancel={vi.fn()} />);
-
-    await user.click(screen.getByRole('button', { name: /Continue to Microsoft 365/i }));
-    expect(mockContinue).toHaveBeenCalledOnce();
+    render(<CalendarO365GuidanceModal open onContinue={onContinue} onCancel={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /Continue to Microsoft 365/ }));
+    expect(onContinue).toHaveBeenCalledOnce();
   });
 
-  it('calls onCancel when Cancel is clicked', async () => {
+  it('calls onCancel when the Cancel button is clicked', async () => {
+    const onCancel = vi.fn();
     const user = userEvent.setup();
-    const mockCancel = vi.fn();
-    render(<CalendarO365GuidanceModal onContinue={vi.fn()} onCancel={mockCancel} />);
+    render(<CalendarO365GuidanceModal open onContinue={vi.fn()} onCancel={onCancel} />);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
 
-    await user.click(screen.getByRole('button', { name: /Cancel/i }));
-    expect(mockCancel).toHaveBeenCalledOnce();
+  it('calls onCancel on Esc dismissal too, not just the Cancel button', async () => {
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    render(<CalendarO365GuidanceModal open onContinue={vi.fn()} onCancel={onCancel} />);
+    await user.keyboard('{Escape}');
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 });

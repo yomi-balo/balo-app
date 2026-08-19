@@ -7,15 +7,34 @@ import type { SubCalendar } from '../_types/calendar';
 
 interface CalendarSubCalendarRowProps {
   calendar: SubCalendar;
-  onToggle: (id: string, checked: boolean, provider: SubCalendar['provider']) => void;
+  /**
+   * ⚠ NO `provider` ARGUMENT (BAL-397 fix round). The owning connection's provider is the only
+   * correct one, and this row cannot see it — `calendar.provider` is a SEPARATE column that can
+   * disagree. `CalendarBusyCalendarsPanel` closes over `connection.provider` and supplies it;
+   * see the note at that call site for what the divergence used to cost.
+   */
+  onToggle: (id: string, checked: boolean) => void;
+  /** BAL-397 §9.3 — set while this row's toggle mutation is in flight. Disables the Switch
+   *  (prevents a double-fire race) and reflects `aria-busy` for screen-reader users. */
+  pending?: boolean;
+  /** BAL-397 fix round — the panel is shown but INERT (`reconnect_needed`). Distinct from
+   *  `pending`: nothing is in flight, so no `aria-busy`; the control is simply not operable. */
+  disabled?: boolean;
 }
 
 export function CalendarSubCalendarRow({
   calendar,
   onToggle,
+  pending = false,
+  disabled = false,
 }: Readonly<CalendarSubCalendarRowProps>): React.JSX.Element {
+  const switchLabel = calendar.primary
+    ? `${calendar.name} always blocks time and can't be turned off`
+    : `Block time from ${calendar.name}`;
+
   return (
     <div
+      aria-busy={pending}
       className={cn(
         'hover:bg-muted/50 flex min-h-[44px] items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors'
       )}
@@ -54,11 +73,9 @@ export function CalendarSubCalendarRow({
         )}
         <Switch
           checked={calendar.conflictChecking}
-          onCheckedChange={(checked) =>
-            !calendar.primary && onToggle(calendar.id, checked, calendar.provider)
-          }
-          disabled={calendar.primary}
-          aria-label={`Use ${calendar.name} for conflict checking`}
+          onCheckedChange={(checked) => !calendar.primary && onToggle(calendar.id, checked)}
+          disabled={calendar.primary || pending || disabled}
+          aria-label={switchLabel}
         />
       </div>
     </div>

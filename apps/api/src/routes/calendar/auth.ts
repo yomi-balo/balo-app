@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
@@ -6,7 +7,7 @@ import {
   CALENDAR_SERVER_EVENTS,
   toCalendarEventProvider,
 } from '@balo/analytics/server';
-import { buildApirocAuthorizeUrl } from '../../lib/apiroc/index.js';
+import { buildApirocAuthorizeUrl, getApirocClient, callApiroc } from '../../lib/apiroc/index.js';
 import {
   signConnectState,
   verifyConnectState,
@@ -22,6 +23,7 @@ import {
   provisionConnection,
 } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
+import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 
 // ── Validation ──────────────────────────────────────────────────
 
@@ -34,12 +36,20 @@ const connectBodySchema = z.object({
  * BAL-396 §10.3 — the Apiroc callback has THREE shapes and none of `error` /
  * `endUserAccountId` / `state` is guaranteed present, so every field is optional here; the
  * handler itself branches on which fields showed up (`error` FIRST, per the ordering rule).
+ *
+ * ⚠ BAL-397 fix round — EVERY string here is bounded. This route is PUBLIC and unauthenticated
+ * (the vendor redirects a browser to it), so an unbounded `z.string()` lets anyone push
+ * arbitrarily large attacker-authored text into `request.log.warn` and, through it, into paid
+ * pipelines (Axiom `balo-logs`). The bounds are generous relative to the real values — a signed
+ * state is ~200 chars (`base64url(payload).base64url(hmac)`), an Apiroc account id is a short
+ * opaque token, and the OAuth error vocabulary is snake_case words — so nothing legitimate is
+ * anywhere near them.
  */
 const callbackQuerySchema = z.object({
-  endUserAccountId: z.string().optional(),
-  state: z.string().optional(),
-  error: z.string().optional(),
-  error_description: z.string().optional(),
+  endUserAccountId: z.string().min(1).max(255).optional(),
+  state: z.string().max(2048).optional(),
+  error: z.string().max(200).optional(),
+  error_description: z.string().max(200).optional(),
 });
 
 // ── §10.3 — the callback error classifier (Objection 8) ─────────
@@ -92,6 +102,22 @@ function clearConnectNonceCookie(
   );
 }
 
+/**
+ * BAL-397 fix round — the CSRF nonce comparison, timing-safe. Hardening rather than a live
+ * hole (in the modelled attack the adversary already HOLDS the nonce and needs the victim's
+ * cookie, not a guess), but it makes this the third secret comparison in the codebase written
+ * the same way, alongside `lib/internal-auth.ts` and `services/calendar/connect-state.ts` —
+ * so no future reader has to work out why one of the three is a plain `!==`.
+ *
+ * The explicit length check is required: `timingSafeEqual` THROWS on unequal-length buffers.
+ */
+function nonceMatches(cookieNonce: string | undefined, stateNonce: string): boolean {
+  if (!cookieNonce) return false;
+  const provided = Buffer.from(cookieNonce);
+  const expected = Buffer.from(stateNonce);
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+
 function redirectWithError(
   reply: FastifyReply,
   ctx: CallbackRedirectContext,
@@ -117,7 +143,9 @@ function handleCallbackErrorShape(
   fields: { error: string; errorDescription?: string; state?: string }
 ): FastifyReply {
   const { error, errorDescription, state } = fields;
-  const { expertProfileId, provider } = state ? readStatePayloadUnverified(state) : {};
+  // ⚠ BAL-397 fix round — `expertProfileId` is DELIBERATELY NOT read off this payload. See the
+  // `trackServer` call below.
+  const { provider } = state ? readStatePayloadUnverified(state) : {};
   const errorCode = classifyCallbackError(error, errorDescription);
 
   if (errorCode === 'callback_failed') {
@@ -136,10 +164,19 @@ function handleCallbackErrorShape(
   // cookie when the state is absent or names nothing recognisable.
   clearConnectNonceCookie(reply, ctx.clearCookieHostname, eventProvider);
 
+  // ⚠ BAL-397 fix round — `distinct_id` IS ALWAYS `'unknown'` ON THIS ARM. There is no
+  // signature check on the error shape by design, so `state` here is browser-authored text:
+  // forwarding its `expertProfileId` to PostHog let anyone `curl` this public route with a
+  // hand-rolled state and either mint arbitrary person profiles or attribute forged
+  // `OAUTH_FAILED` events to a real expert — poisoning the very funnel BAL-397's `source`
+  // property was added to measure. `provider` is safe to keep because it is laundered through
+  // the `toCalendarEventProvider` allowlist below; an identity has no such allowlist, so it is
+  // dropped instead. The verified arms (`handleCsrfMismatch`, `persistAndRedirectConnected`)
+  // still send the real id — they have `verifyConnectState`'s HMAC behind them.
   trackServer(CALENDAR_SERVER_EVENTS.OAUTH_FAILED, {
     error_code: errorCode,
     ...(eventProvider ? { provider: eventProvider } : {}),
-    distinct_id: expertProfileId ?? 'unknown',
+    distinct_id: 'unknown',
   });
 
   return redirectWithError(reply, ctx, errorCode, eventProvider);
@@ -171,6 +208,33 @@ function handleInvalidState(
 }
 
 /**
+ * THE SINGLE OPAQUE REJECTION PATH for every pre-persistence SHAPE 2 failure — today the CSRF
+ * nonce mismatch (BAL-396 Finding 1) and the vendor-account ownership mismatch (BAL-397 fix
+ * round). Both deliberately emit the SAME wire code, `state_csrf_mismatch`.
+ *
+ * ⚠ DO NOT MINT A DISTINCT CODE FOR THE OWNERSHIP CHECK. The browser controls
+ * `endUserAccountId`, so a code that said "that account isn't yours" (as opposed to "that
+ * account doesn't exist") would turn this public, unauthenticated route into an existence
+ * oracle for valid Apiroc account ids — handing an attacker exactly the enumeration primitive
+ * the ownership check exists to make useless. The two causes are distinguished in the SERVER
+ * LOG only (`apiroc_callback_csrf_nonce_mismatch` vs `apiroc_callback_account_binding_rejected`),
+ * which no attacker can read.
+ */
+function rejectShape2(
+  reply: FastifyReply,
+  ctx: CallbackRedirectContext,
+  expertProfileId: string,
+  eventProvider: 'google' | 'microsoft' | undefined
+): FastifyReply {
+  trackServer(CALENDAR_SERVER_EVENTS.OAUTH_FAILED, {
+    error_code: 'state_csrf_mismatch',
+    ...(eventProvider ? { provider: eventProvider } : {}),
+    distinct_id: expertProfileId,
+  });
+  return redirectWithError(reply, ctx, 'state_csrf_mismatch', eventProvider);
+}
+
+/**
  * SHAPE 2, the CSRF binding check itself (BAL-396 fix round, Finding 1). `state`'s HMAC
  * proves Balo minted it for `expertProfileId`; it does NOT prove this browser is the one that
  * started the flow. Missing or mismatched → reject via the existing error-redirect path,
@@ -188,12 +252,61 @@ function handleCsrfMismatch(
     { expertProfileId: payload.expertProfileId, provider: payload.provider, hasCookie },
     'apiroc_callback_csrf_nonce_mismatch'
   );
-  trackServer(CALENDAR_SERVER_EVENTS.OAUTH_FAILED, {
-    error_code: 'state_csrf_mismatch',
-    ...(eventProvider ? { provider: eventProvider } : {}),
-    distinct_id: payload.expertProfileId,
-  });
-  return redirectWithError(reply, ctx, 'state_csrf_mismatch', eventProvider);
+  return rejectShape2(reply, ctx, payload.expertProfileId, eventProvider);
+}
+
+/**
+ * SHAPE 2, THE VENDOR-ACCOUNT OWNERSHIP BINDING (BAL-397 fix round — closes a CRITICAL that
+ * predates this ticket, from BAL-396).
+ *
+ * ⚠ WHY THIS EXISTS. `endUserAccountId` arrives **entirely from the browser-controlled query
+ * string**, and nothing downstream re-derives it: `upsertApirocConnection` OVERWRITES the
+ * pointer on the `(expertProfileId, provider)` conflict arbiter, and
+ * `calendar_connections.end_user_account_id` is deliberately NON-unique, so two rows may name
+ * one vendor account. Without this check an authenticated expert who learns another expert's
+ * `endUserAccountId` can mint a legitimate `state` + nonce cookie for their OWN profile,
+ * skip the vendor entirely, and hit the callback with the VICTIM's account id — repointing
+ * their own connection at the victim's calendar. That reads the victim's free/busy into the
+ * attacker's availability engine AND writes Balo's consultation events into the victim's
+ * calendar. The CSRF nonce cannot catch it: it proves the browser started *a* flow, never that
+ * this account came out of *that* flow.
+ *
+ * ⚠ THE BINDING BALO ALREADY SENDS. `buildApirocAuthorizeUrl` passes
+ * `externalId: expertProfileId` on every authorize URL (`lib/apiroc/oauth.ts`), and the vendor
+ * round-trips it onto the End User Account. So the account the callback names must carry the
+ * SAME expert id the signed state does. Every account Balo has ever created came through that
+ * one code path, so a live account with an absent/`null` `externalId` is not a legacy shape to
+ * tolerate — it is an account Balo did not create, and it fails closed like any other mismatch.
+ *
+ * ⚠ FAIL CLOSED ON A FAILED LOOKUP TOO, not just on a mismatch. A 404 (unknown id), a 401/403,
+ * a 5xx and a network timeout all land here, and every one of them means "Balo could not prove
+ * this account belongs to this expert". Treating an unprovable binding as satisfied would
+ * re-open the whole hole on any vendor blip.
+ *
+ * Wrapped in `callApiroc` per the apiroc skill's one-fallible-call rule, so the failure arrives
+ * as a Balo-shaped `ApirocError` rather than the SDK's mangled one.
+ */
+async function endUserAccountBelongsToExpert(
+  request: FastifyRequest,
+  endUserAccountId: string,
+  expertProfileId: string
+): Promise<boolean> {
+  try {
+    const client = getApirocClient();
+    const account = await callApiroc('endUserAccounts.get', () =>
+      client.endUserAccounts.get(endUserAccountId)
+    );
+    return account.externalId === expertProfileId;
+  } catch (err: unknown) {
+    request.log.warn(
+      {
+        expertProfileId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'apiroc_callback_account_lookup_failed'
+    );
+    return false;
+  }
 }
 
 /**
@@ -217,12 +330,16 @@ async function persistAndRedirectConnected(
     const status = await provisionConnection(connection);
     await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
-    // `provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING' — a plain ternary is
-    // exhaustive here without pulling in `api.ts`'s 4-value adapter.
-    const legacyStatus = status === 'ACTIVE' ? 'connected' : 'sync_pending';
+    // BAL-397 §13.2 — `calendar_status` on the wire now carries the REAL vocabulary
+    // (`provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING') so `apps/web` reads
+    // it through `isCalendarCredentialStatus` rather than the retired `connected`/`sync_pending`
+    // strings. `analyticsStatus` is kept as a SEPARATE local for the `trackServer` call only —
+    // that PostHog property has funnel history behind it, and changing its values would fork
+    // every existing funnel. Do not collapse the two back into one variable.
+    const analyticsStatus = status === 'ACTIVE' ? 'connected' : 'sync_pending';
     trackServer(CALENDAR_SERVER_EVENTS.OAUTH_COMPLETED, {
       provider,
-      status: legacyStatus,
+      status: analyticsStatus,
       distinct_id: expertProfileId,
     });
 
@@ -235,7 +352,7 @@ async function persistAndRedirectConnected(
     // ever signed from the `z.enum(['google', 'microsoft'])`-validated connect body) —
     // `encodeURIComponent` is defense in depth, not a trust boundary.
     return reply.redirect(
-      `${ctx.webAppUrl}${ctx.settingsPath}&calendar_connected=true&calendar_status=${legacyStatus}` +
+      `${ctx.webAppUrl}${ctx.settingsPath}&calendar_connected=true&calendar_status=${status}` +
         `&calendar_provider=${encodeURIComponent(provider)}`
     );
   } catch (err: unknown) {
@@ -297,7 +414,7 @@ async function handleEndUserAccountIdShape(
   const cookieNonce = eventProvider
     ? extractCookieValue(request.headers.cookie, calendarConnectNonceCookieName(eventProvider))
     : undefined;
-  if (!cookieNonce || cookieNonce !== nonce) {
+  if (!nonceMatches(cookieNonce, nonce)) {
     return handleCsrfMismatch(
       request,
       reply,
@@ -306,6 +423,15 @@ async function handleEndUserAccountIdShape(
       eventProvider,
       cookieNonce !== undefined
     );
+  }
+
+  // BAL-397 fix round — THE VENDOR-ACCOUNT OWNERSHIP BINDING. ⚠ MUST stay between the CSRF
+  // check and `persistAndRedirectConnected`: it is the only thing that resolves the SUBJECT
+  // (`endUserAccountId`, browser-supplied) against the ACTOR (`expertProfileId`, HMAC-trusted).
+  // See `endUserAccountBelongsToExpert` for the full threat model.
+  if (!(await endUserAccountBelongsToExpert(request, endUserAccountId, expertProfileId))) {
+    request.log.warn({ expertProfileId, provider }, 'apiroc_callback_account_binding_rejected');
+    return rejectShape2(reply, ctx, expertProfileId, eventProvider);
   }
 
   return persistAndRedirectConnected(request, reply, ctx, {
@@ -374,7 +500,7 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
     // production; APP_URL is the one every other user-facing link already uses.
     const ctx: CallbackRedirectContext = {
       webAppUrl: process.env.APP_URL ?? 'http://localhost:3000',
-      settingsPath: '/expert/settings?tab=calendar',
+      settingsPath: EXPERT_CALENDAR_SETTINGS_PATH,
       // BAL-396 fix round 2, Finding 1 — `Domain` now comes from the ONE shared derivation
       // (`@balo/shared/calendar`, re-exported by `connect-state.js`) that apps/web's
       // cookie-set also calls, so the two sides cannot disagree the way the hand-duplicated

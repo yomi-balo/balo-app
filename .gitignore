@@ -48,6 +48,11 @@ drizzle/meta
 .vscode/
 .claude/settings.local.json
 
+# /implement scratch dir — briefs, plans and review verdicts for the ticket in flight.
+# Ignored here rather than in .prettierignore because Prettier 3 reads .gitignore too, so one
+# entry keeps these out of BOTH `git add -A` and the `prettier --check .` Lint & Format job.
+.implement/
+
 # Logs
 *.log
 

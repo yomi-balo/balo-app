@@ -17,7 +17,6 @@ vi.mock('./work-history-tab', () => ({
 vi.mock('./certifications-tab', () => ({
   CertificationsTab: () => <div data-testid="certifications-tab" />,
 }));
-vi.mock('./calendar-tab', () => ({ CalendarTab: () => <div data-testid="calendar-tab" /> }));
 vi.mock('./schedule-tab', () => ({ ScheduleTab: () => <div data-testid="schedule-tab" /> }));
 vi.mock('./agency-domains-tab', () => ({
   AgencyDomainsTab: () => <div data-testid="agency-domains-tab" />,

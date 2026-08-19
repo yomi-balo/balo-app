@@ -18,7 +18,8 @@ export interface FixPermissionsResult {
  * no Apiroc equivalent). "Fix permissions" in an Apiroc world IS re-running OAuth, so this
  * retargets to `POST /api/calendar/connect` and takes the `provider` the caller already
  * knows. The RESULT FIELD NAME stays `relinkUrl` (mapped from the connect response's
- * `authUrl`) deliberately — it keeps `calendar-tab.tsx`'s consumer of this action identical.
+ * `authUrl`) deliberately — it keeps this action's consumer (BAL-397:
+ * `calendar-connections-section.tsx`) identical.
  */
 export const fixCalendarPermissionsAction = withAuth(
   async (session, provider: CalendarProvider): Promise<FixPermissionsResult> => {
