@@ -554,6 +554,25 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-468 — the daily calendar-subscription monitor's non-zero-arm alert. Mirrors
+  // `billing-details-confirmed-admin`'s shape: an ops signal for Balo staff, factual and
+  // non-alarming. `actionUrl: undefined` — no admin surface exists for this yet (open
+  // question in the BAL-468 plan). Every field degrades via `numberOrZero` so an absent count
+  // renders `0`, never `NaN`/`undefined`.
+  'calendar-subscription-lapse-admin': (data) => {
+    const expiring = numberOrZero(data.expiringCount);
+    const unconfirmed = numberOrZero(data.unconfirmedCount);
+    const unsubscribed = numberOrZero(data.unsubscribedConnectionCount);
+    // ⚠ ALL THREE ARMS, NOT TWO (PR #223 review). The monitor alerts on count > 0 in ANY arm,
+    // so omitting `unconfirmedCount` meant an arm-2-only alert rendered "0 … and 0 …" — a
+    // notification whose own numbers said nothing was wrong. The `log.error` paging signal
+    // always carried all three; this brings the human-readable half into line with it.
+    return {
+      title: 'Calendar subscriptions need attention',
+      body: `${expiring} calendar subscription(s) expire within 48 hours, ${unconfirmed} have never been confirmed by the calendar provider, and ${unsubscribed} connection(s) have none — the renewal sweep may be falling behind.`,
+    };
+  },
+
   // BAL-323: MJ's "ready to invoice" nudge once a company's billing details land.
   'billing-details-confirmed-admin': (data) => {
     const companyName = (data.companyName as string) ?? 'a company';

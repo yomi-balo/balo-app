@@ -39,11 +39,13 @@ export interface AvailabilityCacheJobData {
 // ── Enqueue helper ───────────────────────────────────────────────
 
 /**
- * Enqueues a (deduplicated) availability-cache rebuild for one expert.
+ * BAL-468 §7.4 — the shared implementation. Returns `false` when the enqueue did not land.
+ * The ONE caller that must know is the Apiroc webhook (`routes/calendar/webhook.ts`), which
+ * answers 503 so the delivery stays in the vendor's retry queue instead of being acked into
+ * the void — see `tryEnqueueAvailabilityCacheRebuild` below.
  *
- * Best-effort: a Redis hiccup must never fail the caller's mutation, so we
- * swallow and log any enqueue error. The `jobId` dedupes concurrent triggers
- * (webhook change + settings mutation) into a single pending rebuild.
+ * `jobId`, `removeOnComplete`, `removeOnFail`, `attempts` and `backoff` live HERE and only
+ * here — there must remain exactly ONE place those options are written.
  *
  * `removeOnFail: true` is deliberate: this is an idempotent cache-rebuild, and the
  * fixed per-expert `jobId` means a RETAINED failed job would block every later
@@ -51,32 +53,59 @@ export interface AvailabilityCacheJobData {
  * — permanently wedging their availability. Dropping the job on terminal failure
  * lets the next trigger self-heal. `attempts`/`backoff` absorb transient DB blips;
  * the worker's `failed` listener surfaces a terminal failure to logs/Sentry.
- *
- * Shared by the Cronofy webhook, the schedule editor, and the availability-override routes.
  */
-export async function enqueueAvailabilityCacheRebuild(
+async function enqueueRebuild(expertProfileId: string): Promise<void> {
+  const queue = getQueue(AVAILABILITY_CACHE_QUEUE);
+  await queue.add(
+    'rebuild-availability-cache',
+    { expertProfileId } satisfies AvailabilityCacheJobData,
+    {
+      // ⚠ Per-EXPERT, not per-calendar or per-subscription. The jobId string is load-bearing:
+      // getting it wrong (e.g. `availability-${expertId}`) silently disables the dedupe.
+      jobId: `availability-${expertProfileId}`,
+      removeOnComplete: true,
+      removeOnFail: true,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+    }
+  );
+}
+
+/**
+ * Returns `false` when the enqueue did not land — the Apiroc webhook route is the one caller
+ * that must know, so it can answer 503 and keep the delivery in Svix's retry queue rather than
+ * acking a change it never scheduled a rebuild for.
+ */
+export async function tryEnqueueAvailabilityCacheRebuild(
   expertProfileId: string,
   log: FastifyBaseLogger
-): Promise<void> {
+): Promise<boolean> {
   try {
-    const queue = getQueue(AVAILABILITY_CACHE_QUEUE);
-    await queue.add(
-      'rebuild-availability-cache',
-      { expertProfileId } satisfies AvailabilityCacheJobData,
-      {
-        jobId: `availability-${expertProfileId}`,
-        removeOnComplete: true,
-        removeOnFail: true,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 2000 },
-      }
-    );
+    await enqueueRebuild(expertProfileId);
+    return true;
   } catch (err: unknown) {
     log.error(
       { expertProfileId, error: err instanceof Error ? err.message : String(err) },
       'Failed to enqueue availability cache rebuild job'
     );
+    return false;
   }
+}
+
+/**
+ * Enqueues a (deduplicated) availability-cache rebuild for one expert.
+ *
+ * Best-effort: a Redis hiccup must never fail the caller's mutation, so this swallows and
+ * logs any enqueue error via `tryEnqueueAvailabilityCacheRebuild` and discards the result.
+ * Unchanged contract for its five existing callers: the OAuth connect callback, the schedule
+ * editor, the availability-override routes, booking-time meeting-availability, and the
+ * conflict-check toggle.
+ */
+export async function enqueueAvailabilityCacheRebuild(
+  expertProfileId: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  await tryEnqueueAvailabilityCacheRebuild(expertProfileId, log);
 }
 
 // ── Worker: Rebuild availability cache ───────────────────────────

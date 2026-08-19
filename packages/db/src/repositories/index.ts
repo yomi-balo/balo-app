@@ -50,6 +50,13 @@ export { calendarRepository } from './calendar';
 export type { UpsertApirocConnectionInput, BusyReadTarget } from './calendar';
 export type { CalendarConnection, CalendarCredentialStatus, CalendarSubCalendar } from '../schema';
 export { CALENDAR_CREDENTIAL_STATUSES } from '../schema';
+// ── Apiroc webhook subscriptions (BAL-468) — the ONLY access path to that table ──────────
+export { calendarSubscriptionsRepository } from './calendar-subscriptions';
+export type {
+  InsertSubscriptionInput,
+  ActiveConnectionWithoutSubscription,
+} from './calendar-subscriptions';
+export type { CalendarSubscription, NewCalendarSubscription } from '../schema';
 // ── Consultation calendar events (BAL-396 §5) — the vendor event id's only home ──────────
 export { meetingCalendarEventsRepository } from './meeting-calendar-events';
 export type { RecordCalendarEventInput } from './meeting-calendar-events';
@@ -438,6 +445,12 @@ export {
   type InsertReceivedDailyEventInput,
 } from './daily-webhook-events';
 export type { DailyWebhookEvent, NewDailyWebhookEvent } from '../schema';
+// ── Apiroc webhook idempotency (BAL-468) — the THIRD webhook marker log ─────
+export {
+  apirocWebhookEventsRepository,
+  type InsertReceivedApirocEventInput,
+} from './apiroc-webhook-events';
+export type { ApirocWebhookEvent, NewApirocWebhookEvent } from '../schema';
 // ── Case consultation billing / expert payout obligation (BAL-399) ──────────
 export {
   expertPayoutRecordsRepository,

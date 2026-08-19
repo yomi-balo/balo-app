@@ -86,6 +86,26 @@ export interface CalendarAuthErrorPayload {
   provider: string;
 }
 
+/**
+ * BAL-468 §15 — the daily calendar-subscription monitor's non-zero-arm alert. SERVER-ONLY,
+ * declared INLINE in this file — deliberately, and the exception TO
+ * `reference_notification_event_dup_shared_home`, not a violation of it: the web mirror
+ * (`apps/web/src/lib/notifications/types.ts`) omits server-only events by design (exactly as
+ * it omits `calendar.auth_error`), so there is no second copy of this shape and no clone.
+ * `CalendarAuthErrorPayload` above is the in-repo precedent for an inline server-only payload.
+ *
+ * `correlationId` is date-keyed (`calendar_subscription_lapse:${YYYY-MM-DD}`), not a uuid —
+ * one alert per sweep day; a same-day retry collapses on the publisher's jobId while a
+ * genuinely new day re-alerts. Precedent: `wallet-dormancy-sweep`'s
+ * `${walletId}:dormancy_reminder:${band}:${expiresAtDate}`.
+ */
+export interface CalendarSubscriptionLapsePayload {
+  correlationId: string;
+  expiringCount: number;
+  unconfirmedCount: number;
+  unsubscribedConnectionCount: number;
+}
+
 export interface ProjectRequestSubmittedPayload {
   correlationId: string; // projectRequestId
   projectRequestId: string;
@@ -235,6 +255,8 @@ export type NotificationEvent =
   | 'expert.approved'
   | 'expert.referral_invited'
   | 'calendar.auth_error'
+  // BAL-468 — the daily calendar-subscription monitor's non-zero-arm alert. SERVER-ONLY.
+  | 'calendar.subscription_lapse'
   | 'project.request_submitted'
   | 'project.match_requested'
   | 'project.exploratory_requested'
@@ -328,6 +350,10 @@ export type NotificationEvent =
  */
 export type ServerOnlyNotificationEvent =
   | 'calendar.auth_error'
+  // BAL-468: published exclusively by the API's daily `calendar-subscription-monitor` sweep —
+  // never from apps/web, so it has no `publishBodySchema` arm; adding one would be a
+  // `StraySchemaArm` and fail `tsc`.
+  | 'calendar.subscription_lapse'
   | 'engagement.auto_accepted'
   | 'engagement.review_reminder'
   | 'onboarding.reminder'
@@ -464,6 +490,7 @@ export interface EventPayloadMap {
   'expert.approved': ExpertApprovedPayload;
   'expert.referral_invited': ExpertReferralInvitedPayload;
   'calendar.auth_error': CalendarAuthErrorPayload;
+  'calendar.subscription_lapse': CalendarSubscriptionLapsePayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;
   'project.exploratory_requested': ProjectExploratoryRequestedPayload;

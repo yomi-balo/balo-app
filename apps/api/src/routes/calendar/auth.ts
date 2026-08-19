@@ -22,6 +22,7 @@ import {
   provisionConnection,
 } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
+import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
 
 // ── Validation ──────────────────────────────────────────────────
 
@@ -216,6 +217,13 @@ async function persistAndRedirectConnected(
     });
     const status = await provisionConnection(connection);
     await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
+    // BAL-468 §8.4/§8.6 — covers both first connect (force is a no-op — nothing to renew) and
+    // reconnect (force re-creates every canonical subscription rather than trusting a vendor
+    // channel that may have died silently during the revoke). Only on ACTIVE: a SYNC_PENDING
+    // connection has no sub-calendars yet, so there is nothing to subscribe.
+    if (status === 'ACTIVE') {
+      await enqueueSubscriptionReconcile(connection.id, { force: true }, request.log);
+    }
 
     // `provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING' — a plain ternary is
     // exhaustive here without pulling in `api.ts`'s 4-value adapter.

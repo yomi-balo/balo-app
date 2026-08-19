@@ -27,6 +27,9 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
   'engagement.accepted',
   'engagement.changes_requested',
   'engagement.auto_accepted',
+  // BAL-468 — the daily calendar-subscription monitor's alert. Without this the rule resolves
+  // to nobody and the alert is silently dropped.
+  'calendar.subscription_lapse',
 ]);
 
 /**

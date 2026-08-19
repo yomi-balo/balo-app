@@ -140,4 +140,13 @@ export const SYNC_PATH_FILES = [
   'services/availability/vendor-busy.ts',
   'services/availability/resolve-and-cache.ts',
   'services/availability/window-availability.ts',
+  // BAL-468 — the webhook is a bare trigger into this same sync path; the subscription
+  // lifecycle machinery that keeps the trigger alive. ⚠ NOT `routes/calendar/webhook.ts` —
+  // that file falls inside Scan B's exemption (it necessarily forms part of the connect
+  // surface's URL scheme) and adding it here would fail "is a declared sync-path file but
+  // falls inside a Scan B exemption".
+  'jobs/calendar-subscription-reconcile.ts',
+  'jobs/calendar-subscription-monitor.ts',
+  'services/calendar/subscription-plan.ts',
+  'services/calendar/subscription-reconcile.ts',
 ] as const;

@@ -240,6 +240,19 @@ describe('notificationRules', () => {
     expect(rules!.some((r) => r.channel !== 'in-app')).toBe(false);
   });
 
+  it('calendar.subscription_lapse notifies admins in-app only (BAL-468)', () => {
+    const rules = notificationRules['calendar.subscription_lapse'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(1);
+    expect(rules![0]).toMatchObject({
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'calendar-subscription-lapse-admin',
+      timing: 'immediate',
+    });
+    expect(rules!.some((r) => r.channel !== 'in-app')).toBe(false);
+  });
+
   it('has rules for message.received event', () => {
     const rules = notificationRules['message.received'];
     expect(rules).toBeDefined();
