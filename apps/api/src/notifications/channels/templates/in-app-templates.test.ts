@@ -432,7 +432,7 @@ describe('getInAppTemplate', () => {
   });
 
   describe('calendar-subscription-lapse-admin (BAL-468)', () => {
-    it('renders both counts in the body', () => {
+    it('renders ALL THREE arm counts in the body', () => {
       const result = getInAppTemplate('calendar-subscription-lapse-admin', {
         expiringCount: 3,
         unconfirmedCount: 1,
@@ -440,14 +440,27 @@ describe('getInAppTemplate', () => {
       });
       expect(result).toEqual({
         title: 'Calendar subscriptions need attention',
-        body: '3 calendar subscription(s) expire within 48 hours and 2 connection(s) have none — the renewal sweep may be falling behind.',
+        body: '3 calendar subscription(s) expire within 48 hours, 1 have never been confirmed by the calendar provider, and 2 connection(s) have none — the renewal sweep may be falling behind.',
       });
+    });
+
+    it('⚠ an arm-2-ONLY alert does not render as "0 … and 0 …"', () => {
+      // The monitor alerts on count > 0 in ANY arm. Before PR #223's review, this template
+      // rendered only arms 1 and 3, so an alert fired purely by arm 2 produced a notification
+      // whose own numbers said nothing was wrong — while the log.error paging signal beside it
+      // carried all three. This is the regression guard for that.
+      const result = getInAppTemplate('calendar-subscription-lapse-admin', {
+        expiringCount: 0,
+        unconfirmedCount: 4,
+        unsubscribedConnectionCount: 0,
+      });
+      expect(result.body).toContain('4 have never been confirmed');
     });
 
     it('degrades every field to 0 on empty data — never NaN/undefined', () => {
       const result = getInAppTemplate('calendar-subscription-lapse-admin', {});
       expect(result.body).toBe(
-        '0 calendar subscription(s) expire within 48 hours and 0 connection(s) have none — the renewal sweep may be falling behind.'
+        '0 calendar subscription(s) expire within 48 hours, 0 have never been confirmed by the calendar provider, and 0 connection(s) have none — the renewal sweep may be falling behind.'
       );
       expect(result.actionUrl).toBeUndefined();
     });

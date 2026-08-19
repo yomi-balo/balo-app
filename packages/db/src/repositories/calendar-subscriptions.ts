@@ -1,6 +1,11 @@
-import { and, asc, desc, eq, inArray, isNull, lt, notExists, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, isNull, lt, notExists, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { calendarConnections, calendarSubscriptions, type CalendarSubscription } from '../schema';
+import {
+  calendarConnections,
+  calendarSubCalendars,
+  calendarSubscriptions,
+  type CalendarSubscription,
+} from '../schema';
 
 /**
  * The create payload for one Apiroc webhook subscription.
@@ -253,13 +258,31 @@ export const calendarSubscriptionsRepository = {
   },
 
   /**
-   * MONITOR ARM 2 — rows the VENDOR HAS NEVER CONFIRMED. Live rows with no `expiration`,
-   * created before the grace cutoff.
+   * MONITOR ARM 2 — rows the VENDOR HAS NEVER CONFIRMED. Live rows the reconciler's `list` pass
+   * has never stamped, created before the grace cutoff.
    *
    * Deliberately separate from arm 1 (see above). The `createdBefore` grace is what keeps a
    * row created seconds ago — whose verification pass simply has not run yet — out of the
    * alert, so a firing arm 2 means the reconciler's `list` pass has genuinely not succeeded
    * for this row.
+   *
+   * ⚠⚠ "UNCONFIRMED" IS `expiration IS NULL` **AND** `expiration_synced_at IS NULL` — BOTH
+   * COLUMNS, AND THE SECOND ONE IS THE LOAD-BEARING HALF (PR #223 review).
+   *
+   * `stampVendorState`'s docblock already draws this distinction and this query used to
+   * contradict it: `expiration: null` means "the vendor reports NO EXPIRY for this
+   * subscription", which is a real, confirmed answer — the don't-know state is the column
+   * being null with `expiration_synced_at` ALSO null, i.e. nobody has looked. Three other
+   * places already treat vendor-reports-no-expiry as a real state (`parseVendorExpiration`,
+   * the `expiration` column doc, and `canonicalRenewalReason`, which declines to plan a
+   * full-expiration renewal for such a row).
+   *
+   * Checking only `expiration` therefore alerted FOREVER on any subscription Apiroc returns
+   * without an expiry: `stampVendorState` writes `expiration = null, expiration_synced_at =
+   * now`, the row is fully confirmed, and arm 2 kept flagging it every day with the self-heal
+   * unable to change anything. Whether Apiroc ever returns such a row is still open on
+   * BAL-455 — which is exactly why the query must encode the documented semantics rather than
+   * assume the vendor never does it.
    *
    * ⚠ Same no-silent-caps contract on `limit` as arm 1.
    */
@@ -271,6 +294,7 @@ export const calendarSubscriptionsRepository = {
         and(
           isNull(calendarSubscriptions.deletedAt),
           isNull(calendarSubscriptions.expiration),
+          isNull(calendarSubscriptions.expirationSyncedAt),
           lt(calendarSubscriptions.createdAt, createdBefore)
         )
       )
@@ -279,15 +303,35 @@ export const calendarSubscriptionsRepository = {
   },
 
   /**
-   * MONITOR ARM 3 — THE INVERSE ALERT. Live `ACTIVE` connections with ZERO live subscriptions.
+   * MONITOR ARM 3 — THE INVERSE ALERT. Live `ACTIVE` connections that SHOULD hold at least one
+   * subscription and hold none.
    *
    * ⚠⚠ THIS IS THE ONE QUESTION NO PER-SUBSCRIPTION CHECK CAN ASK. A silent platform-wide
    * expiry (or a reconciler that quietly stopped running) leaves behind connections with no
    * rows at all — arms 1 and 2 scan `calendar_subscriptions`, so they see NOTHING and report
    * a clean bill of health while every expert's change push is dead.
    *
-   * A deliberate cross-table read (`NOT EXISTS`), owned by THIS repository rather than
-   * `calendarRepository`, because the question being asked is about subscription ABSENCE.
+   * ⚠⚠ IT ALERTS ON **DESIRED-BUT-ABSENT**, NOT ON **ABSENT** — AND THAT DISTINCTION IS THE
+   * WHOLE CORRECTNESS OF THIS ARM (PR #223 review).
+   *
+   * The reconciler's DESIRED set is `subCalendars.filter((c) => c.conflictCheck)`. A connection
+   * with no conflict-checked calendar therefore SHOULD have zero subscriptions — the reconciler
+   * correctly creates nothing for it. Alerting on bare absence would page about that connection
+   * every single day, forever, with the self-heal structurally unable to fix it: exactly the
+   * alert-fatigue failure mode the whole gating design exists to avoid, just reached in the
+   * ENABLED steady state instead of on the revert path.
+   *
+   * ⚠ AND THE STATE IS REACHABLE, NOT THEORETICAL. `provisionConnection` floors `conflictCheck`
+   * on the PRIMARY calendar (`cal.isPrimary || existing`) — but if the provider reports NO
+   * writable calendar as primary, `writable.find((cal) => cal.isPrimary)` is `undefined`,
+   * `targetCalendarId` stays null, and the connection is STILL persisted `ACTIVE`. That yields
+   * a legitimately-zero-conflict-check ACTIVE connection. Nothing in the schema or in
+   * `apiroc-connection.ts` guarantees "ACTIVE ⇒ ≥1 conflict-check calendar", so this query must
+   * not assume it.
+   *
+   * Two cross-table reads (`EXISTS` over the desired set, `NOT EXISTS` over subscriptions),
+   * owned by THIS repository rather than `calendarRepository`, because the question is about
+   * subscription ABSENCE.
    *
    * ⚠ THE CALLER MUST GATE THIS ARM ON THE FEATURE BEING CONFIGURED. Before the on-switch is
    * thrown, EVERY ACTIVE connection legitimately has zero subscriptions, and an ungated arm 3
@@ -308,6 +352,19 @@ export const calendarSubscriptionsRepository = {
         and(
           isNull(calendarConnections.deletedAt),
           eq(calendarConnections.credentialStatus, 'ACTIVE'),
+          // The DESIRED set — mirrors the reconciler's `subCalendars.filter(c => c.conflictCheck)`.
+          // Without this arm, a connection that legitimately wants no subscriptions pages daily.
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(calendarSubCalendars)
+              .where(
+                and(
+                  eq(calendarSubCalendars.connectionId, calendarConnections.id),
+                  eq(calendarSubCalendars.conflictCheck, true)
+                )
+              )
+          ),
           notExists(
             db
               .select({ one: sql`1` })

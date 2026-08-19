@@ -233,12 +233,30 @@ async function processVerifiedApirocWebhook(
     return;
   }
 
-  // ── Step 10 — insert the marker. `undefined` (lost the race, or a prior delivery that ────
-  // died before enqueuing) is NOT a reason to abandon the effect — continue either way.
-  await apirocWebhookEventsRepository.insertReceived(
+  // ── Step 10 — insert the marker. ───────────────────────────────────────────────────────
+  //
+  // `undefined` means the id was already recorded: either a concurrent delivery won the unique
+  // index, or a PRIOR delivery inserted the marker and then died before committing its effect.
+  // We CONTINUE in both cases, and that is deliberate — the second case still owes its effect,
+  // and the replay short-circuit above has already returned 200 for anything with
+  // `processed_at` set, so a row reaching here is by construction unprocessed.
+  //
+  // ⚠⚠ THE RESULT IS CAPTURED AND LOGGED RATHER THAN DISCARDED, BECAUSE THIS IS "THE REAL
+  // CONCURRENCY GATE" (see `insertReceived`'s repository docblock) AND A GATE NOBODY READS IS
+  // NOT A GATE (PR #223 review). Two simultaneous deliveries of one `svix-id` both proceed
+  // here. That is HARMLESS TODAY and only today: the sole effect is
+  // `tryEnqueueAvailabilityCacheRebuild`, which is idempotent and coalesced on the per-expert
+  // `availability-${expertProfileId}` jobId, so the duplicate collapses by construction.
+  //
+  // ⚠⚠ THE MOMENT THIS HANDLER GROWS A SECOND, NON-IDEMPOTENT EFFECT — a counter, an audit
+  // row, a notification, an analytics fire — IT MUST BRANCH HERE AND RETURN 200 ON
+  // `undefined`, the way `routes/daily/webhook.ts` does for its presence writes. Do not add
+  // that effect and leave this call site unchanged.
+  const marker = await apirocWebhookEventsRepository.insertReceived(
     { svixId, calendarSubscriptionId, eventType },
     db
   );
+  const wonInsertRace = marker !== undefined;
 
   // ── Step 8 — unknown eventType: marker + log + 200, no enqueue. Never switch on eventType
   // as though the set were closed.
@@ -283,7 +301,7 @@ async function processVerifiedApirocWebhook(
   await apirocWebhookEventsRepository.markProcessed(svixId, db);
 
   log.info(
-    { svixId, calendarSubscriptionId, expertProfileId, eventType },
+    { svixId, calendarSubscriptionId, expertProfileId, eventType, wonInsertRace },
     'apiroc_webhook_processed'
   );
   reply.code(200).send({ received: true });

@@ -33,9 +33,17 @@ import {
 // ── Fixtures ──────────────────────────────────────────────────────
 
 /** A live ACTIVE Apiroc connection for a fresh expert. Returns its id. */
+/**
+ * ⚠ SEEDS ONE CONFLICT-CHECKED SUB-CALENDAR BY DEFAULT, and that default is load-bearing for
+ * monitor arm 3: the arm alerts on DESIRED-but-absent, where "desired" is
+ * `subCalendars.filter((c) => c.conflictCheck)`. A connection with no conflict-checked calendar
+ * legitimately wants zero subscriptions and must NOT be flagged. Pass `conflictCheckCalendars:
+ * 0` to build that case explicitly.
+ */
 async function seedConnection(
   provider = 'google',
-  credentialStatus: 'ACTIVE' | 'SYNC_PENDING' | 'EXPIRED' | 'REVOKED' = 'ACTIVE'
+  credentialStatus: 'ACTIVE' | 'SYNC_PENDING' | 'EXPIRED' | 'REVOKED' = 'ACTIVE',
+  options: { conflictCheckCalendars?: number } = {}
 ): Promise<{ connectionId: string; expertProfileId: string }> {
   const expert = await expertDraftFactory();
   const connection = await calendarRepository.upsertApirocConnection({
@@ -45,6 +53,21 @@ async function seedConnection(
     providerEmail: `expert@${provider}.example`,
     credentialStatus,
   });
+  const conflictCheckCalendars = options.conflictCheckCalendars ?? 1;
+  if (conflictCheckCalendars > 0) {
+    await calendarRepository.replaceSubCalendars(
+      connection.id,
+      Array.from({ length: conflictCheckCalendars }, (_, i) => ({
+        calendarId: `subcal-${i}`,
+        name: `Calendar ${i}`,
+        provider,
+        profileName: null,
+        isPrimary: i === 0,
+        conflictCheck: true,
+        color: null,
+      }))
+    );
+  }
   return { connectionId: connection.id, expertProfileId: expert.id };
 }
 
@@ -543,6 +566,37 @@ describe('calendarSubscriptionsRepository.listUnconfirmedBefore', () => {
     expect(rows.map((r) => r.id)).toEqual([stale.id]);
   });
 
+  it('⚠⚠ EXCLUDES a row the vendor confirmed as having NO expiry', async () => {
+    // PR #223 review. `stampVendorState`'s docblock is explicit that `expiration: null` means
+    // "the vendor reports no expiry" — a real, CONFIRMED answer — and that the don't-know state
+    // is that column null with `expiration_synced_at` ALSO null. Checking only `expiration`
+    // meant such a row was flagged every single day forever, with the self-heal unable to
+    // change anything, because it is not actually broken.
+    const { connectionId } = await seedConnection();
+    const noExpiry = await calendarSubscriptionsRepository.insertSubscription(
+      subInput(connectionId, { calendarId: 'cal-no-expiry' })
+    );
+    const neverLookedAt = await calendarSubscriptionsRepository.insertSubscription(
+      subInput(connectionId, { calendarId: 'cal-never-looked' })
+    );
+    await stampCreatedAt(noExpiry.id, '2026-08-19T00:00:00Z');
+    await stampCreatedAt(neverLookedAt.id, '2026-08-19T00:00:00Z');
+
+    // The vendor answered, and the answer was "no expiry" — expiration null, synced_at set.
+    await calendarSubscriptionsRepository.stampVendorState(
+      noExpiry.id,
+      null,
+      new Date('2026-08-19T01:00:00Z')
+    );
+
+    const rows = await calendarSubscriptionsRepository.listUnconfirmedBefore(
+      new Date('2026-08-19T10:00:00Z'),
+      10
+    );
+
+    expect(rows.map((r) => r.id)).toEqual([neverLookedAt.id]);
+  });
+
   it('honours the batch limit', async () => {
     const { connectionId } = await seedConnection();
     const first = await calendarSubscriptionsRepository.insertSubscription(
@@ -579,6 +633,47 @@ describe('calendarSubscriptionsRepository.listActiveConnectionsWithoutSubscripti
     expect(rows.find((r) => r.connectionId === bare.connectionId)?.expertProfileId).toBe(
       bare.expertProfileId
     );
+  });
+
+  it('⚠⚠ EXCLUDES an ACTIVE connection that legitimately wants NO subscriptions', async () => {
+    // PR #223 review. The reconciler's DESIRED set is the conflict-checked sub-calendars, so a
+    // connection with none SHOULD have zero subscriptions — the reconcile correctly creates
+    // nothing. Alerting on bare absence would page about it every day forever with the
+    // self-heal structurally unable to fix it: the alert-fatigue failure mode this feature is
+    // otherwise careful to avoid, reached in the ENABLED steady state rather than on revert.
+    //
+    // ⚠ AND IT IS REACHABLE, NOT THEORETICAL: `provisionConnection` floors conflictCheck on the
+    // PRIMARY calendar, but when the provider reports no writable calendar as primary the
+    // connection is still persisted ACTIVE with every conflictCheck false.
+    const wantsNothing = await seedConnection('google', 'ACTIVE', { conflictCheckCalendars: 0 });
+    const wantsOne = await seedConnection('microsoft', 'ACTIVE');
+
+    const rows = await calendarSubscriptionsRepository.listActiveConnectionsWithoutSubscription(50);
+    const ids = rows.map((r) => r.connectionId);
+
+    expect(ids).not.toContain(wantsNothing.connectionId);
+    expect(ids).toContain(wantsOne.connectionId);
+  });
+
+  it('EXCLUDES a connection whose sub-calendars all have conflictCheck OFF', async () => {
+    const { connectionId } = await seedConnection('google', 'ACTIVE', {
+      conflictCheckCalendars: 0,
+    });
+    // Rows exist, but none is conflict-checked — still nothing desired, so still no alert.
+    await calendarRepository.replaceSubCalendars(connectionId, [
+      {
+        calendarId: 'read-only-ish',
+        name: 'Not conflict checked',
+        provider: 'google',
+        profileName: null,
+        isPrimary: false,
+        conflictCheck: false,
+        color: null,
+      },
+    ]);
+
+    const rows = await calendarSubscriptionsRepository.listActiveConnectionsWithoutSubscription(50);
+    expect(rows.map((r) => r.connectionId)).not.toContain(connectionId);
   });
 
   it('INCLUDES a connection whose ONLY subscription is soft-deleted', async () => {

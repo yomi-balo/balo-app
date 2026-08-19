@@ -124,11 +124,21 @@ Runs at **07:00 UTC**, offset from the other sweeps (dormancy 03:00, fx 05:00, d
 It alerts on **count > 0 in any arm, never on a threshold** — if renewal is working, the steady
 state is zero.
 
-| Arm            | Question                                                  | What a hit means                                                                               |
-| -------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `expiring`     | Rows expiring inside 48h                                  | Renewal is in arrears                                                                          |
-| `unconfirmed`  | Created >2h ago but never confirmed at the vendor         | The verification pass is not succeeding                                                        |
-| `unsubscribed` | A live ACTIVE connection with **zero** live subscriptions | The shape a silent platform-wide expiry leaves behind — no per-subscription check can see this |
+| Arm            | Question                                                                                                    | What a hit means                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `expiring`     | Rows expiring inside 48h                                                                                    | Renewal is in arrears                                                                          |
+| `unconfirmed`  | Created >2h ago and **never stamped** by the vendor — `expiration` **and** `expiration_synced_at` both null | Nobody has looked — the reconciler's `list` pass is not succeeding for this row                |
+| `unsubscribed` | A live ACTIVE connection that **wants** ≥1 subscription (has ≥1 conflict-checked calendar) and has none     | The shape a silent platform-wide expiry leaves behind — no per-subscription check can see this |
+
+Two things the arms deliberately do **not** flag. Both are legitimate steady states, and
+alerting on either would page every day with the self-heal structurally unable to fix it:
+
+- **A subscription the vendor confirmed as having no expiry.** `expiration` null with
+  `expiration_synced_at` set is a real answer, not ignorance. Only both-null is "unconfirmed".
+- **An ACTIVE connection with no conflict-checked calendar.** It correctly wants zero
+  subscriptions. This is reachable, not theoretical: if the provider reports no writable
+  calendar as primary, the connection is still persisted ACTIVE with every `conflictCheck`
+  false.
 
 The monitor also **self-heals**: it enqueues a reconcile for every affected connection. That does
 **not** suppress the alert — "renewal was late" is worth knowing even after a successful repair.

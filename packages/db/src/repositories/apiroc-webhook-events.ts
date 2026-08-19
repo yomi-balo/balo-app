@@ -9,7 +9,7 @@ export interface InsertReceivedApirocEventInput {
   svixId: string;
   /** The live `calendar_subscriptions` row the delivery resolved to. */
   calendarSubscriptionId: string;
-  /** The Apiroc event type as delivered, e.g. `event.updated`. */
+  /** The Apiroc event type as delivered, e.g. `calendar.event.changed`. */
   eventType: string;
 }
 

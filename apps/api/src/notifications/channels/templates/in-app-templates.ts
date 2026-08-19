@@ -561,10 +561,15 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // renders `0`, never `NaN`/`undefined`.
   'calendar-subscription-lapse-admin': (data) => {
     const expiring = numberOrZero(data.expiringCount);
+    const unconfirmed = numberOrZero(data.unconfirmedCount);
     const unsubscribed = numberOrZero(data.unsubscribedConnectionCount);
+    // ⚠ ALL THREE ARMS, NOT TWO (PR #223 review). The monitor alerts on count > 0 in ANY arm,
+    // so omitting `unconfirmedCount` meant an arm-2-only alert rendered "0 … and 0 …" — a
+    // notification whose own numbers said nothing was wrong. The `log.error` paging signal
+    // always carried all three; this brings the human-readable half into line with it.
     return {
       title: 'Calendar subscriptions need attention',
-      body: `${expiring} calendar subscription(s) expire within 48 hours and ${unsubscribed} connection(s) have none — the renewal sweep may be falling behind.`,
+      body: `${expiring} calendar subscription(s) expire within 48 hours, ${unconfirmed} have never been confirmed by the calendar provider, and ${unsubscribed} connection(s) have none — the renewal sweep may be falling behind.`,
     };
   },
 
