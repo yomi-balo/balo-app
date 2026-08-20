@@ -5,8 +5,6 @@ describe('CALENDAR_SERVER_EVENTS', () => {
   it('exposes exactly the calendar server events (guards against accidental drift)', () => {
     expect(Object.keys(CALENDAR_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'AVAILABILITY_CACHE_REBUILT',
-      'AVAILABILITY_OVERRIDE_CREATED',
-      'AVAILABILITY_OVERRIDE_DELETED',
       'CREDENTIALS_REVOKED',
       'DISCONNECTED',
       'OAUTH_COMPLETED',
@@ -23,14 +21,8 @@ describe('CALENDAR_SERVER_EVENTS', () => {
     );
   });
 
-  it('maps the BAL-235 date-override events to their exact snake_case values', () => {
-    expect(CALENDAR_SERVER_EVENTS.AVAILABILITY_OVERRIDE_CREATED).toBe(
-      'availability_override_created'
-    );
-    expect(CALENDAR_SERVER_EVENTS.AVAILABILITY_OVERRIDE_DELETED).toBe(
-      'availability_override_deleted'
-    );
-  });
+  // The BAL-235 date-override events MOVED to `AVAILABILITY_SERVER_EVENTS` (BAL-416) — their
+  // value assertions migrated to `availability.test.ts`.
 
   it('uses snake_case event values throughout', () => {
     for (const value of Object.values(CALENDAR_SERVER_EVENTS)) {

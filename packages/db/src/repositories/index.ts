@@ -546,7 +546,9 @@ export {
  */
 export {
   resolveMeetingContextOwner,
+  resolveClientCompaniesForMeetings,
   type MeetingContextOwner,
+  type MeetingClientCompany,
 } from './_shared/meeting-context-owner';
 export type {
   Meeting,

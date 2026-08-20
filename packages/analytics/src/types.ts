@@ -41,6 +41,7 @@ import type { TranscriptServerEventMap } from './events/transcript';
 import type { ReviewServerEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
+import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -74,7 +75,9 @@ export type AllEvents = AuthEventMap &
   // BAL-435 — the in-call surface. ⚠ CLIENT family; `MeetingServerEventMap` stays server-only.
   MeetingCallEventMap &
   // BAL-436 — the in-call side panel. ⚠ CLIENT family; `GuestServerEventMap` stays server-only.
-  MeetingPanelEventMap;
+  MeetingPanelEventMap &
+  // BAL-416 — the time-off conflict warning's CLIENT family.
+  AvailabilityEventMap;
 
 export type EventName = keyof AllEvents;
 
@@ -107,6 +110,8 @@ export type ServerEvents = ExpertServerEventMap &
   // `apps/web` `/join/[token]` RSC. Deliberately absent from `AllEvents`.
   GuestServerEventMap &
   EndOfCallServerEventMap &
+  // BAL-416 — the MOVED BAL-235 date-override events (server-side, home changed only).
+  AvailabilityServerEventMap &
   // BAL-414 (D7) — SERVER-ONLY: both origins (the API credential-break/repair triggers and
   // the web dashboard read path, an `import 'server-only'` RSC) are server contexts.
   // Deliberately absent from `AllEvents`.

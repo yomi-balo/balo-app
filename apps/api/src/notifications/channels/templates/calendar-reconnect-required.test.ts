@@ -8,7 +8,7 @@ const BASE = 'https://app.balo.expert';
 const props = (over: Record<string, unknown> = {}) => ({
   firstName: 'Dana',
   providerLabel: 'Google Calendar',
-  ctaUrl: `${BASE}/expert/settings?tab=calendar`,
+  ctaUrl: `${BASE}/expert/settings?tab=schedule`,
   baseUrl: BASE,
   // BAL-414 (D10) — the de-list arm by default; individual tests override to exercise the
   // still-searchable arm.
@@ -32,7 +32,7 @@ describe('CalendarReconnectRequiredEmail (BAL-396 §7)', () => {
     expect(html).toContain('Your calendar disconnected');
     expect(html).toContain('Google Calendar');
     expect(html).toContain('Reconnect calendar');
-    expect(html).toContain(`${BASE}/expert/settings?tab=calendar`);
+    expect(html).toContain(`${BASE}/expert/settings?tab=schedule`);
   });
 
   it('falls back to the "there" greeting for a name-less recipient', async () => {

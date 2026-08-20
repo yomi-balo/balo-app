@@ -716,19 +716,4 @@ describe('calendarRepository', () => {
       expect(mockValues).toHaveBeenCalled();
     });
   });
-
-  describe('findConnectionWithSubCalendars', () => {
-    it('returns connection with sub-calendars included', async () => {
-      const connWithSubs = {
-        id: 'conn-1',
-        expertProfileId: 'ep-1',
-        subCalendars: [{ calendarId: 'cal-1' }],
-      };
-      mockFindFirst.mockResolvedValue(connWithSubs);
-
-      const result = await calendarRepository.findConnectionWithSubCalendars('ep-1');
-
-      expect(result).toEqual(connWithSubs);
-    });
-  });
 });

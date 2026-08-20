@@ -3,7 +3,6 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 // ── Hoisted mocks ──────────────────────────────────────────────
 
 const {
-  mockFindConnectionWithSubCalendars,
   mockListConnectionsByExpertProfileId,
   mockFindSubCalendarsByConnectionId,
   mockFindConnectionByExpertAndProvider,
@@ -16,7 +15,6 @@ const {
   mockEnqueueSubscriptionReconcile,
   mockReconcileExpertSearchability,
 } = vi.hoisted(() => ({
-  mockFindConnectionWithSubCalendars: vi.fn(),
   mockListConnectionsByExpertProfileId: vi.fn(),
   mockFindSubCalendarsByConnectionId: vi.fn(),
   mockFindConnectionByExpertAndProvider: vi.fn(),
@@ -32,7 +30,6 @@ const {
 
 vi.mock('@balo/db', () => ({
   calendarRepository: {
-    findConnectionWithSubCalendars: mockFindConnectionWithSubCalendars,
     listConnectionsByExpertProfileId: mockListConnectionsByExpertProfileId,
     findSubCalendarsByConnectionId: mockFindSubCalendarsByConnectionId,
     findConnectionByExpertAndProvider: mockFindConnectionByExpertAndProvider,
@@ -92,7 +89,6 @@ vi.mock('@balo/analytics/server', () => ({
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { trackServer } from '@balo/analytics/server';
-import { toLegacyStatus } from './api.js';
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -146,15 +142,6 @@ describe('calendar API routes (BAL-396)', () => {
     mockReconcileExpertSearchability.mockResolvedValue({ changed: false });
   });
 
-  describe('toLegacyStatus', () => {
-    it('maps the DB vocabulary onto the web vocabulary, collapsing EXPIRED/REVOKED', () => {
-      expect(toLegacyStatus('ACTIVE')).toBe('connected');
-      expect(toLegacyStatus('SYNC_PENDING')).toBe('sync_pending');
-      expect(toLegacyStatus('EXPIRED')).toBe('auth_error');
-      expect(toLegacyStatus('REVOKED')).toBe('auth_error');
-    });
-  });
-
   // ── GET /api/calendar/connection ────────────────────────────────
 
   describe('GET /api/calendar/connection', () => {
@@ -175,8 +162,7 @@ describe('calendar API routes (BAL-396)', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('returns { connection: null, connections: [] } when nothing is connected', async () => {
-      mockFindConnectionWithSubCalendars.mockResolvedValue(undefined);
+    it('returns { connections: [] } when nothing is connected — no legacy `connection` key', async () => {
       mockListConnectionsByExpertProfileId.mockResolvedValue([]);
 
       const res = await app.inject({
@@ -186,14 +172,12 @@ describe('calendar API routes (BAL-396)', () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ connection: null, connections: [] });
+      const body = res.json();
+      expect(body).toEqual({ connections: [] });
+      expect(body).not.toHaveProperty('connection');
     });
 
-    it('keeps the legacy single-connection shape AND returns the new per-provider summaries', async () => {
-      mockFindConnectionWithSubCalendars.mockResolvedValue({
-        ...buildConnection(),
-        subCalendars: [buildSubCalendar()],
-      });
+    it('returns the per-provider summaries with the real credentialStatus vocabulary', async () => {
       mockListConnectionsByExpertProfileId.mockResolvedValue([
         buildConnection(),
         buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: 'cal-ms' }),
@@ -208,11 +192,12 @@ describe('calendar API routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.connection).toEqual({
+      expect(body.connections).toHaveLength(2);
+      expect(body.connections[0]).toEqual({
         // BAL-396 fix round 2, Finding 6 — the connection-level provider, always present
         // regardless of subCalendars (which can be empty while SYNC_PENDING).
         provider: 'google',
-        status: 'connected',
+        credentialStatus: 'ACTIVE',
         providerEmail: 'dana@example.com',
         lastSyncedAt: null,
         targetCalendarId: 'cal-primary',
@@ -227,8 +212,30 @@ describe('calendar API routes (BAL-396)', () => {
           },
         ],
       });
-      expect(body.connections).toHaveLength(2);
       expect(body.connections[1].provider).toBe('microsoft');
+    });
+
+    // BAL-397 — this is the regression the deleted `toLegacyStatus` adapter used to cause:
+    // EXPIRED and REVOKED must arrive DISTINCT on the wire (they share one UX client-side, but
+    // stay observable in logs/analytics), and every status round-trips verbatim.
+    it.each([
+      ['ACTIVE', 'ACTIVE'],
+      ['SYNC_PENDING', 'SYNC_PENDING'],
+      ['EXPIRED', 'EXPIRED'],
+      ['REVOKED', 'REVOKED'],
+    ])('carries credentialStatus %s through unmodified', async (dbStatus, wireStatus) => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ credentialStatus: dbStatus }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.json().connections[0].credentialStatus).toBe(wireStatus);
     });
 
     // BAL-396 fix round, Finding 7 — the `office365` translation was Cronofy-only and dead:
@@ -237,7 +244,6 @@ describe('calendar API routes (BAL-396)', () => {
     // `provider` is a bare `text` column with no CHECK, so `mapProvider` still narrows rather
     // than asserts — this pins the fallback for a value outside the known union.
     it('falls back to google for a provider value outside the known union (no CHECK constrains the column)', async () => {
-      mockFindConnectionWithSubCalendars.mockResolvedValue(undefined);
       mockListConnectionsByExpertProfileId.mockResolvedValue([
         buildConnection({ provider: 'something-unexpected' }),
       ]);
@@ -253,7 +259,7 @@ describe('calendar API routes (BAL-396)', () => {
     });
 
     it('returns 500 when the repository throws', async () => {
-      mockFindConnectionWithSubCalendars.mockRejectedValue(new Error('db down'));
+      mockListConnectionsByExpertProfileId.mockRejectedValue(new Error('db down'));
 
       const res = await app.inject({
         method: 'GET',

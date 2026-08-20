@@ -27,8 +27,18 @@ export interface BuildApirocAuthorizeUrlParams {
   /** The signed CSRF state (`services/calendar/connect-state.ts`) — round-trips unverified
    *  through the vendor and back to Balo's callback. */
   readonly state: string;
-  /** Balo's stable reference for this expert — carried by the vendor as `externalId`, not
-   *  read back by the callback (the callback returns `endUserAccountId` + `state` only). */
+  /**
+   * Balo's stable reference for this expert — carried by the vendor as `externalId` on the End
+   * User Account it creates.
+   *
+   * ⚠ THIS IS A SECURITY BINDING, NOT A LABEL (BAL-397 fix round). An earlier revision of this
+   * docblock said it was "not read back by the callback", and that was true — which is exactly
+   * why the callback trusted a browser-supplied `endUserAccountId` verbatim and could be made
+   * to repoint one expert's connection at another expert's calendar. `routes/calendar/auth.ts`
+   * now fetches the named account via `endUserAccounts.get` and REQUIRES
+   * `account.externalId === statePayload.expertProfileId` before it persists anything. Pass
+   * anything other than the expert profile id here and every connect will fail closed.
+   */
   readonly externalId: string;
 }
 

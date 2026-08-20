@@ -71,3 +71,7 @@ export type { MeetingBookingContextType } from '../events/meeting';
 export { GUEST_SERVER_EVENTS } from '../events/guest';
 export type { GuestInviteEntryPoint, GuestJoinMethod } from '../events/guest';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';
+// BAL-416 — the MOVED BAL-235 date-override events. `apps/api`'s routes import from
+// `@balo/analytics/server` ONLY, so skipping this line makes them unimportable there —
+// same fourth-step trap as MEETING_SERVER_EVENTS / GUEST_SERVER_EVENTS above.
+export { AVAILABILITY_SERVER_EVENTS } from '../events/availability';

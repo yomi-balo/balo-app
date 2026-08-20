@@ -690,7 +690,7 @@ describe('getInAppTemplate', () => {
       expect(result).toEqual({
         title: 'Reconnect your calendar',
         body: "Balo lost access to your Google Calendar — your availability is paused, you've stopped appearing in search, and your public profile link is on hold until it's reconnected.",
-        actionUrl: '/expert/settings?tab=calendar',
+        actionUrl: '/expert/settings?tab=schedule',
       });
     });
 

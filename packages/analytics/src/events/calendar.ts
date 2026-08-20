@@ -18,6 +18,12 @@ export const CALENDAR_EVENTS = {
 export interface CalendarEventMap {
   [CALENDAR_EVENTS.CONNECT_INITIATED]: {
     provider: 'google' | 'microsoft';
+    /** BAL-397 — WHICH affordance started this round trip. Optional so no existing call site
+     *  breaks and no constant key changes. 'add_another' is the metric that tells us whether
+     *  the multi-provider affordance this ticket built is actually used; 'reopen_window' is
+     *  the card's "Re-open window" retry while an attempt is still in flight (T11), separated
+     *  so a re-opened window is not counted as a fresh first attempt. */
+    source?: 'first_connect' | 'add_another' | 'reconnect' | 'fix_permissions' | 'reopen_window';
   };
   [CALENDAR_EVENTS.DISCONNECT_INITIATED]: {
     provider: 'google' | 'microsoft';
@@ -62,6 +68,14 @@ export interface CalendarEventMap {
  * emitted from is gone (BAL-468 owns its Apiroc-shaped replacement), and Cronofy's relink-URL
  * concept has no Apiroc counterpart. Keeping them would have pinned a permanently-zero-emitter
  * "as current" against the exact-key-set guard in `calendar.test.ts`.
+ *
+ * ⚠ BAL-235's date-override (time off) events (`AVAILABILITY_OVERRIDE_CREATED` /
+ * `_DELETED`) MOVED OUT of this constant by BAL-416, to
+ * `AVAILABILITY_SERVER_EVENTS.OVERRIDE_CREATED` / `.OVERRIDE_DELETED` in
+ * `./availability.ts`. They never belonged here: Balo-side scheduling, not calendar-vendor
+ * lifecycle, and the only members of this constant without a `calendar_` prefix. The wire
+ * values are UNCHANGED (`availability_override_created` / `_deleted`) — do not re-add them
+ * here.
  */
 export const CALENDAR_SERVER_EVENTS = {
   OAUTH_COMPLETED: 'calendar_oauth_completed',
@@ -70,9 +84,6 @@ export const CALENDAR_SERVER_EVENTS = {
   AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
   // BAL-233: Error state events
   SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
-  // BAL-235: Date overrides (time off) events
-  AVAILABILITY_OVERRIDE_CREATED: 'availability_override_created',
-  AVAILABILITY_OVERRIDE_DELETED: 'availability_override_deleted',
   // BAL-396 (ADR-1021 amendment 18 Aug 2026 §6) — Apiroc credential-health lifecycle.
   CREDENTIALS_REVOKED: 'calendar_credentials_revoked',
   RECONNECT_RESOLVED: 'calendar_reconnect_resolved',
@@ -105,17 +116,6 @@ export interface CalendarServerEventMap {
     distinct_id: string;
   };
   [CALENDAR_SERVER_EVENTS.SYNC_PENDING_AUTO_RESOLVED]: {
-    distinct_id: string;
-  };
-  [CALENDAR_SERVER_EVENTS.AVAILABILITY_OVERRIDE_CREATED]: {
-    /** Inclusive day count of the block (single day = 1). */
-    duration_days: number;
-    has_label: boolean;
-    /** = expertProfileId. */
-    distinct_id: string;
-  };
-  [CALENDAR_SERVER_EVENTS.AVAILABILITY_OVERRIDE_DELETED]: {
-    /** = expertProfileId. */
     distinct_id: string;
   };
   [CALENDAR_SERVER_EVENTS.CREDENTIALS_REVOKED]: {

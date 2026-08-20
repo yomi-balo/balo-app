@@ -1,6 +1,7 @@
 import { formatAudMinor, formatExpiryDateShort } from './credit-format.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
+import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 
 interface InAppOutput {
   title: string;
@@ -353,7 +354,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return {
       title: 'Reconnect your calendar',
       body,
-      actionUrl: '/expert/settings?tab=calendar',
+      actionUrl: EXPERT_CALENDAR_SETTINGS_PATH,
     };
   },
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
@@ -941,7 +942,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       component: React.createElement(CalendarReconnectRequiredEmail, {
         firstName: (data.recipientName as string) ?? 'there',
         providerLabel: calendarProviderLabel(data.provider),
-        ctaUrl: `${BASE_URL}/expert/settings?tab=calendar`,
+        ctaUrl: `${BASE_URL}${EXPERT_CALENDAR_SETTINGS_PATH}`,
         baseUrl: BASE_URL,
         stillSearchable,
       }),

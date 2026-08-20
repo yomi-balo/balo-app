@@ -75,12 +75,14 @@ describe('connect-state (BAL-396 §10.3)', () => {
   });
 
   describe('readStatePayloadUnverified', () => {
+    const EXPERT_UUID = '550e8400-e29b-41d4-a716-446655440000';
+
     it('extracts expertProfileId and provider WITHOUT verifying the signature (even from a tampered state)', () => {
-      const state = signConnectState('expert-1', 'exp-provider-a');
+      const state = signConnectState(EXPERT_UUID, 'exp-provider-a');
       const [payloadB64] = state.split('.');
       const tampered = `${payloadB64}.not-a-real-signature`;
       expect(readStatePayloadUnverified(tampered)).toEqual({
-        expertProfileId: 'expert-1',
+        expertProfileId: EXPERT_UUID,
         provider: 'exp-provider-a',
       });
     });
@@ -90,13 +92,33 @@ describe('connect-state (BAL-396 §10.3)', () => {
     });
 
     it('returns partial fields when the payload only has one of them', () => {
-      const payloadB64 = Buffer.from(JSON.stringify({ expertProfileId: 'e' })).toString(
+      const payloadB64 = Buffer.from(JSON.stringify({ expertProfileId: EXPERT_UUID })).toString(
         'base64url'
       );
       expect(readStatePayloadUnverified(`${payloadB64}.sig`)).toEqual({
-        expertProfileId: 'e',
+        expertProfileId: EXPERT_UUID,
         provider: undefined,
       });
+    });
+
+    // BAL-397 fix round — defence in depth. This payload is attacker-authored on every arm
+    // that calls this function, so an `expertProfileId` that is not UUID-shaped is dropped
+    // rather than passed on as arbitrary text of arbitrary length.
+    it('drops an expertProfileId that is not UUID-shaped', () => {
+      const payloadB64 = Buffer.from(
+        JSON.stringify({ expertProfileId: 'a'.repeat(4096), provider: 'exp-provider-a' })
+      ).toString('base64url');
+      expect(readStatePayloadUnverified(`${payloadB64}.sig`)).toEqual({
+        expertProfileId: undefined,
+        provider: 'exp-provider-a',
+      });
+    });
+
+    it('drops a non-string expertProfileId', () => {
+      const payloadB64 = Buffer.from(JSON.stringify({ expertProfileId: { evil: true } })).toString(
+        'base64url'
+      );
+      expect(readStatePayloadUnverified(`${payloadB64}.sig`).expertProfileId).toBeUndefined();
     });
   });
 

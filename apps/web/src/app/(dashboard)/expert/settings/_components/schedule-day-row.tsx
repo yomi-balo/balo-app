@@ -1,22 +1,49 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { Copy, Plus, X } from 'lucide-react';
+import { Copy, Moon, Plus, X } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScheduleTimeSelect } from './schedule-time-select';
 import {
   DAY_META,
   MAX_RANGES_PER_DAY,
-  START_TIME_OPTIONS,
+  buildEndOptions,
+  dayHasOtherOvernightRange,
+  isOvernightRange,
   type DayState,
+  type TimeRange,
 } from '../_lib/schedule-helpers';
+
+/**
+ * Trigger tint for the End select. Destructive wins over the info tint when a crossing
+ * range is also in conflict (design §5). An if-chain, not a nested ternary — SonarCloud
+ * S3358 flags nested ternaries on new code.
+ */
+function endSelectTone(hasConflict: boolean, crossing: boolean): string | undefined {
+  if (hasConflict) return 'bg-destructive/5';
+  if (crossing) return 'border-info/40 bg-info/5';
+  return undefined;
+}
+
+/**
+ * Badge copy for a crossing range. A `09:00 → 00:00` range has a ZERO-length tail on
+ * the next day — "Continues into {day}" would mislead the expert into thinking the
+ * window bleeds into the next morning, so that exact case gets its own wording.
+ * Display-only: `isOvernightRange` stays the sole predicate for every LOGIC path.
+ */
+function crossingBadgeLabel(range: Pick<TimeRange, 'end'>, nextDayFull: string): string {
+  return range.end === '00:00' ? 'Runs until midnight' : `Continues into ${nextDayFull}`;
+}
 
 interface ScheduleDayRowProps {
   dayIndex: number;
   day: DayState;
+  /** rangeId → inline conflict pointer, for ranges implicated in the active conflict. */
+  conflictMessages?: Readonly<Record<string, string>>;
   onToggle: (enabled: boolean) => void;
   onRangeChange: (rangeId: string, field: 'start' | 'end', value: string) => void;
   onAddRange: () => void;
@@ -27,6 +54,7 @@ interface ScheduleDayRowProps {
 export function ScheduleDayRow({
   dayIndex,
   day,
+  conflictMessages,
   onToggle,
   onRangeChange,
   onAddRange,
@@ -34,6 +62,7 @@ export function ScheduleDayRow({
   onCopyToDays,
 }: Readonly<ScheduleDayRowProps>): React.JSX.Element {
   const meta = DAY_META[dayIndex];
+  const nextMeta = DAY_META[(dayIndex + 1) % DAY_META.length];
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyTargets, setCopyTargets] = useState<number[]>([]);
 
@@ -54,7 +83,7 @@ export function ScheduleDayRow({
     if (!open) setCopyTargets([]);
   }, []);
 
-  if (!meta) return <></>;
+  if (!meta || !nextMeta) return <></>;
 
   const otherDays = DAY_META.map((other, index) => ({ ...other, index })).filter(
     (other) => other.index !== dayIndex
@@ -84,33 +113,69 @@ export function ScheduleDayRow({
       <div className="min-w-[220px] flex-1">
         {day.enabled ? (
           <div className="flex flex-col gap-2">
-            {day.ranges.map((range, rangeIndex) => (
-              <div key={range.id} className="flex flex-wrap items-center gap-2">
-                <ScheduleTimeSelect
-                  value={range.start}
-                  options={START_TIME_OPTIONS}
-                  ariaLabel={`${meta.full} range ${rangeIndex + 1} start time`}
-                  onChange={(value) => onRangeChange(range.id, 'start', value)}
-                />
-                <span className="text-muted-foreground text-sm">–</span>
-                <ScheduleTimeSelect
-                  value={range.end}
-                  minExclusive={range.start}
-                  ariaLabel={`${meta.full} range ${rangeIndex + 1} end time`}
-                  onChange={(value) => onRangeChange(range.id, 'end', value)}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="text-muted-foreground hover:text-foreground h-8 w-8"
-                  aria-label={`Remove ${meta.full} range ${rangeIndex + 1}`}
-                  onClick={() => onRemoveRange(range.id)}
-                >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </div>
-            ))}
+            {day.ranges.map((range, rangeIndex) => {
+              const crossing = isOvernightRange(range);
+              const conflictMessage = conflictMessages?.[range.id];
+              const hasConflict = conflictMessage !== undefined;
+              const badgeId = `crossing-badge-${range.id}`;
+              const errorId = `range-error-${range.id}`;
+              const describedBy = [
+                crossing ? badgeId : undefined,
+                hasConflict ? errorId : undefined,
+              ]
+                .filter((id): id is string => id !== undefined)
+                .join(' ');
+              const endOptions = buildEndOptions(range, !dayHasOtherOvernightRange(day, range.id));
+              const endTone = endSelectTone(hasConflict, crossing);
+
+              return (
+                <div key={range.id} className="flex flex-wrap items-center gap-2">
+                  <ScheduleTimeSelect
+                    value={range.start}
+                    ariaLabel={`${meta.full} range ${rangeIndex + 1} start time`}
+                    ariaDescribedBy={hasConflict ? errorId : undefined}
+                    invalid={hasConflict}
+                    triggerClassName={hasConflict ? 'bg-destructive/5' : undefined}
+                    onChange={(value) => onRangeChange(range.id, 'start', value)}
+                  />
+                  <span className="text-muted-foreground text-sm">–</span>
+                  <ScheduleTimeSelect
+                    value={range.end}
+                    options={endOptions}
+                    ariaLabel={`${meta.full} range ${rangeIndex + 1} end time`}
+                    ariaDescribedBy={describedBy || undefined}
+                    invalid={hasConflict}
+                    triggerClassName={endTone}
+                    onChange={(value) => onRangeChange(range.id, 'end', value)}
+                  />
+                  {crossing && (
+                    <Badge
+                      id={badgeId}
+                      variant="outline"
+                      className="border-info/30 bg-info/10 text-info gap-1"
+                    >
+                      <Moon className="h-3 w-3" aria-hidden="true" />
+                      {crossingBadgeLabel(range, nextMeta.full)}
+                    </Badge>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-foreground h-8 w-8"
+                    aria-label={`Remove ${meta.full} range ${rangeIndex + 1}`}
+                    onClick={() => onRemoveRange(range.id)}
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </Button>
+                  {hasConflict && (
+                    <p id={errorId} className="text-destructive mt-1 w-full text-xs">
+                      {conflictMessage}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
             {day.ranges.length < MAX_RANGES_PER_DAY && (
               <button
                 type="button"

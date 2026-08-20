@@ -4,32 +4,70 @@ import userEvent from '@testing-library/user-event';
 import { CalendarDisconnectConfirm } from './calendar-disconnect-confirm';
 
 describe('CalendarDisconnectConfirm', () => {
-  it('renders the warning message', () => {
-    render(<CalendarDisconnectConfirm onCancel={vi.fn()} onConfirm={vi.fn()} />);
-    expect(screen.getByText(/Disconnecting will stop syncing/)).toBeInTheDocument();
+  it('renders a provider-specific title, not the retired "all calendars" copy', () => {
+    render(
+      <CalendarDisconnectConfirm
+        provider="google"
+        open
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Disconnect Google Calendar?')).toBeInTheDocument();
+    expect(screen.queryByText(/all calendars/i)).not.toBeInTheDocument();
   });
 
-  it('renders Cancel and confirm buttons', () => {
-    render(<CalendarDisconnectConfirm onCancel={vi.fn()} onConfirm={vi.fn()} />);
-    expect(screen.getByText('Cancel')).toBeInTheDocument();
-    expect(screen.getByText('Yes, disconnect')).toBeInTheDocument();
+  it('renders the Microsoft label for the microsoft provider', () => {
+    render(
+      <CalendarDisconnectConfirm
+        provider="microsoft"
+        open
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Disconnect Microsoft Outlook?')).toBeInTheDocument();
   });
 
-  it('calls onCancel when Cancel button is clicked', async () => {
-    const onCancel = vi.fn();
-    const user = userEvent.setup();
-    render(<CalendarDisconnectConfirm onCancel={onCancel} onConfirm={vi.fn()} />);
-
-    await user.click(screen.getByText('Cancel'));
-    expect(onCancel).toHaveBeenCalledOnce();
+  it('does not render when closed', () => {
+    render(
+      <CalendarDisconnectConfirm
+        provider="google"
+        open={false}
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+    expect(screen.queryByText('Disconnect Google Calendar?')).not.toBeInTheDocument();
   });
 
-  it('calls onConfirm when "Yes, disconnect" button is clicked', async () => {
+  it('calls onConfirm when the Disconnect action is clicked', async () => {
     const onConfirm = vi.fn();
     const user = userEvent.setup();
-    render(<CalendarDisconnectConfirm onCancel={vi.fn()} onConfirm={onConfirm} />);
-
-    await user.click(screen.getByText('Yes, disconnect'));
+    render(
+      <CalendarDisconnectConfirm
+        provider="google"
+        open
+        onOpenChange={vi.fn()}
+        onConfirm={onConfirm}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it('calls onOpenChange(false) when Keep it connected is clicked', async () => {
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CalendarDisconnectConfirm
+        provider="google"
+        open
+        onOpenChange={onOpenChange}
+        onConfirm={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Keep it connected' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

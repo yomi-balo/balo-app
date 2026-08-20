@@ -13,7 +13,8 @@ import { getAvatarUrl } from '@/lib/storage/avatar-url';
 /**
  * BAL-347: whether to show the company "Team" nav item — owner/admin on a NON-personal
  * company. The page still hard-gates via hasCapability + notFound, so this is UX-only.
- * In v1 every company is personal, so this stays false (the surface is dormant).
+ * True only for a company promoted to a shared organization (BAL-369); a personal
+ * workspace keeps this false.
  * Extracted so the layout component stays flat.
  */
 async function resolveCanManageCompany(

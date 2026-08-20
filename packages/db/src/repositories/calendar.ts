@@ -750,32 +750,4 @@ export const calendarRepository = {
         },
       });
   },
-
-  // ── Compound queries ───────────────────────────────────────────
-
-  /**
-   * (c) LEGACY-SINGLE-CONNECTION — the OLDEST live connection with its sub-calendars.
-   *
-   * Same ambiguity and same deterministic ordering as `findConnectionByExpertProfileId`;
-   * see that docblock. Both live callers are in `routes/calendar/api.ts` (Cronofy).
-   *
-   * ⚠ The `with: { subCalendars: true }` hydration is safe to expose: `calendar_sub_calendars`
-   * carries no tokens and no PII beyond a calendar display name the expert already sees.
-   * The CONNECTION row itself, however, still carries `access_token` / `refresh_token` until
-   * migration 0069 drops them, so a caller that forwards this value to a client MUST project
-   * columns explicitly (`reference_drizzle_with_hydration_leaks_secrets`). Even after 0069 the
-   * rule holds for `end_user_account_id` — a vendor pointer is not a client-facing field.
-   */
-  async findConnectionWithSubCalendars(
-    expertProfileId: string
-  ): Promise<(CalendarConnection & { subCalendars: CalendarSubCalendar[] }) | undefined> {
-    return db.query.calendarConnections.findFirst({
-      where: and(
-        eq(calendarConnections.expertProfileId, expertProfileId),
-        isNull(calendarConnections.deletedAt)
-      ),
-      orderBy: OLDEST_LIVE_FIRST,
-      with: { subCalendars: true },
-    });
-  },
 };
