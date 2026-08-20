@@ -3,11 +3,13 @@
 import { AlertTriangle } from 'lucide-react';
 import type { SpringForwardGap } from '@balo/shared/timezone';
 import { extractCityFromTimezone } from '@balo/shared/timezone';
-import { formatGapMinutes } from '../_lib/schedule-helpers';
+import { DAY_META, formatGapMinutes, type DstGapMatch } from '../_lib/schedule-helpers';
 
 interface ScheduleDstWarningProps {
   gap: SpringForwardGap;
   timezone: string;
+  /** Which interval landed in the gap — selects the attribution copy. */
+  match: DstGapMatch;
 }
 
 function formatGapDate(dateISO: string): string {
@@ -29,8 +31,11 @@ function formatGapDate(dateISO: string): string {
 export function ScheduleDstWarning({
   gap,
   timezone,
+  match,
 }: Readonly<ScheduleDstWarningProps>): React.JSX.Element {
   const city = extractCityFromTimezone(timezone) ?? timezone;
+  const sourceMeta = DAY_META[match.sourceDayIndex];
+  const gapDayMeta = DAY_META[(match.sourceDayIndex + 1) % DAY_META.length];
 
   return (
     <div
@@ -40,12 +45,22 @@ export function ScheduleDstWarning({
       <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
       <div className="text-sm leading-relaxed">
         <p className="text-foreground font-medium">Daylight saving affects one of your hours</p>
-        <p className="text-muted-foreground mt-0.5">
-          On {formatGapDate(gap.dateISO)}, clocks in {city} skip from{' '}
-          {formatGapMinutes(gap.gapStartMinutes)} to {formatGapMinutes(gap.gapEndMinutes)}. A range
-          you&apos;ve set that day falls in this window, so it won&apos;t exist that once — no need
-          to change anything, we just won&apos;t offer bookings in the skipped hour.
-        </p>
+        {match.isOvernightTail && sourceMeta && gapDayMeta ? (
+          <p className="text-muted-foreground mt-0.5">
+            On {formatGapDate(gap.dateISO)}, clocks in {city} skip from{' '}
+            {formatGapMinutes(gap.gapStartMinutes)} to {formatGapMinutes(gap.gapEndMinutes)}. The{' '}
+            {sourceMeta.full}–{gapDayMeta.full} overnight range you set (which continues into the
+            early hours of {gapDayMeta.full}) falls in this window, so it won&apos;t exist that once
+            — no need to change anything, we just won&apos;t offer bookings in the skipped hour.
+          </p>
+        ) : (
+          <p className="text-muted-foreground mt-0.5">
+            On {formatGapDate(gap.dateISO)}, clocks in {city} skip from{' '}
+            {formatGapMinutes(gap.gapStartMinutes)} to {formatGapMinutes(gap.gapEndMinutes)}. A
+            range you&apos;ve set that day falls in this window, so it won&apos;t exist that once —
+            no need to change anything, we just won&apos;t offer bookings in the skipped hour.
+          </p>
+        )}
       </div>
     </div>
   );
