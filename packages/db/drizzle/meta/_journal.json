@@ -498,6 +498,13 @@
       "when": 1787068010520,
       "tag": "0070_bal468_calendar_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1787220738032,
+      "tag": "0071_bal412_presence_settlement",
+      "breakpoints": true
     }
   ]
 }

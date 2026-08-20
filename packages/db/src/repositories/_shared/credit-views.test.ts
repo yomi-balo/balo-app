@@ -261,6 +261,16 @@ function fullSession(overrides: Partial<CreditSession> = {}): CreditSession {
     overdraftSettledMinor: 4500,
     billingFinalizedAt: new Date('2026-07-20T12:45:05Z'),
     finalizationPath: 'live_capture',
+    // BAL-412 — NULL on this fixture on purpose: it models a `live_capture` session, i.e.
+    // EVERY row that exists on main today. The legacy-row cases below assert that such a row
+    // maps through all three lenses unchanged.
+    actualMinutes: null,
+    billingFloorMinutes: null,
+    settlementShape: null,
+    // BAL-412 (F14/R2) — the snapshotted floor predicate. NULL on every non-presence row; the
+    // mappers fall it back to `false`. ⚠ R2 ADDED IT TO ALL THREE LENSES: it is a BOOLEAN, never
+    // a figure, and the recap must read this snapshot rather than re-derive `billable > actual`.
+    floorApplied: null,
     stripePaymentIntentId: STRIPE_PI_SENTINEL,
     // BAL-418 — the meeting link + the denormalised engagement. Deliberately NOT added to
     // CLIENT_SESSION_MONEY_COLUMNS or the expert projection: neither is fee-bearing, but
@@ -391,5 +401,110 @@ describe('money-block pending state (invariant #5 — never leaks the finalized 
     expect(block.expertEarningsAudMinor).toBe(0);
     expect(block.marginAudMinor).toBe(0);
     expect(block.overdraftSettledMinor).toBe(0);
+  });
+});
+
+// BAL-412 (ADR-1044 §7, §7.2) — the actual-vs-billed split + settlement shape thread through
+// all three lenses IDENTICALLY (they are durations/labels, never figures — see the allow-list
+// docblocks), and a LEGACY row (every session written before migration 0071) maps through with
+// ZERO behaviour change.
+describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes / settlementShape', () => {
+  it('a legacy row (all three columns NULL) maps through every lens with zero behaviour change', () => {
+    const legacy = fullSession(); // actualMinutes/billingFloorMinutes/settlementShape all NULL
+    for (const block of [
+      toClientMoneyBlock(legacy),
+      toExpertMoneyBlock(legacy),
+      toAdminMoneyBlock(legacy),
+    ]) {
+      expect(block.actualMinutes).toBe(45); // falls back to connectedMinutes
+      expect(block.billingFloorMinutes).toBe(0);
+      expect(block.billingFloorApplied).toBe(false);
+      expect(block.settlementShape).toBeUndefined();
+    }
+  });
+
+  it('a presence-settled row (floor bound) surfaces the split IDENTICALLY on all three lenses', () => {
+    const presenceSettled = fullSession({
+      finalizationPath: 'presence',
+      connectedMinutes: 15, // the FLOORED figure
+      actualMinutes: 6, // the delivered figure — floor raised it
+      billingFloorMinutes: 15,
+      settlementShape: 'held',
+      floorApplied: true, // R2 — the SNAPSHOT is what the lenses read, not `billable > actual`
+    });
+    const client = toClientMoneyBlock(presenceSettled);
+    const expert = toExpertMoneyBlock(presenceSettled);
+    const admin = toAdminMoneyBlock(presenceSettled);
+
+    for (const block of [client, expert, admin]) {
+      expect(block.actualMinutes).toBe(6);
+      expect(block.billingFloorMinutes).toBe(15);
+      expect(block.billingFloorApplied).toBe(true);
+      expect(block.settlementShape).toBe('held');
+      expect(block.durationMinutes).toBe(15);
+    }
+  });
+
+  it('a no-show row bills the FLAT floor (15) below a 40-min wait, and still reports it applied (R1)', () => {
+    // R1 (owner ruling, 2026-08-21) — `no_show_client` bills the floor FLAT, so the BILLED figure
+    // is below `actualMinutes`. The old `billable > actual` re-derivation reported `false` on
+    // exactly this shape; the persisted snapshot is `true` and all three lenses now agree.
+    const noShow = fullSession({
+      finalizationPath: 'presence',
+      connectedMinutes: 15, // the FLAT floor — not the expert's 40-minute wait
+      actualMinutes: 40, // held the room 40 min; the client who never arrived pays 15
+      billingFloorMinutes: 15,
+      settlementShape: 'no_show_client',
+      floorApplied: true,
+    });
+    for (const block of [
+      toClientMoneyBlock(noShow),
+      toExpertMoneyBlock(noShow),
+      toAdminMoneyBlock(noShow),
+    ]) {
+      expect(block.durationMinutes).toBe(15);
+      expect(block.actualMinutes).toBe(40);
+      expect(block.billingFloorApplied).toBe(true);
+      expect(block.settlementShape).toBe('no_show_client');
+    }
+  });
+
+  it('a Q1 no-refund clamp (billable 10 > actual 6) is NOT reported as a floor application (R2/F14)', () => {
+    // The regression R2 is about: `billable > actual` here is the CLAMP, not the floor. Reporting
+    // it as a floor application would print "billed at the minimum" over a real overcharge.
+    const clamped = fullSession({
+      finalizationPath: 'presence',
+      connectedMinutes: 10, // clamped up to minutes already drawn
+      actualMinutes: 6, // rule was 6 — no floor was in force
+      billingFloorMinutes: 15,
+      settlementShape: 'held',
+      floorApplied: false,
+    });
+    for (const block of [
+      toClientMoneyBlock(clamped),
+      toExpertMoneyBlock(clamped),
+      toAdminMoneyBlock(clamped),
+    ]) {
+      expect(block.durationMinutes).toBeGreaterThan(block.actualMinutes);
+      expect(block.billingFloorApplied).toBe(false);
+    }
+  });
+
+  it('a zero-shape row (missed_call) is fee-safe and carries no figure beyond the pending zeros', () => {
+    const missedCall = fullSession({
+      finalizationPath: 'presence',
+      connectedMinutes: 0,
+      actualMinutes: 0,
+      billingFloorMinutes: 15,
+      settlementShape: 'missed_call',
+      expertAccruedMinor: 0,
+      overdraftSettledMinor: 0,
+    });
+    const client = toClientMoneyBlock(missedCall);
+    const expert = toExpertMoneyBlock(missedCall);
+    expect(client.amountAudMinor).toBe(0);
+    expect(client.settlementShape).toBe('missed_call');
+    expect(expert.earningsAudMinor).toBe(0);
+    expect(expert.settlementShape).toBe('missed_call');
   });
 });

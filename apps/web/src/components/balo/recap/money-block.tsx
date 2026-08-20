@@ -55,6 +55,54 @@ function finalizedAmountMinor(block: SessionMoneyBlock): number {
   return block.lens === 'client' ? block.amountAudMinor : block.earningsAudMinor;
 }
 
+/**
+ * BAL-412 (D13, plan §7.3) — the finalized duration line. `money-block.tsx` never read
+ * `block.durationMinutes` before this ticket; the finalized branch had no duration slot at all.
+ * Keyed on `settlementShape` FIRST (the two zero shapes have no number to attach — there is
+ * nothing to floor when nobody was charged) and on `billingFloorApplied` second. `no_show_client`
+ * is checked ahead of `billingFloorApplied` — that shape now ALWAYS sets the flag (the floor is
+ * flatly the whole charge, owner ruling 2026-08-21), but it wants its own "min held" phrasing
+ * rather than the generic short-call one, so it must be matched first.
+ *
+ * Quiet fact, never punitive, never scolding, gender-neutral, no absence framing — the same
+ * register as the booking-flow billing line.
+ *
+ * ⚠ MJ COPY CHECKPOINT — all six strings below are pending MJ sign-off (flagged in the PR body).
+ * ⚠ D12.3 — this stays INSIDE `money-block.tsx`, not a shared helper: extracting it would trip
+ * `apps/web/src/invariants/no-money-block-in-call.test.ts`, which scans for the substring
+ * `recap/money-block` across the live-call render tree.
+ */
+function durationLine(block: SessionMoneyBlock): string {
+  if (block.settlementShape === 'missed_call') {
+    return block.lens === 'client'
+      ? "Not charged — your consultant didn't join this time" // pending-MJ
+      : "No earnings recorded — the call didn't take place"; // pending-MJ
+  }
+  if (block.settlementShape === 'abandoned_wait') {
+    // F12(b), UX review round 1 — `actualMinutes` (the real connected time before the
+    // session was abandoned) is deliberately NOT surfaced here: "Not charged"/"No earnings
+    // recorded" plus a partial-minute figure reads as more detail than an abandoned session
+    // warrants. Revisit if MJ copy sign-off disagrees.
+    return block.lens === 'client' ? 'Not charged' : 'No earnings recorded'; // pending-MJ
+  }
+  if (block.settlementShape === 'no_show_client') {
+    // F9, UX review round 1 — `actualMinutes`, not `durationMinutes`: `durationMinutes` is the
+    // BILLED figure, which on this shape is FLATLY the floor (owner ruling 2026-08-21), so it
+    // would state the floor twice while discarding the real time the expert held the room.
+    // "40 min held · billed at the 15-minute minimum" is now a TRUE statement — before R1 the
+    // client was actually charged 40 while this line claimed 15.
+    return block.lens === 'client'
+      ? `${block.actualMinutes} min held · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
+      : `${block.actualMinutes} min held · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ
+  }
+  if (block.billingFloorApplied) {
+    return block.lens === 'client'
+      ? `${block.actualMinutes} min · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
+      : `${block.actualMinutes} min · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ
+  }
+  return `${block.durationMinutes} min`; // pending-MJ
+}
+
 /** Skeleton pill (loading). */
 function MoneyBlockSkeleton() {
   return (
@@ -120,10 +168,15 @@ function MoneyBlockPending({
 function MoneyBlockFinalized({ block }: Readonly<{ block: SessionMoneyBlock }>) {
   const { Icon, finalizedLabel } = LENS_COPY[block.lens];
   return (
-    <span className="text-foreground inline-flex items-center gap-1.5 text-sm">
+    // F10, UX review round 1 — `flex-wrap` (was a rigid single-row `inline-flex`) so the
+    // BAL-412 duration line can drop onto its own row instead of overflowing/clipping at
+    // narrow widths; the outer `whitespace-nowrap` that used to force this onto one line was
+    // removed from `RecapHeader`'s `MoneyLine` for the same reason.
+    <span className="text-foreground inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
       <Icon size={14} className="text-muted-foreground" aria-hidden="true" />
       <span className="text-muted-foreground">{finalizedLabel}</span>
       <span className="font-mono tabular-nums">{formatAud(finalizedAmountMinor(block))}</span>
+      <span className="text-muted-foreground">{durationLine(block)}</span>
     </span>
   );
 }

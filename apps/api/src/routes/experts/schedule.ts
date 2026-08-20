@@ -25,7 +25,9 @@ const ruleSchema = z
     startTime: HHMM,
     endTime: HHMM,
   })
-  .refine((r) => r.startTime < r.endTime, { message: 'startTime must be before endTime' });
+  .refine((r) => r.startTime !== r.endTime, {
+    message: 'A range needs a different start and end time.',
+  });
 
 // `isValidTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`
 // plus the special-cased 'UTC' (which Node omits). 'UTC' is the

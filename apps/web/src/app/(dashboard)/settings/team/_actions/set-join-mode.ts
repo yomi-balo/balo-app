@@ -46,7 +46,8 @@ export async function setCompanyJoinMode(input: {
   }
 
   // Company-only action → always mirror the page's `isPersonal` guard so a
-  // personal-workspace owner can't flip join modes on a dormant surface.
+  // personal-workspace owner can't flip join modes — only a promoted shared
+  // organization has them.
   const personalDenied = await assertRealCompany(companyId);
   if (personalDenied) {
     return personalDenied;

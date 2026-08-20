@@ -74,7 +74,6 @@ describe('meeting lifecycle timers (BAL-134 D8)', () => {
       { name: 'EXPERT_ABSENT_ALERT_MS', minutes: 5 },
       { name: 'MISSED_CALL_TERMINATION_MS', minutes: 10 },
       { name: 'CLIENT_ABSENT_NUDGE_MS', minutes: 5 },
-      { name: 'NO_SHOW_FLOOR_MS', minutes: 15 },
       { name: 'IDLE_END_EMPTY_MS', minutes: 5 },
     ];
 
@@ -82,13 +81,31 @@ describe('meeting lifecycle timers (BAL-134 D8)', () => {
       expect(source).toContain(`export const ${name} = ${minutes} * MS_PER_MINUTE;`);
     }
 
-    // …and no timer is declared in terms of another one.
+    // …and no timer is declared in terms of another TIMER (NO_SHOW_FLOOR_MS is exempt — it is
+    // deliberately derived from `bounds.ts`'s `MIN_MEETING_MINUTES`, D5's anti-drift fix, and is
+    // asserted separately below).
     for (const { name } of DECLARATIONS) {
       for (const other of DECLARATIONS) {
         if (other.name === name) continue;
         expect(source).not.toContain(`export const ${name} = ${other.name}`);
       }
     }
+  });
+
+  /**
+   * ⚠ D5 — THE ANTI-DRIFT ASSERTION. `bounds.ts`'s `MIN_MEETING_MINUTES` (the booking floor) and
+   * this module's `NO_SHOW_FLOOR_MS` (the settlement floor, ms) MUST NOT be able to drift apart:
+   * `NO_SHOW_FLOOR_MS` is DERIVED from `MIN_MEETING_MINUTES`, not a second copy of `15`.
+   */
+  it('⚠ D5 — NO_SHOW_FLOOR_MS is derived from bounds.ts MIN_MEETING_MINUTES, not a second copy', async () => {
+    const { MIN_MEETING_MINUTES } = await import('./bounds');
+    expect(NO_SHOW_FLOOR_MS).toBe(MIN_MEETING_MINUTES * MINUTE);
+
+    const source = readFileSync(new URL('./timers.ts', import.meta.url), 'utf8');
+    expect(source).toContain(
+      'export const NO_SHOW_FLOOR_MS = MIN_MEETING_MINUTES * MS_PER_MINUTE;'
+    );
+    expect(source).toContain("import { MIN_MEETING_MINUTES } from './bounds';");
   });
 
   it('the five values are what the anchors need — the alert precedes its termination', () => {

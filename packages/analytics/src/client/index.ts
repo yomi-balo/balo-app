@@ -32,11 +32,14 @@ export {
   END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
-  AVAILABILITY_EVENTS,
   MEETING_CALL_EVENTS,
   // BAL-436 — ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package
   // (`apps/web` cannot import it), not in this one.
   MEETING_PANEL_EVENTS,
+  // Availability CLIENT events — BAL-416's conflict warnings AND BAL-236's slot picker.
+  // ⚠ `AVAILABILITY_SERVER_EVENTS` must NEVER join this list — it is server-only
+  // (exported from '../server' instead).
+  AVAILABILITY_EVENTS,
 } from '../events';
 
 export type {
@@ -86,7 +89,6 @@ export type {
   WalletLens,
   WalletRestingStateName,
   ScheduleEventMap,
-  AvailabilityEventMap,
   MeetingCallEventMap,
   MeetingCallLayout,
   MeetingCallLayoutSource,
@@ -110,4 +112,7 @@ export type {
   // this package nor `apps/web`'s barrel has a check that would have flagged the omission —
   // it surfaces only as an unresolved import in whichever app tries to use it.
   CaseSurfaceAction,
+  // Availability CLIENT family — BAL-416's conflict warnings AND BAL-236's slot picker.
+  AvailabilityEventMap,
+  AvailabilityConflictResolution,
 } from '../events';

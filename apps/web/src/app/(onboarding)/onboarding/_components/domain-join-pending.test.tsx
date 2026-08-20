@@ -90,7 +90,7 @@ describe('DomainJoinPending', () => {
     });
   });
 
-  describe('approved phase (dormant — testable via initialPhase)', () => {
+  describe('approved phase (driven via initialPhase)', () => {
     it('renders the success copy and the continue CTA', async () => {
       const { onContinueToCompany } = renderPending({ initialPhase: 'approved' });
       const user = userEvent.setup();
@@ -123,7 +123,7 @@ describe('DomainJoinPending', () => {
     });
   });
 
-  describe('declined phase (dormant — testable via initialPhase)', () => {
+  describe('declined phase (driven via initialPhase)', () => {
     it('renders neutral copy (no admin named, no "rejected") and routes to creation', async () => {
       const { onCreateInstead } = renderPending({ initialPhase: 'declined' });
       const user = userEvent.setup();

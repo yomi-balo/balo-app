@@ -705,6 +705,39 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-412 (ADR-1044 §7, D8) session.missed_call', () => {
+    it('gives each of the two recipients (self, expert) email + in-app — 4 rules, no admin fan-out', () => {
+      const rules = notificationRules['session.missed_call'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(4); // (self: email+in-app) + (expert: email+in-app)
+      expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
+        'expert',
+        'expert',
+        'self',
+        'self',
+      ]);
+      expect(rules!.filter((r) => r.channel === 'email')).toHaveLength(2);
+      expect(rules!.filter((r) => r.channel === 'in-app')).toHaveLength(2);
+      // No SMS, no admin fan-out.
+      expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+      expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
+      expect(rules!.some((r) => r.recipient === 'company_billing_admins')).toBe(false);
+    });
+
+    it('uses the distinct apologetic/factual templates per recipient', () => {
+      const rules = notificationRules['session.missed_call']!;
+      const selfRules = rules.filter((r) => r.recipient === 'self');
+      const expertRules = rules.filter((r) => r.recipient === 'expert');
+      expect(selfRules.every((r) => r.template === 'session-missed-call-client')).toBe(true);
+      expect(expertRules.every((r) => r.template === 'session-missed-call-expert')).toBe(true);
+    });
+
+    it('is UNCONDITIONED — both recipients always fire (a missed call always names both parties)', () => {
+      const rules = notificationRules['session.missed_call']!;
+      expect(rules.every((r) => r.condition === undefined)).toBe(true);
+    });
+  });
+
   describe('BAL-390 review & rating', () => {
     /** Narrow by destructure + guard — `noUncheckedIndexedAccess` is on. */
     function rulesFor(event: string): NotificationRule[] {

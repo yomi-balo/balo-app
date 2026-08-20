@@ -278,9 +278,6 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
           sessionId,
           minutes: parsed.minutes,
           path: parsed.path,
-          ...(parsed.settledByUserId === undefined
-            ? {}
-            : { settledByUserId: parsed.settledByUserId }),
         });
         reply.code(200).send(result);
       } catch (error) {

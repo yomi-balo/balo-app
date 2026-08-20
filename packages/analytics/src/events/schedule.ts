@@ -12,6 +12,10 @@ export interface ScheduleEventMap {
     days_enabled: number;
     /** True when any enabled day has more than one range (split day). */
     has_split_days: boolean;
+    /** True when any enabled range crosses midnight (end earlier than start) — BAL-415. */
+    has_overnight_window: boolean;
+    /** True when any enabled range ends after 22:00 WITHOUT crossing midnight. */
+    has_late_window: boolean;
   };
   [SCHEDULE_EVENTS.BOOKING_RULES_SAVED]: {
     expert_id: string;

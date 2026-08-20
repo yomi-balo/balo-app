@@ -32,10 +32,11 @@ export {
   END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
-  AVAILABILITY_EVENTS,
   MEETING_CALL_EVENTS,
   /** BAL-436 — the in-call side panel (People and Files). */
   MEETING_PANEL_EVENTS,
+  /** Availability CLIENT family — BAL-416's conflict warning + BAL-236's slot picker. */
+  AVAILABILITY_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -74,4 +75,6 @@ export type {
   MeetingPanelReactionEmoji,
   /** BAL-421 — annotates the case surface's client action handlers. */
   CaseSurfaceAction,
+  /** BAL-416 — the time-off conflict warning's client outcome vocabulary. */
+  AvailabilityConflictResolution,
 } from '@balo/analytics/client';

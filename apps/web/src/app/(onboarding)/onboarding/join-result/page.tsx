@@ -67,9 +67,10 @@ async function revalidateRelationship(
  * renders nothing here (redirect to /dashboard) and NEVER completes onboarding. This
  * mirrors deliverable B's posture: trust the DB, not the client.
  *
- * DORMANT in v1: the whole domain-company-join family stands down behind the isPersonal
- * guard, so this route is harmless until the shared-org creation seam ships. (The
- * expert→agency `agency.provisioned` path is live but does not deep-link here.)
+ * LIVE as of BAL-369 / ADR-1038: the org-creation seam shipped, so a company promoted to a
+ * shared organization at the onboarding Intent step really can own a domain and field
+ * request-mode joins — these deep-links now land real requesters. (The expert→agency
+ * `agency.provisioned` path is also live but does not deep-link here.)
  */
 export default async function JoinResultPage({
   searchParams,

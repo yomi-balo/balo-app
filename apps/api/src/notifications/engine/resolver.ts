@@ -54,6 +54,13 @@ const BILLING_FANOUT_EVENTS = new Set<string>([
   // BAL-377 / BAL-381: a member's "nudge {Admin} to top up" fans out to the company's
   // MANAGE_BILLING holders (the nudging member lacks MANAGE_BILLING → naturally excluded).
   'credit.topup.requested',
+  // ⚠⚠ BAL-412's `session.missed_call` is DELIBERATELY NOT LISTED HERE, and the omission is a
+  // DECISION, not a gap (omitting an entry for a genuine fan-out event would silently drop the
+  // alert — see the file docblock's warning). This event has NO `company_billing_admins`
+  // recipient: its two recipients are `self` (via `payload.userId`) and `expert` (via
+  // `payload.expertProfileId`, hydrated by the generic `expertProfileId → data.expert` branch
+  // below). The MONEY side is already covered — a missed call settles at zero, and the billing
+  // admins' receipt is the unaffected `session.settled` event.
 ]);
 
 /**

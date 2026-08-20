@@ -187,7 +187,12 @@ interface UpdateProfileInput {
   isSalesforceMvp?: boolean;
   isSalesforceCta?: boolean;
   isCertifiedTrainer?: boolean;
-  searchable?: boolean;
+  // CHEAP-3 (fix round 1) — deliberately NOT a field here. `expert_profiles.searchable` has
+  // exactly ONE writer outside seeds:
+  // `expertSearchabilityRepository.applySearchable`'s conditional compare-and-set
+  // (`packages/db/src/repositories/expert-searchability.ts`) — the docblock there names the
+  // forbidden "fixes" this field would have reopened. Removing it here makes the compiler
+  // enforce the invariant instead of leaving it convention-only.
   rateCents?: number;
   // Calendar / booking-rule writes (BAL-234). `timezone` write is net-new here —
   // the schedule editor persists the expert's own tz alongside the booking rules.
@@ -381,13 +386,19 @@ export const expertsRepository = {
 
   /**
    * The full set of resolver inputs owned by the expert — timezone + the three
-   * booking rules — in one `columns:`-projected read (never hydrate the whole
-   * row: it carries stripeConnectId / cronofyUserId / PII the resolver must not
-   * see). Returns null if the profile doesn't exist so the resolve-and-cache
-   * wire-up can short-circuit. Field names are the resolver's own vocabulary
-   * (`bufferBeforeMinutes`, …), decoupled from the DB column names.
+   * booking rules, plus the owning `userId` — in one `columns:`-projected read
+   * (never hydrate the whole row: it carries stripeConnectId / cronofyUserId /
+   * PII the resolver must not see). Returns null if the profile doesn't exist
+   * so the resolve-and-cache wire-up can short-circuit. Field names are the
+   * resolver's own vocabulary (`bufferBeforeMinutes`, …), decoupled from the DB
+   * column names.
+   *
+   * `userId` was added by BAL-416 fix round 1 (S1) so a caller can assert
+   * `expertProfiles.userId === <session userId>` against an already-fetched
+   * row instead of a second query — see `findOverrideConflicts`.
    */
   async findResolverSettings(expertProfileId: string): Promise<{
+    userId: string;
     timezone: string;
     bufferBeforeMinutes: number;
     bufferAfterMinutes: number;
@@ -396,6 +407,7 @@ export const expertsRepository = {
     const row = await db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
       columns: {
+        userId: true,
         timezone: true,
         bookingBufferBeforeMinutes: true,
         bookingBufferAfterMinutes: true,
@@ -404,6 +416,7 @@ export const expertsRepository = {
     });
     if (!row) return null;
     return {
+      userId: row.userId,
       timezone: row.timezone,
       bufferBeforeMinutes: row.bookingBufferBeforeMinutes,
       bufferAfterMinutes: row.bookingBufferAfterMinutes,
@@ -896,7 +909,6 @@ export const expertsRepository = {
         isSalesforceMvp: data.isSalesforceMvp,
         isSalesforceCta: data.isSalesforceCta,
         isCertifiedTrainer: data.isCertifiedTrainer,
-        searchable: data.searchable,
         rateCents: data.rateCents,
         timezone: data.timezone,
         bookingBufferBeforeMinutes: data.bookingBufferBeforeMinutes,

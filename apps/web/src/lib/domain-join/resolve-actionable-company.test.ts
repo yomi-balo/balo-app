@@ -91,7 +91,7 @@ describe('resolveActionableCompanyForSession', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when the match stands down (personal workspace — v1 dormant)', async () => {
+  it('returns null when the match stands down (personal workspace)', async () => {
     mockFindActiveByDomain.mockResolvedValue({ partyType: 'company', partyId: 'company-1' });
     mockGetPartyJoinSettings.mockResolvedValue(actionableSettings({ isPersonal: true }));
     const result = await resolveActionableCompanyForSession(USER_ID, 'founder@acme.io');

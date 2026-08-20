@@ -44,32 +44,32 @@ describe('getAvailabilityOverridesAction', () => {
     await expect(getAvailabilityOverridesAction()).rejects.toThrow('Unauthorized');
   });
 
-  it('returns [] when the session has no expert profile', async () => {
+  it('returns null when the session has no expert profile', async () => {
     mockSessionObj = {
       user: { id: 'user-1', onboardingCompleted: true, email: 'e@e.com', activeMode: 'expert' },
       save: mockSave,
     };
     const result = await getAvailabilityOverridesAction();
-    expect(result).toEqual([]);
+    expect(result).toBeNull();
     expect(mockCalendarApiFetch).not.toHaveBeenCalled();
   });
 
-  it('returns the overrides list on success', async () => {
+  it('returns the overrides list + expertProfileId on success (BAL-416)', async () => {
     mockCalendarApiFetch.mockResolvedValueOnce({ overrides: [SAMPLE] });
 
     const result = await getAvailabilityOverridesAction();
 
-    expect(result).toEqual([SAMPLE]);
+    expect(result).toEqual({ overrides: [SAMPLE], expertProfileId: 'profile-1' });
     expect(mockCalendarApiFetch).toHaveBeenCalledWith(
       '/api/experts/availability-overrides?expertProfileId=profile-1'
     );
   });
 
-  it('returns [] when the API call fails (graceful read degradation)', async () => {
+  it('returns null when the API call fails (graceful read degradation)', async () => {
     mockCalendarApiFetch.mockRejectedValueOnce(new Error('Network error'));
 
     const result = await getAvailabilityOverridesAction();
 
-    expect(result).toEqual([]);
+    expect(result).toBeNull();
   });
 });

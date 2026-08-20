@@ -615,12 +615,27 @@ export function getNextSpringForwardGap(timeZone: string, from: Date): SpringFor
 /**
  * True when a weekly wall-clock range would land in the timezone's upcoming spring-forward
  * gap. Only the transition's own weekday is considered (v1: single upcoming transition).
+ *
+ * Single-day only: `range` must describe one calendar day's own interval
+ * (`startMinutes < endMinutes`). A range that crosses midnight (`endMinutes <=
+ * startMinutes`, e.g. 22:00→02:00) spans TWO calendar days and is out of scope for this
+ * helper — passing one throws rather than silently answering "no gap" (the overlap test
+ * below is false for any real gap when `startMinutes > endMinutes`, which would fail
+ * open). Callers with a crossing range need the two-interval, week-level check — see
+ * `findWeekGapMatch` in apps/web's schedule-helpers.ts — which this does NOT duplicate.
  */
 export function isWallClockInSpringForwardGap(
   timeZone: string,
   from: Date,
   range: { dayOfWeek: number; startMinutes: number; endMinutes: number }
 ): boolean {
+  if (range.endMinutes <= range.startMinutes) {
+    throw new Error(
+      'isWallClockInSpringForwardGap does not support a crossing-midnight range ' +
+        '(endMinutes <= startMinutes); use the week-level two-interval check ' +
+        '(findWeekGapMatch) for those instead.'
+    );
+  }
   const gap = getNextSpringForwardGap(timeZone, from);
   // Split guards (not `!gap || …gap.x`) so `gap` narrows to non-null for the reads below.
   if (!gap) return false;

@@ -446,22 +446,85 @@ export const creditReceivableReasonEnum = pgEnum('credit_receivable_reason', [
  * How a session's billable duration is established.
  *  `live_capture` → wall-clock metering (BAL-378) finalizes at hang-up.
  *  `external`     → held on an outside tool / bot failed; duration settled later via BAL-133.
+ *  `presence`     → BAL-412 (ADR-1044 §7): the session's FINAL billable duration is
+ *                   established from `meeting_presence` at settlement, with the 15-minute
+ *                   billing floor applied. **Metered live exactly like `live_capture`** —
+ *                   `findMeterable` includes it and the per-minute tick loop runs, because
+ *                   the in-call balance panel, the grace/ceiling state machine and the
+ *                   one-shot low/near-wrap notices are all tick-driven. What differs is only
+ *                   how the TERMINAL figure is fixed: `settleFromPresence` tops the ticks up
+ *                   to the floored figure over the SAME tick-sequence idempotency scheme.
+ *                   Set at `open`, immutable, like the other two.
+ *
+ * ⚠ BAL-412 ADDED `'presence'` VIA `ALTER TYPE … ADD VALUE` (migration 0071), so the label is
+ * subject to the one-transaction hazard — and drizzle-orm's migrator runs **every pending
+ * migration in ONE transaction** (`pg-core/dialect.js`'s `migrate`), so on a FROM-SCRATCH run
+ * that is every migration file, not just 0071. THE LABEL THEREFORE APPEARS IN NO INDEX
+ * PREDICATE AND NO CHECK, in 0071 or in any later migration. The
+ * `credit_sessions_presence_unsettled_idx` partial index carries `duration_source` as a KEY
+ * COLUMN with a `billing_finalized_at IS NULL AND deleted_at IS NULL` predicate for exactly
+ * this reason — see that index's comment on `schema/credit-sessions.ts`. Enum literals at
+ * QUERY time are always safe; the restriction is index predicates, CHECKs and column defaults.
+ *
+ * ⚠ NO COLUMN DEFAULT MOVES. `credit_sessions.duration_source` keeps `DEFAULT 'live_capture'`
+ * (an OLD label), so the default-to-a-just-added-value hazard (memory
+ * `reference_enum_default_same_tx_migration_hazard`) does not arise.
  */
 export const creditDurationSourceEnum = pgEnum('credit_duration_source', [
   'live_capture',
   'external',
+  'presence',
 ]);
 
 /**
  * Which path produced the finalized billing figure (recap-facing). No column default —
  * the writer states it: `live_capture` (wall-clock hang-up), `confirmed` / `disputed` /
- * `auto_confirmed` (the external BAL-133 duration-settlement paths).
+ * `auto_confirmed` (the external BAL-133 duration-settlement paths), `presence` (BAL-412's
+ * `meeting_presence`-derived settlement with the ADR-1044 §7 floor).
+ *
+ * ⚠ `'presence'` IS ALSO AN `ADD VALUE` LABEL (migration 0071) — same rule as
+ * `credit_duration_source` above: it appears in no index predicate, no CHECK and no default.
+ * This type has never had a column default (every writer states the path), so the cast the
+ * BAL-399 note below describes is not needed for it.
  */
 export const creditFinalizationPathEnum = pgEnum('credit_finalization_path', [
   'live_capture',
   'confirmed',
   'disputed',
   'auto_confirmed',
+  'presence',
+]);
+
+/**
+ * BAL-412 (ADR-1044 §7) — HOW A PRESENCE SETTLEMENT RESOLVED. Four shapes, and they are NOT
+ * redundant with `meeting_outcome`:
+ *
+ *   `held`           → both sides present. Outcome `completed`. Billed
+ *                      `ceil(max(expert-present, floor))`.
+ *   `no_show_client` → expert present ≥ the floor, no client-side participant EVER arrived.
+ *                      Outcome `no_show_client`. Billed the floor **FLAT** — the floor is the
+ *                      WHOLE charge, not a minimum: an expert who waits 40 minutes bills 15,
+ *                      and accrues 15 (owner ruling, 2026-08-21). The expert's excess wait is
+ *                      deliberately not billed to a client who never arrived.
+ *   `missed_call`    → the expert never joined. Outcome `missed_call`. ZERO, hold released.
+ *   `abandoned_wait` → the expert joined, waited, and left BELOW the floor with no client
+ *                      ever present (decision D2). ZERO, hold released.
+ *
+ * ⚠⚠ THE LAST TWO ARE WHY THIS TYPE EXISTS. `meeting_outcome` has only three labels and
+ * **BAL-412 mints no fourth** — an `abandoned_wait` therefore lands on the meeting row as
+ * `completed` with a zero settlement, which is indistinguishable from a `missed_call` (also
+ * zero) and from a genuine completed call on `meetings.outcome` alone. "Never joined" vs
+ * "joined and gave up" survives settlement ONLY on `credit_sessions.settlement_shape`.
+ *
+ * Standalone `CREATE TYPE` (never `ALTER TYPE … ADD VALUE`), so every label commits
+ * atomically WITH the type and the one-transaction hazard cannot apply. No column default —
+ * the column is NULL for any session never settled from presence.
+ */
+export const creditSettlementShapeEnum = pgEnum('credit_settlement_shape', [
+  'held',
+  'no_show_client',
+  'missed_call',
+  'abandoned_wait',
 ]);
 
 /**

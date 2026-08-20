@@ -21,6 +21,7 @@ const {
   mockWarn,
   mockErrorLog,
   mockInfo,
+  mockSettleMeetingIfBillable,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
   mockFindMeetingById: vi.fn(),
@@ -42,6 +43,7 @@ const {
   mockWarn: vi.fn(),
   mockErrorLog: vi.fn(),
   mockInfo: vi.fn(),
+  mockSettleMeetingIfBillable: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -82,6 +84,11 @@ vi.mock('../services/meetings/delivering-party.js', () => ({
   deliveringPartyName: mockDeliveringPartyName,
 }));
 vi.mock('../services/meetings/end-meeting.js', () => ({ emitMeetingEnded: mockEmitMeetingEnded }));
+// BAL-412 — INERT on main (D10). Mocked so this suite stays focused on the sweep's own three
+// passes; the settlement wrapper's own behaviour is covered in `settle-from-presence.test.ts`.
+vi.mock('../services/credit-session/settle-from-presence.js', () => ({
+  settleMeetingIfBillable: mockSettleMeetingIfBillable,
+}));
 vi.mock('../notifications/scheduling/meeting-absence.js', () => ({
   scheduleExpertAbsentAlert: mockScheduleExpertAbsent,
   scheduleClientAbsentNudge: mockScheduleClientAbsent,
@@ -152,6 +159,8 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockFindMeetingById.mockResolvedValue(meeting());
     mockReconcileMeetingStatus.mockResolvedValue(null);
     mockDeliveringPartyName.mockResolvedValue('CloudPeak');
+    // BAL-412 — INERT on main (D10): every meeting today resolves `no_meeting`.
+    mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'no_meeting' });
   });
 
   it('scans nothing and does nothing on an empty batch — no vendor call', async () => {
@@ -744,6 +753,54 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       expect.objectContaining({ meetingId: 'bad' }),
       'Meeting lifecycle sweep failed'
     );
+  });
+
+  // ── BAL-412 — PRESENCE SETTLEMENT, BEST-EFFORT AND NON-FATAL ────────────────────────────
+
+  it('settles the terminated meeting with the system-actor exemption (actorUserId: null)', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: at(30) },
+      { party: 'client', joinedAt: at(2), leftAt: at(30) },
+    ]);
+
+    const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(1);
+    expect(mockSettleMeetingIfBillable).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actorUserId: null,
+      now: at(35),
+    });
+  });
+
+  it('⚠ a SETTLEMENT FAILURE does not abort the sweep tick — logs at error and continues', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({ status: 'in_progress' }),
+      meeting({ id: 'good', status: 'in_progress' }),
+    ]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: at(30) },
+      { party: 'client', joinedAt: at(2), leftAt: at(30) },
+    ]);
+    mockSettleMeetingIfBillable.mockRejectedValueOnce(new Error('settlement boom'));
+
+    const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(2);
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID }),
+      expect.stringContaining('Presence settlement failed')
+    );
+  });
+
+  it('does not call settlement for a meeting the sweep merely armed (no terminal rule fired)', async () => {
+    mockListCandidates.mockResolvedValue([meeting()]);
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(5), leftAt: null }]);
+
+    await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+    expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
   });
 });
 

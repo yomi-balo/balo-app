@@ -36,11 +36,15 @@ export const sessionIdParamsSchema = z.object({
  * BAL-399 — `POST /internal/sessions/:id/finalize-duration` (the BAL-133 consumer seam; system-
  * authed internal route, same posture as the internal `/credit` routes — NOT client-callable).
  * `minutes` is the confirmed billable duration (drawn in full, no ceiling clamp); `path` records
- * which BAL-133 outcome finalized it; `settledByUserId` is optional audit context.
+ * which BAL-133 outcome finalized it.
+ *
+ * ⚠ BAL-412 (D9) REMOVED `settledByUserId`. `finalizeExternalDuration` only ever acts when
+ * `durationSource === 'external'`, which nothing on main sets — accepting the field would have
+ * advertised audit attribution the route silently discarded. BAL-133 owns audit attribution
+ * for the external path if it is ever needed; the API stops advertising a field it does not use.
  */
 export const finalizeDurationBodySchema = z.object({
   minutes: z.number().int().min(0).max(MAX_SESSION_MINUTES),
   path: z.enum(['confirmed', 'disputed', 'auto_confirmed']),
-  settledByUserId: z.string().uuid().optional(),
 });
 export type FinalizeDurationBody = z.infer<typeof finalizeDurationBodySchema>;

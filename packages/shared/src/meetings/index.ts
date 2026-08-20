@@ -24,9 +24,14 @@
  * the span faithfully and caps nothing. Both numbers are PINNED by tests in `index.test.ts`
  * so this paragraph cannot drift from the behaviour.
  *
- * ⚠ THE POLICY CAP IS ASSIGNED: **BAL-412** (settlement) holds it and already carries
- * `effectiveCeilingMinor` as the money-side backstop; **BAL-134** clamps presence to the
- * meeting window on the write side.
+ * ⚠ D1a — NO CAP IN v1, DECIDED, NOT PENDING. The gap-inclusive exposure above (both parties
+ * present early and late, the gap in between still counted) is accepted as-is: the expert
+ * held the room open for the whole span, so billing the span rather than the sum of intervals
+ * is the correct call here, not a bug to cap. This is a DIFFERENT hazard from an expert
+ * leaving the room open indefinitely after the other party leaves for good and never returns
+ * — that one IS bounded, by a `maxBillableMinutes` clamp at settlement (**BAL-412**), not by
+ * anything in this pure module. **BAL-134** clamps presence to the meeting window on the
+ * write side.
  *
  * `observer` (a Balo staffer / silent attendee) is present but NEVER makes a meeting
  * billable — it is excluded from the billable intersection by construction.

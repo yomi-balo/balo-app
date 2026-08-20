@@ -13,6 +13,7 @@ import {
   endSessionAsSystem,
   finalizeBilling,
   reconcileStuckSettlement,
+  settleSessionFromPresence,
 } from '../services/credit-session/index.js';
 
 /**
@@ -35,6 +36,14 @@ import {
  *     notices; does NOT settle/charge). Keys on the DB end-state, so it covers all four ending
  *     paths (route, wrapped-idle reaper, max-duration reaper, external) uniformly. Idempotent via
  *     the payout `created` guard, so it is race-safe against a concurrent legitimate finalize.
+ *  6. PRESENCE-SETTLEMENT DURABILITY BACKSTOP (BAL-412, plan §4.3) — `duration_source='presence'`
+ *     sessions whose MEETING has ended but which never settled (`findPresenceUnsettled`). NEEDED
+ *     because both terminal paths (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call
+ *     `settleMeetingIfBillable` BEST-EFFORT and NON-FATAL, so a fault there strands a session
+ *     `findFinalizedMissingPayout` (pass 5) cannot see — that finder keys on
+ *     `billing_finalized_at IS NOT NULL`, the exact opposite half of this space. ⚠⚠ INERT ON
+ *     MAIN (D10): `findPresenceUnsettled` returns `[]` always — nothing sets
+ *     `duration_source='presence'` today.
  *
  * Metering is deterministic + idempotent (tickSeq minute-index ledger key), so a re-meter that
  * crosses nothing publishes nothing. All money/lock logic lives in `@balo/db` — this stays thin.
@@ -52,6 +61,15 @@ const STUCK_SETTLEMENT_MINUTES = 10;
  * legitimate in-flight finalize.
  */
 const PAYOUT_RECONCILE_GRACE_MINUTES = 5;
+/**
+ * BAL-412 (plan §4.3) — how far behind `now` a meeting's `ended_at` must be before the presence
+ * durability backstop picks up its unsettled session. Mirrors `PAYOUT_RECONCILE_GRACE_MINUTES`'s
+ * posture: small enough to recover quickly, large enough to never race the µs-window between a
+ * terminal path's `endMeeting` commit and its own best-effort `settleMeetingIfBillable` call.
+ */
+const PRESENCE_SETTLEMENT_GRACE_MINUTES = 2;
+/** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
+const PRESENCE_SETTLEMENT_BATCH_LIMIT = 100;
 
 const logger = createLogger('credit-session-meter-sweep');
 
@@ -67,15 +85,42 @@ async function enforceMaxDuration(session: CreditSession, now: Date): Promise<vo
   const elapsedMinutes = Math.floor(
     (now.getTime() - session.connectedAt.getTime()) / MS_PER_MINUTE
   );
-  if (elapsedMinutes >= MAX_SESSION_MINUTES) {
+  if (elapsedMinutes < MAX_SESSION_MINUTES) {
+    return;
+  }
+  // BAL-412 (Q3, plan §4.3) — a `presence` session's terminal path is the meeting lifecycle
+  // sweep's idle-end rule (`meeting-lifecycle-sweep.ts`), NEVER this force-end: finalizing it
+  // here would settle it behind the meeting's back, with no floor and no outcome resolved.
+  // Skipped and left to the owning rule; settlement (`settleMeetingIfBillable`) follows from
+  // there, and this file's own pass 6 durability backstop covers a settlement that then fails.
+  // Residual, accepted (Q3): a `presence` session on a room nobody ever leaves CAN exceed
+  // `MAX_SESSION_MINUTES` in DURATION.
+  //
+  // ⚠⚠ AN EARLIER REVISION OF THIS COMMENT CLAIMED THIS WAS "not a money hazard — the
+  // grace/ceiling wrap already stops metering at `effectiveCeilingMinor`". **THAT WAS FALSE**
+  // (F1), and it is corrected here rather than quietly reworded because it was the stated
+  // reason no bound was added. `effectiveCeilingMinor` bounds the LIVE METER's overdraft wrap
+  // (`applyGraceTick`); NOTHING in the settlement path reads it, so it never bounded the
+  // settlement TOP-UP — which is where the off-session charge is actually sized.
+  //
+  // THE MONEY BOUND IS `maxBillableMinutes`, injected into `resolveMeetingSettlement` at the
+  // `apps/api` boundary (`resolveMaxBillableMinutes()`, `config/billing-floor.ts`). It is what
+  // makes this skip safe: settlement cannot bill above `MAX_SESSION_MINUTES` however long the
+  // room stayed occupied. What remains here is a DURATION residual only.
+  if (session.durationSource === 'presence') {
     logger.warn(
       { sessionId: session.id, elapsedMinutes },
-      'Session exceeded MAX_SESSION_MINUTES — force-ending'
+      'Presence session exceeded MAX_SESSION_MINUTES — skipping force-end; the meeting lifecycle sweep (its idle-end rule) owns termination for this duration_source, not this reaper'
     );
-    // System force-end — the reaper is the system, not an actor, so it bypasses the actor
-    // authorization `endSession` applies (a departed initiating member must not strand the session).
-    await endSessionAsSystem(session.id, { now });
+    return;
   }
+  logger.warn(
+    { sessionId: session.id, elapsedMinutes },
+    'Session exceeded MAX_SESSION_MINUTES — force-ending'
+  );
+  // System force-end — the reaper is the system, not an actor, so it bypasses the actor
+  // authorization `endSession` applies (a departed initiating member must not strand the session).
+  await endSessionAsSystem(session.id, { now });
 }
 
 /** Pass 1 — meter every active/grace session + enforce the max-duration cap. */
@@ -183,6 +228,69 @@ async function runFinalizedMissingPayoutPass(
   return recovered;
 }
 
+/**
+ * Pass 6 (BAL-412, plan §4.3) — THE PRESENCE-SETTLEMENT DURABILITY BACKSTOP. Both terminal paths
+ * (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call `settleMeetingIfBillable` BEST-EFFORT and
+ * NON-FATAL, so a settlement fault there strands a session that pass 5 above CANNOT see —
+ * `findFinalizedMissingPayout` keys on `billing_finalized_at IS NOT NULL`, the exact opposite
+ * half of the space. `findPresenceUnsettled` is the NEW finder for the opposite half: a meeting
+ * that has ENDED with a `duration_source='presence'` session that never settled.
+ *
+ * `settleSessionFromPresence` is itself idempotent (the repository's row lock is the real
+ * guard), so a row picked up here and settled by a racing terminal path in the same instant is a
+ * harmless `already_settled` no-op.
+ *
+ * ⚠⚠ INERT ON MAIN (D10) — `findPresenceUnsettled` returns `[]` always: nothing sets
+ * `duration_source='presence'` today (BAL-400 booking → BAL-466 session open would).
+ */
+async function runPresenceSettlementPass(
+  now: Date,
+  log: (message: string) => void
+): Promise<number> {
+  let settled = 0;
+  const cutoff = new Date(now.getTime() - PRESENCE_SETTLEMENT_GRACE_MINUTES * MS_PER_MINUTE);
+  const sessions = await creditSessionsRepository.findPresenceUnsettled(
+    cutoff,
+    PRESENCE_SETTLEMENT_BATCH_LIMIT
+  );
+  if (sessions.length === PRESENCE_SETTLEMENT_BATCH_LIMIT) {
+    // ⚠ NO SILENT CAPS — a full batch means unsettled sessions were DROPPED from this tick.
+    const [oldest] = sessions;
+    logger.warn(
+      { limit: PRESENCE_SETTLEMENT_BATCH_LIMIT, oldestSessionId: oldest?.id },
+      'Presence-unsettled batch FILLED — sessions were dropped from this tick'
+    );
+  }
+  for (const session of sessions) {
+    try {
+      const outcome = await settleSessionFromPresence({
+        sessionId: session.id,
+        actorUserId: null,
+        now,
+      });
+      if (outcome.ok) {
+        settled += 1;
+      } else if (outcome.code !== 'already_settled') {
+        // A racing terminal path settled it between the finder read and here → benign. Anything
+        // else (`no_meeting` / `meeting_not_terminal` / `not_presence_sourced`) means the finder's
+        // predicate and this service's preconditions disagree — worth a look, not a crash.
+        logger.warn(
+          { sessionId: session.id, code: outcome.code },
+          'Presence settlement durability backstop declined'
+        );
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      log(`presence settlement backstop failed for session ${session.id}: ${message}`);
+      logger.error(
+        { sessionId: session.id, error: message },
+        'Presence settlement backstop failed'
+      );
+    }
+  }
+  return settled;
+}
+
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
 export async function runSessionMeterSweep(
   now: Date,
@@ -193,14 +301,19 @@ export async function runSessionMeterSweep(
   cancelled: number;
   reconciled: number;
   recovered: number;
+  presenceSettled: number;
 }> {
   const metered = await runMeterPass(now, log);
   const ended = await runWrappedIdlePass(now, log);
   const cancelled = await runStalePendingPass(now, log);
   const reconciled = await runStuckSettlingPass(now, log);
   const recovered = await runFinalizedMissingPayoutPass(now, log);
-  logger.info({ metered, ended, cancelled, reconciled, recovered }, 'Session meter sweep complete');
-  return { metered, ended, cancelled, reconciled, recovered };
+  const presenceSettled = await runPresenceSettlementPass(now, log);
+  logger.info(
+    { metered, ended, cancelled, reconciled, recovered, presenceSettled },
+    'Session meter sweep complete'
+  );
+  return { metered, ended, cancelled, reconciled, recovered, presenceSettled };
 }
 
 /** Start the credit-session meter sweep worker (concurrency 1 — serialised passes). */
@@ -208,12 +321,10 @@ export function startCreditSessionMeterSweepWorker(): Worker {
   return new Worker(
     CREDIT_SESSION_METER_SWEEP_QUEUE,
     async (job: Job) => {
-      const { metered, ended, cancelled, reconciled, recovered } = await runSessionMeterSweep(
-        new Date(),
-        (m) => job.log(m)
-      );
+      const { metered, ended, cancelled, reconciled, recovered, presenceSettled } =
+        await runSessionMeterSweep(new Date(), (m) => job.log(m));
       job.log(
-        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered`
+        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered, ${presenceSettled} presence-settled`
       );
     },
     {

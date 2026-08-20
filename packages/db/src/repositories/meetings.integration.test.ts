@@ -988,6 +988,187 @@ describe('meetingsRepository.endMeeting', () => {
   });
 });
 
+// ── BAL-412 — resolving the outcome BAL-134 deliberately left NULL ────────────────────────
+
+describe('meetingsRepository.setOutcomeIfUnset (BAL-412)', () => {
+  /** An `ended` meeting with NO outcome — exactly what a HUMAN End writes (ADR-1049 D5). */
+  async function endedWithoutOutcome(): Promise<string> {
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', endedBy: 'expert_host', endedAt: new Date() },
+    });
+    expect(meeting.outcome).toBeNull();
+    return meeting.id;
+  }
+
+  /** The `meeting.outcome_resolved` rows for one meeting. */
+  async function outcomeAudits(meetingId: string): Promise<AuditEvent[]> {
+    return db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(eq(auditEvents.entityId, meetingId), eq(auditEvents.action, 'meeting.outcome_resolved'))
+      );
+  }
+
+  it('writes the outcome on an ended meeting whose outcome is NULL, and audits it', async () => {
+    const id = await endedWithoutOutcome();
+    const actor = await userFactory();
+
+    const written = await meetingsRepository.setOutcomeIfUnset(db, {
+      meetingId: id,
+      outcome: 'no_show_client',
+      actorUserId: actor.id,
+    });
+
+    expect(written).toBe(true);
+    expect((await meetingsRepository.findById(id))?.outcome).toBe('no_show_client');
+
+    const audits = await outcomeAudits(id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(actor.id);
+    expect(audits[0]?.entityType).toBe('meeting');
+    expect(audits[0]?.metadata).toMatchObject({ outcome: 'no_show_client' });
+  });
+
+  it('accepts a NULL actor — the ADR-1030 system-actor exemption on the sweep path', async () => {
+    const id = await endedWithoutOutcome();
+
+    expect(
+      await meetingsRepository.setOutcomeIfUnset(db, {
+        meetingId: id,
+        outcome: 'completed',
+        actorUserId: null,
+      })
+    ).toBe(true);
+
+    const audits = await outcomeAudits(id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBeNull();
+  });
+
+  it('⚠ NEVER OVERWRITES: the sweep’s missed_call survives a settlement that re-derives it', async () => {
+    // BAL-134's lifecycle sweep already wrote `missed_call` on the never-joined path.
+    // Settlement re-derives the SAME label — and must still not write, because a re-write
+    // would also append a second audit row attesting to a resolution that did not happen.
+    const { meeting } = await meetingFactory({
+      values: {
+        status: 'ended',
+        endedBy: 'system_idle',
+        endedAt: new Date(),
+        outcome: 'missed_call',
+      },
+    });
+
+    const written = await meetingsRepository.setOutcomeIfUnset(db, {
+      meetingId: meeting.id,
+      outcome: 'missed_call',
+      actorUserId: null,
+    });
+
+    expect(written).toBe(false);
+    expect((await meetingsRepository.findById(meeting.id))?.outcome).toBe('missed_call');
+    expect(await outcomeAudits(meeting.id)).toHaveLength(0);
+  });
+
+  it('⚠ NEVER DOWNGRADES a completed meeting to a different label either', async () => {
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', endedAt: new Date(), outcome: 'completed' },
+    });
+
+    expect(
+      await meetingsRepository.setOutcomeIfUnset(db, {
+        meetingId: meeting.id,
+        outcome: 'no_show_client',
+        actorUserId: null,
+      })
+    ).toBe(false);
+    expect((await meetingsRepository.findById(meeting.id))?.outcome).toBe('completed');
+  });
+
+  it('⚠ REFUSES a NON-ended meeting rather than tripping meeting_outcome_requires_ended', async () => {
+    // The CHECK is one-directional (`outcome ⇒ ended`). Writing here would raise a bare 23514
+    // and roll back the caller's WHOLE settlement transaction — the money and the ledger ticks
+    // with it. `status = 'ended'` is in the predicate so the write simply matches no row.
+    const id = await lifecycleMeeting('in_progress');
+
+    const written = await meetingsRepository.setOutcomeIfUnset(db, {
+      meetingId: id,
+      outcome: 'completed',
+      actorUserId: null,
+    });
+
+    expect(written).toBe(false);
+    const persisted = await meetingsRepository.findById(id);
+    expect(persisted?.status).toBe('in_progress');
+    expect(persisted?.outcome).toBeNull();
+    expect(await outcomeAudits(id)).toHaveLength(0);
+  });
+
+  it('refuses a SOFT-DELETED meeting, and an unknown id', async () => {
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', endedAt: new Date(), deletedAt: new Date() },
+    });
+
+    expect(
+      await meetingsRepository.setOutcomeIfUnset(db, {
+        meetingId: meeting.id,
+        outcome: 'completed',
+        actorUserId: null,
+      })
+    ).toBe(false);
+    expect(
+      await meetingsRepository.setOutcomeIfUnset(db, {
+        meetingId: randomUUID(),
+        outcome: 'completed',
+        actorUserId: null,
+      })
+    ).toBe(false);
+  });
+
+  it('⚠ ADR-1030: a ROLLED-BACK caller transaction leaves NEITHER the outcome NOR the audit row', async () => {
+    const id = await endedWithoutOutcome();
+
+    await expect(
+      db.transaction(async (tx) => {
+        expect(
+          await meetingsRepository.setOutcomeIfUnset(tx, {
+            meetingId: id,
+            outcome: 'no_show_client',
+            actorUserId: null,
+          })
+        ).toBe(true);
+        // The settlement blowing up AFTER the outcome write — the exact reason the outcome
+        // must ride the caller's executor rather than the base client.
+        throw new Error('settlement failed');
+      })
+    ).rejects.toThrow('settlement failed');
+
+    expect((await meetingsRepository.findById(id))?.outcome).toBeNull();
+    expect(await outcomeAudits(id)).toHaveLength(0);
+  });
+
+  it('is IDEMPOTENT across two calls — the second is a no-op, not a second audit row', async () => {
+    const id = await endedWithoutOutcome();
+
+    expect(
+      await meetingsRepository.setOutcomeIfUnset(db, {
+        meetingId: id,
+        outcome: 'completed',
+        actorUserId: null,
+      })
+    ).toBe(true);
+    expect(
+      await meetingsRepository.setOutcomeIfUnset(db, {
+        meetingId: id,
+        outcome: 'completed',
+        actorUserId: null,
+      })
+    ).toBe(false);
+
+    expect(await outcomeAudits(id)).toHaveLength(1);
+  });
+});
+
 describe('meetings — the ended_by CHECK', () => {
   it('meeting_ended_by_requires_ended rejects an ender on a NON-ended meeting (23514)', async () => {
     const { meeting } = await meetingFactory();

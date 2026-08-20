@@ -81,15 +81,14 @@ export async function searchExpertFactory(
   const rateIsNull = rateProvided && overrides.rateCents === null;
   const rateValue = rateProvided ? overrides.rateCents : 200;
 
-  // Profile scalars + distinctions + searchable flag.
+  // Profile scalars + distinctions.
   await expertsRepository.updateProfile(profile.id, {
     headline: overrides.headline ?? 'Salesforce Consultant',
     bio: overrides.bio ?? 'Experienced Salesforce professional.',
-    ...(overrides.username !== undefined ? { username: overrides.username } : {}),
+    ...(overrides.username === undefined ? {} : { username: overrides.username }),
     ...(rateIsNull ? {} : { rateCents: rateValue as number }),
     yearStartedSalesforce: overrides.yearStartedSalesforce ?? 2015,
     projectCountMin: overrides.projectCountMin ?? 10,
-    searchable: overrides.searchable ?? true,
     isSalesforceMvp: overrides.isSalesforceMvp ?? false,
     isSalesforceCta: overrides.isSalesforceCta ?? false,
     isCertifiedTrainer: overrides.isCertifiedTrainer ?? false,
@@ -102,6 +101,17 @@ export async function searchExpertFactory(
       .set({ rateCents: null })
       .where(eq(expertProfiles.id, profile.id));
   }
+
+  // CHEAP-3 (fix round 1) — `searchable` is applied DIRECTLY, not through
+  // `expertsRepository.updateProfile`: `UpdateProfileInput` no longer accepts `searchable` at
+  // all, so the compiler now enforces the "one writer" invariant
+  // (`expertSearchabilityRepository.applySearchable`) outside seeds and this factory. A search
+  // fixture legitimately needs to set the flag directly (bypassing the checklist derivation) to
+  // exercise `expert-search.ts` in isolation from the checklist rule.
+  await db
+    .update(expertProfiles)
+    .set({ searchable: overrides.searchable ?? true })
+    .where(eq(expertProfiles.id, profile.id));
 
   // Agency link is set directly (updateProfile does not cover agencyId).
   if (overrides.agencyId !== undefined) {

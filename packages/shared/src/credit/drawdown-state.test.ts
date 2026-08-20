@@ -18,6 +18,11 @@ function base(overrides: Partial<DrawdownInputs> = {}): DrawdownInputs {
     graceBoundMinutes: 30,
     graceEnteredAt: null,
     balanceMinor: 50_000, // ~500 min runway
+    // BAL-412 (D6) — 42 minutes already drawn is well past the 15-minute floor, so the
+    // corrected runway formula reduces EXACTLY to the shipped `floor(balance/rate)` for every
+    // existing scenario below. This is what keeps "past minute 15 is byte-identical" true.
+    billingFloorMinutes: 15,
+    minutesAlreadyDrawn: 42,
     mandatePresent: true,
     lens: 'client',
     now: NOW,
@@ -203,6 +208,75 @@ describe('deriveDrawdownState — the word "overdraft" never appears', () => {
     }
     for (const value of strings) {
       expect(value.toLowerCase()).not.toContain('overdraft');
+    }
+  });
+});
+
+/**
+ * BAL-412 (ADR-1044 §7, D6) — the runway correction's effect on `deriveDrawdownState`.
+ * `runway.test.ts` pins the pure formula directly; these pin its INTEGRATION into the
+ * presentational key + copy, which is the surface a client actually sees.
+ */
+describe('deriveDrawdownState — the runway correction (BAL-412, D6)', () => {
+  it('a scenario that was `healthy` under the old formula is `low` under the corrected one', () => {
+    // floor(2000/100) = 20 (the OLD, uncorrected answer) ⇒ would have been `healthy`.
+    // Corrected: unconsumed floor = 15 − 2 = 13 min ⇒ committed = 1300 ⇒ discretionary = 700
+    // ⇒ 7 min, which is ≤ LOW_BALANCE_WARNING_MINUTES (8) ⇒ `low`. The warning fires SOONER,
+    // which is the intended effect (never later — it is the conservative direction).
+    const state = deriveDrawdownState(
+      base({
+        status: 'active',
+        balanceMinor: 2_000,
+        billingFloorMinutes: 15,
+        minutesAlreadyDrawn: 2,
+      })
+    );
+    expect(state.key).toBe('low');
+    expect(state.minutesRemaining).toBe(7);
+    expect(state.title).toBe('About 7 minutes of balance left');
+  });
+
+  it('early in a session (floor mostly unconsumed) reports the corrected discretionary figure', () => {
+    // The ticket's own worked example: rate=100, floor=15, drawn=2, balance=3000 → 17 (not 30).
+    const state = deriveDrawdownState(
+      base({
+        status: 'active',
+        balanceMinor: 900, // low enough to surface `minutesRemaining` (key = 'low')
+        billingFloorMinutes: 15,
+        minutesAlreadyDrawn: 2,
+      })
+    );
+    // unconsumed = 13, committed = 1300 > 900 ⇒ discretionary ≤ 0 ⇒ 0 minutes remaining, `low`.
+    expect(state.key).toBe('low');
+    expect(state.minutesRemaining).toBe(0);
+  });
+
+  it('floor fully consumed (drawn ≥ floor) is byte-identical to the shipped healthy/low boundary', () => {
+    // At drawn=15 (== floor), the correction is a no-op: unconsumed=0, so this is exactly
+    // floor(balance/rate). Same assertions as the un-corrected KEY_INPUTS.low scenario.
+    const state = deriveDrawdownState(
+      base({
+        status: 'active',
+        balanceMinor: 500,
+        billingFloorMinutes: 15,
+        minutesAlreadyDrawn: 15,
+      })
+    );
+    expect(state.key).toBe('low');
+    expect(state.minutesRemaining).toBe(5);
+  });
+
+  it('grace/near/wrap/end keys are unaffected by the floor (they do not read minutesRemaining)', () => {
+    for (const key of ['grace', 'near', 'wrap', 'end'] as const) {
+      const withFloor = deriveDrawdownState(
+        base({ ...KEY_INPUTS[key], billingFloorMinutes: 15, minutesAlreadyDrawn: 2 })
+      );
+      const pastFloor = deriveDrawdownState(
+        base({ ...KEY_INPUTS[key], billingFloorMinutes: 15, minutesAlreadyDrawn: 42 })
+      );
+      expect(withFloor.key).toBe(pastFloor.key);
+      expect(withFloor.graceRemainingMinutes).toBe(pastFloor.graceRemainingMinutes);
+      expect(withFloor.ceilingRoomMinor).toBe(pastFloor.ceilingRoomMinor);
     }
   });
 });

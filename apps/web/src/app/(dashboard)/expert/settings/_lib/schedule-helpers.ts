@@ -53,13 +53,9 @@ export const TIME_STEP_MINUTES = SLOT_STEP_MINUTES;
 const MINUTES_PER_DAY = 24 * 60;
 const DEFAULT_START = '09:00';
 const DEFAULT_END = '17:00';
-/**
- * Latest selectable START time. With a 15-minute minimum range, 23:45 as a start
- * would leave no valid end (any auto-bump clamps back to 23:45 → start === end,
- * an error the expert can't clear). 23:30 is the last start that keeps an end
- * selectable.
- */
-export const LATEST_START_HHMM = '23:30';
+
+/** Suffix appended to any end time that lands on the FOLLOWING calendar day. */
+export const NEXT_DAY_SUFFIX = '(next day)';
 
 // ── Time helpers ────────────────────────────────────────────────────
 
@@ -68,10 +64,17 @@ export function hhmmToMinutes(value: string): number {
   return Number(hours) * 60 + Number(minutes);
 }
 
+/**
+ * Wraps modularly rather than clamping — `1440` (midnight, one full day later) becomes
+ * `'00:00'`, not `'23:45'`. Every caller in this module already pre-wraps its input
+ * (`% MINUTES_PER_DAY`), so this is normally a no-op; making the function itself
+ * modular means a future caller that forgets to pre-wrap gets the correct clock-face
+ * answer instead of silently landing on 23:45.
+ */
 export function minutesToHhmm(minutes: number): string {
-  const clamped = Math.max(0, Math.min(MINUTES_PER_DAY - TIME_STEP_MINUTES, minutes));
-  const hours = Math.floor(clamped / 60);
-  const mins = clamped % 60;
+  const wrapped = ((minutes % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const hours = Math.floor(wrapped / 60);
+  const mins = wrapped % 60;
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
@@ -99,10 +102,54 @@ export const TIME_OPTIONS: readonly TimeOption[] = Array.from(
   }
 );
 
-/** START-picker slots, 00:00 → 23:30 (a valid end must always remain selectable). */
-export const START_TIME_OPTIONS: readonly TimeOption[] = TIME_OPTIONS.filter(
-  (option) => option.value <= LATEST_START_HHMM
-);
+// ── Crossing-midnight helpers ────────────────────────────────────────
+
+/**
+ * THE definition of "this range crosses midnight" for the whole editor. Everything
+ * else derives from it — option building, validation, DST, analytics, the badge.
+ * DO NOT write a second `end < start` anywhere in this feature.
+ *
+ * String compare is exact: both values come from the zero-padded 96-slot TIME_OPTIONS
+ * set, so this is identical to comparing minutes — and identical to the resolver's own
+ * `endTime < startTime` (apps/api/src/services/availability/resolver.ts).
+ *
+ * `start === end` is forbidden at four layers (DB CHECK, both Zod schemas, the picker)
+ * and returns false here: it is a different error with its own message, not an
+ * overnight range.
+ */
+export function isOvernightRange(range: Pick<TimeRange, 'start' | 'end'>): boolean {
+  return range.end < range.start;
+}
+
+/** True when some OTHER range on this day already crosses midnight. */
+export function dayHasOtherOvernightRange(day: DayState, rangeId: string): boolean {
+  return day.ranges.some((range) => range.id !== rangeId && isOvernightRange(range));
+}
+
+/**
+ * End-picker options for ONE range: every 15-minute slot except the range's own start.
+ *   1. same-day slots strictly after `start`, through 23:45 — normal labels
+ *   2. then wrapped slots 00:00 … < start — each suffixed `(next day)`
+ *
+ * `allowOvernight` is false when a SIBLING range on the same day already crosses
+ * midnight (design §1: a day can hold only one). The wrapped half is then dropped and
+ * the list reverts to today's shipped behaviour.
+ *
+ * The wrapped half is kept regardless when THIS range is already crossing — a Radix
+ * Select whose current value is absent from its items renders an empty trigger.
+ */
+export function buildEndOptions(
+  range: Pick<TimeRange, 'start' | 'end'>,
+  allowOvernight: boolean
+): readonly TimeOption[] {
+  const sameDay = TIME_OPTIONS.filter((option) => option.value > range.start);
+  if (!allowOvernight && !isOvernightRange(range)) return sameDay;
+  const wrapped = TIME_OPTIONS.filter((option) => option.value < range.start).map((option) => ({
+    value: option.value,
+    label: `${option.label} ${NEXT_DAY_SUFFIX}`,
+  }));
+  return [...sameDay, ...wrapped];
+}
 
 // ── Booking-rule option sets (exact sets from availability-editor.jsx) ──
 
@@ -154,16 +201,58 @@ export function defaultRange(): TimeRange {
   return { id: newRangeId(), start: DEFAULT_START, end: DEFAULT_END };
 }
 
-/** Default range appended when adding to a day: after the last range, capped to end-of-day. */
-export function nextRangeDefault(existing: TimeRange[]): TimeRange {
+/**
+ * Default range appended when adding to a day: an hour after the previous range ends.
+ * The START stays on the clock face; the END is allowed to WRAP past midnight (BAL-415)
+ * rather than clamping to 23:45, which used to produce `start === end`.
+ *
+ * The preferred anchor can land INSIDE an existing range's own-day interval — most
+ * notably a crossing range's `[start, 1440)` tail, which `defaultRange()` (09:00–17:00)
+ * doesn't avoid either. So this walks every 15-minute boundary from the anchor,
+ * wrapping once through the full day, until it finds an hour that genuinely doesn't
+ * collide with anything already on the day. Only one range per day may cross midnight
+ * (design §1), so once one already exists, a candidate that would itself cross is
+ * skipped rather than handed to the expert unsaveable. Returns null when the day's free
+ * space is genuinely exhausted — the caller is expected to no-op rather than add a
+ * range it can't place.
+ */
+export function nextRangeDefault(existing: readonly TimeRange[]): TimeRange | null {
   const last = existing.at(-1);
   if (!last) return defaultRange();
-  const startMinutes = Math.min(hhmmToMinutes(last.end) + 60, MINUTES_PER_DAY - TIME_STEP_MINUTES);
-  const endMinutes = Math.min(startMinutes + 60, MINUTES_PER_DAY - TIME_STEP_MINUTES);
-  return { id: newRangeId(), start: minutesToHhmm(startMinutes), end: minutesToHhmm(endMinutes) };
+
+  const hasOvernight = existing.some(isOvernightRange);
+  // Own-day occupied minute-of-day intervals — a crossing range occupies through
+  // midnight on ITS day; the tail belongs to the next day and is out of scope here.
+  const occupied = existing.map((range) => ({
+    start: hhmmToMinutes(range.start),
+    end: effectiveEndMinutes(range),
+  }));
+  const overlapsOccupied = (start: number, end: number): boolean =>
+    occupied.some((slot) => start < slot.end && end > slot.start);
+
+  // Preferred anchor: an hour after the previous range ends, clamped so the START
+  // stays representable today — the END is free to wrap, which is how a range crosses
+  // midnight.
+  const anchor = Math.min(hhmmToMinutes(last.end) + 60, MINUTES_PER_DAY - TIME_STEP_MINUTES);
+
+  for (let step = 0; step < MINUTES_PER_DAY / TIME_STEP_MINUTES; step++) {
+    const start = (anchor + step * TIME_STEP_MINUTES) % MINUTES_PER_DAY;
+    const end = start + 60;
+    const crosses = end > MINUTES_PER_DAY;
+    if (crosses && hasOvernight) continue;
+    if (overlapsOccupied(start, crosses ? MINUTES_PER_DAY : end)) continue;
+    return { id: newRangeId(), start: minutesToHhmm(start), end: minutesToHhmm(end) };
+  }
+
+  return null;
 }
 
 // ── Week mutations (pure; keep the component's setWeek callbacks shallow) ─────
+
+/** One 15-minute step later, wrapping 23:45 → 00:00 (never clamping). */
+function bumpOneStep(hhmm: string): string {
+  return minutesToHhmm((hhmmToMinutes(hhmm) + TIME_STEP_MINUTES) % MINUTES_PER_DAY);
+}
 
 function applyRangeChange(
   range: TimeRange,
@@ -173,10 +262,11 @@ function applyRangeChange(
 ): TimeRange {
   if (range.id !== rangeId) return range;
   if (field === 'start') {
-    // Bumping the start to/past the end auto-advances the end one step so the
-    // range stays valid.
-    const end =
-      value >= range.end ? minutesToHhmm(hhmmToMinutes(value) + TIME_STEP_MINUTES) : range.end;
+    // `start === end` is the one genuinely-invalid pairing (DB CHECK
+    // avail_rules_start_ne_end_check). Every other pairing is legal: an end EARLIER
+    // than the start simply means the range now crosses midnight, so the expert's
+    // chosen end is left exactly where they put it and the row's badge says so.
+    const end = value === range.end ? bumpOneStep(value) : range.end;
     return { ...range, start: value, end };
   }
   return { ...range, end: value };
@@ -270,6 +360,22 @@ export function hasSplitDays(week: WeekState): boolean {
   return week.some((day) => day.enabled && day.ranges.length > 1);
 }
 
+export function hasOvernightWindow(week: WeekState): boolean {
+  return week.some((day) => day.enabled && day.ranges.some(isOvernightRange));
+}
+
+/** Ranges ending strictly after this are "late". Module-private — analytics only. */
+const LATE_WINDOW_AFTER_HHMM = '22:00';
+
+/** Any enabled range ending after 22:00 WITHOUT crossing midnight. */
+export function hasLateWindow(week: WeekState): boolean {
+  return week.some(
+    (day) =>
+      day.enabled &&
+      day.ranges.some((range) => !isOvernightRange(range) && range.end > LATE_WINDOW_AFTER_HHMM)
+  );
+}
+
 // ── Validation (local zod, mirrors the API contract) ────────────────
 
 // Anchored, no nested quantifiers — safe against ReDoS (SonarCloud S5852).
@@ -281,38 +387,223 @@ export const scheduleRuleSchema = z
     startTime: z.string().regex(HHMM_REGEX, 'Time must be on a 15-minute boundary'),
     endTime: z.string().regex(HHMM_REGEX, 'Time must be on a 15-minute boundary'),
   })
-  .refine((rule) => rule.startTime < rule.endTime, {
-    message: 'End time must be after start time',
+  .refine((rule) => rule.startTime !== rule.endTime, {
+    message: 'A range needs a different start and end time.',
   });
 
 export const scheduleRulesSchema = z.array(scheduleRuleSchema).max(21);
 
+// ── Conflict detection ────────────────────────────────────────────
+
+/** Minutes-of-day at which a range stops occupying its OWN day (1440 when it crosses). */
+function effectiveEndMinutes(range: TimeRange): number {
+  return isOvernightRange(range) ? MINUTES_PER_DAY : hhmmToMinutes(range.end);
+}
+
 /**
- * Validates the editor week. Returns a user-facing error string, or null when valid.
- * Runs the shared zod rule schema and adds a friendly per-day overlap check.
+ * '9:00 PM – 1:00 AM' or, for a range that crosses midnight, '9:00 PM – 1:00 AM (next
+ * day)'. The ONE definition of the en-dash hours label — every conflict message and the
+ * saved-summary route through this, so a crossing range is never rendered as though its
+ * end were earlier in the same day.
  */
-export function validateWeek(week: WeekState): string | null {
+function hoursLabel(range: TimeRange): string {
+  const base = `${formatHhmm(range.start)} – ${formatHhmm(range.end)}`;
+  return isOvernightRange(range) ? `${base} ${NEXT_DAY_SUFFIX}` : base;
+}
+
+export type ScheduleConflictKind = 'same-day-overlap' | 'cross-day-overlap' | 'two-overnight';
+
+export interface ScheduleConflict {
+  kind: ScheduleConflictKind;
+  /** DISPLAY index (0=Mon … 6=Sun) of the first implicated range's day. */
+  dayIndex: number;
+  rangeId: string;
+  /** The colliding range. For 'cross-day-overlap' this day is `(dayIndex + 1) % 7`. */
+  conflictDayIndex: number;
+  conflictRangeId: string;
+  /** Blocking toast copy — the full, two-day explanation. */
+  message: string;
+}
+
+/** (a) two-overnight — a day can only hold one crossing range. */
+function findTwoOvernightConflict(
+  day: DayState,
+  index: number,
+  meta: DayMeta,
+  nextMeta: DayMeta
+): ScheduleConflict | null {
+  const overnight = day.ranges.filter(isOvernightRange);
+  if (overnight.length < 2) return null;
+  const [first, second] = overnight;
+  if (!first || !second) return null;
+  return {
+    kind: 'two-overnight',
+    dayIndex: index,
+    rangeId: first.id,
+    conflictDayIndex: index,
+    conflictRangeId: second.id,
+    message:
+      `${meta.full} already has one range that runs past midnight — ${hoursLabel(first)}. ` +
+      `A day can only have one overnight range, since they'd both be running at the same ` +
+      `time late that night. Remove one, or adjust the times so only one crosses into ${nextMeta.full}.`,
+  };
+}
+
+/** (b) same-day-overlap — sort by start, walk holding the previous range. */
+function findSameDayOverlapConflict(
+  day: DayState,
+  index: number,
+  meta: DayMeta
+): ScheduleConflict | null {
+  const sorted = [...day.ranges].sort((a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start));
+  for (let i = 1; i < sorted.length; i++) {
+    const previous = sorted[i - 1];
+    const range = sorted[i];
+    if (!previous || !range) continue;
+    if (hhmmToMinutes(range.start) < effectiveEndMinutes(previous)) {
+      return {
+        kind: 'same-day-overlap',
+        dayIndex: index,
+        rangeId: previous.id,
+        conflictDayIndex: index,
+        conflictRangeId: range.id,
+        message: `Time ranges on ${meta.full} overlap.`,
+      };
+    }
+  }
+  return null;
+}
+
+/** (c) cross-day-overlap — a crossing range's tail against the next day's ranges. */
+function findCrossDayOverlapConflict(
+  day: DayState,
+  index: number,
+  week: WeekState,
+  meta: DayMeta,
+  nextMeta: DayMeta
+): ScheduleConflict | null {
+  const nextDay = week[(index + 1) % week.length];
+  if (!nextDay?.enabled) return null;
+  for (const r of day.ranges) {
+    if (!isOvernightRange(r)) continue;
+    const tailEnd = hhmmToMinutes(r.end);
+    for (const s of nextDay.ranges) {
+      if (hhmmToMinutes(s.start) < tailEnd) {
+        return {
+          kind: 'cross-day-overlap',
+          dayIndex: index,
+          rangeId: r.id,
+          conflictDayIndex: (index + 1) % week.length,
+          conflictRangeId: s.id,
+          message:
+            `${meta.full}'s ${hoursLabel(r)} range runs into ${nextMeta.full} morning, overlapping the ` +
+            `${hoursLabel(s)} range you already set for ${nextMeta.full}. Adjust one of the times so ` +
+            `they don't overlap.`,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/** First conflict in display order, or null. Pure. */
+export function findScheduleConflict(week: WeekState): ScheduleConflict | null {
+  for (const [index, day] of week.entries()) {
+    if (!day.enabled) continue;
+    const meta = DAY_META[index];
+    const nextMeta = DAY_META[(index + 1) % DAY_META.length];
+    if (!meta || !nextMeta) continue;
+
+    const conflict =
+      findTwoOvernightConflict(day, index, meta, nextMeta) ??
+      findSameDayOverlapConflict(day, index, meta) ??
+      findCrossDayOverlapConflict(day, index, week, meta, nextMeta);
+    if (conflict) return conflict;
+  }
+  return null;
+}
+
+/**
+ * rangeId → the short inline pointer rendered under that row's range. Derived from the
+ * SAME ScheduleConflict that produced the toast, so the two can never disagree.
+ * Ranges that have since been edited away are simply omitted.
+ */
+export function conflictInlineMessages(
+  conflict: ScheduleConflict,
+  week: WeekState
+): Readonly<Record<string, string>> {
+  const day = week[conflict.dayIndex];
+  const conflictDay = week[conflict.conflictDayIndex];
+  const range = day?.ranges.find((r) => r.id === conflict.rangeId);
+  const other = conflictDay?.ranges.find((r) => r.id === conflict.conflictRangeId);
+  if (!range || !other) return {};
+
+  if (conflict.kind === 'two-overnight') {
+    const message = 'Only one range per day can run past midnight.';
+    return { [range.id]: message, [other.id]: message };
+  }
+
+  if (conflict.kind === 'cross-day-overlap') {
+    const otherMeta = DAY_META[conflict.conflictDayIndex];
+    const rangeMeta = DAY_META[conflict.dayIndex];
+    if (!otherMeta || !rangeMeta) return {};
+    return {
+      [range.id]: `Overlaps with ${otherMeta.full}'s ${hoursLabel(other)} range.`,
+      [other.id]: `Overlaps with ${rangeMeta.full}'s ${hoursLabel(range)} range.`,
+    };
+  }
+
+  // same-day-overlap
+  return {
+    [range.id]: `Overlaps with your ${hoursLabel(other)} range on the same day.`,
+    [other.id]: `Overlaps with your ${hoursLabel(range)} range on the same day.`,
+  };
+}
+
+export interface ScheduleValidation {
+  /** Blocking toast copy. */
+  message: string;
+  /**
+   * The conflict `message` narrates, so the row highlight can only ever describe the
+   * error actually shown in the toast. Null for the empty-day and zod-schema failure
+   * paths, which don't (and can't) implicate a `ScheduleConflict` pair.
+   */
+  conflict: ScheduleConflict | null;
+}
+
+/**
+ * Validates the editor week in ONE evaluation. Returns null when valid, else the
+ * message plus (only when applicable) the conflict it describes. Checks run in this
+ * order: empty enabled day, then `findScheduleConflict`, then the shared zod rule
+ * schema — the FIRST one to fail wins, and it is the only thing reported. Calling this
+ * exactly once per save (instead of `findScheduleConflict` once for the toast and again
+ * inside a separate validation pass) is what keeps the toast and the row highlight from
+ * ever disagreeing.
+ */
+export function evaluateWeek(week: WeekState): ScheduleValidation | null {
   for (const [index, day] of week.entries()) {
     const meta = DAY_META[index];
     if (!day.enabled || !meta) continue;
     if (day.ranges.length === 0) {
-      return `Add hours to ${meta.full}, or turn the day off.`;
-    }
-    const sorted = [...day.ranges].sort((a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start));
-    let previousEnd = -1;
-    for (const range of sorted) {
-      if (hhmmToMinutes(range.start) < previousEnd) {
-        return `Time ranges on ${meta.full} overlap.`;
-      }
-      previousEnd = hhmmToMinutes(range.end);
+      return { message: `Add hours to ${meta.full}, or turn the day off.`, conflict: null };
     }
   }
+  const conflict = findScheduleConflict(week);
+  if (conflict) return { message: conflict.message, conflict };
 
   const parsed = scheduleRulesSchema.safeParse(weekToRules(week));
   if (!parsed.success) {
-    return parsed.error.issues[0]?.message ?? 'Please review your schedule.';
+    return {
+      message: parsed.error.issues[0]?.message ?? 'Please review your schedule.',
+      conflict: null,
+    };
   }
   return null;
+}
+
+/** Message-only view of `evaluateWeek`, for callers that don't need the row highlight. */
+export function validateWeek(week: WeekState): string | null {
+  return evaluateWeek(week)?.message ?? null;
 }
 
 // ── Saved-summary text (BAL-236 fallback) ───────────────────────────
@@ -328,8 +619,8 @@ function rangesSignature(ranges: TimeRange[]): string {
   return ranges.map((range) => `${range.start}-${range.end}`).join(',');
 }
 
-function rangesLabel(ranges: TimeRange[]): string {
-  return ranges.map((range) => `${formatHhmm(range.start)} – ${formatHhmm(range.end)}`).join(', ');
+function rangesLabel(ranges: readonly TimeRange[]): string {
+  return ranges.map((range) => hoursLabel(range)).join(', ');
 }
 
 /**
@@ -374,37 +665,70 @@ export function summarizeWeek(week: WeekState): ScheduleSummarySegment[] {
 
 // ── DST spring-forward conflict (non-blocking warning) ──────────────
 
-/**
- * Pure, Intl-free overlap test: does any enabled range on the gap's weekday land
- * in the spring-forward gap? Split out from `findDstConflict` so the cheap
- * per-keystroke check runs WITHOUT re-paying the expensive `getNextSpringForwardGap`
- * scan (which depends only on the timezone).
- */
-export function weekOverlapsGap(week: WeekState, gap: SpringForwardGap): boolean {
-  for (const [index, day] of week.entries()) {
-    const meta = DAY_META[index];
-    if (!day.enabled || !meta || meta.dayOfWeek !== gap.dayOfWeek) continue;
-    for (const range of day.ranges) {
-      const startMinutes = hhmmToMinutes(range.start);
-      const endMinutes = hhmmToMinutes(range.end);
-      if (startMinutes < gap.gapEndMinutes && endMinutes > gap.gapStartMinutes) return true;
-    }
-  }
-  return false;
+export interface DstGapMatch {
+  /** True when the matched interval is the TAIL of an overnight range set the PREVIOUS day. */
+  isOvernightTail: boolean;
+  /** DISPLAY index (0=Mon … 6=Sun) of the day the matched range was AUTHORED on. */
+  sourceDayIndex: number;
+}
+
+/** Half-open overlap test, shared by both the front-half and tail checks below. */
+function intervalHitsGap(startMinutes: number, endMinutes: number, gap: SpringForwardGap): boolean {
+  return startMinutes < gap.gapEndMinutes && endMinutes > gap.gapStartMinutes;
 }
 
 /**
- * Returns the upcoming spring-forward gap if any enabled range on the transition's
- * weekday would land in it, else null. Warning only — never blocks saving.
+ * Which enabled interval, if any, lands in the spring-forward gap. Pure, Intl-free —
+ * takes an already-computed `gap` so the cheap per-keystroke check runs WITHOUT
+ * re-paying the expensive `getNextSpringForwardGap` scan (which depends only on the
+ * timezone). A crossing range contributes TWO intervals on two different calendar
+ * days — `[start, 1440)` on its own day and `[0, end)` on the next — so a gap can
+ * land in either the front half or the overnight tail.
  */
-export function findDstConflict(
-  week: WeekState,
-  timezone: string,
-  now: Date
-): SpringForwardGap | null {
-  const gap = getNextSpringForwardGap(timezone, now);
-  if (!gap) return null;
-  return weekOverlapsGap(week, gap) ? gap : null;
+/** Gap match for a single range against a single day's meta. Extracted to keep the
+ * outer scan's own cognitive complexity within the SonarCloud limit. */
+function rangeGapMatch(
+  range: TimeRange,
+  index: number,
+  meta: DayMeta,
+  nextMeta: DayMeta,
+  gap: SpringForwardGap
+): DstGapMatch | null {
+  if (!isOvernightRange(range)) {
+    if (
+      meta.dayOfWeek === gap.dayOfWeek &&
+      intervalHitsGap(hhmmToMinutes(range.start), hhmmToMinutes(range.end), gap)
+    ) {
+      return { isOvernightTail: false, sourceDayIndex: index };
+    }
+    return null;
+  }
+  // Crossing range: front half on this day, tail on the next.
+  if (
+    meta.dayOfWeek === gap.dayOfWeek &&
+    intervalHitsGap(hhmmToMinutes(range.start), MINUTES_PER_DAY, gap)
+  ) {
+    return { isOvernightTail: false, sourceDayIndex: index };
+  }
+  if (nextMeta.dayOfWeek === gap.dayOfWeek && intervalHitsGap(0, hhmmToMinutes(range.end), gap)) {
+    return { isOvernightTail: true, sourceDayIndex: index };
+  }
+  return null;
+}
+
+export function findWeekGapMatch(week: WeekState, gap: SpringForwardGap): DstGapMatch | null {
+  for (const [index, day] of week.entries()) {
+    if (!day.enabled) continue;
+    const meta = DAY_META[index];
+    const nextMeta = DAY_META[(index + 1) % DAY_META.length];
+    if (!meta || !nextMeta) continue;
+
+    for (const range of day.ranges) {
+      const match = rangeGapMatch(range, index, meta, nextMeta, gap);
+      if (match) return match;
+    }
+  }
+  return null;
 }
 
 // Re-exported so the editor can run the expensive scan and the cheap overlap test

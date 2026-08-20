@@ -4,6 +4,21 @@
  * migrate opportunistically.
  */
 
+/**
+ * BAL-412 (F17) — the settlement shapes are IMPORTED, never re-spelled inline.
+ *
+ * CLAUDE.md forbids a repeated string union: `credit_settlement_shape` (`enums.ts`) is the source
+ * of truth and `MeetingSettlementShape` (`../credit`) is its one dependency-free derivation —
+ * already in THIS package, so the import costs no new dependency and cannot drag `@balo/db`
+ * anywhere. `PaymentChargedPayload` and `PayoutRecordedPayload` both spelled the four labels out
+ * by hand; a fifth shape would have had to be added in two more places, silently.
+ *
+ * ⚠ Relative, EXTENSION-LESS (memory `reference_balo_shared_no_js_extensions_in_reexports`) —
+ * packages/shared is consumed as raw TS by Turbopack, so a `.js` suffix here 404s the web build
+ * while every local gate stays green. Opposite rule to `apps/api`.
+ */
+import type { MeetingSettlementShape } from '../credit';
+
 // ── Preview text (BAL-424) ─────────────────────────────────────────────────────────────
 //
 // HOISTED HERE FROM `apps/web` BECAUSE BOTH APPS NOW NEED IT AND NEITHER MAY IMPORT THE
@@ -681,6 +696,14 @@ export interface PaymentChargedPayload {
   durationMinutes: number;
   expertName: string; // display only (resolveExpertName)
   chargedOn: string; // pre-formatted UTC date
+  // ── BAL-412 (ADR-1044 §7) additions — OPTIONAL, so the shipped `live_capture` path (which
+  // never sets these) is unaffected. Durations/labels, never a SECOND figure — fee-safe.
+  /** How the presence settlement resolved. Present only on a presence-settled session. */
+  settlementShape?: MeetingSettlementShape;
+  /** Minutes ACTUALLY delivered, PRE-floor. */
+  actualMinutes?: number;
+  /** The floor in force at settlement, whole minutes. */
+  billingFloorMinutes?: number;
 }
 
 /**
@@ -696,6 +719,36 @@ export interface PayoutRecordedPayload {
   amountAudMinor: number; // = expertAccruedMinor (own earnings)
   durationMinutes: number;
   recordedOn: string; // pre-formatted UTC date
+  // ── BAL-412 (ADR-1044 §7) additions — OPTIONAL, mirroring PaymentChargedPayload's.
+  settlementShape?: MeetingSettlementShape;
+  actualMinutes?: number;
+  billingFloorMinutes?: number;
+}
+
+/**
+ * BAL-412 (ADR-1044 §7) — the expert never joined. Nothing was charged and the credit hold is
+ * released in full. TWO conditioned rules on ONE event (the `recap.ready` pattern): the acting
+ * member (recipient 'self', APOLOGETIC — Balo failed them) and the delivering expert (recipient
+ * 'expert' via `expertProfileId`, FACTUAL — no penalty in v1, but they should know it was
+ * recorded). SERVER-ONLY — published exclusively by `apps/api`'s presence-settlement service
+ * (`finalizeBilling`, gated on `settlementShape === 'missed_call'`), never from apps/web, so it
+ * has NO `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+ *
+ * ⚠ CARRIES NO FIGURE AT ALL — nothing was charged, so concealment is trivial (both templates
+ * read the same payload safely).
+ *
+ * ⚠ `abandoned_wait` publishes NOTHING (D2) — see `finalize-billing.ts`'s gate. This event is
+ * ONLY for `missed_call` (the expert never joined at all).
+ */
+export interface SessionMissedCallPayload {
+  correlationId: string; // `${sessionId}:missed_call` → BullMQ jobId dedup
+  sessionId: string;
+  meetingId: string;
+  userId: string; // the acting member → recipient 'self'; resolver hydrates data.user
+  companyId: string;
+  expertProfileId: string; // → data.expert → recipient 'expert'
+  expertName: string;
+  scheduledOn: string; // pre-formatted UTC date, matching the credit-email convention
 }
 
 // BAL-387 (ADR-1013 + ADR-1043) — a transcript recap is ready. SERVER-ONLY (published from the
@@ -1068,3 +1121,38 @@ export interface ConversationUnreadDigestDuePayload {
 // compile (memory `reference_notification_event_dup_shared_home`). ⚠ EXTENSIONLESS relative
 // specifier — see the corrected note in `../meetings/index.ts`; a `.js` here 404s Turbopack.
 export * from './meeting-absence';
+
+// ── BAL-414 — the two searchability-transition promises (D1/D2) ────────────────────────
+//
+// ⚠ EXTENSIONLESS relative specifier — same rule as every other import in this file.
+import type { ExpertChecklistItemKey } from '../experts';
+
+/**
+ * BAL-414 (D1/D2) — the expert stopped meeting the six-item checklist and has been removed
+ * from expert search AND from their public profile URL. Recipient 'expert' via
+ * `expertProfileId` (the `calendar.auth_error` resolution). Email + in-app.
+ *
+ * ⚠ NOT PUBLISHED FOR A CALENDAR CREDENTIAL BREAK. That case rides the strengthened
+ * `calendar-reconnect-required` email instead (D2, "one email per underlying cause"); the
+ * suppression lives at the `flipToReconnectRequired` call site, not in a rule condition.
+ *
+ * `correlationId` IS the `audit_events` row id minted by the conditional compare-and-set that
+ * performed this transition. One transition ⇒ one uuid ⇒ a deterministic BullMQ jobId; a
+ * genuine later regression mints a new row and legitimately re-notifies. Do NOT use
+ * `expertProfileId` — that would silence every regression after the first.
+ */
+export interface ExpertSearchabilityLostPayload {
+  correlationId: string; // = audit_events.id → BullMQ jobId dedup
+  expertProfileId: string; // → resolver hydrates data.expert → recipient 'expert'
+  failingItems: ExpertChecklistItemKey[]; // ordered; the template lists what to fix
+}
+
+/**
+ * BAL-414 (D2) — the expert completed the checklist again and is back in search. IN-APP ONLY,
+ * both directions of cause: a flapping calendar connection must never generate email churn.
+ * `correlationId` is the `audit_events` row id, as above.
+ */
+export interface ExpertSearchabilityRestoredPayload {
+  correlationId: string; // = audit_events.id → BullMQ jobId dedup
+  expertProfileId: string; // → resolver hydrates data.expert → recipient 'expert'
+}

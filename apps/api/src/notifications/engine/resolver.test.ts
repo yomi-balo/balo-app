@@ -8,6 +8,7 @@ const {
   mockFindUserIdsByProfileIds,
   mockListByRequest,
   mockListAdminUserIds,
+  mockListBillingUserIds,
   mockGetAgencySummaryById,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockFindUserIdsByProfileIds: vi.fn(),
   mockListByRequest: vi.fn(),
   mockListAdminUserIds: vi.fn(),
+  mockListBillingUserIds: vi.fn(),
   mockGetAgencySummaryById: vi.fn(),
 }));
 
@@ -31,7 +33,10 @@ vi.mock('@balo/db', () => ({
   },
   companiesRepository: { findById: mockCompanyFindById },
   proposalsRepository: { listByRequest: mockListByRequest },
-  partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
+  partyMembershipsRepository: {
+    listAdminUserIds: mockListAdminUserIds,
+    listBillingUserIds: mockListBillingUserIds,
+  },
   agenciesRepository: { getSummaryById: mockGetAgencySummaryById },
 }));
 
@@ -407,6 +412,33 @@ describe('resolveContext', () => {
       expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
       // This event never reads sibling proposals (that path is proposal_accepted-only).
       expect(mockListByRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  // BAL-412 (ADR-1044 §7, D8) — `session.missed_call` is DELIBERATELY excluded from
+  // BILLING_FANOUT_EVENTS (see that set's docblock): the money side is already covered by
+  // `session.settled`, and this event's two recipients are `self` (via `userId`) and `expert`
+  // (via `expertProfileId`) — both generic hydrations, not the billing-admin fan-out.
+  describe('session.missed_call hydration (BAL-412)', () => {
+    it('hydrates data.user + data.expert, and NEVER data.billingUserIds despite carrying companyId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana' });
+      mockFindUserIdByProfileId.mockResolvedValue('expert-user-1');
+
+      const context = await resolveContext('session.missed_call', {
+        correlationId: 'session-1:missed_call',
+        sessionId: 'session-1',
+        meetingId: 'meeting-1',
+        userId: 'user-1',
+        companyId: 'company-1',
+        expertProfileId: 'expert-profile-1',
+        expertName: 'Jordan Ellis',
+        scheduledOn: '16 July 2026',
+      });
+
+      expect(context.data.user).toEqual({ id: 'user-1', firstName: 'Dana' });
+      expect(context.data.expert).toBe('expert-user-1');
+      expect(context.data.billingUserIds).toBeUndefined();
+      expect(mockListBillingUserIds).not.toHaveBeenCalled();
     });
   });
 });

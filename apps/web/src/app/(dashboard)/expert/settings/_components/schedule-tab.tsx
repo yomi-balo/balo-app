@@ -38,17 +38,21 @@ import {
   createEmptyWeek,
   defaultRange,
   getNextSpringForwardGap,
-  weekOverlapsGap,
+  findWeekGapMatch,
   hasSplitDays,
+  hasOvernightWindow,
+  hasLateWindow,
   changeRangeInWeek,
   removeRangeFromWeek,
   copyDayRangesInWeek,
   nextRangeDefault,
   rulesToWeek,
-  validateWeek,
+  evaluateWeek,
+  conflictInlineMessages,
   weekToRules,
   DEFAULT_BOOKING_SETTINGS,
   type WeekState,
+  type ScheduleConflict,
 } from '../_lib/schedule-helpers';
 import type { BookingSettings } from '../_types/schedule';
 
@@ -75,6 +79,7 @@ export function ScheduleTab(): React.JSX.Element {
   // the `ready` branch) re-renders once the id is known. The ref is KEPT: four `track(...)`
   // call sites read it synchronously inside callbacks and must not be disturbed.
   const [expertProfileId, setExpertProfileId] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<ScheduleConflict | null>(null);
   // Target timezone awaiting confirmation (AC12): non-null while the reinterpret
   // warning dialog is open. Only reached when the expert has active saved rules.
   const [pendingTimezone, setPendingTimezone] = useState<string | null>(null);
@@ -127,48 +132,75 @@ export function ScheduleTab(): React.JSX.Element {
 
   // ── Weekly-grid mutations ────────────────────────────────────────
 
-  const handleToggleDay = useCallback((dayIndex: number, enabled: boolean): void => {
+  // One rule, no exceptions: every mutation clears both the saved-summary flag and
+  // any active conflict highlight (a stale red after the expert has already fixed
+  // it but not yet re-saved would be worse than no highlight at all).
+  const markEdited = useCallback((): void => {
     setShowSavedSummary(false);
-    setWeek((prev) =>
-      prev.map((day, index) => {
-        if (index !== dayIndex) return day;
-        const ranges = enabled && day.ranges.length === 0 ? [defaultRange()] : day.ranges;
-        return { ...day, enabled, ranges };
-      })
-    );
+    setConflict(null);
   }, []);
+
+  const handleToggleDay = useCallback(
+    (dayIndex: number, enabled: boolean): void => {
+      markEdited();
+      setWeek((prev) =>
+        prev.map((day, index) => {
+          if (index !== dayIndex) return day;
+          const ranges = enabled && day.ranges.length === 0 ? [defaultRange()] : day.ranges;
+          return { ...day, enabled, ranges };
+        })
+      );
+    },
+    [markEdited]
+  );
 
   const handleRangeChange = useCallback(
     (dayIndex: number, rangeId: string, field: 'start' | 'end', value: string): void => {
-      setShowSavedSummary(false);
+      markEdited();
       setWeek((prev) => changeRangeInWeek(prev, dayIndex, rangeId, field, value));
     },
-    []
+    [markEdited]
   );
 
-  const handleAddRange = useCallback((dayIndex: number): void => {
-    setShowSavedSummary(false);
-    setWeek((prev) =>
-      prev.map((day, index) =>
-        index === dayIndex ? { ...day, ranges: [...day.ranges, nextRangeDefault(day.ranges)] } : day
-      )
-    );
-  }, []);
+  const handleAddRange = useCallback(
+    (dayIndex: number): void => {
+      markEdited();
+      setWeek((prev) =>
+        prev.map((day, index) => {
+          if (index !== dayIndex) return day;
+          const nextRange = nextRangeDefault(day.ranges);
+          // null means the day's free space is genuinely exhausted — nothing honest to
+          // add, so leave the day as-is rather than hand over an unsaveable range.
+          return nextRange ? { ...day, ranges: [...day.ranges, nextRange] } : day;
+        })
+      );
+    },
+    [markEdited]
+  );
 
-  const handleRemoveRange = useCallback((dayIndex: number, rangeId: string): void => {
-    setShowSavedSummary(false);
-    setWeek((prev) => removeRangeFromWeek(prev, dayIndex, rangeId));
-  }, []);
+  const handleRemoveRange = useCallback(
+    (dayIndex: number, rangeId: string): void => {
+      markEdited();
+      setWeek((prev) => removeRangeFromWeek(prev, dayIndex, rangeId));
+    },
+    [markEdited]
+  );
 
-  const handleCopyToDays = useCallback((sourceIndex: number, targetIndices: number[]): void => {
-    setShowSavedSummary(false);
-    setWeek((prev) => copyDayRangesInWeek(prev, sourceIndex, targetIndices));
-  }, []);
+  const handleCopyToDays = useCallback(
+    (sourceIndex: number, targetIndices: number[]): void => {
+      markEdited();
+      setWeek((prev) => copyDayRangesInWeek(prev, sourceIndex, targetIndices));
+    },
+    [markEdited]
+  );
 
-  const handleBookingChange = useCallback((next: BookingSettings): void => {
-    setShowSavedSummary(false);
-    setBookingSettings(next);
-  }, []);
+  const handleBookingChange = useCallback(
+    (next: BookingSettings): void => {
+      markEdited();
+      setBookingSettings(next);
+    },
+    [markEdited]
+  );
 
   // ── Timezone (persisted immediately via PATCH) ───────────────────
 
@@ -234,9 +266,14 @@ export function ScheduleTab(): React.JSX.Element {
   // ── Save / clear ─────────────────────────────────────────────────
 
   const handleSave = useCallback(async (): Promise<void> => {
-    const validationError = validateWeek(week);
-    if (validationError) {
-      toast.error(validationError);
+    // ONE evaluation decides both surfaces — the toast and the row highlight are
+    // derived from the same result, so they can never disagree (F1 / BAL-415 fix
+    // round). `conflict` is only ever set when `validation.message` actually narrates
+    // it (e.g. never for the empty-enabled-day error).
+    const validation = evaluateWeek(week);
+    setConflict(validation?.conflict ?? null);
+    if (validation) {
+      toast.error(validation.message);
       return;
     }
     setSaving(true);
@@ -251,6 +288,8 @@ export function ScheduleTab(): React.JSX.Element {
         expert_id: expertIdRef.current,
         days_enabled: countEnabledDays(week),
         has_split_days: hasSplitDays(week),
+        has_overnight_window: hasOvernightWindow(week),
+        has_late_window: hasLateWindow(week),
       });
       // Fire booking_rules_saved ONLY when the settings differ from what's
       // persisted — without the change-gate it just duplicates schedule_saved.
@@ -295,9 +334,14 @@ export function ScheduleTab(): React.JSX.Element {
   // once per timezone change — not on every keystroke. The cheap overlap test runs
   // per edit against the already-computed gap.
   const springForwardGap = useMemo(() => getNextSpringForwardGap(timezone, new Date()), [timezone]);
-  const dstGap = useMemo(
-    () => (springForwardGap && weekOverlapsGap(week, springForwardGap) ? springForwardGap : null),
+  const dstMatch = useMemo(
+    () => (springForwardGap ? findWeekGapMatch(week, springForwardGap) : null),
     [week, springForwardGap]
+  );
+
+  const conflictMessages = useMemo(
+    () => (conflict ? conflictInlineMessages(conflict, week) : undefined),
+    [conflict, week]
   );
 
   return (
@@ -391,6 +435,7 @@ export function ScheduleTab(): React.JSX.Element {
                         key={meta?.dayOfWeek ?? index}
                         dayIndex={index}
                         day={day}
+                        conflictMessages={conflictMessages}
                         onToggle={(enabled) => handleToggleDay(index, enabled)}
                         onRangeChange={(rangeId, field, value) =>
                           handleRangeChange(index, rangeId, field, value)
@@ -404,7 +449,9 @@ export function ScheduleTab(): React.JSX.Element {
                 </div>
               </section>
 
-              {dstGap && <ScheduleDstWarning gap={dstGap} timezone={timezone} />}
+              {springForwardGap && dstMatch && (
+                <ScheduleDstWarning gap={springForwardGap} timezone={timezone} match={dstMatch} />
+              )}
 
               {/* Booking rules */}
               <BookingRulesSection settings={bookingSettings} onChange={handleBookingChange} />

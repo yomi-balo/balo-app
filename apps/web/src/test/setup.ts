@@ -113,14 +113,16 @@ vi.mock('@/lib/analytics', async () => {
     END_OF_CALL_EVENTS: events.END_OF_CALL_EVENTS,
     WALLET_EVENTS: events.WALLET_EVENTS,
     SCHEDULE_EVENTS: events.SCHEDULE_EVENTS,
-    // BAL-236 — WITHOUT THIS LINE every availability-picker test throws on an undefined
-    // constant (memory `reference_web_analytics_test_mock_export_list`).
-    AVAILABILITY_EVENTS: events.AVAILABILITY_EVENTS,
     MEETING_CALL_EVENTS: events.MEETING_CALL_EVENTS,
     // BAL-436 — the in-call side panel's CLIENT family. ⚠ WITHOUT THIS LINE every panel test
     // throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     // ⚠ `GUEST_SERVER_EVENTS` must NEVER join this list — it is server-only.
     MEETING_PANEL_EVENTS: events.MEETING_PANEL_EVENTS,
+    // Availability CLIENT family — BAL-416's conflict warnings AND BAL-236's slot picker.
+    // ⚠ WITHOUT THIS LINE every availability test throws on an undefined constant
+    // (memory `reference_web_analytics_test_mock_export_list`). ⚠ `AVAILABILITY_SERVER_EVENTS`
+    // must NEVER join this list — it is server-only.
+    AVAILABILITY_EVENTS: events.AVAILABILITY_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

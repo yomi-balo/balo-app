@@ -73,6 +73,8 @@ import {
   unreadDigestSummary,
 } from './conversation-unread-digest.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
+import { ExpertSearchabilityLostEmail } from './expert-searchability-lost.js';
+import type { ExpertChecklistItemKey } from '@balo/shared/experts';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -89,6 +91,84 @@ function arrayLength(value: unknown): number {
 /** Coerce a payload field to a non-negative integer count; 0 when absent. */
 function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * BAL-412 (F16, ADR-1044 §7) — THE ONE EXTRA SENTENCE A `no_show_client` RECEIPT CARRIES.
+ *
+ * ⚠ WITHOUT IT THE NO-SHOW RECEIPT IS THE ORDINARY RECEIPT. `missed_call` (the expert never
+ * joined) has its own bespoke apologetic event; `no_show_client` settles through the SAME
+ * `payment.charged` / `payout.recorded` events every completed consultation uses, so the client
+ * who never joined would read "Your 15-minute session with {expert} came to A$X" — a claim about
+ * a call they were not on, with no explanation of the minimum — and the expert would read an
+ * ordinary earnings notice. The ticket's AC requires both sides be told, factually.
+ *
+ * REGISTER (pending-MJ): FACTUAL, NEVER PUNITIVE, NEVER SCOLDING, GENDER-NEUTRAL. It states what
+ * the presence data recorded and which rule applied; it does not assign blame, does not speculate
+ * about why, and names no individual on either side — a no-show is a scheduling fact, not a
+ * character judgement, and there is no penalty in v1 (D2/D8).
+ *
+ * FEE-SAFE: it renders a shape LABEL and DURATIONS only. `floorMinutes` is the snapshotted floor
+ * in force at settlement (`billing_floor_minutes`), never today's config, and never a money
+ * figure — so ONE helper can safely serve both the client lens and the expert lens.
+ *
+ * Returns `null` — i.e. NO extra line at all — for every other shape and for every
+ * `live_capture` / `external` / pre-0071 row, which is why the shipped receipt is untouched.
+ */
+function noShowClientSentence(
+  data: Record<string, unknown>,
+  lens: 'client' | 'expert',
+  expertName?: string
+): string | null {
+  if (data.settlementShape !== 'no_show_client') {
+    return null;
+  }
+  const floorMinutes = numberCount(data.billingFloorMinutes);
+  if (lens === 'expert') {
+    // ⚠ SAYS "nobody arrived", NOT "the client didn't join". The expert-lens fee boundary is
+    // pinned by `case-billing-templates.test.ts`, which asserts the word "client" appears
+    // NOWHERE in a payout notice — and the register rule says the same thing for a different
+    // reason: naming the absent party is a hair's breadth from blaming them.
+    return (
+      `This one settled as a no-show — nobody arrived to join you. Your time still counts: it is ` +
+      `recorded at the ${floorMinutes}-minute minimum.`
+    );
+  }
+  const who = expertName ?? 'your consultant';
+  const actualMinutes = numberCount(data.actualMinutes);
+  // Not a nested ternary (SonarCloud) and not a lie when the payload predates the column: an
+  // absent/zero `actualMinutes` drops the "waited N minutes" clause rather than rendering "0".
+  const waited = actualMinutes > 0 ? `waited ${actualMinutes} minutes` : 'was there and waiting';
+  return (
+    `No one from your side joined this one — ${who} ${waited}, so it settles at the ` +
+    `${floorMinutes}-minute minimum.`
+  );
+}
+
+/**
+ * BAL-414 — the human label for each checklist item key. Deliberately owned by the TEMPLATE
+ * REGISTRY, not the payload: `expert.searchability_lost`'s `failingItems` stays a plain key
+ * array (D6/D7's vocabulary), and copy is this file's job. Typed
+ * `Record<ExpertChecklistItemKey, string>` so a missing key is a COMPILE ERROR, not a silently
+ * dropped label.
+ */
+const CHECKLIST_ITEM_LABELS: Record<ExpertChecklistItemKey, string> = {
+  profile: 'complete your profile',
+  phone: 'verify your phone',
+  rate: 'set your rate',
+  calendar: 'connect a calendar',
+  availability: 'set your availability',
+  payouts: 'set up payouts',
+};
+
+/** Unknown payload members degrade to their raw string rather than vanishing silently. */
+function checklistItemLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) =>
+    typeof item === 'string' && item in CHECKLIST_ITEM_LABELS
+      ? CHECKLIST_ITEM_LABELS[item as ExpertChecklistItemKey]
+      : String(item)
+  );
 }
 
 /**
@@ -902,14 +982,41 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // this is its first template (no rule existed either — see `engine/rules.ts`). Recipient is
   // the DELIVERING EXPERT (`recipient: 'expert'` via `payload.expertProfileId`). `providerLabel`
   // derives from the payload's `provider` field — never branch on it beyond this label lookup.
-  'calendar-reconnect-required': (data) => ({
-    component: React.createElement(CalendarReconnectRequiredEmail, {
+  //
+  // BAL-414 (D10, addendum) — `stillSearchable` rides straight through from the payload (the
+  // SAME derived value the DB de-list decision used) into the template's branch; it is never
+  // recomputed here. The subject branches on it too — for the ANY-ACTIVE audience (D4: one
+  // broken provider, one healthy one) the expert never left search, so a subject asserting a
+  // search drop-out would be the first (false) thing they read.
+  'calendar-reconnect-required': (data) => {
+    const stillSearchable = data.stillSearchable === true;
+    return {
+      component: React.createElement(CalendarReconnectRequiredEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        providerLabel: calendarProviderLabel(data.provider),
+        ctaUrl: `${BASE_URL}${EXPERT_CALENDAR_SETTINGS_PATH}`,
+        baseUrl: BASE_URL,
+        stillSearchable,
+      }),
+      subject: stillSearchable
+        ? 'Reconnect your calendar to keep your availability accurate'
+        : 'Reconnect your calendar to appear in search again',
+    };
+  },
+
+  // BAL-414 (D1/D2) — the NON-calendar de-list (rate / payouts / profile / phone /
+  // availability-rules regressing, or the expert's own calendar disconnect). Recipient is the
+  // DELIVERING EXPERT (`recipient: 'expert'` via `payload.expertProfileId`). `failingItems`
+  // (plain keys) is mapped to human labels HERE, not in the payload — see
+  // `CHECKLIST_ITEM_LABELS` above.
+  'expert-searchability-lost': (data) => ({
+    component: React.createElement(ExpertSearchabilityLostEmail, {
       firstName: (data.recipientName as string) ?? 'there',
-      providerLabel: calendarProviderLabel(data.provider),
-      ctaUrl: `${BASE_URL}${EXPERT_CALENDAR_SETTINGS_PATH}`,
+      failingItemLabels: checklistItemLabels(data.failingItems),
+      ctaUrl: `${BASE_URL}/expert/settings`,
       baseUrl: BASE_URL,
     }),
-    subject: 'Reconnect your calendar to keep taking bookings',
+    subject: "You've stopped appearing in Balo search",
   }),
 
   // BAL-380 (ADR-1040 Lane 3) dormancy reminder — server-only, EMAIL to the company's
@@ -1101,11 +1208,15 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // BAL-399 (ADR-1040 / ADR-1043) payment charged — the acting MEMBER's consultation receipt
   // (recipient 'self'). The all-in charge ONLY (`amountAudMinor` = connectedMinutes × client
   // rate); NO expert figure / margin (fee concealment). `recipientName` greets the member.
+  //
+  // BAL-412 (F16): ONE extra sentence on a `no_show_client` settlement — see
+  // `noShowClientSentence`. Every other settlement renders exactly as it did before.
   'payment-charged': (data) => {
     const expertName = (data.expertName as string) ?? 'your expert';
     const amount = formatAudMinor(numberCount(data.amountAudMinor));
     const durationMinutes = numberCount(data.durationMinutes);
     const chargedOn = (data.chargedOn as string) ?? '';
+    const noShowLine = noShowClientSentence(data, 'client', expertName);
     return {
       component: React.createElement(CaseBillingReceiptEmail, {
         firstName: (data.recipientName as string) ?? 'there',
@@ -1116,6 +1227,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         subtext: 'A quick receipt for your records.',
         bodyLines: [
           `Your ${durationMinutes}-minute session with ${expertName} on ${chargedOn} wrapped up.`,
+          ...(noShowLine === null ? [] : [noShowLine]),
           `The total came to ${amount} — nothing further to do.`,
         ],
         ctaLabel: 'View billing →',
@@ -1130,10 +1242,14 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // BAL-399 (ADR-1040 / ADR-1043) payout recorded — the delivering EXPERT's own-earnings notice
   // (recipient 'expert'). Own earnings ONLY (`amountAudMinor` = expertAccruedMinor); NO client
   // charge / markup / margin (fee concealment). `recipientName` greets the expert.
+  //
+  // BAL-412 (F16): ONE extra sentence on a `no_show_client` settlement — the AC's expert-side
+  // "accrual confirmation". Never names or judges the client side.
   'payout-recorded': (data) => {
     const amount = formatAudMinor(numberCount(data.amountAudMinor));
     const durationMinutes = numberCount(data.durationMinutes);
     const recordedOn = (data.recordedOn as string) ?? '';
+    const noShowLine = noShowClientSentence(data, 'expert');
     return {
       component: React.createElement(CaseBillingReceiptEmail, {
         firstName: (data.recipientName as string) ?? 'there',
@@ -1144,6 +1260,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         subtext: "Nice work — this one's in the books.",
         bodyLines: [
           `Your ${durationMinutes}-minute session on ${recordedOn} wrapped up, and ${amount} in earnings is recorded.`,
+          ...(noShowLine === null ? [] : [noShowLine]),
           'It will be included in your next payout — nothing you need to do.',
         ],
         ctaLabel: 'View earnings →',
@@ -1152,6 +1269,59 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'Your session earnings are recorded',
+    };
+  },
+
+  // BAL-412 (ADR-1044 §7) missed call — the acting MEMBER (recipient 'self'). APOLOGETIC
+  // register (D8): Balo failed to connect them, nothing was charged, and the funds set aside
+  // are back in their balance. Reuses `CaseBillingReceiptEmail` (the same shared scaffold as
+  // payment-charged/payout-recorded) — carries NO figure, since nothing was charged.
+  'session-missed-call-client': (data) => {
+    const expertName = (data.expertName as string) ?? 'your expert';
+    const scheduledOn = (data.scheduledOn as string) ?? '';
+    return {
+      component: React.createElement(CaseBillingReceiptEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        previewText: `${expertName} wasn't able to join — nothing was charged.`,
+        pillLabel: 'Missed call',
+        pillTone: 'primary',
+        heading: "We're sorry — your session didn't connect",
+        subtext: 'Nothing has been charged for this one.',
+        bodyLines: [
+          `Your session with ${expertName} scheduled for ${scheduledOn} didn't connect — ${expertName} wasn't able to join.`,
+          'Nothing has been charged, and the funds we set aside are back in your balance.',
+        ],
+        ctaLabel: 'View billing →',
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        footerPrefix: 'Questions about this?',
+        baseUrl: BASE_URL,
+      }),
+      subject: `We're sorry — your session with ${sanitizeSubjectTitle(expertName)} didn't connect`,
+    };
+  },
+
+  // BAL-412 (ADR-1044 §7) missed call — the delivering EXPERT (recipient 'expert'). FACTUAL,
+  // NEVER PUNITIVE (D2/D8): no penalty in v1, but they should know it was recorded.
+  'session-missed-call-expert': (data) => {
+    const scheduledOn = (data.scheduledOn as string) ?? '';
+    return {
+      component: React.createElement(CaseBillingReceiptEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        previewText: 'A consultation was recorded as a missed call.',
+        pillLabel: 'Missed call',
+        pillTone: 'primary',
+        heading: 'A consultation was recorded as a missed call',
+        subtext: 'No payment applies for this one.',
+        bodyLines: [
+          `Your consultation scheduled for ${scheduledOn} was recorded as a missed call — no payment applies.`,
+          'If something went wrong on your end, let us know.',
+        ],
+        ctaLabel: 'View earnings →',
+        ctaUrl: `${BASE_URL}/settings/earnings`,
+        footerPrefix: 'Questions about this?',
+        baseUrl: BASE_URL,
+      }),
+      subject: 'A consultation was recorded as a missed call',
     };
   },
 

@@ -55,6 +55,10 @@ function sessionView(overrides: Record<string, unknown> = {}): Record<string, un
     graceBoundMinutes: 30,
     connectedAt: new Date('2026-07-16T11:00:00.000Z'),
     graceEnteredAt: null,
+    // BAL-412 (D5/D6) — 60 min drawn (connected 11:00 → NOW 12:00) is past the 15-min floor,
+    // so the corrected runway formula is a no-op and every existing assertion below is
+    // unchanged.
+    connectedMinutes: 60,
     ...overrides,
   };
 }
@@ -140,6 +144,15 @@ describe('getSessionDrawdownState', () => {
     const state = await getSessionDrawdownState(SESSION_ID, NOW);
 
     expect(state?.mandatePresent).toBe(false);
+  });
+
+  it('BAL-412 (D5/D6) — threads the shipped MIN_MEETING_MINUTES floor + minutesAlreadyDrawn', async () => {
+    mockFindForClientView.mockResolvedValue(sessionView({ connectedMinutes: 2 }));
+    mockFindWalletById.mockResolvedValue(walletRow({ balanceMinor: 900 }));
+    // rate=450, floor=15, drawn=2 ⇒ unconsumed=13, committed=5850 > balance(900) ⇒ 0 runway.
+    const state = await getSessionDrawdownState(SESSION_ID, NOW);
+    expect(state?.key).toBe('low');
+    expect(state?.minutesRemaining).toBe(0);
   });
 
   it('never leaks the word "overdraft" into any derived copy', async () => {

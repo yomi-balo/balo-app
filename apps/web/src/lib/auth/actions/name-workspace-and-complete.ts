@@ -123,8 +123,8 @@ export async function nameWorkspaceAndCompleteAction(
   // Least-privilege: only the workspace OWNER may rename/promote the company. At
   // onboarding this always holds (the personal workspace was created with the user as
   // owner and `companyId` is server-derived, never client input), so this is
-  // defense-in-depth — forward-safe for when the shared-org creation seam
-  // (BAL-345/346) makes non-owner memberships reachable here.
+  // defense-in-depth: non-owner memberships now genuinely exist (BAL-371 domain joins),
+  // and this keeps one from ever renaming or promoting a company here.
   if (session.user.companyRole !== 'owner') {
     return { success: false, error: 'Unauthorized' };
   }

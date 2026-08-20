@@ -31,6 +31,11 @@ export {
   // BAL-389 — the end-of-call page RSC fires END_OF_CALL_SERVER_EVENTS.VIEWED. Its client
   // half (END_OF_CALL_EVENTS) lives in the @/lib/analytics barrel; both are required.
   END_OF_CALL_SERVER_EVENTS,
+  // BAL-414 — server-only by construction: `getChecklistStatus()` is an `import 'server-only'`
+  // RSC function, so its reconcile emits via `trackServerAndFlush` below, never the client
+  // `track()`. NOT in the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s
+  // client `vi.mock` list — that mock is client-only (mirrors GUEST_SERVER_EVENTS/REVIEW_SERVER_EVENTS).
+  EXPERT_SETUP_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type {
   RecapState,

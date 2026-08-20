@@ -89,8 +89,6 @@ vi.mock('@balo/analytics/server', () => ({
     DISCONNECTED: 'calendar_disconnected',
     AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
     SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
-    AVAILABILITY_OVERRIDE_CREATED: 'availability_override_created',
-    AVAILABILITY_OVERRIDE_DELETED: 'availability_override_deleted',
     CREDENTIALS_REVOKED: 'calendar_credentials_revoked',
     RECONNECT_RESOLVED: 'calendar_reconnect_resolved',
   }),
@@ -302,7 +300,14 @@ describe('experts schedule API routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('returns 400 when startTime is not before endTime', async () => {
+    // BAL-415 INVERTS the BAL-234 assertion that lived here: `startTime > endTime` used to be a 400.
+    // A rule whose end is EARLIER than its start now means "this window crosses midnight into the
+    // following date" (resolver `expandRuleOnDate`), and is accepted. The one remaining forbidden
+    // pairing is start === end, which mirrors the DB CHECK `avail_rules_start_ne_end_check`.
+
+    it('accepts a rule that crosses midnight and persists it verbatim (BAL-415)', async () => {
+      mockFindProfileById.mockResolvedValue(PROFILE);
+
       const res = await app.inject({
         method: 'POST',
         url: `/api/experts/${EXPERT_UUID}/schedule`,
@@ -312,7 +317,44 @@ describe('experts schedule API routes', () => {
           rules: [{ dayOfWeek: 1, startTime: '17:00', endTime: '09:00' }],
         },
       });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockReplaceForExpert).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        [{ dayOfWeek: 1, startTime: '17:00', endTime: '09:00' }],
+        { __tx: true }
+      );
+      expectRebuildEnqueued();
+    });
+
+    it('accepts a midnight end (00:00), which crosses by definition', async () => {
+      mockFindProfileById.mockResolvedValue(PROFILE);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/experts/${EXPERT_UUID}/schedule`,
+        headers: AUTH_HEADERS,
+        payload: {
+          ...VALID_BODY,
+          rules: [{ dayOfWeek: 1, startTime: '09:00', endTime: '00:00' }],
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('returns 400 when startTime equals endTime', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/experts/${EXPERT_UUID}/schedule`,
+        headers: AUTH_HEADERS,
+        payload: {
+          ...VALID_BODY,
+          rules: [{ dayOfWeek: 1, startTime: '09:00', endTime: '09:00' }],
+        },
+      });
       expect(res.statusCode).toBe(400);
+      expect(mockTransaction).not.toHaveBeenCalled();
     });
 
     it('returns 404 when the profile does not exist', async () => {

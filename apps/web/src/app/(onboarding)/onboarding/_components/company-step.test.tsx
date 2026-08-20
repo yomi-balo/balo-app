@@ -167,7 +167,7 @@ describe('CompanyStep', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  describe('JOIN branch (dormant — driven via a matched resolve)', () => {
+  describe('JOIN branch (driven via a matched resolve)', () => {
     function matched(joinMode: 'auto' | 'request') {
       return {
         status: 'matched',

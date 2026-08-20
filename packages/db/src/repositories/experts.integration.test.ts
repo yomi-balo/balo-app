@@ -44,6 +44,16 @@ function uniq(prefix: string): string {
   return `${prefix}-${taxonomySeq}-${Date.now()}`;
 }
 
+/**
+ * CHEAP-3 (fix round 1) — `UpdateProfileInput` no longer accepts `searchable`; the ONE writer
+ * outside seeds is `expertSearchabilityRepository.applySearchable`'s conditional
+ * compare-and-set. These fixtures legitimately need to set the flag directly (bypassing the
+ * checklist derivation) to drive `findPublicProfileByUsername`'s visibility gate in isolation.
+ */
+async function setSearchableDirectly(expertProfileId: string, searchable: boolean): Promise<void> {
+  await db.update(expertProfiles).set({ searchable }).where(eq(expertProfiles.id, expertProfileId));
+}
+
 // ── createDraft ─────────────────────────────────────────────────────
 
 describe('expertsRepository.createDraft', () => {
@@ -260,6 +270,7 @@ describe('expertsRepository.findResolverSettings', () => {
     const settings = await expertsRepository.findResolverSettings(draft.id);
 
     expect(settings).toEqual({
+      userId: draft.userId,
       timezone: 'America/New_York',
       bufferBeforeMinutes: 5,
       bufferAfterMinutes: 30,
@@ -273,6 +284,7 @@ describe('expertsRepository.findResolverSettings', () => {
     const settings = await expertsRepository.findResolverSettings(draft.id);
 
     expect(settings).toEqual({
+      userId: draft.userId,
       timezone: 'UTC',
       bufferBeforeMinutes: 0,
       bufferAfterMinutes: 0,
@@ -513,7 +525,8 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
   it('returns undefined for a draft (never submitted/approved)', async () => {
     const username = uniq('draft');
     const draft = await expertDraftFactory();
-    await expertsRepository.updateProfile(draft.id, { username, searchable: true });
+    await expertsRepository.updateProfile(draft.id, { username });
+    await setSearchableDirectly(draft.id, true);
 
     const result = await expertsRepository.findPublicProfileByUsername(username);
 
@@ -523,7 +536,8 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
   it('returns undefined when submitted but not approved', async () => {
     const username = uniq('submitted');
     const draft = await expertDraftFactory();
-    await expertsRepository.updateProfile(draft.id, { username, searchable: true });
+    await expertsRepository.updateProfile(draft.id, { username });
+    await setSearchableDirectly(draft.id, true);
     await expertsRepository.submitApplication(draft.id);
 
     const result = await expertsRepository.findPublicProfileByUsername(username);
@@ -535,7 +549,8 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     const username = uniq('not-searchable');
     // expertFactory approves but leaves searchable at its default (false).
     const expert = await expertFactory();
-    await expertsRepository.updateProfile(expert.id, { username, searchable: false });
+    await expertsRepository.updateProfile(expert.id, { username });
+    await setSearchableDirectly(expert.id, false);
 
     const result = await expertsRepository.findPublicProfileByUsername(username);
 
@@ -545,7 +560,7 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
   it('returns undefined when searchable is true but approvedAt is null (defensive)', async () => {
     const username = uniq('searchable-unapproved');
     const draft = await expertDraftFactory();
-    await expertsRepository.updateProfile(draft.id, { username, searchable: true });
+    await expertsRepository.updateProfile(draft.id, { username });
     // Force the defensive state directly: searchable=true yet approvedAt still NULL.
     await db
       .update(expertProfiles)

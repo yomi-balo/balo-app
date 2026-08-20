@@ -8,6 +8,7 @@ const {
   mockListByMeeting,
   mockTrackServer,
   mockError,
+  mockSettleMeetingIfBillable,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockResolveEndAuthority: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockListByMeeting: vi.fn(),
   mockTrackServer: vi.fn(),
   mockError: vi.fn(),
+  mockSettleMeetingIfBillable: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -35,6 +37,11 @@ vi.mock('./authorize-meeting-participation.js', () => ({
 vi.mock('./authorize-end-meeting.js', () => ({
   resolveEndAuthority: mockResolveEndAuthority,
   logEndAuthorityDenied: mockLogDenied,
+}));
+// BAL-412 — INERT on main (D10). Mocked so this suite stays focused on the human-end sequence;
+// the settlement wrapper's own behaviour is covered in `settle-from-presence.test.ts`.
+vi.mock('../credit-session/settle-from-presence.js', () => ({
+  settleMeetingIfBillable: mockSettleMeetingIfBillable,
 }));
 // ⚠ `@balo/shared/meetings` is NOT mocked — the real `computeMeetingClocks` is what the
 // analytics numbers below assert, and it is the one definition of both spans.
@@ -105,6 +112,8 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       { party: 'expert', joinedAt: START, leftAt: NOW },
       { party: 'client', joinedAt: new Date(START.getTime() + 300_000), leftAt: NOW },
     ]);
+    // BAL-412 — INERT on main (D10): every meeting today resolves `no_meeting`.
+    mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'no_meeting' });
   });
 
   // ── AUTHORIZATION ───────────────────────────────────────────────────────────────────────
@@ -378,6 +387,48 @@ describe('endMeeting (BAL-134 §5.4)', () => {
         participant_count: 0,
       })
     );
+  });
+
+  // ── BAL-412 — PRESENCE SETTLEMENT, BEST-EFFORT AND NON-FATAL ────────────────────────────
+
+  it('calls settleMeetingIfBillable with the ended meeting id and the ACTING user (not null)', async () => {
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockSettleMeetingIfBillable).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actorUserId: USER_ID,
+    });
+  });
+
+  it('⚠ a SETTLEMENT FAILURE still returns success, and logs at error (never fails the End request)', async () => {
+    mockSettleMeetingIfBillable.mockRejectedValue(new Error('settlement boom'));
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true, alreadyEnded: false });
+
+    expect(mockError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID }),
+      expect.stringContaining('Presence settlement failed')
+    );
+  });
+
+  it('does not call settlement on the idempotent already-ended branch', async () => {
+    mockEndMeeting.mockResolvedValue(undefined);
+
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
   });
 });
 

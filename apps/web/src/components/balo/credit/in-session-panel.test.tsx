@@ -27,6 +27,11 @@ function build(partial: Partial<DrawdownInputs>): DrawdownState {
     balanceMinor: 45000,
     mandatePresent: true,
     lens: 'client',
+    // BAL-412 — the floor (15) is already fully drawn by CONNECTED_AT (42min elapsed), so
+    // `minutesOfRunway` reduces to the pre-BAL-412 `floor(balance/rate)` bit-for-bit — this
+    // fixture's runway/low-balance assertions are unaffected by the floor correction.
+    billingFloorMinutes: 15,
+    minutesAlreadyDrawn: 15,
     now: NOW,
     ...partial,
   });
