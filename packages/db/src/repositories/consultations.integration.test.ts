@@ -177,3 +177,96 @@ describe('consultationsRepository — read-only surface (BAL-428)', () => {
     expect(Object.keys(consultationsRepository)).toEqual(['listConfirmedInRange']);
   });
 });
+
+// ── BAL-416 — the override-conflict AC cases, over the REAL overlap predicate ──────────
+//
+// `findOverrideConflicts` (apps/api) calls this exact method with the bare
+// `expandOverrideBlocks([{startDate, endDate}], timezone)` interval — no
+// `CONSULTATION_LOAD_PAD_MS`. These fixtures pin that range directly rather than importing
+// `apps/api`'s helper (packages/db cannot depend on apps/api): the block
+// `2026-12-24` → `2026-12-26` (inclusive) in `Australia/Sydney`, which is AEDT (UTC+11) in
+// December, expands to the half-open UTC interval `[2026-12-23T13:00:00.000Z,
+// 2026-12-26T13:00:00.000Z)` — midnight Dec 24 Sydney to midnight Dec 27 Sydney (the day
+// AFTER the inclusive `endDate`).
+describe('consultationsRepository.listConfirmedInRange — BAL-416 override-conflict AC cases', () => {
+  const BLOCK_RANGE_START = new Date('2026-12-23T13:00:00.000Z');
+  const BLOCK_RANGE_END = new Date('2026-12-26T13:00:00.000Z');
+
+  /**
+   * Q3 fix round 1 — expressed as an `it.each` table, matching the discipline
+   * `OVERLAP_CASES` above already establishes (and this file's own docblock at lines
+   * 49-63 explains why: SonarCloud flags copy-pasted near-identical bodies). The two
+   * strict-boundary "touching" cases from the original hand-written version are NOT
+   * repeated here — they are exact restatements of `OVERLAP_CASES`' `'ends exactly at
+   * rangeStart (strict)'` / `'starts exactly at rangeEnd (strict)'` rows, just against a
+   * differently-named range; `OVERLAP_CASES` already pins that boundary math.
+   */
+  const BLOCK_RANGE_CASES: readonly {
+    label: string;
+    startAt: string;
+    endAt: string;
+    overlaps: boolean;
+  }[] = [
+    // 25 Dec 10:00–11:00 Sydney → 24 Dec 23:00 – 25 Dec 00:00 UTC.
+    {
+      label: 'a session inside the range',
+      startAt: '2026-12-24T23:00:00.000Z',
+      endAt: '2026-12-25T00:00:00.000Z',
+      overlaps: true,
+    },
+    // 24 Dec 09:00–10:00 Sydney → 23 Dec 22:00–23:00 UTC.
+    {
+      label: 'a session on the first boundary day',
+      startAt: '2026-12-23T22:00:00.000Z',
+      endAt: '2026-12-23T23:00:00.000Z',
+      overlaps: true,
+    },
+    // 26 Dec 23:00–23:59 Sydney → 26 Dec 12:00–12:59 UTC.
+    {
+      label: 'a session on the last boundary day',
+      startAt: '2026-12-26T12:00:00.000Z',
+      endAt: '2026-12-26T12:59:00.000Z',
+      overlaps: true,
+    },
+    // 23 Dec 10:00 Sydney → 22 Dec 23:00 UTC.
+    {
+      label: 'a session the day before the block',
+      startAt: '2026-12-22T23:00:00.000Z',
+      endAt: '2026-12-22T23:30:00.000Z',
+      overlaps: false,
+    },
+    // 27 Dec 10:00 Sydney → 26 Dec 23:00 UTC.
+    {
+      label: 'a session the day after the block',
+      startAt: '2026-12-26T23:00:00.000Z',
+      endAt: '2026-12-26T23:30:00.000Z',
+      overlaps: false,
+    },
+  ];
+
+  it.each(BLOCK_RANGE_CASES)(
+    '$label → overlaps=$overlaps',
+    async ({ startAt, endAt, overlaps }) => {
+      const expert = await seedBookableExpert();
+      await expert.book(startAt, endAt);
+
+      const rows = await consultationsRepository.listConfirmedInRange(
+        expert.expertProfileId,
+        BLOCK_RANGE_START,
+        BLOCK_RANGE_END
+      );
+      expect(rows).toHaveLength(overlaps ? 1 : 0);
+    }
+  );
+
+  it('an expert with no bookings has zero conflicts', async () => {
+    const expert = await seedBookableExpert();
+
+    const rows = await consultationsRepository.listConfirmedInRange(
+      expert.expertProfileId,
+      BLOCK_RANGE_START,
+      BLOCK_RANGE_END
+    );
+    expect(rows).toHaveLength(0);
+  });
+});

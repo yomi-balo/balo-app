@@ -260,6 +260,7 @@ describe('expertsRepository.findResolverSettings', () => {
     const settings = await expertsRepository.findResolverSettings(draft.id);
 
     expect(settings).toEqual({
+      userId: draft.userId,
       timezone: 'America/New_York',
       bufferBeforeMinutes: 5,
       bufferAfterMinutes: 30,
@@ -273,6 +274,7 @@ describe('expertsRepository.findResolverSettings', () => {
     const settings = await expertsRepository.findResolverSettings(draft.id);
 
     expect(settings).toEqual({
+      userId: draft.userId,
       timezone: 'UTC',
       bufferBeforeMinutes: 0,
       bufferAfterMinutes: 0,

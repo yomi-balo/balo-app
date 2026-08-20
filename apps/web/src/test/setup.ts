@@ -118,6 +118,9 @@ vi.mock('@/lib/analytics', async () => {
     // throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     // ⚠ `GUEST_SERVER_EVENTS` must NEVER join this list — it is server-only.
     MEETING_PANEL_EVENTS: events.MEETING_PANEL_EVENTS,
+    // BAL-416 — the time-off conflict warning's CLIENT family. ⚠ `AVAILABILITY_SERVER_EVENTS`
+    // must NEVER join this list — it is server-only.
+    AVAILABILITY_EVENTS: events.AVAILABILITY_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

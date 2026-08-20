@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
 import {
@@ -7,7 +7,13 @@ import {
   projectRequestFactory,
   requestExpertRelationshipFactory,
 } from '../../test/factories';
-import { resolveMeetingContextOwner } from './meeting-context-owner';
+import { companiesRepository } from '../companies';
+import { meetingContextsRepository } from '../meeting-contexts';
+import { meetingsRepository } from '../meetings';
+import {
+  resolveMeetingContextOwner,
+  resolveClientCompaniesForMeetings,
+} from './meeting-context-owner';
 
 /**
  * BAL-423 — the judgement-free "who owns this meeting context" READ, lifted from
@@ -188,5 +194,149 @@ describe('resolveMeetingContextOwner — relationship grain (`request_interactio
         contextId: relationship.id,
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+// ── BAL-416 — resolveClientCompaniesForMeetings, the BATCHED sibling ────────────────────
+describe('resolveClientCompaniesForMeetings', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns an empty map with no query for an empty input', async () => {
+    await expect(resolveClientCompaniesForMeetings([])).resolves.toEqual(new Map());
+  });
+
+  it('resolves companyId + companyName for a `case`-context meeting', async () => {
+    const { engagement, companyId } = await caseEngagementFactory();
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id]);
+
+    expect(map.get(meeting.id)?.companyId).toBe(companyId);
+    expect(map.get(meeting.id)?.companyName).toBe('Acme Co');
+  });
+
+  it('resolves a `project_discovery` meeting via a direct-mode project request', async () => {
+    const request = await projectRequestFactory();
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id]);
+
+    expect(map.get(meeting.id)?.companyId).toBe(request.companyId);
+    expect(map.get(meeting.id)?.companyName).toBe('Acme Co');
+  });
+
+  it('omits a meeting with two DISTINCT top-tier contexts (ambiguous)', async () => {
+    const first = await caseEngagementFactory();
+    // Same expert, different engagement/company — the projection's own resolver still
+    // names one expert (so `attach` does not reject it), but `selectPrimaryMeetingContext`
+    // sees two distinct top-tier candidates and reports `ambiguous`.
+    const second = await caseEngagementFactory({ expertProfileId: first.expertProfileId });
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: first.engagement.id }],
+    });
+    await meetingContextsRepository.attach({
+      meetingId: meeting.id,
+      contextType: 'case',
+      contextId: second.engagement.id,
+    });
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id]);
+
+    expect(map.has(meeting.id)).toBe(false);
+  });
+
+  it('omits a meeting with only an `admin` context', async () => {
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'admin', contextId: null }],
+    });
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id]);
+
+    expect(map.has(meeting.id)).toBe(false);
+  });
+
+  it('omits a meeting whose only context row has been soft-deleted', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    await meetingContextsRepository.detach(meeting.id, 'case', engagement.id);
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id]);
+
+    expect(map.has(meeting.id)).toBe(false);
+  });
+
+  it('omits a meeting whose resolved expert does NOT match `expectedExpertProfileId` (S2)', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const otherExpert = await expertDraftFactory();
+    expect(otherExpert.id).not.toBe(expertProfileId);
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id], otherExpert.id);
+
+    expect(map.has(meeting.id)).toBe(false);
+  });
+
+  it('keeps a meeting whose resolved expert MATCHES `expectedExpertProfileId` (S2)', async () => {
+    const { engagement, companyId, expertProfileId } = await caseEngagementFactory();
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    const map = await resolveClientCompaniesForMeetings([meeting.id], expertProfileId);
+
+    expect(map.get(meeting.id)).toEqual({ companyId, companyName: 'Acme Co' });
+  });
+
+  it('resolves two meetings sharing one company from ONE distinct company lookup', async () => {
+    // SUGGESTION — this test's own name claims a specific call COUNT, which the assertions
+    // below it never checked: two correct `.get()` results also pass if the dedup this test
+    // exists to pin were silently broken and `findNameById` ran twice. Spy on the real
+    // repository method (this suite runs against a real Testcontainers Postgres, so there is
+    // no mock to redirect) to assert the count the name promises.
+    const findNameByIdSpy = vi.spyOn(companiesRepository, 'findNameById');
+
+    const { engagement, companyId } = await caseEngagementFactory();
+    const { meeting: meetingA } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    const { meeting: meetingB } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-25T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-25T11:00:00.000Z'),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    findNameByIdSpy.mockClear(); // drop any calls the two factory/create setup steps made
+
+    const map = await resolveClientCompaniesForMeetings([meetingA.id, meetingB.id]);
+
+    expect(map.get(meetingA.id)).toEqual({ companyId, companyName: 'Acme Co' });
+    expect(map.get(meetingB.id)).toEqual({ companyId, companyName: 'Acme Co' });
+    expect(findNameByIdSpy).toHaveBeenCalledTimes(1);
+    expect(findNameByIdSpy).toHaveBeenCalledWith(companyId);
   });
 });

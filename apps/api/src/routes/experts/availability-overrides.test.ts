@@ -9,6 +9,10 @@ const {
   mockQueueAdd,
   mockGetQueue,
   mockTrackServer,
+  mockFindResolverSettings,
+  mockListConfirmedInRange,
+  mockResolveCompanies,
+  mockCheckRateLimit,
 } = vi.hoisted(() => ({
   mockListUpcoming: vi.fn(),
   mockCreate: vi.fn(),
@@ -16,6 +20,10 @@ const {
   mockQueueAdd: vi.fn(),
   mockGetQueue: vi.fn(),
   mockTrackServer: vi.fn(),
+  mockFindResolverSettings: vi.fn(),
+  mockListConfirmedInRange: vi.fn(),
+  mockResolveCompanies: vi.fn(),
+  mockCheckRateLimit: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -24,6 +32,13 @@ vi.mock('@balo/db', () => ({
     create: mockCreate,
     softDelete: mockSoftDelete,
   },
+  expertsRepository: {
+    findResolverSettings: mockFindResolverSettings,
+  },
+  consultationsRepository: {
+    listConfirmedInRange: mockListConfirmedInRange,
+  },
+  resolveClientCompaniesForMeetings: mockResolveCompanies,
 }));
 
 vi.mock('../../lib/queue.js', () => ({
@@ -38,22 +53,30 @@ vi.mock('../../lib/redis.js', () => ({
   createRedisConnection: () => ({}),
 }));
 
+// R3 — `importOriginal` so `RATE_LIMIT_DEADLINE_MS` (a real, non-mocked constant `withDeadline`
+// reads) survives the mock: a factory that names only `checkRateLimit` silently drops every
+// other export, and `RATE_LIMIT_DEADLINE_MS` arriving as `undefined` would collapse every
+// `setTimeout` deadline to effectively-0ms — masking exactly the hang this exists to catch.
+vi.mock('../../lib/rate-limiter.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/rate-limiter.js')>()),
+  checkRateLimit: mockCheckRateLimit,
+}));
+
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
-  CALENDAR_SERVER_EVENTS: Object.freeze({
-    AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
-    SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
-    AVAILABILITY_OVERRIDE_CREATED: 'availability_override_created',
-    AVAILABILITY_OVERRIDE_DELETED: 'availability_override_deleted',
+  AVAILABILITY_SERVER_EVENTS: Object.freeze({
+    OVERRIDE_CREATED: 'availability_override_created',
+    OVERRIDE_DELETED: 'availability_override_deleted',
   }),
 }));
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import { availabilityOverridesRoutes } from './availability-overrides.js';
+import { RATE_LIMIT_DEADLINE_MS } from '../../lib/rate-limiter.js';
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -94,6 +117,7 @@ describe('experts availability-overrides routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 60 });
   });
 
   const authedHeaders = { 'content-type': 'application/json', 'x-internal-api-key': SECRET };
@@ -144,6 +168,23 @@ describe('experts availability-overrides routes', () => {
         endDate: '2026-12-26',
         label: 'x'.repeat(81),
       },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * SUGGESTION — S3 added this span guard to the conflicts query but shipped no test for the
+   * CREATE arm, which is the one with the durable consequence: an unbounded `endDate` (e.g.
+   * `9999-12-31`) would be STORED, permanently widening every future availability-cache
+   * rebuild's forward scan rather than just failing one read.
+   */
+  it('returns 400 when the create span exceeds 366 days (S3)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/experts/availability-overrides',
+      headers: authedHeaders,
+      payload: { expertProfileId: EXPERT_ID, startDate: '2026-01-01', endDate: '2027-06-01' },
     });
     expect(res.statusCode).toBe(400);
     expect(mockCreate).not.toHaveBeenCalled();
@@ -334,5 +375,328 @@ describe('experts availability-overrides routes', () => {
     expect(res.statusCode).toBe(404);
     expect(mockQueueAdd).not.toHaveBeenCalled();
     expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  // ── Conflicts (BAL-416) ───────────────────────────────────────
+
+  describe('conflicts route', () => {
+    // Valid v4 UUIDs — zod v4's `.uuid()` enforces the version/variant nibbles.
+    const USER_ID = 'a1b2c3d4-5678-4e9f-8a1b-2c3d4e5f6789';
+    const OTHER_USER_ID = 'f1e2d3c4-b5a6-4978-9a8b-7c6d5e4f3a2b';
+
+    const settings = {
+      userId: USER_ID,
+      timezone: 'UTC',
+      bufferBeforeMinutes: 15,
+      bufferAfterMinutes: 30,
+      minimumNoticeMinutes: 120,
+    };
+
+    /**
+     * Q2 fix — clock-relative fixture dates, so this suite can never go red from the D4
+     * forward clamp just because time passed (the old suite hard-coded `2026-12-24` against
+     * the REAL clock the route doesn't let a test override). UTC getters, matching
+     * `settings.timezone: 'UTC'` — mirrors the `localIsoOffset` pattern in
+     * `date-overrides-card.test.tsx`, adapted to UTC since this drives the route directly
+     * rather than a browser-local component.
+     */
+    function utcIsoOffset(offsetDays: number): string {
+      const now = new Date();
+      const d = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + offsetDays)
+      );
+      const y = d.getUTCFullYear().toString().padStart(4, '0');
+      const m = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+      const day = d.getUTCDate().toString().padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    // Always ~30 days out — far enough that the forward clamp never engages, however long
+    // this fixture lives.
+    const START_DATE = utcIsoOffset(30);
+    const END_DATE = utcIsoOffset(32);
+
+    function conflictsUrl(params: Record<string, string>): string {
+      return `/api/experts/availability-overrides/conflicts?${new URLSearchParams(params).toString()}`;
+    }
+
+    function baseParams(over: Partial<Record<string, string>> = {}): Record<string, string> {
+      return {
+        expertProfileId: EXPERT_ID,
+        userId: USER_ID,
+        startDate: START_DATE,
+        endDate: END_DATE,
+        ...over,
+      };
+    }
+
+    it('returns 401 without the internal API key on the conflicts route', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+      });
+      expect(res.statusCode).toBe(401);
+      expect(mockFindResolverSettings).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when endDate is before startDate on the conflicts route', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams({ startDate: END_DATE, endDate: START_DATE })),
+        headers: authedHeaders,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(mockFindResolverSettings).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when userId is missing or not a uuid', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/experts/availability-overrides/conflicts?expertProfileId=${EXPERT_ID}&startDate=${START_DATE}&endDate=${END_DATE}`,
+        headers: authedHeaders,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(mockFindResolverSettings).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when the span exceeds 366 days (S3)', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams({ startDate: utcIsoOffset(0), endDate: utcIsoOffset(400) })),
+        headers: authedHeaders,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(mockFindResolverSettings).not.toHaveBeenCalled();
+    });
+
+    it('returns 429 with Retry-After and skips the lookup when rate-limited (S4)', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 31, ttlSeconds: 42 });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toEqual({ error: 'rate_limited', cooldownSeconds: 42 });
+      expect(res.headers['retry-after']).toBe('42');
+      expect(mockFindResolverSettings).not.toHaveBeenCalled();
+    });
+
+    it('fails OPEN (proceeds) when the rate limiter itself throws', async () => {
+      mockCheckRateLimit.mockRejectedValue(new Error('redis down'));
+      mockFindResolverSettings.mockResolvedValue(settings);
+      mockListConfirmedInRange.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    /**
+     * R3 — the branch the round-1 test above ("fails OPEN when the rate limiter itself
+     * throws") does NOT exercise: `getRedis()` sets `maxRetriesPerRequest: null` (BullMQ
+     * requires it), and ioredis only fails pending commands with an error when that option
+     * is a NUMBER. With `null`, a command issued during a Redis outage is parked in the
+     * offline queue and NEVER SETTLES — so a `checkRateLimit` that hangs forever (exactly
+     * what that outage produces) used to hang this request too, never reaching the `catch`
+     * that answers fail-open. `withDeadline` is what makes the `catch` reachable at all.
+     *
+     * Fake timers, not a real 2s wait: the assertion is about the DEADLINE firing, and
+     * advancing the clock proves that far more precisely than sleeping does.
+     */
+    it('fails OPEN within the deadline when the rate limiter HANGS, instead of hanging the request (R3)', async () => {
+      vi.useFakeTimers();
+      try {
+        // Exactly what ioredis produces while disconnected: pending, forever.
+        mockCheckRateLimit.mockReturnValue(new Promise(() => {}));
+        mockFindResolverSettings.mockResolvedValue(settings);
+        mockListConfirmedInRange.mockResolvedValue([]);
+
+        const pending = app.inject({
+          method: 'GET',
+          url: conflictsUrl(baseParams()),
+          headers: authedHeaders,
+        });
+        await vi.advanceTimersByTimeAsync(RATE_LIMIT_DEADLINE_MS + 1);
+        const res = await pending;
+
+        expect(res.statusCode).toBe(200);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keys the rate limit on `userId`, not `expertProfileId` (R3 — a bogus userId must not spend the real expert's bucket)", async () => {
+      mockFindResolverSettings.mockResolvedValue(settings);
+      mockListConfirmedInRange.mockResolvedValue([]);
+
+      await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams({ userId: OTHER_USER_ID })),
+        headers: authedHeaders,
+      });
+
+      expect(mockCheckRateLimit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ keyPrefix: 'ratelimit:availability-conflicts' }),
+        OTHER_USER_ID
+      );
+      expect(mockCheckRateLimit).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        EXPERT_ID
+      );
+    });
+
+    it('returns the zero-conflict shape', async () => {
+      mockFindResolverSettings.mockResolvedValue(settings);
+      mockListConfirmedInRange.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        conflictCount: 0,
+        durationDays: 3,
+        timezone: 'UTC',
+        truncated: false,
+        conflicts: [],
+      });
+      expect(mockResolveCompanies).not.toHaveBeenCalled();
+    });
+
+    it('returns the full conflict shape, ISO-serialised, with a resolved company name', async () => {
+      mockFindResolverSettings.mockResolvedValue(settings);
+      mockListConfirmedInRange.mockResolvedValue([
+        {
+          id: 'consult-1',
+          meetingId: 'meeting-1',
+          expertProfileId: EXPERT_ID,
+          startAt: new Date(`${START_DATE}T03:00:00.000Z`),
+          endAt: new Date(`${START_DATE}T04:00:00.000Z`),
+          status: 'confirmed',
+        },
+      ]);
+      mockResolveCompanies.mockResolvedValue(
+        new Map([['meeting-1', { companyId: 'co-1', companyName: 'Northwind Industrial' }]])
+      );
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        conflictCount: 1,
+        durationDays: 3,
+        timezone: 'UTC',
+        truncated: false,
+        conflicts: [
+          {
+            consultationId: 'consult-1',
+            startAt: `${START_DATE}T03:00:00.000Z`,
+            endAt: `${START_DATE}T04:00:00.000Z`,
+            clientCompanyName: 'Northwind Industrial',
+          },
+        ],
+      });
+      // S2 — the expert containment term is threaded through, not dropped.
+      expect(mockResolveCompanies).toHaveBeenCalledWith(['meeting-1'], EXPERT_ID);
+    });
+
+    it('returns 404 when the expert profile is not found', async () => {
+      mockFindResolverSettings.mockResolvedValue(null);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('returns the SAME 404 shape when userId does not own this expert profile (S1) — no oracle', async () => {
+      mockFindResolverSettings.mockResolvedValue(settings);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams({ userId: OTHER_USER_ID })),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ error: 'Expert profile not found' });
+      expect(mockListConfirmedInRange).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 and logs when the service throws', async () => {
+      mockFindResolverSettings.mockRejectedValue(new Error('db down'));
+
+      const res = await app.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(500);
+    });
+
+    it('logs the truncation notice via request.log.info, not the module logger (Q5)', async () => {
+      const mockRequestLog = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        fatal: vi.fn(),
+        trace: vi.fn(),
+        child: vi.fn(),
+      };
+      mockRequestLog.child.mockReturnValue(mockRequestLog);
+      const loggedApp = Fastify({ logger: false });
+      loggedApp.addHook('onRequest', (request, _reply, done) => {
+        request.log = mockRequestLog as unknown as FastifyInstance['log'];
+        done();
+      });
+      await loggedApp.register(availabilityOverridesRoutes);
+      await loggedApp.ready();
+
+      mockFindResolverSettings.mockResolvedValue(settings);
+      const rows = Array.from({ length: 25 }, (_, i) => ({
+        id: `c${i.toString().padStart(2, '0')}`,
+        meetingId: `meeting-${i}`,
+        expertProfileId: EXPERT_ID,
+        startAt: new Date(Date.UTC(2026, 0, 1, 0, i)),
+        endAt: new Date(Date.UTC(2026, 0, 1, 0, i + 1)),
+        status: 'confirmed',
+      }));
+      mockListConfirmedInRange.mockResolvedValue(rows);
+      mockResolveCompanies.mockResolvedValue(new Map());
+
+      const res = await loggedApp.inject({
+        method: 'GET',
+        url: conflictsUrl(baseParams()),
+        headers: authedHeaders,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockRequestLog.info).toHaveBeenCalledWith(
+        expect.objectContaining({ expertProfileId: EXPERT_ID, conflictCount: 25, detailCount: 20 }),
+        'Override-conflict check truncated the detail list'
+      );
+
+      await loggedApp.close();
+    });
   });
 });

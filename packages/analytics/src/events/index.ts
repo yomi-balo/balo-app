@@ -221,3 +221,10 @@ export {
   type GuestInviteEntryPoint,
   type GuestJoinMethod,
 } from './guest';
+export {
+  AVAILABILITY_EVENTS,
+  type AvailabilityEventMap,
+  type AvailabilityConflictResolution,
+  AVAILABILITY_SERVER_EVENTS,
+  type AvailabilityServerEventMap,
+} from './availability';
