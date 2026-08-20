@@ -43,8 +43,9 @@ const BADGE_TONE: Record<PendingPhase, string> = {
  * the PARTY (company) and the declined tone is neutral (no admin named, no
  * "rejected"). Standalone onboarding interstitial — no wizard dots.
  *
- * DORMANT in v1: reachable only when the resolve action returns `matched`, which
- * cannot occur until the shared-org creation seam ships.
+ * LIVE as of BAL-369: reachable whenever the resolve action returns `matched` — which a
+ * same-domain signup now hits once the owning company has been promoted to a shared
+ * organization at the onboarding Intent step.
  */
 export function DomainJoinPending({
   companyName,

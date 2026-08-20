@@ -159,7 +159,7 @@ describe('resolveOnboardingCompanyAction', () => {
     expectNoWrites();
   });
 
-  it('returns new for a company owner whose workspace is personal (dormant match stands down)', async () => {
+  it('returns new for a company owner whose workspace is personal (match stands down)', async () => {
     mockFindActiveByDomain.mockResolvedValue({ partyType: 'company', partyId: 'company-1' });
     mockGetPartyJoinSettings.mockResolvedValue(actionableSettings({ isPersonal: true }));
 
