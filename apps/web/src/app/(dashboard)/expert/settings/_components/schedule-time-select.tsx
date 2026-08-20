@@ -7,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 import { TIME_OPTIONS, type TimeOption } from '../_lib/schedule-helpers';
 
 interface ScheduleTimeSelectProps {
@@ -14,29 +15,36 @@ interface ScheduleTimeSelectProps {
   onChange: (value: string) => void;
   /** Accessible name (e.g. "Monday range 1 start time"). */
   ariaLabel: string;
-  /** Base option list. Defaults to all 15-minute slots (end pickers); start pickers pass a capped list. */
+  /** Option list. Defaults to all 96 15-minute slots; end pickers pass a computed list. */
   options?: readonly TimeOption[];
-  /** When set, only options strictly after this 'HH:mm' are offered (end pickers). */
-  minExclusive?: string;
+  /** Space-separated id list describing this control (crossing badge, conflict text). */
+  ariaDescribedBy?: string;
+  /** Marks the control as in-error — drives the destructive border via the primitive. */
+  invalid?: boolean;
+  /** Extra trigger classes (crossing info tint / conflict background). */
+  triggerClassName?: string;
   disabled?: boolean;
 }
 
-/** 15-minute wall-clock picker. End pickers filter to `> minExclusive`; start pickers pass a 23:30-capped list. */
+/** 15-minute wall-clock picker. Callers shape the option list — end pickers pass a wrapping list built by `buildEndOptions`. */
 export function ScheduleTimeSelect({
   value,
   onChange,
   ariaLabel,
-  options: baseOptions = TIME_OPTIONS,
-  minExclusive,
+  options = TIME_OPTIONS,
+  ariaDescribedBy,
+  invalid,
+  triggerClassName,
   disabled,
 }: Readonly<ScheduleTimeSelectProps>): React.JSX.Element {
-  const options = minExclusive
-    ? baseOptions.filter((option) => option.value > minExclusive)
-    : baseOptions;
-
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger aria-label={ariaLabel} className="h-9 w-[112px] tabular-nums">
+      <SelectTrigger
+        aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={invalid ? true : undefined}
+        className={cn('h-9 w-[112px] tabular-nums', triggerClassName)}
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-h-64">

@@ -121,4 +121,24 @@ describe('saveScheduleAction', () => {
     expect(result.success).toBe(false);
     expect(log.error).toHaveBeenCalled();
   });
+
+  it('forwards a rule that crosses midnight — the refine is transitive via scheduleRulesSchema', async () => {
+    mockInternalApiFetch.mockResolvedValueOnce({ success: true });
+    const crossingRule = { dayOfWeek: 1, startTime: '17:00', endTime: '09:00' };
+
+    const result = await saveScheduleAction({ ...VALID_INPUT, rules: [crossingRule] });
+
+    expect(result).toEqual({ success: true });
+    const [, options] = mockInternalApiFetch.mock.calls[0] ?? [];
+    expect(JSON.parse(options.body).rules[0]).toEqual(crossingRule);
+  });
+
+  it('rejects a rule whose start equals its end', async () => {
+    const result = await saveScheduleAction({
+      ...VALID_INPUT,
+      rules: [{ dayOfWeek: 1, startTime: '09:00', endTime: '09:00' }],
+    });
+    expect(result.success).toBe(false);
+    expect(mockInternalApiFetch).not.toHaveBeenCalled();
+  });
 });

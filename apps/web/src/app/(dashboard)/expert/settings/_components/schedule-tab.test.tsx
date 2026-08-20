@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { track } from '@/lib/analytics';
@@ -124,6 +124,14 @@ function loadResult(overrides: Partial<ScheduleLoadResult> = {}): ScheduleLoadRe
   };
 }
 
+// Radix Select drives the open/select interaction through Pointer Capture APIs
+// jsdom doesn't implement — stub them so the real time-select listbox can open.
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = vi.fn();
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
+
 // ── Tests ───────────────────────────────────────────────────────
 
 describe('ScheduleTab', () => {
@@ -190,10 +198,85 @@ describe('ScheduleTab', () => {
     expect(toast.success).toHaveBeenCalledWith('Schedule saved');
     expect(track).toHaveBeenCalledWith(
       SCHEDULE_EVENTS.SAVED,
-      expect.objectContaining({ expert_id: 'profile-1', has_split_days: false })
+      expect.objectContaining({
+        expert_id: 'profile-1',
+        has_split_days: false,
+        has_overnight_window: false,
+        has_late_window: false,
+      })
     );
     // Booking settings equal the persisted values → the change-gate suppresses the event.
     expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.BOOKING_RULES_SAVED, expect.anything());
+  });
+
+  it('fires schedule_saved with has_overnight_window when a rule crosses midnight', async () => {
+    mockGetSchedule.mockResolvedValue(
+      loadResult({ rules: [{ dayOfWeek: 1, startTime: '21:00', endTime: '01:00' }] })
+    );
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+
+    await waitFor(() => expect(mockSaveSchedule).toHaveBeenCalledTimes(1));
+    expect(track).toHaveBeenCalledWith(
+      SCHEDULE_EVENTS.SAVED,
+      expect.objectContaining({ has_overnight_window: true, has_late_window: false })
+    );
+    // AC3: a crossing rule round-trips — saved, reloaded, and shown as one range.
+    expect(mockSaveSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rules: [{ dayOfWeek: 1, startTime: '21:00', endTime: '01:00' }],
+      })
+    );
+  });
+
+  it('fires schedule_saved with has_late_window for a same-day range ending after 22:00', async () => {
+    mockGetSchedule.mockResolvedValue(
+      loadResult({ rules: [{ dayOfWeek: 1, startTime: '18:00', endTime: '22:30' }] })
+    );
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+
+    await waitFor(() => expect(mockSaveSchedule).toHaveBeenCalledTimes(1));
+    expect(track).toHaveBeenCalledWith(
+      SCHEDULE_EVENTS.SAVED,
+      expect.objectContaining({ has_late_window: true, has_overnight_window: false })
+    );
+  });
+
+  it('blocks save on a cross-day conflict, shows the toast and inline pointer, and clears on edit', async () => {
+    mockGetSchedule.mockResolvedValue(
+      loadResult({
+        rules: [
+          { dayOfWeek: 1, startTime: '22:00', endTime: '02:00' },
+          { dayOfWeek: 2, startTime: '01:00', endTime: '09:00' },
+        ],
+      })
+    );
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /Monday's 10:00 PM – 2:00 AM \(next day\) range runs into Tuesday morning/
+        )
+      )
+    );
+    expect(mockSaveSchedule).not.toHaveBeenCalled();
+    expect(await screen.findAllByText(/Overlaps with/)).toHaveLength(2);
+
+    // Editing any control clears the stale highlight (markEdited).
+    await user.click(screen.getByRole('switch', { name: 'Tuesday availability' }));
+    expect(screen.queryByText(/Overlaps with/)).not.toBeInTheDocument();
   });
 
   it('fires booking_rules_saved with the new values when a booking rule changes', async () => {
@@ -295,6 +378,18 @@ describe('ScheduleTab', () => {
     expect(alert).toHaveTextContent(/daylight saving/i);
   });
 
+  it('surfaces the previous-day-attribution DST copy when the gap lands in an overnight tail', async () => {
+    // Saturday 22:00–04:00 (Melbourne): the tail [0, 240) contains the Sunday 02:00–03:00 gap.
+    mockGetSchedule.mockResolvedValue(
+      loadResult({ rules: [{ dayOfWeek: 6, startTime: '22:00', endTime: '04:00' }] })
+    );
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/overnight range you set/);
+  });
+
   it('reports a save failure without firing the saved event', async () => {
     mockSaveSchedule.mockResolvedValue({ success: false, error: 'nope' });
     const user = userEvent.setup();
@@ -306,4 +401,42 @@ describe('ScheduleTab', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('nope'));
     expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.SAVED, expect.anything());
   });
+
+  // Explicit timeout: four sequential real Radix Select/Popover interactions comfortably
+  // clear the default 5s under an isolated run but can miss it under full-repo worker
+  // contention (matches the repo's other pointer-capture-driven tests' behaviour).
+  it('adds, edits, removes, and copies a range through the real day-row wiring', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    // Add a second range to Monday (first "Add a time range" button in display order).
+    const addButtons = screen.getAllByRole('button', { name: /Add a time range/ });
+    const [firstAddButton] = addButtons;
+    if (!firstAddButton) throw new Error('expected an Add a time range button');
+    await user.click(firstAddButton);
+    expect(screen.getByRole('combobox', { name: 'Monday range 2 start time' })).toBeInTheDocument();
+
+    // Change Monday's range 1 start time via the real Radix Select.
+    await user.click(screen.getByRole('combobox', { name: 'Monday range 1 start time' }));
+    await user.click(screen.getByRole('option', { name: '10:00 AM' }));
+    expect(screen.getByRole('combobox', { name: 'Monday range 1 start time' })).toHaveTextContent(
+      '10:00 AM'
+    );
+
+    // Remove the range just added.
+    await user.click(screen.getByRole('button', { name: 'Remove Monday range 2' }));
+    expect(
+      screen.queryByRole('combobox', { name: 'Monday range 2 start time' })
+    ).not.toBeInTheDocument();
+
+    // Copy Monday's hours onto Wednesday via the copy popover.
+    await user.click(screen.getByRole('button', { name: 'Copy Monday hours to other days' }));
+    await user.click(screen.getByLabelText('Wednesday'));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('switch', { name: 'Wednesday availability' })).toBeChecked();
+    expect(
+      screen.getByRole('combobox', { name: 'Wednesday range 1 start time' })
+    ).toHaveTextContent('10:00 AM');
+  }, 15000);
 });
