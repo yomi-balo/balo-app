@@ -73,6 +73,8 @@ import {
   unreadDigestSummary,
 } from './conversation-unread-digest.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
+import { ExpertSearchabilityLostEmail } from './expert-searchability-lost.js';
+import type { ExpertChecklistItemKey } from '@balo/shared/experts';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -140,6 +142,32 @@ function noShowClientSentence(
   return (
     `No one from your side joined this one — ${who} ${waited}, so it settles at the ` +
     `${floorMinutes}-minute minimum.`
+  );
+}
+
+/**
+ * BAL-414 — the human label for each checklist item key. Deliberately owned by the TEMPLATE
+ * REGISTRY, not the payload: `expert.searchability_lost`'s `failingItems` stays a plain key
+ * array (D6/D7's vocabulary), and copy is this file's job. Typed
+ * `Record<ExpertChecklistItemKey, string>` so a missing key is a COMPILE ERROR, not a silently
+ * dropped label.
+ */
+const CHECKLIST_ITEM_LABELS: Record<ExpertChecklistItemKey, string> = {
+  profile: 'complete your profile',
+  phone: 'verify your phone',
+  rate: 'set your rate',
+  calendar: 'connect a calendar',
+  availability: 'set your availability',
+  payouts: 'set up payouts',
+};
+
+/** Unknown payload members degrade to their raw string rather than vanishing silently. */
+function checklistItemLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) =>
+    typeof item === 'string' && item in CHECKLIST_ITEM_LABELS
+      ? CHECKLIST_ITEM_LABELS[item as ExpertChecklistItemKey]
+      : String(item)
   );
 }
 
@@ -954,14 +982,41 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // this is its first template (no rule existed either — see `engine/rules.ts`). Recipient is
   // the DELIVERING EXPERT (`recipient: 'expert'` via `payload.expertProfileId`). `providerLabel`
   // derives from the payload's `provider` field — never branch on it beyond this label lookup.
-  'calendar-reconnect-required': (data) => ({
-    component: React.createElement(CalendarReconnectRequiredEmail, {
+  //
+  // BAL-414 (D10, addendum) — `stillSearchable` rides straight through from the payload (the
+  // SAME derived value the DB de-list decision used) into the template's branch; it is never
+  // recomputed here. The subject branches on it too — for the ANY-ACTIVE audience (D4: one
+  // broken provider, one healthy one) the expert never left search, so a subject asserting a
+  // search drop-out would be the first (false) thing they read.
+  'calendar-reconnect-required': (data) => {
+    const stillSearchable = data.stillSearchable === true;
+    return {
+      component: React.createElement(CalendarReconnectRequiredEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        providerLabel: calendarProviderLabel(data.provider),
+        ctaUrl: `${BASE_URL}${EXPERT_CALENDAR_SETTINGS_PATH}`,
+        baseUrl: BASE_URL,
+        stillSearchable,
+      }),
+      subject: stillSearchable
+        ? 'Reconnect your calendar to keep your availability accurate'
+        : 'Reconnect your calendar to appear in search again',
+    };
+  },
+
+  // BAL-414 (D1/D2) — the NON-calendar de-list (rate / payouts / profile / phone /
+  // availability-rules regressing, or the expert's own calendar disconnect). Recipient is the
+  // DELIVERING EXPERT (`recipient: 'expert'` via `payload.expertProfileId`). `failingItems`
+  // (plain keys) is mapped to human labels HERE, not in the payload — see
+  // `CHECKLIST_ITEM_LABELS` above.
+  'expert-searchability-lost': (data) => ({
+    component: React.createElement(ExpertSearchabilityLostEmail, {
       firstName: (data.recipientName as string) ?? 'there',
-      providerLabel: calendarProviderLabel(data.provider),
-      ctaUrl: `${BASE_URL}${EXPERT_CALENDAR_SETTINGS_PATH}`,
+      failingItemLabels: checklistItemLabels(data.failingItems),
+      ctaUrl: `${BASE_URL}/expert/settings`,
       baseUrl: BASE_URL,
     }),
-    subject: 'Reconnect your calendar to keep taking bookings',
+    subject: "You've stopped appearing in Balo search",
   }),
 
   // BAL-380 (ADR-1040 Lane 3) dormancy reminder — server-only, EMAIL to the company's

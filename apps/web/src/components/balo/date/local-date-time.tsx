@@ -22,23 +22,41 @@ import { useEffect, useState } from 'react';
  * case surface is the second consumer, and a route-private `_components/` file imported from
  * another route is a lie about ownership. The `variant` prop below is ADDITIVE: `full` is the
  * default and the recap's call site is unchanged.
+ *
+ * ⚠ `timeZone` (BAL-416) IS ADDITIVE TOO, AND IT CHANGES THE UPGRADE RULE WHEN SUPPLIED. An
+ * EXPLICIT zone is AUTHORITATIVE and is never upgraded to the viewer's — BAL-416 renders a
+ * conflicting session in the EXPERT'S OWN schedule timezone (the same zone the resolver
+ * expands their time-off block in), so "in the viewer's clock" would be a different, wrong
+ * answer for a travelling expert. It also means server and client render the SAME string on
+ * first paint, so this path has no hydration gap to close. All five pre-existing consumers
+ * omit the prop and keep the viewer-upgrade behaviour above, byte-for-byte.
  */
 export type LocalDateTimeVariant = 'full' | 'day-month' | 'day-month-time';
 
 export function LocalDateTime({
   iso,
   variant = 'full',
-}: Readonly<{ iso: string; variant?: LocalDateTimeVariant }>): React.JSX.Element {
-  const [label, setLabel] = useState(() => formatIn(iso, 'UTC', variant));
-  const [zone, setZone] = useState('UTC');
+  timeZone,
+}: Readonly<{
+  iso: string;
+  variant?: LocalDateTimeVariant;
+  timeZone?: string;
+}>): React.JSX.Element {
+  const [label, setLabel] = useState(() => formatIn(iso, timeZone ?? 'UTC', variant));
+  const [zone, setZone] = useState(timeZone ?? 'UTC');
 
   useEffect(() => {
+    if (timeZone !== undefined) {
+      setZone(timeZone);
+      setLabel(formatIn(iso, timeZone, variant));
+      return;
+    }
     const viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (viewerZone) {
       setZone(viewerZone);
       setLabel(formatIn(iso, viewerZone, variant));
     }
-  }, [iso, variant]);
+  }, [iso, variant, timeZone]);
 
   return (
     <time dateTime={iso} title={label + ' (' + zone + ')'}>

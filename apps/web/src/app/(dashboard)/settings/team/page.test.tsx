@@ -79,7 +79,7 @@ describe('MembersAccessPage gating', () => {
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
-  it('notFound() for a personal workspace (surface is dormant in v1)', async () => {
+  it('notFound() for a personal workspace (only a promoted organization reaches this surface)', async () => {
     mockGetCurrentUser.mockResolvedValue({ id: 'u1', companyId: COMPANY_ID });
     mockHasCapability.mockResolvedValue(true);
     mockFindById.mockResolvedValue({

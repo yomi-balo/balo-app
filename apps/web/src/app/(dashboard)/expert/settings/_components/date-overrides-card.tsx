@@ -5,58 +5,19 @@ import { CalendarDays, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { IconBadge } from '@/components/balo/icon-badge';
 import { getAvailabilityOverridesAction } from '../_actions/get-availability-overrides';
-import { createAvailabilityOverrideAction } from '../_actions/create-availability-override';
+import {
+  createAvailabilityOverrideAction,
+  type CreateAvailabilityOverrideResult,
+} from '../_actions/create-availability-override';
 import { deleteAvailabilityOverrideAction } from '../_actions/delete-availability-override';
+import { getOverrideConflictsAction } from '../_actions/get-override-conflicts';
+import { formatOverrideRange } from '../_lib/format-override-range';
 import { DateOverrideAddPopover, type CreateOverrideInput } from './date-override-add-popover';
 import { DateOverrideDeleteConfirm } from './date-override-delete-confirm';
 import type { AvailabilityOverrideDto } from '../_types/availability-override';
 
 /** Brand violet for the Time-off IconBadge (header + row tiles). */
 const OVERRIDE_ICON_COLOR = '#7C3AED';
-
-// ── Date formatting (display only; no timezone math) ─────────────
-
-const MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-
-function parseIso(iso: string): { y: number; m: number; d: number } | null {
-  const [ys, ms, ds] = iso.split('-');
-  if (ys === undefined || ms === undefined || ds === undefined) return null;
-  const y = Number(ys);
-  const m = Number(ms);
-  const d = Number(ds);
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
-  return { y, m, d };
-}
-
-function formatDay(iso: string, withWeekday: boolean): string {
-  const parsed = parseIso(iso);
-  if (!parsed) return iso;
-  const month = MONTHS[parsed.m - 1] ?? '';
-  const base = `${parsed.d} ${month} ${parsed.y}`;
-  if (!withWeekday) return base;
-  const weekday = WEEKDAYS[new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d)).getUTCDay()] ?? '';
-  return `${weekday}, ${base}`;
-}
-
-/** Single day → `Thu, 25 Dec 2026`; range → `25 Dec 2026 – 2 Jan 2027`. */
-export function formatOverrideRange(startIso: string, endIso: string): string {
-  if (startIso === endIso) return formatDay(startIso, true);
-  return `${formatDay(startIso, false)} – ${formatDay(endIso, false)}`;
-}
 
 function sortByStart(list: AvailabilityOverrideDto[]): AvailabilityOverrideDto[] {
   return [...list].sort((a, b) => a.startDate.localeCompare(b.startDate));
@@ -111,6 +72,12 @@ type CardState = 'loading' | 'error' | 'ready';
 export function DateOverridesCard(): React.JSX.Element {
   const [overrides, setOverrides] = useState<AvailabilityOverrideDto[]>([]);
   const [state, setState] = useState<CardState>('loading');
+  // BAL-416 — purely an analytics dimension for the "Add time off" popover's conflict
+  // events. `null` both while the initial fetch below is still in flight (the popover is
+  // reachable before it resolves) and for the unreachable-in-practice "no expert profile"
+  // branch (this settings page is expert-only to begin with); the popover simply skips
+  // firing those events rather than shipping an empty-string dimension.
+  const [expertProfileId, setExpertProfileId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +85,8 @@ export function DateOverridesCard(): React.JSX.Element {
     getAvailabilityOverridesAction()
       .then((data) => {
         if (cancelled) return;
-        setOverrides(sortByStart(data));
+        setOverrides(data === null ? [] : sortByStart(data.overrides));
+        setExpertProfileId(data === null ? null : data.expertProfileId);
         setState('ready');
       })
       .catch(() => {
@@ -131,7 +99,17 @@ export function DateOverridesCard(): React.JSX.Element {
   }, []);
 
   const handleCreate = useCallback(async (input: CreateOverrideInput): Promise<boolean> => {
-    const result = await createAvailabilityOverrideAction(input);
+    // R4 — the popover's `onCreate` prop must never REJECT: it awaits this directly inside an
+    // async `onClick`, which React does not catch, so a rejection would escape as an
+    // unhandled rejection (the same vector C1 closed for `onCheckConflicts`). The Server
+    // Action already catches a transport failure internally and returns `{success:false}`,
+    // but this `.catch` makes that total regardless of what future callers do.
+    const result = await createAvailabilityOverrideAction(input).catch(
+      (error: unknown): CreateAvailabilityOverrideResult => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to add time off',
+      })
+    );
     if (result.success) {
       setOverrides((prev) => sortByStart([...prev, result.override]));
       toast.success('Time off added');
@@ -174,7 +152,11 @@ export function DateOverridesCard(): React.JSX.Element {
             </p>
           </div>
         </div>
-        <DateOverrideAddPopover onCreate={handleCreate} />
+        <DateOverrideAddPopover
+          onCreate={handleCreate}
+          onCheckConflicts={getOverrideConflictsAction}
+          expertProfileId={expertProfileId}
+        />
       </div>
 
       <div className="mt-4">

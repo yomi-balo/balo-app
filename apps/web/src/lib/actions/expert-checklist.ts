@@ -1,15 +1,11 @@
 import 'server-only';
 
 import { cache } from 'react';
-import { getSession } from '@/lib/auth/session';
-import {
-  expertsRepository,
-  usersRepository,
-  payoutsRepository,
-  calendarRepository,
-  availabilityRulesRepository,
-} from '@balo/db';
+import { requireOnboardedUser } from '@/lib/auth/session';
+import { expertSearchabilityRepository } from '@balo/db';
+import { deriveExpertChecklist } from '@balo/shared/experts';
 import { log } from '@/lib/logging';
+import { reconcileFromRead } from '@/lib/expert/searchability';
 
 export interface ChecklistStatus {
   items: {
@@ -26,77 +22,86 @@ export interface ChecklistStatus {
   rateCents: number | null;
 }
 
-/** Server-side function to compute checklist status. Called from server components. */
+/**
+ * BAL-414 (D1/D3.2) — server-side function to compute checklist status. Called from server
+ * components. `searchable` now derives from `allComplete` in BOTH directions (D1) — this is
+ * the READ-PATH RECONCILIATION BACKSTOP for the five non-calendar items; the API-side triggers
+ * (§B/§C of the plan) own the calendar-credential half and can de-list a dormant expert who
+ * never opens this dashboard at all, which is what makes this backstop safe to leave
+ * idempotent and best-effort here.
+ *
+ * The fetch is now ONE repository call (`expertSearchabilityRepository.loadInputs`), not a
+ * five-repository fan-out — see that repository's docblock for the D4 ANY-ACTIVE semantics
+ * and the soft-delete filters it applies at the SQL layer.
+ *
+ * ⚠ S2 (fix round 1) — this became a WRITE path (`reconcileFromRead` mutates on every render)
+ * but kept a bare read-path auth check. `requireOnboardedUser()` is the fail-closed gate every
+ * other privileged mutation uses; a bare `requireUser()`/`getSession()` here would leave an
+ * un-onboarded session able to trigger a write. (This module stays `import 'server-only'`, not
+ * `'use server'`, so it is still outside `onboarding-mutation-gate.test.ts`'s scan — that gate
+ * only walks Server Actions — but the auth check itself is now the same fail-closed one.)
+ */
 export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
-  const session = await getSession();
-  if (!session?.user?.id) {
-    throw new Error('Unauthorized');
-  }
+  const user = await requireOnboardedUser();
 
-  if (session.user.activeMode !== 'expert') {
+  if (user.activeMode !== 'expert') {
     throw new Error('Expert mode required');
   }
 
-  const expertProfileId = session.user.expertProfileId;
+  const expertProfileId = user.expertProfileId;
   if (!expertProfileId) {
     throw new Error('Expert profile required');
   }
 
-  const [profile, user, hasPayouts, connection, hasSchedule] = await Promise.all([
-    expertsRepository.findProfileById(expertProfileId),
-    usersRepository.findById(session.user.id),
-    payoutsRepository.hasPayoutDetails(expertProfileId),
-    calendarRepository.findConnectionByExpertProfileId(expertProfileId),
-    availabilityRulesRepository.hasActiveRules(expertProfileId),
-  ]);
+  // S4 — the scoped overload: an extra `AND expert_profiles.user_id = :userId` term on a
+  // by-id read against a table with no RLS. `session.user.id` is the caller's own id, so this
+  // is a no-op for a well-formed session and a defence-in-depth guard against a future caller
+  // passing a mismatched id.
+  const snapshot = await expertSearchabilityRepository.loadInputs(expertProfileId, undefined, {
+    userId: user.id,
+  });
 
-  if (!profile || !user) {
+  if (!snapshot) {
     log.error('Profile or user not found in checklist', {
       expertProfileId,
-      userId: session.user.id,
-      profileFound: Boolean(profile),
-      userFound: Boolean(user),
+      userId: user.id,
     });
     throw new Error('Profile or user not found');
   }
 
-  // `calendar`: a live calendar_connections row with an ACTIVE credential (BAL-234,
-  // BAL-396 §3 — `status` renamed to `credential_status`, vocabulary ACTIVE | SYNC_PENDING |
-  // EXPIRED | REVOKED). A revoked/errored/pending connection is not connected. This replaces
-  // the dead `cronofySyncStatus` read (no writer) and keeps the check vendor-agnostic.
-  const calendar = connection?.credentialStatus === 'ACTIVE';
+  const derivation = deriveExpertChecklist(snapshot.inputs);
 
-  const items = {
-    profile: Boolean(
-      profile.headline &&
-      profile.bio &&
-      user.avatarUrl &&
-      profile.headline.trim().length > 0 &&
-      profile.bio.trim().length > 0
-    ),
-    phone: Boolean(user.phoneVerifiedAt),
-    rate: Boolean(profile.rateCents && profile.rateCents > 0),
-    calendar,
-    // "Set your availability" completes when ≥1 enabled weekly rule is saved (BAL-234
-    // §7). NOT conjoined with `calendar` — that is its own checklist item, and
-    // conjoining would leave this item unstickable while the hours are visibly saved.
-    availability: hasSchedule,
-    payouts: hasPayouts,
-  };
+  // S2 — audit-integrity residual: a staff member operating under an impersonated session must
+  // not have this de-list attributed to the impersonated expert alone. Preferred over refusing
+  // the reconcile (which would leave `searchable` stale): the write still happens, and the fact
+  // of impersonation rides into `audit_events.metadata` alongside it.
+  const actorImpersonating = user.isImpersonating === true;
 
-  const completedCount = Object.values(items).filter(Boolean).length;
-  const allComplete = completedCount === Object.keys(items).length;
-
-  // When all 6 complete, set searchable = true (idempotent)
-  if (allComplete && !profile.searchable) {
-    await expertsRepository.updateProfile(expertProfileId, {
-      searchable: true,
-    });
-    log.info('Expert became searchable', {
+  // D1/D3.2 — symmetric: writes BOTH directions, conditional (a no-op when the row already
+  // matches). Best-effort: a reconcile failure must never break the render, which is why
+  // BOTH the write and its post-commit effects are inside this one try/catch rather than
+  // letting it propagate.
+  try {
+    await reconcileFromRead({
       expertProfileId,
-      userId: session.user.id,
+      actorUserId: user.id,
+      derivation,
+      currentSearchable: snapshot.currentSearchable,
+      actorImpersonating,
+    });
+  } catch (error) {
+    log.error('Expert searchability reconcile failed', {
+      expertProfileId,
+      userId: user.id,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
   }
 
-  return { items, completedCount, allComplete, rateCents: profile.rateCents ?? null };
+  return {
+    items: derivation.items,
+    completedCount: derivation.completedCount,
+    allComplete: derivation.allComplete,
+    rateCents: snapshot.rateCents,
+  };
 });

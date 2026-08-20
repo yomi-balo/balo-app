@@ -1,5 +1,6 @@
 import { formatAudMinor, formatExpiryDateShort } from './credit-format.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
+import { pluralize } from './shared.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 
 interface InAppOutput {
@@ -11,6 +12,11 @@ interface InAppOutput {
 /** Coerce a merged-payload numeric field to a number; 0 when absent/non-numeric. */
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** Length of an array-valued payload field; 0 when absent or not an array. */
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 /**
@@ -363,14 +369,49 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-396 §7 (Objection 5) — `calendar.auth_error` already existed and already published;
   // this is its first in-app entry (no rule existed either — see `engine/rules.ts`). Recipient
   // is the delivering expert. Straight into the calendar tab — the whole point of the nudge.
+  //
+  // BAL-414 (D10, addendum) — branches on `stillSearchable`, the SAME derived value the DB
+  // de-list decision used (never recomputed here): a multi-provider expert whose other
+  // connection is still ACTIVE stays searchable, so the body must not claim a search pause.
   'calendar-reconnect-required': (data) => {
     const providerLabel = calendarProviderLabel(data.provider);
+    const body =
+      data.stillSearchable === true
+        ? `Balo lost access to your ${providerLabel} — busy time on it isn't being checked before a booking until it's reconnected. Your other connected calendar is still covering your search listing.`
+        : // UX WARNING (fix round 1) — the email version already states the public-profile
+          // pause (D1's other consequence); this in-app body previously omitted it, which is
+          // exactly what made the RESTORE notice ("...public profile are live again") read as
+          // referencing a pause this notice never disclosed.
+          `Balo lost access to your ${providerLabel} — your availability is paused, you've stopped appearing in search, and your public profile link is on hold until it's reconnected.`;
     return {
       title: 'Reconnect your calendar',
-      body: `Balo lost access to your ${providerLabel} — your availability is paused until it's reconnected.`,
+      body,
       actionUrl: EXPERT_CALENDAR_SETTINGS_PATH,
     };
   },
+
+  // BAL-414 (D1/D2) — the NON-calendar de-list. Recipient is the delivering expert. Straight
+  // into settings — the whole point of the nudge.
+  'expert-searchability-lost': (data) => {
+    const count = arrayLength(data.failingItems);
+    const suffix = count > 0 ? ` — ${pluralize(count, 'item')} left to finish` : '';
+    return {
+      title: "You've stopped appearing in search",
+      // UX WARNING (fix round 1) — the email version already states the public-profile pause;
+      // this in-app body previously omitted it entirely.
+      body: `You've stopped appearing in Balo search and your public profile link is on hold. Finish setting up your profile to come back${suffix}.`,
+      actionUrl: '/expert/settings',
+    };
+  },
+
+  // BAL-414 (D2) — the re-list, IN-APP ONLY (no email rule). Both directions of cause: a
+  // flapping calendar connection must never generate email churn, but the in-app confirmation
+  // still fires every genuine transition.
+  'expert-searchability-restored': () => ({
+    title: "You're back in search",
+    body: 'Your Balo search listing and public profile are live again.',
+    actionUrl: '/expert/settings',
+  }),
 
   // BAL-332 (D2) milestone completed — CLIENT owner ("your expert delivered").
   'engagement-milestone-completed-client': (data) => {

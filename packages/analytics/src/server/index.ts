@@ -9,6 +9,9 @@ export { EXPERT_SERVER_EVENTS } from '../events/expert';
 export { EXPERT_PAYOUT_SERVER_EVENTS } from '../events/expert-payouts';
 export { NOTIFICATION_SERVER_EVENTS } from '../events/notifications';
 export { CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from '../events/calendar';
+// BAL-414 — server-only by construction (§F): `apps/api`'s credential-break/repair triggers
+// AND `apps/web`'s `import 'server-only'` dashboard read path both need this from here.
+export { EXPERT_SETUP_SERVER_EVENTS } from '../events/expert-setup';
 export { SEARCH_SERVER_EVENTS } from '../events/search';
 export { PROJECT_SERVER_EVENTS } from '../events/project';
 export { BILLING_SERVER_EVENTS } from '../events/billing';
@@ -68,3 +71,7 @@ export type { MeetingBookingContextType } from '../events/meeting';
 export { GUEST_SERVER_EVENTS } from '../events/guest';
 export type { GuestInviteEntryPoint, GuestJoinMethod } from '../events/guest';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';
+// BAL-416 — the MOVED BAL-235 date-override events. `apps/api`'s routes import from
+// `@balo/analytics/server` ONLY, so skipping this line makes them unimportable there —
+// same fourth-step trap as MEETING_SERVER_EVENTS / GUEST_SERVER_EVENTS above.
+export { AVAILABILITY_SERVER_EVENTS } from '../events/availability';

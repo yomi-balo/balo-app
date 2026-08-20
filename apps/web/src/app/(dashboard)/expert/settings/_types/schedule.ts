@@ -22,7 +22,12 @@ export interface ScheduleRule {
   dayOfWeek: number;
   /** Wall-clock start, 'HH:mm' on a 15-minute boundary. */
   startTime: string;
-  /** Wall-clock end, 'HH:mm' on a 15-minute boundary, strictly after startTime. */
+  /**
+   * Wall-clock end, 'HH:mm' on a 15-minute boundary, always DIFFERENT from startTime.
+   * An end EARLIER than startTime means the window CROSSES MIDNIGHT into the following
+   * date — `dayOfWeek` anchors the start, and the resolver takes the end from the next
+   * date (BAL-415). A midnight end is '00:00', never '24:00'.
+   */
   endTime: string;
 }
 

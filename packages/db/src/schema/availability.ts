@@ -37,8 +37,12 @@ export const availabilityRules = pgTable(
     check('avail_rules_day_check', sql`${table.dayOfWeek} BETWEEN 0 AND 6`),
     // BAL-234: start != end (a zero-length window is meaningless). `end < start`
     // is a valid window that CROSSES MIDNIGHT into the following date; `dayOfWeek`
-    // anchors the START. The resolver expands the end from the next date. The
-    // editor/API still author same-day ranges only — the crossing UI is BAL-415.
+    // anchors the START. The resolver expands the end from the next date.
+    // BAL-415 shipped the authoring side: the settings editor offers wrapped
+    // `(next day)` end slots and both Zod layers (the API route and the editor's
+    // `scheduleRuleSchema`) now enforce only `start !== end`, matching this CHECK
+    // exactly. A midnight end is `00:00`, never `24:00` — so every `00:00` end is
+    // a crossing rule by definition.
     check('avail_rules_start_ne_end_check', sql`${table.startTime} <> ${table.endTime}`),
   ]
 );

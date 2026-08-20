@@ -14,7 +14,12 @@ export {
   EXPERT_SERVER_EVENTS,
   type ExpertServerEventMap,
 } from './expert';
-export { EXPERT_SETUP_EVENTS, type ExpertSetupEventMap } from './expert-setup';
+export {
+  EXPERT_SETUP_EVENTS,
+  type ExpertSetupEventMap,
+  EXPERT_SETUP_SERVER_EVENTS,
+  type ExpertSetupServerEventMap,
+} from './expert-setup';
 export { EXPERT_RATE_EVENTS, type ExpertRateEventMap } from './expert-rate';
 export {
   EXPERT_PAYOUT_EVENTS,
@@ -221,3 +226,10 @@ export {
   type GuestInviteEntryPoint,
   type GuestJoinMethod,
 } from './guest';
+export {
+  AVAILABILITY_EVENTS,
+  type AvailabilityEventMap,
+  type AvailabilityConflictResolution,
+  AVAILABILITY_SERVER_EVENTS,
+  type AvailabilityServerEventMap,
+} from './availability';

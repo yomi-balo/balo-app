@@ -81,6 +81,15 @@ const PINNED_REPOSITORIES: readonly string[] = [
    */
   'meeting-calendar-events.ts',
   'calendar.ts',
+  /**
+   * BAL-414 adds the searchability repository, and it is a genuine near-miss: its docblock
+   * says "NO PUBLISH HERE, EVER" and its ONLY production caller publishes a notification
+   * immediately after `applySearchable` commits (`apps/api`'s searchability service, and
+   * `apps/web`'s dashboard read path). That is exactly the "publish, then stamp" adjacency
+   * that made `calendar.ts` worth pinning above — a publish smuggled into this repository
+   * would fire from inside `db.transaction` and could not be rolled back.
+   */
+  'expert-searchability.ts',
 ];
 
 /**

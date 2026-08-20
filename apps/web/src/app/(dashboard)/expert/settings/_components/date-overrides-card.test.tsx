@@ -9,6 +9,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const mockGet = vi.fn();
 const mockCreate = vi.fn();
 const mockDelete = vi.fn();
+const mockCheckConflicts = vi.fn();
 
 vi.mock('../_actions/get-availability-overrides', () => ({
   getAvailabilityOverridesAction: () => mockGet(),
@@ -18,6 +19,11 @@ vi.mock('../_actions/create-availability-override', () => ({
 }));
 vi.mock('../_actions/delete-availability-override', () => ({
   deleteAvailabilityOverrideAction: (...args: unknown[]) => mockDelete(...args),
+}));
+// BAL-416 — `date-overrides-card.tsx` now imports this directly (not injected). Mocked like
+// its three siblings so the real `'use server'` / `server-only` module chain never loads.
+vi.mock('../_actions/get-override-conflicts', () => ({
+  getOverrideConflictsAction: (...args: unknown[]) => mockCheckConflicts(...args),
 }));
 
 import { toast } from 'sonner';
@@ -75,10 +81,14 @@ async function pickToday(user: ReturnType<typeof userEvent.setup>): Promise<void
 describe('DateOverridesCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Zero-conflict default so the create-flow tests below (which never assert on the
+    // conflict check itself) keep going straight through `onCreate`, exactly as before
+    // BAL-416 added the silent pre-check.
+    mockCheckConflicts.mockResolvedValue(null);
   });
 
   it('shows the invitation-framed empty state once loading resolves with no blocks', async () => {
-    mockGet.mockResolvedValue([]);
+    mockGet.mockResolvedValue({ overrides: [], expertProfileId: 'profile-1' });
     render(<DateOverridesCard />);
 
     expect(
@@ -87,7 +97,7 @@ describe('DateOverridesCard', () => {
   });
 
   it('renders existing time-off blocks with a formatted range and label', async () => {
-    mockGet.mockResolvedValue([CHRISTMAS]);
+    mockGet.mockResolvedValue({ overrides: [CHRISTMAS], expertProfileId: 'profile-1' });
     render(<DateOverridesCard />);
 
     expect(await screen.findByText('Fri, 25 Dec 2026')).toBeInTheDocument();
@@ -111,7 +121,10 @@ describe('DateOverridesCard', () => {
       endDate: localIsoOffset(0),
       label: 'Starts today',
     };
-    mockGet.mockResolvedValue([pastBlock, activeBlock]);
+    mockGet.mockResolvedValue({
+      overrides: [pastBlock, activeBlock],
+      expertProfileId: 'profile-1',
+    });
     render(<DateOverridesCard />);
 
     // `endDate === today` is inclusive (>=), so the active block renders …
@@ -127,7 +140,7 @@ describe('DateOverridesCard', () => {
       endDate: localIsoOffset(-1),
       label: 'Old leave',
     };
-    mockGet.mockResolvedValue([pastBlock]);
+    mockGet.mockResolvedValue({ overrides: [pastBlock], expertProfileId: 'profile-1' });
     render(<DateOverridesCard />);
 
     expect(
@@ -145,7 +158,7 @@ describe('DateOverridesCard', () => {
 
   it('opens the add popover, submits a picked date, calls the action, toasts, and shows the new row', async () => {
     const user = userEvent.setup();
-    mockGet.mockResolvedValue([]);
+    mockGet.mockResolvedValue({ overrides: [], expertProfileId: 'profile-1' });
     mockCreate.mockResolvedValue({ success: true, override: NEW_YEAR });
     render(<DateOverridesCard />);
 
@@ -174,7 +187,7 @@ describe('DateOverridesCard', () => {
 
   it('surfaces an error toast when creating a block fails', async () => {
     const user = userEvent.setup();
-    mockGet.mockResolvedValue([]);
+    mockGet.mockResolvedValue({ overrides: [], expertProfileId: 'profile-1' });
     mockCreate.mockResolvedValue({
       success: false,
       error: 'End date must be on or after start date',
@@ -193,7 +206,7 @@ describe('DateOverridesCard', () => {
 
   it('confirms deletion, calls the delete action, toasts, and removes the row', async () => {
     const user = userEvent.setup();
-    mockGet.mockResolvedValue([CHRISTMAS]);
+    mockGet.mockResolvedValue({ overrides: [CHRISTMAS], expertProfileId: 'profile-1' });
     mockDelete.mockResolvedValue({ success: true });
     render(<DateOverridesCard />);
 
@@ -215,7 +228,7 @@ describe('DateOverridesCard', () => {
   });
 
   it('has no accessibility violations in the list state', async () => {
-    mockGet.mockResolvedValue([CHRISTMAS]);
+    mockGet.mockResolvedValue({ overrides: [CHRISTMAS], expertProfileId: 'profile-1' });
     const { container } = render(<DateOverridesCard />);
     await screen.findByText('Fri, 25 Dec 2026');
 

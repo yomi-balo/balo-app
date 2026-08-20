@@ -928,4 +928,28 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+
+  // ── BAL-414 (D1/D2) — searchability derives from the checklist symmetrically ────────────
+  //
+  // The calendar-CAUSED de-list publishes NOTHING here — it rides the strengthened
+  // `calendar.auth_error` / `calendar-reconnect-required` email instead (one email per
+  // underlying cause; the suppression is `publishNotification: false` at the
+  // `flipToReconnectRequired` call site, not a rule condition). This rule only ever fires for
+  // a non-calendar regression (rate / payouts / profile / phone / availability-rules) or the
+  // expert's own calendar-disconnect action. `recipient: 'expert'` resolves via
+  // `payload.expertProfileId` (resolver.ts), same as `calendar.auth_error` above.
+  'expert.searchability_lost': emailAndInApp('expert', 'expert-searchability-lost'),
+
+  // IN-APP ONLY (D2) — both directions of cause. A flapping calendar connection (break, heal,
+  // break, heal) must never generate email churn; there is no re-list email at all. No
+  // `inAppOnly` helper exists — the literal array matches `calendar.subscription_lapse` (above)
+  // and `party.member_joined_via_domain`.
+  'expert.searchability_restored': [
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'expert-searchability-restored',
+      timing: 'immediate',
+    },
+  ],
 };

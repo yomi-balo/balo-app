@@ -260,4 +260,24 @@ describe('isWallClockInSpringForwardGap', () => {
       })
     ).toBe(false);
   });
+
+  it('throws rather than fail open for a crossing-midnight range (endMinutes <= startMinutes)', () => {
+    expect(() =>
+      isWallClockInSpringForwardGap('Australia/Melbourne', FROM_JAN_2026, {
+        dayOfWeek: 0,
+        startMinutes: 1320, // 22:00
+        endMinutes: 120, // 02:00 next day
+      })
+    ).toThrow(/crossing-midnight/);
+  });
+
+  it('throws for a degenerate zero-length range (endMinutes === startMinutes)', () => {
+    expect(() =>
+      isWallClockInSpringForwardGap('Australia/Melbourne', FROM_JAN_2026, {
+        dayOfWeek: 0,
+        startMinutes: 540,
+        endMinutes: 540,
+      })
+    ).toThrow(/crossing-midnight/);
+  });
 });
