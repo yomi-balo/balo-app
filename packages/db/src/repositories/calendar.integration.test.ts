@@ -943,24 +943,6 @@ describe('calendarRepository — LEGACY-SINGLE-CONNECTION reads answer determini
       microsoft.id
     );
   });
-
-  it('findConnectionWithSubCalendars returns the OLDEST live connection with its sub-calendars', async () => {
-    const expert = await expertDraftFactory();
-    const { google } = await seedGoogleThenMicrosoft(expert.id);
-    await calendarRepository.replaceSubCalendars(google.id, [
-      {
-        calendarId: 'cal_primary',
-        name: 'Primary',
-        provider: 'google',
-        isPrimary: true,
-        conflictCheck: true,
-      },
-    ]);
-
-    const found = await calendarRepository.findConnectionWithSubCalendars(expert.id);
-    expect(found?.id).toBe(google.id);
-    expect(found?.subCalendars.map((sub) => sub.calendarId)).toEqual(['cal_primary']);
-  });
 });
 
 // ── Writes: provider-scoped siblings vs the documented fan-out ───

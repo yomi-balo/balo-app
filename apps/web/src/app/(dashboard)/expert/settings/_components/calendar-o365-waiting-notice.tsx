@@ -1,14 +1,13 @@
 'use client';
 
 import { Clock, ExternalLink, RefreshCw } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { CALENDAR_HELP_URL } from '../_lib/calendar-help';
 import { MicrosoftIcon } from './calendar-provider-icons';
 
-interface CalendarO365WaitingCardProps {
-  onTryAgain: () => void;
-  onCancel: () => void;
+interface CalendarO365WaitingNoticeProps {
+  readonly onTryAgain: () => void;
+  readonly onCancel: () => void;
 }
 
 const INSTRUCTIONS = [
@@ -17,12 +16,17 @@ const INSTRUCTIONS = [
   'Once approved, click "Try connecting again" below',
 ] as const;
 
-export function CalendarO365WaitingCard({
+/**
+ * BAL-397 §9.6 — renamed from `-card`: renders inside the Microsoft connection card now, so
+ * the root is a `<div>`. No provider prop — it is Microsoft-branded by construction (it is
+ * unreachable for Google, per the slot-state machine's Microsoft-only enforcement).
+ */
+export function CalendarO365WaitingNotice({
   onTryAgain,
   onCancel,
-}: Readonly<CalendarO365WaitingCardProps>): React.JSX.Element {
+}: Readonly<CalendarO365WaitingNoticeProps>): React.JSX.Element {
   return (
-    <Card className="px-8 py-10 text-center">
+    <div className="px-8 py-10 text-center">
       {/* Microsoft badge with clock overlay */}
       <div className="relative mx-auto mb-5 h-[68px] w-[68px]">
         <div className="bg-card border-border flex h-[68px] w-[68px] items-center justify-center rounded-[18px] border shadow-md">
@@ -79,13 +83,13 @@ export function CalendarO365WaitingCard({
       {/* CTAs */}
       <div className="flex justify-center gap-2.5">
         <Button className="gap-1.5" onClick={onTryAgain}>
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           Try connecting again
         </Button>
         <Button variant="outline" onClick={onCancel}>
-          Cancel
+          Not now
         </Button>
       </div>
-    </Card>
+    </div>
   );
 }

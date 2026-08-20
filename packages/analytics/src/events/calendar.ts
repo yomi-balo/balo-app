@@ -18,6 +18,12 @@ export const CALENDAR_EVENTS = {
 export interface CalendarEventMap {
   [CALENDAR_EVENTS.CONNECT_INITIATED]: {
     provider: 'google' | 'microsoft';
+    /** BAL-397 — WHICH affordance started this round trip. Optional so no existing call site
+     *  breaks and no constant key changes. 'add_another' is the metric that tells us whether
+     *  the multi-provider affordance this ticket built is actually used; 'reopen_window' is
+     *  the card's "Re-open window" retry while an attempt is still in flight (T11), separated
+     *  so a re-opened window is not counted as a fresh first attempt. */
+    source?: 'first_connect' | 'add_another' | 'reconnect' | 'fix_permissions' | 'reopen_window';
   };
   [CALENDAR_EVENTS.DISCONNECT_INITIATED]: {
     provider: 'google' | 'microsoft';

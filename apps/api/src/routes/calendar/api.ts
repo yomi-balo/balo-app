@@ -4,34 +4,13 @@ import {
   calendarRepository,
   type CalendarConnection as DbCalendarConnection,
   type CalendarSubCalendar,
-  type CalendarCredentialStatus,
 } from '@balo/db';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { disconnectProvider } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
-import type {
-  CalendarConnectionStatus,
-  CalendarProvider,
-  SubCalendar,
-  CalendarConnection,
-  CalendarConnectionSummary,
-} from './types.js';
-
-/**
- * ⚠ A PRESENTATION ADAPTER, NOT A SECOND VOCABULARY (BAL-396 §8.2). `apps/web`'s
- * single-connection card (BAL-397 replaces it) renders `connected | sync_pending |
- * auth_error`. The DB speaks `ACTIVE | SYNC_PENDING | EXPIRED | REVOKED` (ADR-1021 amendment
- * 18 Aug 2026 §3). This is the ONE place the two meet, and it dies with BAL-397.
- */
-export function toLegacyStatus(
-  status: CalendarCredentialStatus
-): Exclude<CalendarConnectionStatus, null> {
-  if (status === 'ACTIVE') return 'connected';
-  if (status === 'SYNC_PENDING') return 'sync_pending';
-  return 'auth_error'; // EXPIRED and REVOKED collapse — no distinct UX
-}
+import type { CalendarProvider, SubCalendar, CalendarConnection } from './types.js';
 
 // ── Validation schemas ──────────────────────────────────────────
 
@@ -82,29 +61,19 @@ function mapSubCalendar(sub: CalendarSubCalendar): SubCalendar {
   };
 }
 
-function mapConnectionToFrontend(
-  connection: (DbCalendarConnection & { subCalendars: CalendarSubCalendar[] }) | undefined
-): CalendarConnection | null {
-  if (!connection) return null;
-
-  return {
-    // BAL-396 fix round 2, Finding 6 — see the `CalendarConnection.provider` docblock (types.ts).
-    provider: mapProvider(connection.provider),
-    status: toLegacyStatus(connection.credentialStatus),
-    providerEmail: connection.providerEmail,
-    lastSyncedAt: connection.lastSyncedAt?.toISOString() ?? null,
-    targetCalendarId: connection.targetCalendarId,
-    subCalendars: connection.subCalendars.map(mapSubCalendar),
-  };
-}
-
+/**
+ * BAL-397 — the real DB vocabulary reaches the client verbatim. `status` is renamed to
+ * `credentialStatus` so nobody mistakes the new four-value union (`ACTIVE | SYNC_PENDING |
+ * EXPIRED | REVOKED`) for the retired three-value one on sight.
+ */
 function mapConnectionSummary(
   connection: DbCalendarConnection,
   subCalendars: CalendarSubCalendar[]
-): CalendarConnectionSummary {
+): CalendarConnection {
   return {
+    // BAL-396 fix round 2, Finding 6 — see the `CalendarConnection.provider` docblock (types.ts).
     provider: mapProvider(connection.provider),
-    status: toLegacyStatus(connection.credentialStatus),
+    credentialStatus: connection.credentialStatus,
     providerEmail: connection.providerEmail,
     lastSyncedAt: connection.lastSyncedAt?.toISOString() ?? null,
     targetCalendarId: connection.targetCalendarId,
@@ -139,11 +108,10 @@ async function findConnectionOwningCalendar(
 export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * GET /api/calendar/connection
-   * Returns the expert's calendar connection with sub-calendars.
-   *
-   * `connection` keeps today's single-connection shape EXACTLY (the oldest live connection,
-   * any provider — `apps/web`'s single-connection card, BAL-397 replaces it). `connections`
-   * is the new per-provider summary array BAL-397's multi-connection UI will consume.
+   * Returns the expert's calendar connections — the per-provider summary array BAL-397's
+   * multi-connection UI consumes. The legacy single-connection `connection` key (oldest live
+   * connection, any provider) is GONE — `apps/web` no longer has a single-connection card to
+   * feed it, and `findConnectionWithSubCalendars` is deleted as its only caller.
    */
   fastify.get(
     '/api/calendar/connection',
@@ -161,10 +129,8 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
       const { expertProfileId } = parsed.data;
 
       try {
-        const [legacyConnection, allConnections] = await Promise.all([
-          calendarRepository.findConnectionWithSubCalendars(expertProfileId),
-          calendarRepository.listConnectionsByExpertProfileId(expertProfileId),
-        ]);
+        const allConnections =
+          await calendarRepository.listConnectionsByExpertProfileId(expertProfileId);
 
         const connections = await Promise.all(
           allConnections.map(async (connection) => {
@@ -175,10 +141,7 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
           })
         );
 
-        return reply.send({
-          connection: mapConnectionToFrontend(legacyConnection),
-          connections,
-        });
+        return reply.send({ connections });
       } catch (err: unknown) {
         request.log.error(
           {
@@ -195,11 +158,18 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
   /**
    * POST /api/calendar/disconnect
    * `provider` present → disconnect that provider only. Absent → disconnect every live
-   * connection (today's whole-account behaviour, and what the "Disconnect all calendars"
-   * copy says), then `softDeleteConnection` as a backstop for anything the per-provider loop
+   * connection, then `softDeleteConnection` as a backstop for anything the per-provider loop
    * did not name. (Migration 0069 already removes every Cronofy-era row at the DB level —
    * this backstop is not for those; it is a defensive catch-all for a connection the
    * per-provider loop above did not enumerate.)
+   *
+   * ⚠ THE `provider`-ABSENT ARM HAS NO SHIPPED CALLER AS OF BAL-397. It used to back a
+   * "Disconnect all calendars" affordance; that copy is gone — `calendar-disconnect-confirm.tsx`
+   * is per-provider now — and the web action (`_actions/disconnect-calendar.ts`) Zod-validates
+   * `provider` as REQUIRED precisely so an omitted field cannot silently escalate one
+   * provider's disconnect into an account-wide one. `.optional()` stays here as the documented
+   * whole-account contract for a future caller; do not treat it as reachable from the settings
+   * UI.
    */
   fastify.post(
     '/api/calendar/disconnect',

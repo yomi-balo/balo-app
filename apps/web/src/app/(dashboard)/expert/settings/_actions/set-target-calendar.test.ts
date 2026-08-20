@@ -39,20 +39,24 @@ describe('setTargetCalendarAction', () => {
 
   it('throws when no session user', async () => {
     mockSessionObj = { save: mockSave };
-    await expect(setTargetCalendarAction({ targetCalendarId: 'cal-1' })).rejects.toThrow(
-      'Unauthorized'
-    );
+    await expect(
+      setTargetCalendarAction({ targetCalendarId: 'cal-1', provider: 'google' })
+    ).rejects.toThrow('Unauthorized');
   });
 
-  it('returns success when API call succeeds', async () => {
+  it('sends provider in the POST body', async () => {
     mockCalendarApiFetch.mockResolvedValueOnce({ success: true });
-    const result = await setTargetCalendarAction({ targetCalendarId: 'cal-1' });
+    const result = await setTargetCalendarAction({
+      targetCalendarId: 'cal-1',
+      provider: 'microsoft',
+    });
     expect(result).toEqual({ success: true });
     expect(mockCalendarApiFetch).toHaveBeenCalledWith('/api/calendar/set-target-calendar', {
       method: 'POST',
       body: JSON.stringify({
         expertProfileId: 'profile-1',
         targetCalendarId: 'cal-1',
+        provider: 'microsoft',
       }),
     });
   });
@@ -62,18 +66,16 @@ describe('setTargetCalendarAction', () => {
       user: { id: 'user-1', onboardingCompleted: true, email: 'e@e.com', activeMode: 'expert' },
       save: mockSave,
     };
-    const result = await setTargetCalendarAction({ targetCalendarId: 'cal-1' });
+    const result = await setTargetCalendarAction({ targetCalendarId: 'cal-1', provider: 'google' });
     expect(result).toEqual({ success: false, error: 'No expert profile found' });
   });
 
-  it('returns error when API call fails', async () => {
-    mockCalendarApiFetch.mockRejectedValueOnce(
-      new Error('Calendar not found in connected sub-calendars')
-    );
-    const result = await setTargetCalendarAction({ targetCalendarId: 'cal-1' });
-    expect(result).toEqual({
-      success: false,
-      error: 'Calendar not found in connected sub-calendars',
-    });
+  // BAL-397 fix round (security WARNING) — a fixed literal reaches the browser; the real
+  // error stays in `log.error`. See `disconnect-calendar.ts` for the four leaking classes.
+  it('returns a generic error, never the raw internal error text, when the API call fails', async () => {
+    mockCalendarApiFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED 10.0.0.7:3002'));
+    const result = await setTargetCalendarAction({ targetCalendarId: 'cal-1', provider: 'google' });
+    expect(result).toEqual({ success: false, error: 'Failed to set target calendar' });
+    expect(result.error).not.toContain('ECONNREFUSED');
   });
 });

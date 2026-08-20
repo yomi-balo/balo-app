@@ -15,9 +15,9 @@ vi.mock('@/lib/logging', () => ({
   log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
 
-const mockGetConnection = vi.fn();
-vi.mock('../_actions/get-calendar-connection', () => ({
-  getCalendarConnectionAction: (...args: unknown[]) => mockGetConnection(...args),
+const mockGetConnections = vi.fn();
+vi.mock('../_actions/get-calendar-connections', () => ({
+  getCalendarConnectionsAction: (...args: unknown[]) => mockGetConnections(...args),
 }));
 vi.mock('../_lib/calendar-api', () => ({
   calendarApiFetch: vi.fn(),
@@ -26,10 +26,9 @@ vi.mock('../_lib/calendar-api', () => ({
 import { useCalendarPolling } from './use-calendar-polling';
 import type { CalendarConnection } from '../_types/calendar';
 
-const connectedResult: CalendarConnection = {
-  // BAL-396 fix round 2, Finding 6 — required field.
+const googleActive: CalendarConnection = {
   provider: 'google',
-  status: 'connected',
+  credentialStatus: 'ACTIVE',
   providerEmail: 'test@gmail.com',
   lastSyncedAt: null,
   targetCalendarId: null,
@@ -38,10 +37,10 @@ const connectedResult: CalendarConnection = {
   ],
 };
 
-const syncPendingResult: CalendarConnection = {
-  ...connectedResult,
-  status: 'sync_pending',
-};
+const googleSyncPending: CalendarConnection = { ...googleActive, credentialStatus: 'SYNC_PENDING' };
+const microsoftActive: CalendarConnection = { ...googleActive, provider: 'microsoft' };
+
+const NOOP_SKIP = (): ReadonlySet<never> => new Set();
 
 describe('useCalendarPolling', () => {
   beforeEach(() => {
@@ -54,96 +53,157 @@ describe('useCalendarPolling', () => {
   });
 
   it('does not poll when enabled is false', () => {
-    renderHook(() => useCalendarPolling({ enabled: false, intervalMs: 1000 }));
+    renderHook(() =>
+      useCalendarPolling({
+        enabled: false,
+        intervalMs: 1000,
+        skipProviders: NOOP_SKIP,
+        onConnections: vi.fn(),
+      })
+    );
 
     vi.advanceTimersByTime(5000);
-    expect(mockGetConnection).not.toHaveBeenCalled();
+    expect(mockGetConnections).not.toHaveBeenCalled();
   });
 
   it('polls at the specified interval when enabled', () => {
-    mockGetConnection.mockResolvedValue(syncPendingResult);
-
-    renderHook(() => useCalendarPolling({ enabled: true, intervalMs: 1000 }));
-
-    // Tick 1 — first poll fires
-    vi.advanceTimersByTime(1000);
-    expect(mockGetConnection).toHaveBeenCalledTimes(1);
-
-    // Tick 2
-    vi.advanceTimersByTime(1000);
-    expect(mockGetConnection).toHaveBeenCalledTimes(2);
-  });
-
-  it('calls onStatusChange when status transitions from sync_pending', async () => {
-    const onStatusChange = vi.fn();
-    mockGetConnection.mockResolvedValue(connectedResult);
+    mockGetConnections.mockResolvedValue({ ok: true, connections: [googleSyncPending] });
 
     renderHook(() =>
       useCalendarPolling({
         enabled: true,
         intervalMs: 1000,
-        onStatusChange,
+        skipProviders: NOOP_SKIP,
+        onConnections: vi.fn(),
       })
     );
 
-    // Tick — fires poll
+    vi.advanceTimersByTime(1000);
+    expect(mockGetConnections).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1000);
+    expect(mockGetConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it('hands the fetched array up via onConnections on a successful tick', async () => {
+    const onConnections = vi.fn();
+    mockGetConnections.mockResolvedValue({ ok: true, connections: [googleActive] });
+
+    renderHook(() =>
+      useCalendarPolling({
+        enabled: true,
+        intervalMs: 1000,
+        skipProviders: NOOP_SKIP,
+        onConnections,
+      })
+    );
+
     vi.advanceTimersByTime(1000);
 
-    // Flush the promise queue
     await vi.waitFor(() => {
-      expect(onStatusChange).toHaveBeenCalledWith(connectedResult);
+      expect(onConnections).toHaveBeenCalledWith([googleActive]);
     });
   });
 
-  it('does not call onStatusChange when status remains sync_pending', async () => {
-    const onStatusChange = vi.fn();
-    mockGetConnection.mockResolvedValue(syncPendingResult);
+  it('does not call onConnections when the action returns ok:false', async () => {
+    const onConnections = vi.fn();
+    mockGetConnections.mockResolvedValue({ ok: false, error: 'boom' });
 
     renderHook(() =>
       useCalendarPolling({
         enabled: true,
         intervalMs: 1000,
-        onStatusChange,
+        skipProviders: NOOP_SKIP,
+        onConnections,
+      })
+    );
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onConnections).not.toHaveBeenCalled();
+  });
+
+  it('filters out a provider in the skip set before handing the array up (a mutation in flight keeps its optimistic row)', async () => {
+    const onConnections = vi.fn();
+    mockGetConnections.mockResolvedValue({
+      ok: true,
+      connections: [googleSyncPending, microsoftActive],
+    });
+
+    renderHook(() =>
+      useCalendarPolling({
+        enabled: true,
+        intervalMs: 1000,
+        skipProviders: () => new Set(['google']),
+        onConnections,
       })
     );
 
     vi.advanceTimersByTime(1000);
 
-    // Give promise time to resolve
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(onStatusChange).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(onConnections).toHaveBeenCalledWith([microsoftActive]);
+    });
   });
 
   it('clears interval on unmount', () => {
-    mockGetConnection.mockResolvedValue(syncPendingResult);
+    mockGetConnections.mockResolvedValue({ ok: true, connections: [googleSyncPending] });
 
-    const { unmount } = renderHook(() => useCalendarPolling({ enabled: true, intervalMs: 1000 }));
+    const { unmount } = renderHook(() =>
+      useCalendarPolling({
+        enabled: true,
+        intervalMs: 1000,
+        skipProviders: NOOP_SKIP,
+        onConnections: vi.fn(),
+      })
+    );
 
     vi.advanceTimersByTime(1000);
-    expect(mockGetConnection).toHaveBeenCalledTimes(1);
+    expect(mockGetConnections).toHaveBeenCalledTimes(1);
 
     unmount();
 
     vi.advanceTimersByTime(5000);
-    // Should not have polled further after unmount
-    expect(mockGetConnection).toHaveBeenCalledTimes(1);
+    expect(mockGetConnections).toHaveBeenCalledTimes(1);
   });
 
   it('stops polling when enabled changes to false', () => {
-    mockGetConnection.mockResolvedValue(syncPendingResult);
+    mockGetConnections.mockResolvedValue({ ok: true, connections: [googleSyncPending] });
 
     const { rerender } = renderHook(
-      ({ enabled }: { enabled: boolean }) => useCalendarPolling({ enabled, intervalMs: 1000 }),
+      ({ enabled }: { enabled: boolean }) =>
+        useCalendarPolling({
+          enabled,
+          intervalMs: 1000,
+          skipProviders: NOOP_SKIP,
+          onConnections: vi.fn(),
+        }),
       { initialProps: { enabled: true } }
     );
 
     vi.advanceTimersByTime(1000);
-    expect(mockGetConnection).toHaveBeenCalledTimes(1);
+    expect(mockGetConnections).toHaveBeenCalledTimes(1);
 
     rerender({ enabled: false });
 
     vi.advanceTimersByTime(5000);
-    expect(mockGetConnection).toHaveBeenCalledTimes(1);
+    expect(mockGetConnections).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours MAX_POLLS — stops fetching after 120 ticks (10 minutes at 5s)', () => {
+    mockGetConnections.mockResolvedValue({ ok: true, connections: [googleSyncPending] });
+
+    renderHook(() =>
+      useCalendarPolling({
+        enabled: true,
+        intervalMs: 5000,
+        skipProviders: NOOP_SKIP,
+        onConnections: vi.fn(),
+      })
+    );
+
+    vi.advanceTimersByTime(5000 * 121);
+    expect(mockGetConnections).toHaveBeenCalledTimes(120);
   });
 });

@@ -1,34 +1,60 @@
 'use client';
 
-import { AlertCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { buttonVariants } from '@/components/ui/button';
+import { PROVIDER_META } from '../_lib/calendar-providers';
+import type { CalendarProvider } from '../_types/calendar';
 
 interface CalendarDisconnectConfirmProps {
-  onCancel: () => void;
-  onConfirm: () => void;
+  readonly provider: CalendarProvider;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onConfirm: () => void;
 }
 
+/**
+ * BAL-397 §9.5 — rewritten as a real `AlertDialog` with PER-PROVIDER copy. Replaces the
+ * shipped inline banner, whose "Disconnect all calendars" copy described a whole-account
+ * action that no longer exists.
+ */
 export function CalendarDisconnectConfirm({
-  onCancel,
+  provider,
+  open,
+  onOpenChange,
   onConfirm,
 }: Readonly<CalendarDisconnectConfirmProps>): React.JSX.Element {
+  const { label } = PROVIDER_META[provider];
+
   return (
-    <div className="border-warning/30 bg-warning/5 dark:bg-warning/10 flex items-center justify-between gap-4 border-b px-5 py-3">
-      <div className="flex items-start gap-2">
-        <AlertCircle className="text-warning mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="text-warning text-sm leading-relaxed">
-          Disconnecting will stop syncing. Clients may see incorrect availability until you
-          reconnect.
-        </span>
-      </div>
-      <div className="flex shrink-0 gap-1.5">
-        <Button variant="outline" size="sm" onClick={onCancel} className="h-8 px-3 text-xs">
-          Cancel
-        </Button>
-        <Button variant="destructive" size="sm" onClick={onConfirm} className="h-8 px-3 text-xs">
-          Yes, disconnect
-        </Button>
-      </div>
-    </div>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Disconnect {label}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            We&apos;ll stop reading this account, so any time you&apos;re busy there won&apos;t be
+            hidden from clients any more. Your weekly hours and time off stay exactly as they are —
+            and you can connect it again whenever you like.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it connected</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={onConfirm}
+            className={buttonVariants({ variant: 'destructive' })}
+          >
+            Disconnect
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
