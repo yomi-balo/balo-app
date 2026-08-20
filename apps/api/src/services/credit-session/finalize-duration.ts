@@ -32,8 +32,6 @@ export interface DurationSettledInput {
   /** The confirmed billable minutes (drawn in full, no ceiling clamp). */
   minutes: number;
   path: ExternalFinalizationPath;
-  /** The confirming actor (BAL-133 audit context; not used for authorization here). */
-  settledByUserId?: string;
 }
 
 /**

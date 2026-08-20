@@ -22,6 +22,15 @@ export {
   type MandateWalletFields,
 } from './settlement';
 export {
+  resolveMeetingSettlement,
+  clampedExpertPresentMs,
+  type MeetingSettlementShape,
+  type MeetingSettlementOutcome,
+  type MeetingSettlementInput,
+  type MeetingSettlement,
+} from './meeting-settlement';
+export { minutesOfRunway, type RunwayInputs } from './runway';
+export {
   buildClientMoneyBlock,
   buildExpertMoneyBlock,
   buildAdminMoneyBlock,
@@ -29,6 +38,9 @@ export {
   type MoneyBlockState,
   type MoneyBlockFinalizationPath,
   type MoneyBlockPayoutStatus,
+  // F17 — `MoneyBlockSettlementShape` is GONE. It was a second spelling of
+  // `MeetingSettlementShape` (exported above, from `./meeting-settlement`); the money-block
+  // payloads now reference that one type directly.
   type ClientMoneyBlock,
   type ExpertMoneyBlock,
   type AdminMoneyBlock,

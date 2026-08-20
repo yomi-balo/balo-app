@@ -42,7 +42,20 @@ export type MeetingAuditAction =
   | 'meeting.booked'
   | 'meeting.rescheduled'
   | 'meeting.cancelled'
-  | 'meeting.ended';
+  | 'meeting.ended'
+  /**
+   * BAL-412 — settlement resolved `meetings.outcome` from `meeting_presence` on a meeting
+   * BAL-134 deliberately left NULL (the two human-end paths and the abandoned wait; ADR-1049
+   * "the ender never sets the outcome"). Written by `meetingsRepository.setOutcomeIfUnset`,
+   * on the settlement transaction, and ONLY when the write actually happened — a no-op
+   * (outcome already resolved, meeting not `ended`, row soft-deleted) writes NOTHING, so an
+   * audit row here always attests to a real state change.
+   *
+   * ⚠ THE THIRD MEMBER WITH A WRITER, and — like `meeting.ended` — it is written with a NULL
+   * actor on the SYSTEM path (the lifecycle sweep's terminations) and with the acting human
+   * on the End-button path. Same ADR-1030 system-actor exemption, same reading.
+   */
+  | 'meeting.outcome_resolved';
 
 /** Subject of a meeting audit row is always the meeting (entity_id = `meetings.id`). */
 export type MeetingAuditEntityType = 'meeting';

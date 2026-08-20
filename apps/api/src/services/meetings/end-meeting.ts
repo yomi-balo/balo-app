@@ -40,6 +40,7 @@ import {
   type MeetingEndedBy,
 } from '@balo/shared/meetings';
 import { dailyRoomTeardown, type RoomTeardown } from '../daily/rooms.js';
+import { settleMeetingIfBillable } from '../credit-session/settle-from-presence.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { logEndAuthorityDenied, resolveEndAuthority } from './authorize-end-meeting.js';
 
@@ -133,6 +134,35 @@ async function tearDownRoom(
 }
 
 /**
+ * ⚠⚠ BAL-412 (ADR-1044 §7) — settle the meeting's presence-sourced credit session, if it has
+ * one. BEST-EFFORT AND NON-FATAL, by design, exactly like {@link tearDownRoom}: the meeting is
+ * ALREADY terminal in Postgres by the time this runs, so a settlement fault must never fail the
+ * End request the person who ended the meeting is waiting on. INERT ON MAIN (D10) — every
+ * meeting today has `duration_source` of `live_capture` or `external`, never `presence`, so
+ * `settleMeetingIfBillable` returns `{ ok: false, code: 'no_meeting' }` on every call.
+ */
+async function settleBestEffort(meetingId: string, actorUserId: string): Promise<void> {
+  try {
+    const outcome = await settleMeetingIfBillable({ meetingId, actorUserId });
+    if (!outcome.ok && outcome.code !== 'no_meeting') {
+      log.warn(
+        { meetingId, code: outcome.code },
+        'Presence settlement declined on the human End path — the meter sweep durability backstop will retry'
+      );
+    }
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Presence settlement failed on the human End path — the meeting stays ended; the meter sweep durability backstop will retry'
+    );
+  }
+}
+
+/**
  * A human with end authority ends the meeting for everyone.
  *
  * ⚠ EVERY DENIAL — no such meeting, soft-deleted, not your party, no authority — collapses into
@@ -222,6 +252,14 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
     actorUserId: userId,
     now,
   });
+
+  // 9. ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. INERT ON MAIN (D10): reachable only
+  //    from a `duration_source='presence'` session, and nothing on main opens one (BAL-400
+  //    booking → BAL-466 session open would). BEST-EFFORT AND NON-FATAL, the same posture as
+  //    `tearDownRoom` above — the meeting is already terminal in Postgres, so a settlement fault
+  //    costs nothing that matters to THIS request, and the meter sweep's durability backstop
+  //    (§4.3, `credit-session-meter-sweep.ts`'s `findPresenceUnsettled` pass) recovers it.
+  await settleBestEffort(ended.meeting.id, userId);
 
   log.info(
     {

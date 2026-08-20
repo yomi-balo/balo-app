@@ -1,7 +1,10 @@
 import { and, asc, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   computeMeetingClocks,
+  summarisePresence,
+  type LifecyclePresenceInterval,
   type MeetingClocks,
+  type PresenceFacts,
   type PresenceInterval,
 } from '@balo/shared/meetings';
 import { db } from '../client';
@@ -556,14 +559,20 @@ export const meetingPresenceRepository = {
   },
 
   /**
-   * BAL-412's SETTLEMENT READ — both clocks for a meeting. A thin wrapper: fetch the live
-   * intervals, then delegate to the pure `computeMeetingClocks`.
+   * BOTH CLOCKS for a meeting. A thin wrapper: fetch the live intervals, then delegate to
+   * the pure `computeMeetingClocks`.
    *
    * `now` is the instant any still-OPEN interval is measured to. When omitted it defaults
    * to `meetings.ended_at` for a TERMINAL meeting and to the wall clock only while the
    * meeting is still running — see `resolveClockCeiling` for why the wall clock alone is an
    * over-bill hazard on a dropped leave webhook. An explicit `now` always wins (BAL-403's
    * in-session panel and the tests both pass one).
+   *
+   * ⚠ THIS IS THE SINGLE-CLOCK SEAM, AND IT IS **NOT** WHAT SETTLEMENT READS. It stays
+   * exactly as BAL-418 shipped it — BAL-403's in-session panel and `GET /meetings/:id/state`
+   * are its callers. BAL-412 HAS landed and reads through {@link settlementFacts} instead,
+   * because settlement additionally needs `clientSideEverPresent`, which is NOT derivable
+   * from these four fields; see that method for why one read rather than two.
    */
   async clocks(meetingId: string, now?: Date): Promise<MeetingClocks> {
     const rows = await this.listByMeeting(meetingId);
@@ -573,6 +582,56 @@ export const meetingPresenceRepository = {
       leftAt: row.leftAt,
     }));
     return computeMeetingClocks(intervals, now ?? (await resolveClockCeiling(meetingId)));
+  },
+
+  /**
+   * BAL-412's SETTLEMENT READ — the clocks AND the structural facts, from **ONE** query.
+   *
+   * ⚠⚠ ONE `listByMeeting`, REDUCED BY BOTH PURE FUNCTIONS, AND THE SINGLE READ IS THE
+   * POINT. `computeMeetingClocks` gives the two durations; `summarisePresence` gives
+   * `clientSideEverPresent`, which settlement needs and which **cannot be derived from
+   * `MeetingClocks`**: `billableStartedAt === null` ALSO covers a client who joined and left
+   * BEFORE the expert arrived, so reading absence off the clocks would settle a
+   * client-attended call as a client no-show. Calling `clocks()` and a separate facts read
+   * would issue two queries against a table a webhook can be writing to, and the two could
+   * disagree about which rows exist — on the MONEY path, where the disagreement decides
+   * whether anybody is charged at all.
+   *
+   * `now` resolves exactly as {@link clocks} resolves it (an explicit instant wins; otherwise
+   * `meetings.ended_at` for a terminal meeting, else the wall clock), and the SAME instant is
+   * used for both reductions — a second `resolveClockCeiling` call could land a millisecond
+   * later and give the two answers different ceilings.
+   *
+   * ⚠ `summarisePresence` READS NO CEILING — it reports booleans and instants only, so an
+   * open interval affects `expertOpen`/`anyOpen` and nothing time-valued. That is why passing
+   * `now` to one reducer and not the other is correct rather than an oversight.
+   *
+   * ⚠ INERT ON MAIN (decision D10): its caller is the presence-settlement service, which
+   * only ever acts on a `duration_source='presence'` session, and nothing on main opens one
+   * (BAL-400 booking → BAL-466 session open would).
+   */
+  async settlementFacts(
+    meetingId: string,
+    now?: Date
+  ): Promise<{ clocks: MeetingClocks; facts: PresenceFacts }> {
+    const rows = await this.listByMeeting(meetingId);
+    const ceiling = now ?? (await resolveClockCeiling(meetingId));
+
+    const clockIntervals: PresenceInterval[] = rows.map((row) => ({
+      party: row.party,
+      joinedAt: row.joinedAt,
+      leftAt: row.leftAt,
+    }));
+    const factIntervals: LifecyclePresenceInterval[] = rows.map((row) => ({
+      party: row.party,
+      joinedAt: row.joinedAt,
+      leftAt: row.leftAt,
+    }));
+
+    return {
+      clocks: computeMeetingClocks(clockIntervals, ceiling),
+      facts: summarisePresence(factIntervals),
+    };
   },
 
   /**

@@ -36,13 +36,15 @@ export function ceilingRoomMinor(
   return Math.max(0, session.effectiveCeilingMinor - used);
 }
 
-/** Whole minutes of funded runway left (0 when the balance is non-positive / rate unknown). */
-export function runwayMinutes(balanceMinor: number, ratePerMinuteMinor: number): number {
-  if (ratePerMinuteMinor <= 0 || balanceMinor <= 0) {
-    return 0;
-  }
-  return Math.floor(balanceMinor / ratePerMinuteMinor);
-}
+/**
+ * BAL-412 (D6) — `runwayMinutes` WAS HERE and is DELETED. It computed `floor(balance / rate)`
+ * with no awareness of the ADR-1044 §7 fifteen-minute billing floor, which OVERSTATED
+ * discretionary runway early in a session (the balance still has to cover the unconsumed
+ * remainder of the floor before anything beyond it is truly discretionary — the same defect
+ * `drawdown-state.ts`'s module-private copy carried). The ONE corrected implementation is
+ * `minutesOfRunway` in `@balo/shared/credit/runway` — import it directly; do NOT re-add a
+ * re-export alias here (two names for one function is how the second copy came back before).
+ */
 
 /** Terminal negative-balance magnitude (0 when in credit). */
 export function overdraftMagnitude(balanceMinor: number): number {

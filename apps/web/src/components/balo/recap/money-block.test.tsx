@@ -13,6 +13,10 @@ const CLIENT_FINALIZED: SessionMoneyBlock = {
   ratePerMinuteMinor: 333,
   settlementStatus: 'not_required',
   finalizationPath: 'live_capture',
+  // BAL-412 — a live_capture session: no presence settlement, no floor.
+  actualMinutes: 45,
+  billingFloorApplied: false,
+  billingFloorMinutes: 0,
 };
 
 const EXPERT_FINALIZED: SessionMoneyBlock = {
@@ -23,6 +27,9 @@ const EXPERT_FINALIZED: SessionMoneyBlock = {
   earningsAudMinor: 11_250,
   payoutStatus: 'recorded',
   finalizationPath: 'live_capture',
+  actualMinutes: 45,
+  billingFloorApplied: false,
+  billingFloorMinutes: 0,
 };
 
 const CLIENT_PENDING: SessionMoneyBlock = {
@@ -33,6 +40,9 @@ const CLIENT_PENDING: SessionMoneyBlock = {
   amountAudMinor: 0,
   ratePerMinuteMinor: 333,
   settlementStatus: 'not_required',
+  actualMinutes: 0,
+  billingFloorApplied: false,
+  billingFloorMinutes: 0,
 };
 
 const EXPERT_PENDING: SessionMoneyBlock = {
@@ -41,6 +51,113 @@ const EXPERT_PENDING: SessionMoneyBlock = {
   sessionId: 'session_1',
   durationMinutes: 0,
   earningsAudMinor: 0,
+  actualMinutes: 0,
+  billingFloorApplied: false,
+  billingFloorMinutes: 0,
+};
+
+// ── BAL-412 (D13, plan §7.3) — the finalized duration line's four extra branches ──────────
+
+const CLIENT_FLOOR_APPLIED: SessionMoneyBlock = {
+  ...CLIENT_FINALIZED,
+  durationMinutes: 15,
+  amountAudMinor: 5_000,
+  actualMinutes: 6,
+  billingFloorApplied: true,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'held',
+};
+
+// ⚠ R1 (owner ruling, 2026-08-21) — a no-show bills the floor FLAT, so `durationMinutes` is the
+// floor (15) and `actualMinutes` is the expert's real, LONGER wait (18). `billingFloorApplied` is
+// `true`: the minimum is definitionally what fixed the charge on this shape, even though the
+// billed figure is BELOW actual. Before R1 this fixture carried `false` and the client was in fact
+// charged 18 while the recap claimed 15.
+const CLIENT_NO_SHOW: SessionMoneyBlock = {
+  ...CLIENT_FINALIZED,
+  durationMinutes: 15,
+  amountAudMinor: 5_000,
+  actualMinutes: 18,
+  billingFloorApplied: true,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'no_show_client',
+};
+
+const CLIENT_MISSED_CALL: SessionMoneyBlock = {
+  ...CLIENT_FINALIZED,
+  durationMinutes: 0,
+  amountAudMinor: 0,
+  actualMinutes: 0,
+  billingFloorApplied: false,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'missed_call',
+};
+
+const EXPERT_MISSED_CALL: SessionMoneyBlock = {
+  ...EXPERT_FINALIZED,
+  durationMinutes: 0,
+  earningsAudMinor: 0,
+  actualMinutes: 0,
+  billingFloorApplied: false,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'missed_call',
+};
+
+const CLIENT_ABANDONED_WAIT: SessionMoneyBlock = {
+  ...CLIENT_FINALIZED,
+  durationMinutes: 0,
+  amountAudMinor: 0,
+  actualMinutes: 8,
+  billingFloorApplied: false,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'abandoned_wait',
+};
+
+// ── UX review round 1, F8 — the missing EXPERT_* counterparts. Only CLIENT_* fixtures existed
+// for these three shapes, which is exactly why the lens-leakage bug (client-coded "charged"/
+// "billed" copy rendering on the expert's own earnings recap) went untested. ─────────────────
+
+const EXPERT_FLOOR_APPLIED: SessionMoneyBlock = {
+  ...EXPERT_FINALIZED,
+  durationMinutes: 15,
+  earningsAudMinor: 3_750,
+  actualMinutes: 6,
+  billingFloorApplied: true,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'held',
+};
+
+// ⚠ R1 (owner ruling, 2026-08-21) — a no-show bills the floor FLAT, so `durationMinutes` is the
+// floor (15) and `actualMinutes` is the expert's real, LONGER wait (18). `billingFloorApplied` is
+// `true`: the minimum is definitionally what fixed the charge on this shape, even though the
+// billed figure is BELOW actual. Before R1 this fixture carried `false` and the client was in fact
+// charged 18 while the recap claimed 15.
+const EXPERT_NO_SHOW: SessionMoneyBlock = {
+  ...EXPERT_FINALIZED,
+  durationMinutes: 15,
+  earningsAudMinor: 3_750,
+  actualMinutes: 18,
+  billingFloorApplied: true,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'no_show_client',
+};
+
+const EXPERT_ABANDONED_WAIT: SessionMoneyBlock = {
+  ...EXPERT_FINALIZED,
+  durationMinutes: 0,
+  earningsAudMinor: 0,
+  actualMinutes: 8,
+  billingFloorApplied: false,
+  billingFloorMinutes: 15,
+  finalizationPath: 'presence',
+  settlementShape: 'abandoned_wait',
 };
 
 describe('MoneyBlock', () => {
@@ -159,5 +276,68 @@ describe('MoneyBlock', () => {
   it('has no accessibility violations in the ERROR fallback render', async () => {
     const { container } = render(<MoneyBlock block={null} />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // ── BAL-412 (D13) — the finalized duration line ─────────────────────────────────────────
+
+  it('renders a bare duration line when finalized with no floor and no settlement shape', () => {
+    render(<MoneyBlock block={CLIENT_FINALIZED} />);
+    expect(screen.getByText('45 min')).toBeInTheDocument();
+  });
+
+  it('renders the split "actual · billed at the floor" line when the floor bound (client)', () => {
+    render(<MoneyBlock block={CLIENT_FLOOR_APPLIED} />);
+    expect(screen.getByText('6 min · billed at the 15-minute minimum')).toBeInTheDocument();
+    // The bare pre-floor number alone must not render — only the split.
+    expect(screen.queryByText('6 min')).not.toBeInTheDocument();
+  });
+
+  // UX review round 1, F8 — the expert side must say "paid", never "billed"/"charged".
+  it('renders the split "actual · paid the floor" line when the floor bound (expert)', () => {
+    render(<MoneyBlock block={EXPERT_FLOOR_APPLIED} />);
+    expect(screen.getByText('6 min · paid the 15-minute minimum')).toBeInTheDocument();
+    expect(screen.queryByText(/billed/)).not.toBeInTheDocument();
+  });
+
+  // UX review round 1, F9 — must read `actualMinutes` (18), not `durationMinutes` (15), or the
+  // real held time the expert waited is silently discarded.
+  it('renders the no-show line keyed on shape, using actualMinutes not durationMinutes (client)', () => {
+    render(<MoneyBlock block={CLIENT_NO_SHOW} />);
+    expect(screen.getByText('18 min held · billed at the 15-minute minimum')).toBeInTheDocument();
+    expect(screen.queryByText(/^15 min held/)).not.toBeInTheDocument();
+  });
+
+  // UX review round 1, F8 — expert lens for the same shape must say "paid", never "billed".
+  it('renders the no-show line for the expert lens', () => {
+    render(<MoneyBlock block={EXPERT_NO_SHOW} />);
+    expect(screen.getByText('18 min held · paid the 15-minute minimum')).toBeInTheDocument();
+    expect(screen.queryByText(/billed/)).not.toBeInTheDocument();
+  });
+
+  // UX review round 1, F11 — names the responsible party (the consultant), never neutral.
+  it('renders the apologetic missed-call line for the client lens', () => {
+    render(<MoneyBlock block={CLIENT_MISSED_CALL} />);
+    expect(
+      screen.getByText("Not charged — your consultant didn't join this time")
+    ).toBeInTheDocument();
+  });
+
+  it('renders the distinct missed-call line for the expert lens', () => {
+    render(<MoneyBlock block={EXPERT_MISSED_CALL} />);
+    expect(
+      screen.getByText("No earnings recorded — the call didn't take place")
+    ).toBeInTheDocument();
+  });
+
+  it('renders "Not charged" for an abandoned wait, factually, never punitive (client)', () => {
+    render(<MoneyBlock block={CLIENT_ABANDONED_WAIT} />);
+    expect(screen.getByText('Not charged')).toBeInTheDocument();
+  });
+
+  // UX review round 1, F8 — expert lens must never see client-coded "charged" copy.
+  it('renders "No earnings recorded" for an abandoned wait (expert)', () => {
+    render(<MoneyBlock block={EXPERT_ABANDONED_WAIT} />);
+    expect(screen.getByText('No earnings recorded')).toBeInTheDocument();
+    expect(screen.queryByText(/charged/i)).not.toBeInTheDocument();
   });
 });

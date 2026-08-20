@@ -34,6 +34,8 @@
  * these — `lifecycle.ts` reads no clock and no constant of its own.
  */
 
+import { MIN_MEETING_MINUTES } from './bounds';
+
 const MS_PER_MINUTE = 60_000;
 
 /**
@@ -72,14 +74,18 @@ export const CLIENT_ABSENT_NUDGE_MS = 5 * MS_PER_MINUTE;
  * The expert has held the room this long with no client-side participant EVER ⇒ the meeting
  * settles as `no_show_client`. Anchored on the expert-present clock start.
  *
- * ⚠ THE FLOOR IS A MONEY NUMBER — it is what an expert must have held before a no-show
- * settles in their favour, and it deliberately mirrors the 15-minute settlement floor named
- * on `bounds.ts`'s `MIN_MEETING_MINUTES`. An expert who leaves at minute 8 never
- * reaches it and settles as an ABANDONED WAIT instead (D9), with NO outcome.
+ * ⚠ THE FLOOR IS A MONEY NUMBER, AND IT IS DERIVED FROM `bounds.ts`'S `MIN_MEETING_MINUTES`,
+ * NOT A SECOND COPY OF `15`. `bounds.ts` carried the instruction "if BAL-412 ever encodes it,
+ * THESE TWO MUST NOT DRIFT — import one from the other" (D5). BAL-412 encoded it: this is the
+ * settlement floor an expert must have held before a no-show settles in their favour, and it
+ * is IMPORTED, not restated, so a single edit to `MIN_MEETING_MINUTES` moves both the booking
+ * minimum and this timer together. An expert who leaves at minute 8 never reaches it and
+ * settles as an ABANDONED WAIT instead (D2/D9), with NO outcome.
  *
- * Env override: `MEETING_NO_SHOW_FLOOR_MINUTES`.
+ * Env override: `MEETING_NO_SHOW_FLOOR_MINUTES` (`apps/api/src/config/billing-floor.ts` reads
+ * the resolved value back off `resolveMeetingTimers().noShowFloorMs` — ONE override, ONE seam).
  */
-export const NO_SHOW_FLOOR_MS = 15 * MS_PER_MINUTE;
+export const NO_SHOW_FLOOR_MS = MIN_MEETING_MINUTES * MS_PER_MINUTE;
 
 /**
  * The room has been EMPTY this long ⇒ terminate. Anchored on the instant the room became

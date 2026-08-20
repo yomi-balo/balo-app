@@ -13,6 +13,7 @@ import {
   type DrawdownState,
 } from '@balo/shared/credit';
 import { authorizeSessionActor } from './authorize-session-actor.js';
+import { resolveBillingFloorMinutes } from '../../config/billing-floor.js';
 
 /**
  * Assemble the `DrawdownState` for a session + viewer. Returns `undefined` when the session is
@@ -52,6 +53,11 @@ export async function getSessionDrawdownState(
     graceBoundMinutes: session.graceBoundMinutes,
     graceEnteredAt: session.graceEnteredAt,
     balanceMinor: wallet.balanceMinor,
+    // BAL-412 (D5/D6) — the corrected runway formula's two new inputs. The floor is read from
+    // the SAME env-overridable seam the settlement layer snapshots; `connectedMinutes` is what
+    // the balance has already been drawn down by (drawn, not elapsed).
+    billingFloorMinutes: resolveBillingFloorMinutes(),
+    minutesAlreadyDrawn: session.connectedMinutes,
     mandatePresent: isWalletMandateActive(wallet),
     lens,
     ...(adminName === undefined ? {} : { adminName }),

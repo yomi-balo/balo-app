@@ -35,6 +35,7 @@ import type {
   SessionTopupNudgePayload,
   PaymentChargedPayload,
   PayoutRecordedPayload,
+  SessionMissedCallPayload,
   RecapReadyPayload,
   ReviewReminderPayload,
   EngagementCaseClosedPayload,
@@ -322,6 +323,9 @@ export type NotificationEvent =
   | 'promo.redeemed'
   | 'payment.charged'
   | 'payout.recorded'
+  // BAL-412 (ADR-1044 §7) — the expert never joined; nothing was charged. SERVER-ONLY (see
+  // ServerOnlyNotificationEvent below).
+  | 'session.missed_call'
   | 'action_item.assigned'
   | 'recap.ready'
   // BAL-408 — the guest participation model. All three are SERVER-ONLY (see below): the
@@ -397,6 +401,10 @@ export type ServerOnlyNotificationEvent =
   // never from apps/web, so neither has a publishBodySchema arm.
   | 'payment.charged'
   | 'payout.recorded'
+  // BAL-412: fires from the SAME `finalizeBilling` call, on the `missed_call` settlement shape
+  // only — never from apps/web, so no `publishBodySchema` arm (adding one would be a
+  // `StraySchemaArm` and fail `tsc`).
+  | 'session.missed_call'
   // BAL-387: published from the transcript pipeline worker post-`markRecapPublished` —
   // never from apps/web, so it has no publishBodySchema arm.
   | 'recap.ready'
@@ -560,6 +568,7 @@ export interface EventPayloadMap {
   'promo.redeemed': PromoRedeemedPayload;
   'payment.charged': PaymentChargedPayload;
   'payout.recorded': PayoutRecordedPayload;
+  'session.missed_call': SessionMissedCallPayload;
   'action_item.assigned': ActionItemAssignedPayload;
   'recap.ready': RecapReadyPayload;
   'meeting.guest_invited': MeetingGuestInvitedPayload;

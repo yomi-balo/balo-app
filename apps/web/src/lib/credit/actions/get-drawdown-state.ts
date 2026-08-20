@@ -12,6 +12,7 @@ import {
   isWalletMandateActive,
   type DrawdownState,
 } from '@balo/shared/credit';
+import { MIN_MEETING_MINUTES } from '@balo/shared/meetings';
 import { getCurrentUser } from '@/lib/auth/session';
 import { roleHasCapability, CAPABILITIES } from '@/lib/authz';
 
@@ -84,6 +85,18 @@ export async function getSessionDrawdownState(
     graceBoundMinutes: session.graceBoundMinutes,
     graceEnteredAt: session.graceEnteredAt,
     balanceMinor: wallet.balanceMinor,
+    // BAL-412 (D5, Q5) — ⚠ THE ONE NAMED DIVERGENCE: this web mirror uses the SHIPPED default
+    // `MIN_MEETING_MINUTES` (`@balo/shared/meetings`) rather than the env-resolved floor,
+    // because the env reader (`resolveBillingFloorMinutes`, `apps/api/src/config/
+    // billing-floor.ts`) lives in `apps/api` ALONE (ADR-1049 D8) and `@balo/shared/meetings` is
+    // deliberately client-reachable (no `process.env` there). If a deployment ever sets
+    // `MEETING_NO_SHOW_FLOOR_MINUTES`, this mirror and the api route disagree by the override
+    // delta. UNREACHABLE TODAY — `openSessionAction` has zero non-test callers, so nothing on
+    // the web renders a live drawdown state. BAL-466 is the resolution (route this through the
+    // gated api instead of a direct `@balo/db` read). Do NOT mirror the env var into Vercel and
+    // do NOT add a money field to this payload (ADR-1050 keeps money structurally absent).
+    billingFloorMinutes: MIN_MEETING_MINUTES,
+    minutesAlreadyDrawn: session.connectedMinutes,
     mandatePresent: isWalletMandateActive(wallet),
     lens,
     ...(adminName === undefined ? {} : { adminName }),

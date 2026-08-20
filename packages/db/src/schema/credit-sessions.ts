@@ -2,6 +2,7 @@ import {
   pgTable,
   uuid,
   integer,
+  boolean,
   text,
   timestamp,
   index,
@@ -21,6 +22,7 @@ import {
   creditSettlementStatusEnum,
   creditDurationSourceEnum,
   creditFinalizationPathEnum,
+  creditSettlementShapeEnum,
 } from './enums';
 import { timestamps, softDelete } from './helpers';
 
@@ -85,7 +87,14 @@ export const creditSessions = pgTable(
 
     // Duration provenance (BAL-399) — set at open; immutable. `live_capture` (default) =
     // wall-clock metering auto-finalizes at hang-up; `external` = the session parks awaiting
-    // an outside-tool duration settled later via BAL-133. Fee-safe (client-viewable).
+    // an outside-tool duration settled later via BAL-133; `presence` (BAL-412) = metered live
+    // exactly like `live_capture`, but the TERMINAL figure is fixed from `meeting_presence`
+    // with the ADR-1044 §7 floor. Fee-safe (client-viewable).
+    //
+    // ⚠ INERT ON MAIN: nothing sets `'presence'` today. `creditSessionsRepository.open` accepts
+    // it as an optional input — the seam BAL-400 (booking) / BAL-466 (session open) will use —
+    // and no shipped caller passes it, so every new settlement path below is unreachable in
+    // production on merge (decision D10).
     durationSource: creditDurationSourceEnum('duration_source').notNull().default('live_capture'),
 
     // ── Snapshots (immutable for the life of the session; economics never drift) ──
@@ -119,10 +128,23 @@ export const creditSessions = pgTable(
     connectedAt: timestamp('connected_at', { withTimezone: true }),
     // Highest whole-minute metered (idempotency resume anchor).
     lastTickSeq: integer('last_tick_seq').notNull().default(0),
-    // Charged minutes (= lastTickSeq while active/grace).
+    // Charged minutes (= lastTickSeq while active/grace). ⚠ ON A PRESENCE-SETTLED SESSION
+    // THIS HOLDS THE **FLOORED** FIGURE, not the delivered one — `actual_minutes` below
+    // holds the pre-floor number.
     connectedMinutes: integer('connected_minutes').notNull().default(0),
-    // Expert-always-paid accrual = connectedMinutes × expertRateMinorPerMinute; finalized
-    // at `end` INDEPENDENT of settlement. NEVER on a client view (raw expert economics).
+    // Expert accrual = the SETTLED billable minutes × `expertRateMinorPerMinute`, finalized at
+    // `end` (live_capture / external) or at presence settlement, INDEPENDENT of the PAYMENT
+    // OUTCOME. NEVER on a client view (raw expert economics).
+    //
+    // ⚠⚠ ADR-1044 §7 (AMENDING ADR-1040 §8): THE INVARIANT IS **"EXPERT PAID FOR TIME MADE
+    // AVAILABLE, WITH A 15-MINUTE FLOOR WHEN PRESENT"** — NOT "expert always paid actual
+    // minutes". The old phrasing stood here and IS NOW FALSE. "When present" is load-bearing:
+    // a missed call (the expert never joined) accrues NOTHING, and so does an abandoned wait
+    // (the expert left below the floor with no client ever present, decision D2). On a
+    // presence-settled session `connected_minutes` holds the FLOORED figure and
+    // `actual_minutes` holds the pre-floor one, so the two are deliberately different numbers.
+    // Pinned by `packages/db/src/invariants/expert-paid-for-time-made-available.test.ts` —
+    // do not restore the old phrasing.
     expertAccruedMinor: integer('expert_accrued_minor').notNull().default(0),
 
     // ── One-shot markers (set once, the first time their condition holds) ──
@@ -143,6 +165,68 @@ export const creditSessions = pgTable(
     // path finalized it (live_capture / confirmed / disputed / auto_confirmed). Both fee-safe.
     billingFinalizedAt: timestamp('billing_finalized_at', { withTimezone: true }),
     finalizationPath: creditFinalizationPathEnum('finalization_path'),
+
+    // ── BAL-412 (ADR-1044 §7) — the presence settlement's provenance record ──
+    //
+    // ⚠ PLACED HERE, WITH THE FINALIZATION MARKERS, RATHER THAN IN THE "Snapshots" BLOCK
+    // ABOVE. All three are written ONCE, at settlement, by the same UPDATE that stamps
+    // `billing_finalized_at` — they are finalization outputs, not open-time snapshots, and
+    // that block's header ("immutable for the life of the session") would be false of them.
+    //
+    // All three are NULLABLE WITH NO DEFAULT AND NO BACKFILL, deliberately: every row written
+    // before migration 0071 carries NULL on all three, and every mapper reads them with a
+    // legacy-safe fallback, so shipped rows change behaviour not at all.
+    /**
+     * Minutes ACTUALLY delivered — the D4-clamped expert-present clock, ceil'd, PRE-floor.
+     * NULL for any session not settled from presence.
+     *
+     * ⚠⚠ WITHOUT THIS COLUMN THE ACTUAL FIGURE IS UNRECOVERABLE. Settlement OVERWRITES
+     * `connected_minutes` with the FLOORED number, so "6 min delivered, billed at the
+     * 15-minute minimum" could never be rendered afterwards and a floored charge would stay
+     * indistinguishable from a genuine 15-minute call.
+     *
+     * FEE-SAFE: a DURATION, never a figure — it appears identically on all three lenses
+     * (client / expert / admin). The split is not fee-concealed; only figures are.
+     */
+    actualMinutes: integer('actual_minutes'),
+    /**
+     * The billing floor IN FORCE at settlement, in whole minutes. Snapshotted for the same
+     * reason every other economic figure here is: the floor is env-overridable per deployment
+     * (`MEETING_NO_SHOW_FLOOR_MINUTES`, read in `apps/api` alone), so a later render must not
+     * re-derive it from today's config. NULL when never presence-settled. Fee-safe.
+     */
+    billingFloorMinutes: integer('billing_floor_minutes'),
+    /**
+     * How the presence settlement resolved (decisions D2 / D3). NULL when never
+     * presence-settled.
+     *
+     * ⚠ IT IS NOT REDUNDANT WITH `meetings.outcome`: `abandoned_wait` has NO outcome label —
+     * BAL-412 mints no fourth `meeting_outcome` value, so it lands as `completed` with a zero
+     * settlement — and `missed_call` is ALSO a zero settlement. The two zero shapes are
+     * indistinguishable on the meeting row and distinguishable ONLY here.
+     */
+    settlementShape: creditSettlementShapeEnum('settlement_shape'),
+    /**
+     * BAL-412 (F14) — did the BILLING FLOOR fix `connected_minutes`? NULL when never
+     * presence-settled.
+     *
+     * ⚠⚠ IT EXISTS BECAUSE THE ANSWER IS **NOT** RE-DERIVABLE FROM THE OTHER COLUMNS. The
+     * obvious derivation, `connected_minutes > actual_minutes`, is WRONG on the Q1 no-refund
+     * clamp: `connected_minutes` is post-clamp, so a session that drew 10 minutes on a 6-minute
+     * presence span with a 6-minute rule reads as "floored" when no floor was involved at all.
+     * The pure core (`resolveMeetingSettlement`) answers `ruleMinutes > actual_minutes`, and
+     * `rule_minutes` is not persisted — this boolean IS that answer, snapshotted at settlement.
+     *
+     * Two readers depend on it being the real answer: `credit_session.presence_settled` (the
+     * ONLY durable forensic record of a Q1 overcharge — mislabelling a clamp as a floor
+     * application destroys the evidence) and the `case_billing_finalized` `floored:` property
+     * (D7's "how often does the minimum bind" metric, which a clamp would inflate).
+     *
+     * FEE-SAFE: a boolean ABOUT a duration rule, never a figure. Not added to the client-lens
+     * projections regardless — nothing client-bound reads it, and the money block derives its
+     * own display predicate.
+     */
+    floorApplied: boolean('floor_applied'),
 
     // Settlement PaymentIntent (reconciliation; NEVER client-facing).
     stripePaymentIntentId: text('stripe_payment_intent_id'),
@@ -243,6 +327,50 @@ export const creditSessions = pgTable(
     index('credit_sessions_engagement_idx')
       .on(t.engagementId)
       .where(sql`${t.engagementId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+
+    // ── BAL-412 (ADR-1044 §7) ────────────────────────────────────────────────
+    check(
+      'credit_sessions_actual_minutes_nonneg',
+      sql`${t.actualMinutes} IS NULL OR ${t.actualMinutes} >= 0`
+    ),
+    check(
+      'credit_sessions_billing_floor_minutes_nonneg',
+      sql`${t.billingFloorMinutes} IS NULL OR ${t.billingFloorMinutes} >= 0`
+    ),
+    /**
+     * The durability backstop's finder index — `findPresenceUnsettled`: `presence` sessions
+     * whose meeting has ended but which never settled (the terminal path is best-effort, so
+     * a crash between `emitMeetingEnded` and settlement strands exactly this shape, and
+     * `findFinalizedMissingPayout` cannot see it — that finder keys on
+     * `billing_finalized_at IS NOT NULL`, i.e. the opposite half of the space).
+     *
+     * ⚠⚠ `duration_source` IS A **KEY COLUMN**, NOT PART OF THE PREDICATE, AND THAT IS
+     * NOT A STYLE CHOICE — THE PREDICATE FORM IS UNRUNNABLE. `'presence'` reaches
+     * `credit_duration_source` through `ALTER TYPE … ADD VALUE` (migration 0071), and
+     * Postgres forbids USING a new enum label in the transaction that added it. It is not
+     * enough to put the index in a LATER migration file either: drizzle-orm's migrator wraps
+     * the ENTIRE pending set in ONE transaction (`pg-core/dialect.js` → `migrate`), so on a
+     * from-scratch run — which is exactly what CI's Testcontainers harness and any fresh
+     * deploy do — every migration shares one transaction with the `ADD VALUE`. A predicate
+     * `WHERE duration_source = 'presence'` would raise `unsafe use of new value "presence"`
+     * and take the whole migration set down with it. Hence the house rule recorded on
+     * `enums.ts`: an ADD-VALUE label appears in NO index predicate and NO CHECK.
+     *
+     * THE KEY-COLUMN FORM IS NOT A WEAKER INDEX — IT IS A STRICTLY MORE USEFUL ONE. The
+     * finder's `WHERE duration_source = 'presence' AND billing_finalized_at IS NULL AND
+     * deleted_at IS NULL` still matches: the two `IS NULL` tests IMPLY the predicate (so the
+     * partial index is usable) and `duration_source = 'presence'` becomes an index scan key
+     * on the leading column. `meeting_id` rides second so the join to `meetings` is served
+     * from the index. Enum literals at QUERY time are always safe.
+     *
+     * ⚠ `deleted_at IS NULL` IS IN THE PREDICATE AND MUST STAY (the shipped soft-delete
+     * convention — memory `reference_softdelete_nonpartial_unique_recreate`). It is also
+     * what keeps the index small: an unsettled row is a transient state, so the index holds
+     * a handful of rows on a live database rather than every session ever billed.
+     */
+    index('credit_sessions_presence_unsettled_idx')
+      .on(t.durationSource, t.meetingId)
+      .where(sql`${t.billingFinalizedAt} IS NULL AND ${t.deletedAt} IS NULL`),
   ]
 );
 
@@ -293,3 +421,5 @@ export type CreditSettlementStatus = (typeof creditSettlementStatusEnum.enumValu
 export type CreditDurationSource = (typeof creditDurationSourceEnum.enumValues)[number];
 /** Which path produced the finalized billing figure (schema-derived). */
 export type CreditFinalizationPath = (typeof creditFinalizationPathEnum.enumValues)[number];
+/** BAL-412 — how a presence settlement resolved (schema-derived, four shapes). */
+export type CreditSettlementShape = (typeof creditSettlementShapeEnum.enumValues)[number];

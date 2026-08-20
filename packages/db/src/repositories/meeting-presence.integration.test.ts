@@ -1145,3 +1145,171 @@ describe('meeting_presence — FK behaviour', () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+// ── BAL-412 — the SETTLEMENT read ────────────────────────────────────────────────────────
+
+describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
+  it('returns BOTH reductions of ONE read — the clocks and the structural facts', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, client.id, 'client', 5);
+    await leave(meeting.id, client.id, 35);
+    await leave(meeting.id, expert.id, 40);
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    // The SAME numbers `clocks()` gives — `settlementFacts` is not a second, different clock.
+    expect(clocks.expertPresentMs).toBe(40 * MIN);
+    expect(clocks.billableMs).toBe(30 * MIN);
+    expect(clocks.expertFirstJoinedAt?.getTime()).toBe(at(0).getTime());
+
+    expect(facts.expertEverPresent).toBe(true);
+    expect(facts.clientSideEverPresent).toBe(true);
+    expect(facts.anyOpen).toBe(false);
+    expect(facts.expertOpen).toBe(false);
+    expect(facts.lastLeftAt?.getTime()).toBe(at(40).getTime());
+  });
+
+  it('⚠⚠ WHY THIS METHOD EXISTS: clientSideEverPresent is NOT derivable from the clocks', async () => {
+    // A client who joined and left BEFORE the expert ever arrived. The two sides were NEVER in
+    // the room together, so `billableStartedAt` is NULL and `billableMs` is 0 — which is
+    // exactly what a genuine client no-show looks like on `MeetingClocks` alone. But a client
+    // DID turn up, so this is not a `no_show_client`, and settling it as one would charge the
+    // 15-minute floor for a call the client actually attended.
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, client.id, 'client', 0);
+    await leave(meeting.id, client.id, 3);
+    await join(meeting.id, expert.id, 'expert', 5);
+    await leave(meeting.id, expert.id, 25);
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    // Indistinguishable from a no-show on the clocks…
+    expect(clocks.billableMs).toBe(0);
+    expect(clocks.billableStartedAt).toBeNull();
+    // …and unambiguous on the facts. THIS is the field settlement branches on.
+    expect(facts.clientSideEverPresent).toBe(true);
+    expect(facts.expertEverPresent).toBe(true);
+  });
+
+  it('an OBSERVER is not client-side presence — a Balo staffer must not make a call billable', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const staffer = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, staffer.id, 'observer', 1);
+    await leave(meeting.id, staffer.id, 20);
+    await leave(meeting.id, expert.id, 20);
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    expect(facts.expertEverPresent).toBe(true);
+    expect(facts.clientSideEverPresent).toBe(false); // the no-show input
+    expect(clocks.expertPresentMs).toBe(20 * MIN);
+    expect(clocks.billableMs).toBe(0);
+  });
+
+  it('the EXPERT-NEVER-JOINED shape: no expert interval ⇒ no clock and no first-join anchor', async () => {
+    const { meeting } = await meetingFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, client.id, 'client', 0);
+    await leave(meeting.id, client.id, 20);
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    expect(facts.expertEverPresent).toBe(false);
+    expect(facts.clientSideEverPresent).toBe(true);
+    expect(clocks.expertFirstJoinedAt).toBeNull();
+    expect(clocks.expertPresentMs).toBe(0);
+  });
+
+  it('an explicit `now` closes every still-OPEN interval at that instant, for the CLOCKS', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, client.id, 'client', 5);
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(25));
+
+    expect(clocks.expertPresentMs).toBe(25 * MIN);
+    expect(clocks.billableMs).toBe(20 * MIN);
+    // `summarisePresence` reads NO ceiling — an open interval is reported as OPEN and
+    // `lastLeftAt` stays null because nothing closed. That asymmetry is deliberate, and it is
+    // why passing `now` to one reduction and not the other is correct.
+    expect(facts.anyOpen).toBe(true);
+    expect(facts.expertOpen).toBe(true);
+    expect(facts.lastLeftAt).toBeNull();
+  });
+
+  it('with NO explicit `now`, a TERMINAL meeting measures to ended_at — never the wall clock', async () => {
+    // Exactly how the settlement backstop calls it. `T0` is far in the past, so a regression
+    // to `new Date()` would report weeks of expert-present time and settle a fortune.
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', outcome: 'completed', endedAt: at(30) },
+    });
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, client.id, 'client', 2);
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id);
+
+    expect(clocks.expertPresentMs).toBe(30 * MIN);
+    expect(clocks.billableMs).toBe(28 * MIN);
+    expect(clocks.expertPresentMs).toBeLessThan(24 * 60 * MIN);
+    expect(facts.expertEverPresent).toBe(true);
+    expect(facts.clientSideEverPresent).toBe(true);
+  });
+
+  it('a SOFT-DELETED interval is invisible to BOTH reductions', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await leave(meeting.id, expert.id, 20);
+    const clientInterval = await join(meeting.id, client.id, 'client', 5);
+    await leave(meeting.id, client.id, 15);
+
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, clientInterval.id));
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    // The client's attendance is gone from the FACTS as well as from the clocks — the two
+    // reductions read the SAME rows, which is the whole point of the single read.
+    expect(facts.clientSideEverPresent).toBe(false);
+    expect(clocks.billableMs).toBe(0);
+    expect(clocks.expertPresentMs).toBe(20 * MIN);
+  });
+
+  it('an EMPTY meeting yields the all-false facts and zero clocks (nobody ever joined)', async () => {
+    const { meeting } = await meetingFactory();
+
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    expect(facts).toEqual({
+      expertEverPresent: false,
+      expertOpen: false,
+      clientSideEverPresent: false,
+      anyOpen: false,
+      lastLeftAt: null,
+      expertFirstJoinedAt: null,
+    });
+    expect(clocks.expertPresentMs).toBe(0);
+    expect(clocks.billableMs).toBe(0);
+  });
+});

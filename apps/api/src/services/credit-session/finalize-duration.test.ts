@@ -42,6 +42,19 @@ const EXTERNAL_PENDING = {
   overdraftSettledMinor: null,
 };
 
+describe('BAL-412 (D9) — settledByUserId is gone from DurationSettledInput', () => {
+  it('a settledByUserId key is a COMPILE-TIME error on the input type', () => {
+    const input: Parameters<typeof finalizeExternalDuration>[0] = {
+      sessionId: 'session_1',
+      minutes: 30,
+      path: 'confirmed',
+      // @ts-expect-error — `settledByUserId` was removed (D9); TypeScript must reject it.
+      settledByUserId: 'user_1',
+    };
+    expect(input.sessionId).toBe('session_1');
+  });
+});
+
 describe('finalizeExternalDuration', () => {
   beforeEach(() => {
     vi.clearAllMocks();

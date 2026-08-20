@@ -112,16 +112,19 @@ function Separator(): React.JSX.Element {
  * ⚠ NEVER AN ERROR OR A WARNING — it is a neutral fact, in the same muted meta voice.
  * ⚠ NEVER A SECOND ERROR STATE around the fragment: a failed fetch is the fragment's own
  * muted fallback.
+ *
+ * ⚠ F10, UX review round 1 — NO `whitespace-nowrap` WRAPPER HERE ANYMORE. It was sized for
+ * the pre-BAL-412 content (a short "Charged A$150.00") and clipped/overflowed at 375px once
+ * BAL-412 appended the duration line. `MoneyBlock` already returns a single root element and
+ * now wraps its own content (`money-block.tsx`'s `MoneyBlockFinalized`), so no wrapper is
+ * needed — the surrounding meta row (`flex flex-wrap`, above) governs reflow the same way it
+ * does for every other item in the row.
  */
 function MoneyLine({ money }: Readonly<{ money: RecapMoneyView }>): React.JSX.Element {
   if (money.kind === 'absent') {
     return <span className="text-muted-foreground">No consultation charge for this one.</span>;
   }
-  return (
-    <span className="whitespace-nowrap">
-      <MoneyBlock block={money.block} elapsedMinutes={money.elapsedMinutes} />
-    </span>
-  );
+  return <MoneyBlock block={money.block} elapsedMinutes={money.elapsedMinutes} />;
 }
 
 /**

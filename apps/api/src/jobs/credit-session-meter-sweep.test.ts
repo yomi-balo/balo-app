@@ -7,22 +7,26 @@ const {
   mockFindStalePending,
   mockFindStuckSettling,
   mockFindFinalizedMissingPayout,
+  mockFindPresenceUnsettled,
   mockCancel,
   mockDriveSession,
   mockEndSession,
   mockReconcile,
   mockFinalizeBilling,
+  mockSettleSessionFromPresence,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
   mockFindStalePending: vi.fn(),
   mockFindStuckSettling: vi.fn(),
   mockFindFinalizedMissingPayout: vi.fn(),
+  mockFindPresenceUnsettled: vi.fn(),
   mockCancel: vi.fn(),
   mockDriveSession: vi.fn(),
   mockEndSession: vi.fn(),
   mockReconcile: vi.fn(),
   mockFinalizeBilling: vi.fn(),
+  mockSettleSessionFromPresence: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -35,6 +39,7 @@ vi.mock('@balo/db', () => ({
     findStalePending: mockFindStalePending,
     findStuckSettling: mockFindStuckSettling,
     findFinalizedMissingPayout: mockFindFinalizedMissingPayout,
+    findPresenceUnsettled: mockFindPresenceUnsettled,
     cancel: mockCancel,
   },
 }));
@@ -45,6 +50,7 @@ vi.mock('../services/credit-session/index.js', () => ({
   endSessionAsSystem: mockEndSession,
   reconcileStuckSettlement: mockReconcile,
   finalizeBilling: mockFinalizeBilling,
+  settleSessionFromPresence: mockSettleSessionFromPresence,
 }));
 
 import { runSessionMeterSweep } from './credit-session-meter-sweep.js';
@@ -69,6 +75,7 @@ describe('runSessionMeterSweep', () => {
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue([]);
     mockDriveSession.mockImplementation(async (id: string) => ({
       session: activeSession({ id }),
       transitions: {},
@@ -186,5 +193,63 @@ describe('runSessionMeterSweep', () => {
     const result = await runSessionMeterSweep(NOW);
     expect(mockFinalizeBilling).toHaveBeenCalledTimes(2); // both attempted
     expect(result.recovered).toBe(1); // s1 threw, s2 recovered
+  });
+
+  // BAL-412 (Q3) — a presence session is skipped by the force-end, not routed to endSessionAsSystem.
+  it('skips the MAX_SESSION_MINUTES force-end for a presence-sourced session', async () => {
+    const stale = activeSession({
+      durationSource: 'presence',
+      connectedAt: new Date(NOW.getTime() - (MAX_SESSION_MINUTES + 1) * 60_000),
+    });
+    mockFindMeterable.mockResolvedValue([stale]);
+    mockDriveSession.mockResolvedValue({ session: stale, transitions: {}, ticksPosted: 0 });
+    await runSessionMeterSweep(NOW);
+    expect(mockEndSession).not.toHaveBeenCalled();
+  });
+
+  // BAL-412 (plan §4.3) — pass 6, the presence-settlement durability backstop.
+  describe('presence-settlement durability backstop (pass 6)', () => {
+    it('settles every presence-unsettled session the finder returns', async () => {
+      mockFindPresenceUnsettled.mockResolvedValue([
+        activeSession({ id: 's1', durationSource: 'presence' }),
+        activeSession({ id: 's2', durationSource: 'presence' }),
+      ]);
+      mockSettleSessionFromPresence.mockResolvedValue({ ok: true });
+      const result = await runSessionMeterSweep(NOW);
+      expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(2);
+      expect(mockSettleSessionFromPresence).toHaveBeenCalledWith({
+        sessionId: 's1',
+        actorUserId: null,
+        now: NOW,
+      });
+      expect(result.presenceSettled).toBe(2);
+    });
+
+    it('does not count a benign already_settled decline (a racing terminal path won)', async () => {
+      mockFindPresenceUnsettled.mockResolvedValue([
+        activeSession({ id: 's1', durationSource: 'presence' }),
+      ]);
+      mockSettleSessionFromPresence.mockResolvedValue({ ok: false, code: 'already_settled' });
+      const result = await runSessionMeterSweep(NOW);
+      expect(result.presenceSettled).toBe(0);
+    });
+
+    it('isolates a per-row settlement failure (batch continues, sweep does not abort)', async () => {
+      mockFindPresenceUnsettled.mockResolvedValue([
+        activeSession({ id: 's1', durationSource: 'presence' }),
+        activeSession({ id: 's2', durationSource: 'presence' }),
+      ]);
+      mockSettleSessionFromPresence.mockRejectedValueOnce(new Error('boom'));
+      mockSettleSessionFromPresence.mockResolvedValueOnce({ ok: true });
+      const result = await runSessionMeterSweep(NOW);
+      expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(2);
+      expect(result.presenceSettled).toBe(1);
+    });
+
+    it('is inert on main today — the finder returns nothing (D10)', async () => {
+      const result = await runSessionMeterSweep(NOW);
+      expect(mockSettleSessionFromPresence).not.toHaveBeenCalled();
+      expect(result.presenceSettled).toBe(0);
+    });
   });
 });

@@ -13,6 +13,7 @@ import {
   type MeterSessionResult,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { resolveBillingFloorMinutes } from '../../config/billing-floor.js';
 import {
   publishGraceEntered,
   publishLowBalance,
@@ -27,7 +28,13 @@ const log = createLogger('credit-session');
  * result so callers (the reaper, `endSession`) can read the advanced session/state.
  */
 export async function driveSession(sessionId: string, now: Date): Promise<MeterSessionResult> {
-  const result = await creditSessionsRepository.meterSessionToNow(sessionId, now);
+  // BAL-412 (F13/D6) — the billing floor is INJECTED into the metering primitive because
+  // `@balo/db` reads no env. It must be the SAME value `publishLowBalance` uses to SIZE the
+  // notice (`notify.ts`), or the threshold that fires and the figure reported would disagree —
+  // which is precisely the split brain F13 closed. Both read `resolveBillingFloorMinutes()`.
+  const result = await creditSessionsRepository.meterSessionToNow(sessionId, now, {
+    floorMinutes: resolveBillingFloorMinutes(),
+  });
   const { session, transitions } = result;
 
   const hasTransition =

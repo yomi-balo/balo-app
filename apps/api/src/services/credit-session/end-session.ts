@@ -5,8 +5,21 @@
  * compute the terminal overdraft, set `settlementStatus`) → if overdraft > 0, settle off-session
  * against the COMPANY mandate. Three outcomes: `processing` (credit + session-settled land via
  * the `payment_intent.succeeded` webhook — `dispatch.ts`), `requires_action` (SCA → receivable
- * + dunning), throw (hard decline → receivable + dunning). The expert is ALWAYS paid (accrual
- * committed in `end` before any charge), independent of settlement.
+ * + dunning), throw (hard decline → receivable + dunning). The expert is ALWAYS paid — the
+ * accrual is committed in `end` (or in the presence settlement, BAL-412) BEFORE any charge, and
+ * is independent of the PAYMENT outcome. ⚠ ADR-1044 §7 amended WHAT is paid: **"expert paid for
+ * time made available, with a 15-minute floor when present"**, not "actual minutes". A missed
+ * call accrues NOTHING. See
+ * `packages/db/src/invariants/expert-paid-for-time-made-available.test.ts`.
+ *
+ * ⚠⚠ BAL-412 — `finalizeAndSettle` IS THE SHARED POST-COMMIT TAIL, used by BOTH
+ * `endSessionAsSystem` (the `live_capture`/`external` path, below) AND
+ * `settleSessionFromPresence` (`./settle-from-presence.ts`, the presence-derived path). It is
+ * everything AFTER the money is written to the row — `finalizeBilling`, the in-credit receipt
+ * publish, the auto-top-up trigger, and the overdraft settle branch — extracted so there is ONE
+ * implementation of that ~80-line tail rather than two drifting copies (SonarCloud's new-code
+ * duplication gate). Nothing about the shipped `endSessionAsSystem` behaviour changed by this
+ * extraction — `end-session.test.ts`'s existing assertions are the regression guard.
  */
 import {
   creditReceivablesRepository,
@@ -184,10 +197,70 @@ async function settleOverdraft(
 }
 
 /**
+ * BAL-412 — THE SHARED POST-COMMIT TAIL (module docblock's steps 2b/3a/3b). Everything AFTER
+ * the session's terminal money row is written: finalize the billing side-effects EXACTLY ONCE
+ * (payout obligation + member receipt + expert payout notice + analytics), then either publish
+ * the in-credit settled receipt + best-effort auto-top-up trigger, or settle a positive terminal
+ * overdraft off-session. Called by BOTH `endSessionAsSystem` (below) and
+ * `settleSessionFromPresence` (`./settle-from-presence.ts`) — see the module docblock for why
+ * this is ONE implementation rather than two.
+ *
+ * ⚠ Takes the ALREADY-COMMITTED `session` + its terminal `overdraftMinor` / `mandateActive` —
+ * it does NO money arithmetic of its own and writes NO further row beyond what `finalizeBilling`
+ * / `settleOverdraft` already do.
+ */
+export async function finalizeAndSettle(
+  session: CreditSession,
+  overdraftMinor: number,
+  mandateActive: boolean,
+  finalizationPath: CreditFinalizationPath,
+  now: Date
+): Promise<EndSessionServiceResult> {
+  // 2b. BAL-399 — finalize the billing side-effects EXACTLY ONCE (payout obligation + member
+  //     receipt + expert payout notice + analytics), BEFORE the settle branch so it fires for
+  //     in-credit AND overdraft(processing) alike (expert-always-paid ⇒ payout booked at accrual
+  //     finalization, independent of the async card outcome). The payout-record UNIQUE dedups.
+  await finalizeBilling(session, finalizationPath, now);
+
+  // 3a. In credit — nothing to charge; publish the settled receipt.
+  if (overdraftMinor === 0) {
+    // BAL-412 (D7) — thread `settlementShape` when this session was presence-settled, so the
+    // billing-admin receipt's analytics carry it under its OWN key (never `outcome`).
+    await publishSessionSettled(
+      toSettleableSession(session),
+      now,
+      session.settlementShape ?? undefined
+    );
+    log.info(
+      { sessionId: session.id, expertAccruedMinor: session.expertAccruedMinor },
+      'Session ended — settled (no charge)'
+    );
+    // BAL-379: the resting balance just finalized (possibly below the auto-top-up threshold) —
+    // consider a between-session reload. Best-effort + POST-COMMIT (the caller already
+    // committed): the wrapper never throws, so a trigger fault can never break the settlement
+    // return, and the engine re-reads everything under its OWN wallet lock (this site only
+    // pokes it with walletId).
+    await triggerAutoTopupBestEffort(session.walletId, {
+      op: 'finalizeAndSettle',
+      sessionId: session.id,
+      reason: 'auto_topup_trigger',
+    });
+    return { settlementStatus: 'not_required', overdraftSettledMinor: 0 };
+  }
+
+  // 3b. Overdraft — settle off-session against the company mandate.
+  return settleOverdraft(session, overdraftMinor, mandateActive);
+}
+
+/**
  * SYSTEM settlement core (§7): final meter → repo `end` → settle. It performs NO actor
  * authorization — the only callers are the trusted reaper (auto-end of wrapped-idle /
  * max-duration sessions, which acts as the system, not as an actor) and the authorized
  * `endSession` wrapper below. NEVER call this from a route; a route MUST go through `endSession`.
+ *
+ * ⚠ ONLY for `live_capture` / `external` sessions — a `presence` session's terminal path is
+ * `settleSessionFromPresence` (`./settle-from-presence.ts`), never this. Nothing on main routes
+ * a `presence` session here (D10).
  */
 export async function endSessionAsSystem(
   sessionId: string,
@@ -203,7 +276,7 @@ export async function endSessionAsSystem(
   // 2. Repo end (pure DB): release hold, finalize accrual + audit, compute overdraft, stamp the
   //    billing-finalization markers with the finalization path.
   const ended = await creditSessionsRepository.end(sessionId, { now, finalizationPath });
-  const { session, overdraftMinor, expertAccruedMinor, mandateActive, alreadyEnded } = ended;
+  const { session, overdraftMinor, mandateActive, alreadyEnded } = ended;
 
   if (alreadyEnded) {
     // BAL-399 durability: a crash (or a finalizeBilling throw) between the end() commit and the
@@ -223,30 +296,7 @@ export async function endSessionAsSystem(
     };
   }
 
-  // 2b. BAL-399 — finalize the billing side-effects EXACTLY ONCE (payout obligation + member
-  //     receipt + expert payout notice + analytics), BEFORE the settle branch so it fires for
-  //     in-credit AND overdraft(processing) alike (expert-always-paid ⇒ payout booked at accrual
-  //     finalization, independent of the async card outcome). The payout-record UNIQUE dedups.
-  await finalizeBilling(session, finalizationPath, now);
-
-  // 3a. In credit — nothing to charge; publish the settled receipt.
-  if (overdraftMinor === 0) {
-    await publishSessionSettled(toSettleableSession(session), now);
-    log.info({ sessionId, expertAccruedMinor }, 'Session ended — settled (no charge)');
-    // BAL-379: the resting balance just finalized (possibly below the auto-top-up threshold) —
-    // consider a between-session reload. Best-effort + POST-COMMIT (end() already committed): the
-    // wrapper never throws, so a trigger fault can never break the settlement return, and the
-    // engine re-reads everything under its OWN wallet lock (this site only pokes it with walletId).
-    await triggerAutoTopupBestEffort(session.walletId, {
-      op: 'endSessionAsSystem',
-      sessionId,
-      reason: 'auto_topup_trigger',
-    });
-    return { settlementStatus: 'not_required', overdraftSettledMinor: 0 };
-  }
-
-  // 3b. Overdraft — settle off-session against the company mandate.
-  return settleOverdraft(session, overdraftMinor, mandateActive);
+  return finalizeAndSettle(session, overdraftMinor, mandateActive, finalizationPath, now);
 }
 
 /**

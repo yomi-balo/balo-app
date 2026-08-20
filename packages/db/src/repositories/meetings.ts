@@ -845,4 +845,74 @@ export const meetingsRepository = {
       throw error;
     }
   },
+
+  /**
+   * BAL-412 — write `meetings.outcome` on an ALREADY-ENDED meeting, ONCE, TX-COMPOSABLE.
+   *
+   * BAL-134 deliberately leaves `outcome` NULL on the two HUMAN end paths and on the
+   * abandoned wait (ADR-1049 D5: "the ender never sets the outcome — BAL-412 resolves it from
+   * `meeting_presence`"). This is that resolution's write seam. The three system paths DEFINED
+   * by their outcome (`completed` / `no_show_client` / `missed_call`) already carry one from
+   * the sweep, and settlement re-derives the same label — so this method must be able to
+   * observe "already resolved" and do nothing, rather than overwrite it.
+   *
+   * ⚠⚠ `outcome IS NULL` IS IN THE **PREDICATE**, NOT AN ASSERTION, AND THAT IS THE WHOLE
+   * DESIGN. A read-then-write ("is it null? then set it") is a TOCTOU on a row the lifecycle
+   * sweep can be writing concurrently: the sweep's `missed_call` and a settlement running a
+   * moment later would both observe NULL and the loser would overwrite the winner. As a
+   * single conditional `UPDATE` the database decides, and `RETURNING` reports which way it
+   * went. **FIRST WRITE WINS**, always.
+   *
+   * ⚠ `status = 'ended'` IS ALSO IN THE PREDICATE, so `meeting_outcome_requires_ended`
+   * (`schema/meetings.ts`) cannot be violated even by a caller that skipped its own
+   * precondition check. A CHECK violation here would raise a bare `23514` and roll back the
+   * caller's WHOLE settlement transaction — the money, the ledger ticks and the audit rows
+   * with it. Refusing in the predicate turns that into a `false` return.
+   *
+   * ⚠ TAKES AN EXECUTOR, AND THE CALLER MUST PASS ITS `tx`. The outcome, the money and the
+   * audit row commit or roll back TOGETHER (ADR-1030). An outcome written outside the
+   * settlement transaction would survive a rolled-back settlement and permanently block the
+   * retry from writing the right label.
+   *
+   * Returns `true` when the row was written (and an audit row appended on the SAME executor),
+   * `false` on every no-op: already resolved, not `ended`, soft-deleted, or gone. The CALLER
+   * logs the `false` case — this repository does not log (`repositories-never-notify`'s
+   * sibling rule); see the presence-settlement service.
+   *
+   * ⚠ INERT ON MAIN (decision D10) — its only caller is the presence settlement, which no
+   * shipped path reaches (BAL-400 → BAL-466).
+   */
+  async setOutcomeIfUnset(
+    exec: DbExecutor,
+    input: { meetingId: string; outcome: MeetingOutcome; actorUserId: string | null }
+  ): Promise<boolean> {
+    const [row] = await exec
+      .update(meetings)
+      .set({ outcome: input.outcome, updatedAt: new Date() })
+      .where(
+        and(
+          eq(meetings.id, input.meetingId),
+          // Enum literals at QUERY time are always safe — the house restriction is index
+          // predicates and CHECKs.
+          eq(meetings.status, 'ended'),
+          isNull(meetings.outcome),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .returning({ id: meetings.id });
+
+    if (row === undefined) {
+      return false;
+    }
+
+    // ONLY on a real write, and on the SAME executor — an audit row beside a no-op would
+    // attest to a resolution that did not happen.
+    await recordMeetingAudit(exec, {
+      actorUserId: input.actorUserId,
+      action: 'meeting.outcome_resolved',
+      meetingId: input.meetingId,
+      metadata: { outcome: input.outcome },
+    });
+    return true;
+  },
 };
