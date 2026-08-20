@@ -87,6 +87,47 @@ describe('reconcileByTag (BAL-396 §5/§10.6)', () => {
     expect(results.map((e) => e.id)).toEqual(['e1', 'e2']);
   });
 
+  /**
+   * BAL-468 §13 — the §2 discharge. §2's real risk is a busy calendar returning everything on
+   * page 1 because the default page size (400) hides the bug in dev/test accounts. This drives
+   * the REAL `reconcileByTag` against a fake `events.list` that behaves like a genuinely
+   * paginating server: it holds 7 tagged events, slices them into pages of 2, mints an opaque
+   * cursor per page, and emits a trailing empty page with no `nextPageToken` (the Microsoft
+   * shape) — exactly what a busy real calendar does, without `reconcileByTag` itself ever
+   * passing a page size.
+   */
+  it('⚠ the forced small-page test: a genuinely paginating transport (page size 2) over 7 tagged events terminates cleanly and returns all 7 exactly once, in order', async () => {
+    const allEvents = Array.from({ length: 7 }, (_, i) => ({ id: `evt-${i}` }));
+    const PAGE_SIZE = 2;
+    mockEventsList.mockImplementation(
+      async (_eua: string, _cal: string, params: { pageToken?: string }) => {
+        const start = params.pageToken ? Number(params.pageToken) : 0;
+        const page = allEvents.slice(start, start + PAGE_SIZE);
+        const nextStart = start + PAGE_SIZE;
+        // Microsoft's own shape: keep emitting a token until the data itself is spent, THEN
+        // one more call returns a trailing empty page (count: 0) with no token at all.
+        return {
+          data: page,
+          ...(start < allEvents.length ? { nextPageToken: String(nextStart) } : {}),
+        };
+      }
+    );
+
+    const results = await reconcileByTag({
+      endUserAccountId: 'eua-1',
+      calendarId: 'cal-1',
+      baloBookingId: 'booking-1',
+    });
+
+    expect(results.map((e) => e.id)).toEqual(allEvents.map((e) => e.id));
+    // ceil(7/2) = 4 pages with data + 1 trailing empty page = 5 calls.
+    expect(mockEventsList).toHaveBeenCalledTimes(5);
+    for (const call of mockEventsList.mock.calls) {
+      const params = call[2] as { metadataFilters?: unknown };
+      expect(params.metadataFilters).toEqual({ baloBookingId: 'booking-1' });
+    }
+  });
+
   it('a Google page whose events DO echo the tag reconciles identically (parity — no provider branch)', async () => {
     mockEventsList.mockResolvedValue({
       data: [{ id: 'g-event-1', privateExtendedProperties: { baloBookingId: 'tag-AAA' } }],

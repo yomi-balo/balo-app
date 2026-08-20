@@ -11,6 +11,7 @@ const {
   mockProvisionConnection,
   mockEnqueueAvailabilityCacheRebuild,
   mockEndUserAccountsGet,
+  mockEnqueueSubscriptionReconcile,
 } = vi.hoisted(() => ({
   mockBuildApirocAuthorizeUrl: vi.fn(),
   mockSignConnectState: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockProvisionConnection: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
   mockEndUserAccountsGet: vi.fn(),
+  mockEnqueueSubscriptionReconcile: vi.fn(),
 }));
 
 // BAL-397 fix round — the callback now resolves the browser-supplied `endUserAccountId`
@@ -53,6 +55,10 @@ vi.mock('../../services/calendar/apiroc-connection.js', () => ({
 
 vi.mock('../../jobs/availability-cache.js', () => ({
   enqueueAvailabilityCacheRebuild: mockEnqueueAvailabilityCacheRebuild,
+}));
+
+vi.mock('../../jobs/calendar-subscription-reconcile.js', () => ({
+  enqueueSubscriptionReconcile: mockEnqueueSubscriptionReconcile,
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -422,6 +428,14 @@ describe('calendar auth routes (BAL-396)', () => {
         EXPERT_UUID,
         expect.anything()
       );
+      // BAL-468 §8.4 — force: true covers both first connect (a no-op — nothing to renew) and
+      // reconnect (replaces every canonical subscription rather than trusting a vendor channel
+      // that may have died silently during a revoke).
+      expect(mockEnqueueSubscriptionReconcile).toHaveBeenCalledWith(
+        'conn-1',
+        { force: true },
+        expect.anything()
+      );
     });
 
     it('SHAPE 2: clears the CSRF cookie on success — the nonce becomes single-use (Finding 1)', async () => {
@@ -461,6 +475,9 @@ describe('calendar auth routes (BAL-396)', () => {
       );
 
       expect(res.headers.location).toContain('calendar_status=SYNC_PENDING');
+      // BAL-468 §8.4 — a SYNC_PENDING connection has no sub-calendars yet, so there is
+      // nothing to subscribe; the reconcile enqueue is gated on ACTIVE only.
+      expect(mockEnqueueSubscriptionReconcile).not.toHaveBeenCalled();
     });
 
     it('SHAPE 2: an expired state redirects state_expired without calling the connection services', async () => {

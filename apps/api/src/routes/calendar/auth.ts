@@ -23,6 +23,7 @@ import {
   provisionConnection,
 } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
+import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 
 // ── Validation ──────────────────────────────────────────────────
@@ -329,6 +330,13 @@ async function persistAndRedirectConnected(
     });
     const status = await provisionConnection(connection);
     await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
+    // BAL-468 §8.4/§8.6 — covers both first connect (force is a no-op — nothing to renew) and
+    // reconnect (force re-creates every canonical subscription rather than trusting a vendor
+    // channel that may have died silently during the revoke). Only on ACTIVE: a SYNC_PENDING
+    // connection has no sub-calendars yet, so there is nothing to subscribe.
+    if (status === 'ACTIVE') {
+      await enqueueSubscriptionReconcile(connection.id, { force: true }, request.log);
+    }
 
     // BAL-397 §13.2 — `calendar_status` on the wire now carries the REAL vocabulary
     // (`provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING') so `apps/web` reads

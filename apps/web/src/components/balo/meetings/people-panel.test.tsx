@@ -381,10 +381,24 @@ describe('PeoplePanel — ⚠⚠ the UNVERIFIED treatment', () => {
     renderPanel(fakes({ guests: [arrived], canHost: true }));
 
     expect(await screen.findByText(/In the call · 2/)).toBeInTheDocument();
-    // Not in "Admitted · not yet arrived" any more — they are genuinely here…
+
+    // ⚠ `findByText`, NOT `getByText` — and the reason is specific to THIS test, not a blanket
+    // style rule. The heading above is driven by DAILY PARTICIPANT state, while the badge is
+    // driven by the GUEST ROSTER: two independent async sources. So the heading resolving
+    // proves nothing about the roster having landed, and asserting the badge synchronously
+    // right after it is a race — one this test lost in CI (and only in CI, where the slower,
+    // contended scheduling widens the window; it passed locally every time, including across
+    // the full 621-file suite). The failure surfaced as `Unable to find an element with the
+    // text: Unverified` buried under a DOM dump still showing `data-testid="panel-skeleton"`.
+    //
+    // The sibling test above (`STAYS on an ADMITTED link row`) keeps its synchronous
+    // `getByText` deliberately: there the heading and the badge come from the SAME roster
+    // render pass, so there is no second source to wait on.
+    expect(await screen.findByText('Unverified')).toBeInTheDocument();
+
+    // Checked AFTER the badge, so the roster is known to have rendered — a `queryBy`
+    // absence assertion against a not-yet-rendered roster would pass for the wrong reason.
     expect(screen.queryByText(/not yet arrived/)).not.toBeInTheDocument();
-    // …and the badge is still on the row.
-    expect(screen.getByText('Unverified')).toBeInTheDocument();
   });
 
   it('⚠ an `email`-channel guest who has arrived carries NO badge', async () => {

@@ -48,5 +48,6 @@ export * from './proposal-share-links';
 export * from './promo-codes';
 export * from './stripe-webhook-events';
 export * from './daily-webhook-events';
+export * from './apiroc-webhook-events';
 export * from './reviews';
 export * from './review-invite-tokens';

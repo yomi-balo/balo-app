@@ -12,8 +12,15 @@ describe('CALENDAR_SERVER_EVENTS', () => {
       'OAUTH_COMPLETED',
       'OAUTH_FAILED',
       'RECONNECT_RESOLVED',
+      'SUBSCRIPTION_LAPSE_DETECTED',
       'SYNC_PENDING_AUTO_RESOLVED',
     ]);
+  });
+
+  it('maps SUBSCRIPTION_LAPSE_DETECTED to its exact event name (BAL-468)', () => {
+    expect(CALENDAR_SERVER_EVENTS.SUBSCRIPTION_LAPSE_DETECTED).toBe(
+      'calendar_subscription_lapse_detected'
+    );
   });
 
   it('maps the BAL-235 date-override events to their exact snake_case values', () => {

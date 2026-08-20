@@ -203,6 +203,160 @@ export const calendarSubCalendars = pgTable(
   })
 );
 
+// ── Calendar Webhook Subscriptions ──────────────────────────────
+
+/**
+ * `calendar_subscriptions` (BAL-468) — ONE Apiroc `event` webhook registration per
+ * (connection, calendar). ADR-1021 amendment 2026-08-15: the inbound webhook is a **bare
+ * trigger** into `rebuildAvailabilityCache` — it carries no event id and Balo reads no event
+ * content on that path — so nothing about the CHANGE is stored here. This table records only
+ * the registration itself and the evidence needed to keep it alive.
+ *
+ * ⚠⚠ NOT TO BE CONFUSED WITH `calendar_sub_calendars`, which lives in this same file. That
+ * table is the expert's LIST OF CALENDARS with its conflict-check toggle; this one is the
+ * WEBHOOK REGISTRATION for a calendar Balo decided to watch. The index prefix here is
+ * `cal_wsub_` (not `cal_sub_`) precisely so the two are never confused in a migration diff,
+ * a query plan, or a `\di` listing.
+ *
+ * ⚠⚠ THERE IS DELIBERATELY **NO** UNIQUE ON `(connection_id, calendar_id)` (BAL-468 plan
+ * ruling #5) — and that reverses the obvious instinct, so read this before "fixing" it.
+ * Renewal is **create-then-delete**: the replacement subscription is registered at the vendor
+ * and inserted here while the incumbent is still live and un-deleted, so **two live rows for
+ * one (connection_id, calendar_id) is the LEGITIMATE steady state** for the width of a
+ * renewal. A partial unique on that pair would reject the second INSERT with 23505 — the
+ * exact failure it was meant to prevent, moved one statement earlier. The only ordering that
+ * satisfies such an index is soft-delete-then-insert, which opens a window where the
+ * connection has NO live row while the vendor is still delivering to the old URL (that URL
+ * then 404s → non-2xx → Svix retries → endpoint disabled after ~5 days).
+ *
+ * So uniqueness lives on `webhook_subscription_id` — genuinely unique, vendor-minted, never
+ * reused — and **canonicity is DERIVED, not stored**: the newest live row per
+ * `(connection_id, calendar_id)` wins (`created_at desc, id desc`, see
+ * `calendarSubscriptionsRepository.listLiveByConnectionId`), and every older live sibling is
+ * a `superseded` delete target on the next reconciliation pass. That is what makes a renewal
+ * whose delete failed self-healing rather than a leak.
+ *
+ * ⚠ NO `ON CONFLICT` STATEMENT ANYWHERE IN THIS TABLE'S REPOSITORY (plan ruling #6). Every
+ * write is a plain INSERT, a keyed UPDATE, or a keyed soft delete — so the partial-arbiter
+ * 42P10 hazard that forces `upsertApirocConnection` to restate its `targetWhere` cannot
+ * arise here at all. Do not "add the missing targetWhere" to a statement that has no
+ * conflict clause.
+ *
+ * ⚠ NO RLS, matching every other table in this package except `stripe_webhook_events`. It is
+ * reached only through `calendarSubscriptionsRepository` on the admin `db` client, which
+ * bypasses RLS anyway.
+ */
+export const calendarSubscriptions = pgTable(
+  'calendar_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /**
+     * ⚠ MINTED BY THE CALLER BEFORE THE VENDOR CALL is the id in `webhook_url` — see
+     * `insertSubscription`'s docblock. The FK is `ON DELETE cascade`, matching
+     * `calendar_sub_calendars`: identity survives a calendar RENAME (the vendor calendar id
+     * is stable, the display name is not), and one hop reaches `expert_profile_id`, which is
+     * what the webhook needs to enqueue the rebuild.
+     */
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => calendarConnections.id, { onDelete: 'cascade' }),
+    /**
+     * The vendor calendar this subscription covers. `text`, not a bounded varchar: a
+     * Microsoft Graph calendar id is ~152 chars of base64 (apiroc skill, Constraint 14).
+     */
+    calendarId: text('calendar_id').notNull(),
+    /**
+     * ⚠⚠ THE ID YOU PASS TO `calendarSubscriptions.delete` — and it is the LIST MODEL'S `id`
+     * FIELD, **NOT** its field literally named `subscriptionId`. The list model carries BOTH:
+     * `id` (= the create response's `webhookSubscriptionId`, e.g. `cmssoyzws1qs2oi2k08up0zjo`)
+     * and `subscriptionId` (the PROVIDER channel uuid, e.g. `ebd61d9d-…`, a Google `watch`
+     * ref). Passing the latter to `delete` is a SILENT NO-OP that leaves a live subscription
+     * delivering for the full 7-day TTL. Store `id`; never store or read `subscriptionId` or
+     * `resourceId`.
+     */
+    webhookSubscriptionId: text('webhook_subscription_id').notNull(),
+    /**
+     * The Svix verification secret for this endpoint. **ENCRYPTED AT REST** by
+     * `apps/api/src/lib/calendar-encryption.ts` (AES-256-GCM under its OWN key — never
+     * `PAYOUT_ENCRYPTION_KEY`). This repository never encrypts or decrypts; it stores the
+     * ciphertext it is handed.
+     *
+     * ⚠ NEVER LOGGED, never an analytics property, never in an error body. The webhook is
+     * the only reader: it decrypts, verifies, and discards.
+     */
+    endpointSecret: text('endpoint_secret').notNull(),
+    /**
+     * The exact URL registered at the vendor (`${base}/webhooks/apiroc/calendar/${id}`).
+     * Load-bearing for the ORPHAN rule — `calendarSubscriptions.list` echoes it back
+     * verbatim, so a vendor record whose url carries Balo's prefix but names a row id that is
+     * live nowhere is a leaked registration to delete. Also the audit trail a human uses to
+     * reconcile Balo's rows against the vendor's by eye.
+     */
+    webhookUrl: text('webhook_url').notNull(),
+    /**
+     * ⚠ READ FROM `calendarSubscriptions.list` ONLY. **The create response has no such key at
+     * all** — not `null`, ABSENT — so `response.expiration` is `undefined` and a
+     * `=== null` check on it never fires. It arrives as an ISO 8601 string; parse at the
+     * boundary into this `timestamptz`. NULLABLE because it is genuinely unknown between the
+     * create and the verification pass that follows it.
+     */
+    expiration: timestamp('expiration', { withTimezone: true }),
+    /**
+     * When `list` last CONFIRMED this row still exists at the vendor. Distinguishes "expiring"
+     * from "we have not looked recently" — which is what lets the daily expiry monitor read
+     * Balo's own column instead of making N vendor calls of its own, and closes the apiroc
+     * skill's "if the vendor DOES auto-renew, a monitor reading only our column would alert
+     * forever" hazard: the reconciler re-reads `list` and re-stamps roughly hourly, so this
+     * column tracks the vendor's within one probe interval.
+     */
+    expirationSyncedAt: timestamp('expiration_synced_at', { withTimezone: true }),
+    /**
+     * Stamped by the webhook on a VERIFIED delivery. Liveness evidence: a subscription that
+     * has never delivered while its sibling calendars have is a silent provider-channel death
+     * that no expiry check can see. A read-only ops signal in this PR — nothing branches on it.
+     */
+    lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
+    ...timestamps,
+    ...softDelete,
+  },
+  (table) => ({
+    /**
+     * UNIQUE on the VENDOR id, PARTIAL on `deleted_at IS NULL`.
+     *
+     * A vendor id is never reissued, so a non-partial unique would also be correct today.
+     * Partial is chosen because this table DOES soft-delete and the house footgun
+     * (`reference_softdelete_nonpartial_unique_recreate`) is that a soft-deleted row keeps
+     * occupying a non-partial unique key forever. No `ON CONFLICT` statement targets this
+     * index (see the table docblock), so making it partial costs nothing.
+     *
+     * ⚠ The migration SQL carries the `WHERE deleted_at IS NULL` predicate and is the SOURCE
+     * OF TRUTH — verify the emitted `CREATE ... INDEX` after `db:generate`, exactly as
+     * `availability_cache`'s docblock and `cal_conn_expert_provider_idx` (migration 0067)
+     * record.
+     */
+    vendorIdIdx: uniqueIndex('cal_wsub_vendor_id_idx')
+      .on(table.webhookSubscriptionId)
+      .where(sql`${table.deletedAt} IS NULL`),
+    /**
+     * ⚠⚠ NON-UNIQUE, AND THAT IS RULING #5 — see the table docblock. Two live rows for one
+     * pair is the legitimate create-then-delete renewal overlap. This index exists for the
+     * reconciler's per-connection read and the canonicity grouping, not for uniqueness.
+     * Partial on live rows because a soft-deleted subscription is never a plan input.
+     */
+    connCalendarIdx: index('cal_wsub_conn_calendar_idx')
+      .on(table.connectionId, table.calendarId)
+      .where(sql`${table.deletedAt} IS NULL`),
+    /**
+     * The daily monitor's `expiration < threshold` scan. Partial on live rows: a soft-deleted
+     * subscription is never an expiry candidate, and including it would make every teardown
+     * look like an outage.
+     */
+    expirationIdx: index('cal_wsub_expiration_idx')
+      .on(table.expiration)
+      .where(sql`${table.deletedAt} IS NULL`),
+  })
+);
+
 // ── Availability Cache ──────────────────────────────────────────
 
 export const availabilityCache = pgTable(
@@ -232,6 +386,24 @@ export const calendarConnectionsRelations = relations(calendarConnections, ({ on
     references: [expertProfiles.id],
   }),
   subCalendars: many(calendarSubCalendars),
+  /**
+   * ⚠ `many`, and it can legitimately hold TWO live rows for one calendar during a
+   * create-then-delete renewal overlap (see `calendarSubscriptions`' docblock). Any consumer
+   * that wants "the" subscription for a calendar must take the NEWEST live row, not `[0]` of
+   * an unordered hydration.
+   *
+   * ⚠ Relational `with:` hydrates FULL rows — including `endpoint_secret`. Never hydrate this
+   * relation onto anything client-bound; use explicit `columns:` if you ever must
+   * (`reference_drizzle_with_hydration_leaks_secrets`).
+   */
+  subscriptions: many(calendarSubscriptions),
+}));
+
+export const calendarSubscriptionsRelations = relations(calendarSubscriptions, ({ one }) => ({
+  connection: one(calendarConnections, {
+    fields: [calendarSubscriptions.connectionId],
+    references: [calendarConnections.id],
+  }),
 }));
 
 export const calendarSubCalendarsRelations = relations(calendarSubCalendars, ({ one }) => ({
@@ -254,5 +426,7 @@ export type CalendarConnection = typeof calendarConnections.$inferSelect;
 export type NewCalendarConnection = typeof calendarConnections.$inferInsert;
 export type CalendarSubCalendar = typeof calendarSubCalendars.$inferSelect;
 export type NewCalendarSubCalendar = typeof calendarSubCalendars.$inferInsert;
+export type CalendarSubscription = typeof calendarSubscriptions.$inferSelect;
+export type NewCalendarSubscription = typeof calendarSubscriptions.$inferInsert;
 export type AvailabilityCache = typeof availabilityCache.$inferSelect;
 export type NewAvailabilityCache = typeof availabilityCache.$inferInsert;

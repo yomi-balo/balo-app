@@ -29,6 +29,10 @@ import {
  *       only one. Given a deterministic `ORDER BY created_at, id` so the answer is the
  *       OLDEST live connection rather than whatever Postgres happens to return, plus a
  *       sibling in class (a) for callers that know which provider they mean.
+ *   (d) ROW-ID-SCOPED — keyed on this table's primary key, so the ruling does not touch it
+ *       at all: the answer is one row or none, by construction. Added by BAL-468, whose
+ *       async subscription path starts from a bare `calendar_subscriptions.connection_id`
+ *       and has no `expertProfileId` to scope by.
  *
  * A method with no marking is genuinely unaffected (keyed by `connectionId` or not
  * expert-scoped at all).
@@ -156,6 +160,32 @@ export const calendarRepository = {
         eq(calendarConnections.provider, provider),
         isNull(calendarConnections.deletedAt)
       ),
+    });
+  },
+
+  /**
+   * (d) ROW-ID-SCOPED — the one live connection with this primary key.
+   *
+   * BAL-468. Every other read on this table is keyed by `(expertProfileId[, provider])`, which
+   * is right for the connect surface but useless to the async subscription path: a
+   * `calendar_subscriptions` row carries `connection_id` and nothing else, so the reconcile
+   * worker and the webhook's enqueue both start from a bare row id.
+   *
+   * ⚠⚠ THIS EXISTS SPECIFICALLY SO NEITHER CALLER RESOLVES IDENTITY THROUGH
+   * `findConnectionsByEndUserAccountId`. That method returns an ARRAY on purpose —
+   * `cal_conn_end_user_account_idx` is deliberately non-unique, because nothing establishes
+   * that one End User Account maps to at most one Balo expert (two experts on one Google
+   * account is routine in dev and seed data). Taking `[0]` from it would rebuild an ARBITRARY
+   * expert's availability. Keyed on the primary key, this answer is unambiguous by
+   * construction.
+   *
+   * ⚠ FILTERS `deleted_at IS NULL` like every other read here: a disconnected connection must
+   * look absent, so a still-live subscription pointing at it reconciles to "gone" rather than
+   * resurrecting a calendar the expert unhooked.
+   */
+  async findConnectionById(connectionId: string): Promise<CalendarConnection | undefined> {
+    return db.query.calendarConnections.findFirst({
+      where: and(eq(calendarConnections.id, connectionId), isNull(calendarConnections.deletedAt)),
     });
   },
 

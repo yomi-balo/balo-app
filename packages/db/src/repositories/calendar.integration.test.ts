@@ -784,6 +784,41 @@ describe('calendarRepository.listBusyReadTargets', () => {
 
 // ── Reads: provider-scoped, fan-out, and legacy-singular ─────────
 
+describe('calendarRepository — findConnectionById (BAL-468)', () => {
+  it('returns the one live connection for a bare row id', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
+
+    const found = await calendarRepository.findConnectionById(google.id);
+    expect(found?.id).toBe(google.id);
+    expect(found?.provider).toBe('google');
+    expect(found?.expertProfileId).toBe(expert.id);
+  });
+
+  it('excludes a soft-deleted connection — a disconnected row must look absent', async () => {
+    // ⚠ THE POINT OF THIS TEST. A `calendar_subscriptions` row outlives a disconnect, so the
+    // reconcile worker and the webhook both reach here holding a `connection_id` whose
+    // connection the expert has since unhooked. Answering the row would resurrect a calendar
+    // they deliberately removed; answering `undefined` makes both callers reconcile to "gone".
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
+
+    expect(await calendarRepository.findConnectionById(google.id)).toBeUndefined();
+  });
+
+  it('returns undefined for an id that names no connection', async () => {
+    expect(
+      await calendarRepository.findConnectionById('00000000-0000-0000-0000-000000000000')
+    ).toBeUndefined();
+  });
+});
+
 describe('calendarRepository — provider-scoped reads', () => {
   it('findConnectionByExpertAndProvider returns the matching provider and nothing else', async () => {
     const expert = await expertDraftFactory();

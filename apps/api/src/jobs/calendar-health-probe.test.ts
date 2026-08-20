@@ -10,6 +10,7 @@ const {
   mockProvisionConnection,
   mockApplyCredentialFailure,
   mockEnqueueAvailabilityCacheRebuild,
+  mockEnqueueSubscriptionReconcile,
   mockTrackServer,
   mockClassifyCredentialFailure,
   mockLog,
@@ -49,6 +50,7 @@ const {
     mockProvisionConnection: vi.fn(),
     mockApplyCredentialFailure: vi.fn(),
     mockEnqueueAvailabilityCacheRebuild: vi.fn(),
+    mockEnqueueSubscriptionReconcile: vi.fn(),
     mockTrackServer: vi.fn(),
     mockClassifyCredentialFailure: vi.fn(),
     mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -100,6 +102,10 @@ vi.mock('./availability-cache.js', () => ({
   // carry the actual production number for that guard (and the dedicated test below) to mean
   // anything.
   STALENESS_CHECK_THRESHOLD_MS: 15 * 60 * 1000,
+}));
+
+vi.mock('./calendar-subscription-reconcile.js', () => ({
+  enqueueSubscriptionReconcile: mockEnqueueSubscriptionReconcile,
 }));
 
 import {
@@ -244,6 +250,8 @@ describe('runCalendarHealthProbe', () => {
         'health_probe'
       );
       expect(mockSetCredentialStatus).not.toHaveBeenCalled();
+      // BAL-468 §8.4 — the reconcile enqueue fires on a SUCCESS branch, never on a failure one.
+      expect(mockEnqueueSubscriptionReconcile).not.toHaveBeenCalled();
       // ⚠⚠ BAL-396 FIX ROUND — A FAILED DATA CALL IS STILL STAMPED AS AN ATTEMPT. This is the
       // probe's SCAN KEY (`listConnectionsDueForHealthCheck`'s `ORDER BY ... NULLS FIRST`),
       // not evidence the credential works — skipping the stamp on failure is exactly what
@@ -304,6 +312,12 @@ describe('runCalendarHealthProbe', () => {
       expect(mockTrackServer).toHaveBeenCalledWith('calendar_sync_pending_auto_resolved', {
         distinct_id: connection.expertProfileId,
       });
+      // BAL-468 §8.4 — reprovision-heal branch, force: false (the desired set just changed).
+      expect(mockEnqueueSubscriptionReconcile).toHaveBeenCalledWith(
+        connection.id,
+        { force: false },
+        expect.anything()
+      );
     });
 
     it('a SYNC_PENDING connection whose re-provision ALSO fails stays SYNC_PENDING this tick — no false recovery', async () => {
@@ -317,6 +331,7 @@ describe('runCalendarHealthProbe', () => {
       expect(result.recovered).toBe(0);
       expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
       expect(mockTrackServer).not.toHaveBeenCalled();
+      expect(mockEnqueueSubscriptionReconcile).not.toHaveBeenCalled();
     });
 
     it('EXPIRED heals to ACTIVE directly — reconnected out of band — and fires RECONNECT_RESOLVED', async () => {
@@ -336,9 +351,15 @@ describe('runCalendarHealthProbe', () => {
         provider: 'google',
         distinct_id: connection.expertProfileId,
       });
+      // BAL-468 §8.4/§8.6 — out-of-band-reconnect branch, force: true.
+      expect(mockEnqueueSubscriptionReconcile).toHaveBeenCalledWith(
+        connection.id,
+        { force: true },
+        expect.anything()
+      );
     });
 
-    it('an ACTIVE connection whose probe succeeds is left alone — not recovered, nothing written', async () => {
+    it('an ACTIVE connection whose probe succeeds is left alone — not recovered, but STILL enqueues the maintenance sweep', async () => {
       const connection = makeConnection({ credentialStatus: 'ACTIVE' });
       mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
       mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
@@ -349,6 +370,13 @@ describe('runCalendarHealthProbe', () => {
       expect(mockSetCredentialStatus).not.toHaveBeenCalled();
       expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
       expect(mockTrackServer).not.toHaveBeenCalled();
+      // BAL-468 §8.4 — ordinary already-healthy ACTIVE branch, force: false. The probe's proven
+      // batch-bounded scheduler now also drives the subscription maintenance sweep.
+      expect(mockEnqueueSubscriptionReconcile).toHaveBeenCalledWith(
+        connection.id,
+        { force: false },
+        expect.anything()
+      );
     });
 
     /**
@@ -386,6 +414,11 @@ describe('runCalendarHealthProbe', () => {
       expect(mockLog.info).toHaveBeenCalledWith(
         { connectionId: 'conn-1', expertProfileId: connection.expertProfileId },
         'apiroc_active_zero_calendars_healed'
+      );
+      expect(mockEnqueueSubscriptionReconcile).toHaveBeenCalledWith(
+        connection.id,
+        { force: false },
+        expect.anything()
       );
     });
 

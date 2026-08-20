@@ -8,6 +8,7 @@ import {
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { disconnectProvider } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
+import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import type { CalendarProvider, SubCalendar, CalendarConnection } from './types.js';
 
@@ -264,6 +265,10 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
         // — and toggling OFF leaves the expert under-advertised until the next unrelated
         // rebuild. Matches the disconnect handler's rebuild call above.
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
+        // BAL-468 §8.4/§10 — the desired calendar set just changed: toggling ON needs a new
+        // subscription, toggling OFF needs the existing one torn down. Both fall out of the
+        // single reconcile plan; force: false (no reason to assume the credential just broke).
+        await enqueueSubscriptionReconcile(connection.id, { force: false }, request.log);
 
         return reply.send({ success: true });
       } catch (err: unknown) {

@@ -27,6 +27,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startReviewNudgeSweepWorker, registerReviewNudgeSweepCron },
     { startMeetingLifecycleSweepWorker, registerMeetingLifecycleSweepCron },
     { startCalendarHealthProbeWorker, registerCalendarHealthProbeCron },
+    { startCalendarSubscriptionReconcileWorker },
+    { startCalendarSubscriptionMonitorWorker, registerCalendarSubscriptionMonitorCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -45,6 +47,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./review-nudge-sweep.js'),
     import('./meeting-lifecycle-sweep.js'),
     import('./calendar-health-probe.js'),
+    import('./calendar-subscription-reconcile.js'),
+    import('./calendar-subscription-monitor.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -94,5 +98,10 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // detected here, before any booking attempt touches it).
   startCalendarHealthProbeWorker();
   await registerCalendarHealthProbeCron();
+  // BAL-468 — the subscription-reconcile worker (trigger-driven, no cron of its own) and the
+  // daily 07:00 UTC expiry monitor.
+  startCalendarSubscriptionReconcileWorker();
+  startCalendarSubscriptionMonitorWorker();
+  await registerCalendarSubscriptionMonitorCron();
   logger?.info('BullMQ workers started');
 }

@@ -1,4 +1,8 @@
-import { calendarRepository, type CalendarConnection } from '@balo/db';
+import {
+  calendarRepository,
+  calendarSubscriptionsRepository,
+  type CalendarConnection,
+} from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { getApirocClient, callApiroc, paginateApiroc } from '../../lib/apiroc/index.js';
 
@@ -214,6 +218,38 @@ export async function provisionConnection(
 // ── §6 — per-provider teardown ──────────────────────────────────
 
 /**
+ * BAL-468 §10 — best-effort, per-subscription vendor deletes, BEFORE the End User Account
+ * delete: deleting the account may or may not cascade its subscriptions at the vendor
+ * (unverified), and after the account delete the account id no longer addresses anything.
+ * Never throws — a failure here is logged and the teardown continues; a stale vendor
+ * subscription keeps delivering for up to 7 days to a URL that will 404 after step 4 below,
+ * and Svix disables that endpoint after ~5 days. Blast radius is one calendar's trigger.
+ */
+async function deleteVendorSubscriptionsBestEffort(connection: CalendarConnection): Promise<void> {
+  const liveRows = await calendarSubscriptionsRepository.listLiveByConnectionId(connection.id);
+  if (liveRows.length === 0) return;
+
+  const client = getApirocClient();
+  for (const row of liveRows) {
+    try {
+      await callApiroc('calendarSubscriptions.delete', () =>
+        client.calendarSubscriptions.delete(connection.endUserAccountId, row.webhookSubscriptionId)
+      );
+    } catch (err: unknown) {
+      log.warn(
+        {
+          connectionId: connection.id,
+          webhookSubscriptionId: row.webhookSubscriptionId,
+          reason: err instanceof Error ? err.message : String(err),
+          context: 'disconnect',
+        },
+        'apiroc_subscription_delete_failed'
+      );
+    }
+  }
+}
+
+/**
  * §6 — per-provider teardown (see `routes/calendar/api.ts`'s disconnect handler for the full
  * sequence, including the availability-cache rebuild and analytics, which are that route's
  * job, not this service's).
@@ -224,6 +260,12 @@ export async function provisionConnection(
  * ⚠ NO NULL GUARD ON `endUserAccountId` — removed in the BAL-396 fix round. Migration 0069
  * made the column `NOT NULL`, so every live row (the only kind `findConnectionByExpertAndProvider`
  * can return) already carries a pointer; the vendor call always runs.
+ *
+ * BAL-468 §10 — new ordering: (1) best-effort per-subscription vendor deletes, (2) best-effort
+ * End User Account delete (unchanged), (3) `softDeleteByConnectionId` — NOT OPTIONAL, without it
+ * the monitor alerts forever on rows for a disconnected connection and the webhook route would
+ * keep resolving and processing deliveries for an expert who unhooked their calendar — (4)/(5)
+ * the existing sub-calendar and connection teardown (unchanged).
  */
 export async function disconnectProvider(expertProfileId: string, provider: string): Promise<void> {
   const connection = await calendarRepository.findConnectionByExpertAndProvider(
@@ -231,6 +273,8 @@ export async function disconnectProvider(expertProfileId: string, provider: stri
     provider
   );
   if (!connection) return;
+
+  await deleteVendorSubscriptionsBestEffort(connection);
 
   try {
     const client = getApirocClient();
@@ -248,6 +292,7 @@ export async function disconnectProvider(expertProfileId: string, provider: stri
     );
   }
 
+  await calendarSubscriptionsRepository.softDeleteByConnectionId(connection.id);
   await calendarRepository.deleteSubCalendarsByConnectionId(connection.id);
   await calendarRepository.softDeleteConnectionForProvider(expertProfileId, provider);
 }

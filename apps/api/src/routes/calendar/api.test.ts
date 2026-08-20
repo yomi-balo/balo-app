@@ -12,6 +12,7 @@ const {
   mockSoftDeleteConnection,
   mockDisconnectProvider,
   mockEnqueueAvailabilityCacheRebuild,
+  mockEnqueueSubscriptionReconcile,
 } = vi.hoisted(() => ({
   mockListConnectionsByExpertProfileId: vi.fn(),
   mockFindSubCalendarsByConnectionId: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockSoftDeleteConnection: vi.fn(),
   mockDisconnectProvider: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
+  mockEnqueueSubscriptionReconcile: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -42,6 +44,10 @@ vi.mock('../../services/calendar/apiroc-connection.js', () => ({
 
 vi.mock('../../jobs/availability-cache.js', () => ({
   enqueueAvailabilityCacheRebuild: mockEnqueueAvailabilityCacheRebuild,
+}));
+
+vi.mock('../../jobs/calendar-subscription-reconcile.js', () => ({
+  enqueueSubscriptionReconcile: mockEnqueueSubscriptionReconcile,
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -395,6 +401,12 @@ describe('calendar API routes (BAL-396)', () => {
       // toggled OFF). Matches the disconnect handler's rebuild call.
       expect(mockEnqueueAvailabilityCacheRebuild).toHaveBeenCalledWith(
         EXPERT_UUID,
+        expect.anything()
+      );
+      // BAL-468 §8.4/§10 — the desired calendar set just changed.
+      expect(mockEnqueueSubscriptionReconcile).toHaveBeenCalledWith(
+        'conn-2',
+        { force: false },
         expect.anything()
       );
     });

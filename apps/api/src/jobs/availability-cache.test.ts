@@ -69,6 +69,7 @@ import {
   startStalenessCheckWorker,
   registerStalenessCheckCron,
   enqueueAvailabilityCacheRebuild,
+  tryEnqueueAvailabilityCacheRebuild,
   AVAILABILITY_CACHE_QUEUE,
   STALENESS_CHECK_QUEUE,
 } from './availability-cache';
@@ -233,6 +234,40 @@ describe('availability-cache jobs', () => {
         { expertProfileId: 'expert-1', error: 'redis down' },
         'Failed to enqueue availability cache rebuild job'
       );
+    });
+  });
+
+  describe('tryEnqueueAvailabilityCacheRebuild (BAL-468 §7.4)', () => {
+    const makeLog = (): FastifyBaseLogger => ({ error: vi.fn() }) as unknown as FastifyBaseLogger;
+
+    it('returns true and enqueues with the same coalescing options on success', async () => {
+      const log = makeLog();
+
+      const result = await tryEnqueueAvailabilityCacheRebuild('expert-1', log);
+
+      expect(result).toBe(true);
+      expect(mockQueueAdd).toHaveBeenCalledWith(
+        'rebuild-availability-cache',
+        { expertProfileId: 'expert-1' },
+        expect.objectContaining({ jobId: 'availability-expert-1' })
+      );
+    });
+
+    it('returns false on a queue error, and still swallows (does not throw)', async () => {
+      const log = makeLog();
+      mockQueueAdd.mockRejectedValueOnce(new Error('redis down'));
+
+      const result = await tryEnqueueAvailabilityCacheRebuild('expert-1', log);
+
+      expect(result).toBe(false);
+      expect(log.error).toHaveBeenCalled();
+    });
+
+    it('enqueueAvailabilityCacheRebuild still swallows and returns void regardless of the result', async () => {
+      const log = makeLog();
+      mockQueueAdd.mockRejectedValueOnce(new Error('redis down'));
+
+      await expect(enqueueAvailabilityCacheRebuild('expert-1', log)).resolves.toBeUndefined();
     });
   });
 });
