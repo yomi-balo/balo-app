@@ -123,10 +123,12 @@ export const partyDomainsRepository = {
     }
     // Owner-resolution race: if a concurrent soft-delete freed the slot between the
     // failed INSERT above and this SELECT, `owner` is undefined and we fall through
-    // to label this 'already_claimed' even though the slot is momentarily free. This
-    // is a cosmetic mislabel, not a failure — harmless in v1 because nothing consumes
-    // the label. BAL-345's matcher must NOT treat 'already_claimed' as authoritative
-    // ownership. Deliberately no retry here (comment only).
+    // to label this 'already_claimed' even though the slot is momentarily free.
+    // 'already_claimed' therefore means "we did not win the slot", NOT "another party
+    // provably owns it" — consumers MUST re-resolve the owner instead of treating this
+    // label as authoritative ownership. `companiesRepository.promoteToOrganization` does
+    // exactly that, mapping the undefined-owner case to `domain_conflict_retryable`
+    // (BAL-372). Deliberately no retry here (comment only).
     return { outcome: 'skipped', reason: 'already_claimed' };
   },
 

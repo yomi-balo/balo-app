@@ -14,8 +14,8 @@ import { MembersAccessClient } from './_components/members-access-client';
 /**
  * Company "Members & access" (BAL-347) — the THREE-section admin surface (Domains +
  * Join mode + Join-request queue). Gating order: sign-in → `MANAGE_MEMBERS` on the
- * session company → `notFound()` for a PERSONAL workspace (the whole company surface
- * is dormant/built-not-live in v1 while every company is personal). Data is loaded in
+ * session company → `notFound()` for a PERSONAL workspace (only a company promoted to a
+ * shared organization at the onboarding Intent step reaches this surface). Data is loaded in
  * a `Promise.all` and assembled into a PII-free DTO for the client shell.
  */
 export default async function MembersAccessPage(): Promise<React.JSX.Element> {
