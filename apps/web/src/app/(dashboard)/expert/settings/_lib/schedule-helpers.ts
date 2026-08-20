@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { getNextSpringForwardGap, type SpringForwardGap } from '@balo/shared/timezone';
+import { SLOT_STEP_MINUTES } from '@balo/shared/availability';
 import type { BookingSettings, ScheduleData, ScheduleRule } from '../_types/schedule';
 
 // ── Editor state model ──────────────────────────────────────────────
@@ -47,7 +48,8 @@ export const DAY_META: readonly DayMeta[] = [
 ];
 
 export const MAX_RANGES_PER_DAY = 3;
-export const TIME_STEP_MINUTES = 15;
+/** The weekly editor's grid IS the slot grid. One definition (BAL-236 §1.5). */
+export const TIME_STEP_MINUTES = SLOT_STEP_MINUTES;
 const MINUTES_PER_DAY = 24 * 60;
 const DEFAULT_START = '09:00';
 const DEFAULT_END = '17:00';

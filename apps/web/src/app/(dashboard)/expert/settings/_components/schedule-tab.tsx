@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, Clock, Info, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Clock, Info, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { IconBadge } from '@/components/balo/icon-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { ExpertAvailabilityCalendar } from '@/components/availability';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,9 +71,24 @@ export function ScheduleTab(): React.JSX.Element {
   const [timezone, setTimezone] = useState('Australia/Melbourne');
   const [saving, setSaving] = useState(false);
   const [showSavedSummary, setShowSavedSummary] = useState(false);
+  // BAL-236 (D15) — promoted from `expertIdRef` so the availability preview (mounted only in
+  // the `ready` branch) re-renders once the id is known. The ref is KEPT: four `track(...)`
+  // call sites read it synchronously inside callbacks and must not be disturbed.
+  const [expertProfileId, setExpertProfileId] = useState<string | null>(null);
   // Target timezone awaiting confirmation (AC12): non-null while the reinterpret
   // warning dialog is open. Only reached when the expert has active saved rules.
   const [pendingTimezone, setPendingTimezone] = useState<string | null>(null);
+
+  /**
+   * The SAVED timezone, mirrored into state alongside the ref (same reason `expertProfileId`
+   * was promoted, D15: a ref does not re-render).
+   *
+   * ⚠ THE PREVIEW MUST RENDER AGAINST THIS, NOT `timezone`. `timezone` is the editing value —
+   * changing the dropdown without saving would relabel the preview into the new zone while the
+   * server grid it is showing was still computed in the persisted one, so the expert would be
+   * told "what clients see" is something no client sees.
+   */
+  const [persistedTimezone, setPersistedTimezone] = useState('Australia/Melbourne');
 
   const expertIdRef = useRef<string>('');
   const persistedTimezoneRef = useRef<string>('Australia/Melbourne');
@@ -87,7 +103,9 @@ export function ScheduleTab(): React.JSX.Element {
       return;
     }
     expertIdRef.current = data.expertProfileId;
+    setExpertProfileId(data.expertProfileId);
     persistedTimezoneRef.current = data.timezone;
+    setPersistedTimezone(data.timezone);
     persistedBookingSettingsRef.current = data.bookingSettings;
     hasPersistedRulesRef.current = data.rules.length > 0;
     setTimezone(data.timezone);
@@ -160,6 +178,7 @@ export function ScheduleTab(): React.JSX.Element {
     const result = await updateScheduleTimezoneAction(nextTimezone);
     if (result.success) {
       persistedTimezoneRef.current = nextTimezone;
+      setPersistedTimezone(nextTimezone);
       track(SCHEDULE_EVENTS.TIMEZONE_CHANGED, {
         expert_id: expertIdRef.current,
         from_timezone: previous,
@@ -226,6 +245,7 @@ export function ScheduleTab(): React.JSX.Element {
     setSaving(false);
     if (result.success) {
       persistedTimezoneRef.current = timezone;
+      setPersistedTimezone(timezone);
       hasPersistedRulesRef.current = rules.length > 0;
       track(SCHEDULE_EVENTS.SAVED, {
         expert_id: expertIdRef.current,
@@ -390,6 +410,30 @@ export function ScheduleTab(): React.JSX.Element {
               <BookingRulesSection settings={bookingSettings} onChange={handleBookingChange} />
 
               {showSavedSummary && <ScheduleSavedSummary week={week} timezone={timezone} />}
+
+              {/* BAL-236 — the resolved bookable-slot preview. Only inside `ready` (the expert
+                  has saved rules); in `empty`, `ScheduleEmptyState` already owns the message and
+                  a `not_configured` preview would just duplicate it. */}
+              {expertProfileId && (
+                <section className="border-border bg-card rounded-xl border p-6">
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <CalendarDays className="text-primary h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="text-primary text-[11px] font-bold tracking-wider uppercase">
+                      What clients see
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground mb-4 text-sm leading-relaxed">
+                    Your hours, minus anything already busy on your connected calendar.
+                  </p>
+                  <ExpertAvailabilityCalendar
+                    expertProfileId={expertProfileId}
+                    mode="preview"
+                    viewerTimezone={persistedTimezone}
+                    daysAhead={14}
+                    viewerType="expert"
+                  />
+                </section>
+              )}
 
               {/* Actions */}
               <div className="flex flex-wrap items-center justify-between gap-3">

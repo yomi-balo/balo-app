@@ -1,10 +1,11 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
 import { expertSearchRepository, type ExpertSearchParams } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, SEARCH_SERVER_EVENTS } from '@balo/analytics/server';
 import { getRedis } from '../../lib/redis.js';
-import { checkRateLimit, type RateLimitConfig } from '../../lib/rate-limiter.js';
+import type { RateLimitConfig } from '../../lib/rate-limiter.js';
+import { createRateLimitPreHandler } from '../../lib/rate-limit-prehandler.js';
 import { isAvailabilityGateEnabled } from '../../lib/search-availability-gate.js';
 import { searchQuerySchema, type SearchQuery } from './schema.js';
 import { mapRowToExpertSearchResult } from './mapper.js';
@@ -96,24 +97,11 @@ function appliedFiltersSnapshot(query: SearchQuery): Record<string, unknown> {
  * availability outranks strict limiting on a public read-only endpoint).
  * Returns `true` if the request was rejected (caller must stop).
  */
-async function enforceRateLimit(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
-  try {
-    const result = await checkRateLimit(getRedis(), RATE_LIMIT, request.ip);
-    if (!result.allowed) {
-      reply
-        .header('Retry-After', String(result.ttlSeconds))
-        .status(429)
-        .send({ error: 'rate_limited', cooldownSeconds: result.ttlSeconds });
-      return true;
-    }
-  } catch (error) {
-    log.warn(
-      { error: error instanceof Error ? error.message : String(error) },
-      'Search rate-limit Redis unavailable — failing open'
-    );
-  }
-  return false;
-}
+const enforceRateLimit = createRateLimitPreHandler({
+  config: RATE_LIMIT,
+  failOpen: true,
+  label: 'expert-search',
+});
 
 export async function searchRoute(fastify: FastifyInstance): Promise<void> {
   fastify.get(

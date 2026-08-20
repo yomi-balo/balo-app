@@ -35,6 +35,7 @@ import type { EndOfCallEventMap, EndOfCallServerEventMap } from './events/end-of
 import type { ActionItemServerEventMap } from './events/action-item';
 import type { WalletEventMap } from './events/wallet';
 import type { ScheduleEventMap } from './events/schedule';
+import type { AvailabilityEventMap } from './events/availability';
 import type { MeetingCallEventMap } from './events/meeting-call';
 import type { MeetingPanelEventMap } from './events/meeting-panel';
 import type { TranscriptServerEventMap } from './events/transcript';
@@ -71,6 +72,7 @@ export type AllEvents = AuthEventMap &
   EndOfCallEventMap &
   WalletEventMap &
   ScheduleEventMap &
+  AvailabilityEventMap &
   // BAL-435 — the in-call surface. ⚠ CLIENT family; `MeetingServerEventMap` stays server-only.
   MeetingCallEventMap &
   // BAL-436 — the in-call side panel. ⚠ CLIENT family; `GuestServerEventMap` stays server-only.

@@ -774,16 +774,113 @@ describe('Layer 3 / Scan C — availability reaches a vendor only as a windowed 
     ).toEqual([]);
   });
 
-  it('both consumers still read the SHARED port, not their own vendor call', () => {
+  it('the shared loader is the ONE place the port is called (BAL-236 — extracted from the two former consumers)', () => {
+    expect(codeLines(readRaw('services/availability/load-resolver-inputs.ts'))).toContain(
+      'vendorBusyProvider.listBusyBlocks'
+    );
+    expect(
+      markersInCode(readRaw('services/availability/load-resolver-inputs.ts'), [
+        'freeBusy',
+        'getApirocClient',
+      ])
+    ).toEqual([]);
+  });
+
+  /**
+   * ⚠ THE TITLE ABOVE IS A CLAIM ABOUT THE WHOLE TREE, SO SCAN IT AS ONE. The first assertion
+   * only proves the loader DOES call the port, and the next only proves two NAMED files do
+   * not — a fourth file anywhere under `apps/api/src` could call it directly and both would
+   * still pass. Scan B and Scan E do not cover this: they ban provider LITERALS and event-CONTENT
+   * reads, not a bypass of the Balo-side port. `ALL_SOURCE_FILES` is already computed, so the
+   * uniqueness claim costs one filter.
+   */
+  it('⚠ the port has EXACTLY ONE call site, tree-wide (not merely "not in these two files")', () => {
+    const callers = ALL_SOURCE_FILES.filter((rel) =>
+      codeLines(readRaw(rel)).includes('vendorBusyProvider.listBusyBlocks')
+    );
+    expect(
+      callers,
+      `The vendor free/busy port must be reached through the ONE shared loader. A second call ` +
+        `site re-opens the drift the BAL-236 extraction closed: each copy decides its own ` +
+        `fail-closed behaviour, and only one of them is scanned. AMEND THE ADR FIRST.`
+    ).toEqual(['services/availability/load-resolver-inputs.ts']);
+  });
+
+  it('every consumer reads the SHARED loader, not its own vendor call (BAL-236)', () => {
     for (const rel of [
       'services/availability/resolve-and-cache.ts',
       'services/availability/window-availability.ts',
+      // ⚠ BAL-236's own NEW third consumer. Omitting it left the ticket that added it as the
+      // one file the scan did not look at.
+      'services/availability/expert-slots.ts',
     ]) {
-      expect(codeLines(readRaw(rel))).toContain('vendorBusyProvider.listBusyBlocks');
-      expect(markersInCode(readRaw(rel), ['freeBusy', 'getApirocClient'])).toEqual([]);
+      expect(codeLines(readRaw(rel))).toContain('loadResolverInputs(');
+      expect(
+        markersInCode(readRaw(rel), [
+          'vendorBusyProvider.listBusyBlocks',
+          'freeBusy',
+          'getApirocClient',
+        ])
+      ).toEqual([]);
     }
   });
+
+  /**
+   * ⚠ THE BYPASS THE SUBSTRING SCANS CANNOT SEE. `loadResolverInputs`'s 4th parameter,
+   * `busyBlocksOverride`, short-circuits the vendor read entirely — it exists ONLY for
+   * `resolve-and-cache.ts`'s seed-only `ResolveAndCacheOptions.busyBlocks`. Passing `[]` from
+   * any other caller yields `busyOutcome = { ok: true, value: [] }`, so the booking gate would
+   * answer "bookable" and the public route `ok` OVER an expert's real external commitments —
+   * with every scan above still green, because the call site names `loadResolverInputs(`, not
+   * the port. This is exactly the "do not re-inline `[]` at either call site" regression
+   * `vendor-busy.ts` exists to prevent.
+   *
+   * ⚠ ARGUMENTS ARE COUNTED BY A PAREN-DEPTH WALK, NOT A REGEX. The obvious pattern
+   * (`/loadResolverInputs\([^)]*,[^)]*,[^)]*,/s`) is quantified overlapping alternation of the
+   * kind SonarCloud S5852 fails the gate on, and it would also mis-count any argument that
+   * itself contains a `)`. The walk is linear and exact.
+   */
+  it('⚠ only the seed path may pass a busyBlocks override (the 4-argument form)', () => {
+    const withOverride = ALL_SOURCE_FILES.filter(
+      (rel) =>
+        // The loader's own 4-parameter DECLARATION is not a call site.
+        rel !== 'services/availability/load-resolver-inputs.ts' &&
+        maxCallArity(codeLines(readRaw(rel)), 'loadResolverInputs(') >= 4
+    );
+    expect(
+      withOverride,
+      `A 4-argument \`loadResolverInputs(…, busyBlocksOverride)\` SKIPS the vendor read ` +
+        `entirely and every other scan in this file stays green. It is sanctioned ONLY for ` +
+        `resolve-and-cache.ts's seed path. AMEND THE ADR FIRST.`
+    ).toEqual(['services/availability/resolve-and-cache.ts']);
+  });
 });
+
+/**
+ * The largest number of top-level arguments any `<open>` call in `code` is given, or 0 when the
+ * call does not appear. Walks parenthesis depth and counts depth-1 commas; string and template
+ * literals are not interpreted, which is safe here because the scanned call takes identifiers
+ * and `Date`s. Deliberately regex-free (S5852) and linear in `code.length`.
+ */
+function maxCallArity(code: string, open: string): number {
+  let best = 0;
+  let from = code.indexOf(open);
+  while (from !== -1) {
+    let depth = 1;
+    let args = 0;
+    let sawToken = false;
+    for (let i = from + open.length; i < code.length && depth > 0; i += 1) {
+      const ch = code[i];
+      if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+      else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+      else if (ch === ',' && depth === 1) args += 1;
+      else if (depth === 1 && ch !== undefined && ch.trim() !== '') sawToken = true;
+    }
+    if (sawToken) best = Math.max(best, args + 1);
+    from = code.indexOf(open, from + open.length);
+  }
+  return best;
+}
 
 /**
  * SCAN D DEFENDS THIS GUARD'S OWN VALIDITY — that is why it is in scope, not because it

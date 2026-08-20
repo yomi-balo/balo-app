@@ -44,9 +44,18 @@ vi.mock('../../lib/redis.js', () => ({
   getRedis: mockGetRedis,
 }));
 
-vi.mock('../../lib/rate-limiter.js', () => ({
-  checkRateLimit: mockCheckRateLimit,
-}));
+// ⚠ `RATE_LIMIT_DEADLINE_MS` MUST come through from the real module. The shared preHandler
+// bounds `checkRateLimit` with `withDeadline` (BAL-236 — without it the fail-closed/fail-open
+// branch is unreachable during a real Redis outage, because ioredis parks commands forever
+// rather than rejecting). A mock that omits the constant passes `undefined` as the deadline,
+// which fires on the next tick and makes EVERY case here look like an outage.
+vi.mock('../../lib/rate-limiter.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/rate-limiter.js')>();
+  return {
+    RATE_LIMIT_DEADLINE_MS: actual.RATE_LIMIT_DEADLINE_MS,
+    checkRateLimit: mockCheckRateLimit,
+  };
+});
 
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,

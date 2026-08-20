@@ -32,6 +32,7 @@ export {
   END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
+  AVAILABILITY_EVENTS,
   MEETING_CALL_EVENTS,
   // BAL-436 — ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package
   // (`apps/web` cannot import it), not in this one.
@@ -85,6 +86,7 @@ export type {
   WalletLens,
   WalletRestingStateName,
   ScheduleEventMap,
+  AvailabilityEventMap,
   MeetingCallEventMap,
   MeetingCallLayout,
   MeetingCallLayoutSource,

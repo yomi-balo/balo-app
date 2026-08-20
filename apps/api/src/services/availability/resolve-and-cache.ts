@@ -1,10 +1,4 @@
-import {
-  availabilityOverridesRepository,
-  availabilityRulesRepository,
-  calendarRepository,
-  consultationsRepository,
-  expertsRepository,
-} from '@balo/db';
+import { calendarRepository, expertsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import {
   CONSULTATION_LOAD_PAD_MS,
@@ -14,7 +8,8 @@ import {
 } from './resolver-inputs.js';
 import { resolve } from './resolver.js';
 import type { BusyBlock } from './types.js';
-import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
+import { loadResolverInputs } from './load-resolver-inputs.js';
+import { VendorBusyUnavailableError } from './vendor-busy.js';
 
 const log = createLogger('availability-resolve-and-cache');
 
@@ -111,35 +106,24 @@ export async function resolveAndCacheAvailability(
   const loadFrom = new Date(now.getTime() - CONSULTATION_LOAD_PAD_MS);
   const loadTo = new Date(horizonEnd.getTime() + CONSULTATION_LOAD_PAD_MS);
 
-  // Vendor free/busy comes from the SHARED port unless a caller overrode it (seed only) — see
+  // Vendor free/busy comes from the SHARED loader (`./load-resolver-inputs.ts`), which reads
+  // `vendorBusyProvider` unless a caller overrode it (seed only) — see
   // `ResolveAndCacheOptions.busyBlocks` and `./vendor-busy.ts`.
   //
   // ⚠⚠ BAL-396 §9.4 — THE ADVERTISE PATH SKIPS THE CACHE WRITE, IT DOES NOT FAIL THE JOB.
-  // `vendorBusyProvider.listBusyBlocks` THROWS `VendorBusyUnavailableError` when it cannot
-  // trust its answer (an unreadable connection, or a vendor read that failed). Overwriting
-  // `availability_cache` with a result computed WITHOUT that data would replace last-known-
-  // good with a possibly-wrong "more available than reality" answer, which is worse than a
-  // stale one — so the rejection is turned into a tagged result BEFORE `Promise.all` sees it
-  // (a raw rejection there would abort the whole rebuild the same way, but this makes the
-  // "vendor failure ≠ every other read failing" distinction explicit rather than incidental).
-  type BusyBlocksOutcome =
-    | { readonly ok: true; readonly value: BusyBlock[] }
-    | { readonly ok: false; readonly error: unknown };
-  const busyBlocksSource: Promise<BusyBlocksOutcome> = (
-    options.busyBlocks === undefined
-      ? vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo)
-      : Promise.resolve(options.busyBlocks)
-  ).then(
-    (value): BusyBlocksOutcome => ({ ok: true, value }),
-    (error: unknown): BusyBlocksOutcome => ({ ok: false, error })
+  // The loader THROWS surfaced as `{ ok: false }` when the vendor answer cannot be trusted (an
+  // unreadable connection, or a vendor read that failed). Overwriting `availability_cache`
+  // with a result computed WITHOUT that data would replace last-known-good with a
+  // possibly-wrong "more available than reality" answer, which is worse than a stale one — so
+  // the rejection is turned into a tagged result BEFORE `Promise.all` sees it (a raw rejection
+  // there would abort the whole rebuild the same way, but this makes the "vendor failure ≠
+  // every other read failing" distinction explicit rather than incidental).
+  const { rules, baloConsultations, overrides, busyOutcome } = await loadResolverInputs(
+    expertProfileId,
+    loadFrom,
+    loadTo,
+    options.busyBlocks
   );
-
-  const [rules, baloConsultations, overrides, busyOutcome] = await Promise.all([
-    availabilityRulesRepository.listByExpertProfileId(expertProfileId),
-    consultationsRepository.listConfirmedInRange(expertProfileId, loadFrom, loadTo),
-    availabilityOverridesRepository.listUpcoming(expertProfileId),
-    busyBlocksSource,
-  ]);
 
   if (!busyOutcome.ok) {
     const err = busyOutcome.error;

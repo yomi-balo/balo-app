@@ -32,6 +32,7 @@ export {
   END_OF_CALL_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
+  AVAILABILITY_EVENTS,
   MEETING_CALL_EVENTS,
   /** BAL-436 — the in-call side panel (People and Files). */
   MEETING_PANEL_EVENTS,

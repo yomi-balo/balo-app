@@ -10,8 +10,10 @@ interface ScheduleSavedSummaryProps {
 }
 
 /**
- * Read-only text summary of the saved schedule — the BAL-236 fallback until the
- * ExpertAvailabilityCalendar slot preview exists. Retrospective info only.
+ * Read-only text summary of the saved schedule — a POST-SAVE CONFIRMATION of the AUTHORED
+ * week, gated on `showSavedSummary`. The `ExpertAvailabilityCalendar` preview (BAL-236, always
+ * on in `schedule-tab.tsx`'s `ready` branch) answers a different question: resolved BOOKABLE
+ * slots after busy subtraction. This component is not superseded by it — they coexist.
  */
 export function ScheduleSavedSummary({
   week,
