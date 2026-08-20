@@ -21,9 +21,6 @@ export interface CreateOverrideInput {
   label?: string;
 }
 
-/** @deprecated use {@link AvailabilityConflictCheckInput} — kept as an alias so existing callers don't churn. */
-export type CheckConflictsInput = AvailabilityConflictCheckInput;
-
 interface DateOverrideAddPopoverProps {
   /** Returns true when the block was created (so the popover can reset + close). */
   onCreate: (input: CreateOverrideInput) => Promise<boolean>;
@@ -38,7 +35,9 @@ interface DateOverrideAddPopoverProps {
    * the module-level `getOverrideConflictsAction` Server Action directly (a stable
    * reference); wrap any future non-Server-Action caller in `useCallback`.
    */
-  onCheckConflicts: (input: CheckConflictsInput) => Promise<AvailabilityConflictReportDto | null>;
+  onCheckConflicts: (
+    input: AvailabilityConflictCheckInput
+  ) => Promise<AvailabilityConflictReportDto | null>;
   /**
    * Purely an analytics dimension — joins the two BAL-416 client events to the expert.
    * `null` while the card's own profile fetch is still in flight (the popover is reachable

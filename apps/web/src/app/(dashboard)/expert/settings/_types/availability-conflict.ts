@@ -31,12 +31,12 @@ export interface AvailabilityConflictReportDto {
 }
 
 /**
- * SUGGESTION — the request shape for a conflict check, shared by the popover's
- * `onCheckConflicts` prop (`CheckConflictsInput`) and the Server Action's own input
- * (`GetOverrideConflictsInput`), which were two structurally-identical `{ startDate: string;
- * endDate: string }` interfaces in two files. Type-only, so importing it into the `'use
- * client'` popover and the `'use server'` action is erased at compile time — no runtime
- * client/server boundary is crossed.
+ * The request shape for a conflict check — the SINGLE definition, consumed directly by both
+ * the popover's `onCheckConflicts` prop and the Server Action's own input. These began as two
+ * structurally-identical `{ startDate: string; endDate: string }` interfaces in two files;
+ * they were collapsed here rather than aliased, so there is exactly one name to import.
+ * Type-only, so importing it into the `'use client'` popover and the `'use server'` action is
+ * erased at compile time — no runtime client/server boundary is crossed.
  */
 export interface AvailabilityConflictCheckInput {
   /** `YYYY-MM-DD`. */

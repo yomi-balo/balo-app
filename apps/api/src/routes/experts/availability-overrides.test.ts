@@ -135,56 +135,50 @@ describe('experts availability-overrides routes', () => {
 
   // ── Validation ────────────────────────────────────────────────
 
-  it('returns 400 when endDate is before startDate', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/experts/availability-overrides',
-      headers: authedHeaders,
+  /**
+   * Every rejected CREATE body, as one table. Each row asserts the same two things — a 400 and
+   * that nothing reached the repository — so they differ only in the payload that must be
+   * refused. Parameterised rather than written out (SonarCloud S4144 flagged the hand-written
+   * run), matching `consultations.integration.test.ts`'s `OVERLAP_CASES`.
+   *
+   * ⚠ The span row is the load-bearing one: S3 added the 366-day guard to the conflicts QUERY
+   * but shipped no test for the CREATE arm, which is the one with the durable consequence —
+   * an unbounded `endDate` (e.g. `9999-12-31`) would be STORED, permanently widening every
+   * future availability-cache rebuild's forward scan rather than just failing one read.
+   */
+  const INVALID_CREATE_BODIES: ReadonlyArray<{
+    readonly name: string;
+    readonly payload: Record<string, unknown>;
+  }> = [
+    {
+      name: 'endDate is before startDate',
       payload: { expertProfileId: EXPERT_ID, startDate: '2026-12-26', endDate: '2026-12-24' },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(mockCreate).not.toHaveBeenCalled();
-  });
-
-  it('returns 400 on a non-ISO date', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/experts/availability-overrides',
-      headers: authedHeaders,
+    },
+    {
+      name: 'a date is not ISO `YYYY-MM-DD`',
       payload: { expertProfileId: EXPERT_ID, startDate: '24-12-2026', endDate: '2026-12-26' },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(mockCreate).not.toHaveBeenCalled();
-  });
-
-  it('returns 400 when the label exceeds 80 characters', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/experts/availability-overrides',
-      headers: authedHeaders,
+    },
+    {
+      name: 'the label exceeds 80 characters',
       payload: {
         expertProfileId: EXPERT_ID,
         startDate: '2026-12-24',
         endDate: '2026-12-26',
         label: 'x'.repeat(81),
       },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(mockCreate).not.toHaveBeenCalled();
-  });
+    },
+    {
+      name: 'the span exceeds 366 days (S3)',
+      payload: { expertProfileId: EXPERT_ID, startDate: '2026-01-01', endDate: '2027-06-01' },
+    },
+  ];
 
-  /**
-   * SUGGESTION — S3 added this span guard to the conflicts query but shipped no test for the
-   * CREATE arm, which is the one with the durable consequence: an unbounded `endDate` (e.g.
-   * `9999-12-31`) would be STORED, permanently widening every future availability-cache
-   * rebuild's forward scan rather than just failing one read.
-   */
-  it('returns 400 when the create span exceeds 366 days (S3)', async () => {
+  it.each(INVALID_CREATE_BODIES)('returns 400 when $name', async ({ payload }) => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/experts/availability-overrides',
       headers: authedHeaders,
-      payload: { expertProfileId: EXPERT_ID, startDate: '2026-01-01', endDate: '2027-06-01' },
+      payload,
     });
     expect(res.statusCode).toBe(400);
     expect(mockCreate).not.toHaveBeenCalled();

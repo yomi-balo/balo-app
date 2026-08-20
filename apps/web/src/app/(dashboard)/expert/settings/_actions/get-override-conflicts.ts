@@ -23,9 +23,6 @@ const checkConflictsSchema = z
     path: ['endDate'],
   });
 
-/** @deprecated use {@link AvailabilityConflictCheckInput} — kept as an alias so existing callers don't churn. */
-export type GetOverrideConflictsInput = AvailabilityConflictCheckInput;
-
 /**
  * BAL-416 — does a proposed time-off block collide with any confirmed consultation?
  * `expertProfileId` is derived from the trusted session — never a client id (this is a
@@ -41,7 +38,7 @@ export type GetOverrideConflictsInput = AvailabilityConflictCheckInput;
 export const getOverrideConflictsAction = withAuth(
   async (
     session,
-    input: GetOverrideConflictsInput
+    input: AvailabilityConflictCheckInput
   ): Promise<AvailabilityConflictReportDto | null> => {
     const expertProfileId = session.user.expertProfileId;
     if (!expertProfileId) {

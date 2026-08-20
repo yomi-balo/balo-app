@@ -248,9 +248,7 @@ describe('findOverrideConflicts', () => {
       // S2 — the expert containment term is threaded through, not dropped.
       EXPERT_ID
     );
-    expect((mockResolveCompanies.mock.calls[0]?.[0] as string[]).length).toBe(
-      CONFLICT_DETAIL_LIMIT
-    );
+    expect(mockResolveCompanies.mock.calls[0]?.[0] as string[]).toHaveLength(CONFLICT_DETAIL_LIMIT);
   });
 
   it('renders clientCompanyName null for a meeting missing from the company map', async () => {

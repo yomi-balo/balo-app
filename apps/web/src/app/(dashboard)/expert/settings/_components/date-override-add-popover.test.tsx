@@ -146,9 +146,9 @@ describe('DateOverrideAddPopover', () => {
 
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
 
-    await waitFor(() =>
-      expect(screen.getByText('2 sessions are already booked in these dates')).toBeInTheDocument()
-    );
+    expect(
+      await screen.findByText('2 sessions are already booked in these dates')
+    ).toBeInTheDocument();
     expect(onCreate).not.toHaveBeenCalled();
     expect(mockTrack).toHaveBeenCalledWith('availability_override_conflict_detected', {
       conflict_count: 2,
@@ -173,7 +173,7 @@ describe('DateOverrideAddPopover', () => {
     await pickADate(user);
     await waitFor(() => expect(onCheckConflicts).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
-    await waitFor(() => screen.getByRole('button', { name: /block dates anyway/i }));
+    await screen.findByRole('button', { name: /block dates anyway/i });
 
     await user.click(screen.getByRole('button', { name: /block dates anyway/i }));
 
@@ -201,7 +201,7 @@ describe('DateOverrideAddPopover', () => {
     await pickADate(user);
     await waitFor(() => expect(onCheckConflicts).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
-    await waitFor(() => screen.getByRole('button', { name: /block dates anyway/i }));
+    await screen.findByRole('button', { name: /block dates anyway/i });
 
     await user.click(screen.getByRole('button', { name: /block dates anyway/i }));
 
@@ -229,7 +229,7 @@ describe('DateOverrideAddPopover', () => {
     await pickADate(user);
     await waitFor(() => expect(onCheckConflicts).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
-    await waitFor(() => screen.getByRole('button', { name: /choose other dates/i }));
+    await screen.findByRole('button', { name: /choose other dates/i });
 
     await user.click(screen.getByRole('button', { name: /choose other dates/i }));
 
@@ -261,7 +261,7 @@ describe('DateOverrideAddPopover', () => {
     await pickADate(user);
     await waitFor(() => expect(onCheckConflicts).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
-    await waitFor(() => screen.getByRole('button', { name: /block dates anyway/i }));
+    await screen.findByRole('button', { name: /block dates anyway/i });
 
     // Radix's Popover treats an outside click as a dismiss regardless of current focus,
     // which is a more robust close trigger for this test than Escape (whose handling can
@@ -311,9 +311,7 @@ describe('DateOverrideAddPopover', () => {
     // trigger disabled forever (the exact bug: previously the rejection propagated straight
     // out of `handleSubmit`'s `await`, so neither `onCreate` nor `setPending(false)` ever
     // ran, and `reset()` didn't clear `pending` either).
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /add time off/i })).toBeInTheDocument()
-    );
+    expect(await screen.findByRole('button', { name: /add time off/i })).toBeInTheDocument();
   });
 
   // ── R1 — a submit inside the 250ms debounce window must still run the check ────────────
@@ -338,9 +336,9 @@ describe('DateOverrideAddPopover', () => {
     // branch, committing the block with NO conflict check ever issued.
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
 
-    await waitFor(() =>
-      expect(screen.getByText('2 sessions are already booked in these dates')).toBeInTheDocument()
-    );
+    expect(
+      await screen.findByText('2 sessions are already booked in these dates')
+    ).toBeInTheDocument();
     expect(onCreate).not.toHaveBeenCalled();
     expect(onCheckConflicts).toHaveBeenCalledWith({
       startDate: '2026-12-24',
@@ -374,9 +372,9 @@ describe('DateOverrideAddPopover', () => {
     // focus lands on the (non-interactive) heading, so the repeat is inert there.
     await user.keyboard('{Enter>3/}');
 
-    await waitFor(() =>
-      expect(screen.getByText('2 sessions are already booked in these dates')).toBeInTheDocument()
-    );
+    expect(
+      await screen.findByText('2 sessions are already booked in these dates')
+    ).toBeInTheDocument();
     expect(onCreate).not.toHaveBeenCalled();
   });
 
@@ -407,7 +405,7 @@ describe('DateOverrideAddPopover', () => {
     await pickADate(user);
     await waitFor(() => expect(onCheckConflicts).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
-    await waitFor(() => screen.getByRole('button', { name: /block dates anyway/i }));
+    await screen.findByRole('button', { name: /block dates anyway/i });
 
     // Start the confirm — `onCreate`'s promise is held open under our control, so `pending`
     // stays true while the dismiss below is attempted.
@@ -458,7 +456,7 @@ describe('DateOverrideAddPopover', () => {
     await pickADate(user);
     await waitFor(() => expect(onCheckConflicts).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: /block these dates/i }));
-    await waitFor(() => screen.getByRole('button', { name: /block dates anyway/i }));
+    await screen.findByRole('button', { name: /block dates anyway/i });
 
     await user.click(screen.getByRole('button', { name: /block dates anyway/i }));
 
