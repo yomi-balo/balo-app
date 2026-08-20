@@ -26,6 +26,24 @@ export type {
   PublicExpertProfile,
   ProfileStepWrite,
 } from './experts';
+/**
+ * BAL-414 — the ONLY reader of the six checklist inputs and the ONLY writer of
+ * `expert_profiles.searchable` outside seeds. Both apps go through it: `apps/api`'s
+ * credential break/repair triggers and `apps/web`'s dashboard read path. The RULE it feeds
+ * lives in `@balo/shared/experts`, never here.
+ */
+export {
+  expertSearchabilityRepository,
+  EXPERT_SEARCHABILITY_AUDIT_ENTITY_TYPE,
+  EXPERT_SEARCHABILITY_GRANTED_ACTION,
+  EXPERT_SEARCHABILITY_REVOKED_ACTION,
+  type ExpertSearchabilityConnectionState,
+  type ExpertSearchabilityChecklistInputs,
+  type ExpertSearchabilitySnapshot,
+  type ExpertSearchabilitySource,
+  type ExpertSearchabilityWriteResult,
+  type ApplySearchableInput,
+} from './expert-searchability';
 export { referenceDataRepository } from './reference-data';
 export { payoutsRepository } from './payouts';
 export { companyBillingRepository, ensureClientBillingGateConfirmed } from './company-billing';

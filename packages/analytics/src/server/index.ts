@@ -9,6 +9,9 @@ export { EXPERT_SERVER_EVENTS } from '../events/expert';
 export { EXPERT_PAYOUT_SERVER_EVENTS } from '../events/expert-payouts';
 export { NOTIFICATION_SERVER_EVENTS } from '../events/notifications';
 export { CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from '../events/calendar';
+// BAL-414 — server-only by construction (§F): `apps/api`'s credential-break/repair triggers
+// AND `apps/web`'s `import 'server-only'` dashboard read path both need this from here.
+export { EXPERT_SETUP_SERVER_EVENTS } from '../events/expert-setup';
 export { SEARCH_SERVER_EVENTS } from '../events/search';
 export { PROJECT_SERVER_EVENTS } from '../events/project';
 export { BILLING_SERVER_EVENTS } from '../events/billing';

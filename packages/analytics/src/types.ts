@@ -1,7 +1,7 @@
 import type { AuthEventMap, AuthServerEventMap } from './events/auth';
 import type { OnboardingEventMap } from './events/onboarding';
 import type { ExpertEventMap, ExpertServerEventMap } from './events/expert';
-import type { ExpertSetupEventMap } from './events/expert-setup';
+import type { ExpertSetupEventMap, ExpertSetupServerEventMap } from './events/expert-setup';
 import type { ExpertRateEventMap } from './events/expert-rate';
 import type { ExpertPayoutEventMap, ExpertPayoutServerEventMap } from './events/expert-payouts';
 import type { AvatarEventMap } from './events/avatar';
@@ -106,6 +106,10 @@ export type ServerEvents = ExpertServerEventMap &
   // BAL-408 — SERVER-ONLY for the same reason: every producer is an `apps/api` route or the
   // `apps/web` `/join/[token]` RSC. Deliberately absent from `AllEvents`.
   GuestServerEventMap &
-  EndOfCallServerEventMap;
+  EndOfCallServerEventMap &
+  // BAL-414 (D7) — SERVER-ONLY: both origins (the API credential-break/repair triggers and
+  // the web dashboard read path, an `import 'server-only'` RSC) are server contexts.
+  // Deliberately absent from `AllEvents`.
+  ExpertSetupServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

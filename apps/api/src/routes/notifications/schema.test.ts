@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { publishBodySchema } from './schema.js';
+import { EXPERT_CHECKLIST_ITEM_KEYS } from '@balo/shared/experts';
 
 describe('publishBodySchema', () => {
   describe('user.welcome', () => {
@@ -1195,6 +1196,102 @@ describe('publishBodySchema', () => {
           event: 'action_item.assigned',
           payload: { ...valid, actionItemBody: '' },
         }).success
+      ).toBe(false);
+    });
+  });
+
+  describe('expert.searchability_lost (BAL-414)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440001',
+      failingItems: ['calendar', 'payouts'],
+    };
+
+    it('accepts a valid payload', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'expert.searchability_lost', payload: valid }).success
+      ).toBe(true);
+    });
+
+    it('accepts an empty failingItems array', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'expert.searchability_lost',
+          payload: { ...valid, failingItems: [] },
+        }).success
+      ).toBe(true);
+    });
+
+    it('rejects an unknown failingItems member', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'expert.searchability_lost',
+          payload: { ...valid, failingItems: ['not_a_checklist_item'] },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a non-uuid correlationId or expertProfileId', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'expert.searchability_lost',
+          payload: { ...valid, correlationId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+      expect(
+        publishBodySchema.safeParse({
+          event: 'expert.searchability_lost',
+          payload: { ...valid, expertProfileId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+    });
+
+    // S3 (fix round 1) — the enum bounds the VALUES but not the LENGTH; without `.max()` a
+    // caller holding INTERNAL_API_SECRET could post ~100k repeated valid keys within Fastify's
+    // 1MB default body limit, flowing into an O(n) email body and in-app count.
+    describe('S3 — failingItems length bound', () => {
+      it('accepts exactly the full six-item vocabulary', () => {
+        expect(
+          publishBodySchema.safeParse({
+            event: 'expert.searchability_lost',
+            payload: { ...valid, failingItems: [...EXPERT_CHECKLIST_ITEM_KEYS] },
+          }).success
+        ).toBe(true);
+      });
+
+      it('rejects a failingItems array longer than the real vocabulary size, even with only valid keys repeated', () => {
+        const tooMany = Array.from(
+          { length: EXPERT_CHECKLIST_ITEM_KEYS.length + 1 },
+          () => 'calendar'
+        );
+        expect(
+          publishBodySchema.safeParse({
+            event: 'expert.searchability_lost',
+            payload: { ...valid, failingItems: tooMany },
+          }).success
+        ).toBe(false);
+      });
+    });
+  });
+
+  describe('expert.searchability_restored (BAL-414)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440001',
+    };
+
+    it('accepts a valid payload', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'expert.searchability_restored', payload: valid })
+          .success
+      ).toBe(true);
+    });
+
+    it('rejects a missing expertProfileId', () => {
+      const { expertProfileId: _e, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'expert.searchability_restored', payload: rest })
+          .success
       ).toBe(false);
     });
   });

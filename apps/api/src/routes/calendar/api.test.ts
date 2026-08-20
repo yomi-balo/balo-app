@@ -14,6 +14,7 @@ const {
   mockDisconnectProvider,
   mockEnqueueAvailabilityCacheRebuild,
   mockEnqueueSubscriptionReconcile,
+  mockReconcileExpertSearchability,
 } = vi.hoisted(() => ({
   mockFindConnectionWithSubCalendars: vi.fn(),
   mockListConnectionsByExpertProfileId: vi.fn(),
@@ -26,6 +27,7 @@ const {
   mockDisconnectProvider: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
   mockEnqueueSubscriptionReconcile: vi.fn(),
+  mockReconcileExpertSearchability: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -51,6 +53,10 @@ vi.mock('../../jobs/availability-cache.js', () => ({
 
 vi.mock('../../jobs/calendar-subscription-reconcile.js', () => ({
   enqueueSubscriptionReconcile: mockEnqueueSubscriptionReconcile,
+}));
+
+vi.mock('../../services/experts/searchability.js', () => ({
+  reconcileExpertSearchability: mockReconcileExpertSearchability,
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -137,6 +143,7 @@ describe('calendar API routes (BAL-396)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReconcileExpertSearchability.mockResolvedValue({ changed: false });
   });
 
   describe('toLegacyStatus', () => {
@@ -291,6 +298,14 @@ describe('calendar API routes (BAL-396)', () => {
         provider: 'google',
         distinct_id: EXPERT_UUID,
       });
+      // BAL-414 (T4.3) — de-lists on the expert's own disconnect action; does not go through
+      // `flipToReconnectRequired`, so this is the only trigger for a self-disconnect.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: EXPERT_UUID,
+        source: 'calendar_disconnected',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
     it('without provider: loops over every live connection, then soft-deletes as a backstop', async () => {
@@ -313,6 +328,13 @@ describe('calendar API routes (BAL-396)', () => {
       expect(trackServer).toHaveBeenCalledWith('calendar_disconnected', {
         distinct_id: EXPERT_UUID,
       });
+      // BAL-414 (T4.3) — the all-providers arm reconciles too, same as the per-provider arm.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: EXPERT_UUID,
+        source: 'calendar_disconnected',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
     it('returns 500 when disconnectProvider throws', async () => {
@@ -326,6 +348,40 @@ describe('calendar API routes (BAL-396)', () => {
       });
 
       expect(res.statusCode).toBe(500);
+    });
+
+    // FAIL-OPEN (fix round 1) — INVERTED from "returns 500 when the searchability reconcile
+    // throws". The disconnect is ALREADY COMMITTED by the time the reconcile runs (the
+    // connections are gone), so a reconcile failure must never turn a successful disconnect
+    // into a reported failure — that would tell the caller the disconnect failed when it
+    // succeeded, AND leave `searchable: true` on a calendar-less expert (precisely BAL-414's
+    // harm), the dangerous direction relative to every sibling hook's risk-appropriate
+    // fail-open (`calendar-health-probe.ts`'s probe heal, `auth.ts`'s OAuth reconnect both log
+    // and continue rather than fail their caller).
+    it('still returns 200 when the searchability reconcile throws — the disconnect already committed', async () => {
+      // The preceding test leaves `mockDisconnectProvider` permanently rejecting
+      // (`mockRejectedValue`, not `-Once`) — reset it here so THIS test exercises only the
+      // reconcile failure, not a leaked rejection from disconnectProvider.
+      mockDisconnectProvider.mockResolvedValue(undefined);
+      mockReconcileExpertSearchability.mockRejectedValue(new Error('queue unavailable'));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/calendar/disconnect',
+        headers: AUTH_HEADERS,
+        payload: { expertProfileId: EXPERT_UUID, provider: 'google' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ success: true });
+      // The reconcile was genuinely attempted (not skipped) — it just does not fail the
+      // request when it throws.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: EXPERT_UUID,
+        source: 'calendar_disconnected',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
   });
 

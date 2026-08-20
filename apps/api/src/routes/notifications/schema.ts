@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PublishableNotificationEvent } from '../../notifications/events.js';
+import { EXPERT_CHECKLIST_ITEM_KEYS } from '@balo/shared/experts';
 
 const userWelcomePayload = z.object({
   correlationId: z.uuid(),
@@ -490,6 +491,28 @@ const actionItemAssignedPayload = z.object({
   dueOn: z.string().min(1).max(40).optional(),
 });
 
+// BAL-414 (D1/D2) — the non-calendar de-list (email + in-app). `correlationId` is the
+// `audit_events` row id minted by the conditional compare-and-set (§B.2) — a z.uuid, not the
+// expertProfileId, so a genuine later regression re-notifies rather than being silenced by a
+// stable dedup key. `failingItems` reads the single vocabulary tuple rather than restating the
+// six literals. Mirrors packages/shared/src/notifications/index.ts.
+const expertSearchabilityLostPayload = z.object({
+  correlationId: z.uuid(),
+  expertProfileId: z.uuid(),
+  // S3 (fix round 1) — the enum bounds the VALUES but not the LENGTH; `.max()` bounds a caller
+  // holding INTERNAL_API_SECRET to at most the real vocabulary size, closing off a repeated-key
+  // payload that would otherwise fit Fastify's 1MB default body limit and flow into an O(n)
+  // email body / in-app count (precedent: `proposal.shared`'s `attachments: z.array(...).max(3)`).
+  failingItems: z.array(z.enum(EXPERT_CHECKLIST_ITEM_KEYS)).max(EXPERT_CHECKLIST_ITEM_KEYS.length),
+});
+
+// BAL-414 (D2) — the re-list, in-app only (no email rule — see engine/rules.ts). Same
+// correlationId shape as the lost payload above. Mirrors packages/shared/src/notifications/index.ts.
+const expertSearchabilityRestoredPayload = z.object({
+  correlationId: z.uuid(),
+  expertProfileId: z.uuid(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -636,6 +659,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('action_item.assigned'),
     payload: actionItemAssignedPayload,
+  }),
+  z.object({
+    event: z.literal('expert.searchability_lost'),
+    payload: expertSearchabilityLostPayload,
+  }),
+  z.object({
+    event: z.literal('expert.searchability_restored'),
+    payload: expertSearchabilityRestoredPayload,
   }),
 ]);
 

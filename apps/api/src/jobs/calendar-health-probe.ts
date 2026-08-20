@@ -17,6 +17,7 @@ import {
 } from '../lib/apiroc/index.js';
 import { provisionConnection } from '../services/calendar/apiroc-connection.js';
 import { applyCredentialFailure } from '../services/calendar/credential-status.js';
+import { reconcileExpertSearchability } from '../services/experts/searchability.js';
 import {
   enqueueAvailabilityCacheRebuild,
   STALENESS_CHECK_THRESHOLD_MS,
@@ -131,6 +132,18 @@ interface DeferredFailure {
 }
 
 /**
+ * `probeAndHeal`'s outcome. `nonActiveAfterProbe` is the SYMMETRY GAP fix's input (fix round
+ * 1): `true` only on the specific path where the connection's PERSISTED status is non-ACTIVE
+ * once this call returns — never inferred from `connection.credentialStatus` by the caller,
+ * which is a pre-tick snapshot and would read stale on the exact downgrade this exists to
+ * catch (see `probeCandidate`'s SYMMETRY GAP comment).
+ */
+interface ProbeAndHealResult {
+  readonly recovered: boolean;
+  readonly nonActiveAfterProbe: boolean;
+}
+
+/**
  * The probe call for ONE connection, plus the heal path when it succeeds. Throws the raw
  * `ApirocError` on a failed data call — the caller classifies and defers the write.
  *
@@ -138,7 +151,10 @@ interface DeferredFailure {
  * made the column `NOT NULL`, so every candidate `listConnectionsDueForHealthCheck` can
  * return already carries a pointer.
  */
-async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<boolean> {
+async function probeAndHeal(
+  connection: CalendarConnection,
+  now: Date
+): Promise<ProbeAndHealResult> {
   const { endUserAccountId } = connection;
 
   await callApiroc('calendars.list', () =>
@@ -163,8 +179,12 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
     const status = await provisionConnection(connection);
     if (status === 'SYNC_PENDING') {
       // `provisionConnection`'s own re-list failed again, or still found zero writable
-      // calendars — nothing more to do this tick; the next one retries.
-      return false;
+      // calendars — nothing more to do this tick; the next one retries. SYMMETRY GAP —
+      // `provisionConnection` just PERSISTED `SYNC_PENDING` here (a real ACTIVE → SYNC_PENDING
+      // downgrade when this connection was ACTIVE-with-zero-sub-calendars before this tick), so
+      // `nonActiveAfterProbe: true` even though `connection.credentialStatus` (the pre-tick
+      // snapshot) may still read `'ACTIVE'`.
+      return { recovered: false, nonActiveAfterProbe: true };
     }
     // `provisionConnection` already wrote `ACTIVE` (and, via `setCredentialStatusForProvider`,
     // already cleared `reconnectNotifiedAt` — do NOT clear it again here).
@@ -189,7 +209,7 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
         'apiroc_active_zero_calendars_healed'
       );
     }
-    return true;
+    return { recovered: true, nonActiveAfterProbe: false };
   }
 
   if (connection.credentialStatus === 'ACTIVE') {
@@ -198,7 +218,7 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
     // re-probing each at most once per `PROBE_INTERVAL_MS` (1h), so subscription renewal
     // inherits a proven, batch-bounded, starvation-free scheduler for free.
     await enqueueSubscriptionReconcile(connection.id, { force: false }, enqueueLogger);
-    return false;
+    return { recovered: false, nonActiveAfterProbe: false };
   }
 
   // EXPIRED / REVOKED, and the probe's data call just succeeded — reconnected out of band.
@@ -216,7 +236,54 @@ async function probeAndHeal(connection: CalendarConnection, now: Date): Promise<
       distinct_id: connection.expertProfileId,
     });
   }
-  return true;
+  return { recovered: true, nonActiveAfterProbe: false };
+}
+
+/**
+ * SYMMETRY GAP (fix round 1) — the ONE de-list-worthy transition `probeAndHeal` can produce
+ * with NO trigger anywhere else: an ACTIVE connection downgrading to SYNC_PENDING via the
+ * `needsReprovision` branch (ACTIVE-with-zero-sub-calendars, whose re-provision attempt failed
+ * again this tick). That branch used to return bare `false`, so the `if (recovered)` hook in
+ * `probeCandidate` never fired and NOTHING reconciled — the expert stayed `searchable: true`
+ * while `items.calendar` read `false`, listed and unbookable indefinitely, for exactly the
+ * dormant expert (never opens their dashboard) BAL-414 exists to protect.
+ *
+ * Gated on `probeAndHeal`'s own `nonActiveAfterProbe` verdict, never on
+ * `connection.credentialStatus` directly — that field is a snapshot taken BEFORE this tick's
+ * `provisionConnection` call, so on the downgrade path above it still reads the PRE-downgrade
+ * `'ACTIVE'`; checking it here would silently skip the exact case this closes. Idempotent and
+ * safe to call even when the persisted status was ALREADY non-ACTIVE before this tick (the
+ * compare-and-set no-ops when `searchable` is already correct) — which is what also closes the
+ * gap for an expert who has been SYNC_PENDING across several probe ticks with no dashboard
+ * render in between.
+ *
+ * `source: 'calendar_sync_pending'`, `publishNotification: true` — unlike the credential-break
+ * path (D2: one email per cause, via the strengthened `calendar-reconnect-required` email), NO
+ * notification fires on this path today, so this is the expert's only notice.
+ */
+async function reconcileSyncPendingAfterProbe(connection: CalendarConnection): Promise<boolean> {
+  try {
+    const result = await reconcileExpertSearchability({
+      expertProfileId: connection.expertProfileId,
+      source: 'calendar_sync_pending',
+      actorUserId: null,
+      publishNotification: true,
+    });
+    // S5 — was this a genuine de-list (searchable true → false), for the mass-de-list
+    // observability counter. See `runCalendarHealthProbe`'s docblock note.
+    return result.changed && result.previousSearchable === true;
+  } catch (reconcileErr: unknown) {
+    log.error(
+      {
+        connectionId: connection.id,
+        expertProfileId: connection.expertProfileId,
+        error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
+        stack: reconcileErr instanceof Error ? reconcileErr.stack : undefined,
+      },
+      'searchability_reconcile_failed'
+    );
+    return false;
+  }
 }
 
 /**
@@ -238,10 +305,42 @@ async function probeCandidate(
   connection: CalendarConnection,
   now: Date,
   jobLog: (message: string) => void
-): Promise<{ recovered: boolean; deferredFailure?: DeferredFailure }> {
+): Promise<{ recovered: boolean; deferredFailure?: DeferredFailure; delisted: boolean }> {
   try {
-    const recovered = await probeAndHeal(connection, now);
-    return { recovered };
+    const { recovered, nonActiveAfterProbe } = await probeAndHeal(connection, now);
+    let delisted = false;
+    if (recovered) {
+      // BAL-414 (D3.1, §C #1/#2) — covers BOTH heal branches inside `probeAndHeal`: the
+      // re-provision branch (SYNC_PENDING, or ACTIVE-with-zero-sub-calendars) and the
+      // EXPIRED/REVOKED-recovered-out-of-band branch. Branch B ("already ACTIVE, nothing to
+      // heal") returns `recovered: false` above and never reaches here — a reconcile on every
+      // healthy connection every hour would be pointless. Wrapped so a failure here cannot kill
+      // the sweep: the next tick, and the read path, both reconcile.
+      try {
+        await reconcileExpertSearchability({
+          expertProfileId: connection.expertProfileId,
+          source: 'calendar_credential_repair',
+          actorUserId: null,
+          publishNotification: true,
+        });
+      } catch (reconcileErr: unknown) {
+        log.error(
+          {
+            connectionId: connection.id,
+            expertProfileId: connection.expertProfileId,
+            error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
+            stack: reconcileErr instanceof Error ? reconcileErr.stack : undefined,
+          },
+          'searchability_reconcile_failed'
+        );
+      }
+    } else if (nonActiveAfterProbe) {
+      // SYMMETRY GAP (fix round 1) — see `reconcileSyncPendingAfterProbe`'s docblock. NOT
+      // called for the "already ACTIVE, nothing to heal" branch (`nonActiveAfterProbe: false`
+      // there) — a reconcile on every already-healthy connection every hour would be pointless.
+      delisted = await reconcileSyncPendingAfterProbe(connection);
+    }
+    return { recovered, delisted };
   } catch (err: unknown) {
     const message = errorMessage(err);
     jobLog(`calendar health probe failed for connection ${connection.id}: ${message}`);
@@ -256,12 +355,13 @@ async function probeCandidate(
         },
         'apiroc_health_probe_unexpected_error'
       );
-      return { recovered: false };
+      return { recovered: false, delisted: false };
     }
     await calendarRepository.markCredentialChecked(connection.id, now);
     const verdict = classifyCredentialFailure(err);
     return {
       recovered: false,
+      delisted: false,
       deferredFailure: {
         connection,
         err,
@@ -375,6 +475,15 @@ export interface CalendarHealthProbeResult {
   recovered: number;
   batchFilled: boolean;
   massFailureSuspected: boolean;
+  /**
+   * S5 (fix round 1) — the SYMMETRY GAP de-list path (`calendar_sync_pending`) has no
+   * circuit breaker of its own: BAL-414 escalates the consequence of a misfire from
+   * "availability paused" to "removed from the marketplace + an unrecallable email", so a
+   * tick that de-lists more than one expert must be VISIBLE, not just counted. See the
+   * `log.error` at the end of {@link runCalendarHealthProbe} — a minimum fix, deliberately not
+   * a redesign of the existing mass-failure breaker (which this counter is independent of).
+   */
+  delisted: number;
 }
 
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
@@ -404,6 +513,7 @@ export async function runCalendarHealthProbe(
     recovered: 0,
     batchFilled,
     massFailureSuspected: false,
+    delisted: 0,
   };
   if (candidates.length === 0) {
     log.info(result, 'apiroc_health_probe_completed');
@@ -425,9 +535,12 @@ export async function runCalendarHealthProbe(
   const deferredFailures: DeferredFailure[] = [];
 
   for (const connection of candidates) {
-    const { recovered, deferredFailure } = await probeCandidate(connection, now, jobLog);
+    const { recovered, deferredFailure, delisted } = await probeCandidate(connection, now, jobLog);
     if (recovered) {
       result.recovered += 1;
+    }
+    if (delisted) {
+      result.delisted += 1;
     }
     if (deferredFailure) {
       deferredFailures.push(deferredFailure);
@@ -450,6 +563,18 @@ export async function runCalendarHealthProbe(
     );
   } else {
     await applyAllDeferredFailures(deferredFailures, result);
+  }
+
+  // S5 (fix round 1) — make a mass de-list OBSERVABLE. This job's de-list consequence is a
+  // strictly heavier harm than the mass-failure breaker above already guards (removed from the
+  // marketplace + an unrecallable email, not merely "availability paused"), and the
+  // `calendar_sync_pending` path has no breaker of its own. A minimum fix: page on more than
+  // one de-list per tick, visible in Axiom, WITHOUT redesigning the existing breaker.
+  if (result.delisted > 1) {
+    log.error(
+      { probed: candidates.length, delisted: result.delisted },
+      'apiroc_probe_mass_delist_suspected'
+    );
   }
 
   log.info(result, 'apiroc_health_probe_completed');

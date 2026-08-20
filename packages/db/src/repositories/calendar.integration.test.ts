@@ -410,6 +410,82 @@ describe('calendarRepository — connection-keyed credential writes', () => {
     expect((await readRow(google.id)).reconnectNotifiedAt).toBeNull();
   });
 
+  /**
+   * ⚠ BAL-414 — the EXECUTOR-AWARE ARM. The credential-break path now runs this flip inside
+   * the same transaction as the `expert_profiles.searchable` de-list, so that a crash between
+   * them cannot leave an EXPIRED credential on a still-searchable expert (bookable, with no
+   * busy-time subtraction). Nested `db.transaction` is a SAVEPOINT under this harness, so the
+   * rollback is contained and the outer per-test transaction survives.
+   */
+  it('setCredentialStatus rolls back with the caller transaction when an executor is passed', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+
+    await expect(
+      db.transaction(async (tx) => {
+        await calendarRepository.setCredentialStatus(google.id, 'EXPIRED', tx);
+        // Visible inside the transaction …
+        const [inTx] = await tx
+          .select({ credentialStatus: calendarConnections.credentialStatus })
+          .from(calendarConnections)
+          .where(eq(calendarConnections.id, google.id));
+        expect(inTx?.credentialStatus).toBe('EXPIRED');
+        throw new Error('force rollback');
+      })
+    ).rejects.toThrow('force rollback');
+
+    // … and gone after it rolls back.
+    expect((await readRow(google.id)).credentialStatus).toBe('ACTIVE');
+  });
+
+  it('setCredentialStatus commits through a caller transaction with identical semantics', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    const microsoft = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'microsoft')
+    );
+    await calendarRepository.markReconnectNotified(google.id, new Date('2026-08-17T00:00:00.000Z'));
+
+    await db.transaction(async (tx) => {
+      await calendarRepository.setCredentialStatus(google.id, 'EXPIRED', tx);
+    });
+
+    expect((await readRow(google.id)).credentialStatus).toBe('EXPIRED');
+    // ⚠ The notify-once marker SURVIVES a non-ACTIVE write on the executor arm too — that is
+    // what makes "the expert has already been told about THIS breakage" meaningful.
+    expect((await readRow(google.id)).reconnectNotifiedAt).toBeInstanceOf(Date);
+    // One provider's breakage still never brands the other.
+    expect((await readRow(microsoft.id)).credentialStatus).toBe('ACTIVE');
+
+    await db.transaction(async (tx) => {
+      await calendarRepository.setCredentialStatus(google.id, 'ACTIVE', tx);
+    });
+
+    // ⚠⚠ THE ONE-LINE REGRESSION THE EXECUTOR PARAMETER COULD HAVE INTRODUCED: writing
+    // 'ACTIVE' must still clear the marker IN THE SAME STATEMENT, or a second breakage is
+    // never announced.
+    expect((await readRow(google.id)).credentialStatus).toBe('ACTIVE');
+    expect((await readRow(google.id)).reconnectNotifiedAt).toBeNull();
+  });
+
+  it('setCredentialStatus leaves a soft-deleted connection alone on the executor arm', async () => {
+    const expert = await expertDraftFactory();
+    const google = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
+
+    await db.transaction(async (tx) => {
+      await calendarRepository.setCredentialStatus(google.id, 'EXPIRED', tx);
+    });
+
+    expect((await readRow(google.id)).credentialStatus).toBe('ACTIVE');
+  });
+
   it('markCredentialChecked stamps the caller-supplied instant', async () => {
     const expert = await expertDraftFactory();
     const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));

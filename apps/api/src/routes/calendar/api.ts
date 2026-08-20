@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
   calendarRepository,
@@ -10,6 +10,7 @@ import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { disconnectProvider } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
+import { reconcileExpertSearchability } from '../../services/experts/searchability.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import type {
   CalendarConnectionStatus,
@@ -134,6 +135,44 @@ async function findConnectionOwningCalendar(
   return undefined;
 }
 
+/**
+ * BAL-414 (D3.1, §C, the de-list counterpart of #3) — the expert's OWN disconnect action.
+ * Extracted to a module-level helper (fix round 1) purely to keep the disconnect route
+ * handler's cognitive complexity under the SonarCloud gate; behaviour is unchanged.
+ *
+ * ⚠⚠ FAIL-OPEN, fix round 1 — this is called AFTER the disconnect has already committed (the
+ * connections are gone), so a reconcile failure here must log and continue, never fail the
+ * request — matching the sibling hooks (`calendar-health-probe.ts`'s probe heal, `auth.ts`'s
+ * OAuth reconnect). Turning an already-committed disconnect into a reported failure would tell
+ * the caller the disconnect failed when it succeeded, while `searchable` stays `true` on a
+ * calendar-less expert — precisely BAL-414's stated harm, and the DANGEROUS direction relative
+ * to every sibling hook's risk-appropriate fail-open.
+ */
+async function reconcileAfterDisconnect(
+  expertProfileId: string,
+  provider: string | undefined,
+  log: FastifyBaseLogger
+): Promise<void> {
+  try {
+    await reconcileExpertSearchability({
+      expertProfileId,
+      source: 'calendar_disconnected',
+      actorUserId: null,
+      publishNotification: true,
+    });
+  } catch (reconcileErr: unknown) {
+    log.error(
+      {
+        expertProfileId,
+        provider,
+        error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
+        stack: reconcileErr instanceof Error ? reconcileErr.stack : undefined,
+      },
+      'searchability_reconcile_failed'
+    );
+  }
+}
+
 // ── Routes ──────────────────────────────────────────────────────
 
 export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void> {
@@ -232,6 +271,11 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
         // an ENQUEUE, not a clear: with two providers connected, disconnecting one must
         // recompute from the remaining one, not blank the cache.
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
+
+        // See `reconcileAfterDisconnect`'s docblock (fix round 1) — self-disconnect de-list,
+        // wrapped in its OWN try/catch so a reconcile failure never turns an already-committed
+        // disconnect into a reported failure.
+        await reconcileAfterDisconnect(expertProfileId, provider, request.log);
 
         trackServer(CALENDAR_SERVER_EVENTS.DISCONNECTED, {
           ...(provider ? { provider } : {}),

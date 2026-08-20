@@ -1068,3 +1068,38 @@ export interface ConversationUnreadDigestDuePayload {
 // compile (memory `reference_notification_event_dup_shared_home`). ⚠ EXTENSIONLESS relative
 // specifier — see the corrected note in `../meetings/index.ts`; a `.js` here 404s Turbopack.
 export * from './meeting-absence';
+
+// ── BAL-414 — the two searchability-transition promises (D1/D2) ────────────────────────
+//
+// ⚠ EXTENSIONLESS relative specifier — same rule as every other import in this file.
+import type { ExpertChecklistItemKey } from '../experts';
+
+/**
+ * BAL-414 (D1/D2) — the expert stopped meeting the six-item checklist and has been removed
+ * from expert search AND from their public profile URL. Recipient 'expert' via
+ * `expertProfileId` (the `calendar.auth_error` resolution). Email + in-app.
+ *
+ * ⚠ NOT PUBLISHED FOR A CALENDAR CREDENTIAL BREAK. That case rides the strengthened
+ * `calendar-reconnect-required` email instead (D2, "one email per underlying cause"); the
+ * suppression lives at the `flipToReconnectRequired` call site, not in a rule condition.
+ *
+ * `correlationId` IS the `audit_events` row id minted by the conditional compare-and-set that
+ * performed this transition. One transition ⇒ one uuid ⇒ a deterministic BullMQ jobId; a
+ * genuine later regression mints a new row and legitimately re-notifies. Do NOT use
+ * `expertProfileId` — that would silence every regression after the first.
+ */
+export interface ExpertSearchabilityLostPayload {
+  correlationId: string; // = audit_events.id → BullMQ jobId dedup
+  expertProfileId: string; // → resolver hydrates data.expert → recipient 'expert'
+  failingItems: ExpertChecklistItemKey[]; // ordered; the template lists what to fix
+}
+
+/**
+ * BAL-414 (D2) — the expert completed the checklist again and is back in search. IN-APP ONLY,
+ * both directions of cause: a flapping calendar connection must never generate email churn.
+ * `correlationId` is the `audit_events` row id, as above.
+ */
+export interface ExpertSearchabilityRestoredPayload {
+  correlationId: string; // = audit_events.id → BullMQ jobId dedup
+  expertProfileId: string; // → resolver hydrates data.expert → recipient 'expert'
+}

@@ -19,6 +19,10 @@ export interface SessionUser {
   // sessions and unknown providers are undefined.
   authMethod?: AuthMethodSignal;
 
+  // Admin impersonation (workos-auth skill, "Admin Impersonation"): `true` for the duration of
+  // an admin's impersonated session. Optional — undefined for every normal session.
+  isImpersonating?: boolean;
+
   // Company context (always present - personal workspace or real company)
   companyId: string;
   companyName: string;

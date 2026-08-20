@@ -9,6 +9,7 @@ import {
   type CalendarSubCalendar,
   type NewCalendarSubCalendar,
 } from '../schema';
+import type { DbExecutor } from './_shared/db-executor';
 
 /**
  * ADR-1021, amendment 18 Aug 2026 (BAL-467), §1 — "A calendar connection is per
@@ -336,12 +337,26 @@ export const calendarRepository = {
    * call site makes "ACTIVE ⇒ marker NULL" an invariant of this repository instead of a
    * step a caller can forget. Non-ACTIVE writes leave the marker exactly as it was — that
    * is what makes the notify-once check meaningful.
+   *
+   * ⚠ EXECUTOR-AWARE (BAL-414). Pass a `tx` to run the flip inside a CALLER'S transaction;
+   * omit it and this writes on the base client exactly as before (every pre-existing
+   * two-argument call site is untouched). The credential-break path needs the flip and the
+   * `expert_profiles.searchable` de-list to commit or roll back TOGETHER — without that, a
+   * crash between them leaves an EXPIRED credential on a still-searchable expert, i.e.
+   * bookable with no busy-time subtraction, which is precisely BAL-414's harm. Failing
+   * together (the flip rolls back too, and the next probe tick re-runs the whole thing) is
+   * strictly better than diverging.
+   *
+   * ⚠ THE BEHAVIOUR IS IDENTICAL ON BOTH ARMS. One `set` object, one `where`, one statement —
+   * so the `'ACTIVE' ⇒ reconnectNotifiedAt = null` clear and the `deleted_at IS NULL` guard
+   * hold whether or not an executor is supplied. Do not fork this into two statements.
    */
   async setCredentialStatus(
     connectionId: string,
-    credentialStatus: CalendarCredentialStatus
+    credentialStatus: CalendarCredentialStatus,
+    executor?: DbExecutor
   ): Promise<void> {
-    await db
+    await (executor ?? db)
       .update(calendarConnections)
       .set({
         credentialStatus,

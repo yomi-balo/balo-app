@@ -689,9 +689,21 @@ describe('getInAppTemplate', () => {
       const result = getInAppTemplate('calendar-reconnect-required', { provider: 'google' });
       expect(result).toEqual({
         title: 'Reconnect your calendar',
-        body: "Balo lost access to your Google Calendar — your availability is paused until it's reconnected.",
+        body: "Balo lost access to your Google Calendar — your availability is paused, you've stopped appearing in search, and your public profile link is on hold until it's reconnected.",
         actionUrl: '/expert/settings?tab=calendar',
       });
+    });
+
+    // UX WARNING (fix round 1) — the de-list in-app body must state the public-profile pause
+    // too, matching the email version. The gap was obvious because the RESTORE in-app copy
+    // ("...public profile are live again") references a pause the de-list notice never
+    // disclosed.
+    it('states the public-profile pause on the de-list arm (stillSearchable false)', () => {
+      const result = getInAppTemplate('calendar-reconnect-required', {
+        provider: 'google',
+        stillSearchable: false,
+      });
+      expect(result.body).toMatch(/public profile link is on hold/i);
     });
 
     it('names the Microsoft 365 label', () => {
@@ -709,6 +721,58 @@ describe('getInAppTemplate', () => {
       const result = getInAppTemplate('calendar-reconnect-required', {});
       expect(result.body).toContain('your calendar —');
       expect(result.body).not.toMatch(/calendar\s+calendar/i);
+    });
+
+    // BAL-414 (D10, addendum) — branches on the SAME `stillSearchable` derived value the DB
+    // de-list decision used.
+    it('states the search-lost consequence when stillSearchable is false (default)', () => {
+      const result = getInAppTemplate('calendar-reconnect-required', {
+        provider: 'google',
+        stillSearchable: false,
+      });
+      expect(result.body).toMatch(/stopped appearing in search/i);
+    });
+
+    it('does NOT claim a search pause when stillSearchable is true, and names the other calendar', () => {
+      const result = getInAppTemplate('calendar-reconnect-required', {
+        provider: 'google',
+        stillSearchable: true,
+      });
+      expect(result.body).not.toMatch(/stopped appearing in search/i);
+      expect(result.body).toMatch(/other connected calendar is still covering/i);
+    });
+  });
+
+  describe('expert-searchability-lost (BAL-414)', () => {
+    it('states the search de-list and names the item count', () => {
+      const result = getInAppTemplate('expert-searchability-lost', {
+        failingItems: ['calendar', 'payouts'],
+      });
+      expect(result.title).toBe("You've stopped appearing in search");
+      expect(result.body).toMatch(/2 items left to finish/i);
+      expect(result.actionUrl).toBe('/expert/settings');
+    });
+
+    it('omits the count suffix when failingItems is absent', () => {
+      const result = getInAppTemplate('expert-searchability-lost', {});
+      expect(result.body).not.toMatch(/left to finish/i);
+    });
+
+    // UX WARNING (fix round 1) — same gap as `calendar-reconnect-required`'s de-list arm.
+    it('states the public-profile pause, matching the email version', () => {
+      const result = getInAppTemplate('expert-searchability-lost', {});
+      expect(result.body).toMatch(/public profile link is on hold/i);
+    });
+  });
+
+  describe('expert-searchability-restored (BAL-414)', () => {
+    it('confirms the public profile is live again and deep-links to settings', () => {
+      const result = getInAppTemplate('expert-searchability-restored', {});
+      expect(result).toEqual({
+        title: "You're back in search",
+        body: 'Your Balo search listing and public profile are live again.',
+        actionUrl: '/expert/settings',
+      });
     });
   });
 

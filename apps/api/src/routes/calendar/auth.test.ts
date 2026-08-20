@@ -11,6 +11,7 @@ const {
   mockProvisionConnection,
   mockEnqueueAvailabilityCacheRebuild,
   mockEnqueueSubscriptionReconcile,
+  mockReconcileExpertSearchability,
 } = vi.hoisted(() => ({
   mockBuildApirocAuthorizeUrl: vi.fn(),
   mockSignConnectState: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockProvisionConnection: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
   mockEnqueueSubscriptionReconcile: vi.fn(),
+  mockReconcileExpertSearchability: vi.fn(),
 }));
 
 vi.mock('../../lib/apiroc/index.js', () => ({
@@ -51,6 +53,10 @@ vi.mock('../../jobs/availability-cache.js', () => ({
 
 vi.mock('../../jobs/calendar-subscription-reconcile.js', () => ({
   enqueueSubscriptionReconcile: mockEnqueueSubscriptionReconcile,
+}));
+
+vi.mock('../../services/experts/searchability.js', () => ({
+  reconcileExpertSearchability: mockReconcileExpertSearchability,
 }));
 
 vi.mock('../../lib/redis.js', () => ({
@@ -116,6 +122,7 @@ describe('calendar auth routes (BAL-396)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReconcileExpertSearchability.mockResolvedValue({ changed: false });
   });
 
   function injectConnect(body?: Record<string, unknown>, headers?: Record<string, string>) {
@@ -374,6 +381,13 @@ describe('calendar auth routes (BAL-396)', () => {
         { force: true },
         expect.anything()
       );
+      // BAL-414 (T4.2) — re-list on OAuth reconnect, gated on ACTIVE.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: EXPERT_UUID,
+        source: 'calendar_connected',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
     it('SHAPE 2: clears the CSRF cookie on success — the nonce becomes single-use (Finding 1)', async () => {
@@ -416,6 +430,28 @@ describe('calendar auth routes (BAL-396)', () => {
       // BAL-468 §8.4 — a SYNC_PENDING connection has no sub-calendars yet, so there is
       // nothing to subscribe; the reconcile enqueue is gated on ACTIVE only.
       expect(mockEnqueueSubscriptionReconcile).not.toHaveBeenCalled();
+      // BAL-414 (T4.2) — SYNC_PENDING is not ACTIVE, so it must not re-list.
+      expect(mockReconcileExpertSearchability).not.toHaveBeenCalled();
+    });
+
+    it('SHAPE 2: a throwing searchability reconcile is caught and still redirects connected (never callback_failed)', async () => {
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+      mockProvisionConnection.mockResolvedValue('ACTIVE');
+      mockReconcileExpertSearchability.mockRejectedValue(new Error('queue unavailable'));
+
+      const res = await injectCallback(
+        { endUserAccountId: 'eua-1', state: 'valid-state' },
+        nonceCookieHeader()
+      );
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_connected=true');
+      expect(res.headers.location).not.toContain('calendar_error=callback_failed');
     });
 
     it('SHAPE 2: an expired state redirects state_expired without calling the connection services', async () => {

@@ -12,36 +12,31 @@ vi.mock('react', async (importOriginal) => {
   return { ...actual, cache: <T>(fn: T): T => fn };
 });
 
-const mockFindProfileById = vi.fn();
-const mockUpdateProfile = vi.fn();
-const mockFindUserById = vi.fn();
-const mockHasPayoutDetails = vi.fn();
-const mockFindConnection = vi.fn();
-const mockHasActiveRules = vi.fn();
+const mockLoadInputs = vi.fn();
+const mockReconcileFromRead = vi.fn();
 
 vi.mock('@balo/db', () => ({
-  expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
-    updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
-  },
-  usersRepository: {
-    findById: (...args: unknown[]) => mockFindUserById(...args),
-  },
-  payoutsRepository: {
-    hasPayoutDetails: (...args: unknown[]) => mockHasPayoutDetails(...args),
-  },
-  calendarRepository: {
-    findConnectionByExpertProfileId: (...args: unknown[]) => mockFindConnection(...args),
-  },
-  availabilityRulesRepository: {
-    hasActiveRules: (...args: unknown[]) => mockHasActiveRules(...args),
+  expertSearchabilityRepository: {
+    loadInputs: (...args: unknown[]) => mockLoadInputs(...args),
   },
 }));
 
-let mockSessionObj: Record<string, unknown> | null;
+vi.mock('@/lib/expert/searchability', () => ({
+  reconcileFromRead: (...args: unknown[]) => mockReconcileFromRead(...args),
+}));
+
+// S2 (fix round 1) — `getChecklistStatus` now authenticates via `requireOnboardedUser()`
+// (fail-closed) rather than a bare `getSession()` + hand-rolled checks. The mock reproduces the
+// real function's contract (Unauthorized / Onboarding not completed / the user) closely enough
+// that the pre-existing guard tests below still exercise the SAME three failure shapes.
+let mockUserObj: Record<string, unknown> | null;
 
 vi.mock('@/lib/auth/session', () => ({
-  getSession: vi.fn(() => Promise.resolve(mockSessionObj)),
+  requireOnboardedUser: vi.fn(() => {
+    if (!mockUserObj) throw new Error('Unauthorized');
+    if (mockUserObj.onboardingCompleted !== true) throw new Error('Onboarding not completed');
+    return Promise.resolve(mockUserObj);
+  }),
 }));
 
 vi.mock('@/lib/logging', () => ({
@@ -49,35 +44,33 @@ vi.mock('@/lib/logging', () => ({
 }));
 
 import { getChecklistStatus } from './expert-checklist';
+import { log } from '@/lib/logging';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-const EXPERT_SESSION = {
-  user: {
-    id: 'user-1',
-    email: 'expert@example.com',
-    activeMode: 'expert',
-    expertProfileId: 'profile-1',
-  },
+const EXPERT_USER = {
+  id: 'user-1',
+  email: 'expert@example.com',
+  activeMode: 'expert',
+  expertProfileId: 'profile-1',
+  onboardingCompleted: true,
 };
 
-/** A profile where every profile-owned checklist item is satisfied. */
-function completeProfile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+/** A snapshot where every checklist item is satisfied. */
+function completeSnapshot(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'profile-1',
-    headline: 'Salesforce Architect',
-    bio: 'Ten years building on the platform.',
+    inputs: {
+      headline: 'Salesforce Architect',
+      bio: 'Ten years building on the platform.',
+      avatarUrl: 'https://cdn.example.com/avatar.png',
+      phoneVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+      rateCents: 313,
+      calendarConnections: [{ id: 'conn-1', credentialStatus: 'ACTIVE' }],
+      hasActiveAvailabilityRules: true,
+      hasPayoutDetails: true,
+    },
+    currentSearchable: false,
     rateCents: 313,
-    searchable: false,
-    ...overrides,
-  };
-}
-
-function completeUser(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'user-1',
-    avatarUrl: 'https://cdn.example.com/avatar.png',
-    phoneVerifiedAt: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
   };
 }
@@ -87,186 +80,69 @@ function completeUser(overrides: Record<string, unknown> = {}): Record<string, u
 describe('getChecklistStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionObj = { ...EXPERT_SESSION };
-    mockUpdateProfile.mockResolvedValue(undefined);
-    // Default: calendar connected, no weekly schedule yet.
-    mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'ACTIVE' });
-    mockHasActiveRules.mockResolvedValue(false);
+    mockUserObj = { ...EXPERT_USER };
+    mockReconcileFromRead.mockResolvedValue({ changed: false });
+    mockLoadInputs.mockResolvedValue(completeSnapshot());
   });
 
   describe('authentication & mode guards', () => {
     it('throws when there is no session user', async () => {
-      mockSessionObj = null;
+      mockUserObj = null;
       await expect(getChecklistStatus()).rejects.toThrow('Unauthorized');
-      expect(mockFindProfileById).not.toHaveBeenCalled();
+      expect(mockLoadInputs).not.toHaveBeenCalled();
+    });
+
+    // S2 — `requireOnboardedUser()` is fail-closed on onboarding, which a bare `getSession()`
+    // read never checked at this layer.
+    it('throws Onboarding not completed for an un-onboarded session', async () => {
+      mockUserObj = { ...EXPERT_USER, onboardingCompleted: false };
+      await expect(getChecklistStatus()).rejects.toThrow('Onboarding not completed');
+      expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 
     it('throws when not in expert mode', async () => {
-      mockSessionObj = {
-        user: { id: 'user-1', activeMode: 'client', expertProfileId: 'profile-1' },
+      mockUserObj = {
+        id: 'user-1',
+        activeMode: 'client',
+        expertProfileId: 'profile-1',
+        onboardingCompleted: true,
       };
       await expect(getChecklistStatus()).rejects.toThrow('Expert mode required');
-      expect(mockFindProfileById).not.toHaveBeenCalled();
+      expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 
     it('throws when there is no expertProfileId', async () => {
-      mockSessionObj = {
-        user: { id: 'user-1', activeMode: 'expert', expertProfileId: null },
+      mockUserObj = {
+        id: 'user-1',
+        activeMode: 'expert',
+        expertProfileId: null,
+        onboardingCompleted: true,
       };
       await expect(getChecklistStatus()).rejects.toThrow('Expert profile required');
-      expect(mockFindProfileById).not.toHaveBeenCalled();
+      expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 
-    it('throws when the profile is not found', async () => {
-      mockFindProfileById.mockResolvedValue(undefined);
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
+    it('throws when the profile/user snapshot is not found', async () => {
+      mockLoadInputs.mockResolvedValue(undefined);
       await expect(getChecklistStatus()).rejects.toThrow('Profile or user not found');
+      expect(mockReconcileFromRead).not.toHaveBeenCalled();
+    });
+
+    // S4 — the scoped read: `loadInputs` must carry the session's own user id as the scoping
+    // term, not just the expert profile id.
+    it('scopes loadInputs to the session user id', async () => {
+      await getChecklistStatus();
+      expect(mockLoadInputs).toHaveBeenCalledWith('profile-1', undefined, { userId: 'user-1' });
     });
   });
 
-  describe('rate checklist item & returned rateCents', () => {
-    it('marks rate complete and returns the raw rateCents when rateCents > 0', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ rateCents: 313 }));
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.rate).toBe(true);
-      expect(status.rateCents).toBe(313);
-    });
-
-    it('marks rate incomplete and returns null when rateCents is null', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ rateCents: null }));
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.rate).toBe(false);
-      expect(status.rateCents).toBeNull();
-    });
-  });
-
-  describe('calendar & availability signals (BAL-234)', () => {
-    it('marks calendar complete when the connection row is in the connected state', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile());
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'ACTIVE' });
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.calendar).toBe(true);
-      expect(mockFindConnection).toHaveBeenCalledWith('profile-1');
-    });
-
-    it('marks calendar incomplete for a non-ACTIVE credential status (EXPIRED)', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile());
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      // A revoked/errored connection is NOT ACTIVE — gated on credentialStatus (BAL-396 §3:
-      // `status` renamed to `credential_status`).
-      mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'EXPIRED' });
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.calendar).toBe(false);
-    });
-
-    it('marks calendar incomplete when there is no connection row', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile());
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockFindConnection.mockResolvedValue(undefined);
-      mockHasActiveRules.mockResolvedValue(true);
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.calendar).toBe(false);
-      // Availability is decoupled from calendar (BAL-234 §7): a saved schedule
-      // completes it even while the calendar item is still incomplete.
-      expect(status.items.availability).toBe(true);
-    });
-
-    it('marks availability complete on ≥1 saved rule, independent of the calendar', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile());
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      // No calendar connection at all — availability must still complete.
-      mockFindConnection.mockResolvedValue(undefined);
-      mockHasActiveRules.mockResolvedValue(true);
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.availability).toBe(true);
-      expect(status.items.calendar).toBe(false);
-      expect(mockHasActiveRules).toHaveBeenCalledWith('profile-1');
-    });
-
-    it('keeps availability incomplete when no schedule exists', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile());
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'ACTIVE' });
-      mockHasActiveRules.mockResolvedValue(false);
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.availability).toBe(false);
-    });
-  });
-
-  describe('searchable side-effect', () => {
-    it('sets searchable when all six items complete', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ searchable: false }));
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'ACTIVE' });
-      mockHasActiveRules.mockResolvedValue(true);
-
-      const status = await getChecklistStatus();
-
-      expect(status.allComplete).toBe(true);
-      expect(status.completedCount).toBe(6);
-      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { searchable: true });
-    });
-
-    it('does NOT set searchable again when the profile is already searchable', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ searchable: true }));
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'ACTIVE' });
-      mockHasActiveRules.mockResolvedValue(true);
-
-      const status = await getChecklistStatus();
-
-      expect(status.allComplete).toBe(true);
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
-    });
-
-    it('does NOT set searchable when availability keeps the checklist incomplete', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile({ searchable: false }));
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockHasActiveRules.mockResolvedValue(false);
-
-      const status = await getChecklistStatus();
-
-      expect(status.items.availability).toBe(false);
-      expect(status.allComplete).toBe(false);
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('completedCount', () => {
+  describe('read-path shape (T5.2) — unchanged for the 5-of-6 case', () => {
     it('counts 5 of 6 when only the weekly schedule is missing', async () => {
-      mockFindProfileById.mockResolvedValue(completeProfile());
-      mockFindUserById.mockResolvedValue(completeUser());
-      mockHasPayoutDetails.mockResolvedValue(true);
-      mockFindConnection.mockResolvedValue({ id: 'conn-1', credentialStatus: 'ACTIVE' });
-      mockHasActiveRules.mockResolvedValue(false);
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: { ...completeSnapshot().inputs, hasActiveAvailabilityRules: false },
+        })
+      );
 
       const status = await getChecklistStatus();
 
@@ -279,6 +155,116 @@ describe('getChecklistStatus', () => {
         availability: false,
         payouts: true,
       });
+      expect(status.allComplete).toBe(false);
+      expect(status.rateCents).toBe(313);
+    });
+  });
+
+  describe('D4 ANY-ACTIVE — calendar & availability signals', () => {
+    it('marks calendar complete when at least one connection is ACTIVE', async () => {
+      const status = await getChecklistStatus();
+      expect(status.items.calendar).toBe(true);
+    });
+
+    it('marks calendar incomplete for a non-ACTIVE credential status (EXPIRED)', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: {
+            ...completeSnapshot().inputs,
+            calendarConnections: [{ id: 'conn-1', credentialStatus: 'EXPIRED' }],
+          },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.items.calendar).toBe(false);
+    });
+
+    it('D4: an expired Google + a healthy Microsoft still marks calendar complete', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: {
+            ...completeSnapshot().inputs,
+            calendarConnections: [
+              { id: 'g', credentialStatus: 'EXPIRED' },
+              { id: 'm', credentialStatus: 'ACTIVE' },
+            ],
+          },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.items.calendar).toBe(true);
+      expect(status.allComplete).toBe(true);
+    });
+
+    it('marks availability complete on active rules, independent of the calendar', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: {
+            ...completeSnapshot().inputs,
+            calendarConnections: [],
+            hasActiveAvailabilityRules: true,
+          },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.items.availability).toBe(true);
+      expect(status.items.calendar).toBe(false);
+    });
+  });
+
+  describe('T5.1 — read-path reconciliation, both directions (D1 symmetric)', () => {
+    it('a complete checklist reconciles with allComplete true', async () => {
+      await getChecklistStatus();
+
+      expect(mockReconcileFromRead).toHaveBeenCalledWith({
+        expertProfileId: 'profile-1',
+        actorUserId: 'user-1',
+        derivation: expect.objectContaining({ allComplete: true, failingItems: [] }),
+        currentSearchable: false,
+        actorImpersonating: false,
+      });
+    });
+
+    it('a regression on a currently-searchable expert reconciles with allComplete false', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          currentSearchable: true,
+          inputs: { ...completeSnapshot().inputs, hasPayoutDetails: false },
+        })
+      );
+
+      await getChecklistStatus();
+
+      expect(mockReconcileFromRead).toHaveBeenCalledWith({
+        expertProfileId: 'profile-1',
+        actorUserId: 'user-1',
+        derivation: expect.objectContaining({ allComplete: false, failingItems: ['payouts'] }),
+        currentSearchable: true,
+        actorImpersonating: false,
+      });
+    });
+
+    // S2 — audit-integrity: an impersonated session must flag itself through to the repository.
+    it('flags actorImpersonating true when the viewing session is an admin impersonation', async () => {
+      mockUserObj = { ...EXPERT_USER, isImpersonating: true };
+
+      await getChecklistStatus();
+
+      expect(mockReconcileFromRead).toHaveBeenCalledWith(
+        expect.objectContaining({ actorImpersonating: true })
+      );
+    });
+
+    it('a reconcile failure is caught and logged — the render still succeeds', async () => {
+      mockReconcileFromRead.mockRejectedValue(new Error('db unavailable'));
+
+      const status = await getChecklistStatus();
+
+      expect(status.allComplete).toBe(true);
+      expect(log.error).toHaveBeenCalledWith(
+        'Expert searchability reconcile failed',
+        expect.objectContaining({ expertProfileId: 'profile-1', userId: 'user-1' })
+      );
     });
   });
 });

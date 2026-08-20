@@ -23,6 +23,7 @@ import {
 } from '../../services/calendar/apiroc-connection.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
+import { reconcileExpertSearchability } from '../../services/experts/searchability.js';
 
 // ── Validation ──────────────────────────────────────────────────
 
@@ -198,6 +199,40 @@ function handleCsrfMismatch(
 }
 
 /**
+ * BAL-414 (D3.1, §C #3) — re-list on OAuth reconnect. Extracted to a module-level helper (fix
+ * round 1, BLOCKER 2) purely to keep `persistAndRedirectConnected`'s cognitive complexity under
+ * the SonarCloud gate — behaviour is unchanged. Wrapped in its OWN try/catch, separate from the
+ * caller's: a reconcile failure here must not misreport an otherwise-successful OAuth connect as
+ * `calendar_error=callback_failed` — log and continue, matching the route's documented
+ * "post-persistence failure still redirects" contract. The read path and the next probe tick
+ * both reconcile.
+ */
+async function reconcileAfterConnect(
+  expertProfileId: string,
+  provider: string,
+  request: FastifyRequest
+): Promise<void> {
+  try {
+    await reconcileExpertSearchability({
+      expertProfileId,
+      source: 'calendar_connected',
+      actorUserId: null,
+      publishNotification: true,
+    });
+  } catch (reconcileErr: unknown) {
+    request.log.error(
+      {
+        expertProfileId,
+        provider,
+        error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
+        stack: reconcileErr instanceof Error ? reconcileErr.stack : undefined,
+      },
+      'searchability_reconcile_failed'
+    );
+  }
+}
+
+/**
  * SHAPE 2 happy path — persist, provision, rebuild availability, redirect connected. A
  * post-persistence failure still redirects (never a 500): the connection row already exists,
  * so a retry from this same response would fail the CSRF check instead of proceeding cleanly.
@@ -223,6 +258,7 @@ async function persistAndRedirectConnected(
     // connection has no sub-calendars yet, so there is nothing to subscribe.
     if (status === 'ACTIVE') {
       await enqueueSubscriptionReconcile(connection.id, { force: true }, request.log);
+      await reconcileAfterConnect(expertProfileId, provider, request);
     }
 
     // `provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING' — a plain ternary is
