@@ -37,6 +37,14 @@ interface CalendarReconnectRequiredEmailProps {
   readonly providerLabel: string;
   readonly ctaUrl: string;
   readonly baseUrl: string;
+  /**
+   * BAL-414 (D10, addendum) — the SAME derived value `flipToReconnectRequired` used to decide
+   * the DB de-list, passed straight through the payload — never recomputed here. Under D4
+   * (ANY-ACTIVE) an expert with a second healthy connected calendar stays fully searchable
+   * even while THIS one is broken, so the two arms below say materially different things
+   * rather than one unconditional (and sometimes false) search-pause claim.
+   */
+  readonly stillSearchable: boolean;
 }
 
 /**
@@ -54,8 +62,11 @@ export function CalendarReconnectRequiredEmail({
   providerLabel,
   ctaUrl,
   baseUrl,
+  stillSearchable,
 }: Readonly<CalendarReconnectRequiredEmailProps>) {
-  const previewText = 'Your calendar disconnected — reconnect to keep taking bookings.';
+  const previewText = stillSearchable
+    ? 'Your calendar disconnected — reconnect so your busy time is covered again.'
+    : 'Your calendar disconnected — reconnect to appear in search again.';
 
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
@@ -64,7 +75,9 @@ export function CalendarReconnectRequiredEmail({
         <LogoRow />
         <Heading style={styles.heroHeading}>Your calendar disconnected</Heading>
         <Text style={styles.heroSubtext}>
-          Nothing else has changed — your profile, rate and past bookings are untouched.
+          {stillSearchable
+            ? "Your profile, rate and past bookings are all safe, and you're still appearing in Balo search."
+            : 'Your profile, rate and past bookings are all safe — reconnecting brings everything straight back.'}
         </Text>
       </Section>
 
@@ -72,11 +85,21 @@ export function CalendarReconnectRequiredEmail({
       <Section style={shared.card}>
         <Text style={shared.greeting}>Hi {firstName},</Text>
 
-        <Text style={styles.bodyText}>
-          Balo lost access to your {providerLabel}, so your availability is paused until it&apos;s
-          reconnected. Nothing else has changed — your profile, rate and past bookings are
-          untouched.
-        </Text>
+        {stillSearchable ? (
+          <Text style={styles.bodyText}>
+            Balo lost access to your {providerLabel}, so busy time on it is no longer being checked
+            before a booking — you could end up double-booked against it. Your other connected
+            calendar is still covering your Balo search listing, and your profile, rate and past
+            bookings are untouched. Reconnecting brings your full availability picture back.
+          </Text>
+        ) : (
+          <Text style={styles.bodyText}>
+            Balo lost access to your {providerLabel}, so your availability is paused. While
+            it&apos;s paused you won&apos;t appear in Balo search and your public profile link is on
+            hold too. Your profile, rate and past bookings are untouched — reconnecting brings it
+            all straight back.
+          </Text>
+        )}
 
         <Text style={styles.bodyText}>
           If you turned Balo&apos;s access off at your calendar provider, you may need to remove it

@@ -1,4 +1,4 @@
-import { calendarRepository, type CalendarConnection } from '@balo/db';
+import { db, calendarRepository, type CalendarConnection } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import {
   trackServer,
@@ -13,6 +13,11 @@ import {
 } from '../../lib/apiroc/index.js';
 import type { CredentialVerdict } from '../../lib/apiroc/reconnect.js';
 import { notificationEvents } from '../../notifications/publisher.js';
+import {
+  planSearchabilityReconciliation,
+  commitSearchabilityPlan,
+  emitSearchabilityChange,
+} from '../experts/searchability.js';
 
 const log = createLogger('credential-status');
 
@@ -103,7 +108,35 @@ async function flipToReconnectRequired(
 ): Promise<void> {
   const status = await confirmNonActiveStatus(connection.endUserAccountId);
 
-  await calendarRepository.setCredentialStatus(connection.id, status);
+  // BAL-414 (D1/D3.1) — READS ONLY, outside the transaction. Supplies the post-flip status
+  // for THIS connection via `credentialStatusOverride`, so the derivation never reads a stale
+  // `calendar` value — its own flip has not committed yet when this runs. See
+  // `services/experts/searchability.ts`'s module docblock and the plan's §B.4 for why the
+  // reads stay outside the transaction and only the two writes join it.
+  const plan = await planSearchabilityReconciliation({
+    expertProfileId: connection.expertProfileId,
+    source: 'calendar_credential_break',
+    credentialStatusOverride: { connectionId: connection.id, credentialStatus: status },
+  });
+
+  let searchabilityResult: Awaited<ReturnType<typeof commitSearchabilityPlan>> = {
+    changed: false,
+  };
+
+  // The credential flip and the searchability flip commit or roll back TOGETHER — a crash
+  // between them would leave a non-ACTIVE credential on a still-searchable (bookable, no
+  // busy-time subtraction) expert, which is precisely BAL-414's harm.
+  await db.transaction(async (tx) => {
+    await calendarRepository.setCredentialStatus(connection.id, status, tx);
+    if (plan !== null && plan.needsWrite) {
+      searchabilityResult = await commitSearchabilityPlan(
+        plan,
+        { source: 'calendar_credential_break', actorUserId: null },
+        tx
+      );
+    }
+  });
+
   await calendarRepository.clearAvailabilityCache(connection.expertProfileId);
 
   // ⚠ round-2 fix #9 — this is the single most consequential state change in this feature
@@ -123,6 +156,12 @@ async function flipToReconnectRequired(
     'apiroc_credential_reconnect_required'
   );
 
+  // BAL-414 (D10, addendum) — the SAME derived value the de-list decision above used, never
+  // recomputed. `plan === null` only when the profile/user row is gone (loadInputs found
+  // nothing) — no searchability write happened in that case, so there is nothing to claim a
+  // pause on; default to `true` (the safe direction: a false reassurance never ships).
+  const stillSearchable = plan === null ? true : plan.targetSearchable;
+
   // Notify at most once per breakage — the caller owns suppression, the engine does not
   // (BAL-396 §7.2). `reconnectNotifiedAt` is cleared by `upsertApirocConnection` on
   // reconnect and by the health probe's recovery path, which is what lets a SECOND breakage
@@ -133,6 +172,7 @@ async function flipToReconnectRequired(
         correlationId: connection.id,
         expertProfileId: connection.expertProfileId,
         provider: connection.provider,
+        stillSearchable,
       });
       await calendarRepository.markReconnectNotified(connection.id, new Date());
     } catch (publishErr: unknown) {
@@ -153,6 +193,22 @@ async function flipToReconnectRequired(
       provider: eventProvider,
       detected_by: detectedBy,
       distinct_id: connection.expertProfileId,
+    });
+  }
+
+  // BAL-414 — POST-COMMIT, never inside the transaction above (a publish from inside
+  // `db.transaction` fires before commit and does not roll back). `publishNotification: false`
+  // — D2 "one email per underlying cause": the strengthened `calendar.auth_error` email just
+  // published above IS the notice for this de-list; `expert.searchability_lost` never fires
+  // for this source. A no-op when `searchabilityResult.changed === false` (the row was
+  // already at its target, or `plan` was null).
+  if (plan !== null) {
+    await emitSearchabilityChange({
+      expertProfileId: connection.expertProfileId,
+      plan,
+      result: searchabilityResult,
+      source: 'calendar_credential_break',
+      publishNotification: false,
     });
   }
 }

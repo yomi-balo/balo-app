@@ -1,7 +1,7 @@
 import type { AuthEventMap, AuthServerEventMap } from './events/auth';
 import type { OnboardingEventMap } from './events/onboarding';
 import type { ExpertEventMap, ExpertServerEventMap } from './events/expert';
-import type { ExpertSetupEventMap } from './events/expert-setup';
+import type { ExpertSetupEventMap, ExpertSetupServerEventMap } from './events/expert-setup';
 import type { ExpertRateEventMap } from './events/expert-rate';
 import type { ExpertPayoutEventMap, ExpertPayoutServerEventMap } from './events/expert-payouts';
 import type { AvatarEventMap } from './events/avatar';
@@ -111,6 +111,10 @@ export type ServerEvents = ExpertServerEventMap &
   GuestServerEventMap &
   EndOfCallServerEventMap &
   // BAL-416 — the MOVED BAL-235 date-override events (server-side, home changed only).
-  AvailabilityServerEventMap;
+  AvailabilityServerEventMap &
+  // BAL-414 (D7) — SERVER-ONLY: both origins (the API credential-break/repair triggers and
+  // the web dashboard read path, an `import 'server-only'` RSC) are server contexts.
+  // Deliberately absent from `AllEvents`.
+  ExpertSetupServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

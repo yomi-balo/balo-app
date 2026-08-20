@@ -22,6 +22,8 @@ import type {
   ActionItemAssignedPayload,
   ConversationMessagePostedPayload,
   ConversationFileSharedPayload,
+  ExpertSearchabilityLostPayload,
+  ExpertSearchabilityRestoredPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -238,7 +240,15 @@ export type NotificationEvent =
   | 'promo.redeemed'
   // BAL-391 (ADR-1043) — an action item was assigned to a side of the engagement.
   // Published from the delivery-workspace create/assign Server Actions.
-  | 'action_item.assigned';
+  | 'action_item.assigned'
+  // BAL-414 (D1/D2) — searchability derives from the checklist symmetrically. Published from
+  // `apps/web/src/lib/expert/searchability.ts`'s post-commit emit, itself called from
+  // `getChecklistStatus()`'s read-path reconciliation. `expert.searchability_lost` is NEVER
+  // published for a calendar-caused de-list (that rides `calendar.auth_error`, an API-only
+  // event absent from this union) — only for the read-path backstop covering the other five
+  // items. `expert.searchability_restored` fires for both directions of cause, in-app only.
+  | 'expert.searchability_lost'
+  | 'expert.searchability_restored';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -279,4 +289,6 @@ export interface EventPayloadMap {
   'credit.topup.requested': CreditTopupRequestedPayload;
   'promo.redeemed': PromoRedeemedPayload;
   'action_item.assigned': ActionItemAssignedPayload;
+  'expert.searchability_lost': ExpertSearchabilityLostPayload;
+  'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
 }

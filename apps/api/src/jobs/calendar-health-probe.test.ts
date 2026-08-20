@@ -14,6 +14,7 @@ const {
   mockTrackServer,
   mockClassifyCredentialFailure,
   mockLog,
+  mockReconcileExpertSearchability,
   MockApirocError,
 } = vi.hoisted(() => {
   /**
@@ -54,6 +55,7 @@ const {
     mockTrackServer: vi.fn(),
     mockClassifyCredentialFailure: vi.fn(),
     mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    mockReconcileExpertSearchability: vi.fn(),
     MockApirocError: MockApirocErrorImpl,
   };
 });
@@ -93,6 +95,10 @@ vi.mock('../services/calendar/apiroc-connection.js', () => ({
 
 vi.mock('../services/calendar/credential-status.js', () => ({
   applyCredentialFailure: mockApplyCredentialFailure,
+}));
+
+vi.mock('../services/experts/searchability.js', () => ({
+  reconcileExpertSearchability: mockReconcileExpertSearchability,
 }));
 
 vi.mock('./availability-cache.js', () => ({
@@ -139,6 +145,7 @@ function makeConnection(overrides: Partial<CalendarConnection> = {}): CalendarCo
 beforeEach(() => {
   vi.clearAllMocks();
   mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
+  mockReconcileExpertSearchability.mockResolvedValue({ changed: false });
   // Default: an ACTIVE connection is already provisioned (has sub-calendar rows), so the
   // "ACTIVE-but-unreadable" re-provision path only fires in the tests that explicitly want it.
   mockFindSubCalendarsByConnectionId.mockResolvedValue([
@@ -186,6 +193,7 @@ describe('runCalendarHealthProbe', () => {
       recovered: 0,
       batchFilled: false,
       massFailureSuspected: false,
+      delisted: 0,
     });
     expect(mockCalendarsListGet).not.toHaveBeenCalled();
   });
@@ -241,6 +249,7 @@ describe('runCalendarHealthProbe', () => {
         recovered: 0,
         batchFilled: false,
         massFailureSuspected: false,
+        delisted: 0,
       });
       // ⚠ THE ONE PLACE A CREDENTIAL IS MARKED BROKEN — the write is DELEGATED, not
       // duplicated: this job never calls `setCredentialStatus` itself on the failure path.
@@ -318,9 +327,16 @@ describe('runCalendarHealthProbe', () => {
         { force: false },
         expect.anything()
       );
+      // BAL-414 (T4.1) — Branch A heal re-lists via the reconcile service.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: connection.expertProfileId,
+        source: 'calendar_credential_repair',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
-    it('a SYNC_PENDING connection whose re-provision ALSO fails stays SYNC_PENDING this tick — no false recovery', async () => {
+    it('a SYNC_PENDING connection whose re-provision ALSO fails stays SYNC_PENDING this tick — no false recovery, but SYMMETRY GAP (fix round 1) still reconciles', async () => {
       const connection = makeConnection({ credentialStatus: 'SYNC_PENDING' });
       mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
       mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
@@ -332,6 +348,15 @@ describe('runCalendarHealthProbe', () => {
       expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
       expect(mockTrackServer).not.toHaveBeenCalled();
       expect(mockEnqueueSubscriptionReconcile).not.toHaveBeenCalled();
+      // SYMMETRY GAP (fix round 1) — a connection that stays non-ACTIVE after a failed
+      // re-provision attempt must still reconcile searchability, or a dormant expert who never
+      // opens their dashboard stays listed and unbookable indefinitely.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: connection.expertProfileId,
+        source: 'calendar_sync_pending',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
     it('EXPIRED heals to ACTIVE directly — reconnected out of band — and fires RECONNECT_RESOLVED', async () => {
@@ -357,6 +382,13 @@ describe('runCalendarHealthProbe', () => {
         { force: true },
         expect.anything()
       );
+      // BAL-414 (T4.1) — Branch C heal re-lists via the reconcile service.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: connection.expertProfileId,
+        source: 'calendar_credential_repair',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
     it('an ACTIVE connection whose probe succeeds is left alone — not recovered, but STILL enqueues the maintenance sweep', async () => {
@@ -377,6 +409,9 @@ describe('runCalendarHealthProbe', () => {
         { force: false },
         expect.anything()
       );
+      // BAL-414 (T4.1) — Branch B ("already ACTIVE, nothing to heal") must NOT reconcile: it
+      // would run on every healthy connection every hour for no reason.
+      expect(mockReconcileExpertSearchability).not.toHaveBeenCalled();
     });
 
     /**
@@ -420,9 +455,17 @@ describe('runCalendarHealthProbe', () => {
         { force: false },
         expect.anything()
       );
+      // BAL-414 (T4.1) — this heals in-place (never went through SYNC_PENDING) but is still a
+      // `recovered === true` outcome, so it re-lists too.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: connection.expertProfileId,
+        source: 'calendar_credential_repair',
+        actorUserId: null,
+        publishNotification: true,
+      });
     });
 
-    it('an ACTIVE connection with ZERO sub-calendar rows whose re-provision ALSO fails is left ACTIVE this tick — no false recovery', async () => {
+    it('an ACTIVE connection with ZERO sub-calendar rows whose re-provision ALSO fails is left ACTIVE this tick — no false recovery, but SYMMETRY GAP (fix round 1) still reconciles', async () => {
       const connection = makeConnection({ credentialStatus: 'ACTIVE' });
       mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
       mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
@@ -434,6 +477,50 @@ describe('runCalendarHealthProbe', () => {
       expect(result.recovered).toBe(0);
       expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
       expect(mockTrackServer).not.toHaveBeenCalled();
+      // SYMMETRY GAP (fix round 1) — THE test this ticket's fix round exists for: this
+      // connection was ACTIVE and just downgraded to SYNC_PENDING via `provisionConnection`
+      // above (an ACTIVE → SYNC_PENDING transition with previously NO trigger anywhere), so it
+      // must reconcile even though `connection.credentialStatus` (the pre-tick snapshot) still
+      // reads `'ACTIVE'`.
+      expect(mockReconcileExpertSearchability).toHaveBeenCalledWith({
+        expertProfileId: connection.expertProfileId,
+        source: 'calendar_sync_pending',
+        actorUserId: null,
+        publishNotification: true,
+      });
+    });
+
+    it('a reconcile failure on the heal path is logged and does not fail the tick', async () => {
+      const connection = makeConnection({ credentialStatus: 'EXPIRED' });
+      mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
+      mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
+      mockReconcileExpertSearchability.mockRejectedValue(new Error('db unavailable'));
+
+      const result = await runCalendarHealthProbe(NOW);
+
+      expect(result.recovered).toBe(1);
+      expect(mockLog.error).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: 'conn-1', expertProfileId: 'expert-1' }),
+        'searchability_reconcile_failed'
+      );
+    });
+
+    // SYMMETRY GAP (fix round 1) — the failure-logging sibling of the two tests above, on the
+    // NON-recovered branch: a reconcile failure here must not fail the tick either.
+    it('a reconcile failure on the SYMMETRY GAP (non-recovered, still non-ACTIVE) path is logged and does not fail the tick', async () => {
+      const connection = makeConnection({ credentialStatus: 'SYNC_PENDING' });
+      mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
+      mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
+      mockProvisionConnection.mockResolvedValue('SYNC_PENDING');
+      mockReconcileExpertSearchability.mockRejectedValue(new Error('db unavailable'));
+
+      const result = await runCalendarHealthProbe(NOW);
+
+      expect(result.recovered).toBe(0);
+      expect(mockLog.error).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: 'conn-1', expertProfileId: 'expert-1' }),
+        'searchability_reconcile_failed'
+      );
     });
   });
 
@@ -636,6 +723,72 @@ describe('runCalendarHealthProbe', () => {
         expect.objectContaining({ connectionId: 'conn-1' }),
         'apiroc_health_probe_unexpected_error'
       );
+    });
+  });
+
+  // S5 (fix round 1) — make a mass de-list observable.
+  describe('S5 — mass de-list observability', () => {
+    it('does NOT log apiroc_probe_mass_delist_suspected for a single de-list', async () => {
+      const connection = makeConnection({ credentialStatus: 'SYNC_PENDING' });
+      mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
+      mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
+      mockProvisionConnection.mockResolvedValue('SYNC_PENDING');
+      mockReconcileExpertSearchability.mockResolvedValue({
+        changed: true,
+        auditEventId: 'audit-1',
+        previousSearchable: true,
+      });
+
+      const result = await runCalendarHealthProbe(NOW);
+
+      expect(result.delisted).toBe(1);
+      expect(mockLog.error).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'apiroc_probe_mass_delist_suspected'
+      );
+    });
+
+    it('logs apiroc_probe_mass_delist_suspected when more than one connection de-lists in one tick', async () => {
+      const connections = [
+        makeConnection({
+          id: 'conn-1',
+          expertProfileId: 'expert-1',
+          credentialStatus: 'SYNC_PENDING',
+        }),
+        makeConnection({
+          id: 'conn-2',
+          expertProfileId: 'expert-2',
+          credentialStatus: 'SYNC_PENDING',
+        }),
+      ];
+      mockListConnectionsDueForHealthCheck.mockResolvedValue(connections);
+      mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
+      mockProvisionConnection.mockResolvedValue('SYNC_PENDING');
+      mockReconcileExpertSearchability.mockResolvedValue({
+        changed: true,
+        auditEventId: 'audit-1',
+        previousSearchable: true,
+      });
+
+      const result = await runCalendarHealthProbe(NOW);
+
+      expect(result.delisted).toBe(2);
+      expect(mockLog.error).toHaveBeenCalledWith(
+        { probed: 2, delisted: 2 },
+        'apiroc_probe_mass_delist_suspected'
+      );
+    });
+
+    it('does not count a no-op reconcile (already de-listed) toward the delisted counter', async () => {
+      const connection = makeConnection({ credentialStatus: 'SYNC_PENDING' });
+      mockListConnectionsDueForHealthCheck.mockResolvedValue([connection]);
+      mockCalendarsListGet.mockResolvedValue({ data: [], nextPageToken: undefined });
+      mockProvisionConnection.mockResolvedValue('SYNC_PENDING');
+      mockReconcileExpertSearchability.mockResolvedValue({ changed: false });
+
+      const result = await runCalendarHealthProbe(NOW);
+
+      expect(result.delisted).toBe(0);
     });
   });
 });

@@ -1,6 +1,7 @@
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { SettingsTabs, type AgencyDomainsTabData } from './_components/settings-tabs';
 import { SetupContextBar } from './_components/setup-context-bar';
+import { ListingStatusLine } from './_components/listing-status-line';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -148,6 +149,9 @@ export default async function ExpertSettingsPage({
 
   return (
     <div>
+      {/* BAL-414 (D11) — the one-line listing-status surface, derived from the same
+          checklistStatus already fetched above. No second query, no shape change. */}
+      {checklistStatus && <ListingStatusLine status={checklistStatus} />}
       {setupStep && checklistStatus && !checklistStatus.allComplete && (
         <SetupContextBar activeSetupStep={setupStep} checklistStatus={checklistStatus} />
       )}

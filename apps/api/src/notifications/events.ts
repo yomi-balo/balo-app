@@ -47,6 +47,8 @@ import type {
   ConversationUnreadDigestDuePayload,
   MeetingExpertAbsentPayload,
   MeetingClientAbsentPayload,
+  ExpertSearchabilityLostPayload,
+  ExpertSearchabilityRestoredPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -84,6 +86,16 @@ export interface CalendarAuthErrorPayload {
   // rewrites/deletes) already hold `connection.provider`. Drives the template's
   // `providerLabel` copy.
   provider: string;
+  /**
+   * BAL-414 (D10, addendum) — whether the expert REMAINS searchable despite this ONE
+   * connection breaking (D4 ANY-ACTIVE: a second healthy provider keeps `calendar` true, so
+   * `allComplete` can stay true too). `flipToReconnectRequired` computes this from the SAME
+   * derived state it uses to decide the DB de-list — never recompute it separately here or in
+   * a template, or the email and the DB can disagree. The reconnect email and its in-app
+   * counterpart branch on this to avoid a false "you've stopped appearing in search" claim for
+   * a multi-provider expert.
+   */
+  stillSearchable: boolean;
 }
 
 /**
@@ -337,7 +349,16 @@ export type NotificationEvent =
   // `project.*` for a message with no project.
   | 'conversation.message_posted'
   | 'conversation.file_shared'
-  | 'conversation.unread_digest_due';
+  | 'conversation.unread_digest_due'
+  // BAL-414 (D1/D2) — searchability derives from the six-item checklist symmetrically.
+  // `expert.searchability_lost` (non-calendar de-list only — the calendar-caused de-list
+  // rides the strengthened `calendar.auth_error` email instead) is published from BOTH
+  // `apps/api` (the disconnect route, the OAuth callback never publishes this direction) and
+  // `apps/web`'s dashboard read path, so it needs a `publishBodySchema` arm.
+  // `expert.searchability_restored` is published from all four re-list triggers, on both
+  // sides, in-app only.
+  | 'expert.searchability_lost'
+  | 'expert.searchability_restored';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -550,4 +571,6 @@ export interface EventPayloadMap {
   'conversation.message_posted': ConversationMessagePostedPayload;
   'conversation.file_shared': ConversationFileSharedPayload;
   'conversation.unread_digest_due': ConversationUnreadDigestDuePayload;
+  'expert.searchability_lost': ExpertSearchabilityLostPayload;
+  'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
 }

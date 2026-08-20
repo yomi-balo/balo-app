@@ -186,7 +186,12 @@ interface UpdateProfileInput {
   isSalesforceMvp?: boolean;
   isSalesforceCta?: boolean;
   isCertifiedTrainer?: boolean;
-  searchable?: boolean;
+  // CHEAP-3 (fix round 1) — deliberately NOT a field here. `expert_profiles.searchable` has
+  // exactly ONE writer outside seeds:
+  // `expertSearchabilityRepository.applySearchable`'s conditional compare-and-set
+  // (`packages/db/src/repositories/expert-searchability.ts`) — the docblock there names the
+  // forbidden "fixes" this field would have reopened. Removing it here makes the compiler
+  // enforce the invariant instead of leaving it convention-only.
   rateCents?: number;
   // Calendar / booking-rule writes (BAL-234). `timezone` write is net-new here —
   // the schedule editor persists the expert's own tz alongside the booking rules.
@@ -864,7 +869,6 @@ export const expertsRepository = {
         isSalesforceMvp: data.isSalesforceMvp,
         isSalesforceCta: data.isSalesforceCta,
         isCertifiedTrainer: data.isCertifiedTrainer,
-        searchable: data.searchable,
         rateCents: data.rateCents,
         timezone: data.timezone,
         bookingBufferBeforeMinutes: data.bookingBufferBeforeMinutes,
