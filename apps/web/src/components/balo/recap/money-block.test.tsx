@@ -69,12 +69,17 @@ const CLIENT_FLOOR_APPLIED: SessionMoneyBlock = {
   settlementShape: 'held',
 };
 
+// ⚠ R1 (owner ruling, 2026-08-21) — a no-show bills the floor FLAT, so `durationMinutes` is the
+// floor (15) and `actualMinutes` is the expert's real, LONGER wait (18). `billingFloorApplied` is
+// `true`: the minimum is definitionally what fixed the charge on this shape, even though the
+// billed figure is BELOW actual. Before R1 this fixture carried `false` and the client was in fact
+// charged 18 while the recap claimed 15.
 const CLIENT_NO_SHOW: SessionMoneyBlock = {
   ...CLIENT_FINALIZED,
   durationMinutes: 15,
   amountAudMinor: 5_000,
   actualMinutes: 18,
-  billingFloorApplied: false,
+  billingFloorApplied: true,
   billingFloorMinutes: 15,
   finalizationPath: 'presence',
   settlementShape: 'no_show_client',
@@ -128,12 +133,17 @@ const EXPERT_FLOOR_APPLIED: SessionMoneyBlock = {
   settlementShape: 'held',
 };
 
+// ⚠ R1 (owner ruling, 2026-08-21) — a no-show bills the floor FLAT, so `durationMinutes` is the
+// floor (15) and `actualMinutes` is the expert's real, LONGER wait (18). `billingFloorApplied` is
+// `true`: the minimum is definitionally what fixed the charge on this shape, even though the
+// billed figure is BELOW actual. Before R1 this fixture carried `false` and the client was in fact
+// charged 18 while the recap claimed 15.
 const EXPERT_NO_SHOW: SessionMoneyBlock = {
   ...EXPERT_FINALIZED,
   durationMinutes: 15,
   earningsAudMinor: 3_750,
   actualMinutes: 18,
-  billingFloorApplied: false,
+  billingFloorApplied: true,
   billingFloorMinutes: 15,
   finalizationPath: 'presence',
   settlementShape: 'no_show_client',

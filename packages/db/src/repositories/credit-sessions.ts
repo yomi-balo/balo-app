@@ -421,12 +421,15 @@ export interface SettleFromPresenceRepoInput {
    *
    * ⚠⚠ IT ARRIVES FROM THE CALLER AND IS **NOT** RE-DERIVED HERE AS
    * `billableMinutes > actualMinutes`. Those two are NOT the same predicate. The pure core
-   * (`resolveMeetingSettlement`) defines it as `ruleMinutes > actualMinutes` — deliberately FALSE
-   * when it was the Q1 NO-REFUND CLAMP, not the floor, that raised the figure. Re-deriving it
-   * from `billableMinutes` (which is post-clamp) labels every clamp as a floor application, and
+   * (`resolveMeetingSettlement`) defines it as `no_show_client || ruleMinutes > actualMinutes` —
+   * deliberately FALSE when it was the Q1 NO-REFUND CLAMP, not the floor, that raised the figure,
+   * and deliberately TRUE on a no-show, where the floor is FLATLY the whole charge (R1, owner
+   * ruling 2026-08-21) and the billed figure therefore sits BELOW actual. Re-deriving it from
+   * `billableMinutes` (which is post-clamp) gets BOTH of those backwards, and
    * `credit_session.presence_settled` is the ONLY durable forensic record of that overcharge.
    * Persisted so `finalizeBilling`'s `floored:` analytics — the "how often does the minimum bind"
-   * metric — reads the real answer instead of re-deriving the same wrong one.
+   * metric — and (since R2) the recap money block all read the real answer instead of each
+   * re-deriving the same wrong one.
    */
   readonly floorApplied: boolean;
   /**

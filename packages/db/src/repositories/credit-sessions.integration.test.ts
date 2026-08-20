@@ -1875,9 +1875,11 @@ function settlementInput(
     // correctly refuses with `SettlementDrawDivergedError`.
     minutesAlreadyDrawn: 0,
     shape: 'no_show_client',
-    // F14 — the floor DID fix the figure here (15 billed, 15 actual is the boring default, so
-    // this is `false`); cases that exercise the floor or the Q1 clamp override it explicitly.
-    floorApplied: false,
+    // ⚠ F14/R1 — `true`, because the default shape is `no_show_client` and that shape bills the
+    // floor **FLAT** (owner ruling, 2026-08-21): the minimum is definitionally what fixed the
+    // figure, whatever the expert's wait was, so the pure core can never emit `false` here.
+    // `held` cases — including the Q1 no-refund clamp — override both `shape` and this flag.
+    floorApplied: true,
     outcome: 'no_show_client',
     actorUserId: null,
     now: meterAt(20),

@@ -22,9 +22,13 @@
  * | # | expertEverPresent | clientSideEverPresent | effective ≥ floor | shape             | outcome        | money |
  * | - | ------------------ | ---------------------- | ------------------ | ----------------- | -------------- | ----- |
  * | 1 | false               | any                     | —                   | missed_call        | missed_call    | zero, hold released, no accrual |
- * | 2 | true                | false                   | true                | no_show_client     | no_show_client | floor |
+ * | 2 | true                | false                   | true                | no_show_client     | no_show_client | floor (FLAT) |
  * | 3 | true                | false                   | false               | abandoned_wait     | completed ⚠    | zero, hold released, no accrual |
  * | 4 | true                | true                    | —                   | held               | completed      | ceil(max(effective, floor)) |
+ *
+ * ⚠⚠ ROW 2 IS **FLAT**, NOT A MINIMUM (owner ruling, 2026-08-21) — see
+ * {@link resolveMeetingSettlement}. An expert who waits 40 minutes on a client no-show bills the
+ * client the FLOOR (15), not 40, and accrues the same 15. Do not "align" it with row 4.
  *
  * Row 3 is D2: the expert joined, waited, and left BELOW the 15-minute floor with no client
  * ever present. ADR-1044 §7 makes the FULL 15 minutes the earning condition ("the expert may
@@ -115,7 +119,15 @@ export interface MeetingSettlement {
   readonly actualMinutes: number;
   /** THE SETTLED FIGURE. Client charge AND expert accrual both derive from this ONE number. */
   readonly billableMinutes: number;
-  /** `true` when the floor is what fixed `billableMinutes` (i.e. `billableMinutes > actualMinutes`). */
+  /**
+   * `true` when the MINIMUM is what fixed the billed figure — i.e. `ruleMinutes > actualMinutes`
+   * (the floor RAISED a short `held` call), OR the shape is `no_show_client`, where the floor is
+   * flatly the whole charge regardless of how long the expert waited (owner ruling, 2026-08-21).
+   *
+   * ⚠ It is derived from `ruleMinutes`, NOT `billableMinutes` — `billableMinutes` is post-Q1
+   * no-refund clamp, and labelling that clamp a "floor application" is exactly the mislabelling
+   * F14 rejected. Both zero shapes are `false`.
+   */
   readonly floorApplied: boolean;
   /** First `session_consume` tick seq the settlement must post (`minutesAlreadyDrawn + 1`). */
   readonly topUpFromTickSeq: number;
@@ -207,6 +219,31 @@ function resolveShape(
   return effectiveExpertPresentMs >= floorMs ? 'no_show_client' : 'abandoned_wait';
 }
 
+/**
+ * D3's money column, per shape, BEFORE the F1 cap and the Q1 no-refund clamp.
+ *
+ * ⚠⚠ `no_show_client` RETURNS THE FLOOR FLAT — it is NOT `max(effective, floor)` (owner ruling,
+ * 2026-08-21; see {@link resolveMeetingSettlement}). Because `resolveShape` only reaches this
+ * shape when `effective >= floorMs`, a shared `max(...)` would resolve to `effective` every single
+ * time and bill the expert's whole wait to a client who never arrived. `held` keeps the `max` —
+ * that one IS "time made available, floored".
+ */
+function uncappedRuleMinutesForShape(
+  shape: MeetingSettlementShape,
+  effectiveExpertPresentMs: number,
+  floorMs: number
+): number {
+  switch (shape) {
+    case 'missed_call':
+    case 'abandoned_wait':
+      return 0;
+    case 'no_show_client':
+      return Math.ceil(floorMs / MS_PER_MINUTE);
+    case 'held':
+      return Math.ceil(Math.max(effectiveExpertPresentMs, floorMs) / MS_PER_MINUTE);
+  }
+}
+
 /** D3's shape → `meeting_outcome` mapping. `abandoned_wait` deliberately maps to `completed` (D2). */
 function outcomeForShape(shape: MeetingSettlementShape): MeetingSettlementOutcome {
   switch (shape) {
@@ -228,16 +265,29 @@ function outcomeForShape(shape: MeetingSettlementShape): MeetingSettlementOutcom
  * THE FULL SETTLEMENT RESOLUTION (D2/D3/D4, §2.3's arithmetic).
  *
  * ```
- * uncappedRuleMinutes = (shape === 'missed_call' || shape === 'abandoned_wait')
- *                     ? 0
- *                     : ceil(max(effectiveExpertPresentMs, floorMs) / 60_000)
+ * uncappedRuleMinutes = missed_call | abandoned_wait → 0
+ *                       no_show_client               → ceil(floorMs / 60_000)          // ⚠ FLAT
+ *                       held                         → ceil(max(effective, floorMs) / 60_000)
  * ruleMinutes     = min(uncappedRuleMinutes, maxBillableMinutes)  // ⚠ F1 — the upper bound
  * actualMinutes   = ceil(effectiveExpertPresentMs / 60_000)
  * billableMinutes = max(ruleMinutes, minutesAlreadyDrawn)     // ⚠ never a refund — see below
- * floorApplied    = ruleMinutes > actualMinutes                // false on both zero shapes
+ * floorApplied    = no_show_client || ruleMinutes > actualMinutes   // false on both zero shapes
  * topUpFromTickSeq = minutesAlreadyDrawn + 1
  * topUpToTickSeq   = billableMinutes                            // `< from` ⇒ nothing posted
  * ```
+ *
+ * ⚠⚠ **A CLIENT NO-SHOW IS A FIXED FLOOR CHARGE, NOT "TIME MADE AVAILABLE" (owner ruling,
+ * 2026-08-21).** The ruling, verbatim: *"For client no-show, the client should only be billed
+ * 15min minimum charge. The expert has to stay for this long for the client to be billed that,
+ * else, no charge."* So on `no_show_client` the floor IS the whole charge and **the expert's
+ * excess wait is deliberately NOT billed to the client** — an expert who leaves the tab open for
+ * 40 minutes after a no-show bills 15, and (the AC: one figure drives both sides) accrues 15
+ * themselves. The "else, no charge" half is `abandoned_wait`, which stays ZERO.
+ *
+ * This shape CANNOT be expressed by the shared `ceil(max(effective, floorMs))`: `no_show_client`'s
+ * own precondition (`resolveShape`) already REQUIRES `effective >= floorMs`, so that `max` always
+ * resolves to `effective` on this shape and the flat rule would silently never apply. Row 4
+ * (`held`) is untouched — a real two-party 40-minute call still bills 40.
  *
  * ⚠⚠ **`min(…, maxBillableMinutes)` — THE UPPER BOUND (F1).** Required, never defaulted. See
  * this module's docblock: no other cap in the system bounds a `presence` settlement, and an
@@ -285,16 +335,18 @@ export function resolveMeetingSettlement(input: MeetingSettlementInput): Meeting
   const outcome = outcomeForShape(shape);
 
   const isZeroShape = shape === 'missed_call' || shape === 'abandoned_wait';
-  const uncappedRuleMinutes = isZeroShape
-    ? 0
-    : Math.ceil(Math.max(effectiveExpertPresentMs, floorMs) / MS_PER_MINUTE);
+  const uncappedRuleMinutes = uncappedRuleMinutesForShape(shape, effectiveExpertPresentMs, floorMs);
   // ⚠ F1 — THE UPPER BOUND. `min`, never a silent default: `maxBillableMinutes` is required
   // input precisely so this line cannot be reached with an unbounded figure.
   const ruleMinutes = Math.min(uncappedRuleMinutes, maxBillableMinutes);
   const actualMinutes = Math.ceil(effectiveExpertPresentMs / MS_PER_MINUTE);
   const drawnFloor = Math.max(0, minutesAlreadyDrawn);
   const billableMinutes = Math.max(ruleMinutes, drawnFloor);
-  const floorApplied = ruleMinutes > actualMinutes;
+  // ⚠ "the minimum is what FIXED the billed figure" — NOT "the billed figure exceeds actual".
+  // On `no_show_client` the floor is flatly the whole charge, so rule (15) is routinely BELOW
+  // actual (a 40-minute wait); the old `ruleMinutes > actualMinutes` alone would report `false`
+  // on the very shape where the floor is the entire reason for the number.
+  const floorApplied = !isZeroShape && (shape === 'no_show_client' || ruleMinutes > actualMinutes);
   const topUpFromTickSeq = drawnFloor + 1;
   const topUpToTickSeq = billableMinutes;
 

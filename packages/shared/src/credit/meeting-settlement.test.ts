@@ -47,7 +47,7 @@ describe('resolveMeetingSettlement — the D3 truth table', () => {
     expect(result.topUpToTickSeq).toBeLessThan(result.topUpFromTickSeq);
   });
 
-  it('#2 expert joined, client never, ≥ floor ⇒ no_show_client, floored', () => {
+  it('#2 expert joined, client never, ≥ floor ⇒ no_show_client, billed the FLAT floor', () => {
     const joined = SCHEDULED_START;
     const result = resolveMeetingSettlement(
       input({
@@ -58,11 +58,13 @@ describe('resolveMeetingSettlement — the D3 truth table', () => {
     expect(result.shape).toBe('no_show_client');
     expect(result.outcome).toBe('no_show_client');
     expect(result.actualMinutes).toBe(20);
-    expect(result.billableMinutes).toBe(20); // above the floor already
-    expect(result.floorApplied).toBe(false);
+    // R1 (owner ruling, 2026-08-21) — the floor is the WHOLE charge on a no-show, not a minimum.
+    // The expert waited 20; the client who never arrived is billed 15, and the expert accrues 15.
+    expect(result.billableMinutes).toBe(15);
+    expect(result.floorApplied).toBe(true);
   });
 
-  it('#2b expert joined, client never, exactly at the floor ⇒ no_show_client, floored, not applied', () => {
+  it('#2b expert joined, client never, exactly at the floor ⇒ no_show_client, billed the floor', () => {
     const result = resolveMeetingSettlement(
       input({
         clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 15 * MINUTE }),
@@ -72,7 +74,9 @@ describe('resolveMeetingSettlement — the D3 truth table', () => {
     expect(result.shape).toBe('no_show_client');
     expect(result.actualMinutes).toBe(15);
     expect(result.billableMinutes).toBe(15);
-    expect(result.floorApplied).toBe(false);
+    // R1 — `true` even here, where rule and actual coincide: the floor is definitionally what
+    // fixed the figure on this shape, so `ruleMinutes > actualMinutes` alone is not the test.
+    expect(result.floorApplied).toBe(true);
   });
 
   it('#3 (D2) expert joined, client never, BELOW floor ⇒ abandoned_wait, outcome completed, ZERO', () => {
@@ -120,6 +124,79 @@ describe('resolveMeetingSettlement — the D3 truth table', () => {
     );
     expect(result.shape).toBe('held');
     expect(result.outcome).toBe('completed');
+  });
+});
+
+/**
+ * R1 (owner ruling, 2026-08-21) — "For client no-show, the client should only be billed 15min
+ * minimum charge. The expert has to stay for this long for the client to be billed that, else, no
+ * charge."
+ *
+ * So `no_show_client` is a FIXED FLOOR PENALTY, not "expert paid for time made available":
+ * the floor is the WHOLE charge and the expert's excess wait is deliberately not billed onward.
+ * `abandoned_wait` is the "else, no charge" half. `held` is untouched.
+ */
+describe('resolveMeetingSettlement — a client no-show bills the floor FLAT (R1)', () => {
+  const noShowFor = (ms: number) =>
+    resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: ms }),
+        clientSideEverPresent: false,
+      })
+    );
+
+  it('a 40-minute wait bills 15, NOT 40 — client charge and expert accrual are the same figure', () => {
+    const result = noShowFor(40 * MINUTE);
+    expect(result.shape).toBe('no_show_client');
+    expect(result.actualMinutes).toBe(40);
+    // ⚠ THE MONEY ASSERTION. `billableMinutes` is the ONE number both the client charge and the
+    // expert accrual derive from, so this pins both halves of the AC at once.
+    expect(result.billableMinutes).toBe(15);
+    expect(result.ruleMinutes).toBe(15);
+    expect(result.uncappedRuleMinutes).toBe(15);
+    expect(result.topUpToTickSeq).toBe(15);
+  });
+
+  it('floorApplied is true on the 40-minute no-show, though rule (15) is BELOW actual (40)', () => {
+    const result = noShowFor(40 * MINUTE);
+    expect(result.ruleMinutes).toBeLessThan(result.actualMinutes);
+    expect(result.floorApplied).toBe(true);
+  });
+
+  it('is FLAT, not a minimum — 20/40/240 minutes of waiting all bill exactly the floor', () => {
+    for (const minutes of [20, 40, 240]) {
+      expect(noShowFor(minutes * MINUTE).billableMinutes).toBe(15);
+    }
+  });
+
+  it('tracks whatever floor the caller injects — a 20-minute floor bills 20 flat', () => {
+    const result = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 40 * MINUTE }),
+        clientSideEverPresent: false,
+        floorMs: 20 * MINUTE,
+      })
+    );
+    expect(result.billableMinutes).toBe(20);
+  });
+
+  it('the "else, no charge" half is unchanged — abandoned_wait at 8 minutes still bills 0', () => {
+    const result = noShowFor(8 * MINUTE);
+    expect(result.shape).toBe('abandoned_wait');
+    expect(result.billableMinutes).toBe(0);
+    expect(result.floorApplied).toBe(false);
+  });
+
+  it('`held` IS NOT TOUCHED — a real two-party 40-minute call still bills 40', () => {
+    const result = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 40 * MINUTE }),
+        clientSideEverPresent: true,
+      })
+    );
+    expect(result.shape).toBe('held');
+    expect(result.billableMinutes).toBe(40);
+    expect(result.floorApplied).toBe(false);
   });
 });
 

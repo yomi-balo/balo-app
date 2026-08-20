@@ -502,7 +502,10 @@ export const creditFinalizationPathEnum = pgEnum('credit_finalization_path', [
  *   `held`           → both sides present. Outcome `completed`. Billed
  *                      `ceil(max(expert-present, floor))`.
  *   `no_show_client` → expert present ≥ the floor, no client-side participant EVER arrived.
- *                      Outcome `no_show_client`. Billed the floor.
+ *                      Outcome `no_show_client`. Billed the floor **FLAT** — the floor is the
+ *                      WHOLE charge, not a minimum: an expert who waits 40 minutes bills 15,
+ *                      and accrues 15 (owner ruling, 2026-08-21). The expert's excess wait is
+ *                      deliberately not billed to a client who never arrived.
  *   `missed_call`    → the expert never joined. Outcome `missed_call`. ZERO, hold released.
  *   `abandoned_wait` → the expert joined, waited, and left BELOW the floor with no client
  *                      ever present (decision D2). ZERO, hold released.

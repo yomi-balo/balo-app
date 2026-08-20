@@ -189,8 +189,8 @@ describe('settleSessionFromPresence', () => {
       // asserts under its row lock. Same value that fed `minutesAlreadyDrawn` in the core.
       minutesAlreadyDrawn: 0,
       shape: 'held',
-      // F14 — the CORE's `floorApplied` (`ruleMinutes > actualMinutes`), threaded rather than
-      // left for the repository to re-derive as `billableMinutes > actualMinutes`.
+      // F14 — the CORE's `floorApplied`, threaded rather than left for the repository to
+      // re-derive as `billableMinutes > actualMinutes` (which is post-Q1-clamp).
       floorApplied: false,
       outcome: 'completed',
       actorUserId: 'user-1',
@@ -257,6 +257,65 @@ describe('settleSessionFromPresence', () => {
     // The clamp — never a refund. `topUpToTickSeq < topUpFromTickSeq` ⇒ nothing new posted.
     expect(mockSettleFromPresence).toHaveBeenCalledWith(
       expect.objectContaining({ billableMinutes: 20, topUpFromTickSeq: 21, topUpToTickSeq: 20 })
+    );
+  });
+
+  it('⚠⚠ R1 — a client no-show hands the FLAT floor to the repository, not the expert’s wait', async () => {
+    // Owner ruling, 2026-08-21: the client pays the 15-minute minimum and nothing more, however
+    // long the expert waited. Asserted HERE, at the boundary, because this is where the figure
+    // becomes a real off-session charge — a core-only test would not prove the service threads it.
+    mockSettlementFacts.mockResolvedValue({
+      clocks: {
+        expertPresentMs: 40 * 60_000, // the expert left the tab open for 40 minutes
+        billableMs: 0,
+        expertFirstJoinedAt: START,
+        billableStartedAt: null,
+      },
+      facts: { clientSideEverPresent: false },
+    });
+
+    const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.settlement.shape).toBe('no_show_client');
+    expect(result.settlement.actualMinutes).toBe(40);
+    expect(result.settlement.billableMinutes).toBe(15);
+
+    expect(mockSettleFromPresence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shape: 'no_show_client',
+        billableMinutes: 15, // ⚠ NOT 40 — the client who never arrived pays the floor only
+        actualMinutes: 40, // …and the real wait is still recorded, for the recap and forensics
+        topUpFromTickSeq: 1,
+        topUpToTickSeq: 15, // one figure drives both sides ⇒ the expert accrues 15 too
+        floorApplied: true,
+        outcome: 'no_show_client',
+      })
+    );
+    // The F1 cap did not bind (15 ≪ 240) and no Q1 clamp fired, so nothing is logged at error.
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('⚠ R1 — an expert who abandons BELOW the floor settles at ZERO ("else, no charge")', async () => {
+    mockSettlementFacts.mockResolvedValue({
+      clocks: {
+        expertPresentMs: 8 * 60_000,
+        billableMs: 0,
+        expertFirstJoinedAt: START,
+        billableStartedAt: null,
+      },
+      facts: { clientSideEverPresent: false },
+    });
+
+    const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.settlement.shape).toBe('abandoned_wait');
+    expect(result.settlement.billableMinutes).toBe(0);
+    expect(mockSettleFromPresence).toHaveBeenCalledWith(
+      expect.objectContaining({ billableMinutes: 0, floorApplied: false })
     );
   });
 

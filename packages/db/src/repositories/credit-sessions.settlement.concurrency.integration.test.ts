@@ -317,7 +317,9 @@ function settlementInput(
     // The seeded session never metered, so 0.
     minutesAlreadyDrawn: 0,
     shape: 'no_show_client',
-    floorApplied: false,
+    // ⚠ F14/R1 — `true`: `no_show_client` bills the floor FLAT, so the minimum is definitionally
+    // what fixed the figure and the pure core can never emit `false` on this shape.
+    floorApplied: true,
     outcome: 'no_show_client',
     actorUserId: null,
     now: new Date('2027-02-01T10:20:05.000Z'),

@@ -60,9 +60,9 @@ function finalizedAmountMinor(block: SessionMoneyBlock): number {
  * `block.durationMinutes` before this ticket; the finalized branch had no duration slot at all.
  * Keyed on `settlementShape` FIRST (the two zero shapes have no number to attach — there is
  * nothing to floor when nobody was charged) and on `billingFloorApplied` second. `no_show_client`
- * is checked ahead of `billingFloorApplied` because that shape is arithmetically NOT floored
- * (the expert already held >= the floor) yet still wants the "billed at the minimum" framing —
- * see the plan's note that keys it on shape rather than the flag.
+ * is checked ahead of `billingFloorApplied` — that shape now ALWAYS sets the flag (the floor is
+ * flatly the whole charge, owner ruling 2026-08-21), but it wants its own "min held" phrasing
+ * rather than the generic short-call one, so it must be matched first.
  *
  * Quiet fact, never punitive, never scolding, gender-neutral, no absence framing — the same
  * register as the booking-flow billing line.
@@ -87,8 +87,10 @@ function durationLine(block: SessionMoneyBlock): string {
   }
   if (block.settlementShape === 'no_show_client') {
     // F9, UX review round 1 — `actualMinutes`, not `durationMinutes`: `durationMinutes` is the
-    // BILLED (post-floor) figure, which for this shape is the SAME number as the floor itself
-    // and would state it twice while discarding the real time the expert held the room.
+    // BILLED figure, which on this shape is FLATLY the floor (owner ruling 2026-08-21), so it
+    // would state the floor twice while discarding the real time the expert held the room.
+    // "40 min held · billed at the 15-minute minimum" is now a TRUE statement — before R1 the
+    // client was actually charged 40 while this line claimed 15.
     return block.lens === 'client'
       ? `${block.actualMinutes} min held · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
       : `${block.actualMinutes} min held · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ

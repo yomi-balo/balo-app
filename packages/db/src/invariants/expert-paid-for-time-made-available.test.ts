@@ -156,12 +156,18 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
   });
 
   /**
-   * ⚠ F14 — `floorApplied` IS `ruleMinutes > actualMinutes`, **NOT** `billableMinutes >
-   * actualMinutes`. The two differ on exactly one branch, and it is the branch that matters:
-   * when the Q1 NO-REFUND CLAMP raised the billed figure, no floor was applied at all. The
-   * persisted `credit_sessions.floor_applied` column and the `credit_session.presence_settled`
-   * audit row are the ONLY durable forensic record of a Q1 overcharge, and D7's "how often does
-   * the minimum bind" metric reads the same value — labelling a clamp as a floor corrupts both.
+   * ⚠ F14 — `floorApplied` IS `no_show_client || ruleMinutes > actualMinutes`, **NOT**
+   * `billableMinutes > actualMinutes`. The last two differ on exactly one branch, and it is the
+   * branch that matters: when the Q1 NO-REFUND CLAMP raised the billed figure, no floor was
+   * applied at all. The persisted `credit_sessions.floor_applied` column and the
+   * `credit_session.presence_settled` audit row are the ONLY durable forensic record of a Q1
+   * overcharge, and D7's "how often does the minimum bind" metric reads the same value —
+   * labelling a clamp as a floor corrupts both. ⚠ R2 made the RECAP money block a third consumer
+   * of that same snapshot, so a drift here now also misstates what the user is shown.
+   *
+   * ⚠ R1 added the `no_show_client` disjunct: that shape bills the floor FLAT, so its rule figure
+   * is routinely BELOW actual and the comparison alone would report `false` on the one shape
+   * where the floor IS the entire charge.
    */
   it('⚠ floorApplied is FALSE when the no-refund clamp — not the floor — raised the figure', () => {
     const settlement = resolveMeetingSettlement({
@@ -193,6 +199,55 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
     expect(floored.ruleMinutes).toBe(15);
     expect(floored.actualMinutes).toBe(6);
     expect(floored.floorApplied).toBe(true);
+  });
+
+  /**
+   * ⚠⚠ **R1 — A CLIENT NO-SHOW IS A FIXED FLOOR CHARGE, NOT "TIME MADE AVAILABLE".** Owner
+   * ruling, 2026-08-21, verbatim: *"For client no-show, the client should only be billed 15min
+   * minimum charge. The expert has to stay for this long for the client to be billed that, else,
+   * no charge."*
+   *
+   * This is the one place the file's own headline invariant is DELIBERATELY NARROWED: "paid for
+   * time made available" governs `held`, and only `held`. On `no_show_client` the expert's excess
+   * wait is not billed onward to a client who never arrived — the floor is the whole charge, on
+   * BOTH sides (one `billableMinutes` drives the client charge and the expert accrual alike).
+   * Restoring `ceil(max(effective, floor))` on this shape is exactly the regression to block:
+   * the shape's own precondition guarantees `effective >= floor`, so that `max` silently degrades
+   * to `effective` and the flat rule vanishes without a single test failing on the `held` path.
+   */
+  it('⚠ a client no-show bills the floor FLAT — a 40-minute wait bills the floor, not 40', () => {
+    for (const floorMinutes of FLOORS_MINUTES) {
+      const settlement = resolveMeetingSettlement({
+        clocks: clocksFor(40 * MS_PER_MINUTE, false),
+        scheduledStart: SCHEDULED_START,
+        clientSideEverPresent: false,
+        floorMs: floorMinutes * MS_PER_MINUTE,
+        minutesAlreadyDrawn: 0,
+        maxBillableMinutes: MAX_BILLABLE_MINUTES,
+      });
+      expect(settlement.shape).toBe('no_show_client');
+      expect(settlement.actualMinutes).toBe(40);
+      // FLAT: exactly the floor, never the 40 minutes the expert actually waited.
+      expect(settlement.billableMinutes).toBe(floorMinutes);
+      // ONE figure drives both sides, so this pins the expert accrual too (see the tick-range
+      // assertion above: the posted range spans exactly `billableMinutes`).
+      expect(settlement.topUpToTickSeq).toBe(floorMinutes);
+      expect(settlement.floorApplied).toBe(true);
+    }
+  });
+
+  it('⚠ …while `held` is UNCHANGED — a real two-party 40-minute call still bills 40', () => {
+    const settlement = resolveMeetingSettlement({
+      clocks: clocksFor(40 * MS_PER_MINUTE, true),
+      scheduledStart: SCHEDULED_START,
+      clientSideEverPresent: true,
+      floorMs: 15 * MS_PER_MINUTE,
+      minutesAlreadyDrawn: 0,
+      maxBillableMinutes: MAX_BILLABLE_MINUTES,
+    });
+    expect(settlement.shape).toBe('held');
+    expect(settlement.billableMinutes).toBe(40);
+    expect(settlement.floorApplied).toBe(false);
   });
 
   it('⚠ a session where the expert NEVER joined consumes nothing', () => {

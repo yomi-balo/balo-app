@@ -28,6 +28,9 @@ function clientInput(overrides: Partial<ClientMoneyBlockInput> = {}): ClientMone
     // BAL-412 — a `live_capture` session's "actual" duration IS its connected minutes.
     actualMinutes: 45,
     billingFloorMinutes: 0,
+    // BAL-412 (R2) — the persisted `credit_sessions.floor_applied` snapshot. `false` on a
+    // `live_capture` row: no floor was ever in force there.
+    floorApplied: false,
     ...overrides,
   };
 }
@@ -41,6 +44,7 @@ function expertInput(overrides: Partial<ExpertMoneyBlockInput> = {}): ExpertMone
     finalizationPath: 'live_capture',
     actualMinutes: 45,
     billingFloorMinutes: 0,
+    floorApplied: false,
     ...overrides,
   };
 }
@@ -57,6 +61,7 @@ function adminInput(overrides: Partial<AdminMoneyBlockInput> = {}): AdminMoneyBl
     finalizationPath: 'live_capture',
     actualMinutes: 45,
     billingFloorMinutes: 0,
+    floorApplied: false,
     ...overrides,
   };
 }
@@ -158,6 +163,7 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
         connectedMinutes: 15,
         actualMinutes: 6,
         billingFloorMinutes: 15,
+        floorApplied: true,
         settlementShape: 'held',
         finalizationPath: 'presence',
       })
@@ -168,18 +174,45 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
     expect(block.settlementShape).toBe('held');
   });
 
-  it('client: floor NOT bound (durationMinutes === actualMinutes) — no_show at 20 min', () => {
+  it('client: a no_show billed the FLAT floor (40 actual, 15 billed) still reports the floor applied', () => {
+    // R1 — `no_show_client` bills the floor FLAT (owner ruling, 2026-08-21), so the BILLED figure
+    // (15) is BELOW `actualMinutes` (40). The old re-derivation `durationMinutes > actualMinutes`
+    // reported `false` here — on the very shape where the floor IS the entire charge. The
+    // snapshot says `true`, and the recap's "40 min held · billed at the 15-minute minimum" is
+    // now a true statement.
     const block = buildClientMoneyBlock(
       clientInput({
-        connectedMinutes: 20,
-        actualMinutes: 20,
+        connectedMinutes: 15,
+        actualMinutes: 40,
         billingFloorMinutes: 15,
+        floorApplied: true,
         settlementShape: 'no_show_client',
         finalizationPath: 'presence',
       })
     );
-    expect(block.billingFloorApplied).toBe(false);
+    expect(block.durationMinutes).toBe(15);
+    expect(block.actualMinutes).toBe(40);
+    expect(block.billingFloorApplied).toBe(true);
     expect(block.settlementShape).toBe('no_show_client');
+  });
+
+  it('client: the Q1 no-refund clamp is NOT reported as a floor application (R2/F14)', () => {
+    // THE REGRESSION THIS FINDING IS ABOUT. Billable 10 > actual 6 purely because 10 minutes were
+    // already drawn (rule was 6, no floor in force). The rejected re-derivation
+    // `durationMinutes > actualMinutes` would say `true` and the recap would print "billed at the
+    // minimum", masking a real overcharge as routine. The persisted snapshot says `false`.
+    const block = buildClientMoneyBlock(
+      clientInput({
+        connectedMinutes: 10,
+        actualMinutes: 6,
+        billingFloorMinutes: 15,
+        floorApplied: false,
+        settlementShape: 'held',
+        finalizationPath: 'presence',
+      })
+    );
+    expect(block.durationMinutes).toBeGreaterThan(block.actualMinutes);
+    expect(block.billingFloorApplied).toBe(false);
   });
 
   it('expert: identical split to the client lens for the same session', () => {
@@ -188,6 +221,7 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
         connectedMinutes: 15,
         actualMinutes: 6,
         billingFloorMinutes: 15,
+        floorApplied: true,
         settlementShape: 'held',
         finalizationPath: 'presence',
       })
@@ -197,12 +231,21 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
     expect(block.settlementShape).toBe('held');
   });
 
+  it('expert: the Q1 no-refund clamp is NOT reported as a floor application (R2/F14)', () => {
+    const block = buildExpertMoneyBlock(
+      expertInput({ connectedMinutes: 10, actualMinutes: 6, floorApplied: false })
+    );
+    expect(block.durationMinutes).toBeGreaterThan(block.actualMinutes);
+    expect(block.billingFloorApplied).toBe(false);
+  });
+
   it('admin: identical split, alongside the margin figures', () => {
     const block = buildAdminMoneyBlock(
       adminInput({
         connectedMinutes: 15,
         actualMinutes: 6,
         billingFloorMinutes: 15,
+        floorApplied: true,
         settlementShape: 'held',
         finalizationPath: 'presence',
       })
@@ -210,6 +253,14 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
     expect(block.actualMinutes).toBe(6);
     expect(block.billingFloorApplied).toBe(true);
     expect(block.settlementShape).toBe('held');
+  });
+
+  it('admin: the Q1 no-refund clamp is NOT reported as a floor application (R2/F14)', () => {
+    const block = buildAdminMoneyBlock(
+      adminInput({ connectedMinutes: 10, actualMinutes: 6, floorApplied: false })
+    );
+    expect(block.durationMinutes).toBeGreaterThan(block.actualMinutes);
+    expect(block.billingFloorApplied).toBe(false);
   });
 
   it('pending ⇒ actualMinutes/billingFloorMinutes are 0, billingFloorApplied is false, shape absent', () => {
@@ -219,6 +270,9 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
         finalizationPath: null,
         actualMinutes: 6,
         billingFloorMinutes: 15,
+        // Even a `true` snapshot must be suppressed while pending — a pending receipt leaks
+        // nothing derived, this field included.
+        floorApplied: true,
         settlementShape: 'held',
       })
     );

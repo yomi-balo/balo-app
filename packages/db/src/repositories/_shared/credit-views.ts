@@ -187,6 +187,10 @@ export const CLIENT_SESSION_MONEY_COLUMNS = {
   actualMinutes: true,
   billingFloorMinutes: true,
   settlementShape: true,
+  // BAL-412 (R2/F14) — the SNAPSHOTTED floor verdict, so the recap agrees with the audit row and
+  // the `floored:` metric instead of re-deriving `billable > actual` (which mislabels a Q1
+  // no-refund clamp). A BOOLEAN, never a figure — nothing about the rate, fee or margin crosses.
+  floorApplied: true,
 } as const;
 
 /**
@@ -211,6 +215,8 @@ export const EXPERT_SESSION_MONEY_COLUMNS = {
   actualMinutes: true,
   billingFloorMinutes: true,
   settlementShape: true,
+  // BAL-412 (R2/F14) — identical to the client lens: the snapshotted boolean, never a figure.
+  floorApplied: true,
 } as const;
 
 /** The projected, fee-safe session shape a CLIENT money-block surface may read. */
@@ -238,6 +244,9 @@ export function toClientMoneyBlock(row: ClientSessionMoneyView): ClientMoneyBloc
     actualMinutes: row.actualMinutes ?? row.connectedMinutes,
     billingFloorMinutes: row.billingFloorMinutes ?? 0,
     settlementShape: row.settlementShape,
+    // BAL-412 (R2/F14) — the persisted verdict, NOT `billable > actual`. NULL on every legacy /
+    // non-presence row ⇒ `false`, which is exactly right: no floor was ever in force there.
+    floorApplied: row.floorApplied ?? false,
   });
 }
 
@@ -260,6 +269,8 @@ export function toExpertMoneyBlock(
     actualMinutes: row.actualMinutes ?? row.connectedMinutes,
     billingFloorMinutes: row.billingFloorMinutes ?? 0,
     settlementShape: row.settlementShape,
+    // BAL-412 (R2/F14) — see `toClientMoneyBlock`.
+    floorApplied: row.floorApplied ?? false,
     ...(payoutStatus === undefined ? {} : { payoutStatus: payoutStatus as MoneyBlockPayoutStatus }),
   });
 }
@@ -282,5 +293,7 @@ export function toAdminMoneyBlock(row: CreditSession): AdminMoneyBlock {
     actualMinutes: row.actualMinutes ?? row.connectedMinutes,
     billingFloorMinutes: row.billingFloorMinutes ?? 0,
     settlementShape: row.settlementShape,
+    // BAL-412 (R2/F14) — see `toClientMoneyBlock`.
+    floorApplied: row.floorApplied ?? false,
   });
 }

@@ -81,7 +81,11 @@ export interface ClientMoneyBlock {
    * while pending. Fee-safe: a duration, never a figure — identical across all three lenses.
    */
   actualMinutes: number;
-  /** BAL-412 — `true` when `durationMinutes` exceeds `actualMinutes` because the floor bound. */
+  /**
+   * BAL-412 — `true` when the billing MINIMUM is what fixed the charge. **The persisted
+   * `credit_sessions.floor_applied` snapshot, never re-derived** — see
+   * {@link ClientMoneyBlockInput.floorApplied}.
+   */
   billingFloorApplied: boolean;
   /**
    * BAL-412 — the floor in whole minutes IN FORCE at settlement, so a renderer can NAME it
@@ -115,7 +119,10 @@ export interface ExpertMoneyBlock {
    * without any client figure crossing.
    */
   actualMinutes: number;
-  /** BAL-412 — `true` when `durationMinutes` exceeds `actualMinutes` because the floor bound. */
+  /**
+   * BAL-412 — `true` when the billing MINIMUM is what fixed the charge. The persisted
+   * `credit_sessions.floor_applied` snapshot, never re-derived (F14/R2).
+   */
   billingFloorApplied: boolean;
   /** BAL-412 — the floor in whole minutes IN FORCE at settlement. `0` while pending. */
   billingFloorMinutes: number;
@@ -144,7 +151,10 @@ export interface AdminMoneyBlock {
   finalizationPath?: MoneyBlockFinalizationPath;
   /** BAL-412 — a duration, never a figure. See the client lens field's docblock. */
   actualMinutes: number;
-  /** BAL-412 — `true` when `durationMinutes` exceeds `actualMinutes` because the floor bound. */
+  /**
+   * BAL-412 — `true` when the billing MINIMUM is what fixed the charge. The persisted
+   * `credit_sessions.floor_applied` snapshot, never re-derived (F14/R2).
+   */
   billingFloorApplied: boolean;
   /** BAL-412 — the floor in whole minutes IN FORCE at settlement. `0` while pending. */
   billingFloorMinutes: number;
@@ -171,6 +181,22 @@ export interface ClientMoneyBlockInput {
   actualMinutes: number;
   /** BAL-412 — the floor in force at settlement, whole minutes. `0` on a non-presence row. */
   billingFloorMinutes: number;
+  /**
+   * BAL-412 (R2) — **THE PERSISTED `credit_sessions.floor_applied` SNAPSHOT, THREADED, NEVER
+   * RE-DERIVED.**
+   *
+   * ⚠⚠ The builders used to compute this as `durationMinutes > actualMinutes` (i.e. billable >
+   * actual). **That is the exact derivation F14 rejected**, and it is why the audit row and the
+   * `floored:` analytics metric already read the snapshot instead: `durationMinutes` is
+   * POST-Q1-no-refund-clamp, so a clamp (billable 10, rule 6, actual 6) got mislabelled as a
+   * routine floor application and the recap said "billed at the minimum" over an overcharge.
+   * Threading it makes all THREE consumers — audit row, analytics, recap — agree on one figure.
+   *
+   * It is a BOOLEAN, not a money figure, so it is fee-safe on every lens (identical on all
+   * three, exactly like `actualMinutes`). Legacy rows persist NULL ⇒ the mapper falls back to
+   * `false`.
+   */
+  floorApplied: boolean;
   /** BAL-412 — omitted (or `null`) for any non-presence session. */
   settlementShape?: MeetingSettlementShape | null;
 }
@@ -188,6 +214,8 @@ export interface ExpertMoneyBlockInput {
   actualMinutes: number;
   /** BAL-412 — the floor in force at settlement, whole minutes. `0` on a non-presence row. */
   billingFloorMinutes: number;
+  /** BAL-412 (R2) — the persisted snapshot. See {@link ClientMoneyBlockInput.floorApplied}. */
+  floorApplied: boolean;
   /** BAL-412 — omitted (or `null`) for any non-presence session. */
   settlementShape?: MeetingSettlementShape | null;
 }
@@ -206,6 +234,8 @@ export interface AdminMoneyBlockInput {
   actualMinutes: number;
   /** BAL-412 — the floor in force at settlement, whole minutes. `0` on a non-presence row. */
   billingFloorMinutes: number;
+  /** BAL-412 (R2) — the persisted snapshot. See {@link ClientMoneyBlockInput.floorApplied}. */
+  floorApplied: boolean;
   /** BAL-412 — omitted (or `null`) for any non-presence session. */
   settlementShape?: MeetingSettlementShape | null;
 }
@@ -232,7 +262,10 @@ export function buildClientMoneyBlock(input: ClientMoneyBlockInput): ClientMoney
     ratePerMinuteMinor: input.clientRateMinorPerMinute,
     settlementStatus: input.settlementStatus,
     actualMinutes,
-    billingFloorApplied: finalized && durationMinutes > actualMinutes,
+    // ⚠ R2/F14 — THE SNAPSHOT, NOT `durationMinutes > actualMinutes`. See
+    // `ClientMoneyBlockInput.floorApplied`: that re-derivation reads post-Q1-clamp and labels a
+    // no-refund overcharge as a routine floor application.
+    billingFloorApplied: finalized && input.floorApplied,
     billingFloorMinutes,
   };
   if (finalized && input.finalizationPath !== null) {
@@ -258,7 +291,8 @@ export function buildExpertMoneyBlock(input: ExpertMoneyBlockInput): ExpertMoney
     durationMinutes,
     earningsAudMinor: finalized ? input.expertAccruedMinor : 0,
     actualMinutes,
-    billingFloorApplied: finalized && durationMinutes > actualMinutes,
+    // ⚠ R2/F14 — the snapshot, never re-derived. See `ClientMoneyBlockInput.floorApplied`.
+    billingFloorApplied: finalized && input.floorApplied,
     billingFloorMinutes,
   };
   if (input.payoutStatus !== undefined) {
@@ -294,7 +328,8 @@ export function buildAdminMoneyBlock(input: AdminMoneyBlockInput): AdminMoneyBlo
     baloFeeBps: input.baloFeeBps,
     overdraftSettledMinor: finalized ? input.overdraftSettledMinor : 0,
     actualMinutes,
-    billingFloorApplied: finalized && durationMinutes > actualMinutes,
+    // ⚠ R2/F14 — the snapshot, never re-derived. See `ClientMoneyBlockInput.floorApplied`.
+    billingFloorApplied: finalized && input.floorApplied,
     billingFloorMinutes,
   };
   if (finalized && input.finalizationPath !== null) {
