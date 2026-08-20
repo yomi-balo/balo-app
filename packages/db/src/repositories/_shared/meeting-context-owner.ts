@@ -1,9 +1,14 @@
+import { and, inArray, isNull } from 'drizzle-orm';
 import {
   resolveContextOwner,
+  selectPrimaryMeetingContext,
   type MeetingContextOwner,
   type MeetingContextOwnerReads,
   type PrimaryMeetingContext,
 } from '@balo/shared/meetings';
+import { db } from '../../client';
+import { meetingContexts } from '../../schema';
+import { companiesRepository } from '../companies';
 import { engagementsRepository } from '../engagements';
 import { projectRequestsRepository } from '../project-requests';
 import { requestExpertRelationshipsRepository } from '../request-expert-relationships';
@@ -76,4 +81,157 @@ export async function resolveMeetingContextOwner(
 ): Promise<MeetingContextOwner | undefined> {
   const result = await resolveContextOwner(subject, REPOSITORY_READS);
   return result.outcome === 'resolved' ? result.owner : undefined;
+}
+
+/** The owning client party of ONE meeting, display-shaped. Name only — no id, no billing. */
+export interface MeetingClientCompany {
+  readonly companyId: string;
+  readonly companyName: string;
+}
+
+/**
+ * WHICH CLIENT COMPANY OWNS EACH OF THESE MEETINGS — the BATCHED form of the same rule
+ * `resolveMeetingContextOwner` answers for one context. Built for BAL-416's conflict list,
+ * which needs to name the client on up to `CONFLICT_DETAIL_LIMIT` conflicting consultations
+ * in one round trip rather than one context read per row.
+ *
+ * ⚠ IT IS A READ, NOT A GATE (ADR-1029), exactly like its sibling above. It says nothing
+ * about whether the caller may see these rows; BAL-416's caller has already scoped the
+ * meeting ids to consultations the expert owns.
+ *
+ * ⚠ IT WRITES NO SECOND DEFINITION OF THE POLYMORPHIC WALK. Precedence and ambiguity come
+ * from `selectPrimaryMeetingContext`; the context→party switch comes from
+ * `resolveContextOwner` via the same `REPOSITORY_READS` binding above. Only the BATCHING and
+ * the display-name hydration are new.
+ *
+ * A meeting whose contexts are ambiguous, absent or unresolvable is OMITTED from the map —
+ * fail-closed. Callers must treat a missing key as "no company to name", never as an error.
+ *
+ * ⚠ `expectedExpertProfileId` (BAL-416 fix round 1, S2) — OPTIONAL, but every current caller
+ * passes it. `meeting_contexts.context_id` has NO FK, NO CHECK and NO RLS, so nothing at the
+ * data layer ties a walked context back to the expert whose consultations were listed; the
+ * caller's `meetingIds` scoping only bounds the MEETING, not the CONTEXT a future
+ * `attach` could repoint. When supplied, a meeting whose resolved
+ * `owner.expertProfileId` does not match is OMITTED — the same fail-closed omission the
+ * ambiguity and soft-delete arms already use, never a thrown error.
+ *
+ * ⚠ THIS PARAMETER DOES NOT CLOSE THE `attach` HAZARD IT WAS ADDED FOR — STILL OPEN (fix
+ * round 2, R6). The scenario the S2 residual named was specific:
+ * `meetingContextsRepository.attach` runs `assertProjectionExpertUnchangedTx`, a COHERENCE
+ * check (does the projected expert stay the same?), not a TENANCY check (does the projected
+ * COMPANY stay the same?). That lets a tier-100 `case` context attach to a meeting created
+ * from a tier-50 `project_discovery` while PRESERVING the expert but FLIPPING
+ * `selectPrimaryMeetingContext`'s winner — and therefore the company this function names.
+ * Comparing `owner.expertProfileId` here does not catch that: it is, by construction of the
+ * scenario, unchanged. The parameter still earns its keep (it DOES catch a context repointed
+ * to a wholly different expert) and the practical disclosure risk of the uncaught flip is
+ * low today (both contexts name companies the SAME expert has a live relationship with, so
+ * nothing crosses a party boundary) — but `attach` has no production caller yet, and this
+ * must be closed (compare the company too, or gate `attach` on tier-monotonicity) before
+ * BAL-410/BAL-411 give it its first one.
+ */
+type OwnerEntry = { meetingId: string; companyId: string };
+
+function groupRowsByMeeting<T extends { meetingId: string }>(rows: readonly T[]): Map<string, T[]> {
+  const rowsByMeeting = new Map<string, T[]>();
+  for (const row of rows) {
+    const existing = rowsByMeeting.get(row.meetingId);
+    if (existing === undefined) {
+      rowsByMeeting.set(row.meetingId, [row]);
+    } else {
+      existing.push(row);
+    }
+  }
+  return rowsByMeeting;
+}
+
+/**
+ * ONE meeting's owner, resolved via the same precedence/ambiguity/party pipeline as
+ * `resolveMeetingContextOwner`, and OMITTED (`null`) if ambiguous, unresolvable, or its
+ * owner doesn't match `expectedExpertProfileId` (see the `attach`-hazard note above).
+ */
+async function resolveOwnerEntry(
+  meetingId: string,
+  meetingRows: Parameters<typeof selectPrimaryMeetingContext>[0],
+  expectedExpertProfileId: string | undefined
+): Promise<OwnerEntry | null> {
+  const selection = selectPrimaryMeetingContext(meetingRows);
+  if (!selection.ok) {
+    return null;
+  }
+  const result = await resolveContextOwner(selection.context, REPOSITORY_READS);
+  if (result.outcome !== 'resolved') {
+    return null;
+  }
+  if (
+    expectedExpertProfileId !== undefined &&
+    result.owner.expertProfileId !== expectedExpertProfileId
+  ) {
+    return null;
+  }
+  return { meetingId, companyId: result.owner.companyId };
+}
+
+async function fetchNameByCompanyId(companyIds: ReadonlySet<string>): Promise<Map<string, string>> {
+  const companyNames = await Promise.all(
+    [...companyIds].map(async (companyId) => {
+      const company = await companiesRepository.findNameById(companyId);
+      return company === undefined ? null : { companyId, companyName: company.name };
+    })
+  );
+  const nameByCompanyId = new Map<string, string>();
+  for (const company of companyNames) {
+    if (company !== null) {
+      nameByCompanyId.set(company.companyId, company.companyName);
+    }
+  }
+  return nameByCompanyId;
+}
+
+export async function resolveClientCompaniesForMeetings(
+  meetingIds: readonly string[],
+  expectedExpertProfileId?: string
+): Promise<Map<string, MeetingClientCompany>> {
+  if (meetingIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await db
+    .select({
+      meetingId: meetingContexts.meetingId,
+      contextType: meetingContexts.contextType,
+      contextId: meetingContexts.contextId,
+    })
+    .from(meetingContexts)
+    .where(
+      and(inArray(meetingContexts.meetingId, [...meetingIds]), isNull(meetingContexts.deletedAt))
+    );
+
+  const rowsByMeeting = groupRowsByMeeting(rows);
+
+  // Resolve each meeting's owner in parallel — precedence/ambiguity via
+  // `selectPrimaryMeetingContext`, then the party via `resolveContextOwner`.
+  const ownerEntries = await Promise.all(
+    [...rowsByMeeting.entries()].map(([meetingId, meetingRows]) =>
+      resolveOwnerEntry(meetingId, meetingRows, expectedExpertProfileId)
+    )
+  );
+
+  const distinctCompanyIds = new Set<string>();
+  for (const entry of ownerEntries) {
+    if (entry !== null) {
+      distinctCompanyIds.add(entry.companyId);
+    }
+  }
+
+  const nameByCompanyId = await fetchNameByCompanyId(distinctCompanyIds);
+
+  const result = new Map<string, MeetingClientCompany>();
+  for (const entry of ownerEntries) {
+    if (entry === null) continue;
+    const companyName = nameByCompanyId.get(entry.companyId);
+    if (companyName === undefined) continue;
+    result.set(entry.meetingId, { companyId: entry.companyId, companyName });
+  }
+  return result;
 }

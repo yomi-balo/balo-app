@@ -89,8 +89,6 @@ vi.mock('@balo/analytics/server', () => ({
     DISCONNECTED: 'calendar_disconnected',
     AVAILABILITY_CACHE_REBUILT: 'calendar_availability_cache_rebuilt',
     SYNC_PENDING_AUTO_RESOLVED: 'calendar_sync_pending_auto_resolved',
-    AVAILABILITY_OVERRIDE_CREATED: 'availability_override_created',
-    AVAILABILITY_OVERRIDE_DELETED: 'availability_override_deleted',
     CREDENTIALS_REVOKED: 'calendar_credentials_revoked',
     RECONNECT_RESOLVED: 'calendar_reconnect_resolved',
   }),
