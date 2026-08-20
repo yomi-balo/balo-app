@@ -762,6 +762,18 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // Both server-published once at `finalizeBilling`; templates carry own-side figures ONLY.
   'payment.charged': emailAndInApp('self', 'payment-charged'),
   'payout.recorded': emailAndInApp('expert', 'payout-recorded'),
+  // BAL-412 (ADR-1044 §7, D8): the expert never joined — nothing was charged, the hold is
+  // released in full. One event, TWO conditioned rules on TWO DIFFERENT recipient kinds (the
+  // `recap.ready` two-rules-on-one-event pattern, but neither is conditioned — both always
+  // fire, since a `missed_call` settlement always names both parties): the acting member
+  // (recipient 'self' via payload.userId, APOLOGETIC register — Balo failed them) and the
+  // delivering expert (recipient 'expert' via payload.expertProfileId → data.expert, FACTUAL
+  // register — no penalty in v1, but they should know it was recorded). Published EXACTLY ONCE
+  // from `finalizeBilling`, gated on `settlementShape === 'missed_call'`.
+  'session.missed_call': [
+    ...emailAndInApp('self', 'session-missed-call-client'),
+    ...emailAndInApp('expert', 'session-missed-call-expert'),
+  ],
   // BAL-391 (ADR-1043): an action item was assigned to a SIDE of the engagement. One
   // event, two conditioned rules keyed on payload.assigneeParty (the
   // conversation.message_posted routing precedent, renamed off `project.` by BAL-424) —

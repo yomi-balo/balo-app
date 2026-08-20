@@ -326,6 +326,8 @@ export {
   InvalidSessionTransitionError,
   ExternalDurationConflictError,
   ExpertProfileNotFoundError,
+  /** BAL-412 (F2) — the presence-settlement TOCTOU refusal; the backstop retries on it. */
+  SettlementDrawDivergedError,
   SESSION_EXPERT_ACCRUED_ACTION,
   SESSION_AUDIT_ENTITY_TYPE,
   CLIENT_SESSION_VIEW_COLUMNS,

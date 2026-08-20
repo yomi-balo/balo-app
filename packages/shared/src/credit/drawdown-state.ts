@@ -19,6 +19,7 @@
  */
 
 import { LOW_BALANCE_WARNING_MINUTES, NEAR_WRAP_MINUTES } from '../pricing';
+import { minutesOfRunway } from './runway';
 
 /** Persisted session status (mirrors `@balo/db` `CreditSessionStatus`; kept local to stay db-free). */
 export type CreditSessionStatus =
@@ -86,6 +87,18 @@ export interface DrawdownInputs {
   graceEnteredAt: Date | null;
   /** Live wallet balance (drawn down by the reaper; negative in grace). */
   balanceMinor: number;
+  /**
+   * BAL-412 (ADR-1044 §7, D5/D6) — the billing floor in whole minutes, INJECTED (this module
+   * reads no constant). Feeds the corrected `minutesOfRunway` (`@balo/shared/credit/runway`)
+   * so early-session runway sets aside the unconsumed remainder of the floor before reporting
+   * discretionary time. See that module's docblock for the worked example.
+   */
+  billingFloorMinutes: number;
+  /**
+   * BAL-412 (D6) — minutes ALREADY DRAWN against the balance (`credit_sessions.connected_
+   * minutes`). Drawn, not elapsed — see `runway.ts`'s docblock for why the distinction matters.
+   */
+  minutesAlreadyDrawn: number;
   /** Reserved (pre-connect hold) — carried for widget availability context. */
   activeHoldsMinor?: number;
   promoRemainingMinor?: number;
@@ -133,14 +146,6 @@ function formatElapsed(connectedAt: Date | null, now: Date): string {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   return `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
-}
-
-/** Whole minutes of funded runway remaining (0 when the rate is unknown/zero). */
-function minutesOfRunway(balanceMinor: number, rate: number): number {
-  if (rate <= 0 || balanceMinor <= 0) {
-    return 0;
-  }
-  return Math.floor(balanceMinor / rate);
 }
 
 /** Whole minutes of grace time left before the 30-min bound. */
@@ -347,7 +352,12 @@ const MEMBER_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
  */
 export function deriveDrawdownState(inputs: DrawdownInputs): DrawdownState {
   const rate = inputs.clientRateMinorPerMinute;
-  const minutesRemaining = minutesOfRunway(inputs.balanceMinor, rate);
+  const minutesRemaining = minutesOfRunway({
+    balanceMinor: inputs.balanceMinor,
+    ratePerMinuteMinor: rate,
+    floorMinutes: inputs.billingFloorMinutes,
+    minutesAlreadyDrawn: inputs.minutesAlreadyDrawn,
+  });
   const key = deriveKey(inputs, minutesRemaining);
   const base = KEY_BASE[key];
 

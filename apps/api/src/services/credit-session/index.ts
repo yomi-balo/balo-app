@@ -7,6 +7,13 @@
 export { openSession } from './open-session.js';
 export { connectSession } from './connect-session.js';
 export { endSession, endSessionAsSystem, reconcileStuckSettlement } from './end-session.js';
+export {
+  settleSessionFromPresence,
+  settleMeetingIfBillable,
+  type SettleFromPresenceCode,
+  type SettleFromPresenceOk,
+  type SettleFromPresenceResult,
+} from './settle-from-presence.js';
 export { driveSession } from './meter-driver.js';
 export { getSessionDrawdownState } from './drawdown.js';
 export { nudgeAdminForTopup } from './nudge.js';
@@ -29,7 +36,6 @@ export {
   ceilingRoomMinor,
   graceRemainingMinutes,
   overdraftMagnitude,
-  runwayMinutes,
 } from './settlement.js';
 export type {
   OpenSessionServiceInput,

@@ -160,6 +160,13 @@ export function toLedgerActivityView(entry: CreditLedgerEntry): LedgerActivityVi
  * `expertRateMinorPerMinute` / `expertAccruedMinor` (raw expert economics), `baloFeeBps` (the
  * fee), and `stripePaymentIntentId` (reconciliation). `overdraftSettledMinor` is the client's
  * OWN card charge (client-safe). All timing/status columns are fee-safe (drive the fragment).
+ *
+ * ⚠ BAL-412 ADDED THE THREE SETTLEMENT-PROVENANCE COLUMNS TO **BOTH** LENSES, IDENTICALLY.
+ * `actualMinutes` / `billingFloorMinutes` / `settlementShape` are DURATIONS AND LABELS, never
+ * figures — "6 minutes delivered, billed at the 15-minute minimum" is a fact both parties are
+ * entitled to, and neither can difference it into a rate, a margin or the fee. Concealment of
+ * FIGURES is unchanged: no expert rate/accrual crosses to a client, and no client
+ * rate/charge/overdraft crosses to an expert.
  */
 export const CLIENT_SESSION_MONEY_COLUMNS = {
   id: true,
@@ -175,6 +182,11 @@ export const CLIENT_SESSION_MONEY_COLUMNS = {
   durationSource: true,
   billingFinalizedAt: true,
   finalizationPath: true,
+  // BAL-412 — the actual-vs-billed split + how the settlement resolved. NULL on every row
+  // written before migration 0071, so shipped receipts are unchanged.
+  actualMinutes: true,
+  billingFloorMinutes: true,
+  settlementShape: true,
 } as const;
 
 /**
@@ -193,6 +205,12 @@ export const EXPERT_SESSION_MONEY_COLUMNS = {
   durationSource: true,
   billingFinalizedAt: true,
   finalizationPath: true,
+  // BAL-412 — identical to the client lens (see that allow-list): durations and a label, so
+  // the expert's own recap can say "you held 15 minutes; the client no-showed" without any
+  // client figure crossing.
+  actualMinutes: true,
+  billingFloorMinutes: true,
+  settlementShape: true,
 } as const;
 
 /** The projected, fee-safe session shape a CLIENT money-block surface may read. */
@@ -213,6 +231,13 @@ export function toClientMoneyBlock(row: ClientSessionMoneyView): ClientMoneyBloc
     settlementStatus: row.settlementStatus,
     billingFinalizedAt: row.billingFinalizedAt,
     finalizationPath: row.finalizationPath,
+    // BAL-412 — legacy-safe fallbacks. `actualMinutes` is NULL on every row written before
+    // migration 0071 (and on every `live_capture`/`external` session): a session's "actual"
+    // duration IS its connected minutes when it was never presence-settled. `0`/absent
+    // otherwise — zero behaviour change for shipped rows (asserted by a test).
+    actualMinutes: row.actualMinutes ?? row.connectedMinutes,
+    billingFloorMinutes: row.billingFloorMinutes ?? 0,
+    settlementShape: row.settlementShape,
   });
 }
 
@@ -231,6 +256,10 @@ export function toExpertMoneyBlock(
     expertAccruedMinor: row.expertAccruedMinor,
     billingFinalizedAt: row.billingFinalizedAt,
     finalizationPath: row.finalizationPath,
+    // BAL-412 — see `toClientMoneyBlock`'s docblock for the legacy-safe fallback reasoning.
+    actualMinutes: row.actualMinutes ?? row.connectedMinutes,
+    billingFloorMinutes: row.billingFloorMinutes ?? 0,
+    settlementShape: row.settlementShape,
     ...(payoutStatus === undefined ? {} : { payoutStatus: payoutStatus as MoneyBlockPayoutStatus }),
   });
 }
@@ -249,5 +278,9 @@ export function toAdminMoneyBlock(row: CreditSession): AdminMoneyBlock {
     overdraftSettledMinor: row.overdraftSettledMinor ?? 0,
     billingFinalizedAt: row.billingFinalizedAt,
     finalizationPath: row.finalizationPath,
+    // BAL-412 — see `toClientMoneyBlock`'s docblock for the legacy-safe fallback reasoning.
+    actualMinutes: row.actualMinutes ?? row.connectedMinutes,
+    billingFloorMinutes: row.billingFloorMinutes ?? 0,
+    settlementShape: row.settlementShape,
   });
 }

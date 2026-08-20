@@ -34,6 +34,7 @@ import {
   scheduleExpertAbsentAlert,
 } from '../notifications/scheduling/meeting-absence.js';
 import { emitMeetingEnded } from '../services/meetings/end-meeting.js';
+import { settleMeetingIfBillable } from '../services/credit-session/settle-from-presence.js';
 import {
   applyPresenceEffect,
   closePresenceEffectForRow,
@@ -302,6 +303,34 @@ async function terminateIfDue(
     actorUserId: null,
     now,
   });
+
+  // ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. INERT ON MAIN (D10): reachable only from a
+  // `duration_source='presence'` session, and nothing on main opens one (BAL-400 booking →
+  // BAL-466 session open would). BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom`
+  // below — the meeting is already terminal in Postgres, so a settlement fault must never abort
+  // this sweep tick (it would strand every OTHER candidate batched behind it). `actorUserId:
+  // null` — the ADR-1030 system-actor exemption, same as `endMeeting` above. The meter sweep's
+  // durability backstop (§4.3, `credit-session-meter-sweep.ts`'s `findPresenceUnsettled` pass)
+  // recovers a settlement fault caught here.
+  try {
+    const outcome = await settleMeetingIfBillable({
+      meetingId: state.meeting.id,
+      actorUserId: null,
+      now,
+    });
+    if (!outcome.ok && outcome.code !== 'no_meeting') {
+      logger.warn(
+        { meetingId: state.meeting.id, code: outcome.code },
+        'Presence settlement declined on the lifecycle sweep — the meter sweep durability backstop will retry'
+      );
+    }
+  } catch (error) {
+    logger.error(
+      { meetingId: state.meeting.id, error: errorMessage(error) },
+      'Presence settlement failed on the lifecycle sweep — the meter sweep durability backstop will retry'
+    );
+  }
+
   await tearDownRoom(state.meeting);
   return decision;
 }

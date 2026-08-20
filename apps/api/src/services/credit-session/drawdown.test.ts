@@ -11,6 +11,10 @@ vi.mock('@balo/db', () => ({
   partyMembershipsRepository: { resolveBillingAdminName: mockResolveBillingAdminName },
 }));
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorize }));
+// BAL-412 (D5) — pin the floor so this suite is independent of any real env override.
+vi.mock('../../config/billing-floor.js', () => ({
+  resolveBillingFloorMinutes: () => 15,
+}));
 
 import { getSessionDrawdownState } from './drawdown.js';
 
@@ -25,6 +29,9 @@ const SESSION = {
   graceEnteredAt: null,
   companyId: 'company_1',
   walletId: 'wallet_1',
+  // BAL-412 (D6) — 42 min drawn is past the 15-min floor, so every existing assertion below
+  // stays byte-identical (the correction is a no-op past the floor).
+  connectedMinutes: 42,
 };
 const HEALTHY_WALLET = {
   balanceMinor: 50_000,
@@ -98,5 +105,18 @@ describe('getSessionDrawdownState', () => {
     const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
     expect(state?.mandatePresent).toBe(false);
     expect(state?.key).toBe('low');
+  });
+
+  it('BAL-412 (D5/D6) — threads the floor + minutesAlreadyDrawn early in a session', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, connectedMinutes: 2 },
+      role: 'owner',
+    });
+    mockFindWallet.mockResolvedValue({ ...HEALTHY_WALLET, balanceMinor: 2_000 });
+    // rate=100, floor=15, drawn=2, balance=2000 ⇒ discretionary runway = 7 (not 20).
+    const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
+    expect(state?.key).toBe('low');
+    expect(state?.minutesRemaining).toBe(7);
   });
 });

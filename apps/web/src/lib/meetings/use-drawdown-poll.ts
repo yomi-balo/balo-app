@@ -58,8 +58,17 @@ import type { GetMeetingDrawdownResult, MeetingBalancePanelActions } from './mee
  *   · Terminal stop: `state.status ∈ {'ended','cancelled'}`, OR a SUCCESS answers `state: null`
  *     (the session vanished mid-call — a success, not a failure). ⚠ `'wrapped'` is DELIBERATELY
  *     kept OUTSIDE the terminal set and kept polling — settlement genuinely may still move the
- *     state, and a stale meter is worse than a few extra requests. This is the conservative
- *     choice (Decision OQ3); whoever owns settlement can cheaply refute it later.
+ *     state, and a stale meter is worse than a few extra requests. This was the conservative
+ *     choice (Decision OQ3) pending confirmation from whoever owns settlement.
+ *     ⚠⚠ BAL-412 OWNS SETTLEMENT AND CONFIRMS IT (does not refute it) — NO BEHAVIOUR CHANGE
+ *     HERE. For a `presence` session, `wrapped` is genuinely NOT terminal: the underlying
+ *     MEETING is still live (the wrap is only the wallet-side warm pause at the ceiling — see
+ *     `findMeterable`'s BAL-412 widening, `@balo/db/repositories/credit-sessions.ts`), and
+ *     `settleSessionFromPresence` moves the session to `ended` only when the MEETING
+ *     terminates, which can happen well after the wallet-side wrap. Continuing to poll while
+ *     `wrapped` is therefore correct for BOTH provenances (`live_capture`'s wrap already needed
+ *     it for the reaper's idle-end auto-finalize; `presence`'s wrap needs it for exactly this
+ *     reason).
  *   · `isMountedRef` guards every async resolution; the unmount cleanup clears the timer;
  *     `tickRef` re-entry means the schedule is never restarted by a changing callback identity.
  *

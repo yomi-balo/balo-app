@@ -25,6 +25,9 @@ function clientInput(overrides: Partial<ClientMoneyBlockInput> = {}): ClientMone
     settlementStatus: 'not_required',
     billingFinalizedAt: FINALIZED,
     finalizationPath: 'live_capture',
+    // BAL-412 — a `live_capture` session's "actual" duration IS its connected minutes.
+    actualMinutes: 45,
+    billingFloorMinutes: 0,
     ...overrides,
   };
 }
@@ -36,6 +39,8 @@ function expertInput(overrides: Partial<ExpertMoneyBlockInput> = {}): ExpertMone
     expertAccruedMinor: 11_250, // A$112.50
     billingFinalizedAt: FINALIZED,
     finalizationPath: 'live_capture',
+    actualMinutes: 45,
+    billingFloorMinutes: 0,
     ...overrides,
   };
 }
@@ -50,6 +55,8 @@ function adminInput(overrides: Partial<AdminMoneyBlockInput> = {}): AdminMoneyBl
     overdraftSettledMinor: 4500,
     billingFinalizedAt: FINALIZED,
     finalizationPath: 'live_capture',
+    actualMinutes: 45,
+    billingFloorMinutes: 0,
     ...overrides,
   };
 }
@@ -138,5 +145,91 @@ describe('buildAdminMoneyBlock', () => {
     expect(block.expertEarningsAudMinor).toBe(0);
     expect(block.marginAudMinor).toBe(0);
     expect(block.overdraftSettledMinor).toBe(0);
+  });
+});
+
+// BAL-412 (ADR-1044 §7, §7.2) — the actual-vs-billed split + settlement shape, on all three
+// builders. Concealment re-asserted: these four fields are DURATIONS AND LABELS, so they are
+// deliberately identical across lenses — never a rate, margin or fee.
+describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes / settlementShape', () => {
+  it('client: floor bound (6 actual, 15 billed) sets billingFloorApplied', () => {
+    const block = buildClientMoneyBlock(
+      clientInput({
+        connectedMinutes: 15,
+        actualMinutes: 6,
+        billingFloorMinutes: 15,
+        settlementShape: 'held',
+        finalizationPath: 'presence',
+      })
+    );
+    expect(block.actualMinutes).toBe(6);
+    expect(block.billingFloorMinutes).toBe(15);
+    expect(block.billingFloorApplied).toBe(true);
+    expect(block.settlementShape).toBe('held');
+  });
+
+  it('client: floor NOT bound (durationMinutes === actualMinutes) — no_show at 20 min', () => {
+    const block = buildClientMoneyBlock(
+      clientInput({
+        connectedMinutes: 20,
+        actualMinutes: 20,
+        billingFloorMinutes: 15,
+        settlementShape: 'no_show_client',
+        finalizationPath: 'presence',
+      })
+    );
+    expect(block.billingFloorApplied).toBe(false);
+    expect(block.settlementShape).toBe('no_show_client');
+  });
+
+  it('expert: identical split to the client lens for the same session', () => {
+    const block = buildExpertMoneyBlock(
+      expertInput({
+        connectedMinutes: 15,
+        actualMinutes: 6,
+        billingFloorMinutes: 15,
+        settlementShape: 'held',
+        finalizationPath: 'presence',
+      })
+    );
+    expect(block.actualMinutes).toBe(6);
+    expect(block.billingFloorApplied).toBe(true);
+    expect(block.settlementShape).toBe('held');
+  });
+
+  it('admin: identical split, alongside the margin figures', () => {
+    const block = buildAdminMoneyBlock(
+      adminInput({
+        connectedMinutes: 15,
+        actualMinutes: 6,
+        billingFloorMinutes: 15,
+        settlementShape: 'held',
+        finalizationPath: 'presence',
+      })
+    );
+    expect(block.actualMinutes).toBe(6);
+    expect(block.billingFloorApplied).toBe(true);
+    expect(block.settlementShape).toBe('held');
+  });
+
+  it('pending ⇒ actualMinutes/billingFloorMinutes are 0, billingFloorApplied is false, shape absent', () => {
+    const client = buildClientMoneyBlock(
+      clientInput({
+        billingFinalizedAt: null,
+        finalizationPath: null,
+        actualMinutes: 6,
+        billingFloorMinutes: 15,
+        settlementShape: 'held',
+      })
+    );
+    expect(client.actualMinutes).toBe(0);
+    expect(client.billingFloorMinutes).toBe(0);
+    expect(client.billingFloorApplied).toBe(false);
+    expect(client.settlementShape).toBeUndefined();
+  });
+
+  it('settlementShape is omitted (not null) when undefined on the input', () => {
+    const block = buildClientMoneyBlock(clientInput());
+    expect('settlementShape' in block).toBe(false);
   });
 });

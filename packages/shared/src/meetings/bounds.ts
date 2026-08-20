@@ -41,9 +41,14 @@
 
 /**
  * Floor. Mirrors the 15-minute settlement floor — a 1-minute booking must not be
- * constructible. ⚠ There is no `MIN_SESSION_MINUTES` constant in `@balo/shared/pricing`
- * today (verified); the floor is a product rule stated in tickets. If BAL-412 ever
- * encodes it, THESE TWO MUST NOT DRIFT — import one from the other.
+ * constructible. ⚠ BAL-412 HAS ENCODED THE SETTLEMENT FLOOR: `@balo/shared/meetings/timers.ts`'s
+ * `NO_SHOW_FLOOR_MS` now IMPORTS `MIN_MEETING_MINUTES` FROM HERE rather than restating `15`, so
+ * the two cannot drift — this constant is the single source. There is STILL no
+ * `MIN_SESSION_MINUTES` in `@balo/shared/pricing`, and there must not be one (D5) — the pure
+ * settlement core (`@balo/shared/credit/meeting-settlement.ts`) takes the floor as an INJECTED
+ * parameter and reads neither constant. ADR-1044 §7's "BAL-398 admin minimum ≥ 15" constraint
+ * is NOT assertable today — `platform_config` (BAL-398 / PR #180) is not on main; when it lands,
+ * this is its natural first migration.
  */
 export const MIN_MEETING_MINUTES = 15;
 

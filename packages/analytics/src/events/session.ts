@@ -86,10 +86,15 @@ export interface SessionServerEventMap {
   [SESSION_SERVER_EVENTS.SESSION_SETTLED]: {
     session_id: string;
     company_id: string;
+    /** ⚠ THE PAYMENT outcome (D7) — do NOT overload with the settlement shape below. */
     outcome: 'success' | 'fail' | 'requires_action';
     overdraft_settled_minor: number;
     /** = company_id. */
     distinct_id: string;
+    // ── BAL-412 (ADR-1044 §7). OPTIONAL, present only on a presence-settled session. A
+    // SEPARATELY-NAMED key from `outcome` above (D7) — that key is already taken by the
+    // payment outcome.
+    settlement_outcome?: 'held' | 'no_show_client' | 'missed_call' | 'abandoned_wait';
   };
   [SESSION_SERVER_EVENTS.RECEIVABLE_OPENED]: {
     session_id: string;

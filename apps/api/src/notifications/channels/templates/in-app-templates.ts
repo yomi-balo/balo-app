@@ -14,6 +14,38 @@ function numberOrZero(value: unknown): number {
 }
 
 /**
+ * BAL-412 (F16, ADR-1044 §7) — the IN-APP half of the no-show notice; the email half is
+ * `noShowClientSentence` in `./index.ts`.
+ *
+ * ⚠ THE TWO ARE DELIBERATELY SEPARATE, NOT A MISSED EXTRACTION. An in-app body is a single short
+ * line appended to an existing sentence; the email is a standalone body line with room for the
+ * waited duration. Sharing one string would force one register to fit the other's budget, and
+ * the copy — not the mechanism — is the whole point of this notice.
+ *
+ * Same rules as the email: FACTUAL, NEVER PUNITIVE, GENDER-NEUTRAL, no individual named on
+ * either side, no penalty implied (D2/D8). Fee-safe — a shape label and the SNAPSHOTTED floor
+ * (`billing_floor_minutes`), never a second money figure. Returns `''` (appends nothing) for
+ * every other shape and for every `live_capture` / `external` / pre-0071 row.
+ */
+function noShowClientClause(
+  data: Record<string, unknown>,
+  lens: 'client' | 'expert',
+  expertName?: string
+): string {
+  if (data.settlementShape !== 'no_show_client') {
+    return '';
+  }
+  const floorMinutes = numberOrZero(data.billingFloorMinutes);
+  if (lens === 'expert') {
+    // ⚠ Never says "client" — the expert-lens fee boundary is asserted on the whole body string
+    // (`case-billing-templates.test.ts`), and naming the absent party would read as blame.
+    return ` Settled as a no-show — your time is recorded at the ${floorMinutes}-minute minimum.`;
+  }
+  const who = expertName ?? 'your consultant';
+  return ` No one from your side joined — ${who} was there and waiting, so it settles at the ${floorMinutes}-minute minimum.`;
+}
+
+/**
  * Format a minor-unit price (cents) + currency code for an in-app body, e.g.
  * `formatPriceCents(120000, 'aud') === 'AUD 1,200'`. Guards both fields: a
  * non-number price or absent currency degrades gracefully rather than rendering
@@ -802,26 +834,52 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
 
   // BAL-399 (ADR-1040 / ADR-1043) payment charged — the acting MEMBER's consultation receipt
   // (recipient 'self'). The all-in charge ONLY; NO expert figure / margin. Deep-links to billing.
+  //
+  // BAL-412 (F16): ONE extra clause on a `no_show_client` settlement — see
+  // `noShowClientClause`. Every other settlement renders exactly as it did before.
   'payment-charged': (data) => {
     const amount = formatAudMinor(numberOrZero(data.amountAudMinor));
     const expertName = (data.expertName as string) ?? 'your expert';
     return {
       title: 'Session receipt',
-      body: `Your session with ${expertName} came to ${amount}.`,
+      body: `Your session with ${expertName} came to ${amount}.${noShowClientClause(data, 'client', expertName)}`,
       actionUrl: '/settings/billing',
     };
   },
 
   // BAL-399 (ADR-1040 / ADR-1043) payout recorded — the delivering EXPERT's own-earnings notice
   // (recipient 'expert'). Own earnings ONLY; NO client charge / markup / margin. Links to earnings.
+  //
+  // BAL-412 (F16): the AC's expert-side no-show "accrual confirmation" — in-app, factual, and
+  // never a judgement about the client side.
   'payout-recorded': (data) => {
     const amount = formatAudMinor(numberOrZero(data.amountAudMinor));
     return {
       title: 'Earnings recorded',
-      body: `${amount} from your recent session is recorded and on its way.`,
+      body: `${amount} from your recent session is recorded and on its way.${noShowClientClause(data, 'expert')}`,
       actionUrl: '/settings/earnings',
     };
   },
+
+  // BAL-412 (ADR-1044 §7) missed call — the acting MEMBER (recipient 'self'). APOLOGETIC
+  // register: Balo failed to connect them, nothing was charged, the hold is back in their
+  // balance. Carries NO figure (nothing was charged) — nothing to conceal.
+  'session-missed-call-client': (data) => {
+    const expertName = (data.expertName as string) ?? 'your expert';
+    return {
+      title: "We're sorry — your session didn't connect",
+      body: `${expertName} wasn't able to join. Nothing has been charged, and the funds we set aside are back in your balance.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // BAL-412 (ADR-1044 §7) missed call — the delivering EXPERT (recipient 'expert'). FACTUAL,
+  // NEVER PUNITIVE (D2/D8): no penalty in v1, but they should know it was recorded.
+  'session-missed-call-expert': () => ({
+    title: 'A consultation was recorded as a missed call',
+    body: 'No payment applies for this one. If something went wrong on your end, let us know.',
+    actionUrl: '/settings/earnings',
+  }),
 
   // BAL-391 (ADR-1043) action item assigned — the assigned side (client owner OR expert).
   // One template serves both. Gender-neutral; `actorLabel` is the retrospective person;

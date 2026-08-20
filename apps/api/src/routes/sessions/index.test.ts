@@ -515,5 +515,24 @@ describe('sessions routes', () => {
       });
       expect(res.statusCode).toBe(409);
     });
+
+    it('BAL-412 (D9) — a settledByUserId in the body is silently stripped, never forwarded', async () => {
+      mockFinalizeExternalDuration.mockResolvedValue({
+        settlementStatus: 'not_required',
+        overdraftSettledMinor: 0,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/internal/sessions/${SESSION_ID}/finalize-duration`,
+        headers: { 'x-internal-api-key': 'test-secret' },
+        payload: { ...validBody, settledByUserId: 'user_1' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(mockFinalizeExternalDuration).toHaveBeenCalledWith({
+        sessionId: SESSION_ID,
+        minutes: 30,
+        path: 'confirmed',
+      });
+    });
   });
 });

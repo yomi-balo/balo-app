@@ -118,6 +118,10 @@ describe('resolveMoneyView — RULE M', () => {
     amountAudMinor: 0,
     ratePerMinuteMinor: 333,
     settlementStatus: 'not_required',
+    // BAL-412 — 0 while pending, unrelated to Rule M's own assertions.
+    actualMinutes: 0,
+    billingFloorApplied: false,
+    billingFloorMinutes: 0,
   };
   const FINALIZED: SessionMoneyBlock = {
     lens: 'client',
@@ -128,6 +132,10 @@ describe('resolveMoneyView — RULE M', () => {
     ratePerMinuteMinor: 333,
     settlementStatus: 'not_required',
     finalizationPath: 'live_capture',
+    // BAL-412 — a live_capture session: no presence settlement, no floor.
+    actualMinutes: 45,
+    billingFloorApplied: false,
+    billingFloorMinutes: 0,
   };
 
   it('M1 — NO credit_sessions row gives the absent branch, keyed on absence not on a policy', () => {

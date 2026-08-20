@@ -1,20 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   applyBaloFee,
   deriveMinuteRateCents,
   DEFAULT_BALO_FEE_BPS,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
 } from '@balo/shared/pricing';
-import { db } from '../client';
+import { db, type Database } from '../client';
 import {
   auditEvents,
   creditHolds,
   creditLedger,
   creditSessions,
+  creditWallets,
   expertPayoutRecords,
   expertProfiles,
+  meetings,
+  type AuditEvent,
   type NewCreditWallet,
 } from '../schema';
 import {
@@ -30,7 +33,9 @@ import {
   ExternalDurationConflictError,
   InvalidSessionTransitionError,
   SessionNotFoundError,
+  SettlementDrawDivergedError,
   type OpenSessionResult,
+  type SettleFromPresenceRepoInput,
 } from './credit-sessions';
 import { expertPayoutRecordsRepository } from './expert-payout-records';
 import { toClientMoneyBlock } from './_shared/credit-views';
@@ -56,6 +61,14 @@ const CLIENT_RATE_PER_MIN = deriveMinuteRateCents(
 );
 const EXPERT_RATE_PER_MIN = deriveMinuteRateCents(EXPERT_HOURLY);
 const BASE = new Date('2027-01-01T00:00:00.000Z');
+/**
+ * BAL-412 (F13/D6) — the billing floor `meterSessionToNow` now REQUIRES, matching the shipped
+ * `MEETING_NO_SHOW_FLOOR_MINUTES` default that `apps/api`'s meter driver injects. It feeds
+ * `minutesOfRunway`, which decides `lowWarnedAt`: while a session is still inside the floor the
+ * unconsumed remainder is set aside first, so the low warning fires SOONER than the old
+ * `floor(balance / rate)` did. That is the intended correction, not a regression.
+ */
+const METER_FLOOR_MINUTES = 15;
 
 /** `BASE + minutes` + a 30s cushion so `floor((now − connectedAt)/60s)` lands on `minutes`. */
 function meterAt(minutes: number): Date {
@@ -284,7 +297,9 @@ describe('creditSessionsRepository.open — one live session per wallet', () => 
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     await creditSessionsRepository.end(id, { now: meterAt(3) });
 
     const next = await openAgain(ctx);
@@ -327,7 +342,9 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
   }): Promise<{ sessionId: string; overdraftMinor: number }> {
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(24)); // 24×250=6000 vs 5000 → −1000
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    }); // 24×250=6000 vs 5000 → −1000
     const end = await creditSessionsRepository.end(id, { now: meterAt(24) });
     expect(end.overdraftMinor).toBe(1000);
     expect(end.session.settlementStatus).toBe('processing');
@@ -465,7 +482,9 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
     const id = await openOk(ctx);
     await creditSessionsRepository.connect(id, { now: BASE });
 
-    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(res.ticksPosted).toBe(3);
     expect(res.session.lastTickSeq).toBe(3);
     expect(res.session.connectedMinutes).toBe(3);
@@ -485,8 +504,12 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
     const id = await openOk(ctx);
     await creditSessionsRepository.connect(id, { now: BASE });
 
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
-    const again = await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const again = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(again.ticksPosted).toBe(0);
     expect(again.transitions).toEqual({});
     expect(again.session.lastTickSeq).toBe(3);
@@ -503,14 +526,81 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
     const id = await openOk(ctx, 4);
     await creditSessionsRepository.connect(id, { now: BASE });
 
-    const first = await creditSessionsRepository.meterSessionToNow(id, meterAt(1));
+    const first = await creditSessionsRepository.meterSessionToNow(id, meterAt(1), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(first.transitions.low).toBe(true);
     const marker = first.session.lowWarnedAt?.getTime();
     expect(marker).toBeDefined();
 
-    const second = await creditSessionsRepository.meterSessionToNow(id, meterAt(2));
+    const second = await creditSessionsRepository.meterSessionToNow(id, meterAt(2), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(second.transitions.low).toBeUndefined(); // not re-crossed
     expect(second.session.lowWarnedAt?.getTime()).toBe(marker); // unchanged
+  });
+
+  /**
+   * ⚠⚠ F13/D6 — THE LOW-BALANCE TRIGGER USES `minutesOfRunway`, NOT `floor(balance / rate)`.
+   *
+   * This was the THIRD copy of the runway formula and the one that actually FIRES the notice
+   * (`lowWarnedAt` → `transitions.low` → `session.low_balance`). While the uncorrected copy
+   * lived here the system had a SPLIT BRAIN: `DrawdownState` flipped the panel to `low` early
+   * (corrected) while the notification still fired on the old, later threshold — and when it
+   * did fire, `publishLowBalance` reported the corrected, SMALLER figure. A member was told
+   * "About 0 minutes of balance left" at the moment the trigger thought they had 8.
+   *
+   * The three cases below pin BOTH halves of the correction on the SAME session state.
+   */
+  describe('the low-balance trigger is the ONE minutesOfRunway formula (F13/D6)', () => {
+    it('fires EARLY, inside the floor — the uncorrected formula would not have crossed yet', async () => {
+      // rate 250/min. After tick 1: balance = 5000 − 250 = 4750, drawn = 1.
+      //   uncorrected: floor(4750 / 250) = 19  → 19 > 8  ⇒ would NOT fire.
+      //   corrected:   unconsumed floor = 15 − 1 = 14 ⇒ committed 3500
+      //                ⇒ discretionary 1250 ⇒ 5 ≤ 8    ⇒ FIRES.
+      const ctx = await setup({ balanceMinor: 5000 });
+      const id = await openOk(ctx);
+      await creditSessionsRepository.connect(id, { now: BASE });
+
+      const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(1), {
+        floorMinutes: METER_FLOOR_MINUTES,
+      });
+      expect(res.session.lastTickSeq).toBe(1);
+      expect(Math.floor((5000 - 250) / 250)).toBeGreaterThan(8); // the OLD threshold: no cross
+      expect(res.transitions.low).toBe(true); // the CORRECTED one: crossed
+      expect(res.session.lowWarnedAt).not.toBeNull();
+    });
+
+    it('floorMinutes is a PARAMETER — at floorMinutes=0 the same state reduces to the old formula', async () => {
+      // Identical state, floor injected as 0 ⇒ `minutesOfRunway` reduces bit-for-bit to
+      // `floor(balance / rate)` = 19, which is > 8 ⇒ NO warning. Proves the earlier crossing
+      // above comes from the floor correction and nothing else.
+      const ctx = await setup({ balanceMinor: 5000 });
+      const id = await openOk(ctx);
+      await creditSessionsRepository.connect(id, { now: BASE });
+
+      const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(1), {
+        floorMinutes: 0,
+      });
+      expect(res.session.lastTickSeq).toBe(1);
+      expect(res.transitions.low).toBeUndefined();
+      expect(res.session.lowWarnedAt).toBeNull();
+    });
+
+    it('past the floor the corrected formula is a NO-OP — drawn ≥ floor sets nothing aside', async () => {
+      // 16 ticks at 250 from 10_000 ⇒ balance 6000, drawn 16 ≥ floor 15 ⇒ committed 0 ⇒
+      // runway = floor(6000/250) = 24 > 8 ⇒ no warning, exactly as before BAL-412.
+      const ctx = await setup({ balanceMinor: 10_000 });
+      const id = await openOk(ctx);
+      await creditSessionsRepository.connect(id, { now: BASE });
+
+      const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(16), {
+        floorMinutes: METER_FLOOR_MINUTES,
+      });
+      expect(res.session.lastTickSeq).toBe(16);
+      expect(res.transitions.low).toBeUndefined();
+      expect(res.session.lowWarnedAt).toBeNull();
+    });
   });
 });
 
@@ -521,7 +611,9 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     const id = await openOk(ctx, 2);
     await creditSessionsRepository.connect(id, { now: BASE });
 
-    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(res.session.status).toBe('grace');
     expect(res.transitions.graceEntered).toBe(true);
     expect(res.session.graceEnteredAt).not.toBeNull();
@@ -536,7 +628,9 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     const id = await openOk(ctx, 2);
     await creditSessionsRepository.connect(id, { now: BASE });
 
-    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(res.session.status).toBe('wrapped');
     expect(res.transitions.wrapped).toBe(true);
     expect(res.transitions.graceEntered).toBeUndefined();
@@ -552,7 +646,9 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     const id = await openOk(ctx, 2);
     await creditSessionsRepository.connect(id, { now: BASE });
 
-    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(6));
+    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(6), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(res.session.status).toBe('wrapped');
     expect(res.transitions.ceilingHit).toBe(true);
     expect(res.transitions.wrapped).toBe(true);
@@ -569,7 +665,9 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     await db.update(creditSessions).set({ graceBoundMinutes: 3 }).where(eq(creditSessions.id, id));
 
     // min1 → 0, min2 → grace (−250), grace bound 3 min from min2 → wrap at min5.
-    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(8));
+    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(8), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     expect(res.session.status).toBe('wrapped');
     expect(res.transitions.wrapped).toBe(true);
     expect(res.transitions.ceilingHit).toBeUndefined(); // time bound, not ceiling
@@ -589,7 +687,9 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
     // 24 min × 250 = 6000 charged; 6000 − 5000 = 1000 overdraft (pure cash; promo consumed first).
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(24));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
 
     const end = await creditSessionsRepository.end(id, { now: meterAt(24) });
     expect(end.overdraftMinor).toBe(1000);
@@ -603,7 +703,9 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
     const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(24)); // drains to −1000
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    }); // drains to −1000
 
     const end = await creditSessionsRepository.end(id, { now: meterAt(24) });
     expect(end.overdraftMinor).toBe(1000);
@@ -634,7 +736,9 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
 
     const end = await creditSessionsRepository.end(id, { now: meterAt(3) });
     expect(end.overdraftMinor).toBe(0);
@@ -647,7 +751,9 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(2));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(2), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
 
     const first = await creditSessionsRepository.end(id, { now: meterAt(2) });
     expect(first.alreadyEnded).toBe(false);
@@ -671,7 +777,9 @@ describe('creditSessionsRepository.markSettlementResult', () => {
     const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(24));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     await creditSessionsRepository.end(id, { now: meterAt(24) });
 
     const marked = await creditSessionsRepository.markSettlementResult(db, {
@@ -689,7 +797,9 @@ describe('creditSessionsRepository.markSettlementResult', () => {
     const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(24));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     await creditSessionsRepository.end(id, { now: meterAt(24) });
 
     const marked = await creditSessionsRepository.markSettlementResult(db, {
@@ -790,7 +900,9 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
     const ctxWrapped = await setup({ balanceMinor: 500, mandate: false });
     const wrappedId = await openOk(ctxWrapped, 2);
     await creditSessionsRepository.connect(wrappedId, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(wrappedId, meterAt(3)); // → wrapped
+    await creditSessionsRepository.meterSessionToNow(wrappedId, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    }); // → wrapped
     await db
       .update(creditSessions)
       .set({ wrappedAt: new Date(BASE.getTime() - 60 * 60_000) })
@@ -802,7 +914,9 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
     const ctx2 = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
     const settleId = await openOk(ctx2, 10);
     await creditSessionsRepository.connect(settleId, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(settleId, meterAt(24));
+    await creditSessionsRepository.meterSessionToNow(settleId, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     await creditSessionsRepository.end(settleId, { now: meterAt(24) });
     await db
       .update(creditSessions)
@@ -861,7 +975,9 @@ describe('creditSessionsRepository.end — billing-finalization stamping (BAL-39
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     const end = await creditSessionsRepository.end(id, { now: meterAt(3) });
 
     expect(end.session.billingFinalizedAt).not.toBeNull();
@@ -872,7 +988,9 @@ describe('creditSessionsRepository.end — billing-finalization stamping (BAL-39
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(2));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(2), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     const end = await creditSessionsRepository.end(id, {
       now: meterAt(2),
       finalizationPath: 'confirmed',
@@ -1010,7 +1128,9 @@ describe('creditSessionsRepository — displayed client charge == ledger-settled
     const ctx = await setup({ balanceMinor: 500, mandate: true, overdraftCeilingMinor: 100_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(5)); // 5 ticks; minutes 3-5 = grace
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(5), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    }); // 5 ticks; minutes 3-5 = grace
     await creditSessionsRepository.end(id, { now: meterAt(5) });
 
     // Wallet went negative — this exercised real grace/overdraft minutes.
@@ -1048,7 +1168,9 @@ describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconcili
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(id, meterAt(3));
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     const ended = await creditSessionsRepository.end(id, { now: meterAt(3) });
     return {
       id,
@@ -1459,7 +1581,9 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
     });
     if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
     await creditSessionsRepository.connect(res.session.id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(minutes));
+    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(minutes), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     const ended = await creditSessionsRepository.end(res.session.id, { now: meterAt(minutes) });
     expect(ended.session.billingFinalizedAt).not.toBeNull();
     return { sessionId: res.session.id, expectedAccrualMinor: minutes * EXPERT_RATE_PER_MIN };
@@ -1631,7 +1755,9 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
     if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
     expect(res.session.engagementId).toBeNull();
     await creditSessionsRepository.connect(res.session.id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(4));
+    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(4), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     const ended = await creditSessionsRepository.end(res.session.id, { now: meterAt(4) });
     expect(ended.session.expertAccruedMinor).toBe(4 * EXPERT_RATE_PER_MIN);
 
@@ -1671,7 +1797,9 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
     });
     if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
     await creditSessionsRepository.connect(res.session.id, { now: BASE });
-    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(2));
+    await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(2), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
     await creditSessionsRepository.end(res.session.id, { now: meterAt(2) });
 
     const onNamed = await creditSessionsRepository.sumExpertEarningsForEngagement(named.id);
@@ -1715,5 +1843,1129 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
     expect(keys.sort()).toEqual(
       ['earningsAudMinor', 'finalizedSessionCount', 'pendingSessionCount', 'state'].sort()
     );
+  });
+});
+
+// ── BAL-412 (ADR-1044 §7) — presence settlement + the 15-minute billing floor ─────────────
+//
+// ⚠ EVERY FIGURE BELOW IS SUPPLIED BY THE TEST, NOT DERIVED BY THE REPOSITORY. That is the
+// contract: `resolveMeetingSettlement` (`@balo/shared/credit`) owns the floor rule, the four
+// shapes and the clamps; `settleFromPresence` owns the TRANSACTION. These cases pin the
+// transaction — what is written, what is written exactly once, and what is not written at all.
+
+/** ADR-1044 §7's floor, as the settlement layer injects it (whole minutes). */
+const FLOOR_MINUTES = 15;
+
+/** Settlement inputs with the boring fields filled in. */
+function settlementInput(
+  sessionId: string,
+  meetingId: string,
+  overrides: Partial<SettleFromPresenceRepoInput> = {}
+): SettleFromPresenceRepoInput {
+  return {
+    sessionId,
+    meetingId,
+    billableMinutes: FLOOR_MINUTES,
+    actualMinutes: FLOOR_MINUTES,
+    billingFloorMinutes: FLOOR_MINUTES,
+    topUpFromTickSeq: 1,
+    topUpToTickSeq: FLOOR_MINUTES,
+    // F2 — the TOCTOU anchor. Default 0 matches a session that never metered (the common
+    // no-show); a case that seeds `last_tick_seq > 0` MUST override it or the repository
+    // correctly refuses with `SettlementDrawDivergedError`.
+    minutesAlreadyDrawn: 0,
+    shape: 'no_show_client',
+    // F14 — the floor DID fix the figure here (15 billed, 15 actual is the boring default, so
+    // this is `false`); cases that exercise the floor or the Q1 clamp override it explicitly.
+    floorApplied: false,
+    outcome: 'no_show_client',
+    actorUserId: null,
+    now: meterAt(20),
+    ...overrides,
+  };
+}
+
+/** An ENDED meeting — settlement's precondition (the service refuses a non-terminal one). */
+async function endedMeeting(endedAt: Date = meterAt(20)): Promise<string> {
+  const { meeting } = await meetingFactory({
+    values: { status: 'ended', endedBy: 'expert_host', endedAt },
+  });
+  return meeting.id;
+}
+
+/**
+ * A LIVE meeting — the state a `presence` session is metered in. ⚠ Distinct from
+ * {@link endedMeeting} and NOT interchangeable with it since F3: `findMeterable` now refuses a
+ * `presence` session whose meeting is terminal, so a meter test seeded from an `ended` meeting
+ * would assert the opposite of what it means to.
+ */
+async function liveMeeting(): Promise<string> {
+  const { meeting } = await meetingFactory({ values: { status: 'in_progress' } });
+  return meeting.id;
+}
+
+/** `open` a `presence` session bound to `meetingId`. Asserts acceptance; returns the id. */
+async function openPresence(
+  ctx: { walletId: string; companyId: string; expertProfileId: string; memberId: string },
+  meetingId: string,
+  estimatedMinutes = FLOOR_MINUTES
+): Promise<string> {
+  const res = await creditSessionsRepository.open({
+    walletId: ctx.walletId,
+    companyId: ctx.companyId,
+    expertProfileId: ctx.expertProfileId,
+    initiatingMemberId: ctx.memberId,
+    estimatedMinutes,
+    meetingId,
+    durationSource: 'presence',
+  });
+  if (!res.ok) {
+    throw new Error(`expected open ok, got ${res.code}`);
+  }
+  return res.session.id;
+}
+
+/** Every `session_consume` idempotency key written for one session, in tick order. */
+async function consumeKeys(sessionId: string): Promise<string[]> {
+  const rows = await db
+    .select({ key: creditLedger.idempotencyKey })
+    .from(creditLedger)
+    .where(and(eq(creditLedger.sessionId, sessionId), eq(creditLedger.reason, 'session_consume')))
+    .orderBy(asc(creditLedger.seq));
+  return rows.map((row) => row.key);
+}
+
+/** Audit rows for one session + action. */
+async function sessionAudits(sessionId: string, action: string): Promise<AuditEvent[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(and(eq(auditEvents.entityId, sessionId), eq(auditEvents.action, action)));
+}
+
+async function walletBalance(walletId: string): Promise<number> {
+  const [row] = await db
+    .select({ balanceMinor: creditWallets.balanceMinor })
+    .from(creditWallets)
+    .where(eq(creditWallets.id, walletId));
+  return row?.balanceMinor ?? 0;
+}
+
+describe('creditSessionsRepository.open — duration provenance (BAL-412 seam)', () => {
+  it('defaults to live_capture — every SHIPPED caller is unchanged', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    expect((await creditSessionsRepository.findById(id))?.durationSource).toBe('live_capture');
+  });
+
+  it('persists an explicit presence provenance — the INERT seam BAL-466 will use', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    const session = await creditSessionsRepository.findById(id);
+    expect(session?.durationSource).toBe('presence');
+    expect(session?.meetingId).toBe(meetingId);
+    // The settlement columns are untouched at open — they are finalization outputs.
+    expect(session?.actualMinutes).toBeNull();
+    expect(session?.billingFloorMinutes).toBeNull();
+    expect(session?.settlementShape).toBeNull();
+  });
+});
+
+describe('creditSessionsRepository.settleFromPresence — the no-show (from `pending`)', () => {
+  it('⚠⚠ SETTLES A NEVER-CONNECTED SESSION: 15 floor ticks, hold released, outcome resolved', async () => {
+    // THE CASE THIS TICKET EXISTS FOR. Nothing ever called `connect`, so the session is still
+    // `pending` with a NULL `connected_at` — a status `end()` refuses outright.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    expect((await creditSessionsRepository.findById(id))?.status).toBe('pending');
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: FLOOR_MINUTES })
+    );
+
+    expect(res.alreadySettled).toBe(false);
+    expect(res.ticksPosted).toBe(15);
+    expect(res.outcomeWritten).toBe(true);
+    expect(res.overdraftMinor).toBe(0);
+    expect(res.expertAccruedMinor).toBe(15 * EXPERT_RATE_PER_MIN);
+
+    const s = res.session;
+    expect(s.status).toBe('ended');
+    expect(s.connectedMinutes).toBe(15);
+    expect(s.lastTickSeq).toBe(15);
+    expect(s.actualMinutes).toBe(15);
+    expect(s.billingFloorMinutes).toBe(15);
+    expect(s.settlementShape).toBe('no_show_client');
+    expect(s.finalizationPath).toBe('presence');
+    expect(s.billingFinalizedAt).not.toBeNull();
+    expect(s.settlementStatus).toBe('not_required');
+    expect(s.expertAccruedMinor).toBe(15 * EXPERT_RATE_PER_MIN);
+    // ⚠ `connected_at` STAYS NULL. Nothing downstream reads it for money — the money block
+    // reads `connected_minutes` — and inventing a connect instant would be a fabricated fact.
+    expect(s.connectedAt).toBeNull();
+
+    // 15 ticks drawn at the snapshotted client rate; the reservation released.
+    expect(await walletBalance(ctx.walletId)).toBe(50_000 - 15 * CLIENT_RATE_PER_MIN);
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+    expect(await consumeKeys(id)).toEqual(
+      Array.from({ length: 15 }, (_, index) => `session_consume:${id}:${index + 1}`)
+    );
+
+    // The outcome BAL-134 left NULL is now resolved, on the same transaction.
+    const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+    expect(meeting?.outcome).toBe('no_show_client');
+  });
+
+  it('writes BOTH audit rows — the accrual record AND the settlement’s reasoning record', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    const actor = await userFactory();
+
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        actorUserId: actor.id,
+        actualMinutes: 6,
+        floorApplied: true,
+      })
+    );
+
+    const accrued = await sessionAudits(id, 'credit_session.expert_accrued');
+    expect(accrued).toHaveLength(1);
+    expect(accrued[0]?.actorUserId).toBe(actor.id);
+    expect(accrued[0]?.metadata).toMatchObject({
+      expertProfileId: ctx.expertProfileId,
+      connectedMinutes: 15,
+      expertAccruedMinor: 15 * EXPERT_RATE_PER_MIN,
+    });
+
+    const settled = await sessionAudits(id, 'credit_session.presence_settled');
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.entityType).toBe('credit_session');
+    expect(settled[0]?.metadata).toMatchObject({
+      meetingId,
+      shape: 'no_show_client',
+      outcome: 'no_show_client',
+      outcomeWritten: true,
+      actualMinutes: 6,
+      billableMinutes: 15,
+      floorApplied: true, // 15 billed > 6 delivered — the ONLY durable record of the split
+      floorMinutes: 15,
+      ticksPosted: 15,
+      minutesAlreadyDrawn: 0,
+    });
+  });
+});
+
+describe('creditSessionsRepository.settleFromPresence — the 4 → 15 top-up', () => {
+  it('⚠⚠ POSTS EXACTLY 11 NEW TICKS: no double charge, no under-charge', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    // A `presence` session METERS LIVE, exactly like `live_capture` (D11 / §4.2). Four
+    // minutes are already drawn under keys :1 … :4 before settlement runs.
+    await creditSessionsRepository.connect(id, { now: BASE });
+    const metered = await creditSessionsRepository.meterSessionToNow(id, meterAt(4), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    expect(metered.ticksPosted).toBe(4);
+    expect(await walletBalance(ctx.walletId)).toBe(50_000 - 4 * CLIENT_RATE_PER_MIN);
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 15,
+        actualMinutes: 4,
+        topUpFromTickSeq: 5,
+        topUpToTickSeq: 15,
+        // F2 — four ticks are already on the ledger, so the row's `last_tick_seq` is 4. The
+        // caller MUST declare that; passing the default 0 is exactly the stale pre-read the
+        // divergence guard refuses.
+        minutesAlreadyDrawn: 4,
+        shape: 'held',
+        floorApplied: true, // ruleMinutes(15) > actualMinutes(4) — the floor is what raised it
+        outcome: 'completed',
+      })
+    );
+
+    expect(res.ticksPosted).toBe(11);
+    // ELEVEN new rows, keys :5 … :15 — the first four are never re-posted.
+    expect(await consumeKeys(id)).toEqual(
+      Array.from({ length: 15 }, (_, index) => `session_consume:${id}:${index + 1}`)
+    );
+    // …and the wallet is down by exactly FIFTEEN minutes in total, not 19 and not 4.
+    expect(await walletBalance(ctx.walletId)).toBe(50_000 - 15 * CLIENT_RATE_PER_MIN);
+
+    expect(res.session.connectedMinutes).toBe(15); // the FLOORED figure
+    expect(res.session.actualMinutes).toBe(4); // …and the delivered one, still recoverable
+    expect(res.session.expertAccruedMinor).toBe(15 * EXPERT_RATE_PER_MIN);
+  });
+
+  it('⚠ NO REFUND: a rule figure BELOW what was already drawn settles at the drawn figure', async () => {
+    // The Q1 residual, executed. The caller (`resolveMeetingSettlement`) has already clamped
+    // `billableMinutes` UP to `minutesAlreadyDrawn`, so `topUpFrom > topUpTo` and this method
+    // posts NOTHING. The ledger is append-only — settlement can never claw a minute back.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(10), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 10, // clamped UP from a rule figure of 6
+        actualMinutes: 6,
+        topUpFromTickSeq: 11,
+        topUpToTickSeq: 10, // from > to ⇒ the loop is empty
+        minutesAlreadyDrawn: 10, // F2 — ten ticks are on the ledger; the row agrees
+        shape: 'held',
+        // ⚠ F14 — **FALSE**, and that is the entire point of threading it. The billed figure
+        // (10) EXCEEDS the delivered one (6), so the naive `billable > actual` derivation says
+        // "floored" — but no floor was involved: `ruleMinutes` was 6 and the Q1 NO-REFUND CLAMP
+        // is what raised it. Recording `true` here would file this overcharge under "the
+        // minimum bound", which is the opposite of what happened.
+        floorApplied: false,
+        outcome: 'completed',
+      })
+    );
+
+    expect(res.ticksPosted).toBe(0);
+    expect(await consumeKeys(id)).toHaveLength(10);
+    expect(await walletBalance(ctx.walletId)).toBe(50_000 - 10 * CLIENT_RATE_PER_MIN);
+    expect(res.session.connectedMinutes).toBe(10);
+    expect(res.session.actualMinutes).toBe(6);
+
+    // ⚠⚠ F14 — THE FORENSIC RECORD TELLS THE TRUTH. Both the persisted column and the audit
+    // row must say `false`: this is the only durable evidence distinguishing a Q1 overcharge
+    // from a legitimate floor application, and `finalizeBilling`'s `floored:` metric reads it.
+    expect(res.session.floorApplied).toBe(false);
+    const [audit] = await sessionAudits(id, 'credit_session.presence_settled');
+    expect(audit?.metadata).toMatchObject({
+      billableMinutes: 10,
+      actualMinutes: 6,
+      floorApplied: false,
+      minutesAlreadyDrawn: 10,
+    });
+  });
+});
+
+// ── F6 — THE D12 INVARIANT, EXECUTED AGAINST THE REAL TRANSACTION ─────────────────────────
+//
+// ⚠⚠ THE UNIT-LEVEL VERSION OF THIS ASSERTION WAS TAUTOLOGICAL. It computed
+// `clientChargeMinor = billableMinutes × CLIENT_RATE` and then asserted
+// `clientChargeMinor / CLIENT_RATE === billableMinutes` — an arithmetic identity over its own
+// local variables, exercising NO production code. It would have passed unchanged even if
+// `settleFromPresence` had used a DIFFERENT figure for the accrual than for the ticks.
+//
+// The coupling lives in the repository — the tick loop (`for seq = from … to`) and the accrual
+// (`billableMinutes × expertRateMinorPerMinute`) — and it is only real if the LEDGER, the
+// SESSION ROW and the ACCRUAL all agree after a genuine settlement. ADR-1044 asked for an
+// EXECUTABLE invariant; this is it.
+describe('⚠ INVARIANT (D12): ledger ticks === connected_minutes === accrual ÷ expert rate', () => {
+  /** Assert the three-way identity over one settled session, from the DB alone. */
+  async function assertIdenticalFigure(
+    sessionId: string,
+    expectedBillableMinutes: number
+  ): Promise<void> {
+    const session = await creditSessionsRepository.findById(sessionId);
+    if (session === undefined) throw new Error('settled session vanished');
+    const ticks = await consumeKeys(sessionId);
+
+    // 1. The LEDGER (the source of truth, ADR-1040) holds exactly that many draws…
+    expect(ticks).toHaveLength(expectedBillableMinutes);
+    // 2. …the row's own figure is the SAME number, not a rounded or stale one…
+    expect(session.connectedMinutes).toBe(expectedBillableMinutes);
+    // 3. …and the expert accrual divides back to it EXACTLY at the snapshotted expert rate.
+    //    Distinct rates (700 client / 500 expert here) so "same MINUTES" can never be
+    //    mistaken for "same AMOUNT".
+    expect(session.expertAccruedMinor % EXPERT_RATE_PER_MIN).toBe(0);
+    expect(session.expertAccruedMinor / EXPERT_RATE_PER_MIN).toBe(expectedBillableMinutes);
+    // 4. …and the client was charged the SAME minute count at the client rate.
+    expect(ticks.length * CLIENT_RATE_PER_MIN).toBe(session.connectedMinutes * CLIENT_RATE_PER_MIN);
+  }
+
+  it('holds on a floored no-show settled from `pending` (minutesAlreadyDrawn = 0)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: 6, floorApplied: true })
+    );
+
+    await assertIdenticalFigure(id, 15);
+  });
+
+  // ⚠ THE CASE THE OLD SUITE NEVER REACHED — every one of its cases passed
+  // `minutesAlreadyDrawn: 0`, so the top-up branch (where the ticks come from TWO writers) was
+  // never exercised at all. Here the live meter posts 4 and settlement posts 11: if the accrual
+  // were computed from either half instead of the settled total, this fails.
+  it('holds across a TOP-UP, where the meter and settlement each wrote part of the ledger (minutesAlreadyDrawn = 4)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    const metered = await creditSessionsRepository.meterSessionToNow(id, meterAt(4), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    expect(metered.ticksPosted).toBe(4);
+
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 15,
+        actualMinutes: 4,
+        topUpFromTickSeq: 5,
+        topUpToTickSeq: 15,
+        minutesAlreadyDrawn: 4,
+        shape: 'held',
+        floorApplied: true,
+        outcome: 'completed',
+      })
+    );
+
+    await assertIdenticalFigure(id, 15);
+  });
+
+  // ⚠ AND THE Q1 CLAMP — the ONE branch that can make the presence-derived figure and the
+  // settled figure disagree, and therefore the ONE branch where a wrong accrual basis would
+  // actually show up. The rule says 6; ten were already drawn; the settled figure is 10, and
+  // the expert must be accrued TEN, not six.
+  it('holds when the Q1 no-refund clamp fixed the figure above the rule (minutesAlreadyDrawn = 10)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(10), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 10, // clamped UP from a rule figure of 6
+        actualMinutes: 6,
+        topUpFromTickSeq: 11,
+        topUpToTickSeq: 10, // nothing new posted
+        minutesAlreadyDrawn: 10,
+        shape: 'held',
+        floorApplied: false,
+        outcome: 'completed',
+      })
+    );
+
+    await assertIdenticalFigure(id, 10);
+  });
+
+  it('holds at ZERO on a missed call — "the expert accrued nothing" is a recorded fact, not a gap', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 0,
+        actualMinutes: 0,
+        topUpFromTickSeq: 1,
+        topUpToTickSeq: 0,
+        shape: 'missed_call',
+        outcome: 'missed_call',
+      })
+    );
+
+    await assertIdenticalFigure(id, 0);
+  });
+});
+
+// ── F2 — THE TOCTOU REFUSAL ──────────────────────────────────────────────────────────────
+//
+// ⚠⚠ `findMeterable` INCLUDES `'presence'` BY DESIGN (D11), so the meter sweep is a DESIGNED
+// concurrent writer on `last_tick_seq` — the very column the caller pre-reads OUTSIDE any
+// transaction to compute `minutesAlreadyDrawn`. If the meter commits between that pre-read and
+// the settlement, every figure the caller computed is stale, and writing them would put
+// `connected_minutes` in CONTRADICTION with the append-only ledger: expert under-accrued,
+// client receipt understated, delta silently retained — and the caller's Q1 `log.error` firing
+// with the stale figure, reading as the benign known-limitation case.
+describe('creditSessionsRepository.settleFromPresence — concurrent metering (F2)', () => {
+  it('⚠⚠ REFUSES a settlement computed from a stale last_tick_seq, and writes NOTHING', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+
+    // ── the caller's PRE-READ: 18 minutes drawn ──
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(18), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const preRead = await creditSessionsRepository.findById(id);
+    expect(preRead?.lastTickSeq).toBe(18);
+    const input = settlementInput(id, meetingId, {
+      billableMinutes: 18,
+      actualMinutes: 18,
+      topUpFromTickSeq: 19,
+      topUpToTickSeq: 18,
+      minutesAlreadyDrawn: 18,
+      shape: 'held',
+      outcome: 'completed',
+    });
+
+    // ── …and the METER SWEEP interleaves, committing ticks 19 and 20 ──
+    const metered = await creditSessionsRepository.meterSessionToNow(id, meterAt(20), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    expect(metered.ticksPosted).toBe(2);
+    expect(await consumeKeys(id)).toHaveLength(20);
+
+    await expect(creditSessionsRepository.settleFromPresence(input)).rejects.toThrow(
+      SettlementDrawDivergedError
+    );
+
+    // NOTHING was written: no terminal transition, no marker, no outcome, no audit row — and
+    // above all `connected_minutes` was NOT set to 18 while the ledger holds 20 draws.
+    const after = await creditSessionsRepository.findById(id);
+    expect(after?.status).toBe('active');
+    expect(after?.billingFinalizedAt).toBeNull();
+    expect(after?.connectedMinutes).toBe(20);
+    expect(after?.lastTickSeq).toBe(20);
+    expect(await sessionAudits(id, 'credit_session.presence_settled')).toHaveLength(0);
+    expect(await sessionAudits(id, 'credit_session.expert_accrued')).toHaveLength(0);
+    const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+    expect(meeting?.outcome).toBeNull();
+  });
+
+  it('…and the durability backstop can then settle it against FRESH state, no money lost', async () => {
+    // The refusal is only correct if it is RECOVERABLE. The row is left in exactly the shape
+    // `findPresenceUnsettled` selects, so the backstop re-reads (20), recomputes, and commits.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(18), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const stale = settlementInput(id, meetingId, {
+      billableMinutes: 18,
+      actualMinutes: 18,
+      topUpFromTickSeq: 19,
+      topUpToTickSeq: 18,
+      minutesAlreadyDrawn: 18,
+      shape: 'held',
+      outcome: 'completed',
+    });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(20), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    await expect(creditSessionsRepository.settleFromPresence(stale)).rejects.toThrow(
+      SettlementDrawDivergedError
+    );
+
+    // The meeting terminates and the backstop retries with the fresh figure.
+    await db
+      .update(meetings)
+      .set({ status: 'ended', endedAt: meterAt(20) })
+      .where(eq(meetings.id, meetingId));
+    const stranded = (await creditSessionsRepository.findPresenceUnsettled(meterAt(60))).map(
+      (r) => r.id
+    );
+    expect(stranded).toContain(id);
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 20,
+        actualMinutes: 20,
+        topUpFromTickSeq: 21,
+        topUpToTickSeq: 20,
+        minutesAlreadyDrawn: 20,
+        shape: 'held',
+        outcome: 'completed',
+      })
+    );
+
+    expect(res.alreadySettled).toBe(false);
+    expect(res.session.connectedMinutes).toBe(20);
+    // The row and the ledger AGREE, and the expert is accrued all twenty.
+    expect(await consumeKeys(id)).toHaveLength(20);
+    expect(res.session.expertAccruedMinor).toBe(20 * EXPERT_RATE_PER_MIN);
+  });
+
+  it('the guard is on DIVERGENCE, not on non-zero: an agreeing non-zero draw settles normally', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(4), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 15,
+        actualMinutes: 4,
+        topUpFromTickSeq: 5,
+        topUpToTickSeq: 15,
+        minutesAlreadyDrawn: 4,
+        shape: 'held',
+        floorApplied: true,
+        outcome: 'completed',
+      })
+    );
+    expect(res.ticksPosted).toBe(11);
+  });
+});
+
+describe('creditSessionsRepository.settleFromPresence — the two ZERO shapes', () => {
+  const zeroShapes = [
+    { shape: 'missed_call' as const, outcome: 'missed_call' as const },
+    // ⚠ D2/D3: `abandoned_wait` has NO `meeting_outcome` label — BAL-412 mints no fourth
+    // value — so it lands as `completed` with a ZERO settlement. That is CORRECT, and it is
+    // why `settlement_shape` exists: `meetings.outcome` cannot tell the two zeros apart.
+    { shape: 'abandoned_wait' as const, outcome: 'completed' as const },
+  ];
+
+  for (const { shape, outcome } of zeroShapes) {
+    it(`${shape} charges NOTHING, accrues NOTHING and releases the hold in full`, async () => {
+      const ctx = await setup({ balanceMinor: 50_000 });
+      const meetingId = await endedMeeting();
+      const id = await openPresence(ctx, meetingId);
+
+      const res = await creditSessionsRepository.settleFromPresence(
+        settlementInput(id, meetingId, {
+          billableMinutes: 0,
+          actualMinutes: shape === 'missed_call' ? 0 : 8,
+          topUpFromTickSeq: 1,
+          topUpToTickSeq: 0,
+          shape,
+          outcome,
+        })
+      );
+
+      expect(res.ticksPosted).toBe(0);
+      expect(res.expertAccruedMinor).toBe(0);
+      expect(res.session.connectedMinutes).toBe(0);
+      expect(res.session.expertAccruedMinor).toBe(0);
+      expect(res.session.settlementShape).toBe(shape);
+      expect(res.session.settlementStatus).toBe('not_required');
+      // NOT ONE ledger row, and the balance is untouched.
+      expect(await consumeKeys(id)).toHaveLength(0);
+      expect(await walletBalance(ctx.walletId)).toBe(50_000);
+      // The reservation is returned in full.
+      expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+
+      const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+      expect(meeting?.outcome).toBe(outcome);
+    });
+
+    it(`${shape} is IDEMPOTENT ON THE ROW MARKER ALONE — there is no ledger key to dedup on`, async () => {
+      // ⚠⚠ THE TEST THAT PROVES `billing_finalized_at` IS DOING THE WORK. On a zero shape no
+      // `session_consume` row is written at all, so `applyLedgerEntry`'s UNIQUE key cannot be
+      // the guard — the row marker read under `FOR UPDATE` is the only thing standing between
+      // a retried job and a second hold release.
+      const ctx = await setup({ balanceMinor: 50_000 });
+      const meetingId = await endedMeeting();
+      const id = await openPresence(ctx, meetingId);
+      const input = settlementInput(id, meetingId, {
+        billableMinutes: 0,
+        actualMinutes: 0,
+        topUpFromTickSeq: 1,
+        topUpToTickSeq: 0,
+        shape,
+        outcome,
+      });
+
+      const first = await creditSessionsRepository.settleFromPresence(input);
+      expect(first.alreadySettled).toBe(false);
+
+      const holdIdAfterFirst = first.session.holdId;
+      const second = await creditSessionsRepository.settleFromPresence(input);
+
+      expect(second.alreadySettled).toBe(true);
+      expect(second.ticksPosted).toBe(0);
+      expect(second.outcomeWritten).toBe(false);
+      expect(await consumeKeys(id)).toHaveLength(0);
+      expect(await sessionAudits(id, 'credit_session.expert_accrued')).toHaveLength(1);
+      expect(await sessionAudits(id, 'credit_session.presence_settled')).toHaveLength(1);
+
+      // The hold transitioned ONCE — `released`, and it stayed there.
+      if (holdIdAfterFirst !== null) {
+        const [hold] = await db
+          .select()
+          .from(creditHolds)
+          .where(eq(creditHolds.id, holdIdAfterFirst));
+        expect(hold?.status).toBe('released');
+      }
+    });
+  }
+});
+
+describe('creditSessionsRepository.settleFromPresence — idempotency + guards', () => {
+  it('a second settlement writes NO ledger row, NO audit row and no second outcome', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    const input = settlementInput(id, meetingId);
+
+    const first = await creditSessionsRepository.settleFromPresence(input);
+    expect(first.ticksPosted).toBe(15);
+    const balanceAfterFirst = await walletBalance(ctx.walletId);
+
+    const second = await creditSessionsRepository.settleFromPresence(input);
+
+    expect(second.alreadySettled).toBe(true);
+    expect(second.ticksPosted).toBe(0);
+    expect(second.outcomeWritten).toBe(false);
+    expect(second.overdraftMinor).toBe(0);
+    expect(await walletBalance(ctx.walletId)).toBe(balanceAfterFirst);
+    expect(await consumeKeys(id)).toHaveLength(15);
+    expect(await sessionAudits(id, 'credit_session.expert_accrued')).toHaveLength(1);
+    expect(await sessionAudits(id, 'credit_session.presence_settled')).toHaveLength(1);
+  });
+
+  it('treats a LEGACY `ended` session (marker NULL) as already settled — it never re-bills', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    await creditSessionsRepository.end(id, { now: meterAt(3) });
+    // A pre-BAL-399 row shape: ended, but with no finalization marker.
+    await db
+      .update(creditSessions)
+      .set({ billingFinalizedAt: null })
+      .where(eq(creditSessions.id, id));
+
+    const res = await creditSessionsRepository.settleFromPresence(settlementInput(id, meetingId));
+
+    expect(res.alreadySettled).toBe(true);
+    expect(res.ticksPosted).toBe(0);
+    expect(await consumeKeys(id)).toHaveLength(3);
+  });
+
+  it('refuses a CANCELLED session with InvalidSessionTransitionError', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.cancel(id);
+
+    await expect(
+      creditSessionsRepository.settleFromPresence(settlementInput(id, meetingId))
+    ).rejects.toThrow(InvalidSessionTransitionError);
+    expect(await consumeKeys(id)).toHaveLength(0);
+  });
+
+  it('throws SessionNotFoundError for an unknown session', async () => {
+    const meetingId = await endedMeeting();
+    await expect(
+      creditSessionsRepository.settleFromPresence(settlementInput(randomUUID(), meetingId))
+    ).rejects.toThrow(SessionNotFoundError);
+  });
+
+  it('⚠ REFUSES A MEETING MISMATCH before writing anything — a divergence is caught, not hidden', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const sessionMeetingId = await endedMeeting();
+    const otherMeetingId = await endedMeeting();
+    const id = await openPresence(ctx, sessionMeetingId);
+
+    await expect(
+      creditSessionsRepository.settleFromPresence(settlementInput(id, otherMeetingId))
+    ).rejects.toThrow(/belongs to meeting/);
+
+    // Nothing moved: no ticks, no marker, and the OTHER meeting's outcome is untouched.
+    expect(await consumeKeys(id)).toHaveLength(0);
+    expect((await creditSessionsRepository.findById(id))?.billingFinalizedAt).toBeNull();
+    const [other] = await db.select().from(meetings).where(eq(meetings.id, otherMeetingId));
+    expect(other?.outcome).toBeNull();
+  });
+
+  it('⚠ REJECTS a non-integer or negative figure BEFORE opening a transaction', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    await expect(
+      creditSessionsRepository.settleFromPresence(
+        settlementInput(id, meetingId, { billableMinutes: 15.5 })
+      )
+    ).rejects.toThrow(/non-negative integer/);
+    await expect(
+      creditSessionsRepository.settleFromPresence(
+        settlementInput(id, meetingId, { actualMinutes: -1 })
+      )
+    ).rejects.toThrow(/non-negative integer/);
+
+    expect(await consumeKeys(id)).toHaveLength(0);
+    expect((await creditSessionsRepository.findById(id))?.status).toBe('pending');
+  });
+
+  it('⚠ DOES NOT OVERWRITE an outcome the lifecycle sweep already wrote', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const { meeting } = await meetingFactory({
+      values: {
+        status: 'ended',
+        endedBy: 'system_idle',
+        endedAt: meterAt(20),
+        outcome: 'missed_call', // BAL-134's sweep got there first
+      },
+    });
+    const id = await openPresence(ctx, meeting.id);
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meeting.id, {
+        billableMinutes: 0,
+        actualMinutes: 0,
+        topUpFromTickSeq: 1,
+        topUpToTickSeq: 0,
+        shape: 'missed_call',
+        outcome: 'missed_call',
+      })
+    );
+
+    // The settlement still completes — only the outcome write is skipped.
+    expect(res.alreadySettled).toBe(false);
+    expect(res.outcomeWritten).toBe(false);
+    expect(res.session.settlementShape).toBe('missed_call');
+    const [persisted] = await db.select().from(meetings).where(eq(meetings.id, meeting.id));
+    expect(persisted?.outcome).toBe('missed_call');
+    expect(await sessionAudits(id, 'credit_session.presence_settled')).toHaveLength(1);
+  });
+
+  it('⚠ ADR-1030: a ROLLED-BACK settlement leaves NO audit row, NO tick and NO outcome', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    await expect(
+      db.transaction(async (tx) => {
+        const res = await creditSessionsRepository.settleFromPresence(
+          settlementInput(id, meetingId),
+          tx as unknown as Database
+        );
+        expect(res.ticksPosted).toBe(15);
+        // Something later in the caller's transaction fails. EVERYTHING must go — the audit
+        // rows are the real requirement: a row attesting to a settlement that never committed
+        // is worse than no row at all.
+        throw new Error('caller failed after settlement');
+      })
+    ).rejects.toThrow('caller failed after settlement');
+
+    expect(await consumeKeys(id)).toHaveLength(0);
+    expect(await sessionAudits(id, 'credit_session.expert_accrued')).toHaveLength(0);
+    expect(await sessionAudits(id, 'credit_session.presence_settled')).toHaveLength(0);
+    expect(await walletBalance(ctx.walletId)).toBe(50_000);
+    const session = await creditSessionsRepository.findById(id);
+    expect(session?.status).toBe('pending');
+    expect(session?.billingFinalizedAt).toBeNull();
+    const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+    expect(meeting?.outcome).toBeNull();
+  });
+});
+
+describe('creditSessionsRepository.settleFromPresence — overdraft', () => {
+  it('draws the FULL floored figure with NO ceiling clamp, leaving the wallet negative', async () => {
+    // Owner Decision 3, applied to the floor: the live ceiling is a UX pause, never a billing
+    // cap. Five minutes of balance, a fifteen-minute floor — the overflow becomes an
+    // off-session settlement, not a discount.
+    const ctx = await setup({
+      balanceMinor: 5 * CLIENT_RATE_PER_MIN,
+      mandate: true,
+      overdraftCeilingMinor: 100_000,
+    });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: 15, shape: 'held', outcome: 'completed' })
+    );
+
+    expect(res.ticksPosted).toBe(15);
+    expect(res.overdraftMinor).toBe(10 * CLIENT_RATE_PER_MIN);
+    expect(res.mandateActive).toBe(true);
+    expect(res.session.overdraftSettledMinor).toBe(10 * CLIENT_RATE_PER_MIN);
+    expect(res.session.settlementStatus).toBe('processing');
+    expect(await walletBalance(ctx.walletId)).toBe(-10 * CLIENT_RATE_PER_MIN);
+    // The expert is paid the SAME floored figure regardless of whether the client's card ever
+    // settles — the expert-always-paid guarantee, unchanged by ADR-1044 §7.
+    expect(res.session.expertAccruedMinor).toBe(15 * EXPERT_RATE_PER_MIN);
+  });
+});
+
+describe('creditSessionsRepository — presence in the reaper finders (BAL-412)', () => {
+  it('findMeterable INCLUDES a presence session while its meeting is LIVE — the tick loop still runs under a floor', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+
+    const ids = (await creditSessionsRepository.findMeterable()).map((row) => row.id);
+    expect(ids).toContain(id);
+  });
+
+  // ── F3 — THE METER STOPS WHEN THE MEETING DOES ──────────────────────────────────────────
+  //
+  // ⚠⚠ THIS IS A MONEY GUARD, NOT TIDINESS. Both terminal paths call settlement BEST-EFFORT
+  // and NON-FATAL, so a settlement that FAULTS leaves the session `active` with its meeting
+  // already `ended`. `meterSessionToNow` draws off the WALL CLOCK, `enforceMaxDuration` skips
+  // `presence` (Q3), and the Q1 no-refund clamp makes whatever it drew PERMANENT against an
+  // append-only ledger. A 20-minute call whose settlement threw at 14:00 would post 15 more
+  // ticks and settle at `max(20, 35) = 35` — the client paying 35 minutes for a 20-minute
+  // consultation, with no refund primitive in existence to undo it.
+  it.each([
+    ['ended', 'ended' as const],
+    ['cancelled', 'cancelled' as const],
+  ])(
+    '⚠⚠ findMeterable EXCLUDES a still-active presence session whose meeting is %s',
+    async (_label, status) => {
+      const ctx = await setup({ balanceMinor: 50_000 });
+      const { meeting } = await meetingFactory({
+        values:
+          status === 'ended'
+            ? { status: 'ended', endedBy: 'expert_host', endedAt: meterAt(20) }
+            : { status: 'cancelled' },
+      });
+      const id = await openPresence(ctx, meeting.id);
+      await creditSessionsRepository.connect(id, { now: BASE });
+      // The session itself is a perfectly ordinary meterable row — status alone cannot tell.
+      expect((await creditSessionsRepository.findById(id))?.status).toBe('active');
+
+      const ids = (await creditSessionsRepository.findMeterable()).map((row) => row.id);
+      expect(ids).not.toContain(id);
+    }
+  );
+
+  it('findMeterable EXCLUDES a presence session with NO meeting — there is no presence to reconcile against', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    // Detach it — a shape `open()` cannot produce today, but the LEFT JOIN must fail closed
+    // rather than meter money nothing can ever settle.
+    await db.update(creditSessions).set({ meetingId: null }).where(eq(creditSessions.id, id));
+
+    const ids = (await creditSessionsRepository.findMeterable()).map((row) => row.id);
+    expect(ids).not.toContain(id);
+  });
+
+  it('⚠ the join is scoped to `presence` ONLY — a live_capture session with no meeting still meters', async () => {
+    // The regression the `or(ne(durationSource,'presence'), …)` arm exists to prevent: every
+    // shipped `live_capture` session carries a NULL `meeting_id`, so an INNER join (or an
+    // unscoped predicate) would have silently stopped metering the entire shipped fleet.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+
+    const ids = (await creditSessionsRepository.findMeterable()).map((row) => row.id);
+    expect(ids).toContain(id);
+  });
+
+  // ── F4 — THE REAPER MUST NOT CANCEL THE NO-SHOW IT EXISTS TO SETTLE ─────────────────────
+  //
+  // ⚠⚠ `cancel()` IS A TRAP DOOR ON THIS PROVENANCE. A client no-show never calls `connect`,
+  // so the session sits `pending` — and this reaper's cutoff is anchored on `created_at`, which
+  // for a session opened at booking time is routinely stale before the meeting even starts.
+  // Cancelling it makes settlement throw `InvalidSessionTransitionError` AND makes
+  // `findPresenceUnsettled` (which excludes `cancelled`) unable to recover it: the expert is
+  // never paid for the no-show they waited out and `meetings.outcome` is never resolved.
+  it('⚠⚠ findStalePending EXCLUDES a stale pending PRESENCE session — cancelling it would strand the no-show', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    // Age it well past any cutoff the reaper would use.
+    await db
+      .update(creditSessions)
+      .set({ createdAt: new Date(BASE.getTime() - 24 * 60 * 60_000) })
+      .where(eq(creditSessions.id, id));
+    expect((await creditSessionsRepository.findById(id))?.status).toBe('pending');
+
+    const ids = (await creditSessionsRepository.findStalePending(meterAt(60))).map((r) => r.id);
+    expect(ids).not.toContain(id);
+
+    // …and it is still recoverable by the settlement backstop, which is the whole point.
+    const unsettled = (await creditSessionsRepository.findPresenceUnsettled(meterAt(60))).map(
+      (r) => r.id
+    );
+    expect(unsettled).toContain(id);
+  });
+
+  it('findStalePending STILL cancels a stale pending live_capture session — the shipped reaper is unchanged', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await db
+      .update(creditSessions)
+      .set({ createdAt: new Date(BASE.getTime() - 24 * 60 * 60_000) })
+      .where(eq(creditSessions.id, id));
+
+    const ids = (await creditSessionsRepository.findStalePending(meterAt(60))).map((r) => r.id);
+    expect(ids).toContain(id);
+  });
+
+  it('findWrappedIdle EXCLUDES a presence session — its terminator is the meeting sweep', async () => {
+    // Auto-ending it here would route it through `end()`, which finalizes at wall-clock
+    // minutes with no floor and no outcome — and would then block the real settlement.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await db
+      .update(creditSessions)
+      .set({ status: 'wrapped', wrappedAt: BASE })
+      .where(eq(creditSessions.id, id));
+
+    const ids = (await creditSessionsRepository.findWrappedIdle(meterAt(60))).map((row) => row.id);
+    expect(ids).not.toContain(id);
+  });
+});
+
+describe('creditSessionsRepository.findPresenceUnsettled (BAL-412 durability backstop)', () => {
+  const CUTOFF = meterAt(60);
+
+  it('finds a presence session whose meeting ENDED but which never settled', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    const id = await openPresence(ctx, meetingId);
+
+    const ids = (await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).map((r) => r.id);
+    expect(ids).toContain(id);
+  });
+
+  it('IGNORES an already-settled session — the marker is the exit condition', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.settleFromPresence(settlementInput(id, meetingId));
+
+    const ids = (await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).map((r) => r.id);
+    expect(ids).not.toContain(id);
+  });
+
+  it('IGNORES a CANCELLED session — its marker stays NULL forever and it would never drain', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.cancel(id);
+
+    const ids = (await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).map((r) => r.id);
+    expect(ids).not.toContain(id);
+  });
+
+  it('IGNORES a soft-deleted session, a live_capture session, and one with no meeting', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const deletedMeetingId = await endedMeeting(meterAt(20));
+    const deletedId = await openPresence(ctx, deletedMeetingId);
+    await db
+      .update(creditSessions)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditSessions.id, deletedId));
+
+    // A live_capture session on an ended meeting — finalized at hang-up, never from presence.
+    const liveCaptureMeetingId = await endedMeeting(meterAt(20));
+    const liveCaptureRes = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      meetingId: liveCaptureMeetingId,
+    });
+    if (!liveCaptureRes.ok) throw new Error(`expected open ok, got ${liveCaptureRes.code}`);
+    await creditSessionsRepository.cancel(liveCaptureRes.session.id);
+
+    // A presence session with NO meeting at all — structurally absent (INNER join).
+    const orphanRes = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+      durationSource: 'presence',
+    });
+    if (!orphanRes.ok) throw new Error(`expected open ok, got ${orphanRes.code}`);
+
+    const ids = (await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).map((r) => r.id);
+    expect(ids).not.toContain(deletedId);
+    expect(ids).not.toContain(liveCaptureRes.session.id);
+    expect(ids).not.toContain(orphanRes.session.id);
+  });
+
+  it('IGNORES a still-LIVE meeting, and one that ended AFTER the cutoff (the in-flight grace)', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const { meeting: live } = await meetingFactory({ values: { status: 'in_progress' } });
+    const liveId = await openPresence(ctx, live.id);
+    await creditSessionsRepository.cancel(liveId); // free the one-live-session-per-wallet gate
+
+    const recentMeetingId = await endedMeeting(meterAt(90)); // after CUTOFF
+    const recentId = await openPresence(ctx, recentMeetingId);
+
+    const ids = (await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).map((r) => r.id);
+    expect(ids).not.toContain(liveId);
+    expect(ids).not.toContain(recentId);
+  });
+
+  it('honours the batch bound', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    await openPresence(ctx, meetingId);
+
+    expect(await creditSessionsRepository.findPresenceUnsettled(CUTOFF, 0)).toHaveLength(0);
+  });
+});
+
+describe('creditSessionsRepository — legacy rows are unchanged by BAL-412', () => {
+  it('a live_capture session finalized the shipped way carries NULL on all three new columns', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    await creditSessionsRepository.end(id, { now: meterAt(3) });
+
+    const clientView = await creditSessionsRepository.findForClientMoneyView(id);
+    const expertView = await creditSessionsRepository.findForExpertView(id);
+    const adminView = await creditSessionsRepository.findForAdminView(id);
+
+    for (const view of [clientView, expertView, adminView]) {
+      expect(view?.actualMinutes).toBeNull();
+      expect(view?.billingFloorMinutes).toBeNull();
+      expect(view?.settlementShape).toBeNull();
+    }
+
+    // …and the shipped money block is byte-identical to what it was before the migration.
+    expect(clientView).toBeDefined();
+    if (clientView !== undefined) {
+      const block = toClientMoneyBlock(clientView);
+      expect(block.state).toBe('finalized');
+      expect(block.durationMinutes).toBe(3);
+      expect(block.amountAudMinor).toBe(3 * CLIENT_RATE_PER_MIN);
+      expect(block.finalizationPath).toBe('live_capture');
+    }
+  });
+
+  it('the CLIENT drawdown view carries the three new columns and STILL excludes the fee/PII set', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: 6, floorApplied: true })
+    );
+
+    const view = await creditSessionsRepository.findForClientView(id);
+    expect(view?.actualMinutes).toBe(6);
+    expect(view?.billingFloorMinutes).toBe(15);
+    expect(view?.settlementShape).toBe('no_show_client');
+
+    // The fee boundary is UNCHANGED — durations and labels are not figures.
+    const keys = Object.keys(view ?? {});
+    for (const banned of [
+      'expertRateMinorPerHour',
+      'expertRateMinorPerMinute',
+      'expertAccruedMinor',
+      'baloFeeBps',
+      'stripePaymentIntentId',
+    ]) {
+      expect(keys).not.toContain(banned);
+    }
   });
 });

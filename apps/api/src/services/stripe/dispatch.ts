@@ -268,7 +268,8 @@ async function markSettlementSettled(
   }
   const settleable = toSettleableSession(session);
   return [
-    () => publishSessionSettled(settleable, new Date()),
+    // BAL-412 (D7) — thread `settlementShape` when the settled session was presence-derived.
+    () => publishSessionSettled(settleable, new Date(), session.settlementShape ?? undefined),
     // BAL-379: an overdraft settlement lands the wallet at ~0 (< threshold) with an active
     // mandate ⇒ a legitimate between-session reload crossing. Best-effort, post-commit — a
     // trigger fault must never make Stripe retry the (already-committed) settlement webhook.

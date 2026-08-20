@@ -1,12 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockRecord, mockTrackServer, mockPublishPaymentCharged, mockPublishPayoutRecorded } =
-  vi.hoisted(() => ({
-    mockRecord: vi.fn(),
-    mockTrackServer: vi.fn(),
-    mockPublishPaymentCharged: vi.fn(),
-    mockPublishPayoutRecorded: vi.fn(),
-  }));
+const {
+  mockRecord,
+  mockTrackServer,
+  mockPublishPaymentCharged,
+  mockPublishPayoutRecorded,
+  mockPublishSessionMissedCall,
+} = vi.hoisted(() => ({
+  mockRecord: vi.fn(),
+  mockTrackServer: vi.fn(),
+  mockPublishPaymentCharged: vi.fn(),
+  mockPublishPayoutRecorded: vi.fn(),
+  mockPublishSessionMissedCall: vi.fn(),
+}));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -25,6 +31,7 @@ vi.mock('@balo/analytics/server', () => ({
 vi.mock('./notify.js', () => ({
   publishPaymentCharged: mockPublishPaymentCharged,
   publishPayoutRecorded: mockPublishPayoutRecorded,
+  publishSessionMissedCall: mockPublishSessionMissedCall,
 }));
 
 import type { CreditSession } from '@balo/db';
@@ -44,6 +51,14 @@ function session(overrides: Partial<CreditSession> = {}): CreditSession {
     overdraftSettledMinor: 0,
     graceEnteredAt: null,
     endedAt: NOW,
+    // BAL-412 — NULL by default (a `live_capture` session); overridden per-test for the
+    // presence-settled scenarios below.
+    actualMinutes: null,
+    settlementShape: null,
+    // BAL-412 (F14) — the SNAPSHOTTED floor predicate, NULL on a `live_capture` row. The
+    // analytics `floored:` key reads THIS column and never re-derives it from
+    // `connectedMinutes > actualMinutes` (see the Q1-clamp case below for why).
+    floorApplied: null,
     ...overrides,
   } as unknown as CreditSession;
 }
@@ -117,5 +132,133 @@ describe('finalizeBilling', () => {
     mockPublishPaymentCharged.mockRejectedValue(new Error('brevo down'));
     await expect(finalizeBilling(session(), 'live_capture', NOW)).resolves.toBeUndefined();
     expect(mockRecord).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('finalizeBilling — BAL-412 (ADR-1044 §7, D8) zero-settlement shapes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRecord.mockResolvedValue({ record: { id: 'payout_1' }, created: true });
+    // `clearAllMocks()` clears CALLS, not IMPLEMENTATIONS — an earlier describe's
+    // `mockRejectedValue` would otherwise bleed into these tests. Restore healthy defaults.
+    mockPublishPaymentCharged.mockResolvedValue(undefined);
+    mockPublishPayoutRecorded.mockResolvedValue(undefined);
+    mockPublishSessionMissedCall.mockResolvedValue(undefined);
+  });
+
+  it('missed_call: books the (zero) payout obligation, suppresses payment/payout notices, publishes the missed-call notice instead', async () => {
+    await finalizeBilling(
+      session({
+        connectedMinutes: 0,
+        expertAccruedMinor: 0,
+        actualMinutes: 0,
+        settlementShape: 'missed_call',
+        finalizationPath: 'presence',
+      }),
+      'presence',
+      NOW
+    );
+    // Obligation is STILL booked (zero-valued is a real fact, not a skip).
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ amountMinor: 0, durationMinutes: 0 })
+    );
+    expect(mockPublishPaymentCharged).not.toHaveBeenCalled();
+    expect(mockPublishPayoutRecorded).not.toHaveBeenCalled();
+    expect(mockPublishSessionMissedCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('abandoned_wait: books the obligation, publishes NOTHING (D2 — not a reliability judgement)', async () => {
+    await finalizeBilling(
+      session({
+        connectedMinutes: 0,
+        expertAccruedMinor: 0,
+        actualMinutes: 8,
+        settlementShape: 'abandoned_wait',
+        finalizationPath: 'presence',
+      }),
+      'presence',
+      NOW
+    );
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockPublishPaymentCharged).not.toHaveBeenCalled();
+    expect(mockPublishPayoutRecorded).not.toHaveBeenCalled();
+    expect(mockPublishSessionMissedCall).not.toHaveBeenCalled();
+  });
+
+  it('both zero shapes still fire the always-on analytics (a zero settlement is a real data point)', async () => {
+    await finalizeBilling(
+      session({
+        connectedMinutes: 0,
+        expertAccruedMinor: 0,
+        actualMinutes: 0,
+        floorApplied: false,
+        settlementShape: 'missed_call',
+        finalizationPath: 'presence',
+      }),
+      'presence',
+      NOW
+    );
+    const call = mockTrackServer.mock.calls.find((c) => c[0] === 'case_billing_finalized');
+    expect(call).toBeDefined();
+    expect(call?.[1]).toMatchObject({
+      actual_min: 0,
+      floored: false, // the core's answer for a zero shape: ruleMinutes(0) is not > actual(0)
+      settlement_outcome: 'missed_call',
+    });
+  });
+
+  it('held (non-zero presence shape) publishes the ordinary notices, not the missed-call one', async () => {
+    await finalizeBilling(
+      session({
+        connectedMinutes: 15,
+        expertAccruedMinor: 1_200,
+        actualMinutes: 6,
+        floorApplied: true,
+        settlementShape: 'held',
+        finalizationPath: 'presence',
+      }),
+      'presence',
+      NOW
+    );
+    expect(mockPublishPaymentCharged).toHaveBeenCalledTimes(1);
+    expect(mockPublishPayoutRecorded).toHaveBeenCalledTimes(1);
+    expect(mockPublishSessionMissedCall).not.toHaveBeenCalled();
+    const call = mockTrackServer.mock.calls.find((c) => c[0] === 'case_billing_finalized');
+    expect(call?.[1]).toMatchObject({
+      actual_min: 6,
+      floored: true, // the core's answer: ruleMinutes(15) > actualMinutes(6) — the floor bound
+      settlement_outcome: 'held',
+    });
+  });
+
+  // ⚠⚠ F14 — THE REGRESSION THIS COLUMN EXISTS FOR. The old code derived `floored` as
+  // `connectedMinutes > actualMinutes`, which is TRUE here (10 > 6) even though NO floor was
+  // involved: `ruleMinutes` was 6, and it was the Q1 NO-REFUND CLAMP that raised the billed
+  // figure to the 10 minutes already drawn. Reporting that as a floor application inflates
+  // D7's "how often does the minimum bind" metric with every overcharge — the two events are
+  // opposite in meaning and must never be counted together.
+  it('Q1 no-refund clamp is NOT reported as a floor application (floored reads the snapshot, never billed>actual)', async () => {
+    await finalizeBilling(
+      session({
+        connectedMinutes: 10, // clamped UP to minutes already drawn
+        expertAccruedMinor: 800,
+        actualMinutes: 6, // what presence actually justified
+        floorApplied: false, // the core: ruleMinutes(6) is NOT > actualMinutes(6)
+        settlementShape: 'held',
+        finalizationPath: 'presence',
+      }),
+      'presence',
+      NOW
+    );
+    const call = mockTrackServer.mock.calls.find((c) => c[0] === 'case_billing_finalized');
+    expect(call?.[1]).toMatchObject({ actual_min: 6, duration_min: 10, floored: false });
+  });
+
+  it('a live_capture session (actualMinutes NULL) omits the three optional analytics keys', async () => {
+    await finalizeBilling(session(), 'live_capture', NOW);
+    const call = mockTrackServer.mock.calls.find((c) => c[0] === 'case_billing_finalized');
+    expect(call?.[1]).not.toHaveProperty('actual_min');
+    expect(call?.[1]).not.toHaveProperty('floored');
+    expect(call?.[1]).not.toHaveProperty('settlement_outcome');
   });
 });
