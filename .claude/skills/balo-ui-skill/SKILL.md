@@ -195,25 +195,44 @@ Implemented from day one. Not optional.
 
 ### Upgrade Table: Instead of Plain Shadcn, Use This
 
-| Component                 | ❌ Plain Shadcn              | ✅ Use Instead (CLI install)                    | Why                                                                   |
-| ------------------------- | ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
-| **Text input**            | `Input`                      | `@shadcn-space/input-09` (floating label)       | Floating labels save vertical space, feel polished, animate on focus  |
-| **Input with validation** | `Input` + manual error       | `@shadcn-space/input-04` (validation feedback)  | Integrated error/success states with color transitions, not bolted on |
-| **Input with error**      | `Input` + manual error       | `@shadcn-space/input-14` (error state)          | Pre-styled error input with proper destructive colors                 |
-| **Required input**        | `Input` + asterisk           | `@shadcn-space/input-15` (required indicator)   | Integrated required asterisk with proper label styling                |
-| **Textarea**              | `Textarea`                   | `@shadcn-space/input-06` (character count)      | Shows remaining chars, essential for bios/descriptions with limits    |
-| **Password input**        | `Input type="password"`      | `@shadcn-space/input-04` (password + strength)  | Eye icon to show/hide, strength indicator — expected UX in 2026       |
-| **Search input**          | `Input` with icon            | `@shadcn-space/input-10` (clear button)         | Integrated clear button, works with search patterns                   |
-| **Input with addons**     | `Input` + wrapper div        | `@shadcn-space/input-08` (add-ons)              | https:// prefix, .com suffix — pre-built URL/domain inputs            |
-| **Cards**                 | `Card`                       | shadcnspace Card variants + Motion hover lift   | Hover shadow + subtle y-translate makes cards feel interactive        |
-| **Sidebar**               | Custom sidebar               | shadcnspace Sidebar blocks                      | Pre-built collapse, mobile drawer, nav grouping, polish               |
-| **Calendar/date picker**  | shadcn Calendar              | `@shadcn-space/calendar-03` (date + time slots) | Side-by-side date and time selection for booking flows                |
-| **Login/signup forms**    | shadcn Form + Input          | shadcnspace Auth blocks                         | Pre-built auth form layouts with social buttons, dividers, polish     |
-| **Pricing cards**         | `Card` with content          | shadcnspace Pricing blocks                      | Feature comparison, highlighted tier, toggle monthly/annual           |
-| **Stat/metric cards**     | `Card` with numbers          | shadcnspace Stats blocks                        | Trend indicators, sparklines, comparison badges                       |
-| **File upload**           | Custom `<input type="file">` | `@shadcn-space/file-upload-01`                  | Drag-and-drop zone, preview, progress bar                             |
-| **Empty states**          | Custom div with text         | shadcnspace Empty state blocks                  | Illustration, CTA button, consistent layout                           |
-| **Notification/alert**    | shadcn `Alert`               | shadcnspace Alert variants                      | Icon integration, dismiss animation, action buttons                   |
+| Component                 | ❌ Plain Shadcn              | ✅ Use Instead (CLI install)                      | Why                                                                                                             |
+| ------------------------- | ---------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Text input**            | `Input`                      | `@shadcn-space/input-09` (floating label)         | Floating labels save vertical space, feel polished, animate on focus                                            |
+| **Input with validation** | `Input` + manual error       | `@shadcn-space/input-04` (validation feedback)    | Integrated error/success states with color transitions, not bolted on                                           |
+| **Input with error**      | `Input` + manual error       | `@shadcn-space/input-14` (error state)            | Pre-styled error input with proper destructive colors                                                           |
+| **Required input**        | `Input` + asterisk           | `@shadcn-space/input-15` (required indicator)     | Integrated required asterisk with proper label styling                                                          |
+| **Textarea**              | `Textarea`                   | `@shadcn-space/input-06` (character count)        | Shows remaining chars, essential for bios/descriptions with limits                                              |
+| **Password input**        | `Input type="password"`      | `@shadcn-space/input-04` (password + strength)    | Eye icon to show/hide, strength indicator — expected UX in 2026                                                 |
+| **Search input**          | `Input` with icon            | `@shadcn-space/input-10` (clear button)           | Integrated clear button, works with search patterns                                                             |
+| **Input with addons**     | `Input` + wrapper div        | `@shadcn-space/input-08` (add-ons)                | https:// prefix, .com suffix — pre-built URL/domain inputs                                                      |
+| **Cards**                 | `Card`                       | shadcnspace Card variants + Motion hover lift     | Hover shadow + subtle y-translate makes cards feel interactive                                                  |
+| **Sidebar**               | Custom sidebar               | shadcnspace Sidebar blocks                        | Pre-built collapse, mobile drawer, nav grouping, polish                                                         |
+| **Calendar/date picker**  | vendored `ui/calendar.tsx`   | ⚠ **NOT** `@shadcn-space/calendar-03` — see below | `calendar-03` OVERWRITES the vendored primitive. Build the two-panel layout on top of `ui/calendar.tsx` instead |
+| **Login/signup forms**    | shadcn Form + Input          | shadcnspace Auth blocks                           | Pre-built auth form layouts with social buttons, dividers, polish                                               |
+| **Pricing cards**         | `Card` with content          | shadcnspace Pricing blocks                        | Feature comparison, highlighted tier, toggle monthly/annual                                                     |
+| **Stat/metric cards**     | `Card` with numbers          | shadcnspace Stats blocks                          | Trend indicators, sparklines, comparison badges                                                                 |
+| **File upload**           | Custom `<input type="file">` | `@shadcn-space/file-upload-01`                    | Drag-and-drop zone, preview, progress bar                                                                       |
+| **Empty states**          | Custom div with text         | shadcnspace Empty state blocks                    | Illustration, CTA button, consistent layout                                                                     |
+| **Notification/alert**    | shadcn `Alert`               | shadcnspace Alert variants                        | Icon integration, dismiss animation, action buttons                                                             |
+
+#### ⚠ Calendar/date picker — do not install `calendar-03`
+
+`apps/web/src/components/ui/calendar.tsx` is **already vendored** (shadcn wrapping
+`react-day-picker@10`, added by BAL-235) and is in live use by the expert settings Time-off
+date picker. `npx shadcn add @shadcn-space/calendar-03` writes to that same path, so following
+the old recommendation **overwrites a shipped primitive and breaks Time-off**.
+
+`calendar-03` is also a _block_, not a primitive: its value is a two-panel date + time-slot
+layout, and the slot column is exactly the part that has to be rebuilt against Balo's own
+availability data anyway. Almost nothing of it survives contact with the real feature.
+
+**Do instead:** compose the two panels yourself over the vendored `Calendar`. The worked
+example is `apps/web/src/components/availability/` (BAL-236) — month calendar left, slot list
+right, duration filter pills, and the ten async states — which is the shape any future booking
+picker should copy.
+
+This is the one row in the table above where the shadcnspace-first policy does **not** apply.
+Everywhere else it still does.
 
 ### When Plain Shadcn Is Fine
 
