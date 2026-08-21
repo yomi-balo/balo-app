@@ -1,0 +1,41 @@
+{
+  "probe": "event-create-custom-id",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/events/cmssf6bhg1pnwoi2k3ovlula8/«email-redacted»",
+    "authMode": "valid",
+    "body": {
+      "title": "BAL-393 spike — ignore",
+      "description": "Created by the BAL-393 throwaway harness. Safe to delete.\nhttps://balo.daily.co/spike-test-1",
+      "start": {
+        "dateTime": "2026-08-20T10:00:00Z",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-08-20T10:30:00Z",
+        "timeZone": "UTC"
+      },
+      "transparency": "opaque",
+      "privateExtendedProperties": {
+        "baloBookingId": "spike-test-1"
+      },
+      "id": "bal393spikecustomid001"
+    }
+  },
+  "durationMs": 551,
+  "response": {
+    "status": 409,
+    "statusText": "Conflict",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "5ac4b68ac87cae416448e1ed822fd85c",
+      "date": "Fri, 14 Aug 2026 07:28:32 GMT"
+    },
+    "bodyRaw": "{\"error\":409,\"message\":\"The requested identifier already exists.\",\"requestId\":\"5ac4b68ac87cae416448e1ed822fd85c\"}",
+    "bodyParsed": {
+      "error": 409,
+      "message": "The requested identifier already exists.",
+      "requestId": "5ac4b68ac87cae416448e1ed822fd85c"
+    }
+  }
+}

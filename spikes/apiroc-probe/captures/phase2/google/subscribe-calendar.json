@@ -1,0 +1,28 @@
+{
+  "probe": "subscribe-calendar",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/calendarSubscriptions/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": {
+      "webhookUrl": "https://recall-needs-founder-bat.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/all-calendars",
+      "subscriptionType": "calendar"
+    }
+  },
+  "durationMs": 1745,
+  "response": {
+    "status": 500,
+    "statusText": "Internal Server Error",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "dbecfe42683ee4ea81864064e546cc19",
+      "date": "Fri, 14 Aug 2026 08:35:14 GMT"
+    },
+    "bodyRaw": "{\"error\":\"InternalServerError\",\"message\":\"init[\\\"status\\\"] must be in the range of 200 to 599, inclusive.\",\"requestId\":\"dbecfe42683ee4ea81864064e546cc19\"}",
+    "bodyParsed": {
+      "error": "InternalServerError",
+      "message": "init[\"status\"] must be in the range of 200 to 599, inclusive.",
+      "requestId": "dbecfe42683ee4ea81864064e546cc19"
+    }
+  }
+}

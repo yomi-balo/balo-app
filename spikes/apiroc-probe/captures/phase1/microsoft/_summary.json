@@ -1,0 +1,80 @@
+{
+  "provider": "MICROSOFT",
+  "capturedAt": "2026-08-14",
+  "calendarId": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+  "findings": {
+    "account": {
+      "accountStatus": "ACTIVE",
+      "credentialStatus": "ACTIVE",
+      "expiresAt": "2026-08-14T08:28:37.250Z",
+      "scopes": ["openid", "email", "profile", "User.Read", "Calendars.ReadWrite"]
+    },
+    "calendars": {
+      "count": 3,
+      "primaryId": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+      "isPrimaryReliable": true,
+      "fields": [
+        "id",
+        "name",
+        "readOnly",
+        "inviteEmail",
+        "isPrimary",
+        "isShared",
+        "allowedOnlineMeetingProviders",
+        "defaultOnlineMeetingProvider"
+      ]
+    },
+    "freeBusy-before": {
+      "status": 200,
+      "body": [
+        {
+          "calendarId": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+          "busySlots": []
+        }
+      ]
+    },
+    "event-create": {
+      "customIdHonoured": false,
+      "customIdSilentlyIgnored": true,
+      "eventId": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA",
+      "echoedPrivateProps": {}
+    },
+    "metadata-roundtrip": {
+      "status": 200,
+      "matched": 1,
+      "foundOurEvent": true
+    },
+    "freeBusy-after": {
+      "status": 200,
+      "body": [
+        {
+          "calendarId": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+          "busySlots": [
+            {
+              "start": {
+                "dateTime": "2026-08-20T10:00:00.000Z",
+                "timeZone": "Etc/UTC"
+              },
+              "end": {
+                "dateTime": "2026-08-20T10:30:00.000Z",
+                "timeZone": "Etc/UTC"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "event-update-delete": {
+      "updateStatus": 200,
+      "privatePropsSurvivePut": {},
+      "deleteStatus": 200
+    },
+    "paging-sync-tokens": {
+      "defaultPageSize": 0,
+      "hasNextPageToken": false,
+      "hasNextSyncToken": false,
+      "envelopeKeys": ["data"],
+      "deltaStatus": null
+    }
+  }
+}
