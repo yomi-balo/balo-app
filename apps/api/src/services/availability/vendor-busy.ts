@@ -59,6 +59,15 @@ import type { FreeBusySlot } from '@apiroc/unified-calendar-api-node-sdk';
 import { createLogger } from '@balo/shared/logging';
 import { fromZonedTime } from 'date-fns-tz';
 import { callApiroc, getApirocClient } from '../../lib/apiroc/index.js';
+// ⚠ FROM THE SUBMODULES, NOT THE BARREL, and deliberately (precedent:
+// `services/calendar/credential-status.ts` imports `reconnect.js` the same way).
+// `vendor-busy.test.ts` mocks the whole `lib/apiroc/index.js` barrel down to
+// `callApiroc` + `getApirocClient`; pulling these from there would make them
+// `undefined` under test, so `err instanceof ApirocError` would throw instead of
+// classifying. Importing the real modules keeps the REAL classifier in the tests,
+// which is the whole point — the retry policy is only as good as `classifyRetry`.
+import { ApirocError } from '../../lib/apiroc/errors.js';
+import { classifyRetry } from '../../lib/apiroc/retry.js';
 import type { BusyBlock } from './types.js';
 
 const log = createLogger('vendor-busy');
@@ -171,7 +180,7 @@ function toBusyBlocks(slot: FreeBusySlot): { blocks: BusyBlock[]; droppedCount: 
  * across accounts below is `Promise.allSettled` over SEPARATE `callApiroc` invocations, never
  * a `Promise.all` wrapped inside one.
  */
-async function fetchBusyForTarget(
+async function fetchBusyOnce(
   target: { endUserAccountId: string; calendarIds: string[] },
   from: Date,
   to: Date
@@ -199,6 +208,91 @@ async function fetchBusyForTarget(
     );
   }
   return parsed.flatMap((p) => p.blocks);
+}
+
+/**
+ * BAL-470 — how many times ONE account's `freeBusy.get` is attempted. `2` = the original call
+ * plus a single retry. Not configurable: this is a request path the booking gate awaits, so
+ * the budget is a product decision, not a knob.
+ */
+export const FREE_BUSY_MAX_ATTEMPTS = 2;
+
+/**
+ * Pause between the two attempts. Small and bounded — it is only ever paid on a failure, and
+ * only once, but it is real latency on `POST /meetings`, so it buys a struggling backend a
+ * breath without meaningfully changing the p99 of a healthy request.
+ */
+export const FREE_BUSY_RETRY_DELAY_MS = 200;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * BAL-470 — IS THIS FAILURE WORTH ONE MORE ATTEMPT, ON A REQUEST PATH?
+ *
+ * ⚠⚠ `classifyRetry` IS A *JOB* POLICY AND THIS IS NOT A JOB. It is the single source of
+ * truth for whether a failure is transient — that is exactly why it is consulted here rather
+ * than re-deciding transience with a second, drifting list of `kind`s. But its answer for
+ * `rate_limited` is "retry after `afterMs`", where `afterMs` is the vendor's `Retry-After` or
+ * `DEFAULT_RATE_LIMIT_BACKOFF_MS = 5000`. Honouring that INLINE would park a request the
+ * booking gate is awaiting for ≥5 seconds, and would spend a retry against a rate limit the
+ * apiroc skill records as UNMEASURED ("the sandbox rate-limit probe was never run").
+ *
+ * So the request path takes only the decisions that are safe to act on immediately: `retry`
+ * is true AND the decision carries NO `afterMs`. By construction that admits `network` and
+ * `server_error` and excludes `rate_limited` — and it does so by reading `classifyRetry`'s
+ * own output shape rather than by re-listing kinds, so a future kind added there with a
+ * backoff is excluded here automatically, and one added without a backoff is included.
+ *
+ * ⚠ A NON-`ApirocError` IS NEVER RETRIED. The other throw in `fetchBusyOnce` is a plain
+ * `Error` for unparseable busy slots — parsing is deterministic, so a second identical
+ * response would be dropped identically. Retrying it would double the vendor call for a
+ * guaranteed-identical failure.
+ */
+export function isImmediatelyRetryable(err: unknown): boolean {
+  if (!(err instanceof ApirocError)) return false;
+  const decision = classifyRetry(err);
+  return decision.retry && decision.afterMs === undefined;
+}
+
+/**
+ * One account's busy read, with a bounded single retry for transient failures (BAL-470).
+ *
+ * Before this, ANY first-attempt rejection became `VendorBusyUnavailableError` for the whole
+ * expert — so one dropped connection blanked the public availability picker AND made the
+ * expert briefly un-bookable, because the booking gate fails closed on the same error.
+ *
+ * ⚠ The retry is PER ACCOUNT and the fan-out over accounts is already concurrent, so the
+ * worst-case added latency is ONE extra round-trip plus `FREE_BUSY_RETRY_DELAY_MS` — not N of
+ * them. ⚠ Each attempt is its own `callApiroc` invocation, which is required: that function's
+ * ONE-fallible-call contract is per-invocation, and reusing one sink across two attempts
+ * would attribute the first attempt's captured evidence to the second attempt's error.
+ */
+async function fetchBusyForTarget(
+  target: { endUserAccountId: string; calendarIds: string[] },
+  from: Date,
+  to: Date
+): Promise<BusyBlock[]> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= FREE_BUSY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchBusyOnce(target, from, to);
+    } catch (err: unknown) {
+      lastError = err;
+      const isLastAttempt = attempt === FREE_BUSY_MAX_ATTEMPTS;
+      if (isLastAttempt || !isImmediatelyRetryable(err)) break;
+      log.warn(
+        {
+          endUserAccountId: target.endUserAccountId,
+          attempt,
+          maxAttempts: FREE_BUSY_MAX_ATTEMPTS,
+          kind: err instanceof ApirocError ? err.kind : undefined,
+        },
+        'apiroc_busy_read_retrying'
+      );
+      await sleep(FREE_BUSY_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
 }
 
 /**

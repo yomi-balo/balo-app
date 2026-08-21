@@ -25,7 +25,17 @@ vi.mock('../../lib/apiroc/index.js', () => ({
   getApirocClient: () => mockGetApirocClient(),
 }));
 
-import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
+import {
+  vendorBusyProvider,
+  VendorBusyUnavailableError,
+  isImmediatelyRetryable,
+  FREE_BUSY_MAX_ATTEMPTS,
+} from './vendor-busy.js';
+// ⚠ The REAL error class and the REAL classifier — `vendor-busy.ts` imports them from
+// the submodules precisely so the barrel mock above cannot stub them out. If these ever
+// resolve to `undefined`, every `instanceof` below silently stops classifying.
+import { ApirocError } from '../../lib/apiroc/errors.js';
+import type { ApirocFailureKind } from '../../lib/apiroc/errors.js';
 
 const EXPERT_ID = '66666666-6666-4666-8666-666666666666';
 const FROM = new Date('2026-09-07T00:00:00.000Z');
@@ -397,6 +407,107 @@ describe('vendorBusyProvider.listBusyBlocks', () => {
       } finally {
         process.env.TZ = originalTz;
       }
+    });
+  });
+
+  // ── BAL-470 — transient-failure retry on the free/busy path ──────────────
+  describe('transient-failure retry (BAL-470)', () => {
+    function apirocError(kind: ApirocFailureKind, retryAfterSeconds?: number): ApirocError {
+      return new ApirocError({ kind, operation: 'freeBusy.get', retryAfterSeconds });
+    }
+
+    /**
+     * ⚠ THE POLICY, STATED AS A TABLE. `network` and `server_error` are the two kinds
+     * `classifyRetry` marks retryable WITHOUT a backoff, so they are the only two safe to act
+     * on inline. `rate_limited` is retryable but always carries `afterMs` (a vendor
+     * `Retry-After`, else the 5s default) — parking a request the booking gate awaits for
+     * ≥5s is not a resilience win, it is an outage with extra steps.
+     */
+    it.each([
+      ['network', true],
+      ['server_error', true],
+      ['rate_limited', false],
+      ['unauthorized', false],
+      ['forbidden', false],
+      ['not_found', false],
+      ['validation', false],
+      ['unknown', false],
+    ] as ReadonlyArray<readonly [ApirocFailureKind, boolean]>)(
+      'isImmediatelyRetryable(%s) === %s',
+      (kind, expected) => {
+        expect(isImmediatelyRetryable(apirocError(kind))).toBe(expected);
+      }
+    );
+
+    it('does NOT retry a rate_limited failure even when Retry-After is small', () => {
+      // Even a 1s Retry-After is a backoff, and backoffs belong to jobs, not request paths.
+      expect(isImmediatelyRetryable(apirocError('rate_limited', 1))).toBe(false);
+    });
+
+    it('does NOT retry a non-Apiroc error (the unparseable-slot throw)', () => {
+      expect(isImmediatelyRetryable(new Error('3 unparseable busy slot(s)'))).toBe(false);
+    });
+
+    it('a single transient network blip no longer blanks availability', async () => {
+      mockListBusyReadTargets.mockResolvedValue([readableTarget()]);
+      mockGetApirocClient.mockReturnValue({ freeBusy: { get: mockFreeBusyGet } });
+      mockCallApiroc
+        .mockRejectedValueOnce(apirocError('network'))
+        .mockImplementationOnce((_op: string, fn: () => Promise<unknown>) => fn());
+      mockFreeBusyGet.mockResolvedValue([
+        {
+          busySlots: [
+            {
+              start: { dateTime: '2026-09-07T09:00:00', timeZone: 'UTC' },
+              end: { dateTime: '2026-09-07T10:00:00', timeZone: 'UTC' },
+            },
+          ],
+        },
+      ]);
+
+      const result = await vendorBusyProvider.listBusyBlocks(EXPERT_ID, FROM, TO);
+
+      expect(result).toEqual([
+        { startAt: new Date('2026-09-07T09:00:00Z'), endAt: new Date('2026-09-07T10:00:00Z') },
+      ]);
+      // ⚠ Two SEPARATE callApiroc invocations, not one reused sink — the one-fallible-call
+      // contract is per-invocation, and a shared sink would attribute attempt 1's captured
+      // evidence to attempt 2's error.
+      expect(mockCallApiroc).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * ⚠ THE BUDGET IS PINNED AS A LITERAL BELOW, NOT AS `FREE_BUSY_MAX_ATTEMPTS`. Asserting
+     * the call count equals the constant is true by construction — raise the constant to 5
+     * and the assertion still passes while the booking gate quietly waits through five vendor
+     * round-trips. The literals here are the actual product decision; the separate assertion
+     * at the end ties the exported constant to them.
+     *
+     * `server_error` is the only kind that earns a second call. `rate_limited` is retryable
+     * per `classifyRetry` but carries a backoff, and a backoff belongs to a job, not to a
+     * request the booking gate is awaiting. `unauthorized` is a credential problem — a
+     * retry cannot fix it, it needs a reconnect.
+     */
+    it.each([
+      ['server_error — transient, earns the retry', 'server_error', undefined, 2],
+      ['rate_limited — retryable but backed off, so NOT inline', 'rate_limited', 30, 1],
+      ['unauthorized — permanent, needs a reconnect not a retry', 'unauthorized', undefined, 1],
+    ] as ReadonlyArray<readonly [string, ApirocFailureKind, number | undefined, number]>)(
+      'a persistent %s failure makes exactly %4$s vendor call(s)',
+      async (_label, kind, retryAfterSeconds, expectedCalls) => {
+        mockListBusyReadTargets.mockResolvedValue([readableTarget()]);
+        mockGetApirocClient.mockReturnValue({ freeBusy: { get: mockFreeBusyGet } });
+        mockCallApiroc.mockRejectedValue(apirocError(kind, retryAfterSeconds));
+
+        await expect(vendorBusyProvider.listBusyBlocks(EXPERT_ID, FROM, TO)).rejects.toBeInstanceOf(
+          VendorBusyUnavailableError
+        );
+        expect(mockCallApiroc).toHaveBeenCalledTimes(expectedCalls);
+      }
+    );
+
+    it('the exported budget is 2 — one call plus one retry, and no more', () => {
+      expect(FREE_BUSY_MAX_ATTEMPTS).toBe(2);
     });
   });
 });
