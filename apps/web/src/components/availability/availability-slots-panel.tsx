@@ -191,6 +191,14 @@ export function AvailabilitySlotsPanel({
                     className="text-primary h-4 w-4"
                     checked={isChosen}
                     onChange={() => onChooseDuration(d)}
+                    /*
+                     * ⚠ EXPLICIT, not redundant. The visible text lives two <span> levels inside
+                     * the <label>, which is deeper than `label-has-associated-control` will look
+                     * (SonarCloud S6853) — and a screen reader announcing a bare radio here would
+                     * say nothing useful. Leads with "{d} minutes" so it reads naturally and so
+                     * the existing getByLabelText(/N minutes/) queries still resolve.
+                     */
+                    aria-label={`${d} minutes, ${formatSlotTime(selectedSlot.start, viewerTimezone)} to ${formatSlotTime(end, viewerTimezone)}`}
                   />
                   <span className="flex flex-col">
                     <span

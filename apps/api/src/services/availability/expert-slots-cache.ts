@@ -41,7 +41,7 @@ export const AVAILABILITY_BREAKER_TTL_SECONDS = 15;
 type CacheableStatus = 'ok' | 'not_configured' | 'no_slots';
 
 /**
- * Compact wire shape for the Redis value — a 60-day grid is ~1,400 slots, so short keys
+ * Compact wire shape for the Redis value — a 14-day grid is ~330 slots, so short keys
  * matter. Version-prefixed key (`v: 1`) so a payload-shape change self-invalidates rather
  * than deserializing into the wrong shape.
  */

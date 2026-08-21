@@ -19,9 +19,11 @@ export interface RateLimitPreHandlerOptions {
  * module-private `enforceRateLimit` (BAL-236) — a second near-identical copy for the new
  * availability route would have been a guaranteed jscpd duplication hit.
  *
- * ⚠ Preserve the `Promise<boolean>` return exactly — `true` means the request was already
- * handled (429 or, when `failOpen: false`, 503) and the caller MUST stop; `false` means
- * continue. This is behaviour-identical to `search.ts`'s original for that existing caller.
+ * The `Promise<boolean>` return (`true` = already answered with a 429, or a 503 when
+ * `failOpen: false`) is retained because the unit tests assert on it directly, but it is
+ * INERT in production: both callers register this as a Fastify `preHandler`, and Fastify
+ * short-circuits the lifecycle as soon as the reply is sent — nothing reads the value. It
+ * is not a contract a caller must honour; sending the reply is what stops the request.
  *
  * Two fail modes, by `failOpen`:
  *   - `failOpen: true` — a Redis error lets the request through uncounted. Appropriate when

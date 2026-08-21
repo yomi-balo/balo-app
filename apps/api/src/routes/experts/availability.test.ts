@@ -98,23 +98,22 @@ describe('GET /experts/:expertProfileId/availability', () => {
     expect(mockIsPubliclyVisible).not.toHaveBeenCalled();
   });
 
-  it('400 on days=0', async () => {
-    const res = await inject(EXPERT_ID, '?days=0');
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('400 on days=15 — one past the 14-day advertise horizon', async () => {
-    const res = await inject(EXPERT_ID, `?days=${MAX_AVAILABILITY_WINDOW_DAYS + 1}`);
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('400 on days=61 — the old third horizon is no longer accepted', async () => {
-    const res = await inject(EXPERT_ID, '?days=61');
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('400 on days=abc', async () => {
-    const res = await inject(EXPERT_ID, '?days=abc');
+  /**
+   * ⚠ REJECTS, never clamps. An out-of-range `days` is a 400, not a silently narrowed window —
+   * a caller must never believe it received the horizon it asked for. `days=15` and `days=61`
+   * are the two boundary cases that matter: one past the advertise horizon, and the old
+   * third horizon the 60→14 cut retired.
+   */
+  it.each([
+    ['days=0 — below the floor', '?days=0'],
+    [
+      `days=${MAX_AVAILABILITY_WINDOW_DAYS + 1} — one past the advertise horizon`,
+      `?days=${MAX_AVAILABILITY_WINDOW_DAYS + 1}`,
+    ],
+    ['days=61 — the old third horizon is no longer accepted', '?days=61'],
+    ['days=abc — not a number', '?days=abc'],
+  ])('400 on %s', async (_label, query) => {
+    const res = await inject(EXPERT_ID, query);
     expect(res.statusCode).toBe(400);
   });
 

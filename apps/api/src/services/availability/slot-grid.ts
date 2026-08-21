@@ -112,7 +112,7 @@ export function alignToLocalSlotBoundary(instant: Date, timezone: string): Date 
     (zoned.getMinutes() % SLOT_STEP_MINUTES) * 60_000 +
     zoned.getSeconds() * 1_000 +
     zoned.getMilliseconds();
-  if (intoStepMs === 0) return new Date(instant.getTime());
+  if (intoStepMs === 0) return new Date(instant);
   return new Date(instant.getTime() + (SLOT_STEP_MINUTES * 60_000 - intoStepMs));
 }
 

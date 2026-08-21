@@ -45,22 +45,19 @@ describe('useExpertAvailability', () => {
     expect(result.current.view).toEqual({ kind: 'loading' });
   });
 
-  it('maps a 404 to not_published', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(404, {}));
+  /**
+   * ⚠ 503 → `unavailable`, NOT `error`, and that distinction is the point: a fail-closed vendor
+   * read must never render as "no availability", or a client reads a broken calendar token as a
+   * booked-solid expert and leaves. 500 is the catch-all that proves `unavailable` is reserved.
+   */
+  it.each([
+    [404, 'not_published'],
+    [503, 'unavailable'],
+    [500, 'error'],
+  ])('maps a %i to %s', async (status, kind) => {
+    fetchMock.mockResolvedValue(jsonResponse(status, {}));
     const { result } = renderHook(() => useExpertAvailability(EXPERT_ID, 14));
-    await waitFor(() => expect(result.current.view).toEqual({ kind: 'not_published' }));
-  });
-
-  it('maps a 503 to unavailable', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(503, {}));
-    const { result } = renderHook(() => useExpertAvailability(EXPERT_ID, 14));
-    await waitFor(() => expect(result.current.view).toEqual({ kind: 'unavailable' }));
-  });
-
-  it('maps any other non-ok status to error', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(500, {}));
-    const { result } = renderHook(() => useExpertAvailability(EXPERT_ID, 14));
-    await waitFor(() => expect(result.current.view).toEqual({ kind: 'error' }));
+    await waitFor(() => expect(result.current.view).toEqual({ kind }));
   });
 
   it('rejects a body with an unrecognised status as error (isAvailabilityOkBody guard)', async () => {

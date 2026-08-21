@@ -84,7 +84,13 @@ export interface ExpertAvailabilityResponse {
   generatedAt: string;
   /** UTC ISO — far edge of the returned window. */
   windowEnd: string;
-  /** The CLAMPED look-ahead actually served (never the raw query value). */
+  /**
+   * The look-ahead actually served. ⚠ NOT a clamp of the request — the route's Zod schema
+   * REJECTS an out-of-range `days` with a 400 rather than silently narrowing it, so a
+   * caller never gets a smaller window than it asked for without being told. This echoes
+   * the accepted value back so the "next {n} days" copy stays honest when `days` is omitted
+   * and the default applies.
+   */
   days: number;
   slots: AvailabilitySlotDto[];
 }
