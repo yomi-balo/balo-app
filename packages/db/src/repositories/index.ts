@@ -520,6 +520,7 @@ export {
 export {
   meetingContextsRepository,
   MeetingAdminContextExistsError,
+  MeetingPrimaryContextRepointedError,
   type ConsultationTimestamps,
 } from './meeting-contexts';
 export {

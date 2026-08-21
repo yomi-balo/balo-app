@@ -538,6 +538,13 @@ export async function softDeleteProjectionTx(
  * What this guard DOES still catch — and the reason it exists — is a widened set that names
  * a DIFFERENT single expert, or TWO experts. Those are new divergences the attach itself
  * introduces, and both throw `MeetingExpertAmbiguousError` below.
+ *
+ * ⚠ ITS SIBLING IS NOT FOLDED IN HERE, DELIBERATELY (BAL-469). `attach` also runs
+ * `assertPrimaryContextUnchangedTx` (`../meeting-contexts.ts`), which refuses an insert that
+ * REPOINTS the meeting's primary context — and therefore the company it names. Do NOT move
+ * that check into this function to "keep the attach guards together": this one returns early
+ * when the meeting has no live projection row, so an UNBOOKED meeting would inherit the early
+ * return and be left entirely un-gated. Two guards, two scopes, one transaction.
  */
 export async function assertProjectionExpertUnchangedTx(
   exec: DbExecutor,

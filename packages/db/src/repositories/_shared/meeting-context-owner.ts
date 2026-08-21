@@ -110,25 +110,49 @@ export interface MeetingClientCompany {
  * ⚠ `expectedExpertProfileId` (BAL-416 fix round 1, S2) — OPTIONAL, but every current caller
  * passes it. `meeting_contexts.context_id` has NO FK, NO CHECK and NO RLS, so nothing at the
  * data layer ties a walked context back to the expert whose consultations were listed; the
- * caller's `meetingIds` scoping only bounds the MEETING, not the CONTEXT a future
- * `attach` could repoint. When supplied, a meeting whose resolved
- * `owner.expertProfileId` does not match is OMITTED — the same fail-closed omission the
- * ambiguity and soft-delete arms already use, never a thrown error.
+ * caller's `meetingIds` scoping only bounds the MEETING, not the CONTEXT — nothing at the data
+ * layer ties a walked context to the expert whose consultations were listed (see the two
+ * paragraphs below for what `attach` can and cannot do). When supplied, a meeting whose
+ * resolved `owner.expertProfileId` does not match is OMITTED — the same fail-closed omission
+ * the ambiguity and soft-delete arms already use, never a thrown error.
  *
- * ⚠ THIS PARAMETER DOES NOT CLOSE THE `attach` HAZARD IT WAS ADDED FOR — STILL OPEN (fix
- * round 2, R6). The scenario the S2 residual named was specific:
- * `meetingContextsRepository.attach` runs `assertProjectionExpertUnchangedTx`, a COHERENCE
- * check (does the projected expert stay the same?), not a TENANCY check (does the projected
- * COMPANY stay the same?). That lets a tier-100 `case` context attach to a meeting created
- * from a tier-50 `project_discovery` while PRESERVING the expert but FLIPPING
- * `selectPrimaryMeetingContext`'s winner — and therefore the company this function names.
- * Comparing `owner.expertProfileId` here does not catch that: it is, by construction of the
- * scenario, unchanged. The parameter still earns its keep (it DOES catch a context repointed
- * to a wholly different expert) and the practical disclosure risk of the uncaught flip is
- * low today (both contexts name companies the SAME expert has a live relationship with, so
- * nothing crosses a party boundary) — but `attach` has no production caller yet, and this
- * must be closed (compare the company too, or gate `attach` on tier-monotonicity) before
- * BAL-410/BAL-411 give it its first one.
+ * ⚠ THE `attach` HAZARD THIS PARAMETER COULD NOT CLOSE IS NOW CLOSED FOR A SINGLE `attach`
+ * CALL (BAL-469; fix round 2, R6). The scenario was: `meetingContextsRepository.attach` ran
+ * only `assertProjectionExpertUnchangedTx`, a COHERENCE check (does the projected EXPERT stay
+ * the same?) and never a check on the ANCHOR — so a tier-100 `case` context could attach to a
+ * meeting created from a tier-50 `project_discovery`, PRESERVE the expert, and FLIP
+ * `selectPrimaryMeetingContext`'s winner, and therefore the company this function names.
+ * Comparing `owner.expertProfileId` here never caught it: the expert is unchanged by
+ * construction of the scenario.
+ *
+ * `attach` now also runs `assertPrimaryContextUnchangedTx`, which refuses any single insert
+ * that REPOINTS the primary from one resolvable context to a different one. Because the
+ * owning company is a pure function of the primary context, no ONE `attach` can move a meeting
+ * from naming company X to naming company Y. An attach that makes the primary AMBIGUOUS is
+ * still allowed and is still safe HERE: `resolveOwnerEntry` omits an ambiguous meeting, so
+ * this function names no company at all rather than the wrong one.
+ *
+ * ⚠ `detach` IS A SEPARATE WRITER OF `meeting_contexts` AND CARRIES NO SUCH GUARD — so the
+ * per-call guarantee above does NOT compose into a per-meeting one. Detaching the row that is
+ * currently primary can repoint it on its own (the tier-50 row underneath is promoted), and an
+ * `attach`-to-ambiguous followed by a `detach` of the original winner reaches the exact X → Y
+ * flip AC 1 forbids, in two individually-permitted steps. See `detach`'s own docblock in
+ * `meeting-contexts.ts` for the full residual; it is closed for `attach` alone, not for the
+ * meeting's lifecycle.
+ *
+ * ⚠ NOR DOES IT CLOSE MEMBERSHIP, ONLY THE ANCHOR. `listMeetingsForContext` matches ANY live
+ * context row regardless of tier, so an `attach` of a lower-tier context under a victim's
+ * tier-100 primary still succeeds (it never repoints) and still hands the attacher a reverse
+ * read of that victim meeting through the context they legitimately hold. That obligation is
+ * the caller's `hasCapability` check, stated on `attach`'s own docblock — this guard was never
+ * meant to, and does not, close it either.
+ *
+ * ⚠ THE PARAMETER STILL EARNS ITS KEEP AND IS NOT MADE REDUNDANT BY THAT GUARD. It is a
+ * READ-side defence over rows `attach` never wrote: raw inserts, fixtures, pre-BAL-469 rows,
+ * and any future second writer of `meeting_contexts` — including `detach`, per the residual
+ * above. `context_id` still has NO FK, NO CHECK and NO RLS, so nothing at the data layer ties
+ * a walked context back to the expert whose consultations were listed. Every current caller
+ * passes it; keep passing it.
  */
 type OwnerEntry = { meetingId: string; companyId: string };
 

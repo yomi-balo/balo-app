@@ -535,4 +535,57 @@ describe('DateOverrideAddPopover', () => {
       expect.anything()
     );
   });
+
+  // ── BAL-469 A — a pending timer invalidates the PRIOR range's report ───────────────────
+
+  it('a DIFFERENT range submitted inside the debounce window is checked FRESH — the prior range’s clean report never gates it (BAL-469 A)', async () => {
+    const onCreate = vi.fn().mockResolvedValue(true);
+    const onCheckConflicts = vi
+      .fn()
+      .mockResolvedValueOnce({ ...report(), conflictCount: 0, conflicts: [] }) // range A — CLEAN
+      .mockResolvedValue(report()); // range B — 2 conflicts
+    const user = userEvent.setup();
+
+    render(
+      <DateOverrideAddPopover
+        onCreate={onCreate}
+        onCheckConflicts={onCheckConflicts}
+        expertProfileId={EXPERT_ID}
+      />
+    );
+    await openPopover(user);
+
+    // Range A is checked to COMPLETION, so `requestRef` really holds A's zero-conflict entry.
+    await user.click(screen.getByRole('button', { name: 'pick-2026-12-24' }));
+    await waitFor(() => expect(onCheckConflicts).toHaveBeenCalledTimes(1));
+
+    // Range B is picked and submitted INSIDE its own 250ms window. The debounce effect does
+    // NOT clear `requestRef` on a range CHANGE, so A's entry is still sitting there.
+    await user.click(screen.getByRole('button', { name: 'pick-2026-12-25' }));
+    // ⚠ PRECONDITION GUARD, NOT DECORATION. If B's debounce had already fired, the effect
+    // would have armed B's check by itself and this test would pass against the UNFIXED code.
+    // Asserting the count HERE turns that into a loud failure instead of a silent false green.
+    // Do NOT "fix" a slow run by awaiting a second call before submitting — that is exactly
+    // the vacuous version of this test.
+    expect(onCheckConflicts).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: /block these dates/i }));
+
+    // ⚠ THIS IS THE ASSERTION THAT FAILS AGAINST THE OLD CODE: pre-fix the `??` short-circuit
+    // reused A's CLEAN report, so the warning never mounted and the block committed unchecked.
+    expect(
+      await screen.findByText('2 sessions are already booked in these dates')
+    ).toBeInTheDocument();
+    expect(onCreate).not.toHaveBeenCalled();
+    // …and the check that ran was for the SUBMITTED range, not the prior one.
+    expect(onCheckConflicts).toHaveBeenNthCalledWith(2, {
+      startDate: '2026-12-25',
+      endDate: '2026-12-25',
+    });
+    expect(mockTrack).toHaveBeenCalledWith('availability_override_conflict_detected', {
+      conflict_count: 2,
+      duration_days: 1,
+      expert_profile_id: EXPERT_ID,
+    });
+  });
 });
