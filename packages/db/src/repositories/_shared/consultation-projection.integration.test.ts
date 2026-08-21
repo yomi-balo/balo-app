@@ -519,6 +519,15 @@ describe('consultation projection — lifecycle', () => {
 // ── The `attach` guard — the second door ────────────────────────────────
 
 describe('consultation projection — the attach guard', () => {
+  // `attach`'s SIBLING guard — `assertPrimaryContextUnchangedTx` (BAL-469), which refuses a
+  // REPOINT of the meeting's primary context — is pinned in `meeting-contexts.integration.test.ts`
+  // and `_shared/meeting-context-owner.integration.test.ts`, not here. Every test below was
+  // walked against it — cited by TITLE, not by line, because line numbers drift on the next
+  // edit (they already have once): `'attaching a context naming a DIFFERENT expert is REFUSED
+  // and rolls the attach back'` is ambiguous-after (allowed), `'attaching a context naming the
+  // SAME expert is allowed'` is a lower-tier attach (unchanged winner), `'attach NEVER creates
+  // a projection row — it is not a booking path'` establishes a primary on an admin-only
+  // meeting (none → ok).
   it('attaching a context naming a DIFFERENT expert is REFUSED and rolls the attach back', async () => {
     const { engagement: booked } = await caseEngagementFactory();
     const { engagement: other } = await caseEngagementFactory();

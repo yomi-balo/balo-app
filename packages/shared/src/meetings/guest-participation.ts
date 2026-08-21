@@ -8,6 +8,9 @@
  *   · `selectPrimaryMeetingContext` — the `meetingId` → ONE context combining rule that
  *     ADR-1046 §3 never states and BAL-413 flag F1 defers to its first `meetingId`-shaped
  *     consumer. That is this ticket. **⚠ NEEDS RATIFICATION AS AN ADR-1046 AMENDMENT.**
+ *     …plus its companion stability predicate, {@link findPrimaryMeetingContextRepoint}, which
+ *     is what stops a writer moving the winner underneath an existing meeting, booked or not
+ *     (BAL-469).
  *   · `presencePartyForGuest` — THE MONEY RULE. See its docblock; getting this wrong bills
  *     a client for a guest's time.
  *   · `guestMayReadMeeting` — the retrospective read predicate. BAL-408 RECORDS the grant;
@@ -294,6 +297,83 @@ export function selectPrimaryMeetingContext(
     return { ok: false, reason: 'none' };
   }
   return { ok: true, context: primary };
+}
+
+/**
+ * ⚠⚠ THE PRIMARY-CONTEXT STABILITY PREDICATE (BAL-469). A writer may make a meeting's
+ * primary context go from `none`/`ambiguous` to `ok` (ESTABLISHING), and it may make it go
+ * from `ok` to `ambiguous` (DISSOLVING). It may NEVER make it go from `ok` context P to `ok`
+ * context Q where Q differs from P — that is a REPOINT, and `meetingContextsRepository.attach`
+ * refuses it.
+ *
+ * ⚠ `ambiguous` AND `none` ARE DELIBERATELY NOT REPOINTS, ON EITHER SIDE — BUT NOT BECAUSE
+ * EVERY CONSUMER FAILS CLOSED ON THEM. THAT IS NOT TRUE, AND IT IS NOT THE REASON. The
+ * accurate claim is narrower: no consumer of {@link selectPrimaryMeetingContext} GRANTS MORE
+ * on `ambiguous` than it would on `ok` — which is sufficient to make establishing/dissolving
+ * safe, without needing every consumer to deny outright.
+ *
+ * The seven AUTHORIZATION gates really do fail closed on a non-`ok` result:
+ * `resolveClientCompaniesForMeetings` omits the meeting, `authorizeMeetingParticipation`
+ * denies `ambiguous_context`, `joinMeeting` denies `context_ambiguous`, and so on for meeting
+ * files, recap access and the chat anchor.
+ *
+ * ⚠⚠ THE NAMED EXCEPTION. `deliveringExpertProfileIdForMeeting`
+ * (`apps/api/src/services/meetings/delivering-party.ts`) does NOT deny on `ambiguous` — it
+ * folds it into the same `null` its own docblock defines as "this meeting has no delivering
+ * identity", which is a WRONG FACT, not a denial. That composes into `partyForUser`
+ * (`apps/api/src/services/meetings/presence-writer.ts`), a BILLING INPUT: on an ambiguous
+ * meeting BOTH its arms miss (the participation gate denies; the delivering-expert fallback
+ * reads the same ambiguity-blind `null`), so every authenticated participant — delivering
+ * expert included — is recorded `party: 'observer'`. That silently arms the missed-call sweep
+ * and the missed-call settlement path on a meeting where people are actually present.
+ * `apps/api/src/jobs/meeting-lifecycle-sweep.ts`'s `contextType: 'unknown'` dimension is a
+ * second, lower-stakes non-denying consumer (it still arms its alert; only the label degrades).
+ *
+ * ⚠ THIS MEANS AMBIGUITY ON A **BOOKED** MEETING IS A REAL AVAILABILITY HAZARD, PRE-EXISTING
+ * AND **NOT CLOSED BY BAL-469**. `attach` could always produce `ambiguous`; this ticket does
+ * not change that it can, only refuses a REPOINT. Closing the billing-input exception is the
+ * delivering-party ambiguity follow-up, BAL-471 — which must land on the same gate as this
+ * ticket (before BAL-410/BAL-411 give `attach` its first production caller).
+ *
+ * ⚠ THIS IS WHY, ACROSS A SINGLE `attach` CALL, `meetingContextsRepository.attach` CANNOT
+ * CHANGE THE COMPANY A MEETING NAMES. The company a meeting resolves to is a pure function of
+ * its primary context (`selectPrimaryMeetingContext` → `resolveContextOwner`), and `attach`
+ * writes none of the tables that function reads. So refusing a repoint of the CONTEXT is
+ * sufficient to refuse a repoint of the COMPANY for that one call, without this predicate — or
+ * `attach` — ever reading a company row. `detach` is a SEPARATE writer of `meeting_contexts`
+ * and is NOT guarded by this predicate at all — see `detach`'s own docblock in
+ * `packages/db/src/repositories/meeting-contexts.ts` for the two sequences (a bare detach of
+ * the current winner, and an attach-to-ambiguous followed by a detach of the original winner)
+ * that reach the exact company flip a single `attach` refuses. Also: this predicate secures
+ * the ANCHOR, not MEMBERSHIP — `listMeetingsForContext` matches any live context row
+ * regardless of tier, so an `attach` that only ESTABLISHES or DISSOLVES can still hand the
+ * attacker a read of a victim meeting's join credentials through a lower-tier context they
+ * legitimately own underneath the victim's primary; that is the caller's `hasCapability`
+ * obligation, not something this predicate closes.
+ *
+ * ⚠ IT READS {@link MEETING_CONTEXT_PRECEDENCE} ONLY THROUGH {@link selectPrimaryMeetingContext},
+ * NEVER BY COMPARING TIERS ITSELF. A raw tier comparison gives the wrong answer for an
+ * `admin`-only meeting establishing its first real context: `admin` scores 0 and is dropped
+ * from the candidate set entirely (never scored, never returned), so `none → ok` would look
+ * like a tier RAISE under a bare "did the top tier increase?" test — which is exactly the
+ * establishing case this predicate must allow. Going through the real selection function is
+ * what keeps `none`/`ambiguous` handled identically here and at every other call site.
+ */
+export function findPrimaryMeetingContextRepoint(
+  before: readonly MeetingContextRowLike[],
+  after: readonly MeetingContextRowLike[]
+): { readonly from: PrimaryMeetingContext; readonly to: PrimaryMeetingContext } | null {
+  const beforeResult = selectPrimaryMeetingContext(before);
+  const afterResult = selectPrimaryMeetingContext(after);
+  if (!beforeResult.ok || !afterResult.ok) {
+    return null;
+  }
+  const { context: from } = beforeResult;
+  const { context: to } = afterResult;
+  if (from.contextType === to.contextType && from.contextId === to.contextId) {
+    return null;
+  }
+  return { from, to };
 }
 
 // ── D7: THE MONEY RULE ────────────────────────────────────────────────────────────────

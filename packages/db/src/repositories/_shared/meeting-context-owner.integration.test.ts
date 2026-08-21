@@ -8,7 +8,10 @@ import {
   requestExpertRelationshipFactory,
 } from '../../test/factories';
 import { companiesRepository } from '../companies';
-import { meetingContextsRepository } from '../meeting-contexts';
+import {
+  meetingContextsRepository,
+  MeetingPrimaryContextRepointedError,
+} from '../meeting-contexts';
 import { meetingsRepository } from '../meetings';
 import {
   resolveMeetingContextOwner,
@@ -238,8 +241,11 @@ describe('resolveClientCompaniesForMeetings', () => {
   it('omits a meeting with two DISTINCT top-tier contexts (ambiguous)', async () => {
     const first = await caseEngagementFactory();
     // Same expert, different engagement/company — the projection's own resolver still
-    // names one expert (so `attach` does not reject it), but `selectPrimaryMeetingContext`
-    // sees two distinct top-tier candidates and reports `ambiguous`.
+    // names one expert (so `attach` does not reject it), and BAL-469's primary-stability
+    // guard does not reject it either: making a meeting AMBIGUOUS is permitted precisely
+    // BECAUSE this function then names NO company (fail-closed) rather than the wrong one.
+    // A REPOINT — one resolvable primary replaced by a DIFFERENT one — is what BAL-469
+    // refuses; see the flipped-company test below.
     const second = await caseEngagementFactory({ expertProfileId: first.expertProfileId });
     const { meeting } = await meetingsRepository.create({
       scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
@@ -338,5 +344,37 @@ describe('resolveClientCompaniesForMeetings', () => {
     expect(map.get(meetingB.id)).toEqual({ companyId, companyName: 'Acme Co' });
     expect(findNameByIdSpy).toHaveBeenCalledTimes(1);
     expect(findNameByIdSpy).toHaveBeenCalledWith(companyId);
+  });
+
+  it('never surfaces a FLIPPED company — `attach` refuses the tier-100-over-tier-50 repoint (BAL-469)', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ expertProfileId: expert.id }); // company X
+    const { engagement, companyId: companyY } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+    }); // company Y
+    expect(request.companyId).not.toBe(companyY);
+
+    const { meeting } = await meetingsRepository.create({
+      scheduledStart: new Date('2026-12-24T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-12-24T11:00:00.000Z'),
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    const before = await resolveClientCompaniesForMeetings([meeting.id], expert.id);
+    // ⚠ Assert on `companyId`, NEVER on `companyName` — every company factory in this repo
+    // names its company 'Acme Co', so a name assertion cannot tell X from Y.
+    expect(before.get(meeting.id)?.companyId).toBe(request.companyId);
+
+    await expect(
+      meetingContextsRepository.attach({
+        meetingId: meeting.id,
+        contextType: 'case',
+        contextId: engagement.id,
+      })
+    ).rejects.toBeInstanceOf(MeetingPrimaryContextRepointedError);
+
+    const after = await resolveClientCompaniesForMeetings([meeting.id], expert.id);
+    expect(after.get(meeting.id)?.companyId).toBe(request.companyId);
+    expect(after.get(meeting.id)?.companyId).not.toBe(companyY);
   });
 });

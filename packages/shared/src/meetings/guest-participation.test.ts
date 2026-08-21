@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeMeetingClocks,
+  findPrimaryMeetingContextRepoint,
   guestMayReadMeeting,
   presencePartyForGuest,
   projectGuestForViewer,
@@ -144,6 +145,87 @@ describe('selectPrimaryMeetingContext', () => {
     expect(result).toEqual({
       ok: true,
       context: { contextType: 'retainer_checkin', contextId: CASE_ID },
+    });
+  });
+});
+
+describe('findPrimaryMeetingContextRepoint', () => {
+  it('REPOINT — a tier-100 engagement context added over a tier-50 discovery context returns the pair', () => {
+    const before: MeetingContextRowLike[] = [
+      { contextType: 'project_discovery', contextId: REQUEST_ID },
+    ];
+    const after: MeetingContextRowLike[] = [...before, { contextType: 'case', contextId: CASE_ID }];
+    expect(findPrimaryMeetingContextRepoint(before, after)).toEqual({
+      from: { contextType: 'project_discovery', contextId: REQUEST_ID },
+      to: { contextType: 'case', contextId: CASE_ID },
+    });
+  });
+
+  it('NOT a repoint — a SECOND top-tier subject makes the primary AMBIGUOUS, which names nobody', () => {
+    const before: MeetingContextRowLike[] = [{ contextType: 'case', contextId: CASE_ID }];
+    const after: MeetingContextRowLike[] = [
+      ...before,
+      { contextType: 'package_session', contextId: OTHER_CASE_ID },
+    ];
+    expect(findPrimaryMeetingContextRepoint(before, after)).toBeNull();
+  });
+
+  it('NOT a repoint — a LOWER-tier context added under an existing primary leaves the winner alone', () => {
+    const before: MeetingContextRowLike[] = [{ contextType: 'case', contextId: CASE_ID }];
+    const after: MeetingContextRowLike[] = [
+      ...before,
+      { contextType: 'project_discovery', contextId: REQUEST_ID },
+    ];
+    expect(findPrimaryMeetingContextRepoint(before, after)).toBeNull();
+  });
+
+  it('NOT a repoint — an `admin` row is dropped before scoring, so it can never move the winner', () => {
+    const before: MeetingContextRowLike[] = [{ contextType: 'case', contextId: CASE_ID }];
+    const after: MeetingContextRowLike[] = [...before, { contextType: 'admin', contextId: null }];
+    expect(findPrimaryMeetingContextRepoint(before, after)).toBeNull();
+  });
+
+  it('NOT a repoint — ESTABLISHING a primary where there was none (empty, or admin-only)', () => {
+    const after: MeetingContextRowLike[] = [{ contextType: 'case', contextId: CASE_ID }];
+    expect(findPrimaryMeetingContextRepoint([], after)).toBeNull();
+    expect(
+      findPrimaryMeetingContextRepoint([{ contextType: 'admin', contextId: null }], after)
+    ).toBeNull();
+  });
+
+  it('NOT a repoint — DISSOLVING ambiguity into a single winner', () => {
+    const ambiguous: MeetingContextRowLike[] = [
+      { contextType: 'case', contextId: CASE_ID },
+      { contextType: 'package_session', contextId: OTHER_CASE_ID },
+    ];
+    // Still ambiguous after adding a lower-tier row: no `ok` on either side.
+    expect(
+      findPrimaryMeetingContextRepoint(ambiguous, [
+        ...ambiguous,
+        { contextType: 'project_discovery', contextId: REQUEST_ID },
+      ])
+    ).toBeNull();
+    // Ambiguous before, resolved to a single winner after (one subject dropped): `ambiguous`
+    // is not `ok`, so this is dissolving-into-established, not a repoint.
+    expect(
+      findPrimaryMeetingContextRepoint(ambiguous, [{ contextType: 'case', contextId: CASE_ID }])
+    ).toBeNull();
+  });
+
+  it('NOT a repoint — identical context sets', () => {
+    const contexts: MeetingContextRowLike[] = [{ contextType: 'case', contextId: CASE_ID }];
+    expect(findPrimaryMeetingContextRepoint(contexts, contexts)).toBeNull();
+  });
+
+  it('REPOINT — same context TYPE, DIFFERENT subject id, is still a repoint', () => {
+    expect(
+      findPrimaryMeetingContextRepoint(
+        [{ contextType: 'case', contextId: CASE_ID }],
+        [{ contextType: 'case', contextId: OTHER_CASE_ID }]
+      )
+    ).toEqual({
+      from: { contextType: 'case', contextId: CASE_ID },
+      to: { contextType: 'case', contextId: OTHER_CASE_ID },
     });
   });
 });

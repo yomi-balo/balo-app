@@ -1,4 +1,8 @@
 import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import {
+  findPrimaryMeetingContextRepoint,
+  type PrimaryMeetingContext,
+} from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   creditSessions,
@@ -10,6 +14,7 @@ import {
 } from '../schema';
 import { isUniqueViolation } from './experts';
 import { assertProjectionExpertUnchangedTx } from './_shared/consultation-projection';
+import type { DbExecutor } from './_shared/db-executor';
 
 /** BAL-425's two consultation anchors for ONE case engagement. */
 export interface ConsultationTimestamps {
@@ -56,6 +61,74 @@ export class MeetingAdminContextExistsError extends Error {
 }
 
 /**
+ * Thrown by `attach` (BAL-469) when a genuinely-new context row would REPOINT the meeting's
+ * primary context — `selectPrimaryMeetingContext` resolved `ok` to `from` before the insert
+ * and resolves `ok` to a DIFFERENT `to` after it. A NAMED error, not `…TenancyFlipError`: the
+ * guard compares the primary CONTEXT, never a company — see `findPrimaryMeetingContextRepoint`
+ * and the `attach` docblock for why that is sufficient.
+ *
+ * ⚠⚠ `from` AND `to` ARE LOG-ONLY. THEY MUST NEVER BE RETURNED ON THE WIRE. Both are derived
+ * from `before` — rows that already existed on the TARGET meeting — so `from` in particular can
+ * name another tenant's `engagements.id` / `project_requests.id`. That UUID feeds straight into
+ * `listMeetingsForContext`, which — per this table's own schema docblock — returns another
+ * tenant's meetings INCLUDING `join_url` / `daily_room_name` (call-join credentials). A caller
+ * MUST authorize against the MEETING before this error is even reachable (the `contextId` being
+ * attached is not enough — see the module-level obligation below); and the wire response for
+ * this error MUST collapse to the same opaque literal a non-existent meeting produces, exactly
+ * like `MeetingAdminContextExistsError`'s sibling treatment and the BAL-129 precedent (one
+ * denial, no distinct reason literal, unless the caller has already authorized against the
+ * meeting) — the repoint shape (`meetingId`, `from`, `to`) goes to the log only.
+ */
+export class MeetingPrimaryContextRepointedError extends Error {
+  constructor(
+    public readonly meetingId: string,
+    public readonly from: PrimaryMeetingContext,
+    public readonly to: PrimaryMeetingContext
+  ) {
+    super(`Attaching this context would repoint meeting ${meetingId}'s primary context (BAL-469)`);
+    this.name = 'MeetingPrimaryContextRepointedError';
+  }
+}
+
+/**
+ * BAL-469 — refuses an `attach` that REPOINTS a meeting's primary context. See guard 1 on
+ * `attach`'s own docblock for the full rationale; this is deliberately a MODULE-PRIVATE
+ * sibling to `assertProjectionExpertUnchangedTx`, not an export, because its behaviour is
+ * enforced and pinned entirely through `attach`.
+ *
+ * One `select` from `meetingContexts`, executed on `exec` (the transaction), so it sees the
+ * row the insert just added. `after` is every live row; `before` is `after` minus the row
+ * whose id is `insertedContextRowId` — deriving `before` by ROW ID (not by re-deriving the
+ * triple) is exact and needs no reasoning about the partial unique index, because the insert
+ * added exactly one row and nothing else in the transaction has touched this table.
+ *
+ * ⚠ ONE READ, NOT TWO. Reading `before` in a separate pre-insert select would work equally,
+ * but costs a second round trip and a second consistency argument for no benefit — the
+ * insert's own returned id is all `before` needs to be excluded.
+ */
+async function assertPrimaryContextUnchangedTx(
+  exec: DbExecutor,
+  meetingId: string,
+  insertedContextRowId: string
+): Promise<void> {
+  const after = await exec
+    .select({
+      id: meetingContexts.id,
+      contextType: meetingContexts.contextType,
+      contextId: meetingContexts.contextId,
+    })
+    .from(meetingContexts)
+    .where(and(eq(meetingContexts.meetingId, meetingId), isNull(meetingContexts.deletedAt)));
+
+  const before = after.filter((row) => row.id !== insertedContextRowId);
+
+  const repoint = findPrimaryMeetingContextRepoint(before, after);
+  if (repoint !== null) {
+    throw new MeetingPrimaryContextRepointedError(meetingId, repoint.from, repoint.to);
+  }
+}
+
+/**
  * `meetingContextsRepository` (BAL-418 / ADR-1045 §2) — the polymorphic seam's read/write
  * surface, plus THE BAL-425 SEAM (`consultationTimestampsForEngagements`).
  *
@@ -95,19 +168,74 @@ export const meetingContextsRepository = {
    * expected, named control-flow error must not poison an ambient caller transaction (which
    * a bare `23505` would, leaving every later statement failing `25P02`).
    *
-   * ⚠ BAL-428 — THE SECOND DOOR INTO A BOOKING'S EXPERT, NOW CLOSED. `meetingsRepository`
-   * resolves the delivering expert from the contexts it is given at create time, but THIS
-   * method can widen that set afterwards. A genuinely-new context row therefore re-resolves
-   * the expert across the meeting's whole live context set and throws
-   * `MeetingExpertAmbiguousError` — rolling the attach back inside this same transaction —
-   * if the answer is no longer the one already booked. Without it, a booked meeting could
-   * gain a context naming a DIFFERENT expert while the projection kept blocking the first
-   * one's calendar.
+   * ⚠ TWO GUARDS RUN ON A GENUINELY-NEW ROW, AND THEY ANSWER DIFFERENT QUESTIONS. Both run
+   * inside the insert's own transaction, so either throw rolls the attach back.
    *
-   * THE GUARD RUNS ONLY ON THE `inserted !== undefined` BRANCH, deliberately: the conflict
+   *   1. `assertPrimaryContextUnchangedTx` (BAL-469) — THE MEETING'S ANCHOR. An attach may
+   *      ESTABLISH a primary context (a meeting that had none, or whose contexts were
+   *      ambiguous) and it may DISSOLVE one (a second top-tier subject makes
+   *      `selectPrimaryMeetingContext` answer `ambiguous`, which every reader of that rule
+   *      treats as a denial — so the meeting names NO company rather than the wrong one). It
+   *      may NEVER REPOINT one: primary resolved to P before, resolves to a DIFFERENT Q
+   *      after ⇒ `MeetingPrimaryContextRepointedError`.
+   *      WHY THAT IS THE TENANCY GUARANTEE, WITHOUT READING A COMPANY: the owning company is
+   *      a pure function of the primary context (`selectPrimaryMeetingContext` →
+   *      `resolveContextOwner`), and an attach writes none of the tables that function reads.
+   *      So ACROSS A SINGLE `attach`, if the primary cannot be repointed, the named company can
+   *      only go "some" → "none" or "none" → "some" — never X → Y. That is the hazard
+   *      `_shared/meeting-context-owner.ts` documented and could not catch from the read side:
+   *      its `expectedExpertProfileId` compares the EXPERT, which the hazard leaves unchanged
+   *      by construction.
+   *      ⚠⚠ THAT GUARANTEE IS PER-`attach` CALL, NOT PER-MEETING. `detach` IS A SEPARATE WRITER
+   *      OF `meeting_contexts` AND IS NOT GUARDED BY ANYTHING HERE — see `detach`'s own
+   *      docblock below for the two reachable sequences (a bare detach of the current winner,
+   *      and an attach-to-ambiguous followed by a detach of the original winner) that compose
+   *      into exactly the X → Y flip this guard refuses in one step. Neither is closed by this
+   *      ticket; both are named residuals, not oversights.
+   *      ⚠ THIS GUARD SECURES THE ANCHOR, NOT MEMBERSHIP. `listMeetingsForContext` matches ANY
+   *      live context row regardless of tier, so attaching a LOWER-tier context the caller owns
+   *      underneath a victim meeting's tier-100 primary is ALLOWED by this rule (it is a
+   *      dissolve-safe, establish-safe shape by the table above) and hands the attacker a read
+   *      of that victim meeting's `join_url` / `daily_room_name` through the reverse read. That
+   *      is a pre-existing, loudly-documented gap (the module-level obligation above) whose
+   *      closure is the CALLER'S — this guard was never meant to, and does not, close it.
+   *      ⚠ IT DELIBERATELY DOES NOT READ `consultations`. Guard 2 returns early when a meeting
+   *      has no live projection row; folding this into it would inherit that early return and
+   *      leave every UNBOOKED meeting un-gated. Two guards, two scopes, one transaction.
+   *      ⚠ THE ESTABLISHING ARM'S OBLIGATION IS ON THE MEETING, NOT THE CONTEXT. `none → ok`
+   *      is ALLOWED — nothing was named before, so nothing is repointed — which also means an
+   *      `admin`-only (platform-axis, ADR-1035) meeting can be captured onto an engagement:
+   *      `admin` scores 0 and is dropped, there is no projection row, so NEITHER guard fires,
+   *      and the meeting resolves to the attacher's own context, handing its delivering expert
+   *      `host_meetings` on a meeting they never legitimately owned. The module-level
+   *      obligation above names the party owning the CONTEXT being attached, which the
+   *      attacker legitimately owns; the obligation that actually binds on an establishing
+   *      attach is on the MEETING being captured, and a caller must resolve and authorize
+   *      against THAT before calling `attach`, not merely against the context it is holding.
+   *      ⚠ WHAT THIS NARROWS, STATED SO IT IS NOT REDISCOVERED AS A BUG: a tier-50
+   *      `project_discovery` meeting can no longer be PROMOTED to an engagement context by
+   *      attaching one. ADR-1046's precedence docblock describes that promotion as the
+   *      intended READ semantics, and it still is — a meeting carrying both grains resolves to
+   *      the engagement. What changed is that such a meeting must be CREATED that way
+   *      (`meetingsRepository.create({ contexts: [discovery, kickoff] })`, which works today
+   *      and is tested), or re-anchored by an explicit named operation. Re-anchoring a booked
+   *      call changes who may host it, which conversation it threads to, whose files and recap
+   *      it appears under, and which engagement's consultation anchors it feeds; that is not a
+   *      tag edit, and `attach` is a tagging operation (see `detach`'s docblock, which this
+   *      mirrors on purpose). Widening this needs an ADR-1046 amendment and a named caller.
+   *
+   *   2. `assertProjectionExpertUnchangedTx` (BAL-428) — THE BOOKING'S EXPERT.
+   *      `meetingsRepository` resolves the delivering expert from the contexts it is given at
+   *      create time, but THIS method can widen that set afterwards. A genuinely-new context
+   *      row therefore re-resolves the expert across the meeting's whole live context set and
+   *      throws `MeetingExpertAmbiguousError` if the answer is no longer the one already
+   *      booked. Without it, a booked meeting could gain a context naming a DIFFERENT expert
+   *      while the projection kept blocking the first one's calendar.
+   *
+   * BOTH GUARDS RUN ONLY ON THE `inserted !== undefined` BRANCH, deliberately: the conflict
    * branch changed nothing, so re-resolving there would be pure cost — and could start
-   * throwing for an idempotent re-attach that is by definition still consistent. It ALSO
-   * never CREATES a projection row: `attach` is not a booking path (see
+   * throwing for an idempotent re-attach that is by definition still consistent. Neither ever
+   * CREATES a projection row: `attach` is not a booking path (see
    * `assertProjectionExpertUnchangedTx`).
    */
   async attach(input: {
@@ -135,6 +263,7 @@ export const meetingContextsRepository = {
           .returning();
         if (row !== undefined) {
           // Inside the SAME transaction as the insert — a throw here rolls the attach back.
+          await assertPrimaryContextUnchangedTx(tx, input.meetingId, row.id);
           await assertProjectionExpertUnchangedTx(tx, input.meetingId);
         }
         return row;
@@ -226,6 +355,32 @@ export const meetingContextsRepository = {
    * longer name IS drift — and `findProjectionDrift()` reports it as `expert_mismatch`,
    * which is the correct treatment: surface it for a human, do not let a tagging operation
    * mutate a booking.
+   *
+   * ⚠⚠ BAL-469 — THIS METHOD CAN REPOINT THE MEETING'S PRIMARY CONTEXT, AND NOTHING HERE
+   * GUARDS AGAINST IT. `attach`'s `assertPrimaryContextUnchangedTx` only ever runs on an
+   * INSERT; `detach` is a bare soft-delete `update` with no primary-stability check, no expert
+   * guard, no authorization. Two reachable sequences, both using only shipped, tested
+   * operations:
+   *   1. DIRECTLY. A meeting anchored `{project_discovery, R}` (company X) that ALSO carries
+   *      `{project_kickoff, G}` (company Y, tier-100, so it is the primary) has that primary
+   *      detached — `detach(meetingId, 'project_kickoff', G)` — leaving only the tier-50 row.
+   *      The meeting now resolves to X. A silent repoint, from the OTHER direction to the one
+   *      `attach`'s guard closes.
+   *   2. AS STEP TWO OF AN ATTACH-TO-AMBIGUOUS. Primary `{case, G1}` (company X) → `attach
+   *      {case, G2}` (company Y, same expert) is ALLOWED (dissolves to `ambiguous` — see guard
+   *      1 above) → `detach(meetingId, 'case', G1)` → primary is now `{case, G2}`, company Y.
+   *      Two individually-permitted steps compose into the exact X → Y flip `attach` alone
+   *      refuses. This is also why the ambiguity residual's "reversible by `detach`" framing
+   *      overstates the remedy: `detach` is not only the repair path, it is the second half of
+   *      this attack, and the caller — not the meeting — chooses which context survives.
+   *
+   * BAL-469 DELIBERATELY DID NOT CLOSE THIS. `detach` has ZERO production callers (every call
+   * site is a test), so both sequences ship inert, exactly like the hazard `attach`'s guard
+   * fixes did before this ticket. The closure — most likely the same
+   * `findPrimaryMeetingContextRepoint` call in `detach`'s own update path, which today runs no
+   * transaction at all — is tracked as BAL-471 and MUST land before whichever ticket
+   * (BAL-410 / BAL-411) gives `detach` its first production caller. Until then this is a named
+   * residual, not a rediscovered bug.
    */
   async detach(
     meetingId: string,

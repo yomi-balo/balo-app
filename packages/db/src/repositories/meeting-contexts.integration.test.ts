@@ -13,7 +13,13 @@ import {
   userFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { meetingContextsRepository, MeetingAdminContextExistsError } from './meeting-contexts';
+import { findProjectionForMeeting } from './_shared/consultation-projection';
+import { meetingsRepository } from './meetings';
+import {
+  meetingContextsRepository,
+  MeetingAdminContextExistsError,
+  MeetingPrimaryContextRepointedError,
+} from './meeting-contexts';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -56,20 +62,120 @@ describe('meetingContextsRepository.attach / listByMeeting', () => {
 
     await meetingContextsRepository.attach({
       meetingId: meeting.id,
-      contextType: 'project_discovery',
-      contextId: request.id,
+      contextType: 'project_kickoff',
+      contextId: engagement.id,
     });
     await meetingContextsRepository.attach({
       meetingId: meeting.id,
-      contextType: 'project_kickoff',
-      contextId: engagement.id,
+      contextType: 'project_discovery',
+      contextId: request.id,
     });
 
     const rows = await meetingContextsRepository.listByMeeting(meeting.id);
     expect(rows).toHaveLength(2);
-    // The unique is on the TRIPLE, never on meeting_id alone — a discovery call anchored
-    // to a project_requests.id gains a SECOND row for the engagement at kickoff.
+    // The unique is on the TRIPLE, never on meeting_id alone — one meeting legitimately
+    // carries both grains. ⚠ ORDER MATTERS SINCE BAL-469, and the reverse order is now
+    // REFUSED: attaching the tier-100 engagement context SECOND would repoint the primary
+    // from the discovery request to the engagement (see the repoint test below). A meeting
+    // that must carry both grains from the start is CREATED that way —
+    // `meetingsRepository.create({ contexts: [discovery, kickoff] })`, pinned in
+    // `_shared/consultation-projection.integration.test.ts`.
     expect(rows.map((r) => r.contextType).sort()).toEqual(['project_discovery', 'project_kickoff']);
+  });
+
+  it('REFUSES an attach that REPOINTS the primary — a tier-100 case over a tier-50 project_discovery (BAL-469)', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ expertProfileId: expert.id });
+    // ⚠ Different companies by construction — both factories seed their own.
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
+    const created = await meetingsRepository.create({
+      scheduledStart: new Date(Date.now() + HOUR_MS),
+      scheduledEnd: new Date(Date.now() + 2 * HOUR_MS),
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    // The projected expert is UNCHANGED (`expert` both sides), so
+    // `assertProjectionExpertUnchangedTx` cannot see this — that is the whole point.
+    await expect(
+      meetingContextsRepository.attach({
+        meetingId: created.meeting.id,
+        contextType: 'case',
+        contextId: engagement.id,
+      })
+    ).rejects.toBeInstanceOf(MeetingPrimaryContextRepointedError);
+
+    // …and the insert rolled back: still ONE context row, still the original discovery one.
+    const rows = await meetingContextsRepository.listByMeeting(created.meeting.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.contextType).toBe('project_discovery');
+  });
+
+  it('REFUSES the repoint on an UNBOOKED meeting too — the guard never reads `consultations` (BAL-469)', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ expertProfileId: expert.id });
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
+    // Raw insert (no `meetingsRepository.create`) ⇒ no projection row at all.
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    expect(await findProjectionForMeeting(meeting.id)).toBeUndefined();
+
+    await expect(
+      meetingContextsRepository.attach({
+        meetingId: meeting.id,
+        contextType: 'case',
+        contextId: engagement.id,
+      })
+    ).rejects.toBeInstanceOf(MeetingPrimaryContextRepointedError);
+
+    // ⚠ Proves the guard has no early-return hole: it refused the repoint on an UNBOOKED
+    // meeting, which `assertProjectionExpertUnchangedTx` alone could never do (it early-
+    // returns with no projection row).
+    expect(await findProjectionForMeeting(meeting.id)).toBeUndefined();
+    expect(await meetingContextsRepository.listByMeeting(meeting.id)).toHaveLength(1);
+  });
+
+  it('ALLOWS an attach that makes the primary AMBIGUOUS — it then names NO company, so nothing is silently flipped (BAL-469)', async () => {
+    const expert = await expertDraftFactory();
+    // Distinct engagements, distinct companies, SAME expert — so the expert guard stays
+    // silent and only the new primary-stability guard is in play.
+    const { engagement: first } = await caseEngagementFactory({ expertProfileId: expert.id });
+    const { engagement: second } = await caseEngagementFactory({ expertProfileId: expert.id });
+    const created = await meetingsRepository.create({
+      scheduledStart: new Date(Date.now() + HOUR_MS),
+      scheduledEnd: new Date(Date.now() + 2 * HOUR_MS),
+      contexts: [{ contextType: 'case', contextId: first.id }],
+    });
+
+    await expect(
+      meetingContextsRepository.attach({
+        meetingId: created.meeting.id,
+        contextType: 'case',
+        contextId: second.id,
+      })
+    ).resolves.toBeDefined();
+
+    expect(await meetingContextsRepository.listByMeeting(created.meeting.id)).toHaveLength(2);
+  });
+
+  it('ALLOWS an `admin` attach onto a meeting that already has a primary — admin rows never score (BAL-469)', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      scheduledStart: new Date(Date.now() + HOUR_MS),
+      scheduledEnd: new Date(Date.now() + 2 * HOUR_MS),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    await expect(
+      meetingContextsRepository.attach({
+        meetingId: created.meeting.id,
+        contextType: 'admin',
+        contextId: null,
+      })
+    ).resolves.toBeDefined();
+
+    expect(await meetingContextsRepository.listByMeeting(created.meeting.id)).toHaveLength(2);
   });
 
   it('a duplicate TRIPLE is idempotent — onConflictDoNothing returns the EXISTING row', async () => {

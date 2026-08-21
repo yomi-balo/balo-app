@@ -75,6 +75,8 @@ export function DateOverrideAddPopover({
   // The in-flight (or most recently settled) conflict check for the CURRENT selection, plus
   // a monotonically-increasing token so a slow earlier response can never be read for a
   // range the expert has since changed.
+  // ⚠ It is NOT cleared on a range CHANGE — only on a range CLEAR. `handleSubmit` compensates;
+  // see its flush block.
   const requestRef = useRef<{
     token: number;
     promise: Promise<AvailabilityConflictReportDto | null>;
@@ -168,10 +170,12 @@ export function DateOverrideAddPopover({
   // cleanup means only the LAST selection in a debounce window ever actually calls
   // `onCheckConflicts` — earlier ones are cancelled before they fire, not raced afterward.
   //
-  // ⚠ R1 — A SUBMIT INSIDE THIS WINDOW MUST NOT READ A NULL `requestRef`. `handleSubmit`
-  // flushes `timeoutRef` and calls `armCheck` itself when nothing has armed yet, so "no check
-  // has been ARMED" (submit beat the debounce) can never be confused with "the check FAILED"
-  // (D10's real fail-open) — only the second may skip the check.
+  // ⚠ R1 / BAL-469 A — A SUBMIT INSIDE THIS WINDOW MUST NOT READ A NULL *OR A STALE*
+  // `requestRef`. `handleSubmit` flushes `timeoutRef` and, whenever a timer was actually
+  // pending, calls `armCheck` itself — because a pending timer means THIS range has not been
+  // checked, whether `requestRef` is null (first selection) or holds the PREVIOUS range's
+  // report (a range change). So "no check has been ARMED" can never be confused with "the
+  // check FAILED" (D10's real fail-open) — only the second may skip the check.
   useEffect(() => {
     if (!rangeFrom) {
       requestRef.current = null;
@@ -244,11 +248,27 @@ export function DateOverrideAddPopover({
       // R1 — flush the debounce: a submit inside the 250ms window must ARM the check itself
       // rather than reading a `requestRef` the timer hasn't populated yet. Only a genuinely
       // FAILED check (handled below via `effectiveReport === null`) may fail open.
-      if (timeoutRef.current !== null) {
-        clearTimeout(timeoutRef.current);
+      //
+      // ⚠ BAL-469 A — A PENDING TIMER ALSO INVALIDATES WHATEVER `requestRef` ALREADY HOLDS.
+      // The debounce effect nulls `requestRef` only when the range is CLEARED (`!rangeFrom`),
+      // so a range CHANGE leaves the PREVIOUS range's settled entry in place. Reading it here
+      // would let a clean report for range A gate a block for range B — and the token guard
+      // below would PASS, because nothing bumped the token. A pending timer means "the CURRENT
+      // range has not been checked yet", whatever `requestRef` says, so it always arms fresh.
+      //
+      // ⚠ THE LOCAL `const` IS LOAD-BEARING, NOT STYLE. `timeoutRef.current` is a MUTABLE
+      // property, so an aliased boolean (`const flushed = timeoutRef.current !== null`) does
+      // NOT narrow it — `clearTimeout` would receive `Timeout | null` and fail `pnpm
+      // typecheck`. Capturing the handle in a const narrows it AND reads the ref exactly once.
+      const pendingCheckTimer = timeoutRef.current;
+      if (pendingCheckTimer !== null) {
+        clearTimeout(pendingCheckTimer);
         timeoutRef.current = null;
       }
-      const inFlight = requestRef.current ?? armCheck(rangeFrom, rangeTo);
+      const inFlight =
+        pendingCheckTimer === null
+          ? (requestRef.current ?? armCheck(rangeFrom, rangeTo))
+          : armCheck(rangeFrom, rangeTo);
       const settledReport = await inFlight.promise;
       // A superseded response must never gate a range the expert has since changed (edge
       // case 11). `requestRef.current` is re-armed on every range change (by the debounce
