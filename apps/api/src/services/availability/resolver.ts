@@ -37,20 +37,9 @@ import type {
  * accepted for v1 (locked by `resolver.test.ts > DST spring-forward`).
  */
 export function resolve(input: ResolverInput): ResolverResult {
-  const {
-    rules,
-    baloConsultations,
-    busyBlocks,
-    overrideBlocks,
-    timezone,
-    now,
-    horizonDays,
-    minMinutes,
-  } = input;
+  const { rules, baloConsultations, busyBlocks, overrideBlocks, timezone, now, horizonDays } =
+    input;
 
-  // Booking rules (BAL-234). Default to 0 so the BAL-243 behaviour is unchanged.
-  const bufferBeforeMs = (input.bufferBeforeMinutes ?? 0) * 60 * 1000;
-  const bufferAfterMs = (input.bufferAfterMinutes ?? 0) * 60 * 1000;
   const minimumNoticeMs = (input.minimumNoticeMinutes ?? 0) * 60 * 1000;
 
   const { rangeStart, rangeEnd } = boundWindow(now, horizonDays, minimumNoticeMs);
@@ -58,36 +47,19 @@ export function resolve(input: ResolverInput): ResolverResult {
     return { earliestAvailableAt: null };
   }
 
-  const rulesByDow = groupRulesByDayOfWeek(rules);
-  if (rulesByDow.size === 0) {
-    return { earliestAvailableAt: null };
-  }
-
-  const expanded = expandRulesInRange(rulesByDow, rangeStart, rangeEnd, timezone);
-  const clipped = clipToWindow(expanded, rangeStart, rangeEnd);
-  if (clipped.length === 0) {
-    return { earliestAvailableAt: null };
-  }
-
-  const merged = mergeOverlapping(clipped);
-  // Override blocks (holidays/leave) are treated as ordinary busy intervals: fold
-  // them in alongside consultations and vendor busy so all sources merge, get the
-  // booking buffers applied, and sort once. Interval set-difference is
-  // order-independent (W ∖ A ∖ B === W ∖ (A ∪ B)), so an override simply removes any
-  // overlapping availability — there is no precedence between the busy sources.
-  const busy = combineBusyIntervals(
+  const free = freeIntervalsInRange({
+    rules,
     baloConsultations,
-    [...busyBlocks, ...overrideBlocks],
-    bufferBeforeMs,
-    bufferAfterMs
-  );
+    busyBlocks,
+    overrideBlocks,
+    timezone,
+    rangeStart,
+    rangeEnd,
+    bufferBeforeMs: (input.bufferBeforeMinutes ?? 0) * 60 * 1000,
+    bufferAfterMs: (input.bufferAfterMinutes ?? 0) * 60 * 1000,
+  });
 
-  const free: BusyBlock[] = [];
-  for (const window of merged) {
-    free.push(...subtractBusy(window, busy));
-  }
-
-  const minMs = minMinutes * 60 * 1000;
+  const minMs = input.minMinutes * 60 * 1000;
   const longEnough = free.filter((w) => w.endAt.getTime() - w.startAt.getTime() >= minMs);
   if (longEnough.length === 0) {
     return { earliestAvailableAt: null };
@@ -100,6 +72,61 @@ export function resolve(input: ResolverInput): ResolverResult {
   }
   // Defensive clamp in case step 1's ceil didn't catch a sub-rangeStart head.
   return { earliestAvailableAt: laterOf(head.startAt, now) };
+}
+
+export interface FreeIntervalsInput {
+  rules: ResolverRule[];
+  baloConsultations: ResolverConsultation[];
+  busyBlocks: BusyBlock[];
+  overrideBlocks: BusyBlock[];
+  /** IANA zone the weekly rules are authored in — the EXPERT's. */
+  timezone: string;
+  rangeStart: Date;
+  rangeEnd: Date;
+  bufferBeforeMs: number;
+  bufferAfterMs: number;
+}
+
+/**
+ * THE ONE DEFINITION OF "FREE" — resolver steps 2–7 over an explicit UTC range.
+ *
+ * `resolve()` ("when next?"), `isWindowBookable()` ("may THIS window be booked?") and
+ * `listBookableSlots()` (BAL-236, "what may be booked?") are all thin wrappers over this.
+ * They differ ONLY in the range they hand in and what they do with the answer. Nothing else
+ * in this repo may compute a free interval.
+ *
+ * ⚠ PURE. No DB, env, clock or logging. `mergeOverlapping` sorts in place but only ever sees
+ * the fresh array `clipToWindow` allocates, and `combineBusyIntervals` allocates its own — so
+ * NO caller-owned array is mutated. Keep it that way.
+ *
+ * Returns `[]` when there are no published rules at all, and when nothing survives clipping.
+ * Result is ascending by `startAt` and the intervals are pairwise disjoint.
+ */
+export function freeIntervalsInRange(input: FreeIntervalsInput): BusyBlock[] {
+  const rulesByDow = groupRulesByDayOfWeek(input.rules);
+  if (rulesByDow.size === 0) return [];
+
+  const expanded = expandRulesInRange(rulesByDow, input.rangeStart, input.rangeEnd, input.timezone);
+  const clipped = clipToWindow(expanded, input.rangeStart, input.rangeEnd);
+  if (clipped.length === 0) return [];
+
+  // Override blocks (holidays/leave) are treated as ordinary busy intervals: fold them in
+  // alongside consultations and vendor busy so all sources merge, get the booking buffers
+  // applied, and sort once. Interval set-difference is order-independent
+  // (W ∖ A ∖ B === W ∖ (A ∪ B)), so an override simply removes any overlapping availability —
+  // there is no precedence between the busy sources.
+  const busy = combineBusyIntervals(
+    input.baloConsultations,
+    [...input.busyBlocks, ...input.overrideBlocks],
+    input.bufferBeforeMs,
+    input.bufferAfterMs
+  );
+
+  const free: BusyBlock[] = [];
+  for (const window of mergeOverlapping(clipped)) {
+    free.push(...subtractBusy(window, busy));
+  }
+  return free;
 }
 
 /**
@@ -158,36 +185,24 @@ export function isWindowBookable(input: WindowBookableInput): boolean {
     return false;
   }
 
-  const rulesByDow = groupRulesByDayOfWeek(input.rules);
-  if (rulesByDow.size === 0) {
-    // An expert who has published NO weekly availability is bookable at no time at all.
-    return false;
-  }
+  // Expand only over the proposed window (`freeIntervalsInRange` → `expandRulesInRange`
+  // already steps back one local day, so a rule that crosses midnight into the window is
+  // still seen), then clip to it: a clipped-and-merged segment covering `[start, end]` IS the
+  // "wholly inside" predicate. An expert who has published NO weekly availability yields `[]`
+  // here, which is bookable at no time at all.
+  const free = freeIntervalsInRange({
+    rules: input.rules,
+    baloConsultations: input.baloConsultations,
+    busyBlocks: input.busyBlocks,
+    overrideBlocks: input.overrideBlocks,
+    timezone: input.timezone,
+    rangeStart: input.start,
+    rangeEnd: input.end,
+    bufferBeforeMs: (input.bufferBeforeMinutes ?? 0) * 60 * 1000,
+    bufferAfterMs: (input.bufferAfterMinutes ?? 0) * 60 * 1000,
+  });
 
-  // Expand only over the proposed window (`expandRulesInRange` already steps back one local
-  // day, so a rule that crosses midnight into the window is still seen), then clip to it: a
-  // clipped-and-merged segment covering `[start, end]` IS the "wholly inside" predicate.
-  const expanded = expandRulesInRange(rulesByDow, input.start, input.end, input.timezone);
-  const clipped = clipToWindow(expanded, input.start, input.end);
-  if (clipped.length === 0) {
-    return false;
-  }
-
-  const busy = combineBusyIntervals(
-    input.baloConsultations,
-    [...input.busyBlocks, ...input.overrideBlocks],
-    (input.bufferBeforeMinutes ?? 0) * 60 * 1000,
-    (input.bufferAfterMinutes ?? 0) * 60 * 1000
-  );
-
-  for (const window of mergeOverlapping(clipped)) {
-    for (const free of subtractBusy(window, busy)) {
-      if (free.startAt.getTime() <= startMs && free.endAt.getTime() >= endMs) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return free.some((f) => f.startAt.getTime() <= startMs && f.endAt.getTime() >= endMs);
 }
 
 // ── Step helpers ───────────────────────────────────────────────

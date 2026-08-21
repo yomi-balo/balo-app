@@ -1,7 +1,24 @@
-// ── Client events (BAL-416) ────────────────────────────────────
+/**
+ * Availability events — client and server.
+ *
+ * ⚠ TWO FAMILIES CONVERGED HERE INDEPENDENTLY, and the union is deliberate. BAL-416 created
+ * this file for the time-off conflict warnings and MOVED the two BAL-235 server events out of
+ * `CALENDAR_SERVER_EVENTS`; BAL-236 concurrently created the same `AVAILABILITY_EVENTS` family
+ * for the slot picker. Both landed on the same reasoning — availability is Balo-side scheduling,
+ * not calendar-vendor lifecycle — so the members are unioned rather than one being folded into
+ * `CALENDAR_EVENTS`. No key or wire value is shared between the two sets.
+ */
+
+// ── Client events (BAL-416 conflict warnings + BAL-236 slot picker) ──
 export const AVAILABILITY_EVENTS = {
+  // BAL-416 — warn before blocking time off over confirmed sessions.
   OVERRIDE_CONFLICT_DETECTED: 'availability_override_conflict_detected',
   OVERRIDE_CONFLICT_RESOLVED: 'availability_override_conflict_resolved',
+  // BAL-236 — the ExpertAvailabilityCalendar slot picker.
+  CALENDAR_VIEWED: 'availability_calendar_viewed',
+  SLOT_SELECTED: 'availability_slot_selected',
+  DURATION_FILTER_USED: 'availability_duration_filter_used',
+  EMPTY_STATE_SHOWN: 'availability_empty_state_shown',
 } as const;
 
 /**
@@ -29,6 +46,33 @@ export interface AvailabilityEventMap {
     resolution: AvailabilityConflictResolution;
     conflict_count: number;
     expert_profile_id: string;
+  };
+  /**
+   * ⚠ The four BAL-236 picker events carry `expert_id` (also `expert_profiles.id`) rather than
+   * the `expert_profile_id` the BAL-416 pair uses — the two families were authored in parallel
+   * against their own tickets' stated payloads. Same value, two property names in one family;
+   * worth converging on `expert_profile_id` in a follow-up, but renaming a shipped wire property
+   * is a PostHog-continuity decision, not a merge-conflict resolution.
+   */
+  [AVAILABILITY_EVENTS.CALENDAR_VIEWED]: {
+    /** `expert_profiles.id`. */
+    expert_id: string;
+    mode: 'preview' | 'selectable';
+    viewer_type: 'expert' | 'client';
+  };
+  [AVAILABILITY_EVENTS.SLOT_SELECTED]: {
+    expert_id: string;
+    slot_start_utc: string;
+    duration_minutes: number;
+    viewer_timezone: string;
+  };
+  [AVAILABILITY_EVENTS.DURATION_FILTER_USED]: {
+    expert_id: string;
+    filter_value: number | 'any';
+  };
+  [AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN]: {
+    expert_id: string;
+    reason: 'not_configured' | 'no_slots' | 'unavailable' | 'no_slots_for_filter';
   };
 }
 

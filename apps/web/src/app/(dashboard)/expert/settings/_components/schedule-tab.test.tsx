@@ -44,6 +44,15 @@ vi.mock('./schedule-timezone-combobox', () => ({
 // Stub the Radix-heavy booking-rules selects; expose a deterministic change button so
 // the booking_rules_saved change-gate can be driven without pointer events. Field
 // rendering itself is covered by booking-rules-section.test.tsx.
+// BAL-236 — stub the picker. Its own behaviour is covered by
+// `components/availability/ExpertAvailabilityCalendar.test.tsx`; this suite only proves the
+// mount condition and the expertProfileId ref→state promotion (D15).
+vi.mock('@/components/availability', () => ({
+  ExpertAvailabilityCalendar: ({ expertProfileId }: { expertProfileId: string }) => (
+    <div data-testid="availability-preview-stub">preview:{expertProfileId}</div>
+  ),
+}));
+
 vi.mock('./booking-rules-section', () => ({
   BookingRulesSection: ({
     settings,
@@ -175,6 +184,34 @@ describe('ScheduleTab', () => {
     expect(await screen.findByText('Set your weekly hours')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Use these hours' }));
     expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
+  });
+
+  // ── BAL-236 — the availability preview mount (D15) ────────────
+
+  it('renders the availability preview once the schedule loads, with the promoted expertProfileId', async () => {
+    mockGetSchedule.mockResolvedValue(loadResult({ expertProfileId: 'profile-xyz' }));
+    render(<ScheduleTab />);
+
+    await screen.findByText('Weekly hours');
+    expect(screen.getByText('What clients see')).toBeInTheDocument();
+    expect(screen.getByTestId('availability-preview-stub')).toHaveTextContent(
+      'preview:profile-xyz'
+    );
+  });
+
+  it('does not render the availability preview in the empty state', async () => {
+    mockGetSchedule.mockResolvedValue(loadResult({ rules: [] }));
+    render(<ScheduleTab />);
+
+    await screen.findByText('Set your weekly hours');
+    expect(screen.queryByTestId('availability-preview-stub')).not.toBeInTheDocument();
+  });
+
+  it('does not render the availability preview while loading', () => {
+    mockGetSchedule.mockReturnValue(new Promise(() => {})); // never resolves
+    render(<ScheduleTab />);
+
+    expect(screen.queryByTestId('availability-preview-stub')).not.toBeInTheDocument();
   });
 
   it('shows the error state and retries when loading fails', async () => {

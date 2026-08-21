@@ -76,7 +76,8 @@ export type AllEvents = AuthEventMap &
   MeetingCallEventMap &
   // BAL-436 — the in-call side panel. ⚠ CLIENT family; `GuestServerEventMap` stays server-only.
   MeetingPanelEventMap &
-  // BAL-416 — the time-off conflict warning's CLIENT family.
+  // Availability CLIENT family — BAL-416's time-off conflict warnings PLUS BAL-236's
+  // slot-picker events. One map, two tickets; see `./events/availability.ts`.
   AvailabilityEventMap;
 
 export type EventName = keyof AllEvents;

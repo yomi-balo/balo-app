@@ -1,9 +1,4 @@
-import {
-  availabilityOverridesRepository,
-  availabilityRulesRepository,
-  consultationsRepository,
-  expertsRepository,
-} from '@balo/db';
+import { expertsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import {
   CONSULTATION_LOAD_PAD_MS,
@@ -12,8 +7,8 @@ import {
   toResolverRules,
 } from './resolver-inputs.js';
 import { isWindowBookable } from './resolver.js';
-import type { BusyBlock } from './types.js';
-import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js';
+import { loadResolverInputs } from './load-resolver-inputs.js';
+import { VendorBusyUnavailableError } from './vendor-busy.js';
 
 const log = createLogger('availability-window-check');
 
@@ -79,46 +74,25 @@ export async function isWindowAvailableForExpert(
   const loadFrom = new Date(start.getTime() - CONSULTATION_LOAD_PAD_MS);
   const loadTo = new Date(end.getTime() + CONSULTATION_LOAD_PAD_MS);
 
-  // ⚠ THE SHARED PORT, NOT AN INLINE `[]`. `resolveAndCacheAvailability` reads vendor
-  // free/busy from this SAME object (BAL-396 §9), so the booking gate gets whatever vendor
-  // is wired there in the same commit. An inline `[]` here would have kept double-booking
-  // over an expert's real external commitments with nothing failing.
+  // ⚠ THE SHARED LOADER (`./load-resolver-inputs.ts`), NOT AN INLINE READ. It runs the vendor
+  // free/busy read CONCURRENTLY with the three Balo-owned reads (round-2 fix #10 — not
+  // serially ahead of them) and tags a vendor rejection into a `BusyBlocksOutcome` value
+  // rather than letting it reject the `Promise.all`. `resolveAndCacheAvailability` reads
+  // vendor free/busy from the SAME shared `vendorBusyProvider` object inside that loader
+  // (BAL-396 §9), so the booking gate gets whatever vendor is wired there in the same commit.
   //
-  // ⚠⚠ BAL-396 §9.4 — FAILS CLOSED. `vendorBusyProvider.listBusyBlocks` THROWS
-  // `VendorBusyUnavailableError` when it cannot trust its answer (an unreadable connection,
-  // or a vendor read that failed) — it MUST be caught, never allowed to propagate, otherwise
+  // ⚠⚠ BAL-396 §9.4 — FAILS CLOSED. The loader's vendor outcome THROWS surfaced as
+  // `{ ok: false }` when the vendor answer cannot be trusted (an unreadable connection, or a
+  // vendor read that failed) — it MUST be caught, never allowed to propagate, otherwise
   // `POST /meetings` would answer a `500` where it should answer a clean `409`. Caught
-  // SEPARATELY from the three Balo-owned reads below: this function's own fail-closed
-  // contract is specifically about vendor trust, not about a `@balo/db` outage, which stays
-  // an uncaught 500 exactly as it always has.
-  //
-  // ⚠⚠ round-2 fix #10 — RUN CONCURRENTLY WITH THE THREE BALO-OWNED READS, NOT BEFORE THEM.
-  // A prior version `await`ed the vendor round-trip serially, ahead of `Promise.all` below —
-  // paying a full un-overlapped Apiroc round-trip on every `POST /meetings`, even one the
-  // pure resolver would have cheaply rejected anyway (outside published hours, etc.). The
-  // fail-closed catch is still required; it just no longer needs to be serial to get it. This
-  // mirrors `resolve-and-cache.ts`'s identical `BusyBlocksOutcome` tagging (its §9.4 comment)
-  // exactly, so the two call sites can't drift on how they turn a rejection into a value the
-  // `Promise.all` can carry.
-  type BusyBlocksOutcome =
-    | { readonly ok: true; readonly value: BusyBlock[] }
-    | { readonly ok: false; readonly error: unknown };
-  // ⚠ Scan C (`invariants/sync-token-parity.test.ts`) greps for the exact contiguous substring
-  // `vendorBusyProvider.listBusyBlocks` on a non-comment code line — keep that call on ONE
-  // physical line if this is ever reformatted; splitting the member access across lines (as a
-  // pure `prettier`-style break would) makes the scan blind, not the call wrong.
-  const vendorBusyRead = vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo);
-  const busyBlocksSource: Promise<BusyBlocksOutcome> = vendorBusyRead.then(
-    (value): BusyBlocksOutcome => ({ ok: true, value }),
-    (error: unknown): BusyBlocksOutcome => ({ ok: false, error })
+  // SEPARATELY from the three Balo-owned reads: this function's own fail-closed contract is
+  // specifically about vendor trust, not about a `@balo/db` outage, which stays an uncaught
+  // 500 exactly as it always has.
+  const { rules, baloConsultations, overrides, busyOutcome } = await loadResolverInputs(
+    expertProfileId,
+    loadFrom,
+    loadTo
   );
-
-  const [rules, baloConsultations, overrides, busyOutcome] = await Promise.all([
-    availabilityRulesRepository.listByExpertProfileId(expertProfileId),
-    consultationsRepository.listConfirmedInRange(expertProfileId, loadFrom, loadTo),
-    availabilityOverridesRepository.listUpcoming(expertProfileId),
-    busyBlocksSource,
-  ]);
 
   if (!busyOutcome.ok) {
     const err = busyOutcome.error;

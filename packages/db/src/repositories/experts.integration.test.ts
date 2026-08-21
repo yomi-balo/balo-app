@@ -772,6 +772,55 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
   });
 });
 
+// ── isPubliclyVisible (BAL-236) ───────────────────────────────────────
+
+describe('expertsRepository.isPubliclyVisible', () => {
+  it('true for approved + searchable', async () => {
+    const expert = await searchExpertFactory({ username: uniq('visible'), searchable: true });
+
+    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(true);
+  });
+
+  it('false when searchable is false', async () => {
+    // expertFactory approves but leaves searchable at its default (false).
+    const expert = await expertFactory();
+
+    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(false);
+  });
+
+  it('false when approvedAt is null', async () => {
+    const draft = await expertDraftFactory();
+    await expertsRepository.updateProfile(draft.id, { searchable: true });
+
+    expect(await expertsRepository.isPubliclyVisible(draft.id)).toBe(false);
+  });
+
+  /**
+   * ⚠ THE OWNING USER'S SOFT DELETE, NOT THE PROFILE'S — `expert_profiles` has no `deleted_at`.
+   * `searchable` lives on the profile, so without this term a deleted person's live calendar
+   * complement would keep being published by a public, unauthenticated endpoint.
+   */
+  it('false once the owning user is soft-deleted, even with searchable still true', async () => {
+    const user = await userFactory();
+    const expert = await searchExpertFactory({
+      userId: user.id,
+      username: uniq('visible-then-deleted'),
+      searchable: true,
+    });
+    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(true);
+
+    await usersRepository.softDelete(user.id);
+
+    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(false);
+  });
+
+  it('false for an unknown id', async () => {
+    expect(await expertsRepository.isPubliclyVisible('00000000-0000-4000-8000-000000000000')).toBe(
+      false
+    );
+  });
+});
+
 // ── findOrCreateDraft ────────────────────────────────────────────────
 
 describe('expertsRepository.findOrCreateDraft', () => {

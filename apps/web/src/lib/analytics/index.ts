@@ -35,7 +35,7 @@ export {
   MEETING_CALL_EVENTS,
   /** BAL-436 — the in-call side panel (People and Files). */
   MEETING_PANEL_EVENTS,
-  /** BAL-416 — the time-off conflict warning popover. */
+  /** Availability CLIENT family — BAL-416's conflict warning + BAL-236's slot picker. */
   AVAILABILITY_EVENTS,
 } from '@balo/analytics/client';
 

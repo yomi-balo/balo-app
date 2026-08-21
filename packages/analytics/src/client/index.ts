@@ -36,8 +36,9 @@ export {
   // BAL-436 — ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package
   // (`apps/web` cannot import it), not in this one.
   MEETING_PANEL_EVENTS,
-  // BAL-416 — the time-off conflict warning's CLIENT events. ⚠ `AVAILABILITY_SERVER_EVENTS`
-  // must NEVER join this list — it is server-only (exported from '../server' instead).
+  // Availability CLIENT events — BAL-416's conflict warnings AND BAL-236's slot picker.
+  // ⚠ `AVAILABILITY_SERVER_EVENTS` must NEVER join this list — it is server-only
+  // (exported from '../server' instead).
   AVAILABILITY_EVENTS,
 } from '../events';
 
@@ -111,7 +112,7 @@ export type {
   // this package nor `apps/web`'s barrel has a check that would have flagged the omission —
   // it surfaces only as an unresolved import in whichever app tries to use it.
   CaseSurfaceAction,
-  // BAL-416 — the time-off conflict warning's CLIENT family.
+  // Availability CLIENT family — BAL-416's conflict warnings AND BAL-236's slot picker.
   AvailabilityEventMap,
   AvailabilityConflictResolution,
 } from '../events';

@@ -19,6 +19,7 @@
     "./domains": "./src/domains/index.ts",
     "./parties": "./src/parties/index.ts",
     "./authz": "./src/authz/index.ts",
+    "./availability": "./src/availability/index.ts",
     "./calendar": "./src/calendar/index.ts",
     "./experts": "./src/experts/index.ts",
     "./redaction": "./src/redaction/index.ts",

@@ -1,4 +1,4 @@
-import { eq, and, not, inArray, or, like, isNotNull, sql } from 'drizzle-orm';
+import { eq, and, not, inArray, or, like, isNotNull, isNull, sql } from 'drizzle-orm';
 import { createLogger } from '@balo/shared/logging';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
@@ -10,6 +10,7 @@ import {
   expertLanguages,
   expertIndustries,
   workHistory,
+  users,
   type ExpertProfile,
   type ExpertCompetency,
   type ExpertCertification,
@@ -561,6 +562,45 @@ export const expertsRepository = {
         },
       },
     });
+  },
+
+  /**
+   * BAL-236 — is this profile publicly visible? Approved AND searchable, as
+   * `findPublicProfileByUsername` (above) and `buildWhereConditions` (`expert-search.ts`) both
+   * require. Do not write a fourth visibility rule.
+   *
+   * Deliberately the FIRST read the public availability route performs, so an enumeration probe
+   * against a random uuid costs exactly one indexed PK lookup — no vendor round-trip, no
+   * four-way fan-out.
+   *
+   * ⚠ `expert_profiles` has NO `deleted_at` — do NOT add a soft-delete predicate ON THIS TABLE.
+   *
+   * ⚠ THE OWNING `users` ROW'S SOFT DELETE IS FILTERED HERE, and this is the one place among the
+   * three that does it. `searchable` is a profile column, so a soft-deleted user whose profile
+   * still carries `searchable = true` would keep publishing live calendar data — the complement
+   * of a real person's calendar, from a public unauthenticated endpoint, after they asked to be
+   * deleted. Unreachable today (`usersRepository.softDelete` has no application-code caller),
+   * which is exactly why it is cheap to close now rather than at the moment account deletion
+   * ships. The divergence from the other two public predicates is DELIBERATE and strictly
+   * stricter; whoever ships account deletion should add the same term to
+   * `findPublicProfileByUsername` and `buildWhereConditions` and flip `searchable = false` in the
+   * deletion transaction.
+   */
+  async isPubliclyVisible(expertProfileId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: expertProfiles.id })
+      .from(expertProfiles)
+      .innerJoin(users, eq(users.id, expertProfiles.userId))
+      .where(
+        and(
+          eq(expertProfiles.id, expertProfileId),
+          eq(expertProfiles.searchable, true),
+          isNotNull(expertProfiles.approvedAt),
+          isNull(users.deletedAt)
+        )
+      )
+      .limit(1);
+    return rows.length > 0;
   },
 
   /** Check if a username is available, optionally excluding a specific profile */
