@@ -1,10 +1,8 @@
 const templates: Record<string, (data: Record<string, unknown>) => string> = {
-  'booking-confirmed-sms': (data) => {
-    const expertName = (data.expertName as string) ?? 'your expert';
-    const date = (data.date as string) ?? 'the scheduled time';
-    return `Balo: Your consultation with ${expertName} is confirmed for ${date}. Details at balo.expert`;
-  },
-
+  // BAL-400 (D4) — no `booking-confirmed-sms` entry: the legacy SMS rule at booking time was
+  // structurally incapable of firing (the resolver hydrates `data.user` from `payload.userId`
+  // only, which `BookingConfirmedPayload` never carries) and the ticket's own spec puts SMS at
+  // the ~2h reminder — a separate, unbuilt event. See `engine/rules.ts`'s `booking.confirmed`.
   'booking-reminder-sms': () => {
     return 'Balo: Reminder - your consultation starts in 30 min. Join at balo.expert';
   },

@@ -54,6 +54,38 @@ import { meetingFiles } from './meeting-files';
  * label (the `reference_enum_default_same_tx_migration_hazard` rule). Any future
  * ADD-VALUE migration inherits the same prohibition.
  *
+ * ⚠⚠ BAL-400 / BAL-129 D12 — THE ATTRIBUTION COLUMN WAS DELIBERATELY **NOT** ADDED, AND
+ * THIS IS THE RECORD OF THAT DECISION SO THE NEXT READER DOES NOT "FINISH THE JOB".
+ * BAL-129 shipped the `meeting.booked` audit row (ADR-1030's CEILING) and left a note
+ * saying its FLOOR — a `booked_by_user_id` column here — would ride BAL-400's
+ * idempotency-key migration. It did not, and must not. Ratified by the owner (D5) on the
+ * architect's Decision 8:
+ *
+ *   · `booked_by_user_id uuid ... references(users.id)` FAILS THREE of the five
+ *     assertions in `invariants/meetings-no-context-column.test.ts` — the no-`_id`-suffix
+ *     rule, the exactly-one-uuid-column rule, and the zero-foreign-keys rule. The last is
+ *     the naming-independent one that actually holds the line, and it would become "the
+ *     FKs on this list" the moment the first exception is written. Mechanical strength
+ *     survives an allow-list; DETERRENT strength does not.
+ *   · NOTHING READS IT. No shipped or in-scope consumer asks "who booked this meeting" off
+ *     this table; cancel authorization is on the ADR-1046 ENGAGEMENT axis (delivery
+ *     identity), not on "did you book it".
+ *   · The ceiling already discharges the ADR requirement: `meetingsRepository.create`
+ *     writes one `meeting.booked` `audit_events` row in the SAME transaction with
+ *     `actor_user_id` threaded from the route. An omitted actor records NULL (the ADR-1030
+ *     system-actor exemption), never a fabricated one.
+ *
+ * If the floor is ever genuinely wanted it is a STRUCTURAL change on its own merits: amend
+ * ADR-1045 §2 in the Notion Decision Register FIRST, then edit the invariant with a written
+ * justification. Not a carve-out smuggled into a feature PR.
+ *
+ * ⚠ THE ONE COLUMN BAL-400 DID ADD is `booking_idempotency_key`, and it passes all five
+ * assertions BY CONSTRUCTION — `text`, not `uuid`; a `_key` suffix, not `_id`; no
+ * `.references(`. Two traps for anyone touching this file again, because assertion 2
+ * filters EVERY single-quoted literal in the comment-stripped source and not merely column
+ * names: the key must never become `uuid(...)` even though its value is derived from a
+ * user id, and NO index or CHECK NAME here may end in `_id` either.
+ *
  * NO RLS (matching the credit / action-item / transcript precedents — `transcripts.ts`,
  * `credit-sessions.ts`): access is gated at the application layer.
  *
@@ -96,6 +128,31 @@ export const meetings = pgTable(
     dailyRoomName: text('daily_room_name'),
     joinUrl: text('join_url'),
 
+    /**
+     * BAL-400 — the BOOKING-LEVEL idempotency key, spanning BOTH hops of a client booking
+     * (create-the-case in a web Server Action, then `POST /meetings`). A retry re-enters
+     * against the meeting that already exists instead of creating a second meeting, a
+     * second Daily room, a second calendar event and a second notification fan-out.
+     * `services/meetings/provision-meeting.ts` states the hazard outright: two identical
+     * POSTs create two meetings and two rooms.
+     *
+     * VALUE: a lowercase 64-char hex `sha256(userId:nonce)`, hashed SERVER-SIDE. That is
+     * load-bearing rather than cosmetic — a raw client-supplied key would make the lookup
+     * below an IDOR, handing a stranger who replays someone else's key that person's
+     * meeting. Deriving it from the actor id makes cross-user collision structurally
+     * impossible, so the lookup is actor-scoped BY CONSTRUCTION and needs no second
+     * ownership query.
+     *
+     * ⚠ `text`, NEVER `uuid` — see the file docblock. The value is a hash, not an id, and
+     * a `uuid` column here would trip the exactly-one-uuid-column invariant.
+     *
+     * NULLABLE, and it stays that way. The dev seeder, every pre-existing row, and the
+     * `project_kickoff` / `package_session` / `project_discovery` booking paths all
+     * legitimately carry none. A `NOT NULL` add would pass CI (the integration harness
+     * migrates an EMPTY container) and fail against production data.
+     */
+    bookingIdempotencyKey: text('booking_idempotency_key'),
+
     ...timestamps,
     ...softDelete,
   },
@@ -110,7 +167,33 @@ export const meetings = pgTable(
     uniqueIndex('meeting_daily_room_name_idx')
       .on(t.dailyRoomName)
       .where(sql`${t.dailyRoomName} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+    // BAL-400 — a booking key resolves to at most ONE live meeting, which is what makes
+    // "retry re-enters against the existing meeting" a database guarantee rather than a
+    // convention. PARTIAL on BOTH `IS NOT NULL` and `deleted_at IS NULL`: the column is
+    // nullable (most meetings carry no key, and a non-partial unique would collapse every
+    // one of them onto a single NULL slot in some engines) and a soft-deleted meeting must
+    // not permanently occupy its key (memory `reference_softdelete_nonpartial_unique_recreate`),
+    // exactly as `meeting_daily_room_name_idx` above does for the room name.
+    //
+    // ⚠ THE ARBITER IS A PARTIAL INDEX, so any future `ON CONFLICT` against it must INLINE
+    // its predicate literals via raw `sql` — a Drizzle `eq()` Param fails 42P10 at runtime
+    // (memory `reference_pg_partial_index_arbiter_param_42p10`). The shipped write path
+    // deliberately does NOT use `ON CONFLICT`: it catches 23505 and re-reads by key.
+    uniqueIndex('meeting_booking_idempotency_key_idx')
+      .on(t.bookingIdempotencyKey)
+      .where(sql`${t.bookingIdempotencyKey} IS NOT NULL AND ${t.deletedAt} IS NULL`),
     check('meeting_scheduled_start_before_end', sql`${t.scheduledStart} < ${t.scheduledEnd}`),
+    // BAL-400 — the key is a lowercase sha256 hex digest, and the DB says so. A caller that
+    // forwards a raw client nonce (the IDOR shape the column docblock warns about) fails
+    // 23514 here instead of silently storing an attacker-chosen key. Enum-literal-free, so
+    // the ADD-VALUE one-transaction migration hazard cannot apply.
+    //
+    // No three-valued-logic hole: `IS NULL` is total, and when the column IS NOT NULL the
+    // RHS compares a non-NULL value to a literal pattern ⇒ never NULL.
+    check(
+      'meeting_booking_idempotency_key_format',
+      sql`${t.bookingIdempotencyKey} IS NULL OR ${t.bookingIdempotencyKey} ~ '^[0-9a-f]{64}$'`
+    ),
     // NO THREE-VALUED-LOGIC HOLE: when `outcome` IS NULL the LHS is TRUE (IS NULL is
     // total); when it is NOT NULL the RHS compares a NOT NULL column to a literal ⇒ never
     // NULL. The CHECK therefore never "passes by being unknown".

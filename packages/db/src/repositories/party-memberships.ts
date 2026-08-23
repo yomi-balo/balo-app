@@ -1,10 +1,12 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { rolesWithCapability, CAPABILITIES } from '@balo/shared/authz';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { rolesWithCapability, CAPABILITIES, type Capability } from '@balo/shared/authz';
+import type { EligibleCompany } from '@balo/shared/credit';
 import { db } from '../client';
 import {
   companies,
   agencies,
   companyMembers,
+  companyRoleEnum,
   agencyMembers,
   type PartyType,
   type Company,
@@ -441,6 +443,73 @@ export const partyMembershipsRepository = {
    */
   listBillingUserIds: async (companyId: string): Promise<string[]> => {
     return selectBillingUserIds(companyId);
+  },
+
+  /**
+   * BAL-400 (D1a) — the acting user's LIVE COMPANY memberships that grant `capability`,
+   * projected to the narrow `EligibleCompany` shape (id + name + logo; NO `creditBalance`,
+   * NO `isPersonal`, no other company column). Reuses BAL-401's shape deliberately so
+   * BAL-466 inherits a matching one when the money path attaches.
+   *
+   * WHY THIS EXISTS AT ALL: `engagements.company_id` is NOT NULL and a case PINS the company
+   * that every later consultation on it will bill, so the booking flow must resolve a
+   * company even though BAL-400 moves no money (D1). `openSession`'s
+   * `company_selection_required` 409 is unavailable — its resolver is a PRIVATE, unexported
+   * function in `apps/api` and there is no "list my eligible companies" endpoint anywhere.
+   *
+   * ⚠⚠ THE ROLE SET COMES FROM `rolesWithCapability`, INTERSECTED WITH
+   * `companyRoleEnum.enumValues`, AND THE INTERSECTION IS MANDATORY RATHER THAN TIDINESS.
+   * `rolesWithCapability(CONSUME_CREDITS)` returns `['owner','admin','member','expert']` —
+   * `'expert'` is an AGENCY label that shares the base-member bundle. Passing it to a
+   * comparison against a `company_role` column is a `22P02 invalid input value for enum` AT
+   * THE DATABASE, not a quiet empty result. (The `inArray(sql\`col\`, …)` spelling below,
+   * inherited from `selectAdminUserIds`, casts the column to text and would tolerate it —
+   * but that is an implementation detail of one helper, not a contract to lean on.)
+   *
+   * ⚠ NO ROLE STRING IS READ HERE (ADR-1029). `@balo/shared/authz` stays the single place a
+   * role is interpreted into capabilities; this method derives its filter from that map and
+   * never compares a role literal.
+   *
+   * ⚠ `companies` HAS NO `deleted_at` COLUMN (memory `reference_companies_table_no_deleted_at`)
+   * — do NOT add a soft-delete guard on the joined table; it will not compile. Liveness is
+   * the MEMBERSHIP's (`company_members.deleted_at IS NULL`), which is the right grain
+   * anyway: losing your membership is what makes a company ineligible.
+   *
+   * ⚠ DELIBERATELY PARALLEL TO (not shared with) `open-session.ts`'s private
+   * `resolveEligibleCompanies`. Both derive from the SAME
+   * `rolesWithCapability(CONSUME_CREDITS)` over live company memberships, so they cannot
+   * disagree about the ROLE RULE. A disagreement about the SET fails CLOSED anyway:
+   * `openSession`'s `resolveEngagementForMeeting` re-checks
+   * `engagement.companyId === chosenCompanyId`, so a company pinned here that the actor has
+   * since lost is refused at billing time rather than mis-billed. Converging the two is a
+   * follow-up; D1 keeps BAL-400 off the money path.
+   *
+   * ORDERED `name ASC, id ASC` — deterministic, so a picker with two identically-named
+   * companies does not reshuffle between renders. An empty role set short-circuits to `[]`
+   * WITHOUT touching the database.
+   */
+  listCapabilityEligibleCompanies: async (
+    userId: string,
+    capability: Capability
+  ): Promise<EligibleCompany[]> => {
+    const companyRoles: readonly string[] = companyRoleEnum.enumValues;
+    const roles = rolesWithCapability(capability).filter((role) => companyRoles.includes(role));
+    if (roles.length === 0) {
+      return [];
+    }
+
+    return db
+      .select({ id: companies.id, name: companies.name, logoUrl: companies.logoUrl })
+      .from(companyMembers)
+      .innerJoin(companies, eq(companies.id, companyMembers.companyId))
+      .where(
+        and(
+          eq(companyMembers.userId, userId),
+          isNull(companyMembers.deletedAt),
+          inArray(sql`${companyMembers.role}`, roles)
+        )
+      )
+      .orderBy(asc(companies.name), asc(companies.id));
   },
 
   /**

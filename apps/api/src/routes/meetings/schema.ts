@@ -34,6 +34,20 @@ export const createMeetingBodySchema = z.object({
   contextId: z.string().uuid(),
   scheduledStart: z.string().datetime(),
   scheduledEnd: z.string().datetime(),
+  /**
+   * BAL-400 (Decision 7) — OPTIONAL, additive. Web-side keying makes the CASE hop
+   * idempotent but cannot make the MEETING hop idempotent: after a lost 201 the client
+   * cannot tell whether a meeting exists, and re-POSTing would create a second meeting, a
+   * second Daily room, a second calendar event and a second notification fan-out. Optional
+   * keeps the other three (non-case) context types working unchanged — only the booking
+   * flow mints one. `sha256(userId:nonce)` hex, so cross-user reuse is already impossible;
+   * same-user reuse against a DIFFERENT case is rejected at the service layer (409
+   * `idempotency_key_conflict`), not here.
+   */
+  bookingIdempotencyKey: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
 });
 
 export type CreateMeetingBody = z.infer<typeof createMeetingBodySchema>;

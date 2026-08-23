@@ -37,6 +37,8 @@ export {
   MEETING_PANEL_EVENTS,
   /** Availability CLIENT family — BAL-416's conflict warning + BAL-236's slot picker. */
   AVAILABILITY_EVENTS,
+  /** BAL-400 — the case-booking flow. All eight are client events. */
+  BOOKING_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -77,4 +79,9 @@ export type {
   CaseSurfaceAction,
   /** BAL-416 — the time-off conflict warning's client outcome vocabulary. */
   AvailabilityConflictResolution,
+  /** BAL-400 — the case-booking flow's client vocabulary. */
+  BookingEventMap,
+  BookingSource,
+  BookingEntryMode,
+  BookingAbandonStep,
 } from '@balo/analytics/client';

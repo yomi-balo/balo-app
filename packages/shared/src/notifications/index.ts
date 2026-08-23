@@ -1156,3 +1156,37 @@ export interface ExpertSearchabilityRestoredPayload {
   correlationId: string; // = audit_events.id → BullMQ jobId dedup
   expertProfileId: string; // → resolver hydrates data.expert → recipient 'expert'
 }
+
+/**
+ * BAL-400 — a consultation was booked into a case. Published by the web booking Server Action
+ * AFTER `POST /meetings` returns 201, so a case with no meeting never notifies anyone.
+ *
+ * ⚠ COUNTERPARTY CONTACT CONCEALMENT (ADR-1044 §3): names cross the party boundary, addresses
+ * never. No field here is or contains an email address.
+ * ⚠ FEE CONCEALMENT: no rate, no total, no estimate. There is none to leak (D4c).
+ */
+export interface BookingConfirmedPayload {
+  /** `${meetingId}` — BullMQ jobId dedup (publisher.ts:16). Makes an idempotent retry publish once. */
+  correlationId: string;
+  meetingId: string;
+  engagementId: string;
+  /** The booking client's user id → recipient 'client'. Absent ⇒ the client rule skips. */
+  recipientId?: string;
+  /** → recipient 'expert' (resolver hydrates data.expert). */
+  expertProfileId: string;
+  /** Prospective copy names the PARTY (CLAUDE.md). */
+  clientCompanyName: string;
+  expertPartyLabel: string;
+  caseTitle: string;
+  /** True when this booking opened the case; false when it attached to an existing one. */
+  isNewCase: boolean;
+  /** Count BEFORE this booking — lets the expert template reference prior consultations on an attach. */
+  priorConsultationCount: number;
+  scheduledStartIso: string;
+  durationMinutes: number;
+  /** `/join/m/{meetingId}` — the member route. NEVER `meetings.join_url` (raw Daily). */
+  joinPath: string;
+  /** False ⇒ the Daily room is not up yet; templates must not promise a live link. */
+  provisioned: boolean;
+  guestCount: number;
+}

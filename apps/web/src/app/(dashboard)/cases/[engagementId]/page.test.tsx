@@ -10,6 +10,7 @@ import type {
 
 const ENGAGEMENT_ID = 'c0000000-0000-4000-8000-000000000001';
 const USER_ID = 'd0000000-0000-4000-8000-000000000002';
+const USER_EMAIL = 'dana@northwind.com';
 const CASE_TITLE = 'Flow interview stuck on a record-triggered loop';
 
 vi.mock('server-only', () => ({}));
@@ -57,9 +58,11 @@ vi.mock('@/lib/analytics/server', async () => {
 // The surface itself is a large client tree with its own suites; here it is a witness that the
 // page reached the render, and a record of exactly which view object it was handed.
 const mockCaseSurface = vi.fn();
+const mockCaseSurfaceProps = vi.fn();
 vi.mock('./_components/case-surface', () => ({
-  CaseSurface: (props: Readonly<{ view: CaseSurfaceView }>) => {
+  CaseSurface: (props: Readonly<{ view: CaseSurfaceView; viewerEmailDomain?: string | null }>) => {
     mockCaseSurface(props.view);
+    mockCaseSurfaceProps(props);
     return <div data-testid="case-surface">{props.view.header.title}</div>;
   },
 }));
@@ -118,6 +121,7 @@ const CONVERSATION: CaseConversationView = {
 
 const BASE = {
   engagementId: ENGAGEMENT_ID,
+  expertProfileId: 'expert-1',
   viewerUserId: USER_ID,
   header: OPEN_HEADER,
   nudge: null,
@@ -184,7 +188,7 @@ function props(engagementId: string = ENGAGEMENT_ID): Readonly<{
 describe('CasePage — access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCurrentUser.mockResolvedValue({ id: USER_ID });
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
     mockLoadCase.mockResolvedValue(CLIENT_VIEW);
   });
 
@@ -229,12 +233,31 @@ describe('CasePage — access', () => {
     expect(screen.getByTestId('case-surface')).toHaveTextContent(CASE_TITLE);
     expect(mockCaseSurface).toHaveBeenCalledWith(CLIENT_VIEW);
   });
+
+  // UX-2 (BAL-400 round 2) — the case-surface quick-pick's guest disclosure needs the
+  // SESSION-derived domain, never case-view PII. Pin that the page computes and forwards it.
+  it('derives viewerEmailDomain from the session email and forwards it to CaseSurface', async () => {
+    const element = await CasePage(props());
+    render(element);
+    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(
+      expect.objectContaining({ viewerEmailDomain: 'northwind.com' })
+    );
+  });
+
+  it('forwards null when the session email has no extractable domain', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: 'not-an-email' });
+    const element = await CasePage(props());
+    render(element);
+    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(
+      expect.objectContaining({ viewerEmailDomain: null })
+    );
+  });
 });
 
 describe('CasePage — a loader failure', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCurrentUser.mockResolvedValue({ id: USER_ID });
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
   });
 
   it('LOGS the failure and RE-THROWS so error.tsx renders the boundary', async () => {
@@ -273,7 +296,7 @@ describe('CasePage — a loader failure', () => {
 describe('CasePage — the view event', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCurrentUser.mockResolvedValue({ id: USER_ID });
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
     mockLoadCase.mockResolvedValue(CLIENT_VIEW);
   });
 
@@ -326,7 +349,7 @@ describe('CasePage — the view event', () => {
 describe('CasePage — case_state keeps the two closed reasons distinct', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCurrentUser.mockResolvedValue({ id: USER_ID });
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
   });
 
   async function caseStateFor(view: CaseSurfaceView): Promise<unknown> {
@@ -360,7 +383,7 @@ describe('generateMetadata — the anti-oracle contract', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCurrentUser.mockResolvedValue({ id: USER_ID });
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
     mockLoadCase.mockResolvedValue(CLIENT_VIEW);
   });
 

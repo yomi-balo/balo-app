@@ -50,6 +50,7 @@ import type {
   MeetingClientAbsentPayload,
   ExpertSearchabilityLostPayload,
   ExpertSearchabilityRestoredPayload,
+  BookingConfirmedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -362,7 +363,12 @@ export type NotificationEvent =
   // `expert.searchability_restored` is published from all four re-list triggers, on both
   // sides, in-app only.
   | 'expert.searchability_lost'
-  | 'expert.searchability_restored';
+  | 'expert.searchability_restored'
+  // BAL-400 (D4) — a consultation was booked into a case. Published by the web booking
+  // Server Action AFTER `POST /meetings` returns 201, so a case with no meeting never
+  // notifies anyone. Publishable from apps/web — deliberately NOT in
+  // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
+  | 'booking.confirmed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -582,4 +588,5 @@ export interface EventPayloadMap {
   'conversation.unread_digest_due': ConversationUnreadDigestDuePayload;
   'expert.searchability_lost': ExpertSearchabilityLostPayload;
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
+  'booking.confirmed': BookingConfirmedPayload;
 }

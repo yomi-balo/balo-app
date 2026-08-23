@@ -42,6 +42,7 @@ import type { ReviewServerEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
+import type { BookingEventMap } from './events/booking';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -78,7 +79,9 @@ export type AllEvents = AuthEventMap &
   MeetingPanelEventMap &
   // Availability CLIENT family — BAL-416's time-off conflict warnings PLUS BAL-236's
   // slot-picker events. One map, two tickets; see `./events/availability.ts`.
-  AvailabilityEventMap;
+  AvailabilityEventMap &
+  // BAL-400 — the case-booking flow. All eight are client events; no server family.
+  BookingEventMap;
 
 export type EventName = keyof AllEvents;
 

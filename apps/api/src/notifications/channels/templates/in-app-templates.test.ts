@@ -2,26 +2,70 @@ import { describe, it, expect } from 'vitest';
 import { getInAppTemplate } from './in-app-templates.js';
 
 describe('getInAppTemplate', () => {
-  describe('booking-confirmed', () => {
-    it('returns correct title and body with client name', () => {
-      const result = getInAppTemplate('booking-confirmed', {
-        clientName: 'Alice',
-        caseId: 'case-123',
+  describe('booking-confirmed-client', () => {
+    it('names the expert party and deep-links to the case, new case', () => {
+      const result = getInAppTemplate('booking-confirmed-client', {
+        expertPartyLabel: 'CloudPeak',
+        engagementId: 'engagement-123',
+        isNewCase: true,
+      });
+      expect(result).toEqual({
+        title: 'Consultation confirmed',
+        body: 'Your consultation with CloudPeak is confirmed.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('uses the attach copy when isNewCase is false', () => {
+      const result = getInAppTemplate('booking-confirmed-client', {
+        expertPartyLabel: 'CloudPeak',
+        engagementId: 'engagement-123',
+        isNewCase: false,
+      });
+      expect(result.body).toBe('Another consultation with CloudPeak is confirmed.');
+    });
+
+    it('falls back to "Your expert" when expertPartyLabel is missing', () => {
+      const result = getInAppTemplate('booking-confirmed-client', { isNewCase: true });
+      expect(result.body).toBe('Your consultation with Your expert is confirmed.');
+    });
+
+    it('omits actionUrl when engagementId is missing', () => {
+      const result = getInAppTemplate('booking-confirmed-client', { isNewCase: true });
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('booking-confirmed-expert', () => {
+    it('names the client company and deep-links to the case, new case', () => {
+      const result = getInAppTemplate('booking-confirmed-expert', {
+        clientCompanyName: 'Northwind Industrial',
+        engagementId: 'engagement-456',
+        isNewCase: true,
       });
       expect(result).toEqual({
         title: 'New booking',
-        body: 'Alice booked a consultation',
-        actionUrl: '/cases/case-123',
+        body: 'Northwind Industrial booked a consultation with you.',
+        actionUrl: '/cases/engagement-456',
       });
     });
 
-    it('falls back to "A client" when clientName is missing', () => {
-      const result = getInAppTemplate('booking-confirmed', {});
-      expect(result.body).toBe('A client booked a consultation');
+    it('uses the attach copy when isNewCase is false', () => {
+      const result = getInAppTemplate('booking-confirmed-expert', {
+        clientCompanyName: 'Northwind Industrial',
+        engagementId: 'engagement-456',
+        isNewCase: false,
+      });
+      expect(result.body).toBe('Northwind Industrial booked another consultation with you.');
     });
 
-    it('omits actionUrl when caseId is missing', () => {
-      const result = getInAppTemplate('booking-confirmed', { clientName: 'Bob' });
+    it('falls back to "A client" when clientCompanyName is missing', () => {
+      const result = getInAppTemplate('booking-confirmed-expert', { isNewCase: true });
+      expect(result.body).toBe('A client booked a consultation with you.');
+    });
+
+    it('omits actionUrl when engagementId is missing', () => {
+      const result = getInAppTemplate('booking-confirmed-expert', { isNewCase: true });
       expect(result.actionUrl).toBeUndefined();
     });
   });

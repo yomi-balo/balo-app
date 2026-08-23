@@ -1,8 +1,18 @@
-import { pgTable, uuid, text, timestamp, index, check, foreignKey } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  index,
+  uniqueIndex,
+  check,
+  foreignKey,
+} from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { caseCloseReasonEnum, engagementTypeEnum } from './enums';
 import { engagements } from './engagements';
 import { users } from './users';
+import { caseEngagementProducts } from './case-engagement-products';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -71,6 +81,34 @@ export const caseEngagements = pgTable(
      */
     description: text('description').notNull(),
 
+    /**
+     * BAL-400 — the CASE-GRAIN half of the booking idempotency key. THE SAME VALUE that
+     * lands on `meetings.booking_idempotency_key` for the meeting the same submit books.
+     *
+     * ⚠ WHY THE KEY IS STORED TWICE, AT TWO GRAINS. A client booking is a TWO-HOP,
+     * NON-ATOMIC write: a web Server Action creates this case, then a Bearer hop to
+     * `POST /meetings` books the meeting. After a case-created / meeting-failed partial
+     * there is NO `meetings` row, so a key on `meetings` alone cannot answer the only
+     * question the retry has — "has a case already been created?". Stamping it here is what
+     * makes "Try again" a TRUE IDEMPOTENT RE-ENTRY against the already-created case rather
+     * than a second case with the same title.
+     *
+     * ⚠ IT LIVES ON THE CHILD, NOT THE SUPERTYPE. ADR-1045 §1: `engagements` holds only
+     * what is universal to every engagement product, and booking-double-submit is a
+     * CASE-BOOKING artefact — a project engagement is originated through proposals and has
+     * no equivalent submit to de-duplicate.
+     *
+     * NULLABLE, and it stays that way: the dev seeder, BAL-417's tests, and every case row
+     * that predates BAL-400 legitimately carry none. A `NOT NULL` add would pass CI (the
+     * integration harness migrates an EMPTY container) and fail against production data.
+     *
+     * ⚠ DELIBERATELY STRIPPED FROM `CaseEngagementRow` by `toCaseRow`, exactly as
+     * `engagements.balo_fee_bps` is — see that fold. No caller needs the key handed back
+     * (the retry already holds it), and keeping it out of the projection means it can never
+     * ride a case row onto a client surface.
+     */
+    bookingIdempotencyKey: text('booking_idempotency_key'),
+
     // ── Close / resolution lifecycle ──
     closedAt: timestamp('closed_at', { withTimezone: true }),
     /**
@@ -131,7 +169,32 @@ export const caseEngagements = pgTable(
     index('case_engagement_closed_at_idx')
       .on(t.closedAt)
       .where(sql`${t.deletedAt} IS NULL`),
+    // BAL-400 — a booking key resolves to at most ONE live case, which is what makes the
+    // idempotent retry a database guarantee rather than a convention. PARTIAL on BOTH
+    // `IS NOT NULL` and `deleted_at IS NULL`, for the same two reasons as the twin index
+    // on `meetings`: the column is nullable, and a soft-deleted case must not permanently
+    // occupy its key (memory `reference_softdelete_nonpartial_unique_recreate`). Predicate
+    // references only the two columns — no enum literal, so the ADD-VALUE one-transaction
+    // migration hazard cannot apply.
+    //
+    // ⚠ THE ARBITER IS A PARTIAL INDEX. Any future `ON CONFLICT` against it must INLINE the
+    // predicate literals via raw `sql`; a Drizzle `eq()` Param fails 42P10 at runtime
+    // (memory `reference_pg_partial_index_arbiter_param_42p10`). `create` deliberately does
+    // NOT use `ON CONFLICT` — it lets the 23505 surface so the caller re-reads by key.
+    uniqueIndex('case_engagement_booking_idempotency_key_idx')
+      .on(t.bookingIdempotencyKey)
+      .where(sql`${t.bookingIdempotencyKey} IS NOT NULL AND ${t.deletedAt} IS NULL`),
     check('case_engagement_type_is_case', sql`${t.engagementType} = 'case'`),
+    // BAL-400 — the key is a lowercase sha256 hex digest, and the DB says so. A caller that
+    // forwards a raw client nonce instead of the server-side hash fails 23514 here rather
+    // than silently storing an attacker-chosen key. Enum-literal-free.
+    //
+    // No three-valued-logic hole: `IS NULL` is total, and when the column IS NOT NULL the
+    // RHS compares a non-NULL value to a literal pattern ⇒ never NULL.
+    check(
+      'case_engagement_booking_idempotency_key_format',
+      sql`${t.bookingIdempotencyKey} IS NULL OR ${t.bookingIdempotencyKey} ~ '^[0-9a-f]{64}$'`
+    ),
     check('case_engagement_title_nonempty', sql`length(btrim(${t.title})) > 0`),
     check('case_engagement_description_nonempty', sql`length(btrim(${t.description})) > 0`),
     // The structural encoding of "closed_by_user_id is always a client-side user, or
@@ -166,7 +229,7 @@ export const caseEngagements = pgTable(
 
 // ── Relations ──────────────────────────────────────────────────────────
 
-export const caseEngagementsRelations = relations(caseEngagements, ({ one }) => ({
+export const caseEngagementsRelations = relations(caseEngagements, ({ one, many }) => ({
   engagement: one(engagements, {
     fields: [caseEngagements.engagementId],
     references: [engagements.id],
@@ -181,6 +244,12 @@ export const caseEngagementsRelations = relations(caseEngagements, ({ one }) => 
     fields: [caseEngagements.resolutionRequestedByUserId],
     references: [users.id],
   }),
+  // BAL-400 — the case's product tags. ⚠ `reference_drizzle_with_hydration_leaks_secrets`
+  // does NOT bite here (a junction row carries no PII and no secret), but a bare
+  // `with: { products: true }` still hydrates the junction rows rather than the taxonomy;
+  // a surface that wants product NAMES must nest `with: { product: true }` or project
+  // explicit `columns:`.
+  products: many(caseEngagementProducts),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

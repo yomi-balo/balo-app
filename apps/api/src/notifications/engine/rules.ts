@@ -291,24 +291,17 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // is waiting on it, so email-worthy (plus in-app). recipient:'client' resolves via
   // payload.recipientId (the request owner's user id), like project.proposal_submitted.
   'project.proposal_resubmitted': emailAndInApp('client', 'project-proposal-resubmitted'),
+  // BAL-400 (D4) — a consultation was booked into a case. Two-party fan-out (mirrors
+  // `recap.ready`): the CLIENT (recipient:'client' via payload.recipientId — conditioned on
+  // its presence so the rule skips gracefully when absent) + the delivering EXPERT
+  // (recipient:'expert' via payload.expertProfileId → the resolver hydrates data.expert,
+  // always present so UNCONDITIONED). Email + in-app to each; NO admin fan-out. NO SMS — the
+  // legacy SMS rule was structurally incapable of firing (resolver.ts hydrates data.user
+  // from payload.userId only, which this payload never carries) and the ticket's own spec
+  // puts SMS at the ~2h reminder, a separate, unbuilt event.
   'booking.confirmed': [
-    {
-      channel: 'sms',
-      recipient: 'expert',
-      template: 'booking-confirmed-sms',
-      timing: 'immediate',
-      priority: 'critical',
-      condition: (ctx) => {
-        const user = ctx.data.user as { phoneVerifiedAt?: string | Date } | undefined;
-        return !!user?.phoneVerifiedAt;
-      },
-    },
-    {
-      channel: 'in-app',
-      recipient: 'expert',
-      template: 'booking-confirmed',
-      timing: 'immediate',
-    },
+    ...emailAndInApp('client', 'booking-confirmed-client', (ctx) => !!ctx.payload.recipientId),
+    ...emailAndInApp('expert', 'booking-confirmed-expert'),
   ],
   'message.received': [
     {

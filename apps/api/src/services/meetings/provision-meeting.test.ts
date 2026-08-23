@@ -2,15 +2,37 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import type { FastifyBaseLogger } from 'fastify';
 import type { ProvisionedRoom, RoomProvisioner } from '../daily/rooms.js';
 
-const { mockFindById, mockSetVenue, mockBookMeeting, mockTrackServer } = vi.hoisted(() => ({
+const {
+  mockFindById,
+  mockSetVenue,
+  mockBookMeeting,
+  mockTrackServer,
+  mockFindByBookingIdempotencyKey,
+  mockFindWithContexts,
+  mockFindByEngagementId,
+  mockFindCompanyById,
+  mockProjectBookingToExpertCalendar,
+} = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockSetVenue: vi.fn(),
   mockBookMeeting: vi.fn(),
   mockTrackServer: vi.fn(),
+  mockFindByBookingIdempotencyKey: vi.fn(),
+  mockFindWithContexts: vi.fn(),
+  mockFindByEngagementId: vi.fn(),
+  mockFindCompanyById: vi.fn(),
+  mockProjectBookingToExpertCalendar: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
-  meetingsRepository: { findById: mockFindById, setVenue: mockSetVenue },
+  meetingsRepository: {
+    findById: mockFindById,
+    setVenue: mockSetVenue,
+    findByBookingIdempotencyKey: mockFindByBookingIdempotencyKey,
+    findWithContexts: mockFindWithContexts,
+  },
+  caseEngagementsRepository: { findByEngagementId: mockFindByEngagementId },
+  companiesRepository: { findById: mockFindCompanyById },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
@@ -20,13 +42,21 @@ vi.mock('@balo/analytics/server', () => ({
   },
 }));
 vi.mock('./meeting-availability.js', () => ({ bookMeeting: mockBookMeeting }));
+vi.mock('../consultation-events/project-booking-to-calendar.js', () => ({
+  projectBookingToExpertCalendar: mockProjectBookingToExpertCalendar,
+}));
 // `@balo/shared/meetings` is deliberately NOT mocked — the real `dailyRoomNameForMeeting` is
 // the arbiter the whole idempotency argument rests on, so the tests must see the real name.
 
 // The REAL error class — `instanceof` is what decides whether the vendor's response body
 // reaches the log, so a local stand-in would make that assertion vacuous.
 import { DailyApiError } from '../daily/errors.js';
-import { bookAndProvisionMeeting, provisionMeeting } from './provision-meeting.js';
+import {
+  bookAndProvisionMeeting,
+  provisionMeeting,
+  BookingIdempotencyKeyConflictError,
+  type BookAndProvisionInput,
+} from './provision-meeting.js';
 
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const ROOM_NAME = 'balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
@@ -167,6 +197,9 @@ describe('bookAndProvisionMeeting — the ordering', () => {
         scheduledEnd: END,
         contexts: [{ contextType: 'project_kickoff', contextId: CONTEXT_ID }],
         actorUserId: USER_ID,
+        // BAL-400 — `null` when the caller passed no `bookingIdempotencyKey` (this route's
+        // three non-`case` context types don't mint one).
+        bookingIdempotencyKey: null,
       },
       log
     );
@@ -538,5 +571,273 @@ describe('provisionMeeting — idempotency (D2, AC #6)', () => {
         replayed: false,
       }
     );
+  });
+});
+
+describe('bookAndProvisionMeeting — idempotent replay (BAL-400 Decision 7)', () => {
+  const KEY = 'a'.repeat(64);
+
+  function bookInput(overrides: Partial<BookAndProvisionInput> = {}): BookAndProvisionInput {
+    return {
+      contextType: 'case',
+      contextId: CONTEXT_ID,
+      scheduledStart: START,
+      scheduledEnd: END,
+      engagementType: 'case',
+      userId: USER_ID,
+      bookingIdempotencyKey: KEY,
+      ...overrides,
+    };
+  }
+
+  it('a key with no existing meeting creates normally and threads the key into bookMeeting', async () => {
+    mockFindByBookingIdempotencyKey.mockResolvedValue(undefined);
+
+    await bookAndProvisionMeeting(bookInput(), log, { provisioner: fakeProvisioner() });
+
+    expect(mockBookMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ bookingIdempotencyKey: KEY }),
+      log
+    );
+  });
+
+  it('a key resolving to a COHERENT existing meeting replays through provisionMeeting, not bookMeeting', async () => {
+    mockFindByBookingIdempotencyKey.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    mockFindWithContexts.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [{ contextType: 'case', contextId: CONTEXT_ID }],
+    });
+    // `provisionMeeting` (the replay path) re-reads the meeting itself via `findById`.
+    mockFindById.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+
+    const result = await bookAndProvisionMeeting(bookInput(), log, {
+      provisioner: fakeProvisioner(),
+    });
+
+    expect(mockBookMeeting).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      provisioned: true,
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    expect(result.meeting.id).toBe(MEETING_ID);
+  });
+
+  it('a key resolving to a meeting booked against a DIFFERENT context throws BookingIdempotencyKeyConflictError', async () => {
+    mockFindByBookingIdempotencyKey.mockResolvedValue(unstampedMeeting());
+    mockFindWithContexts.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [{ contextType: 'case', contextId: 'a-totally-different-case-id' }],
+    });
+
+    await expect(
+      bookAndProvisionMeeting(bookInput(), log, { provisioner: fakeProvisioner() })
+    ).rejects.toBeInstanceOf(BookingIdempotencyKeyConflictError);
+    expect(mockBookMeeting).not.toHaveBeenCalled();
+  });
+
+  // ── S3 (second defect) — the WINDOW is part of "the same booking" ─────────
+  //
+  // The replay used to compare `contextType`/`contextId` and nothing else, so a key spent on
+  // 15:00 silently resolved a 16:00 submit to the 15:00 meeting — and the client was then told
+  // 16:00. The chosen semantics are CONFLICT, not silent-replay: see `lookupBookingReplay`.
+
+  it.each([
+    {
+      label: 'a LATER start',
+      existing: { scheduledStart: new Date(START.getTime() + 3_600_000), scheduledEnd: END },
+    },
+    {
+      label: 'a different END only',
+      existing: { scheduledStart: START, scheduledEnd: new Date(END.getTime() + 900_000) },
+    },
+  ])(
+    'a key resolving to a meeting in a DIFFERENT WINDOW ($label) throws BookingIdempotencyKeyConflictError',
+    async ({ existing }) => {
+      mockFindByBookingIdempotencyKey.mockResolvedValue({ ...unstampedMeeting(), ...existing });
+      mockFindWithContexts.mockResolvedValue({
+        meeting: unstampedMeeting(),
+        contexts: [{ contextType: 'case', contextId: CONTEXT_ID }],
+      });
+
+      await expect(
+        bookAndProvisionMeeting(bookInput(), log, { provisioner: fakeProvisioner() })
+      ).rejects.toBeInstanceOf(BookingIdempotencyKeyConflictError);
+      expect(mockBookMeeting).not.toHaveBeenCalled();
+      // The window is compared BEFORE the second read, so a mismatch costs no context lookup.
+      expect(mockFindWithContexts).not.toHaveBeenCalled();
+    }
+  );
+
+  it('an IDENTICAL window replays (the comparison is on the instant, not the object)', async () => {
+    // Distinct `Date` objects carrying the same instant — a naive `!==` would 409 here.
+    mockFindByBookingIdempotencyKey.mockResolvedValue({
+      ...unstampedMeeting(),
+      scheduledStart: new Date(START.getTime()),
+      scheduledEnd: new Date(END.getTime()),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    mockFindWithContexts.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [{ contextType: 'case', contextId: CONTEXT_ID }],
+    });
+    mockFindById.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+
+    const result = await bookAndProvisionMeeting(bookInput(), log, {
+      provisioner: fakeProvisioner(),
+    });
+
+    expect(mockBookMeeting).not.toHaveBeenCalled();
+    expect(result.meeting.id).toBe(MEETING_ID);
+  });
+
+  it('a concurrent double-submit (23505 on create) re-reads by key and replays rather than throwing raw', async () => {
+    mockFindByBookingIdempotencyKey
+      .mockResolvedValueOnce(undefined) // first check: nothing yet
+      .mockResolvedValueOnce({
+        ...unstampedMeeting(),
+        dailyRoomName: ROOM_NAME,
+        joinUrl: JOIN_URL,
+      }); // re-read after the race
+    mockFindWithContexts.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [{ contextType: 'case', contextId: CONTEXT_ID }],
+    });
+    mockFindById.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    const conflict = Object.assign(new Error('duplicate key'), { code: '23505' });
+    mockBookMeeting.mockRejectedValue(conflict);
+
+    const result = await bookAndProvisionMeeting(bookInput(), log, {
+      provisioner: fakeProvisioner(),
+    });
+
+    expect(result).toMatchObject({
+      provisioned: true,
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+  });
+
+  it('a non-unique-violation create failure is NOT swallowed, even with a key present', async () => {
+    mockFindByBookingIdempotencyKey.mockResolvedValue(undefined);
+    const notAConflict = new Error('something else broke');
+    mockBookMeeting.mockRejectedValue(notAConflict);
+
+    await expect(
+      bookAndProvisionMeeting(bookInput(), log, { provisioner: fakeProvisioner() })
+    ).rejects.toBe(notAConflict);
+  });
+
+  it('no key at all never touches findByBookingIdempotencyKey', async () => {
+    await bookAndProvisionMeeting(
+      {
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: 'case',
+        userId: USER_ID,
+      },
+      log,
+      { provisioner: fakeProvisioner() }
+    );
+
+    expect(mockFindByBookingIdempotencyKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('bookAndProvisionMeeting — the expert calendar projection (BAL-400 D2)', () => {
+  function bookInput(
+    contextType: BookAndProvisionInput['contextType'],
+    overrides: Partial<BookAndProvisionInput> = {}
+  ): BookAndProvisionInput {
+    return {
+      contextType,
+      contextId: CONTEXT_ID,
+      scheduledStart: START,
+      scheduledEnd: END,
+      engagementType: 'case',
+      userId: USER_ID,
+      ...overrides,
+    };
+  }
+
+  it('is invoked ONLY for contextType "case"', async () => {
+    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
+    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+    await bookAndProvisionMeeting(
+      bookInput('project_kickoff', { engagementType: 'project' }),
+      log,
+      {
+        provisioner: fakeProvisioner(),
+      }
+    );
+
+    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+  });
+
+  it('resolves the case + company and calls projectBookingToExpertCalendar for contextType "case"', async () => {
+    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
+    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+    await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
+
+    expect(mockProjectBookingToExpertCalendar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        expertProfileId: 'expert_1',
+        clientCompanyName: 'Northwind Industrial',
+        caseTitle: 'CPQ rollout',
+      }),
+      log
+    );
+    const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
+    expect((calendarInput as { joinUrl: string }).joinUrl).toContain(`/join/m/${MEETING_ID}`);
+  });
+
+  it('a throwing projection call does NOT fail the booking', async () => {
+    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
+    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+    mockProjectBookingToExpertCalendar.mockRejectedValue(new Error('should never happen'));
+
+    // `projectBookingToExpertCalendar`'s own contract is "never throws" (D2c) — but the CALL
+    // SITE wraps it in a try/catch too, defence-in-depth, so a violation of that contract
+    // still cannot turn a committed booking into a rejected promise.
+    const result = await bookAndProvisionMeeting(bookInput('case'), log, {
+      provisioner: fakeProvisioner(),
+    });
+    expect(result.meeting.id).toBe(MEETING_ID);
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, engagementId: CONTEXT_ID }),
+      'Failed to resolve case/company for the expert calendar projection'
+    );
+  });
+
+  it('skips silently (no throw) when the case has no live company row', async () => {
+    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
+    mockFindCompanyById.mockResolvedValue(undefined);
+
+    await expect(
+      bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() })
+    ).resolves.toBeDefined();
+    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
   });
 });

@@ -47,37 +47,42 @@ describe('notificationRules', () => {
     expect(rule.priority).toBe('normal');
   });
 
-  it('booking.confirmed has in-app rule for expert', () => {
+  it('booking.confirmed: client + expert each get email + in-app — 4 rules, no SMS, no admin fan-out', () => {
     const rules = notificationRules['booking.confirmed'];
     expect(rules).toBeDefined();
-    const inAppRule = rules!.find((r) => r.channel === 'in-app');
-    expect(inAppRule).toBeDefined();
-    expect(inAppRule!.recipient).toBe('expert');
-    expect(inAppRule!.template).toBe('booking-confirmed');
-    expect(inAppRule!.timing).toBe('immediate');
+    expect(rules).toHaveLength(4);
+    for (const rule of rules!) {
+      expect(rule.timing).toBe('immediate');
+    }
+    const clientRules = rules!.filter((r) => r.recipient === 'client');
+    const expertRules = rules!.filter((r) => r.recipient === 'expert');
+    expect(clientRules).toHaveLength(2);
+    expect(expertRules).toHaveLength(2);
+    expect(clientRules.every((r) => r.template === 'booking-confirmed-client')).toBe(true);
+    expect(expertRules.every((r) => r.template === 'booking-confirmed-expert')).toBe(true);
+    expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+      'email',
+      'in-app',
+    ]);
+    expect(expertRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+      'email',
+      'in-app',
+    ]);
+    expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+    expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
   });
 
-  it('booking.confirmed SMS rule condition returns false when phoneVerifiedAt is not set', () => {
-    const rules = notificationRules['booking.confirmed'];
-    const smsRule = rules!.find((r) => r.channel === 'sms');
-    expect(smsRule!.condition).toBeDefined();
-    const result = smsRule!.condition!({
-      event: 'booking.confirmed',
-      payload: {},
-      data: { user: { phoneVerifiedAt: null } },
-    });
-    expect(result).toBe(false);
-  });
-
-  it('booking.confirmed SMS rule condition returns true when phoneVerifiedAt is set', () => {
-    const rules = notificationRules['booking.confirmed'];
-    const smsRule = rules!.find((r) => r.channel === 'sms');
-    const result = smsRule!.condition!({
-      event: 'booking.confirmed',
-      payload: {},
-      data: { user: { phoneVerifiedAt: new Date().toISOString() } },
-    });
-    expect(result).toBe(true);
+  it('booking.confirmed: the client rules are gated on recipientId; the expert rules are unconditioned', () => {
+    const rules = notificationRules['booking.confirmed']!;
+    const clientRules = rules.filter((r) => r.recipient === 'client');
+    const expertRules = rules.filter((r) => r.recipient === 'expert');
+    for (const rule of clientRules) {
+      expect(rule.condition).toBeDefined();
+      const base = { event: 'booking.confirmed', data: {} };
+      expect(rule.condition!({ ...base, payload: { recipientId: 'user-1' } })).toBe(true);
+      expect(rule.condition!({ ...base, payload: {} })).toBe(false);
+    }
+    expect(expertRules.every((r) => r.condition === undefined)).toBe(true);
   });
 
   it('project.exploratory_requested has client email + in-app rules', () => {

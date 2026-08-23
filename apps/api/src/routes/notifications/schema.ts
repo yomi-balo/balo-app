@@ -513,6 +513,29 @@ const expertSearchabilityRestoredPayload = z.object({
   expertProfileId: z.uuid(),
 });
 
+// BAL-400 (D4) — a consultation was booked into a case. `correlationId` is `${meetingId}` (a
+// uuid) — a retry through the idempotent replay path publishes the SAME jobId, so BullMQ dedups
+// it rather than double-notifying. `recipientId` optional: absent ⇒ the client rule skips
+// (the resolver has no reviewer to hydrate). No rate/total/estimate field exists on this
+// payload — there is none to leak (D4c). Mirrors packages/shared/src/notifications/index.ts.
+const bookingConfirmedPayload = z.object({
+  correlationId: z.uuid(),
+  meetingId: z.uuid(),
+  engagementId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid(),
+  clientCompanyName: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  caseTitle: z.string().min(1).max(200),
+  isNewCase: z.boolean(),
+  priorConsultationCount: z.number().int().nonnegative(),
+  scheduledStartIso: z.string().datetime(),
+  durationMinutes: z.number().int().positive(),
+  joinPath: z.string().min(1).max(200),
+  provisioned: z.boolean(),
+  guestCount: z.number().int().nonnegative(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -667,6 +690,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('expert.searchability_restored'),
     payload: expertSearchabilityRestoredPayload,
+  }),
+  z.object({
+    event: z.literal('booking.confirmed'),
+    payload: bookingConfirmedPayload,
   }),
 ]);
 

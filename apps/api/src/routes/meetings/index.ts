@@ -16,10 +16,39 @@
  *     → createMeetingBodySchema.safeParse       → 400 invalid_request
  *     → validateBookingWindow(start, end, now)  → 400 <stable code>
  *     → authorizeMeetingBooking(...)            → 404 / 400
+ *     → lookupBookingReplay(key, window)        → SKIPS the two guards below on a `match`
  *     → per-(USER, EXPERT) rate limit           → 429 / 503 (fail-CLOSED)
  *     → isWindowAvailableForExpert(...)         → 409 window_not_available
  *     → bookAndProvisionMeeting(...)            → 201
  *        └── typed errors → mapped statuses
+ *
+ * ⚠⚠ THE REPLAY PROBE SITS **AFTER** `authorizeMeetingBooking` AND **BEFORE** THE
+ * AVAILABILITY GATE, AND BOTH HALVES OF THAT PLACEMENT ARE LOAD-BEARING (BAL-400 S3/M1).
+ *
+ *   · AFTER the gate, always. A `bookingIdempotencyKey` is `sha256(userId:nonce)` and proves
+ *     only WHO MINTED IT — never that the actor may book the submitted context. The tenancy
+ *     gate is NEVER skipped, for any key, ever.
+ *   · BEFORE availability, or Decision 7's replay is dead code on the exact path it exists
+ *     for. A committed booking writes its own `confirmed` consultation row, which
+ *     `isWindowAvailableForExpert` then reads as BUSY — so the lost-201 retry used to be
+ *     answered `409 window_not_available` **about the user's own meeting**, and the client
+ *     was pushed into booking a second slot.
+ *
+ * Only an EXACT `match` (same context AND same window — `lookupBookingReplay`) skips them; a
+ * `conflict` or `none` runs every guard as before and lets the service decide. Skipping the
+ * per-pair limit on a match is intentional and bounded: the per-USER limit above has already
+ * been consumed by this request, and a match creates no SECOND meeting and no calendar event.
+ *
+ * ⚠ It does NOT follow that a match makes no outbound vendor call — an earlier version of this
+ * docblock claimed "no room" and that was FALSE. `replayByIdempotencyKey` calls
+ * `provisionMeeting`, which short-circuits only when BOTH venue columns are already stamped
+ * (`provision-meeting.ts:279-285`); otherwise it runs `provisionVenue` and issues a live
+ * `createRoom` to Daily. So a match against a meeting that committed with `provisioned: false`
+ * — a state this feature ships a UI branch for — DOES hit the vendor, with the per-pair limit
+ * deliberately skipped. That is still bounded and safe: the tenancy gate ran first so it is
+ * never cross-tenant, the room name is deterministic so rooms cannot proliferate, and the
+ * per-USER limit (30/h) still applies. It is the idempotent venue REPAIR, not a new booking.
+ * Do not extend this skip to anything that is not provably repair-only.
  *
  * The cheap, leak-free checks run first on purpose: a malformed window must not cost a
  * database round-trip, and a 400 that leaks nothing is a better answer to a probe than a 404
@@ -113,7 +142,10 @@ import { isWindowAvailableForExpert } from '../../services/availability/window-a
 import { authorizeMeetingBooking } from '../../services/meetings/authorize-meeting-booking.js';
 import {
   bookAndProvisionMeeting,
+  lookupBookingReplay,
+  BookingIdempotencyKeyConflictError,
   type BookAndProvisionInput,
+  type BookingReplayProbe,
 } from '../../services/meetings/provision-meeting.js';
 import { createMeetingBodySchema } from './schema.js';
 import { meetingGuestRoutes } from './guests.js';
@@ -188,6 +220,11 @@ function bookingErrorResponse(error: unknown): { status: number; error: string }
   }
   if (error instanceof MeetingContextNotProjectableError) {
     return { status: 409, error: 'context_not_bookable' };
+  }
+  // BAL-400 (Decision 7) — a `bookingIdempotencyKey` that already names a meeting booked
+  // against a DIFFERENT context. Same-user key reuse against a different case.
+  if (error instanceof BookingIdempotencyKeyConflictError) {
+    return { status: 409, error: 'idempotency_key_conflict' };
   }
   return null;
 }
@@ -285,6 +322,40 @@ async function enforceExpertScopedGuards(
 }
 
 /**
+ * BAL-400 (S3/M1) — is this submit an EXACT idempotent replay of a booking that already
+ * exists? `true` ⇒ the expert-scoped guards are skipped (see the module docblock for why that
+ * is safe and why it is necessary). A missing key, an unknown key, or a key naming a different
+ * case/window all answer `false`, so every non-replay keeps the guards it always had.
+ *
+ * ⚠ NEVER call this before `authorizeMeetingBooking`. The key proves who minted it, not what
+ * the actor may book.
+ */
+/**
+ * ⚠ THIS LOOKUP IS DELIBERATELY REPEATED INSIDE THE SERVICE — DO NOT "OPTIMISE" IT AWAY.
+ *
+ * `lookupBookingReplay` runs here (to decide whether to SKIP the availability gate and the
+ * per-pair limit) and again inside `replayByIdempotencyKey` (to decide WHAT to return). That
+ * is one extra indexed read, on the retry path only, and it buys a property worth more than
+ * the read: the service NEVER TRUSTS ITS CALLER'S VERDICT.
+ *
+ * Collapsing the two — threading this result down as a parameter — would make the service's
+ * behaviour a function of what a caller asserts rather than of what the database says. The
+ * service is also reachable as a repair entry point independent of this route, so a caller
+ * asserting "this is an exact replay" must never be able to make it act on that claim alone.
+ * Re-deriving is the same defence-in-depth posture as the gate ordering documented above.
+ */
+async function isExactBookingReplay(
+  bookingIdempotencyKey: string | undefined,
+  probe: BookingReplayProbe
+): Promise<boolean> {
+  if (bookingIdempotencyKey === undefined) {
+    return false;
+  }
+  const lookup = await lookupBookingReplay(bookingIdempotencyKey, probe);
+  return lookup.kind === 'match';
+}
+
+/**
  * EVERY PRE-BOOKING GUARD, IN ORDER — returns the validated service input, or `null` when a
  * reply has already been sent (the caller must return immediately).
  *
@@ -322,11 +393,20 @@ async function resolveBookingInput(
     return null;
   }
 
+  // BAL-400 (S3/M1) — resolved HERE, after the gate and before the two expert-scoped guards.
+  const replaying = await isExactBookingReplay(parsed.bookingIdempotencyKey, {
+    contextType,
+    contextId,
+    scheduledStart,
+    scheduledEnd,
+  });
+
   // A `null` expert means a `match`-routed `project_discovery`: there is no calendar to rate
   // limit against and none to check availability on. The repository throws
   // `MatchModeDiscoveryNotBookableError`, which maps to `409 discovery_not_routed` — so this is
   // a skip, not a bypass.
   if (
+    !replaying &&
     authorized.expertProfileId !== null &&
     (await enforceExpertScopedGuards(
       { userId, expertProfileId: authorized.expertProfileId, scheduledStart, scheduledEnd },
@@ -343,6 +423,7 @@ async function resolveBookingInput(
     scheduledEnd,
     engagementType: authorized.engagementType,
     userId,
+    bookingIdempotencyKey: parsed.bookingIdempotencyKey,
   };
 }
 

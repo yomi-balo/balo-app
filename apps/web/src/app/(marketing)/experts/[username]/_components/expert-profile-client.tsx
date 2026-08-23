@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   track,
@@ -10,7 +11,15 @@ import {
 } from '@/lib/analytics';
 import type { ExpertProfileView, ProfileSectionKey } from '@/components/expert/profile';
 import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
+import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { useAuthModal } from '@/hooks/use-auth-modal';
+import {
+  BookingFlowDialog,
+  type BookingContext,
+  type BookingFlowExpert,
+} from '@/components/booking';
+import type { BookingSource } from '@/lib/analytics';
 import { Hero } from './hero';
 import { StickyNav, type NavSection } from './sticky-nav';
 import { AboutSection } from './about-section';
@@ -25,8 +34,17 @@ import { ProjectRequestPanel } from '@/components/balo/project-request/panel';
 interface ExpertProfileClientProps {
   view: ExpertProfileView;
   portraitUrl: string | null;
+  /** Resolved separately (thumbnail size) for the booking wrapper's compact header avatar. */
+  bookingAvatarUrl: string | null;
   isLoggedIn: boolean;
   projectTaxonomies: ProjectRequestTaxonomies;
+  productsTaxonomy: ProductTaxonomy;
+  /** `null` when signed out — resolved server-side only for a signed-in visitor (D1a). */
+  bookingContext: BookingContext | null;
+  viewerEmailDomain: string | null;
+  /** `?book=1` deep link (entry points 2 and 4, D4a) — auto-opens the booking wrapper. */
+  autoOpenBooking: boolean;
+  autoOpenBookingSource: BookingSource;
 }
 
 const SECTION_LABELS: Record<ProfileSectionKey, string> = {
@@ -49,10 +67,18 @@ const SECTION_LABELS: Record<ProfileSectionKey, string> = {
 export function ExpertProfileClient({
   view,
   portraitUrl,
+  bookingAvatarUrl,
   isLoggedIn,
   projectTaxonomies,
+  productsTaxonomy,
+  bookingContext,
+  viewerEmailDomain,
+  autoOpenBooking,
+  autoOpenBookingSource,
 }: Readonly<ExpertProfileClientProps>): React.JSX.Element {
   const isMobile = useIsMobile(820);
+  const router = useRouter();
+  const authModal = useAuthModal();
 
   const sections = useMemo<NavSection[]>(() => {
     const keys: ProfileSectionKey[] = ['about', 'expertise', 'quickstarts'];
@@ -127,8 +153,61 @@ export function ExpertProfileClient({
     [view.expertId]
   );
 
-  const onBook = useCallback(() => fireCta('book'), [fireCta]);
   const onMessage = useCallback(() => fireCta('message'), [fireCta]);
+
+  // ── BAL-400 — booking wrapper (entry points 1/2/4, D4a) ──
+  const [bookingOpen, setBookingOpen] = useState(false);
+  const [bookingSource, setBookingSource] = useState<BookingSource>('profile');
+  const pendingBookingOpenRef = useRef(false);
+  const autoOpenFiredRef = useRef(false);
+
+  const openBookingFlow = useCallback(
+    (openSource: BookingSource) => {
+      track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'book' });
+      if (!isLoggedIn) {
+        pendingBookingOpenRef.current = true;
+        setBookingSource(openSource);
+        authModal.open({ onSuccess: () => router.refresh() });
+        return;
+      }
+      setBookingSource(openSource);
+      setBookingOpen(true);
+    },
+    [isLoggedIn, view.expertId, authModal, router]
+  );
+
+  const onBook = useCallback(() => openBookingFlow('profile'), [openBookingFlow]);
+
+  // A signed-out visitor who completes auth (via `openBookingFlow`'s `onSuccess`) lands back
+  // here once `router.refresh()` re-resolves `isLoggedIn` + `bookingContext` server-side.
+  useEffect(() => {
+    if (!pendingBookingOpenRef.current || !isLoggedIn) return;
+    pendingBookingOpenRef.current = false;
+    setBookingOpen(true);
+  }, [isLoggedIn]);
+
+  // `?book=1` deep link (entry points 2/4) — auto-opens once bookingContext (or auth) resolves.
+  useEffect(() => {
+    if (!autoOpenBooking || autoOpenFiredRef.current) return;
+    autoOpenFiredRef.current = true;
+    openBookingFlow(autoOpenBookingSource);
+  }, [autoOpenBooking, autoOpenBookingSource, openBookingFlow]);
+
+  const bookingExpert: BookingFlowExpert = useMemo(
+    () => ({
+      expertProfileId: view.expertId,
+      name: view.name,
+      firstName: view.firstName,
+      initials: view.initials,
+      avatarUrl: bookingAvatarUrl,
+      partyLabel: view.agency?.name ?? view.name,
+      verified: view.baloVerified,
+      availableForWork: view.availableForWork,
+    }),
+    [view, bookingAvatarUrl]
+  );
+
+  const chooserContext: BookingContext = bookingContext ?? { arm: 'onboarding_required' };
 
   // `project` is wired (BAL-253): keep the profile-level CTA event, then open
   // the ProjectRequestPanel instead of the "Coming soon" toast.
@@ -209,6 +288,20 @@ export function ExpertProfileClient({
           avatarKey: view.avatarKey,
         }}
         projectTaxonomies={projectTaxonomies}
+      />
+
+      <BookingFlowDialog
+        open={bookingOpen}
+        onClose={() => setBookingOpen(false)}
+        expert={bookingExpert}
+        source={bookingSource}
+        entry={{ mode: 'chooser', context: chooserContext }}
+        viewerEmailDomain={viewerEmailDomain}
+        onMessage={() => {
+          setBookingOpen(false);
+          onMessage();
+        }}
+        productsTaxonomy={productsTaxonomy}
       />
 
       <ExpertProfileAnalytics

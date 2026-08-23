@@ -24,6 +24,7 @@ import type {
   ConversationFileSharedPayload,
   ExpertSearchabilityLostPayload,
   ExpertSearchabilityRestoredPayload,
+  BookingConfirmedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -248,7 +249,11 @@ export type NotificationEvent =
   // event absent from this union) — only for the read-path backstop covering the other five
   // items. `expert.searchability_restored` fires for both directions of cause, in-app only.
   | 'expert.searchability_lost'
-  | 'expert.searchability_restored';
+  | 'expert.searchability_restored'
+  // BAL-400 (D4) — a consultation was booked into a case. Published by the booking
+  // Server Action AFTER `POST /meetings` returns 201 — so a case with no meeting never
+  // notifies anyone. Mirror of apps/api/src/notifications/events.ts — keep in lockstep.
+  | 'booking.confirmed';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -291,4 +296,5 @@ export interface EventPayloadMap {
   'action_item.assigned': ActionItemAssignedPayload;
   'expert.searchability_lost': ExpertSearchabilityLostPayload;
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
+  'booking.confirmed': BookingConfirmedPayload;
 }

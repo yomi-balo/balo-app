@@ -123,6 +123,10 @@ vi.mock('@/lib/analytics', async () => {
     // (memory `reference_web_analytics_test_mock_export_list`). ⚠ `AVAILABILITY_SERVER_EVENTS`
     // must NEVER join this list — it is server-only.
     AVAILABILITY_EVENTS: events.AVAILABILITY_EVENTS,
+    // BAL-400 — the case-booking flow's CLIENT family. ⚠ WITHOUT THIS LINE every booking
+    // component test throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`).
+    BOOKING_EVENTS: events.BOOKING_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

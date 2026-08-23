@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
+import { extractEmailDomain } from '@balo/shared/domains';
 import { getCurrentUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
@@ -107,7 +108,12 @@ export default async function CasePage({
     distinct_id: user.id,
   });
 
-  return <CaseSurface view={view} />;
+  // UX-2 (BAL-400 round 2) — SESSION-derived, never case-view PII (`load-case.ts` deliberately
+  // excludes `users.email`). Threaded so the case-surface quick-pick's guest disclosure (entry
+  // point 3) is honest about same-domain access, same as the profile-page entry points.
+  const viewerEmailDomain = extractEmailDomain(user.email);
+
+  return <CaseSurface view={view} viewerEmailDomain={viewerEmailDomain} />;
 }
 
 /**

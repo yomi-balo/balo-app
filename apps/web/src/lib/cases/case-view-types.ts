@@ -223,6 +223,9 @@ export type CaseNudgeView =
 
 interface CaseSurfaceViewBase {
   engagementId: string;
+  /** BAL-400 — exposed so the client-lens party card can mount `CaseSlotQuickPick` (entry
+   *  point 3, D4a) without a second read; already resolved on `CaseAccess`. */
+  expertProfileId: string;
   viewerUserId: string;
   header: CaseHeaderView;
   nudge: CaseNudgeView;
