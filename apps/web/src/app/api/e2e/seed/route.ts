@@ -218,6 +218,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return NextResponse.json({ error: 'seed failed' }, { status: 500 });
+    // The REASON is returned in the body on purpose. This route is secret-gated (404 without
+    // `E2E_TEST_SECRET`, 401 on a mismatch), so only a caller already holding the secret can
+    // read it, and production never sets that secret. A bare `{ error: 'seed failed' }` cost a
+    // full CI round-trip to diagnose: Next does not surface a route's `log.error` in the
+    // Playwright `[WebServer]` capture, so the reason was invisible in the job log.
+    return NextResponse.json(
+      {
+        error: 'seed failed',
+        reason: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
   }
 }

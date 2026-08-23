@@ -60,9 +60,14 @@ async function seedRequest(page: Page, body: unknown): Promise<Record<string, un
     data: body,
   });
   if (!response.ok()) {
+    // Surface the server's REASON, not just the status. The route returns it deliberately
+    // (it is secret-gated), and without it a 500 here is undiagnosable from the CI log —
+    // Playwright's `[WebServer]` capture does not include the route's own logging.
+    const detail = await response.text().catch(() => '');
     throw new Error(
       `/api/e2e/seed seeding failed (${response.status()}) — is the seeded-E2E harness up ` +
-        `(E2E_TEST_SECRET set on the server + matching header, plus a reachable Postgres)?`
+        `(E2E_TEST_SECRET set on the server + matching header, a reachable Postgres, and ` +
+        `reference data seeded)?${detail ? ` Server said: ${detail}` : ''}`
     );
   }
   return response.json() as Promise<Record<string, unknown>>;
