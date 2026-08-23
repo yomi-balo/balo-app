@@ -198,16 +198,6 @@ jobs:
       - name: Run migrations against ephemeral Postgres
         run: pnpm --filter @balo/db db:migrate
 
-      # Reference data is PLATFORM data, not test fixture data — verticals, the products
-      # taxonomy and project tags exist in every real environment, and `expert_profiles`
-      # carries a NOT NULL `vertical_id` FK. Migrating alone leaves those tables empty, so
-      # `referenceDataRepository.getSalesforceVertical()` throws "Salesforce vertical not
-      # found" and every seeded-fixture route 500s. `db:seed` itself is not usable here: its
-      # script wraps `dotenv -e .env`, and CI has no `.env` — DATABASE_URL comes from the job
-      # env above, so invoke the seeder directly.
-      - name: Seed reference data (verticals + taxonomy) into ephemeral Postgres
-        run: pnpm --filter @balo/db exec tsx src/seed.ts
-
       # NOTE: no job-level `pnpm --filter web build` step — Playwright's webServer
       # (`pnpm build && pnpm start`) is the single build and inherits the job env above.
       - name: Run E2E Tests

@@ -1,9 +1,9 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { usersRepository } from '@balo/db';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { requireE2ESecret } from '@/lib/e2e/require-e2e-secret';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,12 +13,17 @@ export const dynamic = 'force-dynamic';
  * state so Playwright can exercise the middleware onboarding gate without a real auth
  * provider.
  *
- * SECURITY: this route is guarded by `requireE2ESecret` (`@/lib/e2e/require-e2e-secret`) — the
- * ONE shared, deployment-agnostic, fail-safe SECRET gate every E2E-only route opens with
- * (`/api/e2e/seed` carries the identical gate). See that module's docblock for the full
- * 404/401/proceed contract. The gate is the first statement in the handler, so it can never
- * mint a session unless the caller presents the matching secret. The request carries the
- * secret in the `x-e2e-secret` request header — never the body.
+ * SECURITY: this route is guarded by a deployment-agnostic, fail-safe SECRET gate that
+ * is independent of `NODE_ENV` / `VERCEL` / platform:
+ *   - `E2E_TEST_SECRET` absent (or empty) → 404, ALWAYS. Production never sets it, so the
+ *     route is inert in production regardless of the runtime environment. Empty string is
+ *     treated as unset so a mis-provisioned secret fails CLOSED.
+ *   - `E2E_TEST_SECRET` set, but the request's `x-e2e-secret` header is missing or wrong →
+ *     401 (compared in constant time; see `secretMatches`).
+ *   - `E2E_TEST_SECRET` set and the header matches → proceed.
+ * The gate is the first statement in the handler, so it can never mint a session unless
+ * the caller presents the matching secret. The request carries the secret in the
+ * `x-e2e-secret` request header — never the body.
  *
  * The request body cannot select an identity or a role: the email is DERIVED from the
  * requested state on a fixed `@balo.test` domain (never collides with a real account),
@@ -27,6 +32,18 @@ export const dynamic = 'force-dynamic';
  *
  * The secret is NEVER logged (the 404/401 branches return without logging).
  */
+
+/**
+ * Constant-time secret comparison that never throws on a length mismatch.
+ * timingSafeEqual requires equal-length buffers, so both sides are reduced to
+ * fixed-length SHA-256 digests before comparison. Absent/empty input → false.
+ */
+function secretMatches(provided: string | null | undefined, expected: string): boolean {
+  if (!provided) return false;
+  const providedHash = createHash('sha256').update(provided).digest();
+  const expectedHash = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(providedHash, expectedHash);
+}
 
 // Body cannot carry an email/firstName/role — only the onboarding state to seed.
 const testLoginSchema = z.object({
@@ -99,8 +116,18 @@ async function resolveTestUser(onboardingCompleted: boolean): Promise<ResolveRes
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const gated = requireE2ESecret(request);
-  if (gated) return gated;
+  const expectedSecret = process.env.E2E_TEST_SECRET;
+
+  // Prod path: E2E_TEST_SECRET is NEVER set in production → always 404, regardless of
+  // NODE_ENV / VERCEL / platform. Empty string is treated as unset (fail closed).
+  if (!expectedSecret) {
+    return new NextResponse('Not Found', { status: 404 });
+  }
+
+  // Secret set but the request's header is missing or wrong → 401 (timing-safe).
+  if (!secretMatches(request.headers.get('x-e2e-secret'), expectedSecret)) {
+    return new NextResponse('Unauthorized', { status: 401 });
+  }
 
   try {
     const body: unknown = await request.json();
